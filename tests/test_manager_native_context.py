@@ -187,3 +187,27 @@ def test_codex_and_antigravity_context_preferences_operate_independently(
         assert result is not context
         assert result["goals"][0]["recent_delivery_history"]["status"] == "not_read"
         assert _read(result["context_read"]["recovery_command"]) == original
+
+def test_short_history_stays_inline_and_mixed_history_keeps_cheap_rows(tmp_path):
+    from loopx.capabilities.native_chat.manager_input import manager_turn_input
+
+    adapter = _adapter()
+    small = _context()
+    small["goals"][0]["recent_delivery_history"]["deliveries"] = [{"summary": "Export accepted"}]
+    assert native_manager_context(small, adapter, runtime_root=tmp_path, capture_root=tmp_path) is small
+    assert not list(tmp_path.iterdir())
+    prior = tmp_path / "previous-capture"
+    prior.mkdir()
+    medium = deepcopy(small)
+    medium["goals"][0]["recent_delivery_history"]["deliveries"] = [{"summary": "history" * 170}]
+    assert native_manager_context(medium, adapter, runtime_root=tmp_path, capture_root=tmp_path) is medium
+    assert list(tmp_path.iterdir()) == [prior], "discard only this losing candidate"
+    mixed = _context()
+    mixed["goals"].extend(small["goals"])
+    result = native_manager_context(mixed, adapter, runtime_root=tmp_path, capture_root=tmp_path)
+    assert result["goals"][1] == small["goals"][0]
+    assert result["goals"][0]["recent_delivery_history"]["status"] == "not_read"
+    assert _read(result["context_read"]["recovery_command"]) == mixed
+    def wire(context):
+        return manager_turn_input(adapter, "Status?", json.dumps(context, ensure_ascii=False)).encode()
+    assert len(wire(result)) < len(wire(mixed))
