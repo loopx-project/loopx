@@ -4,6 +4,7 @@ from datetime import timedelta
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 
@@ -189,6 +190,106 @@ def test_projected_claim_prepares_the_same_todo_for_a_fresh_guard(
     assert after["selected_todo"]["todo_id"] == TODO
     assert after["execution_preparation"]["state"] == "ready"
     assert after["normal_delivery_allowed"] is True
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("scenario", ["codex_app_heartbeat", "codex_app_ssh_goal"])
+def test_native_hook_returns_readable_ready_source_and_original_claim(
+    tmp_path, monkeypatch, provider, scenario,
+):
+    from loopx.control_plane.turn_driver import codex_context
+
+    tmp_path = tmp_path.resolve()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("CODEX_THREAD_ID", "preparation-session")
+    native = tmp_path / "native"
+    native.mkdir(mode=0o700)
+    event = {"session_id": "preparation-session", "cwd": str(tmp_path),
+        "hook_event_name": "SessionStart", "source": "startup"}
+    assert codex_context.codex_context_hook(str(native), event) == {}
+    original = {**_todo(), "text": "Deliver the complete synthetic request: 保留原文" + "。不可截断的验收条件" * 100,
+        "note": "Preserve the original stop and once-only settlement."}
+    before = _run(tmp_path, monkeypatch, provider, [], "--runtime-profile", scenario,
+        "--turn-instance-id", "preparation-turn", "--todo-id", TODO, todos=[original])
+    assert before["execution_preparation"]["state"] == "claim_required"
+    goal_file = tmp_path / "state.md"
+    goal_text = goal_file.read_text() + "\n\n## Constraints\n\n" + "Preserve the complete Goal and its stop. 保留停止条件。\n" * 100
+    goal_file.write_text(goal_text)
+    capture = tmp_path / "before-claim"
+    capture.mkdir(mode=0o700)
+    codex_context.project_codex_context(before, directory=str(native), capture_directory=capture,
+        goal_id=GOAL, agent_id=AGENT, surface="quota_packet", capture_id="before-claim")
+    hook = [sys.executable, "-m", "loopx.entrypoint", "--registry", str(tmp_path / "registry.json"),
+        "--runtime-root", str(tmp_path / "runtime"), "--format", "json", "quota", "context-hook",
+        "--context-delivery", "on", "--runtime-profile", scenario, "--codex-context-dir", str(native)]
+    hook_event = {**event, "hook_event_name": "PostToolUse"}
+    log = tmp_path / "runtime" / "goals" / GOAL / "rollout-event-log.jsonl"
+    unchanged = log.read_bytes()
+    disabled = subprocess.run(["off" if item == "on" else item for item in hook],
+        input=json.dumps(hook_event), cwd=tmp_path, capture_output=True, text=True, timeout=30)
+    assert disabled.returncode == 0 and json.loads(disabled.stdout) == {}
+    assert log.read_bytes() == unchanged
+    completed = subprocess.run(hook, input=json.dumps(hook_event), cwd=tmp_path,
+        capture_output=True, text=True, timeout=30)
+    assert completed.returncode == 0, completed.stderr
+    additional = json.loads(completed.stdout)["hookSpecificOutput"]["additionalContext"]
+    receipt = json.loads(additional.rsplit("Receipt: ", 1)[1])
+    assert receipt["event"] == "host_execution_prepared"
+    assert receipt["todo_id"] == TODO and receipt["turn_instance_id"] == "preparation-turn"
+    assert receipt["execution_preparation"]["state"] == "ready"
+    claim_reference = receipt["claim_operation_id"]
+    assert claim_reference.startswith("todo-claim:")
+    ready = receipt["context"]
+    read = shlex.split(ready["recovery"]["command"])
+    pointers = ["/execution_preparation", "/selected_todo", "/heartbeat_receipt", "/interaction_contract/cli_channel",
+        "/interaction_contract/agent_channel/work_context", "/interaction_contract/agent_channel/required_reads"]
+    for pointer in pointers:
+        read.extend(("--select", pointer))
+    completed = subprocess.run(read, cwd=tmp_path, capture_output=True, text=True, timeout=30)
+    assert completed.returncode == 0, completed.stderr
+    page = json.loads(completed.stdout)
+    assert page["eof"] is True and page["offset"] == 0
+    selected = {item["pointer"]: item["value"] for item in json.loads(page["content"])["selections"]}
+    assert selected["/execution_preparation"]["state"] == "ready"
+    assert selected["/heartbeat_receipt"]["turn_instance_id"] == "preparation-turn"
+    plan = selected["/interaction_contract/cli_channel"]["settlement_plan"]
+    assert plan["identity"]["todo_id"] == TODO and plan["identity"]["turn_instance_id"] == "preparation-turn"
+    sources = selected["/interaction_contract/agent_channel/work_context"]["sources"]
+    task = next(item["content"]["todo"] for item in sources if item["source"] == "selected_todo")
+    # The v0 owner may deduplicate short text already in selected_todo.
+    # The complete request must survive either original placement, without
+    # replacing it with the selected summary when that summary is shorter.
+    assert task.get("text", selected["/selected_todo"]["text"]) == original["text"]
+    assert task["note"] == original["note"]
+    goal_read = next(item for item in selected["/interaction_contract/agent_channel/required_reads"]
+        if item["source"] == "goal_state")
+    goal = subprocess.run(shlex.split(goal_read["command"]), capture_output=True, text=True, timeout=30)
+    assert goal.returncode == 0 and goal.stdout == goal_text
+    code, current = run_json_cli_result("todo", "list", "--goal-id", GOAL, "--todo-id", TODO,
+        registry_path=tmp_path / "registry.json", runtime_root=tmp_path / "runtime", cwd=tmp_path)
+    assert code == 0
+    code, progress = run_json_cli_result("todo", "update", "--goal-id", GOAL, "--todo-id", TODO,
+        "--agent-id", AGENT, "--claim-operation-id", claim_reference,
+        "--update-operation-id", "prepared-progress",
+        "--update-expected-provider-revision", current["authority_read"]["provider_revision"],
+        "--note", original["note"] + " Checkpoint verified.",
+        registry_path=tmp_path / "registry.json", runtime_root=tmp_path / "runtime", cwd=tmp_path)
+    assert code == 0 and progress["ok"], progress
+    events = log.read_bytes()
+    repeat = subprocess.run(hook, input=json.dumps(hook_event), cwd=tmp_path,
+        capture_output=True, text=True, timeout=30)
+    assert repeat.returncode == 0 and "host_execution_prepared" not in repeat.stdout
+    assert log.read_bytes() == events
+    guards = [json.loads(line) for line in events.splitlines()
+        if json.loads(line)["event_kind"] == "quota_should_run"]
+    assert len(guards) == 2
+    assert [item["details"]["delivery_allowed"] for item in guards] == [False, True]
+    source, _ = codex_context.read_codex_context_reference(str(native), goal_id=GOAL, agent_id=AGENT)
+    source = Path(source)
+    source.write_bytes(source.read_bytes() + b" ")
+    corrupted = subprocess.run(read, cwd=tmp_path, capture_output=True, text=True, timeout=30)
+    assert corrupted.returncode != 0 and json.loads(corrupted.stdout)["ok"] is False
+    assert log.read_bytes() == events
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

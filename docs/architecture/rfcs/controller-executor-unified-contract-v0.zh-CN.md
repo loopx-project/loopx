@@ -96,6 +96,14 @@
 
 ### C1 源码核对：已有共享 owner 与剩余分叉
 
+绑定 Turn 的原生执行准备保留普通 managed claim 原引用，并在 CLI 压缩前捕获同一
+Turn 的 ready 决策。Host 将该原件交给既有 saved-capture 展示/reader owner，不丢弃
+它再要求模型重算 guard 才能取得当前契约。发布前须核对 Goal、Agent、Todo 和 Turn。
+必需材料读取（包括显式的完整 Goal 读取）仍须执行，ready 回执或已保存文件不能代替
+读取。可选展示失败保留原摘要绑定的恢复引用；显式 off 不产生动作，未绑定请求沿原
+readiness 路径，不补造 Turn。这只是有界的 Host 交接修复，不代表 C1 切换、已安装
+采用，或模型费用与长程收益已取得资格。
+
 源码实际共享的部分比输出名称体现的更多。`_emit_quota_result` 在
 `_project_quota_cli_payload` 选择普通 CLI 压缩或 `buildTurnEnvelope` **之前**，
 已经捕获完整决策。后者委托 TypeScript owner，Python 模块是传输 adapter。

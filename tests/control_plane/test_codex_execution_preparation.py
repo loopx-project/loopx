@@ -78,15 +78,18 @@ def test_compact_request_accepts_only_exact_host_action(tmp_path: Path) -> None:
     assert compact_execution_preparation_request(malformed) is None
 
 
-def test_executor_claims_then_proves_same_turn_ready(tmp_path: Path) -> None:
-    request = compact_execution_preparation_request(_packet(tmp_path))
+@pytest.mark.parametrize("scenario", ["codex_app_heartbeat", "codex_app_ssh_goal"])
+@pytest.mark.parametrize("turn", ["turn-example", None])
+def test_executor_claims_then_proves_same_turn_ready(tmp_path: Path, scenario: str, turn: str | None) -> None:
+    request = compact_execution_preparation_request(_packet(tmp_path, turn=turn))
     assert request is not None
     calls: list[list[str]] = []
 
     def runner(command, *, cwd, timeout):
         calls.append(list(command))
         if "should-run" not in command:
-            return _completed({"ok": True, "claimed": True})
+            return _completed({"ok": True, "claimed": True,
+                "claim_operation_id": "todo-claim:goal-example:todo_example:original"})
         return _completed({
             "ok": True,
             "goal_id": GOAL,
@@ -100,18 +103,19 @@ def test_executor_claims_then_proves_same_turn_ready(tmp_path: Path) -> None:
                 "agent_id": AGENT,
                 "delivery_allowed": True,
             },
-            "heartbeat_receipt": {"turn_instance_id": "turn-example"},
+            **({"heartbeat_receipt": {"turn_instance_id": turn}} if turn is not None else {}),
         })
 
     receipt = execute_codex_execution_preparation(
         request,
         cwd=tmp_path.resolve(),
-        scenario="codex_app_ssh_goal",
+        scenario=scenario,
         runner=runner,
     )
 
     assert receipt["event"] == "host_execution_prepared"
     assert receipt["normal_delivery_allowed"] is True
+    assert receipt["claim_operation_id"] == "todo-claim:goal-example:todo_example:original"
     assert len(calls) == 2
     for call in calls:
         assert call[call.index("--registry") + 1] == (
@@ -119,12 +123,17 @@ def test_executor_claims_then_proves_same_turn_ready(tmp_path: Path) -> None:
         )
         assert call[call.index("--runtime-root") + 1] == str((tmp_path / "loopx-runtime-a").resolve())
     assert calls[0][-len(request["claim_args"]):] == request["claim_args"]
-    assert calls[1][-4:] == ["--todo-id", TODO, "--turn-instance-id", "turn-example"]
+    if turn is not None:
+        assert calls[1][-4:] == ["--todo-id", TODO, "--turn-instance-id", turn]
+    else:
+        assert calls[1][-2:] == ["--todo-id", TODO]
+        assert "--turn-instance-id" not in calls[1] and "turn_instance_id" not in receipt
     context = codex_execution_preparation_context(receipt)
     assert "do not repeat" in context and '"state":"ready"' in context
 
 
-def test_executor_rejects_changed_todo_or_turn(tmp_path: Path) -> None:
+@pytest.mark.parametrize("changed", ["goal", "agent", "todo", "turn"])
+def test_executor_rejects_changed_todo_or_turn(tmp_path: Path, changed: str) -> None:
     request = compact_execution_preparation_request(_packet(tmp_path))
     assert request is not None
 
@@ -133,15 +142,18 @@ def test_executor_rejects_changed_todo_or_turn(tmp_path: Path) -> None:
             return _completed({"ok": True})
         return _completed({
             "ok": True,
+            "goal_id": "goal-other" if changed == "goal" else GOAL,
             "should_run": True,
             "normal_delivery_allowed": True,
-            "selected_todo": {"todo_id": "todo-other"},
+            "selected_todo": {"todo_id": "todo-other" if changed == "todo" else TODO},
             "execution_preparation": {
                 "schema_version": "execution_preparation_v0",
                 "state": "ready",
+                "todo_id": TODO,
+                "agent_id": "agent-other" if changed == "agent" else AGENT,
                 "delivery_allowed": True,
             },
-            "heartbeat_receipt": {"turn_instance_id": "turn-other"},
+            "heartbeat_receipt": {"turn_instance_id": "turn-other" if changed == "turn" else "turn-example"},
         })
 
     with pytest.raises(RuntimeError, match="same-Todo ready"):
