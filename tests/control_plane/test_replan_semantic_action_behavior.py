@@ -10,10 +10,13 @@ import pytest
 
 import loopx.control_plane.testing.replan_semantic_action_behavior as replan_behavior
 from loopx.control_plane.testing.model_tool_behavior import (
+    LoopxCliExecutionError,
     QuotaToolContext,
     ScriptedAssistantAction,
     ScriptedDoubaoExecTransport as RawScriptedDoubaoExecTransport,
     ScriptedExecToolAction,
+    is_context_read_command,
+    loopx_command_tokens,
     replan_view_command_tokens,
 )
 from loopx.control_plane.quota.turn_envelope import _turn_envelope_result
@@ -230,6 +233,100 @@ def test_progressive_replan_reader_preserves_semantic_observation(
             command.replace("--replan-stage review", "--replan-stage invalid"),
             state,
         )
+
+
+@pytest.mark.parametrize("launcher", ["native", "console", "loopx.entrypoint", "loopx.cli"])
+def test_native_context_reader_uses_current_capture_and_isolated_executor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, launcher: str,
+) -> None:
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", "on")
+    fixture = _build_fixture(tmp_path / "reader")
+    output = _execute_loopx(
+        fixture.quota_guard_command,
+        fixture=fixture,
+        turn_instance_id="native-context-reader",
+    )
+    context = QuotaToolContext.from_output(output)
+    command = json.loads(output)["recovery"]["command"]
+    tokens = shlex.split(command)
+    if len(tokens) > 3 and tokens[1:3] == ["-m", "loopx.entrypoint"]:
+        tokens = ["loopx", *tokens[3:]]
+    assert Path(tokens[0]).name == "loopx"
+    selected_program = tmp_path / "python-model-selected"
+    selected_program.write_text("raise RuntimeError('must never execute')\n")
+    if launcher not in {"native", "console"}:
+        tokens = [str(selected_program), "-m", launcher, *tokens[1:]]
+    if launcher != "native":
+        command = shlex.join(tokens)
+    command += " --select /goal_id"
+
+    assert is_context_read_command(command)
+    readback = json.loads(context.read(
+        command, source_root=fixture.source_root, project_root=fixture.project_root,
+    ))
+
+    assert readback["ok"] is True
+    assert json.loads(readback["content"])["selections"] == [
+        {"pointer": "/goal_id", "value": "replan-semantic-action-fixture"},
+    ]
+    assert context.capture_path is not None
+    capture_bytes = context.capture_path.read_bytes()
+    foreign_capture = context.capture_path.with_name("foreign-capture.json")
+    foreign_capture.write_bytes(capture_bytes)
+    prefix = tokens[:3] if launcher not in {"native", "console"} else ["loopx"]
+    capture_command = [
+        *prefix, "--format", "json", "quota", "context-read",
+        "--capture-file", str(context.capture_path),
+        "--capture-sha256", str(context.capture_sha256),
+    ]
+    for invalid in (
+        [str(foreign_capture) if t == str(context.capture_path) else t for t in capture_command],
+        ["0" * 64 if t == context.capture_sha256 else t for t in capture_command],
+        [*capture_command, "--capture-file", str(context.capture_path)],
+        [*capture_command, "--codex-context-root", str(context.capture_path.parent)],
+    ):
+        with pytest.raises(ValueError, match="context reader"):
+            context.read(
+                shlex.join(invalid),
+                source_root=fixture.source_root,
+                project_root=fixture.project_root,
+            )
+    assert context.capture_path.read_bytes() == capture_bytes
+    if launcher == "native":
+        try:
+            context.capture_path.write_bytes(capture_bytes + b" ")
+            with pytest.raises(LoopxCliExecutionError):
+                context.read(
+                    command,
+                    source_root=fixture.source_root,
+                    project_root=fixture.project_root,
+                )
+        finally:
+            context.capture_path.write_bytes(capture_bytes)
+        assert json.loads(context.read(
+            command,
+            source_root=fixture.source_root,
+            project_root=fixture.project_root,
+        ))["ok"] is True
+
+
+@pytest.mark.parametrize("command", [
+    "python -m loopx.cli refresh-state --goal-id other",
+    "python -m loopx.entrypoint todo complete --todo-id other",
+    "python -m other.module quota context-read",
+    "node -m loopx.cli quota context-read",
+    "python -m loopx.cli quota context-read ; echo done",
+    "python -m loopx.cli quota context-read && echo done",
+    "python -m loopx.cli quota context-read || echo done",
+    "python -m loopx.cli quota context-read | cat",
+    "python -m 'loopx.cli quota context-read",
+])
+def test_module_reader_does_not_admit_other_routes_or_shell_commands(
+    command: str,
+) -> None:
+    assert loopx_command_tokens(command) is None
+    assert is_context_read_command(command) is False
+    assert replan_view_command_tokens(command) is None
 
 
 def _semantic_action(

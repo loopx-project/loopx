@@ -484,6 +484,9 @@ def loopx_command_tokens(command: str) -> list[str] | None:
         tokens = shlex.split(command)
     except ValueError:
         return None
+    reader_tokens = _module_reader_tokens(tokens)
+    if reader_tokens is not None:
+        return reader_tokens
     for index, token in enumerate(tokens):
         if Path(token).name == "loopx":
             command_tokens = tokens[index:]
@@ -491,6 +494,28 @@ def loopx_command_tokens(command: str) -> list[str] | None:
                 return None
             return command_tokens
     return None
+
+
+def _module_reader_tokens(tokens: list[str]) -> list[str] | None:
+    """Normalize native readers while keeping module writes outside the host."""
+
+    if (
+        len(tokens) < 5
+        or not Path(tokens[0]).name.startswith("python")
+        or tokens[1] != "-m"
+        or tokens[2] not in {"loopx.entrypoint", "loopx.cli"}
+        or any(token in {";", "&&", "||", "|"} for token in tokens)
+    ):
+        return None
+    normalized = ["loopx", *tokens[3:]]
+    if "quota" not in normalized:
+        return None
+    quota = normalized.index("quota")
+    if normalized[quota : quota + 2] not in (
+        ["quota", "context-read"], ["quota", "replan-view"],
+    ):
+        return None
+    return normalized
 
 
 def argument_value(tokens: list[str], option: str) -> str | None:
@@ -525,7 +550,7 @@ def replan_view_command_tokens(command: str) -> list[str] | None:
     The production reader is rendered through ``python -m loopx.entrypoint``
     so it remains independent of the caller's installed console script.  Model
     behavior hosts otherwise accept only the bounded ``loopx`` console form.
-    Keep this exception local to the read-only replan route and return a
+    Share module normalization with the captured context reader and return a
     console-shaped argv for the existing isolated CLI executor.
     """
 
@@ -538,13 +563,8 @@ def replan_view_command_tokens(command: str) -> list[str] | None:
     normalized: list[str] | None = None
     if tokens and Path(tokens[0]).name == "loopx":
         normalized = list(tokens)
-    elif (
-        len(tokens) >= 5
-        and tokens[1] == "-m"
-        and tokens[2] in {"loopx.entrypoint", "loopx.cli"}
-        and Path(tokens[0]).name.startswith("python")
-    ):
-        normalized = ["loopx", *tokens[3:]]
+    else:
+        normalized = _module_reader_tokens(tokens)
     if normalized is None or "quota" not in normalized:
         return None
     quota = normalized.index("quota")

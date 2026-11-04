@@ -25,6 +25,7 @@ from .doubao_model_behavior_actor import (
     _direct_ark_transport,
 )
 from .model_tool_behavior import (
+    _module_reader_tokens,
     QuotaToolContext,
     is_context_read_command,
     LoopxCliExecutionError,
@@ -1608,6 +1609,11 @@ def _run_qualification_loop(
                 # A captured module reader uses the same supervised CLI bridge,
                 # without allowing the shell to import the source checkout.
                 reader = replan_view_command_tokens(tool_call.command)
+                if reader is None:
+                    try:
+                        reader = _module_reader_tokens(shlex.split(tool_call.command))
+                    except ValueError:
+                        pass  # Let the shell report its original syntax error.
                 command = shlex.join(reader) if reader is not None else tool_call.command
                 output, exit_code = shell.execute(command)
                 observe_shell_evidence(output, state)
