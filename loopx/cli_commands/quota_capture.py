@@ -19,8 +19,7 @@ from ..control_plane.effect_runtime import EffectRuntimeRejected, EffectRuntimeR
 from ..control_plane.quota.error_codes import QuotaCommandValidationError, QuotaDecisionTransportError
 from ..control_plane.turn_driver.decision_capture import (
     context_index_fields as _context_index_fields,
-    context_selection_transport as _context_selection_transport,
-    context_selection_bytes as _context_selection_bytes,
+    context_selection_view as _context_selection_view,
     validate_handoff_socket, CONTEXT_CAPTURE_READ_GUIDANCE, CONTEXT_CAPTURE_PAGE_GUIDANCE, context_capture_read_command,
     CONTEXT_CAPTURE_NAVIGATION_GUIDANCE,
     read_context_capture_file as _read_capture,
@@ -224,15 +223,10 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
                 raise ValueError("selected context-read requires JSON output")
             if offset > 0 and selection_digest is None:
                 raise ValueError("selected continuation requires selection-sha256; follow next_command")
-            from ..control_plane.quota.turn_envelope import _turn_envelope_result
-
-            depth_options = {"list_depth": list_depth} if list_depth is not None else {}
-            selection_options = {"initial_read": True} if initial_read else {"select": selectors}
-            planning_context = payload if initial_read or list_fields else _context_selection_transport(payload)
             pinned_explicit = pinned_selection is not None and not initial_read
-            order_options = {"preserve_selection_order": True} if pinned_explicit else {}
-            plan = _turn_envelope_result("context_select", context=planning_context, list_fields=list_fields,
-                recover_selection_errors=not initial_read, **selection_options, **depth_options, **order_options)
+            plan, selected_raw, expected = _context_selection_view(payload, select=selectors,
+                initial_read=initial_read, list_fields=list_fields, list_depth=list_depth,
+                expected_sha256=selection_digest, preserve_selection_order=pinned_explicit)
             if rejection := plan.get("rejected_selection"):
                 # TS alone resolves the nearest container. Reuse the original
                 # escaped tokens, without parsing diagnostic prose or traversing
@@ -248,18 +242,9 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
                     "reason": rejection["message"], "recovery_command": command,
                     "recovery": "Use recovery_command to --list the nearest verified container in the same capture, "
                         "then retry the corrected batch. No values were delivered and no guard, admission or spend was performed."}
-            raw = _context_selection_bytes(payload, plan["selections"], list_fields=list_fields, list_depth=list_depth)
-            expected = hashlib.sha256(raw).hexdigest()
-            if pinned_explicit and selection_digest != expected:
-                # Older explicit metadata could retain caller order while its
-                # digest covered canonical output. Try that original owner
-                # once, over the same verified source and exact address set.
-                plan = _turn_envelope_result("context_select", context=planning_context,
-                    list_fields=list_fields, **selection_options, **depth_options)
-                raw = _context_selection_bytes(payload, plan["selections"], list_fields=list_fields, list_depth=list_depth)
-                expected = hashlib.sha256(raw).hexdigest()
-            if selection_digest is not None and selection_digest != expected:
-                raise ValueError("selected view digest changed; restore the original selection and reader")
+            if selected_raw is None or expected is None:
+                raise ValueError("selected view is unavailable")
+            raw = selected_raw
             selection_digest = expected
             selectors = [item["pointer"] for item in plan["selections"]]
             if reference_file is not None and pinned_selection is None:
