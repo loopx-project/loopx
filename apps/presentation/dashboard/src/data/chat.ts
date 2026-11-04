@@ -967,6 +967,7 @@ export async function fetchChatSession(sessionId: string, signal?: AbortSignal) 
 
 const chatQueueSchema = z.object({
   ok: z.literal(true), schema_version: z.literal("loopx_chat_store_v1"), session_id: z.string().min(1),
+  active_turn_id: z.string().min(1).nullable(),
   turns: z.array(z.object({
     turn_id: z.string().min(1), created_at: z.string(), origin: z.string().nullable(),
     preview: z.string(), character_count: z.number().int().nonnegative(),
@@ -989,7 +990,7 @@ export async function fetchChatQueue(sessionId: string, signal?: AbortSignal) {
     || new Set(result.data.turns.map(row => row.turn_id)).size !== result.data.turns.length) {
     throw new Error("The original Session queue could not be verified.");
   }
-  return result.data.turns;
+  return result.data;
 }
 
 export async function steerQueuedChatTurn(sessionId: string, queuedId: string, targetId: string, ingressId: string) {

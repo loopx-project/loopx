@@ -28,6 +28,7 @@ def test_queue_read_is_ordered_bounded_read_only_and_full_input_remains_readable
     before = capture.read_bytes()
     code, snapshot = request(f"/api/chat/sessions/{sid}/queue")
     assert code == 200 and snapshot["session_id"] == sid
+    assert snapshot["active_turn_id"] == active
     assert [(t["turn_id"], t["character_count"], t["preview"]) for t in snapshot["turns"]] == [(queued, len(text), text[:240])]
     assert snapshot["turns"][0]["steering"] is None
     assert store.load_session(sid)["active_turn_id"] == active

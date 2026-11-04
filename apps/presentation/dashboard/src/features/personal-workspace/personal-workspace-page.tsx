@@ -1400,6 +1400,18 @@ export function PersonalWorkspacePage({
     refreshKey: `${managerMessages.length}:${Boolean(managerMessages.at(-1)?.pending)}:${steering}`,
   });
   const queuedTurnKeys = new Set(conversationQueue.turns.map(turn => JSON.stringify([conversationSessionId, turn.turn_id])));
+  const observedQueueTurn = useRef("");
+  useEffect(() => {
+    const turnId = conversationQueue.activeTurnId;
+    if (!conversationSessionId || !turnId || turnId === runningMessage?.sourceTurnId || !callbacks.onObserveConversationTurn) return;
+    const key = JSON.stringify([statusSourceControl?.activeSource.statusUrl, conversationKey, conversationSessionId, turnId]);
+    if (observedQueueTurn.current === key) return;
+    observedQueueTurn.current = key;
+    void callbacks.onObserveConversationTurn(conversationKey, conversationSessionId, turnId).catch(() => {
+      if (observedQueueTurn.current === key) observedQueueTurn.current = "";
+    });
+  }, [conversationQueue.activeTurnId, conversationQueue.turns, conversationSessionId, runningMessage?.sourceTurnId,
+    callbacks.onObserveConversationTurn, conversationKey, statusSourceControl?.activeSource.statusUrl]);
   const legacyDrafts = conversationSessionId ? legacySteeringRequests(conversationSessionId, composerDraftKey) : [];
   function restoreLegacyDraft(key: string) {
     if (composer.trim() || !conversationSessionId) return;
@@ -3280,6 +3292,7 @@ export function PersonalWorkspacePage({
                   onDefaults={selectedGoal && !originalConversation ? () => openSettings({kind: "settings", tab: "conversation"}, true) : undefined}
                 /> : null}
               {queueTurnId && callbacks.onInterruptConversationTurn ? <button className="personal-composer-stop"
+                data-turn-id={queueTurnId}
                 aria-label={locale === "zh-CN" ? "停止当前回合" : "Stop current turn"} type="button"
                 onClick={() => void callbacks.onInterruptConversationTurn!(conversationKey, queueTurnId).catch(cause =>
                   setActionFeedback(cause instanceof Error ? cause.message : (locale === "zh-CN" ? "停止失败，请查看当前回合。" : "Stop failed. Check the current turn.")))}>

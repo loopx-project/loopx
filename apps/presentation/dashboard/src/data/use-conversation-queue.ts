@@ -7,7 +7,7 @@ export function useConversationQueue({sessionId, scope, active, refreshKey}: {
 }) {
   const key = JSON.stringify([scope, sessionId]);
   const [attempt, setAttempt] = useState(0);
-  const [state, setState] = useState<{key: string; turns: ChatQueuedTurn[]; error: Error | null} | null>(null);
+  const [state, setState] = useState<{key: string; turns: ChatQueuedTurn[]; activeTurnId: string | null; error: Error | null} | null>(null);
   useEffect(() => {
     if (!sessionId) return;
     const controller = new AbortController();
@@ -15,18 +15,20 @@ export function useConversationQueue({sessionId, scope, active, refreshKey}: {
     let failures = 0, pending = false;
     const read = async () => {
       try {
-        const turns = await fetchChatQueue(sessionId, AbortSignal.any([controller.signal, AbortSignal.timeout(5000)]));
+        const snapshot = await fetchChatQueue(sessionId, AbortSignal.any([controller.signal, AbortSignal.timeout(5000)]));
         if (controller.signal.aborted) return;
-        failures = 0; pending = turns.length > 0;
-        setState({key, turns, error: null});
+        failures = 0; pending = snapshot.turns.length > 0 || Boolean(snapshot.active_turn_id);
+        setState({key, turns: snapshot.turns, activeTurnId: snapshot.active_turn_id, error: null});
       } catch (cause) {
         if (controller.signal.aborted) return;
         failures += 1;
         // A failed read is unknown, including revoked scope. Never retain
         // potentially inaccessible input or present an empty successful queue.
-        setState({key, turns: [], error: cause instanceof Error ? cause : new Error(String(cause))});
+        setState({key, turns: [], activeTurnId: null, error: cause instanceof Error ? cause : new Error(String(cause))});
       }
-      if (!controller.signal.aborted && (active || pending)) {
+      // After a successful read, the original queue/Session decides whether
+      // observation continues; a cached model hint must not keep idle polling.
+      if (!controller.signal.aborted && (pending || (failures > 0 && active))) {
         timer = setTimeout(() => void read(), failures ? Math.min(5000 * 2 ** failures, 30_000) : 5000);
       }
     };
@@ -34,6 +36,6 @@ export function useConversationQueue({sessionId, scope, active, refreshKey}: {
     return () => { controller.abort(); clearTimeout(timer); };
   }, [key, sessionId, active, refreshKey, attempt]);
   const current = sessionId && state?.key === key ? state : null;
-  return {turns: current?.turns ?? [], error: current?.error ?? null,
+  return {turns: current?.turns ?? [], activeTurnId: current?.activeTurnId ?? null, error: current?.error ?? null,
     retry: () => setAttempt(value => value + 1)};
 }

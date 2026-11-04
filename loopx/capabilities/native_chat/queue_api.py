@@ -29,7 +29,7 @@ class ChatQueueRequestMixin:
                     "steering": turn.get("_queue_steering"),
                 })
             self._send_json({"ok": True, "schema_version": CHAT_STORE_SCHEMA_VERSION,
-                             "session_id": session_id, "turns": rows})
+                             "session_id": session_id, "active_turn_id": session.get("active_turn_id"), "turns": rows})
         except KeyError:
             self._send_error("chat session was not found", status=404)
         except ValueError as exc:

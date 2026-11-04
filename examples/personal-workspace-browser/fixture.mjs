@@ -1846,7 +1846,9 @@ export async function installApi(page, { fixturePort = port, goalSubagentConfigu
     }
     const queue = url.pathname.match(/^\/api\/chat\/sessions\/([^/]+)\/queue$/);
     if (queue && request.method() === "GET") {
-      await route.fulfill({json: {ok: true, schema_version: "loopx_chat_store_v1", session_id: queue[1], turns: queuedTurns.get(queue[1]) ?? []}});
+      const active = sessions.get(queue[1])?.active_turn_id ?? null;
+      await route.fulfill({json: {ok: true, schema_version: "loopx_chat_store_v1", session_id: queue[1], active_turn_id: active,
+        turns: (queuedTurns.get(queue[1]) ?? []).filter(turn => turn.turn_id !== active)}});
       return;
     }
     const snapshot = url.pathname.match(/^\/api\/chat\/sessions\/([^/]+)$/);

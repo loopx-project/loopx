@@ -278,6 +278,18 @@ export const composerSessionAdmissionScenario = {
         || page.__loopxRuntime.sessions.get(sessionId).active_turn_id !== queued.turnId) {
         throw new Error("Ordinary Enter did not queue once behind the original Turn, or it silently steered current work");
       }
+      // The consumer may advance a queue accepted before this page opened.
+      // Observe its exact Turn through the history owner before offering Stop.
+      const advancedId = `${queued.turnId}-queued-1`;
+      const stops = [];
+      const stopRoute = `**/api/chat/sessions/${sessionId}/turns/*/interrupt`;
+      await page.route(stopRoute, async route => {stops.push(new URL(route.request().url()).pathname); await route.fallback();});
+      page.__loopxRuntime.sessions.set(sessionId, {...page.__loopxRuntime.sessions.get(sessionId), active_turn_id: advancedId, status: "busy"});
+      const currentStop = page.locator(`.personal-composer-stop[data-turn-id="${advancedId}"]`);
+      await currentStop.waitFor({timeout: 15000});
+      await currentStop.click();
+      if (stops.length !== 1 || !stops[0].endsWith(`/${advancedId}/interrupt`)) throw new Error("Automatic queue advancement left Stop on the previous Turn");
+      await page.unroute(stopRoute);
       await queued.release();
       notes.push("managed Enter: one explicit FIFO request retains the original Session/active Turn and never becomes steering");
 

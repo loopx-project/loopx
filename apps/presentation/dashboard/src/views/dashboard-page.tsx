@@ -1422,6 +1422,8 @@ function PersonalGoalHome({
   const sessionDiscoveryKey = model.goals.some((goal) => goal.activationState === "active" && goal.loadState === "loading")
     ? "loading" : model.goals.map((goal) => `${goal.goalId}:${goal.agentId}`).join("|");
   const contextId = conversationContextKey(conversationContext);
+  const activeConversationContext = useRef(contextId);
+  activeConversationContext.current = contextId;
   const discoveredAgents: PersonalAgentOption[] = runtimeAgents.length > 0
     ? runtimeAgents.map((agent) => ({
         agentId: agent.agent_id,
@@ -3240,6 +3242,20 @@ function PersonalGoalHome({
             void sendManagerQuestion(message, { agentId: runtimeBindings[targetContextId]?.agentId,
               contextId: targetContextId, attachments, queue: { sessionId, ingressId, onAccepted: resolve } }).catch(reject);
           }),
+          onObserveConversationTurn: async (targetContextId, sessionId, turnId) => {
+            const key = `${targetContextId}:${selectedAgent.agentId}`;
+            if (activeConversationContext.current !== targetContextId || sessionIds.current.get(key) !== sessionId
+                || (activeTurnIds.current.get(targetContextId) === turnId
+                  && streamControllers.current.get(targetContextId)?.signal.aborted === false)) return;
+            // Queue advancement is a read observation. The existing history
+            // recovery owner adopts the exact current Session/Turn and stream.
+            const history = await conversationHistory.refresh();
+            const current = currentChannelSession(history, selectedAgent.agentId);
+            if (activeConversationContext.current === targetContextId && sessionIds.current.get(key) === sessionId
+                && current?.session_id === sessionId && current.active_turn_id === turnId) {
+              setTurnRecoveryRequest(value => value + 1);
+            }
+          },
           onPrepareLoopX: (agentId, goalId) => prepareGoalConversation(goalId, agentId),
           onStartLoopX: (operation, agentId, goalId, settings) => { void sendManagerQuestion(operation === "start" ? "开启 LoopX 模式，持续推进当前 Goal。" : "恢复 LoopX 模式。", {agentId, contextId: goalId, loopxMode: {operation, settings}}); },
           onStartNewRunSession: startNewManagerSession,
