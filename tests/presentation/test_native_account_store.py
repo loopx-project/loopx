@@ -141,6 +141,13 @@ class AccountTests(unittest.TestCase):
         for path in self.manager.root.rglob('*'):
             self.assertEqual(path.stat().st_mode & 0o777, 0o700 if path.is_dir() else 0o600)
 
+    def test_selected_adopts_unique_external_slot_login(self):
+        self.ready()
+        self.assertEqual(self.manager.status()['active_slot'], 'a')
+        # An operator or another tool restores slot b's vault entry directly.
+        accounts.atomic(self.manager.auth, self.b)
+        self.assertEqual(self.manager.status()['active_slot'], 'b')
+
     def test_native_enrollment_does_not_select_or_change_current_login(self):
         self.current()
         result = self.enroll_b()

@@ -316,12 +316,45 @@ class Accounts:
         state = self.state()
         if state:
             raw = read_private(self.auth)
-            if identity(raw) != state['identity']:
+            current = identity(raw)
+            if current != state['identity']:
+                adopted = self._adopt(current)
+                if adopted is not None:
+                    return adopted, raw
                 raise ValueError('GPT login changed outside the slot manager; inspect before overwriting any account')
             return state, raw
         if self.auth.exists():
+            raw = read_private(self.auth)
+            adopted = self._adopt(identity(raw))
+            if adopted is not None:
+                return adopted, raw
             raise ValueError('Register the current GPT login first: codex app enroll a --current')
         return None, None
+
+    def _adopt(self, current):
+        """Adopt the home login when it matches exactly one stored slot.
+
+        An operator or another tool can restore a slot's credentials directly,
+        for example when returning from the API route after an outage. Only a
+        unique identity match is adopted; an unknown or ambiguous login still
+        requires inspection.
+        """
+        folder = self.root / 'slots'
+        matches = []
+        if folder.is_dir() and not folder.is_symlink():
+            for entry in sorted(folder.iterdir()):
+                if entry.is_symlink() or not entry.is_dir():
+                    continue
+                try:
+                    if identity(read_private(entry / 'auth.json')) == current:
+                        matches.append(entry.name)
+                except (OSError, ValueError):
+                    continue
+        if len(matches) != 1:
+            return None
+        state = {'slot': matches[0], 'identity': current, 'binding': self.binding}
+        atomic(self.active, encoded(state))
+        return state
 
     def targets(self, key):
         if key in ('auth', 'config', 'active', 'binding'):
@@ -413,7 +446,12 @@ class Accounts:
         state = self.state()
         matches = None
         if state and self.auth.exists():
-            matches = identity(read_private(self.auth)) == state['identity']
+            current = identity(read_private(self.auth))
+            if current != state['identity']:
+                adopted = self._adopt(current)
+                if adopted is not None:
+                    state = adopted
+            matches = current == state['identity']
         return {'slots': names, 'slot_kinds': kinds, 'active_slot': state['slot'] if state else None,
                 'current_login_matches': matches, 'recovery_required': self.pending.exists(),
                 'home': str(self.spec['home']), 'frontend': str(self.spec['frontend']),
