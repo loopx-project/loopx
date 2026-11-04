@@ -351,6 +351,54 @@ def test_handoff_reader_keeps_conflicting_result_scope_unknown_and_audience_boun
     assert other["ok"] and other["rows"] == []
 
 
+def test_handoff_scope_is_independent_of_page_size_and_stale_projection_annotations(flow, monkeypatch):
+    from loopx.capabilities.manager_context.inspection import ManagerInspection, TOOL_NAME
+    from loopx.capabilities.manager_context import tracking
+
+    root, registry, store, create = flow
+    session, _, receipt = create()
+    rid = receipt["request_id"]
+    acknowledge(root, "research", "worker", rid, "adopt", "Checked")
+    remaining = {"summary": "Validate", "resume_when": "Evidence available"}
+    report(root, "research", "worker", rid, "conclusion", "A partial result.", remaining_work=remaining)
+    assert drain(root, registry, store, None) == 1
+    for _ in range(12):
+        create()
+    tool = ManagerInspection(context={"goals": [{"goal_id": "research"}]},
+        registry_path=registry, runtime_root=root, owner_scope=True,
+        channel_id=session["channel_id"], scope_valid=lambda: True, record=lambda _: None)
+
+    def pages(limit):
+        result, offset = {}, 0
+        while offset is not None:
+            page = tool.read(TOOL_NAME, {"view": "handoffs", "limit": limit, "offset": offset})
+            assert page["ok"] and not page["unknown"]
+            result.update({row["request_id"]: row for row in page["rows"]})
+            offset = page["next_offset"]
+        return result
+
+    small, large = pages(3), pages(12)
+    assert len(small) == len(large) == 13
+    assert {key: (row["inbox_state"], row["agenda"]) for key, row in small.items()} == {
+        key: (row["inbox_state"], row["agenda"]) for key, row in large.items()}
+    assert small[rid]["remaining_work"] == remaining
+    report(root, "research", "worker", rid, "conclusion", "Final result.", update_id="verified")
+    assert drain(root, registry, store, None) == 1
+    query = tracking.query
+
+    def stale_annotation(*args, **kwargs):
+        packet = query(*args, **kwargs)
+        for row in packet["rows"]:
+            if row["request_id"] == rid:
+                row.update({key: small[rid][key] for key in ("inbox_state", "agenda", "remaining_work")})
+        return packet
+
+    monkeypatch.setattr(tracking, "query", stale_annotation)
+    final = tool.read(TOOL_NAME, {"view": "handoffs", "request_id": rid})["rows"][0]
+    assert final["inbox_state"] == "settled" and final["agenda"] is None
+    assert "remaining_work" not in final
+
+
 @pytest.mark.parametrize("project", [False, True], ids=["steward", "project"])
 def test_single_request_returns_to_original_transcript_without_second_model_turn(flow, project):
     root, registry, store, create = flow

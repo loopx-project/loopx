@@ -364,6 +364,7 @@ def handoff_receipt_readbacks(root, registry, rows):
             raise ValueError("handoff request revision changed")
         item = {**row, "inbox_state": state["kind"], "agenda": safe(agenda),
                 "warnings": list(dict.fromkeys([*row["warnings"], *state["warnings"]]))}
+        item.pop("remaining_work", None)
         if state.get("remaining_work"):
             item["remaining_work"] = safe(state["remaining_work"])
         page.append(item)
