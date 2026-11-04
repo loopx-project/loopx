@@ -34,16 +34,27 @@ def route(owner: NativeAccounts) -> dict:
     return value
 
 
-def healthy(value: dict) -> bool:
-    request = urllib.request.Request(f"http://127.0.0.1:{value['port']}/health", headers={"Authorization": "Bearer " + value["token"]})
+def consumer_token(value: dict, consumer: str) -> str:
+    token = value.get("steward_token" if consumer == "steward" else "token")
+    if not isinstance(token, str) or not token or consumer == "steward" and token == value.get("token"):
+        raise HostError("api_relay_upgrade_required")
+    return token
+
+
+def healthy(value: dict, consumer: str = "worker") -> bool:
+    prefix = "/steward" if consumer == "steward" else ""
     try:
+        request = urllib.request.Request(f"http://127.0.0.1:{value['port']}{prefix}/health", headers={
+            "Authorization": "Bearer " + consumer_token(value, consumer)})
         with urllib.request.build_opener(NoRedirect()).open(request, timeout=1) as response:
             return response.read(128) == b'{"ok":true}'
     except (OSError, HostError):
         return False
 
 
-def ensure(owner: NativeAccounts) -> dict:
+def ensure(owner: NativeAccounts, *, consumer: str = "worker") -> dict:
+    if consumer not in ("worker", "steward"):
+        raise HostError("invalid_policy")
     with owner._lock(name="api-relay-state.lock", wait_seconds=5):
         path = owner.root / "api-relay.json"
         if not path.exists():
@@ -52,6 +63,11 @@ def ensure(owner: NativeAccounts) -> dict:
                 port = sock.getsockname()[1]
             atomic(path, {"schema_version": SCHEMA, "port": port, "token": "sk-loopx-relay-" + secrets.token_urlsafe(32)})
         value = route(owner)
+        if consumer == "steward" and "steward_token" not in value:
+            # Independent random credentials: a worker token must not be able
+            # to derive the steward's API-primary transport credential.
+            value["steward_token"] = "sk-loopx-relay-" + secrets.token_urlsafe(32)
+            atomic(path, value)
         if not healthy(value):
             # Independent of a Chat/App process that the handoff may restart.
             subprocess.Popen([sys.executable, "-m", "loopx_codex_provider_routing.openai_relay",
@@ -63,7 +79,11 @@ def ensure(owner: NativeAccounts) -> dict:
                 time.sleep(.1)
             if not healthy(value):
                 raise HostError("api_relay_unavailable")
-        return {"slot": API_SLOT, "api_key": value["token"], "base_url": f"http://127.0.0.1:{value['port']}/v1"}
+        if consumer == "steward" and not healthy(value, consumer):
+            raise HostError("api_relay_upgrade_required")
+        prefix = "/steward" if consumer == "steward" else ""
+        return {"slot": API_SLOT, "api_key": consumer_token(value, consumer),
+                "base_url": f"http://127.0.0.1:{value['port']}{prefix}/v1"}
 
 
 class RelayServer(ThreadingHTTPServer):
@@ -71,7 +91,7 @@ class RelayServer(ThreadingHTTPServer):
     allow_reuse_address = True
 
     def __init__(self, owner: NativeAccounts, value: dict, *, opener=None):
-        self.owner, self.token = owner, value["token"]
+        self.owner, self.value = owner, value
         self.opener = opener or urllib.request.build_opener(NoRedirect())
         super().__init__(("127.0.0.1", value["port"]), RelayHandler)
 
@@ -92,13 +112,23 @@ class RelayHandler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def _authorized(self):
-        return not self.headers.get("Origin") and hmac.compare_digest(
-            self.headers.get("Authorization", ""), "Bearer " + self.server.token)
+        self.consumer = "steward" if self.path.startswith("/steward/") else "worker"
+        try:
+            return not self.headers.get("Origin") and hmac.compare_digest(
+                self.headers.get("Authorization", ""), "Bearer " + consumer_token(self.server.value, self.consumer))
+        except HostError:
+            return False
 
     def _admitted(self):
         state = self.server.owner._load()
         policy = state["policy"]
         native = state.get("native", {})
+        if self.consumer == "steward":
+            role = policy.get("steward_api_role")
+            if role == "primary":
+                return True
+            if role == "disabled":
+                return False
         selecting_api = state.get("intent", {}).get("target") == API_SLOT if state.get("intent") else False
         return (policy.get("enabled") is True and policy.get("api_fallback") is True
                 and (native.get("active_slot") == API_SLOT or selecting_api))
@@ -107,7 +137,7 @@ class RelayHandler(BaseHTTPRequestHandler):
         if not self._authorized():
             self._json(401, "relay_auth_required")
             return
-        if self.path == "/health":
+        if self.path in ("/health", "/steward/health"):
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", "11")
@@ -120,7 +150,8 @@ class RelayHandler(BaseHTTPRequestHandler):
         if not self._authorized():
             self._json(401, "relay_auth_required")
             return
-        if self.path not in ("/v1/responses", "/v1/responses/compact"):
+        upstream_path = self.path.removeprefix("/steward") if self.consumer == "steward" else self.path
+        if upstream_path not in ("/v1/responses", "/v1/responses/compact"):
             self._json(404, "unsupported_route")
             return
         if not self._admitted():
@@ -150,7 +181,7 @@ class RelayHandler(BaseHTTPRequestHandler):
             current = next((r for r in keys._load()["keys"] if r["id"] == row["id"]), None)
             if current is None:
                 continue
-            request = urllib.request.Request("https://api.openai.com" + self.path, data=body, headers={
+            request = urllib.request.Request("https://api.openai.com" + upstream_path, data=body, headers={
                 "Authorization": "Bearer " + current["api_key"], "Content-Type": "application/json",
                 "Accept": self.headers.get("Accept", "text/event-stream"),
             }, method="POST")
@@ -209,7 +240,8 @@ def main():
                 while True:
                     server.handle_request()
                     policy = owner._load()["policy"]
-                    if time.monotonic() - started > 10 and (not policy.get("enabled") or not policy.get("api_fallback")):
+                    if time.monotonic() - started > 10 and policy.get("steward_api_role") != "primary" and (
+                            not policy.get("enabled") or not policy.get("api_fallback")):
                         break
             finally:
                 # Drain already admitted requests; disabling never replays them.
