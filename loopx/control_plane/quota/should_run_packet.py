@@ -65,6 +65,9 @@ from ..quota.recent_runs import (
 from ..quota.selected_todo_projection import (
     selected_todo_projection as _selected_todo_projection,
 )
+from ..quota.execution_preparation import (
+    apply_selected_todo_execution_preparation,
+)
 from ..quota.stall_repair import (
     stall_repair_blocked_action_scope,
     stall_repair_payload,
@@ -1697,6 +1700,23 @@ def _build_quota_should_run_payload(
         payload["delivery_workspace_isolation"] = observe_goal_delivery_workspace_isolation(
             prepared.item, selected_todo,
         )
+    apply_selected_todo_execution_preparation(
+        payload,
+        runtime_root=_interaction_runtime_root(runtime_root, prepared.status_payload),
+        goal_id=prepared.safe_goal_id,
+        agent_id=quota_decision_agent_id(payload) or prepared.requested_agent_id,
+        obligation=(
+            payload["execution_obligation"]
+            if isinstance(payload.get("execution_obligation"), dict)
+            else None
+        ),
+        recommendation=(
+            payload["heartbeat_recommendation"]
+            if isinstance(payload.get("heartbeat_recommendation"), dict)
+            else None
+        ),
+        receipt_bound=prepared.receipt_bound_todo_id is not None,
+    )
     _attach_automation_cadence_readback(
         payload,
         goal_id=prepared.safe_goal_id,
