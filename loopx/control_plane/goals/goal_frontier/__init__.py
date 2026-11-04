@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 from collections.abc import Callable, Mapping
-from typing import Any
 
 from ...agents.agent_scope import (
     agent_scope_blocking_handoff_gates,
@@ -99,7 +100,7 @@ from .terminal import (
     VISION_CHECKPOINT_NO_FOLLOWUP_RESOLUTION,  # noqa: F401
     _terminal_no_followup_resolves_vision_checkpoint,
     derive_goal_terminal_state,
-    goal_frontier_is_terminal_no_followup,  # noqa: F401
+    goal_frontier_is_terminal_no_followup as goal_frontier_is_terminal_no_followup,  # noqa: F401
 )
 
 GOAL_FRONTIER_PROJECTION_SCHEMA_VERSION = "goal_frontier_projection_v0"
@@ -237,7 +238,7 @@ def _autonomous_replan_owner_agent_ids(
     for key in owner_keys:
         append_owner(replan_obligation.get(key))
     triggers = (
-        replan_obligation.get("triggers")
+        cast(list[Any], replan_obligation.get("triggers"))
         if isinstance(replan_obligation.get("triggers"), list)
         else []
     )
@@ -280,8 +281,8 @@ def autonomous_replan_scope_decision(
             # Display evidence and prose are mutable projections, not work
             # identity. Normalize before both selection and permission checks.
             work_key=peer_work_key(
-                {"obligation_id": replan_obligation.get("obligation_id")
-                 or ensure_replan_novelty_policy(replan_obligation)["obligation_id"]},
+                {"obligation_id": cast(dict[str, Any], replan_obligation).get("obligation_id")
+                 or ensure_replan_novelty_policy(cast(dict[str, Any], replan_obligation))["obligation_id"]},
                 fallback="autonomous_replan",
             ),
         )
@@ -734,8 +735,8 @@ def _is_monitor_only_lane(
     return bool(
         _is_continuous_monitor_lane(work_lane_contract)
         and (
-            work_lane_contract.get("must_attempt_work") is False
-            or work_lane_contract.get("monitor_kind") == "todo_monitor_due"
+            cast(dict[str, Any], work_lane_contract).get("must_attempt_work") is False
+            or cast(dict[str, Any], work_lane_contract).get("monitor_kind") == "todo_monitor_due"
         )
     )
 
@@ -792,7 +793,7 @@ def _ready_deferred_successor_count(
     if current_count or unclaimed_count:
         return current_count + unclaimed_count
     candidates = (
-        agent_todo_summary.get("deferred_resume_candidates")
+        cast(list[Any], agent_todo_summary.get("deferred_resume_candidates"))
         if isinstance(agent_todo_summary.get("deferred_resume_candidates"), list)
         else []
     )
@@ -845,7 +846,7 @@ def _succession_gap_acknowledged(
     """Return true when a valid replan ack postdates the newest succession gap."""
 
     semantic_delta = (
-        latest_replan_ack.get("semantic_delta")
+        cast(dict[str, Any], latest_replan_ack.get("semantic_delta"))
         if isinstance(latest_replan_ack, dict)
         and isinstance(latest_replan_ack.get("semantic_delta"), dict)
         else {}
@@ -880,7 +881,7 @@ def _acknowledged_replan_obligation_id(
     """Return the exact obligation generation closed by the latest ACK."""
 
     semantic_delta = (
-        latest_replan_ack.get("semantic_delta")
+        cast(dict[str, Any], latest_replan_ack.get("semantic_delta"))
         if isinstance(latest_replan_ack, dict)
         and isinstance(latest_replan_ack.get("semantic_delta"), dict)
         else {}
@@ -1208,8 +1209,8 @@ def derive_goal_frontier_replan_obligation_from_summaries(
             schema_version=AUTONOMOUS_REPLAN_OBLIGATION_SCHEMA_VERSION,
             agent_id=agent_id,
             include_agent_id=True,
-            stall_threshold=long_chain_trigger.get("threshold"),
-            trigger_count=long_chain_trigger.get("trigger_count"),
+            stall_threshold=cast(int, long_chain_trigger.get("threshold")),
+            trigger_count=cast(int, long_chain_trigger.get("trigger_count")),
             triggers=[
                 {
                     "kind": LONG_TODO_CHAIN_TRIGGER,
@@ -1818,7 +1819,7 @@ def build_autonomous_replan_recommendation(
 
 def build_autonomous_replan_decision(replan_obligation: dict[str, Any]) -> dict[str, Any]:
     triggers = (
-        replan_obligation.get("triggers")
+        cast(list[Any], replan_obligation.get("triggers"))
         if isinstance(replan_obligation.get("triggers"), list)
         else []
     )

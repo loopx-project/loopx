@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
+
 
 from ...control_plane import control_plane_policy_summary
 from ...control_plane.quota.states import QUOTA_STATE_ORDER
@@ -502,6 +503,7 @@ def render_quota_should_run_markdown(payload: dict[str, Any]) -> str:
                     f"automatic_resume={vision_wait_state.get('automatic_resume')}"
                 )
     orchestration = as_dict(payload.get("task_orchestration_contract"))
+    boundary_orchestration: dict[str, Any] | None
     for label, task_orchestration in (
         ("task_orchestration", orchestration),
         ("peer_activation_diagnostic", as_dict(orchestration.get("peer_activation_diagnostic"))),
@@ -1075,13 +1077,13 @@ def render_quota_should_run_markdown(payload: dict[str, Any]) -> str:
         guards = as_list(goal_boundary.get("guards"))
         for guard in guards[:5]:
             lines.append(f"- goal_boundary_guard: {guard}")
-        orchestration = (
-            goal_boundary.get("orchestration")
+        boundary_orchestration = (
+            cast(dict[str, Any], goal_boundary.get("orchestration"))
             if isinstance(goal_boundary.get("orchestration"), dict)
             else None
         )
-        if orchestration:
-            lines.append(f"- goal_boundary_orchestration: {orchestration_policy_summary(orchestration)}")
+        if boundary_orchestration:
+            lines.append(f"- goal_boundary_orchestration: {orchestration_policy_summary(boundary_orchestration)}")
         capabilities = as_dict(goal_boundary.get("capabilities"))
         lark_inbox = as_dict(capabilities.get("lark_event_inbox"))
         urgency = as_dict(lark_inbox.get("urgency"))
@@ -1098,7 +1100,7 @@ def render_quota_should_run_markdown(payload: dict[str, Any]) -> str:
                 f"oldest_age_seconds={urgency.get('oldest_pending_age_seconds')}"
             )
         run_permission_policy = (
-            goal_boundary.get("run_permission_policy")
+            cast(dict[str, Any], goal_boundary.get("run_permission_policy"))
             if isinstance(goal_boundary.get("run_permission_policy"), dict)
             else None
         )

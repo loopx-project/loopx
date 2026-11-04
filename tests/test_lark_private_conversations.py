@@ -19,7 +19,8 @@ from loopx.extensions.lark.private_conversations import LarkPrivateConversations
 from loopx.extensions.lark.goal_topic_runtime import poll_lark_goal_topic_profile_once
 
 
-@pytest.mark.parametrize("fault", [None, "stop", "source-changed", "later-source", "no-capacity", "native-tool"])
+@pytest.mark.parametrize("fault", [None, "stop", "source-changed", "later-source", "no-capacity", "native-tool",
+    "stop-after-discovery", "source-changed-after-discovery"])
 def test_original_worker_continues_proven_unstarted_argon_quota_on_codex(tmp_path, language_server, monkeypatch, fault):  # noqa: F811
     from copy import deepcopy
     from datetime import timedelta
@@ -59,8 +60,9 @@ def test_original_worker_continues_proven_unstarted_argon_quota_on_codex(tmp_pat
         fake = Path(runtime.codex_bin)
         fake.write_text(fake.read_text().replace('result = {"thread": {"id": "durable-thread"}}',
             'result = {"thread": {"id": "durable-thread"}, "model": "gpt-6.1-sol"}'))
-        route = lambda *_: None if fault == "no-capacity" else {"allocation": allocation,
-            "blocked_primary": None, "observed_at": time.time()}
+        def route(*_):
+            return None if fault == "no-capacity" else {"allocation": allocation,
+                "blocked_primary": None, "observed_at": time.time()}
         monkeypatch.setattr(manager_module, "manager_session_quota_route", route)
         monkeypatch.setattr(runtime_module, "manager_session_quota_route", route)
         class Ahead(datetime):
@@ -80,10 +82,12 @@ def test_original_worker_continues_proven_unstarted_argon_quota_on_codex(tmp_pat
                 transitions.append(session_id)
             return update_session(session_id, **changes)
         monkeypatch.setattr(store, "update_session", checked_update)
-        if fault == "stop":
+        if fault in {"stop-after-discovery", "source-changed-after-discovery"}:
+            assert path in transport.pending_delivery_paths()
+        if fault in {"stop", "stop-after-discovery"}:
             store.append_event(original["session_id"], original["turn_id"], kind="turn.interrupt_requested", payload={})
             original_events = store.events_after(original["session_id"], original["turn_id"], None)
-        elif fault == "source-changed":
+        elif fault in {"source-changed", "source-changed-after-discovery"}:
             provider.messages[event["message_id"]]["content"] = "Changed original input"
         elif fault == "later-source":
             transport.admit("steward-app", provider.event("steward-app", "source-correction", "/status"))
@@ -4498,6 +4502,137 @@ def test_slow_app_reaction_does_not_block_current_or_later_answers(ordinary, mon
     projection = json.loads(next((transport.root / "web-projections").glob("*.json")).read_text())
     assert len(projection["deliveries"]) == 6
     assert all(phase.get("verified") for phase in projection["deliveries"].values())
+
+
+@pytest.mark.parametrize("background_slots", [0, 2])
+def test_private_recovery_backlog_uses_released_capacity_before_retry_delay(tmp_path, monkeypatch, background_slots):
+    from loopx.extensions.lark import goal_topic_runtime_service as worker
+    from loopx.extensions.lark import private_conversations as private
+
+    # Exercise the real discovery, bounded executor, fairness counters and
+    # reconciliation entrypoint. Only native/provider work and the clock are
+    # synthetic: discovering work while full must not count as attempting it.
+    clock = [100.0]
+    release, full = threading.Event(), threading.Event()
+    lock = threading.Lock()
+    attempts, completed = {}, set()
+    slots = 4 - background_slots
+    native_root = tmp_path / "native"
+    native_root.mkdir()
+    transport = LarkPrivateConversations.__new__(LarkPrivateConversations)
+    transport.root = tmp_path
+    transport._context_recovery_probe_at = {}
+    transport._web_projection_paths = lambda: []
+    transport.reconcile_app_feedback = lambda: 0
+
+    def recover(ref, **_):
+        with lock:
+            attempts.setdefault(ref, clock[0])
+            if len(attempts) == slots:
+                full.set()
+        assert release.wait(5)
+        completed.add(ref)
+        return {"request_ref": ref, "turn_id": "original-failed-turn"}
+
+    transport.core = SimpleNamespace(root=native_root,
+        context_recovery_candidate=lambda ref: ref != "ineligible",
+        context_recovery_observer=lambda: transport.core.context_recovery_candidate,
+        recover_failed_request=recover)
+    if background_slots:
+        transport.owner_attention = SimpleNamespace(has_enabled=lambda: True,
+            reconcile=lambda: release.wait(5) and 0)
+        transport.steward_reports = SimpleNamespace(pending=lambda: True,
+            reconcile=lambda: release.wait(5) and 0)
+
+    def write(ref):
+        path = tmp_path / f"{ref}.json"
+        path.write_text(json.dumps({"status": "delivered", "request_ref": ref,
+            "session_id": "original-session", "turn_id": "original-failed-turn",
+            "profile": "fixture", "event": {"message_id": ref}}))
+        return path
+
+    paths = [write(f"old-{i:02}") for i in range(9)]
+    write("ineligible")
+    original_bytes = {path: path.read_bytes() for path in tmp_path.glob("*.json")}
+    service = worker.LarkGoalTopicRuntimeService(snapshot_provider=lambda: {}, runtime_root=tmp_path,
+        runtime_controller=None, private_conversations=transport)
+    monkeypatch.setattr(private, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    monkeypatch.setattr(worker, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+
+    def drive(step, **_):
+        step()
+        assert full.wait(2)
+        clock[0] = 101
+        step()  # No free capacity: do not put the remaining old requests off.
+        paths.append(write("late"))
+        clock[0] = 102
+        step()  # The later arrival is also discovered while all slots are held.
+        release.set()
+        for tick in range(103, 115):
+            clock[0] = tick
+            step()
+            deadline = time.monotonic() + .1
+            while len(completed) < min(10, (tick - 102) * slots) and time.monotonic() < deadline:
+                time.sleep(.001)
+            if len(completed) == 10:
+                break
+        service._closed.set()
+
+    monkeypatch.setattr(service._delivery_worker, "repeat", drive)
+    try:
+        service._reconcile_private()
+    finally:
+        release.set()
+    assert set(attempts) == {path.stem for path in paths}
+    assert attempts["late"] < 115
+    assert all(path.read_bytes() == body for path, body in original_bytes.items())
+    assert all(transport._context_recovery_probe_at[path] > clock[0] for path in paths)
+
+
+def test_private_recovery_discovery_keeps_negative_and_attempt_backoff(tmp_path, monkeypatch):
+    from loopx.extensions.lark import private_conversations as private
+
+    clock, checks, attempts = [100.0], [], []
+    eligible = {"candidate": True, "ineligible": False}
+    transport = LarkPrivateConversations.__new__(LarkPrivateConversations)
+    transport.root = tmp_path
+    transport._context_recovery_probe_at = {}
+    transport._web_projection_paths = lambda: []
+    monkeypatch.setattr(private, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+
+    def candidate(ref):
+        checks.append(ref)
+        return eligible[ref]
+
+    def unavailable(ref, **_):
+        attempts.append(ref)
+        raise OSError("synthetic native observation unavailable")
+
+    transport.core = SimpleNamespace(context_recovery_candidate=candidate,
+        context_recovery_observer=lambda: transport.core.context_recovery_candidate,
+        recover_failed_request=unavailable)
+    paths = {}
+    for ref in eligible:
+        path = tmp_path / f"{ref}.json"
+        path.write_text(json.dumps({"status": "delivered", "request_ref": ref,
+            "session_id": "original", "turn_id": "failed", "profile": "fixture",
+            "event": {"message_id": ref}}))
+        paths[ref] = path
+    assert transport.pending_delivery_paths() == [paths["candidate"]]
+    assert transport.pending_delivery_paths() == []
+    assert checks.count("ineligible") == 1 and attempts == []
+    clock[0] += 30  # The worker finally gets a slot after discovery.
+    with pytest.raises(OSError, match="observation unavailable"):
+        transport.reconcile_request(paths["candidate"])
+    assert attempts == ["candidate"]
+    clock[0] += 31  # Discovery's old hint elapsed; the actual probe's has not.
+    assert transport.pending_delivery_paths() == []
+    clock[0] += 30
+    # Fresh eligibility wins over the old discovery hint; no stale cached
+    # candidate is an execution grant after a source/permission/stop change.
+    eligible["candidate"] = False
+    assert transport.pending_delivery_paths() == []
+    assert attempts == ["candidate"]
 
 
 def test_private_reply_workers_have_no_executor_backlog_and_stop_scheduling(tmp_path):

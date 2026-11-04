@@ -549,10 +549,10 @@ def test_native_cli_retry_and_saved_result_keep_one_original_settlement(
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_live_fixture(tmp_path, provider=provider)
     executable, invocations = _fake_codex(tmp_path)
+    output = 'output_path.write_text(json.dumps(result), encoding="utf-8")'
+    assert executable.read_text().count(output) == 1
     source = executable.read_text().replace(
-        'output_path.write_text(json.dumps({',
-        "pathlib.Path('validated-artifact').write_text('independent marker')\n"
-        'output_path.write_text(json.dumps({',
+        output, "pathlib.Path('validated-artifact').write_text('independent marker')\n" + output,
     )
     executable.write_text(source)
     monkeypatch.setenv("FAKE_CODEX_LOG", str(invocations))
@@ -603,7 +603,7 @@ def test_native_cli_retry_and_saved_result_keep_one_original_settlement(
         assert code == 1 and "synthetic response lost" in json.dumps(committed), committed
         assert lost == [True]
         code, committed = _invoke_turn([*run, "--resume-turn-key", turn_key])
-    assert code == 0 and committed["status"] == "committed", committed
+    assert code == 0 and committed["status"] == "committed", json.dumps(committed)
     saved = load_turn_journal(path)
     assert saved["turn_key"] == turn_key and saved["host_attempt_count"] == 2
     assert [receipt["step_kind"] for receipt in saved["settlement_result"]["receipts"]] == [

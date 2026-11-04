@@ -59,6 +59,24 @@ def test_user_gate_fallback_preserves_repair_and_replan_precedence():
     ) is original
 
 
+def test_independent_fallback_keeps_workspace_repair_obligation_without_write_grant():
+    original = {
+        "decision": "workspace_guard", "should_run": True,
+        "effective_action": "agent_workspace_repair",
+        "normal_delivery_allowed": False, "workspace_repair_allowed": True,
+        "execution_obligation": {
+            "kind": "agent_workspace_repair", "must_attempt_work": True,
+            "delivery_allowed": False, "minimum": "move_to_independent_worktree",
+        },
+    }
+    fallback = {"selected_executable": {"todo_id": "todo_independent"}}
+    result = apply_scoped_user_gate_fallback_projection(
+        original, fallback=fallback, replan_decision_allowed=False,
+    )
+    assert result == {**original, "scoped_user_gate_fallback": fallback}
+    assert "scoped_user_gate_fallback" not in original
+
+
 def _status_payload(
     *,
     gate_action_kind: str,

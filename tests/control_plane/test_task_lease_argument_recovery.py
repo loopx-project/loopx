@@ -168,6 +168,32 @@ def test_missing_inputs_are_combined_and_wrong_owner_is_not_repaired(lease_cli):
     assert run(action("inspect"))["lease"] == before
 
 
+@pytest.mark.parametrize("operation", ["renew", "transfer", "release"])
+def test_wrong_execution_key_explains_matching_version_and_keeps_original_recovery(lease_cli, operation):
+    run, action, _, _ = lease_cli
+    before = run(action("inspect"))
+    version = str(before["lease"]["version"])
+    extra = ["--new-owner", "peer-a", "--new-idempotency-key", "receiver"] if operation == "transfer" else []
+    denied = run(action(operation, "--owner", "peer-a", "--idempotency-key", "new-operation",
+                        "--expected-version", version, *extra), code=1)
+    assert denied["error_code"] == "lease_cas_mismatch"
+    assert denied["expected_version"] == denied["actual_version"] == int(version)
+    assert "owner" in denied["error"] and "idempotency key" in denied["error"]
+    assert denied["inspection"]["execution_authority_granted"] is False
+    observed = run(denied["inspection"]["cli_args"])
+    assert observed["lease"] == before["lease"]
+    assert observed["provider_revision"] == before["provider_revision"]
+
+    original = action(operation, "--owner", "peer-a", "--idempotency-key", "original",
+                      "--expected-version", version, *extra)
+    applied = run(original)
+    assert applied["lease"]["version"] == int(version) + (operation != "release")
+    assert applied["lease"]["idempotency_key"] == ("receiver" if operation == "transfer" else "original")
+    replay = run(original)
+    assert replay["idempotent"] is True and replay["lease"] == applied["lease"]
+    assert run(action("inspect"))["lease"] == applied["lease"]
+
+
 def test_recovery_round_trips_leading_hyphen_execution_keys(lease_cli):
     run, action, _, _ = lease_cli
     released = run(action("release", "--owner", "peer-a", "--idempotency-key", "original",

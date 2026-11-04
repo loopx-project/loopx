@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 import hashlib
 import json
 import shlex
 from collections.abc import Iterable, Mapping
-from typing import Any
 
 from ...turn_identity import normalize_turn_instance_id
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
@@ -248,7 +249,7 @@ def replan_successor_transition_allowed(
         raise ValueError(str(exc)) from None
     if not isinstance(result, Mapping) or not isinstance(result.get("allowed"), bool):
         raise RuntimeError("TypeScript transition eligibility shape mismatch")
-    return result["allowed"]
+    return cast(bool, result["allowed"])
 
 
 def guarded_replan_transition_delta(

@@ -831,6 +831,23 @@ def test_failed_replan_index_cannot_relabel_later_work_after_permissions_recover
     data["vision_patch"]["acceptance_summary"] = "The missed original point stays missed; later research boundaries still qualify separately."
     data["path_delta"]["observed_reality"] = "Real permission recovery did not recapture later code as the original research point."
     data["path_delta"].update(schema_version="goal_path_delta_v0", outcome="replan")
+    control = guard["replan_action_packet"].get("stride_control", {})
+    if "minimal_example" in control:
+        # The permission invariant must also settle under the current enabled
+        # stride contract; capture failure does not waive that original review.
+        decision = json.loads(json.dumps(control["minimal_example"]))
+        decision.update(action="verify", axes={
+            "work_slice": {"plan": "Qualify one separately declared later capture boundary.",
+                           "reason": "The original missed point must remain missed."},
+            "route_distance": {"plan": "Retain the source capture method.",
+                               "reason": "This fixture tests permission recovery, not strategy quality."},
+            "validation_scope": {"plan": "Check a new obligation captures the later candidate exactly once.",
+                                 "reason": "Successful old-point refusal alone does not qualify a later point."}},
+            next_probe={"scope": "One new synthetic replan boundary.", "prediction": "Only the new point captures.",
+                "adoption_criterion": "The original stays absent and the new candidate matches.",
+                "cost_bound": "One original admitted wake and local validation.",
+                "minimum_evidence": "Original guard, new obligation and sealed candidate."})
+        data["stride_decision"] = decision
     vision.write_text(json.dumps(data))
     run("refresh-state", "--goal-id", cli.GOAL_ID, *replan_binding,
         "--classification", "missed_original_point_preserved", "--delivery-batch-scale", "multi_surface",

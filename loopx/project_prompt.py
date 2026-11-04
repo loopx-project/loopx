@@ -446,10 +446,10 @@ def build_new_project_prompt(
         if isinstance(existing_registry, dict) and existing_registry.get("common_runtime_root")
         else None
     )
-    active_state_path = rel_or_abs(
+    active_state_path = Path(rel_or_abs(
         registered_goal_state_file(project.expanduser(), resolved_goal_id, existing_registry),
         project.expanduser(),
-    )
+    )).as_posix()
     allowed_domains = allowed_domains or []
     write_scope = write_scope or []
     connect_command = render_connect_command(

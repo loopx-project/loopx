@@ -762,6 +762,30 @@ Approval needs a reviewed decision, not implementation progress or silence.
   it does not complete R0's full V10 census, M1 public-import migration, split
   packaging or R1 managed minimal. D1–D7 remain open. No new preset or default.
 
+### 2026-11-03 — M1 public status compatibility characterization
+
+- **Boundary:** `ChatStatusRequestMixin` and `goal_read_runtime_root` still live
+  in `loopx.chat_status_api`. The Chat HTTP handler and Todo detail are active
+  consumers. This is a characterization prerequisite, not a relocated owner.
+- **Compatibility evidence:** `tests/test_chat_status_public_compatibility.py`
+  protects historical imports in three fresh-process import orders, historical
+  pickle lookups, reload with already-imported references, and live registry,
+  collector and host-observation patch points through the real HTTP handler.
+  Discovery tolerates a missing registry, not unreadable or invalid metadata.
+  A copied-export facade mutation fails the source-bound Todo-consumer patch
+  oracle: re-exported functions alone do not preserve legacy module globals.
+- **Next reviewed slice:** move the complete status owner under `loopx/chat/`
+  with an identity-compatible public bridge and documented I3 deprecation.
+  Retarget both the exact loader path and `_discovery_registry` exception in
+  `tests/architecture/test_source_session_registry_denial.py` together, retaining
+  metadata-only discovery and executable source-session refusal. The present
+  slice leaves that owner and oracle unchanged; do not split ownership or relax
+  the denial oracle just to make a partial move pass.
+- **Remaining:** status relocation and its installed-wheel integration are not
+  delivered by characterization. I3 retains at least one minor release; D3's
+  exact expiry remains a release-owner decision. M1 is open. No module-count,
+  loading-performance, split-package or R1 managed-Turn benefit is claimed.
+
 ## Appendix B: Decision log
 
 | Date | Decision | Owner / approval | Alternatives | Normative sections changed |

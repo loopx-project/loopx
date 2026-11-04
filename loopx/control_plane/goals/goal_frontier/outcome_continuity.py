@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any
 
 from ...agents.agent_scope import agent_scope_item_claimed_by
 from ...work_items.autonomous_replan_ack import accepted_blocked_replan_history_indexes
@@ -157,7 +158,7 @@ def outcome_vision_checkpoint_from_run(
         "required": checkpoint.get("required") is True,
         "satisfied": checkpoint.get("satisfied") is True,
         "decision": checkpoint.get("decision"),
-        "triggers": checkpoint.get("triggers")
+        "triggers": cast(list[Any], checkpoint.get("triggers"))
         if isinstance(checkpoint.get("triggers"), list)
         else [],
         "generated_at": run.get("generated_at"),
@@ -392,7 +393,7 @@ def acceptance_gaps_from_todo_completion_checkpoint(
 
     vision_present = isinstance(agent_vision, dict)
     if vision_present and goal_vision_state_is_closed(
-        str(agent_vision.get("state") or "")
+        str(cast(dict[str, Any], agent_vision).get("state") or "")
     ):
         return []
     if not agent_id:
@@ -448,12 +449,12 @@ def acceptance_gaps_from_todo_completion_checkpoint(
     if len(uncheckpointed_items) < threshold:
         return []
 
-    patch = _dict_field(agent_vision, "vision_patch") if vision_present else {}
+    patch = _dict_field(cast(dict[str, Any], agent_vision), "vision_patch") if vision_present else {}
     return [
         {
             "kind": VISION_OUTCOME_CHECKPOINT_REQUIRED_TRIGGER,
             "source": "recent_completed_advancement_todo",
-            "agent_id": agent_id or agent_vision.get("agent_id"),
+            "agent_id": agent_id or cast(dict[str, Any], agent_vision).get("agent_id"),
             "replan_trigger_summary": (
                 "a completed advancement Todo chain has no later final-outcome "
                 "checkpoint"

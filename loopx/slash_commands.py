@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
+
 
 from .presentation.markdown import (
     markdown_code,
@@ -240,7 +241,7 @@ def render_slash_command_catalog_markdown(payload: dict[str, Any]) -> str:
         intent = str(item.get("intent") or "")
         if legacy:
             intent += " Legacy aliases: " + ", ".join(f"`{alias}`" for alias in legacy) + "."
-        agent_contract = item.get("agent_contract") if isinstance(item.get("agent_contract"), dict) else {}
+        agent_contract = cast(dict[str, Any], item.get("agent_contract")) if isinstance(item.get("agent_contract"), dict) else {}
         if agent_contract.get("must_run_cli_first"):
             intent += " Agent contract: run the CLI reference first; do not rebuild the queue manually."
         if agent_contract.get("host_loop_activation_required_after_todo_writeback"):

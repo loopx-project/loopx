@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
 
 from .. import compact_control_plane_policy
 from ..goals.goal_frontier import (
@@ -85,7 +86,7 @@ def _compact_latest_run(run: dict[str, Any]) -> dict[str, Any]:
 def _control_plane_post_handoff_observation_hint(item: dict[str, Any]) -> dict[str, Any] | None:
     control_plane = compact_control_plane_policy(item.get("control_plane"))
     self_repair = (
-        control_plane.get("self_repair")
+        cast(dict[str, Any], control_plane.get("self_repair"))
         if isinstance(control_plane.get("self_repair"), dict)
         else {}
     )
@@ -97,12 +98,12 @@ def _control_plane_post_handoff_observation_hint(item: dict[str, Any]) -> dict[s
         return None
 
     handoff_readiness = (
-        item.get("handoff_readiness")
+        cast(dict[str, Any], item.get("handoff_readiness"))
         if isinstance(item.get("handoff_readiness"), dict)
         else {}
     )
     latest_run = (
-        handoff_readiness.get("post_handoff_latest_run")
+        cast(dict[str, Any], handoff_readiness.get("post_handoff_latest_run"))
         if isinstance(handoff_readiness.get("post_handoff_latest_run"), dict)
         else {}
     )
@@ -192,7 +193,7 @@ def refine_heartbeat_recommendation(
     )
     if capability_override:
         refined.update(capability_override)
-        refined["reason"] = capability_gate.get("reason") or refined.get("reason")
+        refined["reason"] = cast(dict[str, Any], capability_gate).get("reason") or refined.get("reason")
 
     if workspace_guard:
         refined.update(
@@ -490,12 +491,12 @@ def _monitor_lane_rule(
 
     latest_run: dict[str, Any] = {}
     handoff_readiness = (
-        facts.item.get("handoff_readiness")
+        cast(dict[str, Any], facts.item.get("handoff_readiness"))
         if isinstance(facts.item.get("handoff_readiness"), dict)
         else {}
     )
     latest_handoff_run = (
-        handoff_readiness.get("post_handoff_latest_run")
+        cast(dict[str, Any], handoff_readiness.get("post_handoff_latest_run"))
         if isinstance(handoff_readiness.get("post_handoff_latest_run"), dict)
         else {}
     )
@@ -580,7 +581,7 @@ def _post_handoff_observation_rule(
     if not post_handoff or facts.has_user_todos:
         return None
     latest_run = (
-        post_handoff.get("latest_run")
+        cast(dict[str, Any], post_handoff.get("latest_run"))
         if isinstance(post_handoff.get("latest_run"), dict)
         else {}
     )
@@ -675,7 +676,7 @@ def _build_recommendation_facts(
     monitor_due_item_limit: int,
 ) -> _HeartbeatRecommendationFacts:
     project_asset = (
-        item.get("project_asset")
+        cast(dict[str, Any], item.get("project_asset"))
         if isinstance(item.get("project_asset"), dict)
         else {}
     )
@@ -705,7 +706,7 @@ def _build_recommendation_facts(
         adapter_kind=str(item.get("adapter_kind") or ""),
         lifecycle_phase=item.get("lifecycle_phase"),
         lifecycle_flags=item.get("lifecycle_flags"),
-        quota=item.get("quota") if isinstance(item.get("quota"), dict) else {},
+        quota=cast(dict[str, Any], item.get("quota")) if isinstance(item.get("quota"), dict) else {},
         replan_obligation=resolved_replan_obligation,
         has_user_todos=_open_todo_count(user_todo_summary) > 0,
         has_agent_todos=_open_todo_count(agent_todo_summary) > 0,
@@ -744,5 +745,5 @@ def build_heartbeat_recommendation(
     for rule in _HEARTBEAT_RECOMMENDATION_RULES:
         recommendation = rule(facts)
         if recommendation is not None:
-            return recommendation
+            return cast(dict[str, Any], recommendation)
     raise AssertionError("heartbeat recommendation rule table requires a fallback")

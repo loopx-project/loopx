@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import json
-from typing import Any
 
 from ..agents.profile import agent_profile_candidate_rank
 from ..effect_runtime import (
@@ -245,7 +246,7 @@ def _decode_quota_summary_wire(wire: Any, source: dict[str, Any]) -> dict[str, A
         if not (isinstance(parent, dict) and isinstance(key, str)
                 or isinstance(parent, list) and type(key) is int):
             raise RuntimeError(error)
-        return parent[key]
+        return parent[cast(int, key)]
 
     try:
         for copy in [*copies, *integers]:

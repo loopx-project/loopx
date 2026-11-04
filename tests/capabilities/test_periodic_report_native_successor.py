@@ -6,6 +6,8 @@ import contextlib
 import io
 import json
 from pathlib import Path
+import shlex
+import subprocess
 
 import pytest
 
@@ -15,6 +17,7 @@ from loopx.capabilities.periodic_report.post_writeback_hook import (
 )
 from loopx.capabilities.periodic_report.pending_intent import pending_periodic_report_intents
 from loopx.cli import main as cli_main
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 from tests.test_loopx_turn_driver import _write_live_fixture
 
 
@@ -26,7 +29,7 @@ def _run_cli(args: list[str]) -> dict[str, object]:
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
         exit_code = cli_main(args)
-    payload = json.loads(output.getvalue())
+    payload = read_cli_policy_payload(output.getvalue(), returncode=exit_code)
     assert exit_code == 0, payload
     return payload
 
@@ -75,6 +78,13 @@ def _native_successor(
     selected = first_guard["selected_todo"]["todo_id"]
     bound_guard = _run_cli([*guard, "--todo-id", selected])
     assert bound_guard["heartbeat_receipt"]["settlement_identity"]["todo_id"] == selected
+    review = json.loads(subprocess.check_output(
+        shlex.split(bound_guard["replan_action_packet"]["review"]), text=True,
+    ))
+    writeback = json.loads(subprocess.check_output(
+        shlex.split(review["next"]["writeback"]), text=True,
+    ))
+    assert writeback["obligation_id"] == bound_guard["replan_action_packet"]["obligation_id"]
 
     successor_vision = {
         "schema_version": "goal_vision_replan_contract_v0",
@@ -91,6 +101,7 @@ def _native_successor(
             "evidence_refs": ["fixture:accepted-stage-boundary"],
             "changed": ["Advance the successor fixture check."],
         },
+        "stride_decision": writeback["stride_control"]["minimal_example"],
     }
     vision_path = project / "successor-vision.json"
     vision_path.write_text(json.dumps(successor_vision), encoding="utf-8")

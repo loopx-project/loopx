@@ -7,6 +7,8 @@ import io
 import json
 from dataclasses import replace
 from pathlib import Path
+import shlex
+import subprocess
 
 import pytest
 
@@ -21,6 +23,7 @@ from loopx.cli_commands import project_lifecycle_refresh_state, turn_post_writeb
 from tests.control_plane.canonical_authority_fixture import (
     isolate_sqlite_runtime,
 )
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 from tests.test_loopx_turn_driver import (
     _completion_host_and_validation_scripts,
     _turn_run_once_completion_argv,
@@ -36,7 +39,7 @@ def _run_cli(args: list[str]) -> dict[str, object]:
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
         exit_code = cli_main(args)
-    payload = json.loads(output.getvalue())
+    payload = read_cli_policy_payload(output.getvalue(), returncode=exit_code)
     assert exit_code == 0, payload
     return payload
 
@@ -81,6 +84,24 @@ def _accepted_closed_vision_and_successor(
         for item in closed["vision_checkpoint"]["triggers"]
     )
 
+    turn_id = "fixture-successor-turn"
+    guard_args = [
+        "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+        "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--turn-instance-id", turn_id,
+    ]
+    guard = _run_cli(guard_args)
+    assert guard["decision"] == "autonomous_replan_required"
+    todo_id = guard["selected_todo"]["todo_id"]
+    bound_guard = _run_cli([*guard_args, "--todo-id", todo_id])
+    review = json.loads(subprocess.check_output(
+        shlex.split(bound_guard["replan_action_packet"]["review"]), text=True,
+    ))
+    writeback = json.loads(subprocess.check_output(
+        shlex.split(review["next"]["writeback"]), text=True,
+    ))
+    assert writeback["obligation_id"] == bound_guard["replan_action_packet"]["obligation_id"]
+
     successor_vision = {
         "schema_version": "goal_vision_replan_contract_v0",
         "state": "active",
@@ -96,11 +117,13 @@ def _accepted_closed_vision_and_successor(
             "evidence_refs": ["fixture:accepted-closed-vision"],
             "changed": ["Finish the remaining fixture Todo."],
         },
+        "stride_decision": writeback["stride_control"]["minimal_example"],
     }
     vision_path = project / "successor-vision.json"
     vision_path.write_text(json.dumps(successor_vision), encoding="utf-8")
     successor = _run_cli([
         *base, "--classification", "fixture_successor_vision",
+        "--todo-id", todo_id, "--turn-instance-id", turn_id,
         "--autonomous-replan-recorded", "--agent-vision-json", str(vision_path),
     ])
     assert successor["appended"] is True

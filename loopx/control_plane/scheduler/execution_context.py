@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 import shlex
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
 
 SCHEDULER_EXECUTION_CONTEXT_SCHEMA_VERSION = "scheduler_execution_context_v0"
 GOAL_RUNTIME_CONTINUATION_SCHEMA_VERSION = "goal_runtime_continuation_v0"
@@ -382,9 +383,9 @@ def resolve_scheduler_execution_context(
             supplied=supplied,
         )
     context = SchedulerExecutionContext(
-        host_surface=host_surface,
-        scheduler_owner=scheduler_owner,
-        execution_mode=execution_mode,
+        host_surface=cast(HostSurface, host_surface),
+        scheduler_owner=cast(SchedulerOwner, scheduler_owner),
+        execution_mode=cast(ExecutionMode, execution_mode),
         source=str(supplied.get("source") or "explicit"),
     )
     errors = _validation_errors(context)
@@ -479,9 +480,9 @@ def render_scheduler_execution_args(
         raise ValueError(
             "invalid scheduler_execution_context: " + "; ".join(resolution.errors)
         )
-    profile = scheduler_runtime_profile_for_execution_context(resolution)
-    if profile is not None:
-        return _render_scheduler_runtime_profile_args(profile)
+    resolved_profile = scheduler_runtime_profile_for_execution_context(resolution)
+    if resolved_profile is not None:
+        return _render_scheduler_runtime_profile_args(resolved_profile)
     context = resolution.context
     return "".join(
         (

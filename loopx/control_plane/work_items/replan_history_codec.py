@@ -173,7 +173,7 @@ def project_replan_history(
     needs_resume = operation == "all" and any(
         row["monitor"]["mode"] == "blocked_successor_wait_without_material_transition"
         for row in facts)
-    params = {
+    params: dict[str, Any] = {
         "schema_version": "replan_history_request_v0", "operation": operation,
         "runs": facts,
         "agent_id": str(agent_id or "").strip() or None,

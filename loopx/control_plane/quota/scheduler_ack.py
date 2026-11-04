@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 import json
 import subprocess
 from pathlib import Path
-from typing import Any
 
 from ..effect_runtime import _node_executable
 from ..runtime.time import now_local_iso
@@ -28,7 +29,7 @@ def _scheduler_packet(
     state_key: str | None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     scheduler_hint = (
-        before.get("scheduler_hint")
+        cast(dict[str, Any], before.get("scheduler_hint"))
         if isinstance(before.get("scheduler_hint"), dict)
         else {}
     )
@@ -45,12 +46,12 @@ def _scheduler_packet(
     else:
         packet_key = surface
     surface_packet = (
-        scheduler_hint.get(packet_key)
+        cast(dict[str, Any], scheduler_hint.get(packet_key))
         if isinstance(scheduler_hint.get(packet_key), dict)
         else {}
     )
     stateful_backoff = (
-        surface_packet.get("stateful_backoff")
+        cast(dict[str, Any], surface_packet.get("stateful_backoff"))
         if isinstance(surface_packet.get("stateful_backoff"), dict)
         else {}
     )
@@ -81,11 +82,11 @@ def _current_hint_identity(
         state_key=state_key,
     )
     ack_hint = (
-        surface_packet.get("ack_hint")
+        cast(dict[str, Any], surface_packet.get("ack_hint"))
         if isinstance(surface_packet.get("ack_hint"), dict)
         else {}
     )
-    ack_args = ack_hint.get("args") if isinstance(ack_hint.get("args"), dict) else {}
+    ack_args = cast(dict[str, Any], ack_hint.get("args")) if isinstance(ack_hint.get("args"), dict) else {}
     return (
         str(applied_rrule or "").strip()
         or str(ack_args.get("applied_rrule") or "").strip()
@@ -415,7 +416,7 @@ def record_quota_scheduler_failure_for_decision(
             or stateful_backoff.get("current_rrule")
         )
         host_observation = (
-            stateful_backoff.get("host_observation")
+            cast(dict[str, Any], stateful_backoff.get("host_observation"))
             if isinstance(stateful_backoff.get("host_observation"), dict)
             else {}
         )

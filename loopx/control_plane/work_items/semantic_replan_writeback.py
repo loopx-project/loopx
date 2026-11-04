@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import shlex
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any
 
 from ...agent_registry import registered_agent_ids_for_goal
 from ..agents.agent_scope import agent_scope_item_matches_agent_or_unclaimed
@@ -252,7 +253,7 @@ def qualify_replan_writeback(
     )
     registered_agent_ids = registered_agent_ids_for_goal(registry_goal)
     agent_identity = (
-        build_quota_agent_identity(registry_goal, agent_id=safe_agent_id)
+        build_quota_agent_identity(cast(dict[str, Any], registry_goal), agent_id=safe_agent_id)
         if registered_agent_ids
         else {
             "agent_id": safe_agent_id,
@@ -331,13 +332,13 @@ def qualify_replan_writeback(
         neutral_replan_ack_classifications=(
             AUTONOMOUS_RUN_HISTORY_NEUTRAL_CLASSIFICATIONS
         ),
-        registered_agent_ids=list(agent_identity["registered_agents"]),
+        registered_agent_ids=list(cast(dict[str, Any], agent_identity)["registered_agents"]),
         goal_status=str((registry_goal or {}).get("status") or "active"),
         receipt_bound_replan_obligation_id=(guard_semantic_replan_obligation_id if guard_scoped else None),
         receipt_bound_guard_recorded_at=receipt_bound_guard_recorded_at,
         agent_profile=(
-            agent_identity.get("agent_profile")
-            if isinstance(agent_identity.get("agent_profile"), dict)
+            cast(dict[str, Any], cast(dict[str, Any], agent_identity).get("agent_profile"))
+            if isinstance(cast(dict[str, Any], agent_identity).get("agent_profile"), dict)
             else None
         ),
     )

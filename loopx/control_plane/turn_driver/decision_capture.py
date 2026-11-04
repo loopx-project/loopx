@@ -1,6 +1,8 @@
 """Private original-capture and presentation IO; TS owns binding validation."""
 from __future__ import annotations
 
+from typing import Any, cast
+
 import hashlib
 import json
 import shlex
@@ -11,7 +13,6 @@ import tempfile
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from ..quota.turn_envelope import bind_turn_decision_capture
 from ..quota.error_codes import QuotaCommandValidationError
@@ -26,17 +27,21 @@ from .native_context_profile import (
 )
 
 
+def private_capture_supported() -> bool:
+    """Whether this host has the POSIX identity needed for private capture IO."""
+    return os.name == "posix" and callable(getattr(os, "getuid", None))
+
+
 def private_capture_uid() -> int:
     """Fail closed until this IO boundary has a qualified non-POSIX ACL reader.
 
     POSIX mode bits cannot establish Windows privacy. Check before creating or
     reading private captures, and before evaluating bounded settlement commands.
     """
-    getuid = getattr(os, "getuid", None)
-    if os.name != "posix" or not callable(getuid):
+    if not private_capture_supported():
         raise ValueError("private capture validation is unsupported on this platform; "
                          "use the same Turn command without --max-page-output-bytes")
-    return getuid()
+    return cast(int, getattr(os, "getuid")())
 
 
 def write_decision_capture(
@@ -247,7 +252,7 @@ def write_context_read_reference(path: Path, digest: str, *, selection: dict[str
     A short filename locates the document; only its complete stored digests are
     checked. A collision or replaced document fails closed, never overwrites.
     """
-    payload = {"schema_version": "context_capture_read_reference_v1", "path": str(path), "sha256": digest}
+    payload: dict[str, Any] = {"schema_version": "context_capture_read_reference_v1", "path": str(path), "sha256": digest}
     if selection is not None:
         payload["selection"] = selection
     if navigation is not None:

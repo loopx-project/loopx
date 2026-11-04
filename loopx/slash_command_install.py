@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 import contextlib
 import json
 import os
@@ -9,7 +11,6 @@ import tempfile
 from collections.abc import Callable
 from enum import Enum
 from pathlib import Path
-from typing import Any
 
 from .agy_goal_mode import (
     ANTIGRAVITY_HOOKS_CONFIG_FILENAME,
@@ -932,7 +933,7 @@ def _merge_managed_hooks_json(
     except (OSError, json.JSONDecodeError):
         marker_payload = {}
     recorded_hooks = (
-        marker_payload.get("hooks")
+        cast(dict[str, Any], marker_payload.get("hooks"))
         if isinstance(marker_payload, dict) and isinstance(marker_payload.get("hooks"), dict)
         else {}
     )
@@ -959,7 +960,7 @@ def _merge_managed_hooks_json(
         if not execute:
             return "would_retire"
         if legacy_owned:
-            legacy.pop(MANAGED_MCP_KEY)
+            cast(dict[str, Any], legacy).pop(MANAGED_MCP_KEY)
             if not legacy:
                 raw.pop("hooks")
         else:
@@ -976,7 +977,7 @@ def _merge_managed_hooks_json(
     if existing == entry and not legacy_owned:
         return "unchanged"
     if legacy_owned:
-        legacy.pop(MANAGED_MCP_KEY)
+        cast(dict[str, Any], legacy).pop(MANAGED_MCP_KEY)
         if not legacy:
             raw.pop("hooks")
     raw[MANAGED_MCP_KEY] = entry

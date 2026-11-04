@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
 from pathlib import Path
 
 from ...effect_runtime import EffectRuntimeRemoteError
@@ -19,7 +20,7 @@ from ...todos.contract import (
 from ...effect_runtime import effect_runtime_result
 from ...todos.resume_planning import build_todo_resume_planning_request
 from ...todos.todo_semantics import (
-    agent_scoped_selectable_advancement_todo_ids,
+    agent_scoped_selectable_advancement_todo_ids as agent_scoped_selectable_advancement_todo_ids,
     todo_item_has_removed_continuation_policy,
     todo_item_task_class,
 )
@@ -270,7 +271,7 @@ def read_fallback_source_snapshot(
     from ...coordination.local_authority import read_canonical_todos_if_promoted
 
     canonical = read_canonical_todos_if_promoted(runtime_root=runtime_root, goal_id=goal_id)
-    return canonical["todos"]
+    return cast(list[dict[str, Any]], canonical["todos"])
 
 
 def live_fallback_authority_items(

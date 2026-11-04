@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 import json
 import os
 import re
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Any
 
 from .authority import authority_registry_summary
 from .control_plane import compact_control_plane_policy, control_plane_policy_summary
@@ -392,8 +393,8 @@ def inspect_registry(path: Path) -> dict[str, Any]:
         repo = Path(repo_text).expanduser() if repo_text else None
         state_file = resolve_state_file(repo, raw_goal.get("state_file")) if repo else None
         repo_ids = repo_goal_ids.get(stable_path_key(repo), []) if repo else []
-        adapter = raw_goal.get("adapter") if isinstance(raw_goal.get("adapter"), dict) else {}
-        spawn_policy = raw_goal.get("spawn_policy") if isinstance(raw_goal.get("spawn_policy"), dict) else {}
+        adapter = cast(dict[str, Any], raw_goal.get("adapter")) if isinstance(raw_goal.get("adapter"), dict) else {}
+        spawn_policy = cast(dict[str, Any], raw_goal.get("spawn_policy")) if isinstance(raw_goal.get("spawn_policy"), dict) else {}
         orchestration = compact_orchestration_policy(spawn_policy)
         execution_profile = compact_execution_profile(raw_goal.get("execution_profile"))
         control_plane = compact_control_plane_policy(raw_goal.get("control_plane"))
@@ -475,13 +476,13 @@ def inspect_registry(path: Path) -> dict[str, Any]:
             }
         )
 
-    for state_file, goal_ids in sorted(state_goal_ids.items()):
+    for shared_state_file, goal_ids in sorted(state_goal_ids.items()):
         unique_goal_ids = sorted(set(goal_ids))
         if len(unique_goal_ids) > 1:
             add_problem(
                 "registry_state_file_shared",
                 "state_file shared by multiple goals: "
-                f"{', '.join(unique_goal_ids)} -> {state_file}",
+                f"{', '.join(unique_goal_ids)} -> {shared_state_file}",
                 goal_ids=unique_goal_ids,
             )
 
@@ -538,20 +539,20 @@ def render_registry_markdown(payload: dict[str, Any]) -> str:
     for goal in payload.get("goals") or []:
         adapter = f"{goal.get('adapter_kind')}:{goal.get('adapter_status')}"
         spawn = orchestration_policy_summary(
-            goal.get("orchestration") if isinstance(goal.get("orchestration"), dict) else None
+            cast(dict[str, Any], goal.get("orchestration")) if isinstance(goal.get("orchestration"), dict) else None
         )
         authority_suffix = ""
         if goal.get("authority_source_count"):
             authority_suffix = f" authorities={goal.get('authority_source_count')}"
-        authority_registry = goal.get("authority_registry") if isinstance(goal.get("authority_registry"), dict) else {}
+        authority_registry = cast(dict[str, Any], goal.get("authority_registry")) if isinstance(goal.get("authority_registry"), dict) else {}
         if authority_registry.get("declared"):
             default_count = authority_registry.get("default_entry_count")
             topic_count = authority_registry.get("topic_authority_count")
             authority_suffix += f" authority_registry=defaults:{default_count},topics:{topic_count}"
-        quota = goal.get("quota") if isinstance(goal.get("quota"), dict) else {}
+        quota = cast(dict[str, Any], goal.get("quota")) if isinstance(goal.get("quota"), dict) else {}
         quota_suffix = f" quota={quota.get('compute')}" if quota else ""
         execution_profile = (
-            goal.get("execution_profile")
+            cast(dict[str, Any], goal.get("execution_profile"))
             if isinstance(goal.get("execution_profile"), dict)
             else None
         )
@@ -561,7 +562,7 @@ def render_registry_markdown(payload: dict[str, Any]) -> str:
             else ""
         )
         control_plane = (
-            goal.get("control_plane")
+            cast(dict[str, Any], goal.get("control_plane"))
             if isinstance(goal.get("control_plane"), dict)
             else None
         )
@@ -608,7 +609,7 @@ def render_registry_boundary_markdown(payload: dict[str, Any]) -> str:
     if payload.get("error"):
         lines.append(f"- error: {payload.get('error')}")
         return "\n".join(lines)
-    git = payload.get("git") if isinstance(payload.get("git"), dict) else {}
+    git = cast(dict[str, Any], payload.get("git")) if isinstance(payload.get("git"), dict) else {}
     lines.extend(
         [
             f"- boundary_kind: `{payload.get('boundary_kind')}`",
@@ -625,11 +626,11 @@ def render_registry_boundary_markdown(payload: dict[str, Any]) -> str:
             f"- worktree_root_recorded: `{git.get('worktree_root_recorded')}`",
         ]
     )
-    risks = payload.get("risks") if isinstance(payload.get("risks"), list) else []
+    risks = cast(list[Any], payload.get("risks")) if isinstance(payload.get("risks"), list) else []
     if risks:
         lines.extend(["", "## Risks"])
         lines.extend(f"- `{risk}`" for risk in risks)
-    markers = payload.get("private_markers") if isinstance(payload.get("private_markers"), list) else []
+    markers = cast(list[Any], payload.get("private_markers")) if isinstance(payload.get("private_markers"), list) else []
     if markers:
         lines.extend(["", "## Private Markers"])
         for marker in markers:
