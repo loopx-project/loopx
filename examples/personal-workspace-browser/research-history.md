@@ -159,6 +159,30 @@ request identities. Other cited ranges return an explicit unavailable response;
 no transcript or failure stack is substituted. These analysis Goals have no
 Explore logs: their empty histories are preserved, separately from the recent
 real-history cases above.
+The same fixture also freezes the original registered feedback snapshot, whose
+native retention is unknown. Select it through **Evaluation scope / 评估范围**:
+the best valid value remains `0.849544264387785` and the last valid candidate
+remains `0.8485288027628158`, while initial and retained results stay unknown.
+No retained-improvement value is supplied by that snapshot. Its saved 36 process
+judgments and analysis usage are identical to the later declaration; neither
+is rerun or relabeled. Switching scope and Back must restore each snapshot's own
+native results, without borrowing a retained value from the other. The additional
+original/Chinese/English responses are captured through the real read-only HTTP
+owner and pinned independently. This is a reader regression, not independent
+verification of the later provider's retention declaration.
+
+The packaged reader keeps the original snapshot's unknown retention visible
+beside its measured best and final values. The narrow view below is scrolled to
+that same result area; it preserves the same values and on-demand sources.
+
+![Original Graph snapshot, desktop](../../docs/development/assets/runtime-source-analysis/original-native-retention-desktop.png)
+
+![Original Graph snapshot, narrow result area](../../docs/development/assets/runtime-source-analysis/original-native-retention-mobile.png)
+
+The original snapshot includes the exact best/final native-result citations and
+the same native-report-4 excerpt as the later snapshot. Other cited ranges return
+an explicit unavailable response; no transcript, failure stack or other snapshot's
+evidence is substituted. The selected Goal has no Explore log: its empty history is preserved.
 Pass `--fixture apps/presentation/dashboard/src/data/fixtures/edgebench-graph-saved-analysis.json`
 to the same read-only preview to inspect this case. All mutation verbs are denied.
 

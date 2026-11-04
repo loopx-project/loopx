@@ -158,6 +158,9 @@ def main():
                         metrics["analysis_reads"] += 1
                         language = query.get("output_language", ["original"])[0]
                         record = capture["analysis_readbacks"].get(language)
+                        if "pack_id" in query:
+                            record = next((item for item in capture["analysis_readbacks"].values()
+                                if query == parse_qs(urlparse(item["request_path"]).query)), None)
                         if record and query.get("pack_id", [record["response"]["pack"]["pack_id"]]) == [record["response"]["pack"]["pack_id"]]:
                             return self._send_json(record["response"])
                     elif path == "/api/chat/research-analysis/citation":
