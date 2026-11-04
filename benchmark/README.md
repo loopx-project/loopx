@@ -1156,35 +1156,42 @@ controller 文件及 handoff 开关即可关闭；移除 checkpoint 请求关闭
 
 The native heartbeat launcher accepts a complete point through
 `--restore-checkpoint POINT --restore-sha256 SHA --restore-config CONFIG
---restore-goal NEW_GOAL --restore-agent NEW_AGENT --restore-source-todo SOURCE_TODO`.
+--restore-goal SOURCE_GOAL --restore-agent SOURCE_AGENT --restore-source-todo SOURCE_TODO`.
 All six inputs are required together. Keep the existing native
 `--eval-interval 0`, full `--capture-before-replan` handoff and
 `--checkpoint-controller-file` configuration. The native provider must expose
 `RestoredRegistration`; an older provider fails instead of cold-registering.
 
-This adapter composes existing artifact, Codex session, Todo-continuation and
+This adapter composes existing artifact, canonical state, Codex session and
 native-judge owners. A captured parent directory may contain the native task
 workspace: the receiver resolves exactly one physical task subtree from the
 verified component and restores only that subtree. Captured siblings remain
 inert unless separately selected as research data; absent, ambiguous or
 noncanonical roots reject before the receiver workspace changes.
 
-It preserves the captured workspace and effective Codex configuration, admits
-a distinct native session and fresh Goal/Agent, and adopts
-retained research as evidence on a current preparation Todo. Historical registry,
-claims, leases and settlement records are not installed as current authority.
-If the sealed context contains Explore events, adoption also seeds the fresh
-Goal's ordinary Explore log. Nodes, findings, scoped counterexamples, topology,
-original attribution and timestamps survive, with each event bound to the
-checkpoint digest and source event through its opaque run reference. Operational
-research-observation lineage stays in the archive; it is not destination
-execution proof. Recovery accepts only the same immutable initial prefix, may
-finish a partial prefix, and never reapplies old statuses after newer evidence.
-Malformed, foreign or interleaved destination history rejects before model work.
-Legacy context-only points keep their original continuation behavior.
-Fresh credentials come from the ordinary runner credential source. The native
-activation's absolute deadline includes receiver installation and preparation;
-restarting the entry cannot grant another full budget or submission allowance.
+Warm replacement preserves the captured workspace, single-Goal registry and
+complete LoopX runtime, including canonical SQLite/File state, Todo identities,
+dependencies, receipts, quota counters, Vision and Explore history. The original
+Goal/Agent identities are required. It forks the retained native conversation
+and replaces only the exact captured session binding through current Goal
+admission and compare-and-swap. A changed binding, occupied runtime or existing
+registry rejects; preserve a failed attempt and use a new isolated receiver.
+Stop the source worker before replacement. No active user runtime is overwritten.
+
+There is no preparation-Todo fallback or temporary replan-cadence override.
+The restored configuration is read back against the declared treatment without
+bootstrapping a new Goal, reseeding the task queue or rewriting its receipts.
+Current guards, leases, recovery, user gates and stops decide execution. Closed
+Turns remain settled; restoration grants no extra budget, opportunity or capture.
+The absolute native deadline still includes receiver installation. Fresh
+credentials come from the ordinary runner credential source.
+
+热恢复接续原 Goal/Agent、完整 SQLite/File 状态、任务依赖、结算、额度和
+Vision/Explore 历史；不另建 preparation Todo，不临时调整重规划频率。
+必须使用已停止源的全新隔离接收端；占用、分歧或部分恢复均拒绝覆盖。
+已有结算不能重放，当前 guard/lease、用户 gate 和原始预算仍然生效。
+需要跨 Goal 复制研究证据时，另用 Core 的 `research-checkpoint adopt-context`；
+资料导入不构成热恢复。
 
 To continue with a different model or reasoning effort, retain the exact sealed
 source settings in `--restore-config` and explicitly pass
@@ -1233,10 +1240,9 @@ Native conversation admission and fresh-replan revalidation allow up to 90 secon
 per read, capped by the original phase deadline, while preserving full-history,
 cursor and identity checks. Core research-context adoption also gives complete
 artifact and native-history reads up to 90 seconds each (previously the generic
-10-second artifact RPC and 30-second native read defaults). Warm preparation
-passes its original phase deadline through adoption; expiration rejects the next
-write, and uncertain prior writes must replay their original operation. Ordinary
-Core callers remain lease-governed and may supply an absolute adoption deadline.
+10-second artifact RPC and 30-second native read defaults). Ordinary Core import
+callers remain lease-governed and may supply an absolute adoption deadline; this
+separate import path does not configure a benchmark warm replacement.
 These allowances grant no extra execution time and
 do not establish sustained performance for growing checkpoints.
 
@@ -1246,72 +1252,31 @@ credentials; an existing bank member must match the sealed bytes. Conflicting or
 partial members fail closed. A lock timeout leaves the attempt for inspection;
 it does not authorize reusing a failed trial directory.
 
-Both comparison arms first settle actual preparation at cadence one and consume
-the retained decision through a current semantic replan. The existing joint
-continuation gate must accept that replan before the declared normal cadence
-returns. Preparation and context-reading cost belong in the comparison. Omit all
-restore flags for the unchanged cold entry; never reuse an ambiguous trial
-folder as a new attempt.
+Both comparison arms retain the original task graph and replan cadence. The
+existing joint continuation gate still requires a current checkpoint-linked
+semantic review before recapture; it does not create a preparation Todo or
+force a review every work Turn. State verification and context-reading cost
+belong in the comparison. Omit restore flags for the cold entry; never reuse an
+ambiguous receiver as a new attempt. A complete point must contain canonical
+LoopX state; a context-only archive is not a warm-replacement fallback.
 
-Warm preparation retains the original evidence-reading task on its existing Todo;
-it does not add a prompt paragraph interpreting historical deadlines. Current
-Goal/guard authority, task time constraints, native cooldowns and user stops
-remain binding. Preparation reads the current claimed Todo and actual quota
-result before reporting `preparation_actionable=true` in the existing `checkpoint-context.json`
-receipt. Closed or unavailable work and a deadline that expires during readback
-fail before model execution; an old ready plan is not current admission. This
-readback neither grants execution nor qualifies subsequent research or recapture.
-It applies only to the existing explicitly admitted complete-checkpoint path;
-ordinary terminal archives are not converted into complete checkpoints.
-
-The receiver brackets the guard with the exact preparation Todo's canonical
-authority revision. Completion, transfer or another canonical edit during that
-observation rejects readiness; a later required review cannot revive an earlier
-open snapshot. The existing context receipt includes `preparation_readback` with
-that revision, the selected Todo and current replan identity, so an operator can
-inspect what was actually observed instead of relying on a readiness boolean.
-This is a bounded observation, not an execution lease; the worker must still use
-fresh ordinary admission. Readiness is validated before changing cadence, so a
-rejected preparation does not change the Goal's cadence. An ambiguous cadence
-write must be inspected, not blindly rolled back across an owed current review.
-Creation retries read the original `checkpoint-preparation` receipt and replay
-its exact accepted task through the canonical create owner, including receivers
-created with the earlier longer task. They never mint a second operation or Todo.
-This covers partial creation, not arbitrary retries after context adoption or
-worker execution. Such uncertain operations retain their original receipt,
-revision and lease recovery boundary; actual model/research adoption is separate.
-
-Warm 准备保留既有 Todo 中原本的证据读取任务，不再增加解释历史截止时间的提示段落。
-当前 Goal、guard、题目时限、原生冷却、用户门槛及停止权限仍有效。
-准备步骤须读回当前 claimed Todo 和实际 quota 结果，才在既有
-`checkpoint-context.json` 回执中报告 `preparation_actionable=true`；工作已闭合、不可用或读回
-期间期限耗尽时，在模型执行前失败。旧 ready 计划不等于当前准入；此读回不授予
-执行权，也不认证后续研究或再次捕获，仅作用于显式准入的完整检查点路径。
-普通终态资料归档不会因此被升级为完整检查点。
-
-接收端用准确准备 Todo 的规范权威修订号夹住 guard 读取；期间完成、转交或其他规范
-修改都会拒绝 ready，后来的 required review 不能复活较早的 open 快照。既有上下文
-回执的 `preparation_readback` 返回该修订、当前选中 Todo 与 replan 身份，便于检查
-实际观察依据；它不是执行租约，worker 仍须重新走普通准入。先验证准备资格，再改
-cadence，因此拒绝准备不会改变 Goal 的 cadence；不确定的配置写入须检查，不能盲目
-回滚而抹掉欠下的当前复盘。创建重试读回原 `checkpoint-preparation` 回执，通过规范
-创建 owner 重放当时接受的准确任务（兼容此前较长任务），不创建第二个操作或 Todo。
-此兼容范围是部分创建，不是上下文采用或 worker 执行后的任意重试；不确定的操作仍须
-保留原回执、修订与租约的恢复边界，真实模型/研究采用也需单独验证。
+两组接续原任务队列与重规划频率；再次捕获仍须通过已有的当前复盘与结算校验，
+不新增 preparation Todo，不强制每轮复盘。状态验证和上下文读取计入完整成本。
+仅有资料的归档不能冒充完整热恢复点，失败接收端须保留现场并使用新隔离实例。
 
 To test a new decision from the same pre-replan state, use
 `--restore-fresh-replan`. The point must contain a verified pending replan packet.
-The first destination model call starts a fresh native conversation, before
-preparation and the first current-Goal replan. It reads the original task,
+The first destination model call starts a fresh native conversation before
+the retained pending replan, preserving the complete Goal and Todo state. It reads the original task,
 retained research evidence, code and incumbent; no post-checkpoint decision or
-old native message prefix is supplied. Preparation remains charged work, and
+old native message prefix is supplied. Context-reading remains charged work, and
 capture remains closed until the ordinary current review/settlement gate passes.
 Omit the flag for retained-history continuation. Change treatments only in a new attempt; the
 same checkpoint budget, opportunities and cooldown remain binding.
 
 同一个决策前 checkpoint 的重新决策实验使用 `--restore-fresh-replan`：首次模型调用
-就在 fresh 原生会话中准备并完成当前目标的 replan，读取原任务、研究证据、代码和最佳
-候选，不预置 checkpoint 之后的决定或旧原生消息前缀。准备成本仍计入原预算，后续捕获
+就在 fresh 原生会话中接续已有任务状态并处理待完成的 replan，读取原任务、研究证据、代码和最佳
+候选，不预置 checkpoint 之后的决定或旧原生消息前缀。上下文读取成本仍计入原预算，后续捕获
 仍须通过当前复盘和结算校验。省略该选项保持历史接续。
 必须用新 attempt 改变处理方式，不能重置预算、机会或冷却。
 
@@ -1375,10 +1340,13 @@ accepted round counts, cooldown and scoring remain unchanged. Omit the option
 for the original-budget behavior; a changed budget requires a fresh destination,
 not a rewrite of a running study or its original results.
 
-The ordinary installed worker has passed a synthetic joined qualification:
-native session continuation, current preparation and accepted replan, restored
-normal cadence, candidate work and released native feedback under the original
-remaining allowance. It reused one immutable captured prefix and preserved its
+The earlier import-based worker passed a synthetic joined qualification:
+native session continuation, a new-Goal preparation/review, candidate work and
+released native feedback under the original remaining allowance. That fixture
+does not qualify the current full-state replacement. The full-state tests use
+real File/SQLite owners and an actual Codex Host with local deterministic
+inference to check retained work selection, unchanged settlement history,
+current user gates and binding compare-and-swap. It reused one immutable captured prefix and preserved its
 source. Native app-server-generated skills are preserved outside discovery before
 linking the current installed skills; ordinary skill identity checks still apply.
 This used real Codex processes and native HTTP with deterministic local inference

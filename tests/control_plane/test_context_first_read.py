@@ -74,6 +74,48 @@ def read_selection(command):
     return page, selected_context_values(page["content"])
 
 
+def test_initial_read_keeps_supporting_index_obligations_and_recovers_its_full_list(tmp_path, decision):
+    # A complete address inventory is navigation, not the Goal/Task/stop text.
+    # Exercise the native reader and exact cold path over the same capture.
+    step = decision["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"][0]
+    step.pop("optional_attachments")
+    evidence = decision["interaction_contract"]["agent_channel"]["work_context"]["sources"][1]["content"]["graph"]
+    evidence["writeback_results"] = [{"detail": f"Original evidence {i}"} for i in range(900)]
+    prefix = "/interaction_contract/agent_channel/work_context/sources/1/content/graph/writeback_results"
+    pointers = [f"{prefix}/{i}/detail" for i in range(900)]
+    source = tmp_path / "complete-source.json"
+    source.write_text(json.dumps(decision), encoding="utf-8")
+    index = {"coverage_confirmed": False, "read_before_dependent_work": True,
+        "source": {"path": str(source), "sha256": hashlib.sha256(source.read_bytes()).hexdigest()}, "pointers": pointers}
+    instruction = "Unread supporting fields remain unconfirmed. Read the applicable source before dependent work."
+    decision["context_details"] = {"unread_context_index": index, "instruction": instruction}
+    capture = tmp_path / "capture"
+    capture.mkdir()
+    view = native_context_capture_view(decision, capture)
+    raw = Path(view["recovery"]["path"]).read_bytes()
+
+    page, values = read_selection(view["first_read_command"])
+    base = "/context_details/unread_context_index"
+    assert values[base + "/coverage_confirmed"] is False
+    assert values[base + "/read_before_dependent_work"] is True
+    assert values[base + "/source"] == index["source"]
+    assert values["/context_details/instruction"] == instruction
+    assert not any(key == base or key.startswith(base + "/pointers") for key in values)
+    assert values["/goal_boundary"] == decision["goal_boundary"]
+    assert values["/selected_todo"] == decision["selected_todo"]
+    goal = "/interaction_contract/agent_channel/work_context/sources/0/content/text"
+    assert values[goal].endswith("STOP at the original budget.")
+    assert values["/interaction_contract/cli_channel/settlement_plan/identity"]["turn_instance_id"] == "original"
+
+    detail = read_context_capture(Namespace(capture_file=view["recovery"]["path"],
+        capture_sha256=view["recovery"]["sha256"], format="json", select=[base + "/pointers"],
+        offset=0, page_bytes=200000, max_page_output_bytes=200000))
+    assert detail["ok"] and detail["eof"]
+    assert json.loads(detail["content"])["selections"][0]["value"] == pointers
+    assert Path(view["recovery"]["path"]).read_bytes() == raw
+    assert json.loads(raw) == decision
+
+
 @pytest.mark.parametrize("output_limit", [8192, 64000])
 def test_cli_initial_pages_prioritize_required_facts_and_keep_the_complete_index(tmp_path, decision, output_limit):
     goal = decision["interaction_contract"]["agent_channel"]["work_context"]["sources"][0]["content"]

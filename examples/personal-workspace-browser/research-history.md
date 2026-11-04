@@ -3,7 +3,8 @@
 The default read-only preview uses the complete saved Explore log from the
 3 November Grid Turing Robot context-on run. The `research-real-benchmark`
 browser scenario reads both context arms, the Ad and Schema histories below,
-and the saved Graph analysis through the real HTTP history owner. It verifies complete original text and append order, download
+the saved Graph analysis, and Portfolio/Ad native results without saved analysis
+through the real HTTP history owner. It verifies complete original text and append order, download
 readback, source preservation, no writes, and desktop/390px reading. These are
 the core populated-page references; synthetic fixtures cover boundaries such
 as races, artificial paging pressure and missing fields.
@@ -113,6 +114,41 @@ tokens**. These are analysis costs; solver token usage and money remain unknown.
 The invalid first submission remains missing rather than zero, and the native
 best/retained result remains distinct from the final submitted candidate.
 
+The core reader also uses the actual registered [Portfolio](../../apps/presentation/dashboard/src/data/fixtures/edgebench-portfolio-native-results.json)
+and [Ad placement](../../apps/presentation/dashboard/src/data/fixtures/edgebench-ad-native-results.json)
+analysis Goals. Their six-episode packs have **no saved model result or job**.
+Native measurements remain readable without inventing judgments, analysis usage,
+or an adoption decision:
+
+| Captured native run | First valid comparison | Best valid | Final valid | Retained |
+| --- | --- | --- | --- | --- |
+| Graph | agent-2: 0.8172464473565724 | agent-16: 0.849544264387785 | agent-18: 0.8485288027628158 | agent-16: 0.849544264387785 |
+| Portfolio | agent-1: **0** | agent-7: 10.86 | agent-12: 10.86 | Unknown |
+| Ad placement | agent-1: 49,550,815,819 | agent-13: 49,653,326,363 | agent-16: 49,650,446,168 | Unknown |
+
+Graph's source-bound retained improvement is **+0.032297817031212595 raw**
+against its fixed agent-2 baseline. Its final candidate change is only
++0.03128235540624347. The terminal-result citation identifies agent-16 as retained;
+the last submitted candidate is not silently substituted. This is a native
+comparison, not LoopX's independently isolated causal contribution. Scores have
+different task meanings and are not added across these runs.
+
+The Ad capture exposed a presentation failure: four significant digits displayed
+both best and final as `4.965E10`. Scientific notation now adds only enough digits
+to distinguish the captured values (`4.9653E10` and `4.965E10` here). Equal native
+values still display equally, and full precision remains in the citation reader.
+
+The saved Graph analysis also preserves a negative result from round 11: a
+reported rollback retained round 10 at 0.84213. Round 4 reports local experimental
+follow-through, while rounds 8, 15 and 18 announce restoration or future work
+without establishing completed adoption in their selected excerpts. The later
+terminal retention evidence does not rewrite those earlier model judgments.
+There are no positive discrimination judgments: two are no and four unknown;
+bundled interventions, timing noise and missing controlled contrasts still limit
+explanatory claims. Native evaluation and positive measured benefit remain
+different questions. These statements describe the saved, uncalibrated analysis
+of six purposive episodes, not a new whole-run or causal assessment.
+
 This fixture freezes the real HTTP readbacks, including the Chinese/English
 cache misses and the saved unspecified-language original. The packaged frontend
 must recover that original without inventing a translation, changing its usage
@@ -120,11 +156,22 @@ or invoking a model. The preview replays captured GET responses; it does **not**
 import the original analysis store or qualify the live execution backend. The
 existing synthetic process fixture separately protects that owner boundary.
 Tests pin the original HTTP byte digests and read all 36 explanations in both
-interfaces at desktop/390px widths.
+interfaces at desktop/390px widths. All three cases also open each available
+native value's original citation; Graph opens its terminal retention evidence.
+An uncaptured judgment citation fails visibly, followed by a successful captured
+citation read; missing sources never substitute another excerpt.
+The real zero in Portfolio stays zero, and missing retention or analysis usage
+in Portfolio and Ad never borrows Graph's values. The three formally registered
+Goals were additionally read through the production HTTP owner with analysis
+execution disabled; this qualifies reading, not model dispatch or installation.
 
-Only one public-safe native-result citation range is bundled. Other cited ranges
-return an explicit unavailable response; no transcript or failure stack is
-substituted. The selected Goal has no Explore log: its empty history is preserved.
+The Graph fixture bundles its existing native-report-4 range plus baseline,
+best/retained, final and terminal-retention citations. Portfolio and Ad bundle
+their initial, best and final native citations with the exact language-specific
+request identities. Other cited ranges return an explicit unavailable response;
+no transcript or failure stack is substituted. These analysis Goals have no
+Explore logs: their empty histories are preserved, separately from the recent
+real-history cases above.
 Pass `--fixture apps/presentation/dashboard/src/data/fixtures/edgebench-graph-saved-analysis.json`
 to the same read-only preview to inspect this case. All mutation verbs are denied.
 

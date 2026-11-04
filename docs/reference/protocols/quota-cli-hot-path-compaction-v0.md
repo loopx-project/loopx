@@ -6,6 +6,29 @@ quota control plane. The full decision is built first. CLI-only projection then
 retains action authority on the hot path and moves repeated diagnostic detail
 behind explicit `--include-detail` selectors.
 
+## Captured Initial Navigation
+
+The TypeScript context owner also bounds `quota context-read --initial-read`.
+For the current four-field supporting-address index, the first view retains
+the original source identity, unconfirmed coverage, read-before-dependent-work
+obligation and complete source instructions. Its pointer array stays unchanged
+in the same immutable capture. Read the full list with the original reader
+reference and `--select /context_details/unread_context_index/pointers` when
+needed. Older, malformed or extended index layouts remain inline in full.
+Goal and Task text, acceptance, permissions, stops and settlement are unchanged.
+This changes the starting view, not the complete capture or explicit reads.
+Include later index reads and their extra calls when comparing total cost;
+fewer initial bytes alone do not establish retention, comprehension or benefit.
+
+TypeScript 上下文 owner 同时约束 `quota context-read --initial-read`。
+对现行四字段补读地址索引，初读保留原始来源身份、覆盖尚未确认的状态、依赖工作前
+必须补读的义务及完整来源指引。地址数组原样保存在同一不可变 capture 中；需要完整
+清单时，沿原 reader reference 读取
+`--select /context_details/unread_context_index/pointers`。
+旧格式、格式不符或增加未知字段的索引仍完整内联。目标、任务正文、验收、权限、
+停止和结算不变；改变的只是起始视图，不是完整 capture 或显式读取。总成本比较须计入
+后续索引补读及额外调用；初读字节减少本身不证明保留、理解或收益。
+
 ## Ownership Boundary
 
 The quota control plane owns decision, precedence, scheduler, interaction,
