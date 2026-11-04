@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 from collections.abc import Mapping
-from typing import Any
 
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from ..coordination.coordination_state_contract_generated import (
@@ -276,7 +277,7 @@ def missing_delivery_workspace_resolution(
             "todo_delivery_contract_not_explicit",
             True,
         ),
-    }.get(decision)
+    }.get(cast(str, decision))
     if expected is None:
         raise RuntimeError(
             "TypeScript delivery workspace resolution result shape mismatch"
@@ -361,7 +362,7 @@ def completed_todo_workspace_causality(
     status_payload: Mapping[str, Any],
     *,
     goal_id: str,
-    todo_id: str,
+    todo_id: str | None,
     source: str = "completed_todo_contract_fallback",
 ) -> dict[str, str] | None:
     """Recover an effect's causality from its exact projected Todo contract."""

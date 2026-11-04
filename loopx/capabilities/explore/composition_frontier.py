@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any
 
 from ...control_plane.quota.goal_boundary import registry_goal_by_id
 from ...control_plane.todos.contract import (
@@ -152,12 +153,13 @@ def build_explore_composition_frontier(
         inputs = [nodes_by_id.get(input_id) for input_id in sorted(input_ids)]
         if len(inputs) < 2 or any(not isinstance(node, Mapping) for node in inputs):
             continue
-        if any(str(node.get("status") or "") not in _CLOSED_INPUT_STATUSES for node in inputs):
+        validated_inputs = cast(list[Mapping[str, Any]], inputs)
+        if any(str(node.get("status") or "") not in _CLOSED_INPUT_STATUSES for node in validated_inputs):
             continue
-        if any(not _evidence_backed(node) for node in inputs):
+        if any(not _evidence_backed(node) for node in validated_inputs):
             continue
         scheduled = experiment_id in bound_refs
-        input_refs = [str(node.get("node_id") or "") for node in inputs]
+        input_refs = [str(node.get("node_id") or "") for node in validated_inputs]
         gap_identity = {
             "goal_id": goal_id,
             "experiment_node_ref": experiment_id,
@@ -239,7 +241,7 @@ def project_live_explore_composition_frontier(
     goal = resolve_explore_goal(goal, runtime_root)
     orchestration = compact_orchestration_policy(goal.get("spawn_policy"))
     harness = (
-        orchestration.get("explore_harness")
+        cast(Mapping[str, Any], orchestration.get("explore_harness"))
         if isinstance(orchestration.get("explore_harness"), Mapping)
         else {}
     )
@@ -283,13 +285,13 @@ def project_live_explore_composition_frontier(
         {},
     )
     project_asset = (
-        item.get("project_asset")
+        cast(Mapping[str, Any], item.get("project_asset"))
         if isinstance(item.get("project_asset"), Mapping)
         else {}
     )
-    item_todos = item.get("agent_todos") if isinstance(item.get("agent_todos"), Mapping) else {}
+    item_todos = cast(Mapping[str, Any], item.get("agent_todos")) if isinstance(item.get("agent_todos"), Mapping) else {}
     asset_todos = (
-        project_asset.get("agent_todos")
+        cast(Mapping[str, Any], project_asset.get("agent_todos"))
         if isinstance(project_asset.get("agent_todos"), Mapping)
         else {}
     )

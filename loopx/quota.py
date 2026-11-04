@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from typing import Any, TYPE_CHECKING, cast
+
 from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import shlex
-from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .control_plane.goals.goal_frontier.fallback_source import FallbackTodoSource
@@ -256,7 +257,7 @@ def quota_with_handoff_outcome_floor(
     if not isinstance(handoff_readiness, dict) or not handoff_readiness:
         return quota
     profile = (
-        project_asset.get("execution_profile")
+        cast(dict[str, Any], project_asset.get("execution_profile"))
         if isinstance(project_asset, dict)
         and isinstance(project_asset.get("execution_profile"), dict)
         else None
@@ -282,7 +283,7 @@ def quota_with_handoff_outcome_floor(
     must_advance = [
         str(value).strip()
         for value in (
-            floor.get("must_advance")
+            cast(list[Any], floor.get("must_advance"))
             if isinstance(floor.get("must_advance"), list)
             else []
         )
@@ -291,7 +292,7 @@ def quota_with_handoff_outcome_floor(
     avoid = [
         str(value).strip()
         for value in (
-            floor.get("avoid") if isinstance(floor.get("avoid"), list) else []
+            cast(list[Any], floor.get("avoid")) if isinstance(floor.get("avoid"), list) else []
         )
         if str(value).strip()
     ]
@@ -345,7 +346,7 @@ def _quota_with_focus_wait_override(
 
 
 def goal_quota_config(goal: dict[str, Any] | None) -> dict[str, Any]:
-    raw = goal.get("quota") if goal and isinstance(goal.get("quota"), dict) else {}
+    raw = cast(dict[str, Any], goal.get("quota")) if goal and isinstance(goal.get("quota"), dict) else {}
     if goal and "compute_quota" in goal and "compute" not in raw:
         raw = {**raw, "compute": goal.get("compute_quota")}
     compute = _clamp_compute(_number(raw.get("compute"), default=DEFAULT_COMPUTE_QUOTA))
@@ -415,7 +416,7 @@ def goal_quota_with_spend_ledger(
             else ""
         )
         run_goal_ref = (
-            run.get("goal_ref")
+            cast(Mapping[str, Any], run.get("goal_ref"))
             if isinstance(run.get("goal_ref"), Mapping)
             else None
         )
@@ -552,7 +553,7 @@ def quota_status(
 
 
 def _quota_sort_key(item: dict[str, Any]) -> tuple[int, float, int, str]:
-    quota = item.get("quota") if isinstance(item.get("quota"), dict) else {}
+    quota = cast(dict[str, Any], item.get("quota")) if isinstance(item.get("quota"), dict) else {}
     state = str(quota.get("state") or "waiting")
     state_index = (
         QUOTA_STATE_ORDER.index(state)
@@ -589,7 +590,7 @@ def _compact_handoff_readiness(value: Any) -> dict[str, Any] | None:
         if field in value
     }
     latest_run = (
-        value.get("post_handoff_latest_run")
+        cast(dict[str, Any], value.get("post_handoff_latest_run"))
         if isinstance(value.get("post_handoff_latest_run"), dict)
         else {}
     )
@@ -600,7 +601,7 @@ def _compact_handoff_readiness(value: Any) -> dict[str, Any] | None:
             if field in latest_run
         }
     recent_runs = (
-        value.get("post_handoff_recent_runs")
+        cast(list[Any], value.get("post_handoff_recent_runs"))
         if isinstance(value.get("post_handoff_recent_runs"), list)
         else []
     )
@@ -733,12 +734,12 @@ def _quota_plan_goal_quota(
     status: Any,
 ) -> dict[str, Any]:
     project_asset_quota = (
-        project_asset.get("quota")
+        cast(dict[str, Any], project_asset.get("quota"))
         if isinstance(project_asset.get("quota"), dict)
         else {}
     )
     raw_quota = (
-        attention.get("quota")
+        cast(dict[str, Any], attention.get("quota"))
         if isinstance(attention.get("quota"), dict)
         else goal.get("quota")
     )
@@ -778,11 +779,11 @@ def _quota_plan_goal_quota(
         quota,
         waiting_on=waiting_on,
         project_asset=project_asset,
-        handoff_readiness=attention.get("handoff_readiness")
+        handoff_readiness=cast(dict[str, Any], attention.get("handoff_readiness"))
         if isinstance(attention.get("handoff_readiness"), dict)
         else None,
     )
-    ledger_quota = goal.get("quota") if isinstance(goal.get("quota"), dict) else None
+    ledger_quota = cast(dict[str, Any], goal.get("quota")) if isinstance(goal.get("quota"), dict) else None
     return _apply_unreadable_ledger_fail_closed(quota, ledger_quota=ledger_quota)
 
 
@@ -790,11 +791,11 @@ def build_quota_plan(
     status_payload: dict[str, Any], *, mode: str = "status"
 ) -> dict[str, Any]:
     queue = (
-        status_payload.get("attention_queue")
+        cast(dict[str, Any], status_payload.get("attention_queue"))
         if isinstance(status_payload.get("attention_queue"), dict)
         else {}
     )
-    queue_items = queue.get("items") if isinstance(queue.get("items"), list) else []
+    queue_items = cast(list[Any], queue.get("items")) if isinstance(queue.get("items"), list) else []
     queue_by_goal = {
         str(item.get("goal_id")): item
         for item in queue_items
@@ -807,15 +808,15 @@ def build_quota_plan(
     ]
 
     run_history = (
-        status_payload.get("run_history")
+        cast(dict[str, Any], status_payload.get("run_history"))
         if isinstance(status_payload.get("run_history"), dict)
         else {}
     )
     run_goals = (
-        run_history.get("goals") if isinstance(run_history.get("goals"), list) else []
+        cast(list[Any], run_history.get("goals")) if isinstance(run_history.get("goals"), list) else []
     )
     status_goals = (
-        status_payload.get("goals")
+        cast(list[Any], status_payload.get("goals"))
         if isinstance(status_payload.get("goals"), list)
         else []
     )
@@ -837,7 +838,7 @@ def build_quota_plan(
         )
         attention = queue_by_goal.get(goal_id, {})
         project_asset = (
-            attention.get("project_asset")
+            cast(dict[str, Any], attention.get("project_asset"))
             if isinstance(attention.get("project_asset"), dict)
             else {}
         )
@@ -886,16 +887,16 @@ def build_quota_plan(
                 or status_goal.get("project")
                 or status_goal.get("root")
             ),
-            "coordination": goal.get("coordination")
+            "coordination": cast(dict[str, Any], goal.get("coordination"))
             if isinstance(goal.get("coordination"), dict)
             else None,
-            "explore_graph": goal.get("explore_graph")
+            "explore_graph": cast(dict[str, Any], goal.get("explore_graph"))
             if isinstance(goal.get("explore_graph"), dict)
             else None,
-            "spawn_policy": goal.get("spawn_policy")
+            "spawn_policy": cast(dict[str, Any], goal.get("spawn_policy"))
             if isinstance(goal.get("spawn_policy"), dict)
             else None,
-            "guards": goal.get("guards")
+            "guards": cast(list[Any], goal.get("guards"))
             if isinstance(goal.get("guards"), list)
             else [],
             "next_probe": goal.get("next_probe"),
@@ -903,9 +904,9 @@ def build_quota_plan(
             "quota": quota,
         }
         workspace_guard_policy = (
-            goal.get("workspace_guard_policy")
+            cast(dict[str, Any], goal.get("workspace_guard_policy"))
             if isinstance(goal.get("workspace_guard_policy"), dict)
-            else status_goal.get("workspace_guard_policy")
+            else cast(dict[str, Any], status_goal.get("workspace_guard_policy"))
             if isinstance(status_goal.get("workspace_guard_policy"), dict)
             else None
         )
@@ -956,8 +957,8 @@ def build_quota_plan(
     ordered_items = [
         item for state in QUOTA_STATE_ORDER for item in groups.get(state, [])
     ] + groups.get("unknown", [])
-    next_automatic_turn = (groups.get("eligible") or [None])[0]
-    summary = {
+    next_automatic_turn = (cast(list[dict[str, Any] | None], groups.get("eligible")) or [None])[0]
+    summary: dict[str, Any] = {
         "registered_goals": len(ordered_items),
         "health_blockers": len(health_items),
         "next_automatic_turn": next_automatic_turn.get("goal_id")
@@ -1057,7 +1058,7 @@ def build_quota_should_run(
         build_quota_should_run as _build_quota_should_run,
     )
 
-    def read_explore_context(read_goal_id: str, read_agent_id: str | None):
+    def read_explore_context(read_goal_id: str, read_agent_id: str | None) -> dict[str, Any] | None:
         from .capabilities.explore.turn_context import read_replan_explore_context
 
         return read_replan_explore_context(source_status=status_payload, goal_id=read_goal_id, agent_id=read_agent_id)
@@ -1426,7 +1427,7 @@ def record_quota_monitor_poll(
         )
 
         readback = read_heartbeat_settlement(
-            runtime_root,
+            cast(Path, runtime_root),
             goal_id=safe_goal_id,
             agent_id=agent_id,
             todo_id=normalized_receipt_todo_id,
@@ -1462,7 +1463,7 @@ def record_quota_monitor_poll(
             command_prefix=prefix,
             scoped_cli_args=scoped_args,
             lifecycle_actor_args="",
-            quota_spend_source=readback.progress["quota_spend_source"],
+            quota_spend_source=cast(dict[str, Any], readback.progress)["quota_spend_source"],
             goal_ref=goal_ref,
         )
         result["settlement_resume"] = {
@@ -1472,7 +1473,7 @@ def record_quota_monitor_poll(
             "next_step": next(
                 (
                     step for step in plan.as_dict()["ordered_steps"]
-                    if step["kind"] == readback.progress["next_step"]
+                    if step["kind"] == cast(dict[str, Any], readback.progress)["next_step"]
                 ),
                 None,
             ),
@@ -1756,12 +1757,12 @@ def spend_quota_slot(
                 "settlement_result": settlement_result_payload(spent_result),
                 **(
                     {"settlement_progress": settlement_readback.progress}
-                    if settlement_readback.progress.get("closeout_kind") == "capability_duty_retired_no_spend"
+                    if cast(dict[str, Any], settlement_readback.progress).get("closeout_kind") == "capability_duty_retired_no_spend"
                     else {}
                 ),
                 "reason": (
                     "exact Turn closeout replayed without a quota debit"
-                    if settlement_readback.progress.get("closeout_kind") == "capability_duty_retired_no_spend"
+                    if cast(dict[str, Any], settlement_readback.progress).get("closeout_kind") == "capability_duty_retired_no_spend"
                     else "quota spend receipt replayed for the same settlement identity"
                 ),
                 **(

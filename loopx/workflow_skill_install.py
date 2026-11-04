@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any, Iterator, Mapping, cast
+
 from contextlib import contextmanager
 from importlib.metadata import PackageNotFoundError, distribution
 import json
@@ -8,7 +10,6 @@ from pathlib import Path, PurePosixPath
 import shutil
 import sys
 import tempfile
-from typing import Any, Iterator, Mapping
 
 from . import __version__
 from .agy_goal_mode import antigravity_config_home
@@ -118,7 +119,7 @@ def resolve_workflow_skill_source() -> dict[str, Any]:
                     "available": True,
                     "kind": "python_distribution",
                     "skills_root": skills_root,
-                    "source_root": Path(installed.locate_file("")).resolve(),
+                    "source_root": Path(cast(Path, installed.locate_file(""))).resolve(),
                     "distribution_version": installed.version,
                     "reason": "workflow skills are available from the installed Python distribution",
                 }
@@ -127,7 +128,7 @@ def resolve_workflow_skill_source() -> dict[str, Any]:
         # for ``--target`` installs, but keeps ``../../share`` RECORD rows.
         # ``importlib.metadata.files`` filters those parent-relative rows, so
         # validate the public distribution root fallback explicitly.
-        distribution_root = Path(installed.locate_file("")).resolve()
+        distribution_root = Path(cast(Path, installed.locate_file(""))).resolve()
         target_skills = distribution_root / "share" / "loopx" / "skills"
         if _valid_source_root(target_skills):
             return {

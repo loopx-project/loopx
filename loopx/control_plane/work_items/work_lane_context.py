@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
+
 
 from ..agents.agent_scope import _agent_scope_monitor_blocked_resume_candidates
 from ..scheduler.external_evidence_observation import build_external_evidence_poll_signal
@@ -37,7 +38,7 @@ def item_progress_scope(item: dict[str, Any]) -> str:
     explicit = str(item.get("progress_scope") or "").strip()
     if explicit:
         return explicit
-    project_asset = item.get("project_asset") if isinstance(item.get("project_asset"), dict) else {}
+    project_asset = cast(dict[str, Any], item.get("project_asset")) if isinstance(item.get("project_asset"), dict) else {}
     project_explicit = str(project_asset.get("progress_scope") or "").strip()
     if project_explicit:
         return project_explicit
@@ -53,12 +54,12 @@ def item_progress_scope(item: dict[str, Any]) -> str:
 
 def post_handoff_latest_run(item: dict[str, Any]) -> dict[str, Any]:
     handoff_readiness = (
-        item.get("handoff_readiness")
+        cast(dict[str, Any], item.get("handoff_readiness"))
         if isinstance(item.get("handoff_readiness"), dict)
         else {}
     )
     latest_run = (
-        handoff_readiness.get("post_handoff_latest_run")
+        cast(dict[str, Any], handoff_readiness.get("post_handoff_latest_run"))
         if isinstance(handoff_readiness.get("post_handoff_latest_run"), dict)
         else {}
     )
@@ -73,7 +74,7 @@ def outcome_followthrough_hint(
 
 
 def next_action_requires_advancement(item: dict[str, Any]) -> bool:
-    project_asset = item.get("project_asset") if isinstance(item.get("project_asset"), dict) else {}
+    project_asset = cast(dict[str, Any], item.get("project_asset")) if isinstance(item.get("project_asset"), dict) else {}
     values = (
         project_asset.get("next_action"),
         project_asset.get("recommended_action"),

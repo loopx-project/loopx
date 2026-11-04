@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from typing import Any, TYPE_CHECKING, cast
+
 from ..goals.acceptance_readback import configured_checks
 from .effective_action import EffectiveAction
 
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
 
 from ..effect_runtime import effect_runtime_request_scope
 
@@ -186,7 +187,7 @@ def _attach_quota_should_run_envelope(
             "included_count": 1 if goal_found else 0,
             "omitted": omitted,
         },
-        upstream=[dict(status_envelope)] if has_status_envelope else [],
+        upstream=[dict(cast(dict[str, Any], status_envelope))] if has_status_envelope else [],
     )
     return payload
 
@@ -395,7 +396,7 @@ def build_quota_paused_should_run_payload(
     distinct resume authority for the host scheduler.
     """
 
-    quota = item.get("quota") if isinstance(item.get("quota"), dict) else {}
+    quota = cast(dict[str, Any], item.get("quota")) if isinstance(item.get("quota"), dict) else {}
     quota = {**quota, "state": "paused"}
     pause_cause = automatic_turn_pause_cause(
         {"quota": quota}
@@ -606,7 +607,7 @@ def build_quota_should_run(
         None,
     )
     health_items = (
-        plan.get("health_items")
+        cast(list[Any], plan.get("health_items"))
         if isinstance(plan.get("health_items"), list)
         else []
     )

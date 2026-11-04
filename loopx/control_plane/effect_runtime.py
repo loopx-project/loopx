@@ -23,6 +23,7 @@ from typing import IO, Any, Literal, TypeAlias
 
 from ..file_lock import process_is_alive
 from .runtime.file_reads import iter_binary_file_reads
+from .runtime.private_permissions import protect_private_path, require_private_path
 from .runtime.node_probe import (
     HOST_PERMISSION_RECOMMENDATION,
     MINIMUM_NODE_VERSION as MINIMUM_NODE_VERSION,
@@ -69,6 +70,7 @@ DEFAULT_REQUEST_TIMEOUT_SECONDS = 10.0
 CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS = 45.0
 CANONICAL_AUTHORITY_READ_TIMEOUT_SECONDS = 15.0
 _RUNTIME_SOURCE_SUFFIXES = frozenset({".json", ".ts"})
+_RUNTIME_SOURCE_PATHS = frozenset({"runtime/private_permissions.py"})
 _RuntimeSourceSnapshot = tuple[tuple[str, int, int, int], ...]
 _SOURCE_DIGEST_SCHEMA_VERSION = "loopx_effect_runtime_source_digest_v1"
 _SOURCE_DIGEST_MAX_BYTES = 4096
@@ -304,8 +306,10 @@ def _scan_runtime_source_snapshot(root: Path) -> _RuntimeSourceSnapshot:
         if relative_directory == ".":
             relative_directory = ""
         for filename in sorted(filenames):
+            relative = Path(relative_directory, filename).as_posix()
             dot = filename.rfind(".")
-            if dot <= 0 or filename[dot:] not in _RUNTIME_SOURCE_SUFFIXES:
+            if ((dot <= 0 or filename[dot:] not in _RUNTIME_SOURCE_SUFFIXES)
+                    and relative not in _RUNTIME_SOURCE_PATHS):
                 continue
             source = Path(directory, filename)
             try:
@@ -318,7 +322,7 @@ def _scan_runtime_source_snapshot(root: Path) -> _RuntimeSourceSnapshot:
             except ValueError:
                 continue
             if stat.S_ISREG(metadata.st_mode):
-                snapshot.append((Path(relative_directory, filename).as_posix(),
+                snapshot.append((relative,
                     metadata.st_mtime_ns, metadata.st_ctime_ns, metadata.st_size))
     return tuple(sorted(snapshot))
 
@@ -954,9 +958,13 @@ def _request_with_info(
                     diagnostic_code="invalid_request",
                 )
             directory = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="loopx-effect-")))
+            protect_private_path(directory, directory=True)
             response_sink = directory / "response.json"
             descriptor = os.open(response_sink, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-            os.close(descriptor)
+            try:
+                protect_private_path(response_sink)
+            finally:
+                os.close(descriptor)
             request["response_sink"] = str(response_sink)
             encoded = _encode_rpc_json(request) + b"\n"
             if len(encoded) > MAX_REQUEST_BYTES:
@@ -969,6 +977,7 @@ def _request_with_info(
                 params_path = directory / "params.json"
                 descriptor = os.open(params_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
                 with os.fdopen(descriptor, "wb") as file:
+                    protect_private_path(params_path)
                     file.write(params_bytes)
                 request.pop("params")
                 request["params_ref"] = {
@@ -1158,8 +1167,10 @@ def _read_local_snapshot_response(
                 or size > MAX_LOCAL_SNAPSHOT_BYTES or not isinstance(digest, str)
                 or BARE_SHA256_PATTERN.fullmatch(digest) is None):
             raise ValueError("invalid local snapshot reference")
+        require_private_path(sink.parent, directory=True)
         descriptor = os.open(sink, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
         with os.fdopen(descriptor, "rb") as file:
+            require_private_path(sink, descriptor=file.fileno())
             metadata = os.fstat(file.fileno())
             if (not os.path.isfile(sink) or metadata.st_size != size
                     or (hasattr(os, "getuid") and
@@ -1378,6 +1389,8 @@ def _start_runtime(*, fingerprint: str, info_path: Path) -> dict[str, Any]:
         environment["LOOPX_EFFECT_RUNTIME_TOKEN"] = token
         # Fixed daemon context, never a model-supplied executable argument.
         environment["LOOPX_EFFECT_RUNTIME_PYTHON"] = sys.executable
+        # Windows snapshot ACL facts use this parent-selected interpreter only.
+        environment["LOOPX_EFFECT_RUNTIME_PYTHON_BIN"] = sys.executable
         # Capture stderr so a rejected startup can publish a typed
         # startup diagnostic instead of a bare exit status. The capture
         # is an unlinked temporary file, so it cannot deadlock the child on a

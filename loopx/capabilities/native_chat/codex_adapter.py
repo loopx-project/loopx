@@ -44,7 +44,14 @@ def failed_request_readback(session: CodexChatAgentSession, turn_id: str) -> dic
                 or any(item.get("status") not in {"completed", "failed", "interrupted"} for item in turns)):
             return None
         selected = next((item for item in turns if item["id"] == turn_id), None)
-        if not selected or selected.get("status") != "failed":
+        if not selected:
+            return None
+        if selected.get("status") == "interrupted" and selected.get("error") is None and ids[0] == turn_id:
+            # Closing a disconnected app-server can persist an interruption,
+            # without a native error. This is not a failed-request diagnostic;
+            # only an exact user-only inventory below can prove no execution.
+            return {"interrupted_before_execution": True}
+        if selected.get("status") != "failed":
             return None
         if _routing_discovery_timeout(selected.get("error")):
             # Later work must not strand an untouched accepted request. Keep
@@ -86,6 +93,9 @@ def failed_request_readback(session: CodexChatAgentSession, turn_id: str) -> dic
             ids.add(item["id"])
             users += item["type"] == "userMessage"
         if users != 1 or (not routing and len(items) != 1) or terminal() != proof:
+            return None
+        if proof.get("interrupted_before_execution") and list(
+                session._control_items("thread/items/list", {"turnId": turn_id}, deadline)) != items:
             return None
         proof.pop("latest_routing_failure", None)
         return {"thread_id": session.thread_id, "turn_id": turn_id,

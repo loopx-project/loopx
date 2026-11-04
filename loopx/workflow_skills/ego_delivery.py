@@ -6,13 +6,14 @@ guidance, not browser-control authority or a new capability/provider lifecycle.
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import hashlib
 import json
 import os
 from pathlib import Path
 import shutil
 import tempfile
-from typing import Any
 
 from .. import __version__
 from ..file_lock import exclusive_file_lock
@@ -361,7 +362,7 @@ def _reconcile(entry: Path, *, execute: bool, uninstall: bool) -> dict[str, Any]
             "status": "preserved_unmanaged",
             "reason": "Custom or unrecognized Ego skill preserved. Keep its policy manually, or restore the upstream Ego skill link before refreshing.",
         }
-    if managed and _digest(entry) != marker.get("tree_sha256"):
+    if managed and _digest(entry) != cast(dict[str, Any], marker).get("tree_sha256"):
         return {
             **result,
             "ok": not uninstall,
@@ -412,9 +413,9 @@ def _reconcile(entry: Path, *, execute: bool, uninstall: bool) -> dict[str, Any]
     if (
         not uninstall
         and managed
-        and marker.get("source_sha256") == source_digest
-        and marker.get("policy_sha256") == policy_digest
-        and marker.get("loopx_version") == __version__
+        and cast(dict[str, Any], marker).get("source_sha256") == source_digest
+        and cast(dict[str, Any], marker).get("policy_sha256") == policy_digest
+        and cast(dict[str, Any], marker).get("loopx_version") == __version__
     ):
         return {
             **result,

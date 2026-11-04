@@ -871,7 +871,7 @@ def test_in_flight_validation_conditions_completion_on_original_deliverable() ->
     validation = plan["ordered_steps"][0]
     assert validation["command_condition"] == "todo_deliverable_complete"
     assert "conditional" not in validation
-    assert "keep the Todo open with its original declaration" in validation["precondition"]
+    assert "Keep an unfinished Todo open with its original declaration." in validation["precondition"]
     command = settlement_step_command(plan, SettlementStepKind.VALIDATION)
     assert command is not None
     argv = shlex.split(command)

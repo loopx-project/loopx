@@ -436,7 +436,7 @@ def _eligible_child_lane(lane: _NormalizedAdmissionLane) -> dict[str, Any]:
         or item.get("validation_command_argv") is not None
         or item.get("completion_validation_required") is True
     )
-    child_brief = {
+    child_brief: dict[str, Any] = {
         "todo_id": lane.todo_id,
         "objective": protocol_action_text(
             item.get("title") or item.get("text"),

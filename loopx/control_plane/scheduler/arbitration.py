@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
 
 from ..goals.goal_vision_wait import exact_blocked_successor_wait_state
 
@@ -95,6 +96,7 @@ def _scheduler_arbitration_facts(
             "agent_scope_frontier_actions": [str(action) for action in agent_scope_frontier_actions]}
     wait = exact_blocked_successor_wait_state(payload)
     if wait:
+        payload = cast(dict[str, Any], payload)
         identity = payload.get("agent_identity")
         facts.update({"effective_action": payload.get("effective_action"),
                       "agent_id": identity.get("agent_id") if isinstance(identity, Mapping) else None,

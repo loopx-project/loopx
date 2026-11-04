@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, Sequence, cast
+
 
 
 SPECULATIVE_SCHEDULER_SCHEMA_VERSION = "loopx_explore_speculative_scheduler_v0"
@@ -19,7 +20,7 @@ def step_throughput(batch_size: int, *, load_factor: float) -> float:
 
     batch = max(1, int(batch_size))
     load = _clamp(float(load_factor), 0.0, 1.0)
-    return 1.0 / (1.0 + load * max(0, batch - 1) ** 1.18)
+    return cast(float, 1.0 / (1.0 + load * max(0, batch - 1) ** 1.18))
 
 
 def calibrate_load_factor(
@@ -474,9 +475,9 @@ def build_branch_plan_ab_result(
     selected: Sequence[Mapping[str, Any]],
     rejected: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
-    comparison = scheduler.get("ab_comparison") if isinstance(scheduler.get("ab_comparison"), Mapping) else {}
-    baseline = comparison.get("baseline_serial") if isinstance(comparison.get("baseline_serial"), Mapping) else {}
-    dspark = comparison.get("dspark_selected") if isinstance(comparison.get("dspark_selected"), Mapping) else {}
+    comparison = cast(Mapping[str, Any], scheduler.get("ab_comparison")) if isinstance(scheduler.get("ab_comparison"), Mapping) else {}
+    baseline = cast(Mapping[str, Any], comparison.get("baseline_serial")) if isinstance(comparison.get("baseline_serial"), Mapping) else {}
+    dspark = cast(Mapping[str, Any], comparison.get("dspark_selected")) if isinstance(comparison.get("dspark_selected"), Mapping) else {}
     baseline_theta = max(0.001, float(baseline.get("theta") or 0.0))
     selected_expected_evidence = round(
         sum(float(item.get("expected_evidence_units") or 0.0) for item in selected),

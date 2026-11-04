@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from typing import Any, Callable, cast
+
 from datetime import datetime, timedelta
-from typing import Any, Callable
 
 from .time import now_utc
 
@@ -163,11 +164,11 @@ def decision_freshness_warning(
     message: str = DECISION_FRESHNESS_WARNING_MESSAGE,
 ) -> dict[str, Any] | None:
     freshness = (
-        status_payload.get("decision_freshness_summary")
+        cast(dict[str, Any], status_payload.get("decision_freshness_summary"))
         if isinstance(status_payload.get("decision_freshness_summary"), dict)
         else {}
     )
-    raw_items = freshness.get("items") if isinstance(freshness.get("items"), list) else []
+    raw_items = cast(list[Any], freshness.get("items")) if isinstance(freshness.get("items"), list) else []
     items: list[dict[str, Any]] = []
     for item in raw_items:
         if not isinstance(item, dict):
@@ -191,7 +192,7 @@ def decision_freshness_warning(
 
     if not items:
         return None
-    summary = freshness.get("summary") if isinstance(freshness.get("summary"), dict) else {}
+    summary = cast(dict[str, Any], freshness.get("summary")) if isinstance(freshness.get("summary"), dict) else {}
     return {
         "source": freshness.get("source") or "run_history",
         "window_days": freshness.get("window_days"),

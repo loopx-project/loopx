@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
+
 
 from ..todos.contract import normalize_todo_id
 from ..todos.resume_condition import (
@@ -96,7 +97,7 @@ def overlay_active_turn_retries(
     )
     semantic = goal.get("semantic_history") if isinstance(goal, dict) else None
     runs = (
-        semantic.get("active_blocked_retry_runs")
+        cast(list[Any], semantic.get("active_blocked_retry_runs"))
         if isinstance(semantic, dict)
         and isinstance(semantic.get("active_blocked_retry_runs"), list)
         else goal.get("latest_runs")
@@ -160,7 +161,7 @@ def overlay_active_turn_retries(
             projected_rows = []
             for todo in value:
                 retry = (
-                    waits.get(normalize_todo_id(todo.get("todo_id")))
+                    waits.get(cast(str, normalize_todo_id(todo.get("todo_id"))))
                     if isinstance(todo, dict)
                     else None
                 )
@@ -186,7 +187,7 @@ def overlay_active_turn_retries(
                                 # Historical Python datetime spellings may not
                                 # be valid authoring syntax. Keep their original
                                 # selection fence without inventing clock proof.
-                                **resume_conditions.get(normalize_todo_id(todo["todo_id"]), {
+                                **resume_conditions.get(cast(str, normalize_todo_id(todo["todo_id"])), {
                                     "kind": "resume_at", "resume_when": resume,
                                     "satisfied": False,
                                 }),
@@ -217,7 +218,7 @@ def overlay_active_turn_retries(
                     **item,
                     "agent_todos": projected_summary,
                     **(
-                        {"project_asset": {**asset, "agent_todos": asset_summary}}
+                        {"project_asset": {**cast(dict[str, Any], asset), "agent_todos": asset_summary}}
                         if asset_changed
                         else {}
                     ),
@@ -228,7 +229,7 @@ def overlay_active_turn_retries(
     return (
         {
             **status_payload,
-            "attention_queue": {**queue, "items": projected_items},
+            "attention_queue": {**cast(dict[str, Any], queue), "items": projected_items},
         }
         if changed
         else status_payload
@@ -252,7 +253,7 @@ def overlay_status_turn_retries(
             continue
         semantic = goal.get("semantic_history")
         runs = (
-            semantic.get("active_blocked_retry_runs")
+            cast(list[Any], semantic.get("active_blocked_retry_runs"))
             if isinstance(semantic, dict)
             and isinstance(semantic.get("active_blocked_retry_runs"), list)
             else goal.get("latest_runs") or []

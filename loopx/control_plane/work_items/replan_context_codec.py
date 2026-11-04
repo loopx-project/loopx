@@ -1,13 +1,14 @@
 """Scoped source codec for the TypeScript-owned replan evidence view."""
 from __future__ import annotations
 
+from typing import Any, cast
+
 from ..goals.acceptance_readback import configured_checks
 
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 import hashlib
 import shlex
-from typing import Any
 
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from ..runtime.time import parse_timestamp
@@ -182,7 +183,7 @@ def project_replan_context(
             if source_status.get(field):
                 prefix.extend([option, str(source_status[field])])
     try:
-        return project_replan_request({
+        return cast(dict[str, Any], project_replan_request({
             "operation": "resolve" if evidence_ref is not None else "project",
             "goal_id": goal_id, "agent_id": agent_id,
             "obligation": dict(obligation) if obligation is not None else None,
@@ -200,16 +201,16 @@ def project_replan_context(
             "read_prefix": shlex.join(prefix),
             "goal_facts": goal_context_facts(source_status, goal_id, goal_acceptance_contract) if evidence_ref is None else {},
             "from_full_index": bool(source_status and source_status.get("registry") and source_status.get("runtime_root")),
-        }, method="work_item.replan_context")
+        }, method="work_item.replan_context"))
     except EffectRuntimeRejected as exc:
         raise ValueError(str(exc)) from None
 
 
 def validate_replan_context(context: Any) -> dict[str, Any]:
     try:
-        return effect_runtime_result("work_item.replan_context.project", {
+        return cast(dict[str, Any], effect_runtime_result("work_item.replan_context.project", {
             "operation": "validate", "context": context,
-        })
+        }))
     except EffectRuntimeRejected as exc:
         raise ValueError(str(exc)) from None
 
@@ -222,13 +223,13 @@ def replay_stride_review_evidence(
 
     previous = context["decision_followthrough"]["previous_decision"]
     try:
-        return project_replan_request({
+        return cast(dict[str, Any], project_replan_request({
             "operation": "review_evidence", "obligation": None, "goal_id": context["goal_id"],
             "agent_id": context["agent_id"], "previous_decision_ref": previous["evidence_ref"],
             "evidence_refs": review.get("evidence_refs", []),
             "goal_facts": {"goal_ref": previous.get("goal_ref")},
             "rows": replan_evidence_rows(runs, goal_id=context["goal_id"], agent_id=context["agent_id"],
                 include_decisions=True, history_newest_first=True),
-        }, method="work_item.replan_context")
+        }, method="work_item.replan_context"))
     except EffectRuntimeRejected as exc:
         raise ValueError(str(exc)) from None

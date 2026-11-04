@@ -7,10 +7,11 @@ closed instead of consulting the legacy Markdown projection.
 
 from __future__ import annotations
 
+from typing import Any, NoReturn, cast
+
 from collections.abc import Callable, Mapping
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, NoReturn
 from uuid import uuid4
 
 from ...agent_registry import registered_agent_ids_from_registry
@@ -259,7 +260,7 @@ def claim_canonical_todo_if_promoted(
 def read_canonical_todos_if_promoted(
     *, runtime_root: Path, goal_id: str, include_leases: bool = False,
     projection_readback: Mapping[str, Any] | None = None,
-    include_summary: bool = False, rollout_events=None, available_capabilities=None,
+    include_summary: bool = False, rollout_events: Any = None, available_capabilities: Any = None,
 ) -> dict[str, Any]:
     """Read canonical Todos or fail with the native migration/recovery cause.
 
@@ -430,7 +431,7 @@ def read_canonical_todo_fields_if_promoted(
     """
     canonical = read_canonical_todos_if_promoted(runtime_root=runtime_root, goal_id=goal_id,
         include_summary=True, rollout_events=rollout_events)
-    return canonical["_todo_fields"]
+    return cast(dict[str, Any], canonical["_todo_fields"])
 
 
 

@@ -159,6 +159,13 @@ Requests without a language retain their original identity and stored artifacts;
 the frontend does not present an unspecified or other-language result as a new
 analysis in the selected language. Output-language metadata records the request,
 not independent verification of a model's translation or judgments.
+When the selected language has no result, the reader also checks the same
+registered pack's original, language-unspecified identity. A verified saved
+original remains readable, with its original judgments, citations and usage,
+and is labeled **Saved original**. It does not fill the selected language's
+cache or substitute another language's artifact. New analysis, retry and cancel
+still use the selected language's key and retain that attempt's failure/usage;
+an explicit read-only response disables execution even on the local origin.
 
 ### Native results as explicit analysis context
 

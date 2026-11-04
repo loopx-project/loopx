@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 from hashlib import sha256
 from pathlib import Path
 import subprocess
-from typing import Any
 
 from ...agent_registry import registered_agent_ids_for_goal
 from ...repository_identity import (
@@ -295,7 +296,7 @@ def build_delivery_workspace_guard(
     """
 
     snapshot = (
-        delivery_run.get("delivery_workspace")
+        cast(dict[str, Any], delivery_run.get("delivery_workspace"))
         if isinstance(delivery_run.get("delivery_workspace"), dict)
         else {}
     )
@@ -446,7 +447,7 @@ def build_agent_workspace_guard(
     if not isinstance(agent_identity, dict):
         return None
     workspace_guard_policy = (
-        goal.get("workspace_guard_policy")
+        cast(dict[str, Any], goal.get("workspace_guard_policy"))
         if isinstance(goal.get("workspace_guard_policy"), dict)
         else {}
     )

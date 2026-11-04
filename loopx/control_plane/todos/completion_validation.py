@@ -4,7 +4,7 @@ import subprocess
 from collections.abc import Mapping
 from json import loads as json_loads
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from ...history import load_registry
 from ...materials import find_registry_goal, goal_repo
@@ -70,7 +70,7 @@ def _resolve_goal_repo_workspace(registry_path: Path, goal_id: str) -> Path | No
     repo = goal_repo(goal)
     if repo is None or not repo.is_dir():
         return None
-    return cast(Path, repo)
+    return repo
 
 
 def _workspace_failure(label: str, *, status: str, summary: str) -> dict[str, Any]:
@@ -291,23 +291,17 @@ def _run_declared_completion_validation(
     assert workspace is not None
     try:
         if validation_argv is not None:
-            return cast(
-                dict[str, Any],
-                run_caller_validation(
-                    workspace,
-                    validation_argv=validation_argv,
-                    validation_label=label,
-                    timeout_seconds=timeout_seconds,
-                ),
-            )
-        return cast(
-            dict[str, Any],
-            run_caller_validation(
+            return run_caller_validation(
                 workspace,
-                validation_command=str(validation_command),
+                validation_argv=validation_argv,
                 validation_label=label,
                 timeout_seconds=timeout_seconds,
-            ),
+            )
+        return run_caller_validation(
+            workspace,
+            validation_command=str(validation_command),
+            validation_label=label,
+            timeout_seconds=timeout_seconds,
         )
     except subprocess.TimeoutExpired:
         return {
@@ -617,23 +611,20 @@ def completion_policy_source_from_state(
 ) -> dict[str, Any]:
     """Project lock-comparable facts for the TS completion policy."""
 
-    return cast(
-        dict[str, Any],
-        build_completion_policy_request(
-            registry_path=registry_path,
-            goal_id=goal_id,
-            claimed_by=facts.get("claimed_by"),
-            next_claimed_by=facts.get("next_claimed_by"),
-            next_agent_todo=facts.get("next_agent_todo"),
-            next_action_kind=facts.get("next_action_kind"),
-            next_continuation_policy=facts.get("next_continuation_policy"),
-            next_excluded_agents=facts.get("next_excluded_agents") or [],
-            self_merged=bool(facts.get("self_merged")),
-            evidence=facts.get("evidence"),
-            linked_successors=linked_successors_from_state(
-                lines=lines,
-                successor_todo_ids=successor_todo_ids,
-            ),
+    return build_completion_policy_request(
+        registry_path=registry_path,
+        goal_id=goal_id,
+        claimed_by=facts.get("claimed_by"),
+        next_claimed_by=facts.get("next_claimed_by"),
+        next_agent_todo=facts.get("next_agent_todo"),
+        next_action_kind=facts.get("next_action_kind"),
+        next_continuation_policy=facts.get("next_continuation_policy"),
+        next_excluded_agents=facts.get("next_excluded_agents") or [],
+        self_merged=bool(facts.get("self_merged")),
+        evidence=facts.get("evidence"),
+        linked_successors=linked_successors_from_state(
+            lines=lines,
+            successor_todo_ids=successor_todo_ids,
         ),
     )
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 import hashlib
 import json
 import re
@@ -8,7 +10,6 @@ import uuid
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any
 
 from ...agent_registry import normalize_registered_agents
 from ...control_plane.reward_memory import (
@@ -850,7 +851,7 @@ def resolve_reward_memory_experiment(
     if not normalized_agent:
         raise ValueError("agent_id must be a public-safe registered agent id")
     registry = _read_json_object(registry_path)
-    goals = registry.get("goals") if isinstance(registry.get("goals"), list) else []
+    goals = cast(list[Any], registry.get("goals")) if isinstance(registry.get("goals"), list) else []
     goal = next(
         (
             item
