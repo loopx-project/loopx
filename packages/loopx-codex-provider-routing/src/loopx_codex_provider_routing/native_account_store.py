@@ -79,6 +79,8 @@ def external_api_auth(raw):
     """Direct API-key login owned by Codex, not by the managed relay vault."""
     try:
         obj = json.loads(raw)
+        if not isinstance(obj, dict):
+            return False
         key = obj.get('OPENAI_API_KEY')
         return (obj.get('auth_mode') == 'apikey' and isinstance(key, str)
                 and bool(key) and not key.startswith('sk-loopx-relay-')

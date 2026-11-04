@@ -430,6 +430,18 @@ class AccountTests(unittest.TestCase):
             self.manager.switch('a')
         self.assertEqual(self.manager.auth.read_bytes(), direct)
 
+    def test_non_object_auth_retains_the_native_preflight_error(self):
+        self.current()
+        selected = self.manager.active.read_bytes()
+        for value in ([], None, True, 1, 'synthetic-invalid-cache'):
+            with self.subTest(value=value):
+                raw = accounts.encoded(value)
+                accounts.atomic(self.manager.auth, raw)
+                with self.assertRaisesRegex(ValueError, 'Invalid native account cache'):
+                    apps.account_preflight(self.home, self.spec)
+                self.assertEqual(self.manager.auth.read_bytes(), raw)
+                self.assertEqual(self.manager.active.read_bytes(), selected)
+
     def test_active_owner_refusal_has_no_vault_side_effects(self):
         self.idle.side_effect = ValueError('synthetic running process')
         with self.assertRaises(ValueError):
