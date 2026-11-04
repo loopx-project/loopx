@@ -443,6 +443,46 @@ def test_t06_terminal_state_refuses_pending_entry_at_effect_time(harness: Harnes
     assert entries[0]["reason"] == "terminal_pr_state"
 
 
+@pytest.mark.parametrize("resend_correction", [False, True], ids=["poll", "retry"])
+@pytest.mark.parametrize(
+    ("login", "association", "reason"),
+    [
+        ("maintainer-a", "NONE", "author_not_maintainer"),
+        ("automation[bot]", "MEMBER", "self_or_bot_author"),
+    ],
+    ids=["non-maintainer", "bot"],
+)
+def test_pending_correction_rechecks_current_author_before_todo_write(
+    harness: Harness, resend_correction: bool, login: str, association: str, reason: str,
+) -> None:
+    event = _event("6102")
+    correction = _correction_v1(event)
+    faulted = harness.run(
+        metadata=_metadata([event]), correction=correction,
+        env={"LOOPX_ISSUE_FIX_FAULT_BEFORE_CORRECTION_TODO": "1"}, check=False,
+    )
+    assert faulted.returncode != 0
+    pending = harness.entries()[0]
+    assert pending["disposition"] == "accepted" and pending["todo_id"] is None
+
+    current_event = _event("6102", login=login, association=association)
+    refused = harness.run_json(
+        metadata=_metadata([current_event]),
+        correction=correction if resend_correction else None,
+    )
+    assert refused["maintainer_correction_settlement"]["settlements"] == [
+        {"operation_id": pending["operation_id"], "status": "refused", "reason": reason}
+    ]
+    assert harness.correction_todos() == []
+    assert harness.entries()[0] == pending
+
+    recovered = harness.run_json(metadata=_metadata([event]), correction=None)
+    assert recovered["maintainer_correction_settlement"]["settlements"][0]["status"] == "written"
+    harness.run_json(metadata=_metadata([event]), correction=correction)
+    assert len(harness.correction_todos()) == 1
+    assert harness.entries()[0]["operation_id"] == pending["operation_id"]
+
+
 def test_t11_crash_between_ledger_entry_and_todo_write_is_reconciled(harness: Harness) -> None:
     event = _event("11001")
     metadata = _metadata([event])

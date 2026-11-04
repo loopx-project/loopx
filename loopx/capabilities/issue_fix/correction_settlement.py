@@ -27,6 +27,8 @@ MAINTAINER_CORRECTION_FAULT_ENV = "LOOPX_ISSUE_FIX_FAULT_BEFORE_CORRECTION_TODO"
 _SOURCE_EVENT_REFUSALS = {
     "source_event_not_observed",
     "source_event_revision_mismatch",
+    "self_or_bot_author",
+    "author_not_maintainer",
 }
 
 

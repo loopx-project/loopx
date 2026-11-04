@@ -784,10 +784,12 @@ def recheck_issue_fix_maintainer_correction_effect_gates(
         ]
         if not observed:
             return "source_event_not_observed"
-        if not any(
-            _same_instant(event.get("updated_at"), source_event.get("updated_at"))
-            for event in observed
-        ):
+        current_event = next(
+            (event for event in observed
+             if _same_instant(event.get("updated_at"), source_event.get("updated_at"))),
+            None,
+        )
+        if current_event is None:
             return "source_event_revision_mismatch"
         latest = _latest_accepted_revision(
             issue_fix_maintainer_correction_entries(
@@ -800,10 +802,10 @@ def recheck_issue_fix_maintainer_correction_effect_gates(
             own_time = _timestamp(source_event.get("updated_at"))
             if latest_time is not None and own_time is not None and own_time < latest_time:
                 return "stale_revision"
-        if _is_bot_or_self_login(source_event.get("author_login")):
+        if _is_bot_or_self_login(current_event.get("author_login")):
             return "self_or_bot_author"
         if (
-            _upper_label(source_event.get("author_association"), "NONE")
+            _upper_label(current_event.get("author_association"), "NONE")
             not in MAINTAINER_ASSOCIATIONS
         ):
             return "author_not_maintainer"
