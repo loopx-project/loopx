@@ -813,7 +813,13 @@ def handle_refresh_state_command(
                 raise RuntimeError(
                     "exact settlement readback unexpectedly returned not-found"
                 )
-            settlement_result = settlement_readback.delivery
+            # A combined retry may already be settled, with no owed child to
+            # dispatch. Retain its complete receipts from the same typed read.
+            settlement_result = (
+                settlement_readback.settlement
+                if getattr(args, "settle_turn", False) and settlement_readback.spend.failure is None
+                else settlement_readback.delivery
+            )
             attach_settlement_progress(
                 payload, settlement_readback, registry_path=registry_path, runtime_root=runtime_root,
                 goal_ref=goal_ref,
