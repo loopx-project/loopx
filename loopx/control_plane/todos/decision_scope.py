@@ -14,7 +14,7 @@ from .contract import (
     normalize_todo_id,
     normalize_todo_required_decision_scopes,
 )
-from .user_gate import is_user_gate_todo_item
+from .user_gate import is_user_gate_todo_item, open_user_gate_todo_items
 from .todo_semantics import todo_projection_sort_key, todo_item_task_class, todo_item_has_removed_continuation_policy
 
 DECISION_SCOPE_CONSISTENCY_SCHEMA_VERSION = "required_decision_scope_consistency_v0"
@@ -293,13 +293,6 @@ def build_required_decision_scope_repair_hint(
     return result
 
 
-def todo_gate_relation(gate: dict[str, Any], agent_item: dict[str, Any]) -> dict[str, Any] | None:
-    return _optional_relation(
-        "relation",
-        _evaluate("relation", gate=_facts(gate), item=_facts(agent_item)),
-    )
-
-
 def todo_gate_relations(gates: list[dict[str, Any]], items: list[dict[str, Any]]) -> list[list[dict[str, Any] | None]]:
     """Evaluate a consumer's candidate set in one RPC, retaining positional identity."""
     if not gates or not items:
@@ -356,3 +349,60 @@ def todo_gate_scope_projections(gates: list[dict[str, Any]], items: list[dict[st
     if not isinstance(projections, list) or len(projections) != len(items):
         raise TypeError("invalid typed gate scope projection cardinality")
     return [_required_projection("gate_scope", row, schema_version="todo_gate_scope_projection_v0") for row in projections]
+
+
+def _readiness_facts(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        **_facts(item),
+        "identity_text": str(item.get("todo_id") or ""),
+        "status_text": str(item.get("status") or ""),
+        "target_text": str(item.get("unblocks_todo_id") or ""),
+    }
+
+
+def _global_readiness_request(payload: dict[str, Any]) -> dict[str, Any]:
+    """Bound transport to candidate containers; TS alone selects their list keys."""
+    bounded = {
+        key: payload.get(key)
+        for key in ("selected_todo", "agent_lane_next_action", "normal_delivery_allowed")
+    }
+    decoded = {
+        f"/{key}": _readiness_facts(value)
+        for key, value in bounded.items()
+        if isinstance(value, dict)
+    }
+    for container_key in ("agent_todo_summary", "agent_scope_frontier"):
+        container = payload.get(container_key)
+        lists = {
+            key: value for key, value in container.items() if isinstance(value, list)
+        } if isinstance(container, dict) else {}
+        bounded[container_key] = lists
+        for key, values in lists.items():
+            for index, item in enumerate(values):
+                if isinstance(item, dict):
+                    decoded[f"/{container_key}/{key}/{index}"] = _readiness_facts(item)
+    return {
+        "schema_version": "global_todo_readiness_request_v0",
+        "payload": bounded,
+        "decoded": decoded,
+        "gates": [
+            _readiness_facts(gate)
+            for gate in open_user_gate_todo_items(payload.get("user_todo_summary"))
+        ],
+    }
+
+
+def project_global_todo_readiness(payload: dict[str, Any]) -> dict[str, Any]:
+    """Decode persisted fields and reuse the shared Python gate selector."""
+    result = effect_runtime_result(
+        "todo.global_readiness.project", _global_readiness_request(payload),
+    )
+    projection = _required_projection(
+        "global_readiness", result, schema_version="global_todo_readiness_v0",
+    )
+    for key in ("warnings", "candidates"):
+        if not isinstance(projection.get(key), list) or any(
+            not isinstance(row, dict) for row in projection[key]
+        ):
+            raise TypeError("invalid typed decision scope global readiness rows")
+    return projection
