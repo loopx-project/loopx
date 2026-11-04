@@ -31,6 +31,26 @@ TypeScript 上下文 owner 同时约束 `quota context-read --initial-read`。
 
 ## Ownership Boundary
 
+Successful JSON `refresh-state` output keeps the complete `explore_result` once.
+When a successful Explore hook's ingestion intent contains exactly the same
+attachment, its display payload uses `attachment_ref: "$.explore_result"` within
+that response. Other intent fields, delivery results, settlement identity and
+receipts remain intact. Numeric spellings participate in equality, so adjacent
+large integers cannot be mistaken for identical inputs. Failed/pending delivery,
+conflicts, unknown schemas and existing references stay inline. If optional
+display transport fails, the complete original response is printed. Markdown,
+persisted intents and exact replay inputs are unchanged; no capture or additional
+model read is required. This reduces repeated output, not semantic/backend work,
+and does not establish lower fees or better model outcomes.
+
+成功的 JSON `refresh-state` 输出完整保留一份 `explore_result`。Explore hook
+成功交付、且 ingestion intent 的附件与其完全相同时，仅显示副本替换为同一响应内的
+`attachment_ref: "$.explore_result"`；其他输入、交付结果、结算身份和回执保持原样。
+相等判断保留原始数值表示，避免将相邻大整数误判为相同。失败、待重试、内容冲突、
+未知 schema 和已有引用保持内联；可选显示传输失败则打印原完整结果。Markdown、
+持久化 intent 和精确重放输入不变，无需新增 capture 或模型补读。这只减少重复输出，
+不减少语义／后端工作，也不证明费用或模型效果改善。
+
 The quota control plane owns decision, precedence, scheduler, interaction,
 selected-todo, and user-action semantics. `cli_projection.py` owns only the
 serialized view consumed by agents. A compactor must not become a second
