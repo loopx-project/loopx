@@ -270,6 +270,9 @@ def test_advertised_native_reader_keeps_the_complete_current_contract_across_pag
     monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
     project, runtime, registry = _write_fixture(tmp_path)
     _initialize_fixture_authority(project, runtime, provider=provider, handoff_mode="hard_lease")
+    code, claim = _run_cli(registry, runtime, "todo", "claim", "--goal-id", GOAL_ID,
+        "--todo-id", TODO_ID, "--agent-id", AGENT_ID, "--claimed-by", AGENT_ID, cwd=project)
+    assert code == 0 and claim["ok"], claim
     state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     original_state = state.read_bytes()
     turn_id = "native-first-read"
