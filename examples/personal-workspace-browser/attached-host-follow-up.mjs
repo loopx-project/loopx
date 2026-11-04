@@ -91,6 +91,9 @@ export const attachedHostFollowUpScenario = {
       await openGoalChat(attachedGoal);
       const followUp = "附着宿主回合进行中的后续消息";
       await composer.fill(followUp);
+      await composer.press("Meta+Enter");
+      await page.getByRole("status").filter({ hasText: "此执行器不支持本轮纠偏" }).waitFor();
+      if (posts.length || await composer.inputValue() !== followUp) throw new Error("Unsupported host steering queued or lost the draft");
       if (await sendButton.isDisabled()) throw new Error("An attached_host composer blocked Send while its host ran a Turn");
       await sendButton.click();
       for (let attempt = 0; attempt < 100 && !posts.length; attempt += 1) await page.waitForTimeout(50);

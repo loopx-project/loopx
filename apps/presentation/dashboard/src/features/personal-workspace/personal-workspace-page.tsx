@@ -2542,7 +2542,7 @@ export function PersonalWorkspacePage({
       } finally { setSteering(false); }
       return;
     }
-    if (intent === "steer" && conversationTurnRunning) {
+    if (intent === "steer" && (conversationTurnRunning || queueTurnId)) {
       setActionFeedback(locale === "zh-CN" ? "此执行器不支持本轮纠偏；可按 Enter 排队，草稿已保留。" : "This executor cannot steer this turn. Press Enter to queue; draft retained.");
       return;
     }
