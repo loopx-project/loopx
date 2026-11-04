@@ -1,17 +1,18 @@
 from __future__ import annotations
 
+from typing import Any, Literal, cast, get_args
+
 import hashlib
 import json
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Literal, get_args
 
 from ...control_plane.runtime.public_safety import public_safe_compact_text
 from ...public_safe_text import (
     MODULE_QUALIFIED_SURFACE_PATTERN as SURFACE_RE,
-    PUBLIC_SAFE_REFERENCE_PATTERN as TOKEN_RE,
+    PUBLIC_SAFE_REFERENCE_PATTERN as _REFERENCE_PATTERN,
 )
 from ..context_providers import build_context_provider
 from ..context_providers.base import (
@@ -28,6 +29,8 @@ from .experience_quality import (
     procedural_experience_quality,
 )
 from .registry import IDENTITY_SCOPE_FIELDS, normalize_reward_memory_corpus
+
+TOKEN_RE = _REFERENCE_PATTERN
 
 
 REWARD_MEMORY_ACTIVE_RECORD_SCHEMA_VERSION = "reward_memory_active_record_v0"
@@ -687,6 +690,9 @@ def execute_reward_memory_recall(
     guard = recall_request.get("guard")
     if not all(isinstance(value, Mapping) for value in (corpus, request, guard)):
         raise ValueError("recall_request is incomplete")
+    corpus = cast(Mapping[str, Any], corpus)
+    request = cast(Mapping[str, Any], request)
+    guard = cast(Mapping[str, Any], guard)
     binding = normalize_reward_memory_provider_binding(provider_binding, corpus)
     base_packet: dict[str, Any] = {
         "ok": True,

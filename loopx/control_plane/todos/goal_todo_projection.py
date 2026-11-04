@@ -8,7 +8,7 @@ never turn a display file into fallback authority.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from ..goals.legacy_event_source import require_no_legacy_todo_events
 from .active_state_editing import TODO_SECTION_HEADINGS
@@ -250,7 +250,7 @@ def project_todo_read(params: dict[str, Any]) -> dict[str, Any]:
 
     request = {"schema_version": "todo_read_request_v0", **params}
     encoded = json.dumps(request, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
-    chunks = []
+    chunks: list[bytes] = []
     identity = None
     try:
         with ExitStack() as stack:
@@ -316,17 +316,17 @@ def project_todo_read(params: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def restore_todo_field_evaluations(result):
+def restore_todo_field_evaluations(result: dict[str, Any]) -> dict[str, Any]:
     from .succession_warning import _EvaluatedTodo
 
-    fields = result["fields"]
+    fields = cast(dict[str, Any], result["fields"])
     for role, decisions in result["field_evaluations"].items():
         fields[role]["items"] = [_EvaluatedTodo(item, decision)
             for item, decision in zip(fields[role]["items"], decisions, strict=True)]
     return fields
 
 
-def canonical_todo_fields(todos, *, rollout_events=None, **facts):
+def canonical_todo_fields(todos: Any, *, rollout_events: Any = None, **facts: Any) -> dict[str, Any]:
     from ..runtime.time import now_utc
 
     now = now_utc()
@@ -341,10 +341,10 @@ def canonical_todo_fields(todos, *, rollout_events=None, **facts):
     }))
 
 
-def source_todo_fields(groups, *, lineage, rollout_events=None, available_capabilities=None,
-                       preferred_todo_ids=None, item_limit=None, evaluated_at=None,
-                       archived_items=None, standing_items=None, legacy_source_order=False,
-                       vision_runs=None, include_task_orchestration_authority=False):
+def source_todo_fields(groups: Any, *, lineage: Any, rollout_events: Any = None, available_capabilities: Any = None,
+                       preferred_todo_ids: Any = None, item_limit: int | None = None, evaluated_at: str | None = None,
+                       archived_items: Any = None, standing_items: Any = None, legacy_source_order: bool = False,
+                       vision_runs: Any = None, include_task_orchestration_authority: bool = False) -> dict[str, Any]:
     from ..runtime.time import now_utc
 
     now = now_utc()
@@ -372,18 +372,18 @@ def source_todo_fields(groups, *, lineage, rollout_events=None, available_capabi
         if vision_runs:
             from .succession_warning import _EvaluatedTodo
             from ..goals.goal_vision_wait_projection import attach_active_vision_waits
-            source = [_EvaluatedTodo(item, decision) for item, decision in zip(
+            source: list[dict[str, Any]] = [_EvaluatedTodo(item, decision) for item, decision in zip(
                 result["source_items"][role], result["source_evaluations"][role], strict=True)]
             attach_active_vision_waits(summary, vision_runs, role=role, items=source,
                 lineage_items=lineage)
     return fields
 
 
-def project_todo_read_group(items, *, source_section, role, preferred_todo_ids=None,
-                            lineage=None, rollout_events=None, available_capabilities=None,
-                            item_limit=None, evaluated_at=None, evaluated=False,
-                            full_selection=True, selection=None, resume_lineage=None,
-                            include_full_source=False, include_task_orchestration_authority=False):
+def project_todo_read_group(items: Any, *, source_section: str | None, role: str | None, preferred_todo_ids: Any = None,
+                            lineage: Any = None, rollout_events: Any = None, available_capabilities: Any = None,
+                            item_limit: int | None = None, evaluated_at: str | None = None, evaluated: bool = False,
+                            full_selection: bool = True, selection: Any = None, resume_lineage: Any = None,
+                            include_full_source: bool = False, include_task_orchestration_authority: bool = False) -> dict[str, Any]:
     from .succession_warning import _EvaluatedTodo
     from ..runtime.time import now_utc
 
@@ -417,7 +417,7 @@ def project_todo_read_group(items, *, source_section, role, preferred_todo_ids=N
     return result
 
 
-def prepare_todo_source_groups(groups, *, lineage):
+def prepare_todo_source_groups(groups: Any, *, lineage: Any) -> list[dict[str, Any]]:
     from .todo_summary import _structured_todo_group_items, _structured_resume_source_items
     from .resume_condition import build_todo_resume_evaluation_request
 
@@ -433,7 +433,7 @@ def prepare_todo_source_groups(groups, *, lineage):
     return prepared
 
 
-def legacy_lineage_facts(items):
+def legacy_lineage_facts(items: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     from .succession_warning import succession_facts
 
     return ([{"todo_id": item.get("todo_id"), "role": item.get("role"), "source_section": item.get("source_section"),
@@ -441,7 +441,7 @@ def legacy_lineage_facts(items):
             [succession_facts(item) for item in items])
 
 
-def prepare_todo_source_text(goal, state_text, state_path, *, todo_id=None, retained=False):
+def prepare_todo_source_text(goal: dict[str, Any] | None, state_text: str, state_path: Path, *, todo_id: str | None = None, retained: bool = False) -> dict[str, Any]:
     from .active_state_todo_parser import parse_todo_source
     from .todo_summary import _structured_resume_source_items
     from .standing_decision import standing_decision_source_items

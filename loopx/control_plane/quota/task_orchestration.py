@@ -1,6 +1,7 @@
 from __future__ import annotations
+
+from typing import Any, cast
 from .effective_action import EffectiveAction
-from typing import Any
 
 from ..agents.agent_scope_frontier import AgentScopeFrontierAction
 from ..agents.runtime_model import peer_work_key
@@ -134,7 +135,7 @@ def apply_task_orchestration_contract(
     fallback_work_lane_contract: dict[str, Any] | None,
     goal_boundary: dict[str, Any] | None,
     agent_identity: dict[str, Any] | None,
-    agent_todo_summary: dict[str, Any],
+    agent_todo_summary: dict[str, Any] | None,
     raw_agent_todo_summary: dict[str, Any] | None = None,
     raw_user_todo_summary: dict[str, Any] | None = None,
     agent_todo_source_items: list[dict[str, Any]] | None = None,
@@ -180,7 +181,7 @@ def _agent_scope_payload_work_lane_contract(
     reason_codes = [
         str(value)
         for value in (
-            work_lane_contract.get("reason_codes")
+            cast(list[Any], work_lane_contract.get("reason_codes"))
             if isinstance(work_lane_contract.get("reason_codes"), list)
             else []
         )
@@ -238,13 +239,13 @@ def _task_orchestration_contract(
     if not agent_id:
         return None
     orchestration = (
-        goal_boundary.get("orchestration")
+        cast(dict[str, Any], goal_boundary.get("orchestration"))
         if isinstance(goal_boundary.get("orchestration"), dict)
         else {}
     )
     available = normalize_required_capabilities(available_capabilities)
     peer_coordination = (
-        goal_boundary.get("peer_task_coordination")
+        cast(dict[str, Any], goal_boundary.get("peer_task_coordination"))
         if isinstance(goal_boundary.get("peer_task_coordination"), dict)
         else {}
     )
@@ -338,7 +339,7 @@ def _registered_peer_task_orchestration_contract(
             key=lambda lane: (lane["agent_id"], lane["todo_id"]),
         ),
     }, fallback="task_orchestration")
-    return contract
+    return cast(dict[str, Any] | None, contract)
 
 
 def _task_orchestration_work_lane_contract(

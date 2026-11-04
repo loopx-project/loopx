@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from typing import Any, Mapping, cast
+
+
 from datetime import datetime
 import re
-from typing import Any
 
 from ..scheduler.monitor_todo import (
     monitor_todo_expires_at,
@@ -194,7 +196,7 @@ def todo_projection_sort_key(
 
 
 def todo_item_task_text(
-    item: dict[str, Any],
+    item: Mapping[str, Any],
     *,
     keys: tuple[str, ...] = ("title", "text"),
 ) -> str:
@@ -204,7 +206,7 @@ def todo_item_task_text(
 
 
 def todo_item_task_class(
-    item: dict[str, Any],
+    item: Mapping[str, Any],
     *,
     task_text_keys: tuple[str, ...] = ("title", "text"),
 ) -> str:
@@ -372,7 +374,7 @@ def todo_scoped_runnable_advancement_count(
         and type(counts.get("advancement")) is int
         and counts["advancement"] >= 0
     ):
-        return counts["advancement"]
+        return cast(int | None, counts["advancement"])
     return None
 
 

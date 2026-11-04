@@ -4,7 +4,8 @@ No dismissal executor lives here: candidate age is not finding-resolution proof.
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
+
 
 from ...control_plane.effect_runtime import EffectRuntimeRejected, effect_runtime_result
 
@@ -50,7 +51,7 @@ def select_review_history(request: dict[str, Any]) -> dict[str, Any]:
     index = result.get("index") if isinstance(result, dict) else None
     if type(index) is not int or not 0 <= index < len(request["reviews"]):
         raise TypeError("typed review conclusion index mismatch")
-    return result
+    return cast(dict[str, Any], result)
 
 
 def read_github_approval_closeout(*, repository: str, exact_head: str) -> dict[str, Any]:

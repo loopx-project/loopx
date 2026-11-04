@@ -137,7 +137,7 @@ def _compact_monitor_poll_interaction_contract(
 
 
 def _compact_monitor_poll_decision(decision: dict[str, Any]) -> dict[str, Any]:
-    compact = compact_quota_decision(decision)
+    compact = cast(dict[str, Any], compact_quota_decision(decision))
     selected_todo = decision.get("selected_todo")
     if isinstance(selected_todo, dict):
         compact["selected_todo"] = {
@@ -624,7 +624,7 @@ def _apply_context_projection_changes(
                 parent[key] = deepcopy(value)
     except (KeyError, IndexError, TypeError, ValueError) as error:
         raise RuntimeError("Invalid TypeScript context projection changes") from error
-    return projected
+    return cast(dict[str, Any], projected)
 
 
 def compact_quota_should_run_cli_payload(

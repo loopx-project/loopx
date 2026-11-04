@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 from collections.abc import Mapping
-from typing import Any
 
 from .todos.contract import normalize_todo_claimed_by
 
@@ -121,12 +122,12 @@ def reward_memory_goal_policy(
     """
 
     control_plane = (
-        goal.get("control_plane")
+        cast(Mapping[str, Any], goal.get("control_plane"))
         if isinstance(goal.get("control_plane"), Mapping)
         else {}
     )
     raw = (
-        control_plane.get("reward_memory")
+        cast(Mapping[str, Any], control_plane.get("reward_memory"))
         if isinstance(control_plane.get("reward_memory"), Mapping)
         else {}
     )

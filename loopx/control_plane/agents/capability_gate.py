@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 from functools import lru_cache
-from typing import Any
 
 from ..todos.contract import (
     TODO_TASK_CLASS_ADVANCEMENT,
@@ -191,11 +192,11 @@ def build_capability_gate(
     policy = ("claim_then_profile_then_priority_then_active_next_then_repair" if profile else
               "claim_then_priority_then_active_next_then_repair") if agent else None
     displays = compact_todo_summary_items(candidates, strip_text=True)
-    return _evaluate("project", source=source,
+    return cast(dict[str, Any] | None, _evaluate("project", source=source,
                      available=normalize_required_capabilities(available_capabilities),
                      candidate_order_policy=policy, candidates=[{
                          "payload": display,
                          "required": normalize_required_capabilities(item.get("required_capabilities")),
                          "targets": normalize_target_capabilities(item.get("target_capabilities")),
                          "rank": list(_agent_lane_candidate_sort_key(item, agent_id=agent, agent_profile=profile)),
-                     } for item, display in zip(candidates, displays, strict=True)])
+                     } for item, display in zip(candidates, displays, strict=True)]))

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 import re
-from typing import Any
 
 from .control_plane.goals.active_state_metadata import todo_role_for_heading
 from .control_plane.status.active_state_projection import SECTION_HEADING_PATTERN
@@ -282,13 +283,13 @@ def state_action_projection_warning(
         and work_lane_contract.get("lane") == "advancement_task"
         and "open_agent_todo"
         in (
-            work_lane_contract.get("reason_codes")
+            cast(list[Any], work_lane_contract.get("reason_codes"))
             if isinstance(work_lane_contract.get("reason_codes"), list)
             else []
         )
     ):
         return None
-    project_asset = item.get("project_asset") if isinstance(item.get("project_asset"), dict) else {}
+    project_asset = cast(dict[str, Any], item.get("project_asset")) if isinstance(item.get("project_asset"), dict) else {}
     active_next_action = str(
         item.get("active_state_next_action")
         or project_asset.get("next_action")
@@ -300,7 +301,7 @@ def state_action_projection_warning(
     if isinstance(agent_todo_summary, dict):
         claim_scope = agent_todo_summary.get("claim_scope")
         first_executable = (
-            agent_todo_summary.get("first_executable_items")
+            cast(list[Any], agent_todo_summary.get("first_executable_items"))
             if isinstance(agent_todo_summary.get("first_executable_items"), list)
             else []
         )

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 import shlex
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Any
 
 from ...boundary_authority import checkpointed_boundary_authority_summary
 from ...execution_profile import execution_profile_outcome_floor
@@ -33,7 +34,7 @@ def quota_execution_profile_summary(value: Any) -> dict[str, Any] | None:
     if isinstance(must_include, list) and must_include:
         compact["must_include"] = [str(item) for item in must_include[:3]]
     policy = (
-        value.get("degradation_policy")
+        cast(dict[str, Any], value.get("degradation_policy"))
         if isinstance(value.get("degradation_policy"), dict)
         else {}
     )
@@ -44,12 +45,12 @@ def quota_execution_profile_summary(value: Any) -> dict[str, Any] | None:
     floor = execution_profile_outcome_floor(value)
     if floor:
         outcome_markers = (
-            floor.get("outcome_markers")
+            cast(list[Any], floor.get("outcome_markers"))
             if isinstance(floor.get("outcome_markers"), list)
             else []
         )
         surface_hints = (
-            floor.get("surface_only_hints")
+            cast(list[Any], floor.get("surface_only_hints"))
             if isinstance(floor.get("surface_only_hints"), list)
             else []
         )
@@ -59,7 +60,7 @@ def quota_execution_profile_summary(value: Any) -> dict[str, Any] | None:
             "must_advance": [
                 str(item)
                 for item in (
-                    floor.get("must_advance")
+                    cast(list[Any], floor.get("must_advance"))
                     if isinstance(floor.get("must_advance"), list)
                     else []
                 )[:2]
@@ -108,7 +109,7 @@ def _lark_kanban_post_writeback_projection(
     registry_path: Path | None,
 ) -> dict[str, Any]:
     lark_kanban = (
-        control_plane.get("lark_kanban")
+        cast(dict[str, Any], control_plane.get("lark_kanban"))
         if isinstance(control_plane.get("lark_kanban"), dict)
         else {}
     )
@@ -188,7 +189,7 @@ def _registry_boundary_projection(goal: Mapping[str, Any]) -> dict[str, Any]:
     peer_task_coordination = compact_peer_task_coordination_policy(coordination)
     if peer_task_coordination:
         boundary["peer_task_coordination"] = peer_task_coordination
-    guards = goal.get("guards") if isinstance(goal.get("guards"), list) else []
+    guards = cast(list[Any], goal.get("guards")) if isinstance(goal.get("guards"), list) else []
     if guards:
         boundary["guards"] = [str(value) for value in guards if str(value).strip()]
     return boundary
@@ -239,15 +240,15 @@ def goal_boundary(
 ) -> dict[str, Any] | None:
     boundary = _registry_boundary_projection(goal)
     control_plane = (
-        goal.get("control_plane") if isinstance(goal.get("control_plane"), dict) else {}
+        cast(dict[str, Any], goal.get("control_plane")) if isinstance(goal.get("control_plane"), dict) else {}
     )
     issue_fix = (
-        control_plane.get("issue_fix")
+        cast(dict[str, Any], control_plane.get("issue_fix"))
         if isinstance(control_plane.get("issue_fix"), dict)
         else {}
     )
     reviewer_notification = (
-        issue_fix.get("reviewer_notification")
+        cast(dict[str, Any], issue_fix.get("reviewer_notification"))
         if isinstance(issue_fix.get("reviewer_notification"), dict)
         else {}
     )
@@ -257,7 +258,7 @@ def goal_boundary(
             "config_pointer_registered": bool(reviewer_notification.get("config_path")),
         }
     agent_inboxes = (
-        control_plane.get("lark_event_inboxes")
+        cast(dict[str, Any], control_plane.get("lark_event_inboxes"))
         if isinstance(control_plane.get("lark_event_inboxes"), dict)
         else {}
     )
@@ -265,7 +266,7 @@ def goal_boundary(
     lark_event_inbox = (
         agent_inbox
         if isinstance(agent_inbox, dict)
-        else control_plane.get("lark_event_inbox")
+        else cast(dict[str, Any], control_plane.get("lark_event_inbox"))
         if isinstance(control_plane.get("lark_event_inbox"), dict)
         else {}
     )
@@ -422,16 +423,16 @@ def goal_boundary(
             goal.get("explore_graph"), (goal.get("spawn_policy") or {}).get("explore_harness")
         )
     spawn_policy = (
-        goal.get("spawn_policy") if isinstance(goal.get("spawn_policy"), dict) else None
+        cast(dict[str, Any], goal.get("spawn_policy")) if isinstance(goal.get("spawn_policy"), dict) else None
     )
     if spawn_policy is not None:
         orchestration = compact_orchestration_policy(spawn_policy)
         boundary["orchestration"] = orchestration
-        project = str(goal.get("repo") or "").strip()
-        if orchestration.get("spawn_allowed") is True and project:
+        project_ref = str(goal.get("repo") or "").strip()
+        if orchestration.get("spawn_allowed") is True and project_ref:
             try:
                 repository_identity = resolve_project_identity(
-                    project,
+                    project_ref,
                     loopx_project_id=str(goal.get("id") or "").strip() or None,
                 )
             except ValueError:
@@ -481,13 +482,13 @@ def declared_available_capabilities(source: Any) -> list[str]:
 
     append(source.get("available_capabilities"))
     coordination = (
-        source.get("coordination")
+        cast(dict[str, Any], source.get("coordination"))
         if isinstance(source.get("coordination"), dict)
         else {}
     )
     append(coordination.get("available_capabilities"))
     project_asset = (
-        source.get("project_asset")
+        cast(dict[str, Any], source.get("project_asset"))
         if isinstance(source.get("project_asset"), dict)
         else {}
     )
