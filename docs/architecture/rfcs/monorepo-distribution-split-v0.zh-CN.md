@@ -570,6 +570,32 @@ R0 可以先于目录移动交付，但不代表内核合格。R3/R4 可选，�
   版本，D3 精确退役时间仍由发布负责人决定。M1 未关闭，不声明模块数量、加载性能、
   拆包或 R1 managed Turn 收益。
 
+### 2026-11-04 — Capability 发现路径的所选加载
+
+- **基线：** `79b781865`。`capability list` / `show` 及命令帮助复用既有
+  capability registrar 与 catalog handler，不再加载完整 CLI 或 Chat。
+  `inspect`、`bind`、`invoke` 的执行、显式完整 CLI 的 handler patch 点、registry
+  路由及非法请求的规范诊断仍保留原路径。本地发现集合复用 CLI 词汇，不新增
+  capability、provider、协议或权限 owner。
+- **证据：** `tests/test_cli_entrypoint.py` 覆盖输出／帮助一致性、已声明但未安装
+  及真实已安装且禁用的 provider、隐藏 helper、缺失／非法 manifest，以及不启动
+  进程、不联网、不写文件。五个加载 oracle 在基线失败、候选通过；全部 23 个聚焦
+  用例也在 checkout 外独立安装的 wheel 上、无 Node 条件下通过，不升级既有宿主。
+  另有八组不可变基线／候选拒绝对照保留输出和退出码。
+- **加载闭包测量：** macOS arm64/Python 3.13.5 上，三个新进程 help/list/show
+  负载各自每版本采样 20 次，丢弃一次 warm-up 并交替顺序。两份源码快照均为暖文件
+  缓存、无 bytecode，Node 与遥测关闭。真实 `main()` 路径加载的 LoopX 模块由
+  1,149 降到 362，read-open 观察由 2,494 降到 832。输出字节完全一致；观察到的
+  文件写入、进程启动、网络连接和线程启动均为零。耗时与 RSS 包含相同插桩及解释器
+  启动，是 PR 中的限定证据，不是跨机器 D6 阈值，也不声明已安装宿主或任务收益。
+- **验证保留项：** 更广的源码选择为 320 个通过，
+  `test_settlement_plan_import_does_not_load_native_capture_io` 一个失败；不可变
+  基线有完全相同的失败。配置的 mypy 在两个版本上同样报告 126 个文件中的 789 个
+  错误。两项失败均不豁免、不改写为通过；聚焦一致性不证明所有必需检查通过。
+- **剩余：** 本片独立于公开 status 提案 #8011，扩展 R0 类发现路径的资格证据，
+  不关闭完整 R0/V10、M1、拆包安装、R1 managed minimal 或 D1–D7。不改变 preset、
+  前端操作、权限或持久化状态；受保护执行仍由既有 owner 所有。
+
 ## 附录 B：决策日志
 
 | 日期 | 决策 | 负责人 / 批准 | 备选 | 变更的规范章节 |
