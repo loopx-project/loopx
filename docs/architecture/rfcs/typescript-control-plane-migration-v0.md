@@ -813,6 +813,14 @@ File/SQLite CLI rejection, corrected-packet readback and fixed-caller base/head
 comparison qualify this recovery seam separately from model adoption, billing,
 installed behavior and sustained long-horizon benefit.
 
+The complete-source C1 caller also exercises these diagnostics through its
+returned composed settlement command. File/SQLite negatives preserve the
+authored packet, run index and quota; explicit correction and replay retain the
+original Turn, all three receipts and one debit. The paired recovery comparison
+includes the accounting child process, but excludes equal fixture admission and
+independent verification. It qualifies this retry segment, not the original
+quota workload's overall net benefit or model output reduction.
+
 ### Delivery semantics: correctness before migration
 
 The replan obligation outcome policy now lives in
