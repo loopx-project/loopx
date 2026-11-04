@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
-import {mkdtemp, rm} from 'node:fs/promises';
+import {mkdtemp, readFile, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {resolve} from 'node:path';
 import {resolveTestPython} from '../../scripts/test-python.mjs';
@@ -79,6 +79,42 @@ Path(sys.argv[1]).write_text(json.dumps(dict(goal_id=goal,display_name='Syntheti
       assert.match(await source.innerText(), /unfinished/);
       await source.getByRole('button', {name: '关闭原文', exact: true}).click();
       await costs.getByRole('combobox').selectOption('input');
+      const firstTurn = costs.getByRole('spinbutton', {name: '起始轮次', exact: true});
+      const lastTurn = costs.getByRole('spinbutton', {name: '结束轮次', exact: true});
+      const selection = costs.locator('.research-usage-range-summary');
+      assert.match(await selection.innerText(), /已选 11 \/ 11 轮.*完成 10 轮.*无计数 1 轮/);
+      const download = async () => {
+        const waiting = page.waitForEvent('download');
+        await costs.getByRole('button', {name: '下载所选用量', exact: true}).click();
+        const file = await waiting;
+        return JSON.parse(await readFile(await file.path(), 'utf8'));
+      };
+      const all = await download();
+      assert.equal(all.selection.turns.length, 11, 'Download includes every selected Turn beyond the eight-row page');
+      assert.equal(all.selection.observed_input_tokens, 5900);
+      assert.equal(all.goal_id, 'synthetic-cost-study');
+      assert.equal(all.artifact_sha256.length, 64);
+      assert.ok(!JSON.stringify(all).includes('SENSITIVE_TEXT_NOT_FOR_BROWSER'));
+      await firstTurn.fill('3'); await lastTurn.fill('7');
+      assert.equal(await items.count(), 5);
+      assert.match(await selection.innerText(), /5,400/);
+      const range = await download();
+      assert.deepEqual(range.selection.turns.map(turn => turn.turn_id), ['turn-3','turn-4','turn-5','turn-6','turn-7']);
+      assert.equal(range.selection.observed_turn_seconds, 134);
+      await firstTurn.fill('11'); await lastTurn.fill('11');
+      assert.match(await selection.innerText(), /完成 0 轮.*无计数 1 轮/);
+      assert.equal((await download()).selection.observed_input_tokens, null);
+      await firstTurn.fill('12');
+      assert.equal(await costs.getByRole('button', {name: '下载所选用量', exact: true}).isDisabled(), true);
+      await costs.getByRole('alert').waitFor();
+      await costs.getByRole('button', {name: '全部轮次', exact: true}).click();
+      // A browser download failure can be retried without losing the selection.
+      await page.evaluate(() => {window.savedUsageCreateURL = URL.createObjectURL; URL.createObjectURL = () => {throw new Error('synthetic download failure');};});
+      await costs.getByRole('button', {name: '下载所选用量', exact: true}).click();
+      assert.match(await costs.getByRole('alert').innerText(), /无法开始下载/);
+      await page.evaluate(() => {URL.createObjectURL = window.savedUsageCreateURL; delete window.savedUsageCreateURL;});
+      assert.equal((await download()).selection.turns.length, 11);
+      assert.equal(await costs.getByRole('alert').count(), 0);
       const helpButton = costs.getByRole('button', {name: '轮次耗时与输入说明', exact: true});
       const helpPopover = costs.locator('.context-help-popover');
       await helpButton.focus();
@@ -102,7 +138,26 @@ Path(sys.argv[1]).write_text(json.dumps(dict(goal_id=goal,display_name='Syntheti
         await page.keyboard.press('Escape');
         await helpPopover.waitFor({state: 'hidden'});
         assert.equal(await helpButton.evaluate(element => element === document.activeElement), true);
+        await costs.locator('legend').evaluate(element => element.scrollIntoView({block: 'center'}));
+        await page.screenshot({path: resolve(outputDir, `research-usage-range-${width}.png`), animations: 'disabled'});
       }
+      await page.evaluate(() => localStorage.setItem('loopx-pw-locale', 'en'));
+      await page.reload({waitUntil: 'networkidle'});
+      await progress.locator('.research-progress-basis').waitFor();
+      if (!await progress.locator('.research-progress-basis').evaluate(element => element.open)) {
+        await progress.locator('.research-progress-basis > summary').focus(); await page.keyboard.press('Enter');
+      }
+      await costs.locator('summary').click();
+      await costs.getByRole('spinbutton', {name: 'First Turn', exact: true}).fill('3');
+      await costs.getByRole('spinbutton', {name: 'Last Turn', exact: true}).fill('7');
+      assert.match(await selection.innerText(), /5 \/ 11 Turns selected.*5 completed.*0 without counters/);
+      assert.match(await selection.innerText(), /5,400/);
+      const englishDownload = page.waitForEvent('download');
+      await costs.getByRole('button', {name: 'Download selected usage', exact: true}).click();
+      assert.equal(JSON.parse(await readFile(await (await englishDownload).path(), 'utf8')).selection.observed_input_tokens, 5400);
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+      await costs.locator('legend').evaluate(element => element.scrollIntoView({block: 'center'}));
+      await page.screenshot({path: resolve(outputDir, 'research-usage-range-en-390.png'), animations: 'disabled'});
       assert.deepEqual(errors, []);
       assert.deepEqual(writes, [], 'Cost inspection never starts analysis or mutates Goal state');
       return {coverageEntries: [], note: 'Real registered capture, typed reduction, HTTP and source UI: sort, pagination, incomplete/unknown counters, accessible contextual help, exact source evidence, keyboard return and mobile. No model or live benchmark.'};

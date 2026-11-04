@@ -344,7 +344,7 @@ export function ResearchProgress({pack: p, packs, selectedId, zh, onSelect, onCi
             </> : null}
           </div> : null}
           </div>
-          {usage && onUsageTurn ? <ResearchTurnCosts key={p.pack_id} usage={usage} zh={zh} onRead={onUsageTurn}/> : null}
+          {usage && onUsageTurn ? <ResearchTurnCosts key={`${p.pack_id}:${measured?.artifact_sha256}`} usage={usage} source={{pack_id: p.pack_id, goal_id: p.scope.goal_id, artifact_sha256: measured!.artifact_sha256, applicability: measured!.applicability}} zh={zh} onRead={onUsageTurn}/> : null}
           {usage && measured ? <details className="research-usage-detail"><summary>{zh ? "计数明细与来源" : "Counter details and source"}</summary>
             <dl className="research-usage-basis">
               <dt>{zh ? "捕获时间（UTC）" : "Capture window (UTC)"}</dt><dd><time dateTime={usage.start}>{stamp(usage.start)}</time> — <time dateTime={usage.end}>{stamp(usage.end)}</time></dd>

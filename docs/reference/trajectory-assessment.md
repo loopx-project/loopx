@@ -1011,6 +1011,39 @@ TypeScript reducer retain ownership, with Python restricted to scoped file
 reading and transport. There is no new telemetry, accounting store or scoring
 policy.
 
+### Inspect and save a Turn range
+
+In Research → Sources and usage → **Find time and input hotspots**, enter the
+first and last chronological Turn numbers to inspect a contiguous portion of the
+selected capture. Sorting changes only the display order; it does not change
+range membership. **All Turns** restores the capture. The summary reports
+selected/completed Turns, missing counter coverage, observed input (including
+its cached subset), output and summed observed Turn intervals. Gaps between
+Turns are excluded from that elapsed sum. Unknown counters stay unknown; an
+unfinished Turn remains incomplete even when some counters are available.
+
+**Download selected usage** saves every selected Turn, including rows beyond the
+current page, as JSON. The file retains the Goal, pack, session, source SHA-256,
+method, capture window, historical/current applicability, original source line
+ranges and limitations. It contains captured counters rather than raw messages
+or a source filesystem location. A failed download can be retried without
+changing the selection or Goal state. Changing the pack/source digest resets
+the range so a previous selection cannot silently refer to different evidence.
+
+This local reading operation needs no model call, new activation, server write
+or CLI/Lark configuration. Close the disclosure to leave the workflow. The file
+is a portable reading snapshot, not an import, billing or acceptance receipt.
+Do not combine overlapping captures, treat partial observations as final costs,
+or infer monetary savings or comparable outcomes from the selected sums.
+
+在研究页的「来源与用量」→「定位耗时与输入最多的轮次」中，输入起止轮次，
+查看同一捕获内连续范围的已观测用量。排序只改变显示顺序；「全部轮次」恢复全量。
+汇总保留完成状态与无计数覆盖，缺失不记零，未完成轮不当作最终用量；耗时合计不含
+轮次间空档。「下载所选用量」导出跨分页的完整所选计数、来源摘要、行号与适用性，
+不导出原始消息或本机路径。下载失败可原地重试，切换捕获或来源摘要会重置范围。
+该操作不调用模型、不写入 Goal，也不增加 CLI/Lark 配置；关闭详情即可退出。
+导出是阅读快照，不是账单、导入或验收凭据，不能据此推断金额、节省或因果收益。
+
 ### Reconcile request and compaction coverage
 
 New usage captures also inspect persisted Codex `token_usage_record` and
