@@ -61,12 +61,59 @@ async function readNativeResults(page, history, capture, language) {
     assert.equal(await history.locator("[data-analysis-judgment]").count(), 0);
   }
   await progress.locator(".research-progress-basis > summary").click();
+  const name = pack.scope.case_id.split("_")[0];
   for (const width of [1440, 390]) {
     await page.setViewportSize({width, height: 900});
     await progress.scrollIntoViewIfNeeded();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
-    const name = pack.scope.case_id.split("_")[0];
     await page.screenshot({path: resolve(outputDir, `research-real-native-${name}-${language}-${width}.png`), animations: "disabled"});
+  }
+  await page.setViewportSize({width: 1440, height: 900});
+}
+
+async function readOriginalNativeSnapshot(page, history, capture, language) {
+  const initial = capture.analysis_readbacks.initial_original.response.pack;
+  const current = capture.analysis_readbacks.original.response.pack;
+  const progress = history.locator(".research-progress");
+  const scope = progress.getByRole("combobox", {name: language === "zh" ? "评估范围" : "Evaluation scope"});
+  const selectOriginal = async () => {
+    await scope.selectOption(initial.pack_id);
+    await progress.locator(`[data-pack-id="${initial.pack_id}"]`).waitFor();
+    await history.locator('.research-analysis [data-analysis-judgment]').first().waitFor({state: "attached"});
+  };
+  await selectOriginal();
+  for (const key of ["initial", "retained"]) {
+    const row = progress.locator(`[data-native-point="${key}"]`);
+    assert.match(await row.innerText(), language === "zh" ? /未知/ : /Unknown/);
+    assert.equal(await row.getByRole("button").count(), 0, "An absent native result is not borrowed from another snapshot");
+  }
+  assert.match(await progress.locator('[data-native-point="best_valid"] button').getAttribute("aria-label"), /0\.849544264387785/);
+  assert.match(await progress.locator('[data-native-point="final_valid"] button').getAttribute("aria-label"), /0\.8485288027628158/);
+  assert.equal(await progress.locator("[data-retained-improvement]").count(), 0, "A best measurement does not supply missing retained improvement");
+  assert.equal(await history.locator("[data-analysis-judgment]").count(), 36, "The same original process judgments remain available");
+  const missing = history.locator('[data-analysis-episode="native-feedback-1"]');
+  await missing.locator(":scope > summary").click();
+  for (const detail of await missing.locator(".analysis-judgments > details").all()) {
+    if (!await detail.evaluate(element => element.open)) await detail.locator(":scope > summary").click();
+  }
+  await missing.getByRole("button", {name: /native-report-1/}).first().click();
+  const source = history.locator(".analysis-source");
+  await source.locator(".analysis-error").waitFor();
+  assert.equal(await source.locator("pre").count(), 0, "An uncaptured source is not borrowed from a different snapshot");
+  await source.getByRole("button", {name: language === "zh" ? "关闭原文" : "Close source", exact: true}).click();
+  await progress.locator('[data-native-point="best_valid"] button').click();
+  await source.locator("pre").waitFor();
+  assert.equal(JSON.parse(await source.locator("pre").innerText()).value, 0.849544264387785);
+  await source.getByRole("button", {name: language === "zh" ? "关闭原文" : "Close source", exact: true}).click();
+  await page.goBack();
+  await progress.locator(`[data-pack-id="${current.pack_id}"]`).waitFor();
+  assert.match(await progress.locator("[data-retained-improvement]").innerText(), /\+0\.0323/);
+  await selectOriginal();
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({width, height: 900});
+    await progress.scrollIntoViewIfNeeded();
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+    await page.screenshot({path: resolve(outputDir, `research-real-graph-retention-unknown-${language}-${width}.png`), animations: "disabled"});
   }
   await page.setViewportSize({width: 1440, height: 900});
 }
@@ -164,6 +211,7 @@ async function readSavedGraphAnalysis(browser, collectCoverage) {
         await page.screenshot({path: resolve(outputDir, `research-real-graph-analysis-${language}-${width}.png`), animations: "disabled"});
       }
       await page.setViewportSize({width: 1440, height: 900});
+      await readOriginalNativeSnapshot(page, history, capture, language);
     }
     const readback = await (await page.request.get(`${owner.base}/fixture/readback`)).json();
     assert.equal(readback.source_unchanged, true);

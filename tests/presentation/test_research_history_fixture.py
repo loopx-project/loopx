@@ -105,6 +105,9 @@ def test_captured_analysis_fixture_serves_real_saved_results_without_source_muta
                             "original": "0e4bb4b931784abe1faf8cba49922aeb36f6c96f9e1730fdc77d82e7ebd3da2f",
                             "zh": "cb8fdf1a61915f06168816c82367e9d037bdf49424028cd2793dfe61364def64",
                             "en": "d76b579672d87f8b071d871ecfd5797b986f295b8dc93bc967471c0e1aab0b2b",
+                            "initial_original": "7b68615db558732a9a78b4d83befcb3e31d92840f4d4944c37f5589288fcfcd2",
+                            "initial_zh": "be0621f5d24cc61a9717611caf7b0ef89c7acdfc5eb03da0d763da7a1c87e531",
+                            "initial_en": "c44c78a2404ea55183a42d3ae1c2e08b90920666b49f159d8f841a84d8f5a4da",
                         },
                         "edgebench-portfolio-native-results.json": {
                             "original": "b33ebfcc7c233f8cf87b70e23b3bc76e34d5b91b8fcf11393e532afa9597b717",
@@ -145,6 +148,17 @@ def test_captured_analysis_fixture_serves_real_saved_results_without_source_muta
                     assert "solver_usage" not in view and not events
                     for citation in capture["analysis_citations"]:
                         assert read(citation["request_path"]) == citation["response"]
+                    citation = capture["analysis_citations"][0]
+                    if fixture_name == "edgebench-graph-saved-analysis.json":
+                        initial = read(capture["analysis_readbacks"]["initial_original"]["request_path"])["pack"]
+                        initial_native = initial["native_outcomes"]["projection"]
+                        assert initial_native["retained"] is None and initial_native["initial"] is None
+                        assert "retained_improvement" not in initial_native
+                        assert initial_native["best_valid"]["candidate_ref"] == "agent-16"
+                        assert initial_native["final_valid"]["candidate_ref"] == "agent-18"
+                        assert initial["result"] == view["result"]
+                        assert initial["job"] == view["job"]
+                    assert read(citation["request_path"]) == citation["response"]
                     for query in [
                         {"output_language": "fr"}, {"pack_id": "wrong-pack"},
                     ]:
