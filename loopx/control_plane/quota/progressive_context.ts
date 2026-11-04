@@ -301,7 +301,7 @@ export function initialContextReadPointers(context: JsonObject, decisionFields: 
     include(...source, "content", "harness", "guidance");
     include(...source, "content", "harness", "orchestration_gate");
   });
-  for (const field of ["next_cli_actions", "spend_allowed_now", "spend_after_validation", "spend_policy",
+  for (const field of ["execution_preparation", "next_cli_actions", "spend_allowed_now", "spend_after_validation", "spend_policy",
     "quota_spend_source", "delivery_workspace_causality", "vision_continuation_audit"])
     include("interaction_contract", "cli_channel", field);
   const planPath = ["interaction_contract", "cli_channel", "settlement_plan"];
