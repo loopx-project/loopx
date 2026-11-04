@@ -440,7 +440,10 @@ fails closed with `origin_request_cancelled` or `origin_request_unreadable`;
 existing Todos retain readback-only behavior. A completed Todo observed at a
 new head queues a body-free conclusion through the origin runtime, deduplicated
 by operation/head in `returns`, with `return_delivery` readback; cancellation
-or unreadability prevents enqueue. The return service owns actual delivery.
+or unreadability prevents enqueue. The complete conclusion text, request
+revision and selected update identity are persisted before `report()`, so an
+interrupted return-ledger write resumes the exact publication instead of
+reconstructing it from newer PR state. The return service owns actual delivery.
 Once the origin request is cancelled, no further result is returned even if an
 accepted correction completes later; the request's cancellation record is the
 accountability trail.
@@ -459,7 +462,10 @@ these entries in `maintainer_corrections`
 `disposition`, `reason`, `todo_id`, `recorded_at`, `superseded_by`,
 `todo_intent`); the accepted entry is written with `todo_id: null` before the
 Todo write and filled afterwards, and any later run retries a still-pending
-accepted entry under its operation id. The test-only
+accepted entry under its operation id. Every retry revalidates a pending v1
+source event against the current provider metadata, including an ordinary poll
+that omits the correction input or reports a different current correction. The
+test-only
 `LOOPX_ISSUE_FIX_FAULT_BEFORE_CORRECTION_TODO=1` aborts between those two
 writes and exists only to exercise that recovery. The legacy
 `maintainer_correction` fields keep the latest accepted correction for older

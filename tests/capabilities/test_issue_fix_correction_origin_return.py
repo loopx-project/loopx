@@ -362,7 +362,8 @@ def test_invalid_request_entry_writes_nothing(h, damage, error):
     assert not default_issue_fix_domain_state_ledger_path(project=h.project, goal_id=GOAL_ID).exists()
 
 
-def test_return_ledger_failure_preserves_publication_identity(h, monkeypatch):
+@pytest.mark.parametrize("change", ["checks", "revision"])
+def test_return_ledger_failure_replays_the_immutable_publication(h, monkeypatch, change):
     from loopx.capabilities.issue_fix import correction_settlement
 
     event = _event("313")
@@ -381,8 +382,26 @@ def test_return_ledger_failure_preserves_publication_identity(h, monkeypatch):
         with pytest.raises(OSError, match="return ledger interrupted"):
             settle(h, packet)
     assert len(h.replies()) == 1
-    assert not h.entries()[0].get("returns")
-    h.run_json(metadata=observation([event], "b" * 40), correction=None)
+    pending = h.entries()[0]
+    assert not pending.get("returns")
+    publication = pending["pending_return"]
+    assert publication["head_sha"] == "b" * 40
+    assert "checks PASSING" in publication["text"]
+    retry_observation = observation([event], "b" * 40)
+    if change == "checks":
+        retry_observation["statusCheckRollup"] = [{"name": "focused", "conclusion": "FAILURE"}]
+    else:
+        view = h.control("inspect")
+        h.control("revise", {
+            "operation_id": "revision-after-publication",
+            "expected_revision": view["revision"],
+            "expected_digest": view["revision_digest"],
+            "brief": {**view["brief"], "purpose": "Validate the changed correction"},
+            "reason": "The request changed after publication",
+        })
+    h.run_json(metadata=retry_observation, correction=None)
     assert len(h.replies()) == len(h.entries()[0]["returns"]) == 1
-    h.run_json(metadata=observation([event], "c" * 40), correction=None)
-    assert len(h.replies()) == len(h.entries()[0]["returns"]) == 2
+    assert json.loads(h.replies()[0].read_text())["text"] == publication["text"]
+    if change == "checks":
+        h.run_json(metadata=observation([event], "c" * 40), correction=None)
+        assert len(h.replies()) == len(h.entries()[0]["returns"]) == 2

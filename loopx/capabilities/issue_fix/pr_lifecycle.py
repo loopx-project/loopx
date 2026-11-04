@@ -767,11 +767,28 @@ def recheck_issue_fix_maintainer_correction_effect_gates(
     observation: Mapping[str, Any],
     ledger_entries: Sequence[Mapping[str, Any]] | None,
     goal_stopped: bool,
+    source_events: Mapping[str, Any] | None = None,
 ) -> str | None:
     """Re-run the effect-time gates for an accepted entry just before its Todo write."""
 
     source_event = entry.get("source_event")
     if isinstance(source_event, Mapping):
+        observed = [
+            event
+            for event in (
+                source_events.get("events") if isinstance(source_events, Mapping) else []
+            )
+            if isinstance(event, Mapping)
+            and event.get("kind") == source_event.get("kind")
+            and str(event.get("id")) == str(source_event.get("id"))
+        ]
+        if not observed:
+            return "source_event_not_observed"
+        if not any(
+            _same_instant(event.get("updated_at"), source_event.get("updated_at"))
+            for event in observed
+        ):
+            return "source_event_revision_mismatch"
         latest = _latest_accepted_revision(
             issue_fix_maintainer_correction_entries(
                 {"maintainer_corrections": ledger_entries}
@@ -1569,14 +1586,25 @@ def build_issue_fix_pr_lifecycle_monitor_packet(
     )
     maintainer_correction_admission: dict[str, Any] | None = None
     source_events: dict[str, Any] | None = None
+    pending_source_event_recheck = any(
+        entry.get("disposition") == "accepted"
+        and not entry.get("todo_id")
+        and isinstance(entry.get("source_event"), Mapping)
+        for entry in issue_fix_maintainer_correction_entries(
+            {"maintainer_corrections": prior_maintainer_corrections}
+        )
+    )
+    if pending_source_event_recheck or (
+        maintainer_correction is not None
+        and isinstance(maintainer_correction.get("source_event"), Mapping)
+    ):
+        if fetch_metadata:
+            source_events = _fetch_pr_source_events(
+                reference, timeout_seconds=fetch_timeout_seconds
+            )
+        else:
+            source_events = normalise_issue_fix_pr_source_events(payload)
     if maintainer_correction is not None:
-        if isinstance(maintainer_correction.get("source_event"), Mapping):
-            if fetch_metadata:
-                source_events = _fetch_pr_source_events(
-                    reference, timeout_seconds=fetch_timeout_seconds
-                )
-            else:
-                source_events = normalise_issue_fix_pr_source_events(payload)
         maintainer_correction_admission = (
             evaluate_issue_fix_maintainer_correction_admission(
                 maintainer_correction,
@@ -1686,12 +1714,13 @@ def build_issue_fix_pr_lifecycle_monitor_packet(
         entries = maintainer_correction_admission.pop("entries")
         packet["maintainer_correction_admission"] = maintainer_correction_admission
         packet["maintainer_corrections"] = entries
-        if source_events is not None:
-            packet["source_events_observed"] = {
-                "status": source_events.get("status"),
-                "event_count": len(source_events.get("events") or []),
-                "body_captured": False,
-            }
+    if source_events is not None:
+        packet["source_events_observed"] = {
+            "status": source_events.get("status"),
+            "event_count": len(source_events.get("events") or []),
+            "body_captured": False,
+        }
+        packet["_maintainer_correction_source_events"] = source_events
     validation = validate_issue_fix_pr_lifecycle_monitor_packet(packet)
     packet["ok"] = bool(validation["ok"])
     packet["validation"] = validation

@@ -24,6 +24,10 @@ from .pr_lifecycle import recheck_issue_fix_maintainer_correction_effect_gates
 # Set to "1" to abort between the accepted ledger entry write and its Todo
 # write. Exists only to prove the next run reconciles the pending entry.
 MAINTAINER_CORRECTION_FAULT_ENV = "LOOPX_ISSUE_FIX_FAULT_BEFORE_CORRECTION_TODO"
+_SOURCE_EVENT_REFUSALS = {
+    "source_event_not_observed",
+    "source_event_revision_mismatch",
+}
 
 
 def _goal_stopped_for_correction(registry_path: Path | None, goal_id: str | None) -> bool:
@@ -152,6 +156,7 @@ def _settle_maintainer_correction_entries(
     goal_id: str,
     claimed_by: str,
     project: Path,
+    source_events: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """Write Todos for accepted ledger entries that still lack a todo_id.
 
@@ -172,6 +177,9 @@ def _settle_maintainer_correction_entries(
 
     row = read_issue_fix_pr_lifecycle_ledger_row(ledger_path, repo=repo, pr_ref=pr_ref)
     ledger_entries = issue_fix_maintainer_correction_entries(row)
+    if source_events is None:
+        pending_source_events = payload.pop("_maintainer_correction_source_events", None)
+        source_events = pending_source_events if isinstance(pending_source_events, dict) else None
     origin = (row or {}).get("origin_request")
     view = None
     origin_refusal = None
@@ -217,25 +225,24 @@ def _settle_maintainer_correction_entries(
             or (entry.get("todo_id") and not is_current)
         ):
             continue
-        if is_current and not entry.get("todo_id") and admission.get("reason") in {
-            "source_event_not_observed", "source_event_revision_mismatch",
-        }:
-            refusal = str(admission["reason"])
-            settlements.append(
-                {"operation_id": operation_id, "status": "refused", "reason": refusal}
-            )
-            current_todo_write = _correction_todo_readback_receipt(
-                skip_reason=refusal, operation_id=operation_id, todo_id=entry.get("todo_id"),
-            )
-            continue
         refusal = recheck_issue_fix_maintainer_correction_effect_gates(
             entry,
             observation=observation,
             ledger_entries=ledger_entries,
             goal_stopped=goal_stopped,
+            source_events=source_events,
         )
         refusal = origin_refusal or refusal
         if refusal is not None and not entry.get("todo_id"):
+            if refusal in _SOURCE_EVENT_REFUSALS:
+                settlements.append(
+                    {"operation_id": operation_id, "status": "refused", "reason": refusal}
+                )
+                if is_current:
+                    current_todo_write = _correction_todo_readback_receipt(
+                        skip_reason=refusal, operation_id=operation_id,
+                    )
+                continue
             if is_current and origin_refusal:
                 admission.update(disposition="context_only", reason=refusal)
             changed_entries.append(
@@ -325,30 +332,47 @@ def _settle_maintainer_correction_entries(
                 continue
             operation_id = entry["operation_id"]
             update_id = f"issue-fix-correction:{operation_id}:{head}"
-            event = entry.get("source_event") or {}
-            checks = observation.get("checks") or {}
-            text = (f"Maintainer correction {entry.get('correction_kind')} "
-                f"({event.get('kind')} {event.get('id')}) applied in "
-                f"{observation.get('permalink')} at head {head[:12]}; "
-                f"PR state {observation.get('state')}, checks {checks.get('aggregate')}; "
-                f"todo {entry['todo_id']} done.")
             origin_root = resolve_runtime_root(
                 load_project_registry(Path(origin["registry_path"])),
                 origin["runtime_root"], registry_path=Path(origin["registry_path"]))
             pending = entry.get("pending_return")
-            if not isinstance(pending, dict) or pending.get("head_sha") != head:
-                # Select the initial/update identity durably before publication;
-                # a successful report may outlive the final return-ledger write.
-                pending = {"head_sha": head, "update_id": update_id if any(
-                    r["phase"] == "conclusion" for r in reply_status(origin_root, origin)
-                ) else None}
+            if (
+                not isinstance(pending, dict)
+                or pending.get("head_sha") != head
+                or not isinstance(pending.get("text"), str)
+                or not isinstance(pending.get("request_revision"), int)
+            ):
+                event = entry.get("source_event") or {}
+                checks = observation.get("checks") or {}
+                text = (f"Maintainer correction {entry.get('correction_kind')} "
+                    f"({event.get('kind')} {event.get('id')}) applied in "
+                    f"{observation.get('permalink')} at head {head[:12]}; "
+                    f"PR state {observation.get('state')}, checks {checks.get('aggregate')}; "
+                    f"todo {entry['todo_id']} done.")
+                # The complete audience-visible publication is durable before
+                # report(). A crash after report() must replay this exact result,
+                # not reconstruct it from newer, mutable PR observations.
+                pending = {
+                    "schema_version": "issue_fix_maintainer_correction_publication_v1",
+                    "head_sha": head,
+                    "update_id": update_id if any(
+                        r["phase"] == "conclusion"
+                        for r in reply_status(origin_root, origin)
+                    ) else None,
+                    "text": text,
+                    "request_revision": view["revision"],
+                    "phase": "conclusion",
+                }
                 entry["pending_return"] = pending
                 upsert_issue_fix_pr_lifecycle_ledger_jsonl(ledger_path, payload)
             result = report(origin_root, identity["goal_id"], identity["agent_id"],
-                origin["request_id"], "conclusion", text, registry=Path(origin["registry_path"]),
-                update_id=pending["update_id"], workspace=project, request_revision=view["revision"],
+                origin["request_id"], str(pending.get("phase") or "conclusion"),
+                str(pending["text"]),
+                registry=Path(origin["registry_path"]),
+                update_id=pending.get("update_id"), workspace=project,
+                request_revision=pending["request_revision"],
                 caller_goal_ref=goal_ref)
-            entry["pending_return"] = None
+            entry.pop("pending_return", None)
             returns.append({"update_id": update_id, "result_key": result.get("result_key", "conclusion"),
                 "enqueued_at": now_utc_iso(), "head_sha": head})
             upsert_issue_fix_pr_lifecycle_ledger_jsonl(ledger_path, payload)

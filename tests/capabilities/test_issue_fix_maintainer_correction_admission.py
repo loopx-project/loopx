@@ -652,10 +652,26 @@ def test_pending_correction_requires_current_event_verification(harness: Harness
         ([], "source_event_not_observed"),
         ([_event("3502", updated_at="2026-06-20T12:00:00Z")], "source_event_revision_mismatch"),
     ):
-        packet = harness.run_json(metadata=_metadata(events), correction=_correction_v1(event))
-        assert _correction_write(packet)["skip_reason"] == reason
+        packet = harness.run_json(metadata=_metadata(events), correction=None)
+        refusal = next(item for item in packet["maintainer_correction_settlement"]["settlements"]
+            if item["operation_id"] == harness.entries()[0]["operation_id"])
+        assert refusal == {
+            "operation_id": harness.entries()[0]["operation_id"],
+            "status": "refused",
+            "reason": reason,
+        }
         assert harness.correction_todos() == []
-        assert harness.entries()[0]["todo_id"] is None
-    harness.run_json(metadata=_metadata([event]), correction=_correction_v1(event))
-    harness.run_json(metadata=_metadata([event]), correction=_correction_v1(event))
+        pending = harness.entries()[0]
+        assert pending["disposition"] == "accepted" and pending["todo_id"] is None
+    different = _event("3599")
+    packet = harness.run_json(metadata=_metadata([]), correction=_correction_v1(different))
+    original_operation = harness.entries()[0]["operation_id"]
+    assert next(item for item in packet["maintainer_correction_settlement"]["settlements"]
+        if item["operation_id"] == original_operation)["status"] == "refused"
+    assert harness.entries()[0]["todo_id"] is None
+    recovered = harness.run_json(metadata=_metadata([event]), correction=None)
+    original_settlement = next(item for item in recovered["maintainer_correction_settlement"]["settlements"]
+        if item["operation_id"] == harness.entries()[0]["operation_id"])
+    assert original_settlement["status"] == "written"
+    harness.run_json(metadata=_metadata([event]), correction=None)
     assert len(harness.correction_todos()) == 1

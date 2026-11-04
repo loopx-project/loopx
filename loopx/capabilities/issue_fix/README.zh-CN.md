@@ -421,7 +421,9 @@ entry；不支持 recipient addressing。Settlement 会再次解析该 entry，�
 `origin_request_cancelled` 或 `origin_request_unreadable` fail closed；已有 Todo
 保持只读回读行为。在新 head 观察到已完成 Todo 时，会通过 origin runtime 将无正文的结论
 入队，在 `returns` 中按 operation/head 去重，并提供 `return_delivery` 回读；取消或不可读
-会阻止入队。Return service 负责实际投递。Origin request 一旦取消，即使已接纳的 correction
+会阻止入队。完整 conclusion text、request revision 与所选 update identity 会在
+`report()` 前持久化，因此 return-ledger 写入中断后恢复的是同一份 publication，而不是
+根据更新的 PR state 重建文本。Return service 负责实际投递。Origin request 一旦取消，即使已接纳的 correction
 稍后完成，也不再返回任何结果；request 的 cancellation record 是其 accountability trail。
 
 显式使用 `--execute-transition` 时，已接纳的 `actionable_patch` 只创建一个由当前注册 agent 认领的
@@ -435,7 +437,9 @@ revision 会生成新 Todo，并把先前条目标记为 `superseded`。Ledger r
 `correction_fingerprint`、`admission_basis`、`disposition`、`reason`、`todo_id`、
 `recorded_at`、`superseded_by`、`todo_intent`）；已接纳条目在 Todo 写入前先以
 `todo_id: null` 写入，随后补齐；任何后续运行都会按其 operation id 重试仍处于 pending
-状态的已接纳条目。仅供测试的 `LOOPX_ISSUE_FIX_FAULT_BEFORE_CORRECTION_TODO=1`
+状态的已接纳条目。每次重试都会用当前 provider metadata 重新验证 pending v1 source event，
+包括省略 correction input 的普通轮询，或报告了另一个 current correction 的运行。仅供测试的
+`LOOPX_ISSUE_FIX_FAULT_BEFORE_CORRECTION_TODO=1`
 会在这两次写入之间中止，仅用于演练该恢复路径。旧 `maintainer_correction` 字段为旧版
 reader 保留最新接纳的 correction。Merged/closed terminal state 仍优先于迟到反馈。
 

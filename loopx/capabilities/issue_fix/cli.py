@@ -1356,6 +1356,7 @@ def handle_issue_fix_command(
                 prior_maintainer_corrections=prior_maintainer_corrections,
                 generated_at=generated_at,
             )
+            pending_source_events = payload.pop("_maintainer_correction_source_events", None)
             if origin:
                 payload["origin_request"] = origin
             if should_write_domain_state and ledger_path is not None:
@@ -1412,6 +1413,11 @@ def handle_issue_fix_command(
                         goal_id=args.goal_id,
                         claimed_by=args.claimed_by,
                         project=Path(args.project).expanduser(),
+                        source_events=(
+                            pending_source_events
+                            if isinstance(pending_source_events, dict)
+                            else None
+                        ),
                     )
                     if settlement.get("settlements") or isinstance(
                         correction_admission, dict
