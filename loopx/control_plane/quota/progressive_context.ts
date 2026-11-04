@@ -1,5 +1,7 @@
 /** Model presentation: requirements stay inline, supporting material is
  * addressed in the immutable source. This plan changes no canonical state. */
+import {isDeepStrictEqual} from "node:util";
+import {visionAuthoringContract} from "../goals/vision_checkpoint.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {jsonObject, requireJsonObject} from "../runtime_decode.ts";
 import {GOAL_OUTCOMES_SCHEMA, OUTCOME_CONTEXT_NAVIGATION_SCHEMA} from "../goals/outcome_requirements.ts";
@@ -367,6 +369,13 @@ export function initialContextReadPointers(context: JsonObject, decisionFields: 
       const step = object(value), stepPath = [...planPath, "ordered_steps", stepIndex];
       if (!step) { include(...stepPath); return; }
       for (const field of Object.keys(step)) {
+        if (field === "vision_authoring" && step.kind === "durable_writeback"
+            && [false, true].some(replan => isDeepStrictEqual(step[field], visionAuthoringContract(replan)))) {
+          // Keep the decision and continuation policy at admission. Field limits
+          // and worked examples are read from this step when writing the Vision.
+          for (const key of ["schema_version", "rule", "continuation_review"]) include(...stepPath, field, key);
+          continue;
+        }
         if (field !== "optional_attachments" || !Array.isArray(step[field])) { include(...stepPath, field); continue; }
         step[field].forEach((attachment, attachmentIndex) => {
           const path = [...stepPath, field, attachmentIndex];
