@@ -1038,8 +1038,9 @@ function resolveIdentity(
   );
 }
 
-function bundle(result: SettlementResult): ResultBundle {
-  return { result, payload: settlementResultPayload(result) };
+function bundle(result: SettlementResult, includeRecordBody = true): ResultBundle {
+  return {result: includeRecordBody ? result : {...result, value: null},
+    payload: settlementResultPayload(result)};
 }
 
 function failedAfterIdentity(
@@ -1343,17 +1344,18 @@ function readQuotaSettlementFromRequest(
   const progress = settlementProgress(identityResult, writeback, spend, writebackRun, spendRun,
     receiptDetails.quota_spend_source ?? spendRun?.source, noSpendKind);
   // The combined caller consumes controls and receipts after verification.
-  // Keep original bodies by default and throughout any pending recovery;
-  // requesting this projection cannot make an unsettled Turn settled.
+  // Keep original bodies by default and throughout any pending recovery,
+  // including the same Runs carried by the four result bundles. Identity,
+  // controls and receipts remain complete; projection cannot settle a Turn.
   const includeRecords = request.include_record_bodies || progress.state !== "settled";
   return {
     schema_version: QUOTA_SETTLEMENT_READBACK_RESULT_SCHEMA,
     found: true,
     identity: bundle(identityResult),
-    writeback: bundle(writeback),
-    spend: bundle(spend),
-    delivery: bundle(withWriteback),
-    settlement: bundle(settled),
+    writeback: bundle(writeback, includeRecords),
+    spend: bundle(spend, includeRecords),
+    delivery: bundle(withWriteback, includeRecords),
+    settlement: bundle(settled, includeRecords),
     terminal_closeout: bundle(terminalCloseout),
     terminal_settlement: bundle(terminalSettlement),
     progress,
