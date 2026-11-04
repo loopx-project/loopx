@@ -76,7 +76,7 @@ def test_machine_catalog_discovers_context_delivery_without_activation(tmp_path)
     assert len(contexts) == 1
     assert contexts[0]["schema_versions"] == [CONTEXT_DELIVERY_MACHINE_SCHEMA]
     assert contexts[0]["configuration_template"] == {
-        "schema_version": CONTEXT_DELIVERY_MACHINE_SCHEMA, "mode": "on", "delta_delivery": "auto", "antigravity_mode": "on",
+        "schema_version": CONTEXT_DELIVERY_MACHINE_SCHEMA, "mode": "on", "delta_delivery": "auto",
     }
     assert not registry.exists() and not (runtime / "machine/configuration.json").exists()
     assert not (runtime / "context-delivery").exists()

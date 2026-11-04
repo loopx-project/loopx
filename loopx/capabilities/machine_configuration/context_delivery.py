@@ -25,7 +25,7 @@ def normalize_context_delivery_machine_defaults(raw: Mapping[str, Any]) -> dict[
         "schema_version": CONTEXT_DELIVERY_MACHINE_SCHEMA,
         "mode": raw["mode"],
         "delta_delivery": delta,
-        "antigravity_mode": antigravity_mode,
+        **({"antigravity_mode": antigravity_mode} if "antigravity_mode" in raw else {}),
     }
 
 
@@ -39,10 +39,7 @@ def context_delivery_machine_configuration_namespace() -> MachineConfigurationNa
         title="Progressive context",
         description=(
             "Read current requirements before expandable supporting material on every host (`mode`). "
-            "Reuse unchanged context independently on supported continuity hosts (`delta_delivery`), "
-            "and read trusted-owner Antigravity manager delivery histories progressively from private captures "
-            "(`antigravity_mode`). Both default on independently; explicit unsupported Codex activation fails "
-            "and known context loss or disabled provider preferences keep full context. "
+            "Supported continuity hosts may reuse unchanged context across turns. "
             "Completed Codex reads use an explicit native-hook continuity assumption. "
             "A saved preference does not establish host readiness or actual delta use."
         ),
@@ -51,6 +48,5 @@ def context_delivery_machine_configuration_namespace() -> MachineConfigurationNa
             "schema_version": CONTEXT_DELIVERY_MACHINE_SCHEMA,
             "mode": "on",
             "delta_delivery": "auto",
-            "antigravity_mode": "on",
         },
     )

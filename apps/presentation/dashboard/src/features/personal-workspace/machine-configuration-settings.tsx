@@ -279,7 +279,7 @@ export function MachineConfigurationSettings({ section, onChanged }: {
     setNotice(null);
   }
 
-  async function setContextDelivery(mode: "off" | "on" | "auto", key: "mode" | "delta_delivery" | "antigravity_mode" = "mode") {
+  async function setContextDelivery(mode: "off" | "on" | "auto", key: "mode" | "delta_delivery" = "mode") {
     if (busy || !editorAvailable || selected?.capability_id !== "context_delivery" || !selected.machine_namespace) return;
     const namespace = selected.machine_namespace;
     const configuration = {...selected.default, ...selectedCurrent, [key]: mode};
@@ -298,7 +298,7 @@ export function MachineConfigurationSettings({ section, onChanged }: {
       if (next.machine_configuration?.namespaces[namespace]?.[key] !== mode) {
         throw new Error(locale === "zh-CN" ? "保存后的配置已变化，请刷新后重试。" : "The saved configuration changed. Refresh and retry.");
       }
-      const targetLabel = key === "antigravity_mode" ? "Antigravity" : key === "delta_delivery"
+      const targetLabel = key === "delta_delivery"
         ? locale === "zh-CN" ? "跨轮差分" : "Cross-turn delta"
         : locale === "zh-CN" ? "渐进读取" : "Progressive reads";
       setNotice(locale === "zh-CN" ? `${targetLabel}偏好已保存。` : `${targetLabel} preference saved.`);
@@ -539,26 +539,10 @@ export function MachineConfigurationSettings({ section, onChanged }: {
               <input aria-label={locale === "zh-CN" ? "在受支持宿主中自动使用跨轮差分" : "Use cross-turn delta automatically on supported hosts"}
                 type="checkbox" role="switch" checked={(selectedCurrent?.delta_delivery ?? selected.default?.delta_delivery ?? "auto") === "auto"} disabled={Boolean(busy) || !editorAvailable}
                 onChange={(event) => void setContextDelivery(event.target.checked ? "auto" : "off", "delta_delivery")} />
-            </label><label className="is-boolean">
-              <span>Antigravity</span>
-              <input aria-label={locale === "zh-CN" ? "在 Antigravity 中渐进读取管家历史" : "Use progressive manager history in Antigravity"}
-                type="checkbox" role="switch" checked={(selectedCurrent?.antigravity_mode ?? selected.default?.antigravity_mode ?? "on") === "on"} disabled={Boolean(busy) || !editorAvailable}
-                onChange={(event) => void setContextDelivery(event.target.checked ? "on" : "off", "antigravity_mode")} />
             </label></div>
-            <p role="status">{(selectedCurrent?.mode ?? selected.default?.mode) === "on"
-              ? selectedCurrent
-                ? locale === "zh-CN" ? "渐进读取已开启。" : "Progressive reads are on."
-                : locale === "zh-CN" ? "渐进读取默认开启。" : "Progressive reads default on."
-              : locale === "zh-CN" ? "渐进读取已关闭。" : "Progressive reads are off."}</p>
-            <p role="status">{(selectedCurrent?.delta_delivery ?? selected.default?.delta_delivery ?? "auto") === "auto"
-              ? locale === "zh-CN" ? "跨轮差分自动选择；当前会话是否采用尚未验证。" : "Delta is automatic; current-session use is unverified."
-              : locale === "zh-CN" ? "跨轮差分已关闭。" : "Cross-turn delta is off."}</p>
-            <p role="status">{(selectedCurrent?.antigravity_mode ?? selected.default?.antigravity_mode ?? "on") === "on"
-              ? locale === "zh-CN" ? "Antigravity 管家历史渐进读取已开启。" : "Antigravity progressive manager history is on."
-              : locale === "zh-CN" ? "Antigravity 已关闭。" : "Off for Antigravity."}</p>
             <ContextHelp label={locale === "zh-CN" ? "上下文开关的支持范围与生效条件" : "Context support and activation requirements"}><p>{locale === "zh-CN"
-              ? "渐进读取先提供当前要求，支持材料按需展开，适用于所有宿主。跨轮差分独立控制：仅在受支持的 POSIX Codex App／SSH、benchmark 心跳已保留完整旧上下文时自动使用，否则恢复完整当前输入。Antigravity 管家历史另有独立开关。关闭偏好和实验显式关闭均继续生效。保存不会安装 hook、启动实验或证明当前会话已采用差分。"
-              : "Progressive reads present current requirements before expandable supporting material on every host. Cross-turn delta is independent: automatic reuse requires a supported POSIX Codex App/SSH or benchmark heartbeat and complete retained context; otherwise the current full input is restored. Antigravity manager history has its own switch. Saved off preferences and explicit experiment opt-outs remain effective. Saving installs no hook, starts no experiment and does not prove current-session delta use."}</p></ContextHelp>
+              ? "渐进读取先提供当前要求，支持材料按需展开，适用于所有宿主。跨轮差分独立控制：仅在受支持的 POSIX Codex App／SSH、benchmark 心跳已保留完整旧上下文时自动使用，否则恢复完整当前输入。关闭偏好和实验显式关闭均继续生效。保存不会安装 hook、启动实验或证明当前会话已采用差分。"
+              : "Progressive reads present current requirements before expandable supporting material on every host. Cross-turn delta is independent: automatic reuse requires a supported POSIX Codex App/SSH or benchmark heartbeat and complete retained context; otherwise the current full input is restored. Saved off preferences and explicit experiment opt-outs remain effective. Saving installs no hook, starts no experiment and does not prove current-session delta use."}</p></ContextHelp>
           </section> : null}
           {editorAvailable && selected.capability_id !== "context_delivery" ? <>{editorMode === "json" || !selected.configuration_editor.fields.some((field) => field.key === "enabled" && field.input_kind === "boolean") ? <div className="personal-capability-editor-mode">
             <button disabled={Boolean(busy)} onClick={() => changeMode(editorMode === "guided" ? "json" : "guided")} type="button">

@@ -254,10 +254,6 @@ export function localizedCapabilityFieldCopy(locale: WorkspaceLocale, capability
     label: "跨轮差分", description: "仅在支持连续性的宿主自动启用；可独立关闭，保留渐进读取。", options: {off: "关闭", auto: "自动"},
   } : {
     label: "Cross-Turn Delta", description: "Automatic only on supported continuity hosts; off preserves progressive reads.", options: {off: "Off", auto: "Automatic"},
-  }, antigravity_mode: locale === "zh-CN" ? {
-    label: "Antigravity", description: "仅作用于强能力 Antigravity 管家的交付历史渐进读取；关闭时保持完整内联。", options: {off: "关闭", on: "开启"},
-  } : {
-    label: "Antigravity", description: "Applies only to progressive history reads in trusted-owner Antigravity manager sessions; off keeps full inline input.", options: {off: "Off", on: "On"},
   }};
   if (capabilityId === "codex_chat") return {...fieldCopy[locale], ...(locale === "zh-CN" ? {
     codex_profile: {label: "Codex 配置来源", description: "选择已有本机配置，例如 codex-gpt。账户和凭据留在原目录，不复制；留空继承服务配置。"},

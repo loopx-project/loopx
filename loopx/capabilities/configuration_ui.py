@@ -94,9 +94,6 @@ def capability_configuration_editor(
                     description="Present current requirements before expandable supporting material on every host. Off keeps complete inline delivery."),
                 _field("delta_delivery", "Cross-Turn Delta", "select", options=("off", "auto"), required=True,
                     description="Auto reuses exact saved captures only on supported continuity hosts. Off leaves progressive presentation enabled. Neither choice proves retained model input."),
-                _field("antigravity_mode", "Antigravity manager history", "select",
-                    options=("off", "on"), required=True,
-                    description="On defers trusted-owner Antigravity manager delivery histories to private capture reads while keeping current facts inline; off keeps full inline input."),
             ],
         },
         "codex_chat": {

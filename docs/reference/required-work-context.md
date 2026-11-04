@@ -575,22 +575,19 @@ the existing Turn or its recovery files.
 ### Machine default
 
 **Settings → This machine → Capabilities → Progressive context** exposes progressive
-reads (`mode`), independent cross-Turn reuse (`delta_delivery`) and the existing
-Antigravity manager-history setting (`antigravity_mode`). It uses the same
+reads (`mode`) and cross-Turn reuse (`delta_delivery`). It uses the same
 revision-locked preview, apply, readback, disable and rollback owner. Read-only
 editors cannot save; sibling settings and Goal records remain unchanged. No choice
 installs hooks, trusts a host or proves actual delivery or model retention.
 
 The existing `context_delivery_machine_defaults_v0` namespace accepts
-`{"schema_version":"context_delivery_machine_defaults_v0","mode":"on","delta_delivery":"auto","antigravity_mode":"on"}`.
+`{"schema_version":"context_delivery_machine_defaults_v0","mode":"on","delta_delivery":"auto"}`.
 `mode` and `antigravity_mode` keep their `on|off` values; omitted `delta_delivery`
 defaults to `auto` and also accepts `off`. Old saved rows remain readable.
 `machine-config preview/apply --namespace context_delivery --config-json FILE`
 requires the original preview revision. Removing the namespace restores progressive
 reads, supported-host Delta AUTO and Antigravity manager history reads. Save the
-relevant off setting to keep it disabled. `antigravity_mode` still independently
-controls private reads of `recent_delivery_history` in trusted-owner manager turns;
-it does not grant host configuration or execution authority.
+relevant off setting to keep it disabled. Manager history is delivered automatically. A trusted-owner native manager can read nonempty delivery history from a private snapshot using its permitted shell. Current facts stay inline. Existing explicit legacy `antigravity_mode=off` preferences remain effective.
 
 The CLI facade `--context-delivery auto` (also the omitted default) presents
 current requirements before expandable material across hosts. Stateless CLI,
@@ -960,16 +957,16 @@ quota 能力候选沿用同一精确 codec 复用已登记 Todo 的正文、标�
 ### 机器级默认
 
 在**设置 → 本机设置 → 能力中心 → 渐进上下文**分别设置渐进读取（`mode`）、独立的跨轮差分
-（`delta_delivery`）及原有 Antigravity 管家历史读取（`antigravity_mode`），沿用现有精确修订的预览、
+（`delta_delivery`），沿用现有精确修订的预览、
 应用、读回、关闭和回滚 owner。只读编辑器不能保存；不改写其他配置和 Goal，不安装／信任 hook，
 保存偏好不证明原生初始化、实际投递或模型保留。
 
 既有 `context_delivery_machine_defaults_v0` namespace 接受
-`{"schema_version":"context_delivery_machine_defaults_v0","mode":"on","delta_delivery":"auto","antigravity_mode":"on"}`。
+`{"schema_version":"context_delivery_machine_defaults_v0","mode":"on","delta_delivery":"auto"}`。
 `mode` 与 `antigravity_mode` 保留 `on|off`；可选的 `delta_delivery` 默认为 `auto`，也可为 `off`；旧配置继续可读。
 CLI 的 `machine-config preview/apply --namespace context_delivery --config-json FILE` 仍需原预览修订。
 移除 namespace 恢复渐进读取、支持宿主的 Delta AUTO 与 Antigravity 管家历史读取；要保持关闭应保存对应 off。
-`antigravity_mode` 继续独立控制强能力管家的 `recent_delivery_history` 私有快照读取，不新增宿主配置或执行权限。
+管家自动选择交付历史的读取方式。有权限读取私有快照的原生管家可按需读取已有历史，当前目标与待办仍直接可见。既有显式 `antigravity_mode=off` 偏好继续生效。
 
 CLI 的 `--context-delivery auto`（省略时也使用此门面）跨宿主先呈现当前要求，再按需展开材料。
 普通 CLI、其他已声明宿主及恢复读取不要求原生初始化；只读 `should-run` 仍不创建 Turn、回执、会话、journal 或执行 lease。

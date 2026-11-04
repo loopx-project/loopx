@@ -159,7 +159,8 @@ def test_codex_and_antigravity_context_preferences_operate_independently(
     assert stored["namespaces"]["context_delivery"] == {
         "schema_version": "context_delivery_machine_defaults_v0",
         "mode": codex_mode,
-        "antigravity_mode": expected_antigravity,
+        "delta_delivery": "auto",
+        **({"antigravity_mode": antigravity_mode} if antigravity_mode is not None else {}),
     }
 
     args = argparse.Namespace(
@@ -168,12 +169,10 @@ def test_codex_and_antigravity_context_preferences_operate_independently(
         format="json", codex_context_dir=None, codex_context_root=None,
         decision_handoff_socket=None, decision_output_dir=None, decision_output_root=None,
     )
+    apply_context_machine_options(args, registry_path=tmp_path / "absent.json", runtime_root_arg=str(tmp_path))
+    assert args.context_delivery == ("auto" if codex_mode == "on" else "off")
     if codex_mode == "on" and os.name != "posix":
-        with pytest.raises(ValueError, match="unavailable on this platform"):
-            apply_context_machine_options(args, registry_path=tmp_path / "absent.json", runtime_root_arg=str(tmp_path))
-    else:
-        apply_context_machine_options(args, registry_path=tmp_path / "absent.json", runtime_root_arg=str(tmp_path))
-        assert args.context_delivery == codex_mode
+        assert args.delta_delivery == "off"
 
     capture_root = tmp_path / "captures"
     capture_root.mkdir()
