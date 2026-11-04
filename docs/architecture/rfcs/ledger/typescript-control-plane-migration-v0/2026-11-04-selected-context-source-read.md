@@ -33,3 +33,9 @@ Integration base: `d29ec8bf2a105aac24629bcbf3dfb7c97aea51fe`. Source candidate: 
 - Complete inline work context matches in all 30 default-entry pairs. Event IDs are identical with only the event-clock input fixed. Differences in collection clocks and their computed ages remain in raw observations; no ownership, body, field, refusal or identity is normalized.
 
 **Author implementation is complete; merge qualification remains held for performance review and a fresh exact-head review.** No merge, deployment, authority migration or persistent-state deletion is performed.
+
+### Later upstream capture integration
+
+Candidate `ff4e94459` integrates latest base `ce4cfc1ce`. Its four changed production files remain byte-identical to `c137daecc`. Upstream now returns capture navigation; the existing product reader verifies and opens the complete current projection. Actual File/SQLite entrypoint readbacks on this base preserve complete work context and event identity; logical Effect calls are 74→73 in these newer observations.
+
+Six historical direct-stdout assertions fail on both latest main and candidate because they still expect an inline `should_run` field. Both selected runs have 2 pass /6 fail, with the same identities and failure boundary. Those failures remain evidence. Earlier installed/cost measurements retain their stated revision; latest-main full cost and Host qualification remain held.
