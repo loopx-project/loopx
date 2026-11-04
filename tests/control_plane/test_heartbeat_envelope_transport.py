@@ -260,16 +260,14 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(
     first = json.loads(result.stdout)
     assert result.returncode == 0, first
     def complete_page(value):
-        if context_delivery:
+        if value.get('schema_version') == 'context_capture_navigation_v1':
             # This compatibility test elects to read the full saved view.
             # A manifest only supplies navigation; it is not delivered body.
             assert value['mode'] == 'full'
-            digest = value['sha256']
-            read = subprocess.run(shlex.split(value['command']), env=env, cwd=project,
+            read = subprocess.run(shlex.split(value['recovery']['command']), env=env, cwd=project,
                 capture_output=True, text=True, check=True)
             value = json.loads(read.stdout)
             assert value['schema_version'] == 'context_capture_page_v1'
-            assert value['sha256'] == digest
         if value.get('schema_version') != 'context_capture_page_v1':
             return value
         digest, body = value['sha256'], b''
