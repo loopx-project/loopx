@@ -450,6 +450,9 @@ def _return_transaction(host, path, phase, request):
 
 def _return_provider(plan, source, sender, record_attempt):
     route, session, turn = (source[key] for key in ("route", "session", "turn"))
+    # The typed transaction owns the canonical result identity. Transports may
+    # verify a mirror of this message, never guess its identity from its body.
+    route = {**route, "return_message_id": plan["message_id"]}
     attachments = plan.get("attachments") or []
     if attachments:
         if getattr(sender, "supports_result_files", False) is not True:
@@ -472,6 +475,11 @@ def _return_provider(plan, source, sender, record_attempt):
         sent = sender(route, session, turn, plan["text"])
     else:
         return {"kind": "sender_unavailable"}
+    if isinstance(sent.get("verification"), dict) and sent.get("external_write_performed") is False:
+        # A provider outbox may already own publication. Its adapter records the
+        # existing attempt before returning a readback, including unavailable
+        # or mismatched results, through the ordinary verification state machine.
+        return {"kind": "verified", "verification": sent["verification"]}
     return {"kind": "sent", "reply_verified": sent.get("reply_verified"),
             "external_write_performed": sent.get("external_write_performed"),
             "idempotency_key": sent.get("idempotency_key")}
