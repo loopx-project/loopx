@@ -410,6 +410,10 @@ def register_refresh_state_command(
         help="After verified writeback, execute the owed quota step once for this exact Turn; replay never creates another debit.",
     )
     refresh_state_parser.add_argument(
+        "--settlement-receipt", action="store_true",
+        help="With --settle-turn, retain successful supporting snapshots in an immutable result and print controls plus exact receipts.",
+    )
+    refresh_state_parser.add_argument(
         "--no-global-sync",
         action="store_true",
         help="Do not refresh the shared global registry after writing the state run.",
@@ -483,6 +487,8 @@ def handle_refresh_state_command(
     outcome_update_result = None
     goal_acceptance_preview = None
     try:
+        if getattr(args, "settlement_receipt", False) and (not args.settle_turn or fmt != "json"):
+            raise ValueError("--settlement-receipt requires --settle-turn and --format json")
         if getattr(args, "settle_turn", False) and not (
             args.agent_id and args.turn_instance_id and bool(args.todo_id) != bool(args.replan_obligation_id)
         ):
@@ -968,7 +974,7 @@ def handle_refresh_state_command(
 def _settle_requested_refresh(payload, args, registry_path, goal_ref):
     if not getattr(args, "settle_turn", False):
         return
-    from .refresh_settlement import settle_refreshed_turn
+    from .refresh_settlement import present_settled_refresh, settle_refreshed_turn
 
     settle_refreshed_turn(payload, registry_path=registry_path,
         runtime_root=resolve_runtime_root(load_registry(registry_path), args.runtime_root),
@@ -979,3 +985,14 @@ def _settle_requested_refresh(payload, args, registry_path, goal_ref):
             Path(args.delivery_workspace_path)
             if args.delivery_workspace_path else None
         ))
+    if getattr(args, "settlement_receipt", False):
+        from ..control_plane.quota.error_codes import QuotaDecisionTransportError
+        try:
+            view = present_settled_refresh(payload, runtime_root=resolve_runtime_root(
+                load_registry(registry_path), args.runtime_root))
+        except QuotaDecisionTransportError as exc:
+            payload.update(ok=False, error=str(exc))
+            return  # Exact committed receipts stay visible; never re-admit.
+        if view is not payload:
+            payload.clear()
+            payload.update(view)

@@ -70,12 +70,9 @@ def prepare_turn_host_request(
                 timeout_seconds=args.validation_timeout_seconds,
                 failure_recovery_kind=args.validation_failure_kind,
             )
-    envelope = (
-        cast(dict[str, Any], payload.get("turn_envelope"))
-        if isinstance(payload.get("turn_envelope"), dict)
-        else {}
-    )
-    return project, raw_argv, task_validator, envelope
+    from ..control_plane.turn_driver.driver import read_turn_execution_context
+
+    return project, raw_argv, task_validator, read_turn_execution_context(payload)
 
 
 def build_codex_cli_host_runner(

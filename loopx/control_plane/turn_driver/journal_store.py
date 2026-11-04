@@ -114,6 +114,7 @@ def load_loopx_turn_plan_from_journal(
     *,
     goal_id: str,
     turn_key: str,
+    agent_id: str | None = None,
 ) -> dict[str, Any]:
     path = turn_journal_path(runtime_root, goal_id=goal_id, turn_key=turn_key)
     with exclusive_file_lock(path):
@@ -128,11 +129,15 @@ def load_loopx_turn_plan_from_journal(
     )
     if transaction.get("turn_key") != turn_key or journal.get("turn_key") != turn_key:
         raise ValueError("LoopX Turn resume journal has mismatched turn lineage")
-    envelope = (
-        cast(dict[str, Any], plan.get("turn_envelope")) if isinstance(plan.get("turn_envelope"), dict) else {}
-    )
-    if envelope.get("goal_id") != goal_id or journal.get("goal_id") != goal_id:
+    from .driver import COMPLETE_TURN_PLAN_SCHEMA_VERSION, turn_host_lineage
+
+    identity = (turn_host_lineage(plan) if plan.get("schema_version") == COMPLETE_TURN_PLAN_SCHEMA_VERSION else
+                cast(dict[str, Any], plan.get("turn_envelope"))
+                if isinstance(plan.get("turn_envelope"), dict) else {})
+    if identity.get("goal_id") != goal_id or journal.get("goal_id") != goal_id:
         raise ValueError("LoopX Turn resume journal belongs to another goal")
+    if agent_id is not None and identity.get("agent_id") != agent_id:
+        raise ValueError("LoopX Turn resume journal belongs to another agent")
     return dict(plan)
 
 

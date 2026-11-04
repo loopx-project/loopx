@@ -563,7 +563,6 @@ def build_heartbeat_prompt(
     task_body = bind_exact_turn_settlement_task_body(
         task_body,
         turn_instance_id=normalized_turn_instance_id,
-        captured_envelope=turn_envelope,
     )
     if fine_grained:
         task_body = f"{task_body}\n\n{FINE_GRAINED_TURN_RULE}"

@@ -3,13 +3,14 @@
 import {isDeepStrictEqual} from "node:util";
 import {visionAuthoringContract} from "../goals/vision_checkpoint.ts";
 import type {JsonObject} from "../effect_program.ts";
-import {jsonObject, requireJsonObject} from "../runtime_decode.ts";
+import {jsonObject, requireBoolean, requireJsonObject} from "../runtime_decode.ts";
 import {GOAL_OUTCOMES_SCHEMA, OUTCOME_CONTEXT_NAVIGATION_SCHEMA} from "../goals/outcome_requirements.ts";
 import {FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE} from "../work_items/interaction_contract.ts";
 import {quotaSummaryReferences, contextSourceIdentity, contextProjectionChanges,
   type ProjectionSourceValues} from "./diagnostic_projection.ts";
 import {encodeContextDelivery} from "./context_delivery.ts";
 import {createHash} from "node:crypto";
+import {capturedContextSelection} from "./context_selection.ts";
 
 type Path = (string | number)[];
 const pointer = (path: Path): string => path.length ? "/" + path.map(key =>
@@ -121,12 +122,12 @@ export function progressiveContextPlan(request: JsonObject): JsonObject {
 
 const pathStartsWith = (path: Path, start: Path) => start.every((key, i) => path[i] === key);
 
-function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSourceValues):
+function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSourceValues,
+    plan = progressiveContextPlan({payload: request.context, surface: request.surface})):
     {context: JsonObject; tokens: [Path, string][]; projected: boolean} {
   const context = requireJsonObject(request.context, "current projection");
   const details = requireJsonObject(request.native_projection, "supporting material reference");
   const identity = contextSourceIdentity(request, request.source_number_tokens);
-  const plan = progressiveContextPlan({payload: context, surface: request.surface});
   const deferred = plan.deferred as JsonObject[], references = (plan.references ?? []) as JsonObject[];
   const instructions = plan.instructions as JsonObject[];
   const at = (root: unknown, path: Path): unknown => path.reduce<unknown>((row, key) =>
@@ -218,7 +219,17 @@ function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSour
     path[0] === "context" ? size + token.length - JSON.stringify(at(request, path)).length : size, 0);
   const projected = required !== context && Buffer.byteLength(JSON.stringify(required))
     - Buffer.byteLength(JSON.stringify(context)) + adjustment(remaining) - adjustment(tokens) < 0;
-  return {context: projected ? required : context, tokens: projected ? remaining : tokens, projected};
+  // A saved capture may predate the caller's native transport. Keep its signed
+  // source immutable; bind only this display recipe after the optional shrink
+  // decision, so caller options neither bypass source validation nor defeat its
+  // no-growth guard. The next invocation still runs the ordinary CLI guard.
+  const selectionPath = ["interaction_contract", "cli_channel", "selection_command", "command_args_template"];
+  const transport = details.selection_command_args_template;
+  const bindTransport = typeof transport === "string" && typeof at(context, selectionPath) === "string"
+    && transport !== at(context, selectionPath);
+  if (!projected) { required = context; copies.clear(); }
+  if (bindTransport) parent(selectionPath)[selectionPath.at(-1)!] = transport;
+  return {context: required, tokens: projected ? remaining : tokens, projected: projected || bindTransport};
 }
 
 function nativeContextContinuity(codec: JsonObject): JsonObject {
@@ -239,9 +250,12 @@ function nativeContextContinuity(codec: JsonObject): JsonObject {
 
 /** Plan and encode one native capture without sending its intermediate view
  * back through Python. Capture publication and native locking remain Host IO. */
-export function prepareProgressiveContextDelivery(request: JsonObject, legacyFields: readonly string[]): JsonObject {
+export function prepareProgressiveContextDelivery(request: JsonObject, legacyFields: readonly string[],
+    decisionFields: readonly string[], plan?: JsonObject): JsonObject {
+  if (request.include_initial_read_plan !== undefined)
+    requireBoolean(request.include_initial_read_plan, "include_initial_read_plan");
   const sourceValues: ProjectionSourceValues = new WeakMap();
-  const required = requiredNativeContext(request, sourceValues);
+  const required = requiredNativeContext(request, sourceValues, plan);
   const codec = nativeContextContinuity({...request, context: required.context,
     ...(request.source_number_tokens === undefined ? {} : {source_number_tokens: required.tokens})});
   const details = jsonObject(required.context.context_details);
@@ -250,16 +264,26 @@ export function prepareProgressiveContextDelivery(request: JsonObject, legacyFie
   const delivery = encodeContextDelivery(codec, legacyFields, sourceValues, navigation);
   const {operation: _operation, source_edits: _edits, source_number_tokens: _numbers, ...source} = request;
   return contextProjectionChanges(source, {context: required.context, delivery, projected: required.projected,
-    read_sections: inlineReadSections(request, required.context)}, sourceValues);
+    read_sections: inlineReadSections(request, required.context),
+    ...(request.include_initial_read_plan === true
+      ? {initial_read_plan: nativeContextReadPlan(required.context, decisionFields)} : {})}, sourceValues);
 }
 
 /** Stateless presentation uses the same plan without inventing a native session,
  * retained baseline or admission identity. Hosts may add delta independently. */
-export function prepareProgressiveContext(request: JsonObject): JsonObject {
+export function prepareProgressiveContext(request: JsonObject, plan?: JsonObject): JsonObject {
   const values: ProjectionSourceValues = new WeakMap();
-  const required = requiredNativeContext(request, values);
+  const required = requiredNativeContext(request, values, plan);
   const {operation: _operation, source_edits: _edits, source_number_tokens: _numbers, ...source} = request;
   return contextProjectionChanges(source, {context: required.context, projected: required.projected}, values);
+}
+
+/** Invocation-local navigation, not captured input or a read/retention receipt.
+ * Decision vocabulary comes from the same owner as standalone initial reads. */
+function nativeContextReadPlan(context: JsonObject, decisionFields: readonly string[]): JsonObject {
+  const pointers = initialContextReadPointers(context, decisionFields), initial = pointers.length > 0;
+  return {initial, plan: capturedContextSelection(initial ? {context, initial_read: true}
+    : {context, select: [""], list_fields: true}, pointers)};
 }
 
 export function initialContextReadPointers(context: JsonObject, decisionFields: readonly string[]): string[] {
@@ -361,7 +385,7 @@ export function initialContextReadPointers(context: JsonObject, decisionFields: 
     include("interaction_contract", "cli_channel", field);
   const planPath = ["interaction_contract", "cli_channel", "settlement_plan"];
   const plan = object(object(interaction.cli_channel)?.settlement_plan);
-  if (plan?.schema_version === "quota_settlement_plan_v1" && Array.isArray(plan.ordered_steps)) {
+  if ((plan?.schema_version === "quota_settlement_plan_v1" || plan?.schema_version === "quota_settlement_plan_v2") && Array.isArray(plan.ordered_steps)) {
     for (const field of Object.keys(plan)) if (field !== "ordered_steps") include(...planPath, field);
     plan.ordered_steps.forEach((value, stepIndex) => {
       const step = object(value), stepPath = [...planPath, "ordered_steps", stepIndex];
