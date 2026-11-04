@@ -15,7 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-from ...capabilities.native_chat.external_conversations import ChatExternalConversations
+from ...capabilities.native_chat.external_conversations import ChatExternalConversations, QUOTA_BACKLOG_BATCH_SIZE
 from ...chat_store import TERMINAL_TURN_STATES, _atomic_write_json, _read_json
 from ...control_plane.collaboration import conversation_reply_context
 from ...control_plane.effect_runtime import effect_runtime_request_scope
@@ -225,6 +225,17 @@ class LarkPrivateConversations:
     def health(self) -> dict[str, dict[str, int]]:
         health: dict[str, dict[str, int]] = {}
         quota_pending = self.core.quota_backlog_observer()
+        completed: list[tuple[dict[str, Any], dict[str, Any]]] = []
+
+        def observe_completed() -> None:
+            flags = quota_pending([native for _, native in completed])
+            for (row, _), pending in zip(completed, flags, strict=True):
+                if pending:
+                    health[row["binding_id"]]["pending_count"] += 1
+                    health[row["binding_id"]]["recovery_count"] += int(any(
+                        phase.get("started") and not phase.get("verified") for phase in row["deliveries"].values()))
+            completed.clear()
+
         for path in [*self.root.glob("*.json"), *self.root.glob("web-projections/*.json")]:
             row = _read_json(path)
             entry = health.setdefault(row["binding_id"], {"pending_count": 0, "recovery_count": 0})
@@ -239,11 +250,14 @@ class LarkPrivateConversations:
                 if (native.get("status") == "accepted" and native.get("command") is None
                         and all(native.get(key) == row.get(key) for key in
                             ("binding_id", "source", "session_id", "turn_id"))):
-                    pending = quota_pending(native)
+                    completed.append((row, native))
+                    if len(completed) >= QUOTA_BACKLOG_BATCH_SIZE:
+                        observe_completed()
             if pending:
                 entry["pending_count"] += 1
                 entry["recovery_count"] += int(any(phase.get("started") and not phase.get("verified")
                                                    for phase in row["deliveries"].values()))
+        observe_completed()
         return health
 
     def _binding(self, profile: str) -> dict[str, Any]:

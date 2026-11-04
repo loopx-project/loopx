@@ -331,7 +331,8 @@ def connect(fixture):
                                                              runner=provider, cli_bin="lark-cli")
 
 
-@pytest.mark.parametrize("case", ["normal", "invalid-metadata", "metadata-only", "unfinished", "source-changed", "closed", "lost-ack", "message-crash"])
+@pytest.mark.parametrize("case", ["normal", "invalid-metadata", "metadata-only", "unfinished", "source-changed", "closed", "lost-ack", "message-crash",
+    "historical", "historical-source-changed", "historical-stop"])
 def test_original_worker_recovers_native_result_without_replay(tmp_path, language_server, monkeypatch, case):  # noqa: F811
     from test_native_steward_private import steward
     from loopx.capabilities.native_chat.antigravity_adapter import AntigravityAdapter
@@ -342,6 +343,8 @@ def test_original_worker_recovers_native_result_without_replay(tmp_path, languag
     monkeypatch.setenv("LOOPX_MANAGER_REASONING_EFFORT", "high")
     fixture = steward.__wrapped__(tmp_path)
     store, runtime, provider, transport, binding, _, workspace = next(fixture)
+    historical = case.startswith("historical")
+    fault = case.removeprefix("historical-") if case != "historical" else "normal"
     try:
         binding = transport.bindings.configure(transport_ref="steward-app", project_ref=binding["project_ref"],
             executor_endpoint_id="antigravity", context_kind="steward")
@@ -376,12 +379,21 @@ def test_original_worker_recovers_native_result_without_replay(tmp_path, languag
         old = _read_json(path)
         if case not in {"source-changed", "closed"}:
             assert transport.core.context_recovery_candidate(ref)
+        if historical:
+            monkeypatch.setattr(AntigravityAdapter, "start_turn", original)
+            later = provider.event("steward-app", "later-separate-question", "An unrelated later question")
+            transport.admit("steward-app", later)
+            later_row = transport.core.read_request(identity_ref(binding["provider_ref"], later["message_id"]))
+            assert runtime.wait_for_turn(session_id=later_row["session_id"], turn_id=later_row["turn_id"], timeout_sec=15)["status"] == "completed"
+            transport.reconcile_request(transport.root / f"{later_row['request_ref']}.json")
         failed_bytes = store._turn_path(row["session_id"], row["turn_id"]).read_bytes()
         writes = len(provider.writes)
         monkeypatch.setattr(runtime, "enqueue_turn", lambda **_: pytest.fail("Result recovery enqueued work"))
         monkeypatch.setattr(runtime, "resume_session_queue", lambda **_: pytest.fail("Result recovery resumed work"))
-        if case == "source-changed":
+        if fault == "source-changed":
             provider.messages[event["message_id"]]["content"] = "Edited source"
+        elif fault == "stop":
+            store.append_event(row["session_id"], row["turn_id"], kind="turn.interrupt_requested", payload={})
         elif case == "closed":
             store.update_session(row["session_id"], status="closed")
         elif case == "lost-ack":
@@ -409,7 +421,7 @@ def test_original_worker_recovers_native_result_without_replay(tmp_path, languag
         restarted.reconcile()
         native = restarted.core.read_request(ref)
         recovered = native.get("native_result_recovery")
-        if case in {"source-changed", "closed"}:
+        if fault in {"source-changed", "closed", "stop"}:
             assert recovered is None and len(provider.writes) == writes
         elif case == "lost-ack":
             assert recovered["delivery_verified"] is False
@@ -427,6 +439,9 @@ def test_original_worker_recovers_native_result_without_replay(tmp_path, languag
             body = json.loads(provider.messages[receipt["attempt"]["message_ref"]]["body"]["content"])
             assert body["zh_cn"]["content"][0][0]["text"] == message["text"]
             assert "Argon answer 1" in message["text"]
+            if historical:
+                assert "历史答复" in message["text"] and "没有重新执行业务" in message["text"]
+                assert "Argon answer 2" not in message["text"]
             assert len(provider.writes) == writes + 1
             assert restarted.health()[row["binding_id"]]["pending_count"] == (case in {"invalid-metadata", "unfinished"})
             if case == "unfinished":
@@ -434,8 +449,8 @@ def test_original_worker_recovers_native_result_without_replay(tmp_path, languag
             assert len([item for item in store.messages(row["session_id"]) if item["message_id"] == recovered["message_id"]]) == 1
         assert _read_json(path)["deliveries"]["terminal"] == old["deliveries"]["terminal"]
         assert store._turn_path(row["session_id"], row["turn_id"]).read_bytes() == failed_bytes
-        assert len(list(store._turn_path(row["session_id"], row["turn_id"]).parent.glob("*.json"))) == 1
-        assert len([1 for method, _ in language_server["calls"] if method == "SendUserCascadeMessage"]) == 1
+        assert len(list(store._turn_path(row["session_id"], row["turn_id"]).parent.glob("*.json"))) == (2 if historical else 1)
+        assert len([1 for method, _ in language_server["calls"] if method == "SendUserCascadeMessage"]) == (2 if historical else 1)
     finally:
         fixture.close()
 
