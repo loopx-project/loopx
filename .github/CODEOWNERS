@@ -75,6 +75,18 @@
 /examples/control_plane/lark-* @huangruiteng @steven-kid @songoow @loopx-agent
 /tests/extensions/test_lark_*.py @huangruiteng @steven-kid @songoow @loopx-agent
 
+# Runtime recovery and daemon I/O (bounded route: @JasonBuildAI).
+/loopx/control_plane/effect_runtime.py @huangruiteng @JasonBuildAI @songoow @loopx-agent
+/loopx/control_plane/effect_runtime_snapshot.ts @huangruiteng @JasonBuildAI @songoow @loopx-agent
+/loopx/control_plane/runtime/document_io.py @huangruiteng @JasonBuildAI @songoow @loopx-agent
+/loopx/control_plane/runtime/private_permissions.py @huangruiteng @JasonBuildAI @songoow @loopx-agent
+/tests/control_plane/test_effect_runtime_host_permission.py @huangruiteng @JasonBuildAI @songoow @loopx-agent
+/tests/control_plane/test_effect_runtime_integration.py @huangruiteng @JasonBuildAI @songoow @loopx-agent
+/tests/control_plane/test_effect_runtime_locator_recovery.py @huangruiteng @JasonBuildAI @songoow @loopx-agent
+/tests/control_plane/test_runtime_source_read_batching.py @huangruiteng @JasonBuildAI @songoow @loopx-agent
+/tests/control_plane/test_windows_snapshot_privacy.py @huangruiteng @JasonBuildAI @songoow @loopx-agent
+/tests/control_plane/test_document_io.py @huangruiteng @JasonBuildAI @songoow @loopx-agent
+
 # Windows installer and dedicated Windows filesystem tests.
 # Cross-platform core, workflows and release policy retain their existing routes.
 /loopx/windows_install.py @huangruiteng @BigDataDZ @songoow @loopx-agent
