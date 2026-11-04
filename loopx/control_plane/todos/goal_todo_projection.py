@@ -246,6 +246,7 @@ def project_todo_read(params: dict[str, Any]) -> dict[str, Any]:
     from contextlib import ExitStack
     from pathlib import Path
     from ..effect_runtime import MAX_LOCAL_SNAPSHOT_BYTES
+    from ..runtime.private_permissions import protect_private_path
 
     request = {"schema_version": "todo_read_request_v0", **params}
     encoded = json.dumps(request, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
@@ -255,9 +256,11 @@ def project_todo_read(params: dict[str, Any]) -> dict[str, Any]:
         with ExitStack() as stack:
             if len(encoded) > MAX_LOCAL_SNAPSHOT_BYTES - 4096:
                 directory = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="loopx-effect-todo-")))
+                protect_private_path(directory, directory=True)
                 source = directory / "facts.json"
                 fd = os.open(source, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
                 with os.fdopen(fd, "wb") as file:
+                    protect_private_path(source)
                     file.write(encoded)
                 request = {"schema_version": "todo_read_request_v0", "facts_ref": {
                     "path": str(source), "byte_count": len(encoded), "sha256": hashlib.sha256(encoded).hexdigest()}}

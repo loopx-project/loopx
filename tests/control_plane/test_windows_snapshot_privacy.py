@@ -75,6 +75,48 @@ def test_actual_producer_protects_before_socket_dispatch(monkeypatch):
     er._request_with_info({'token':'synthetic','host':'127.0.0.1','port':1},request_id='producer',method='goal.checkpoint_read_context.resolve',params={'large':'x'*er.MAX_REQUEST_BYTES},timeout=2,large_local_snapshot=True)
     assert len(seen)==1 and not Path(seen[0]['response_sink']).exists()
 
+
+@pytest.mark.parametrize(
+    ("broaden_target", "fact_bytes"),
+    [(None, er.MAX_LOCAL_SNAPSHOT_BYTES), ("file", 8192), ("parent", 8192)],
+)
+def test_todo_facts_producer_reaches_real_runtime(monkeypatch, broaden_target, fact_bytes):
+    from loopx.control_plane.todos.goal_todo_projection import project_todo_read
+
+    # Keep negative fixtures small; the successful case crosses the real 64 MiB boundary.
+    monkeypatch.setattr(er, "MAX_LOCAL_SNAPSHOT_BYTES", fact_bytes)
+    dispatch = er.effect_runtime_result
+    sources = []
+
+    def inspect_and_dispatch(method, request, **kwargs):
+        source = Path(request["facts_ref"]["path"])
+        sources.append(source)
+        assert source.stat().st_size > fact_bytes - 4096
+        if broaden_target is not None:
+            broaden(source if broaden_target == "file" else source.parent)
+        return dispatch(method, request, **kwargs)
+
+    monkeypatch.setattr(er, "effect_runtime_result", inspect_and_dispatch)
+    params = {
+        "kind": "fields",
+        "observed_at": 1767225600,
+        "evaluated_at": "2026-01-01T00:00:00Z",
+        "todos": [{"todo_id": "todo_private_facts", "role": "agent", "status": "open",
+                   "text": "x" * fact_bytes}],
+        "rollout_events": [],
+    }
+    if broaden_target is None:
+        result = project_todo_read(params)
+        summary = result["fields"]["agent_todos"]
+        assert summary["total_count"] == 1
+        assert summary["items"][0]["todo_id"] == "todo_private_facts"
+    else:
+        with pytest.raises(ValueError, match="complete Todo fact source unavailable or invalid"):
+            project_todo_read(params)
+    assert len(sources) == 1
+    assert not sources[0].parent.exists()
+
+
 def test_large_protected_bytes_and_digest(snapshot):
     path, payload = snapshot
     assert_private_acl(path.parent)
