@@ -745,6 +745,8 @@ class CodexChatAgentSession:
         dynamic_tools: list[dict[str, Any]] | None = None,
         host_config: dict[str, Any] | None = None,
         launch_guard: Callable[[], AbstractContextManager[None]] | None = None,
+        account_runtime_root: Path | None = None,
+        account_consumer: str = "worker",
         _compatibility_catalog_path: Path | None = None,
     ) -> "CodexChatAgentSession":
         resolved = shutil.which(codex_bin)
@@ -850,6 +852,23 @@ class CodexChatAgentSession:
             runtime_env.get("LOOPX_CHAT_CODEX_MODEL_PROVIDER", "").strip()
             if not execution_mode else ""
         )
+        account_base_config = host_config
+        api_transport = None
+        if (account_runtime_root is not None and not execution_mode and not provider_override
+                and not (host_config or {}).get("model_provider")
+                and (not permissions_profile or not (runtime_home / "auth.json").exists()
+                     and not (runtime_home / "auth.json").is_symlink())):
+            from .capabilities.native_chat.codex_auth import native_api_transport
+            try:
+                api_transport = native_api_transport(account_runtime_root, base_home,
+                    consumer=account_consumer, model=model)
+                if api_transport is not None:
+                    runtime_env[api_transport.env_key] = api_transport.token
+                    host_config = api_transport.configuration(host_config or {})
+                    provider_override = api_transport.provider
+            except Exception:
+                raise CodexChatAgentError("Native account API transport is unavailable.",
+                    error_code="model_auth_unavailable", gate=None) from None
         command = [resolved, "app-server"]
         if permissions_profile:
             # Keep this native store independent even when the account's
@@ -938,7 +957,7 @@ class CodexChatAgentSession:
                 request_id=1,
             )
             session._notify("initialized", {})
-            if permissions_profile:
+            if permissions_profile and api_transport is None:
                 from .capabilities.native_chat.codex_auth import for_isolated_process
                 try:
                     session._host_model_auth = for_isolated_process(base_home, runtime_home, resolved)
@@ -961,7 +980,7 @@ class CodexChatAgentSession:
             # copying auth, restarting clients or replacing the original thread.
             follow_native_provider = bool(resume_thread_id and not execution_mode
                 and (not permissions_profile or metadata_review_context is not None) and not provider_override)
-            read_native_config = read_project_defaults or bool(permissions_profile) or owner_git_write or follow_native_provider
+            read_native_config = read_project_defaults or bool(permissions_profile) or owner_git_write or follow_native_provider or api_transport is not None
             if read_native_config:
                 # Resume otherwise inherits the old thread's model/effort, even
                 # when the owner's effective workspace configuration has changed.
@@ -974,6 +993,8 @@ class CodexChatAgentSession:
                 effective = config_result.get("config", {})
                 if not isinstance(effective, dict):
                     raise session._runtime_error("Codex returned an invalid project configuration.")
+                if api_transport is not None:
+                    host_config = api_transport.configuration(host_config or {}, effective)
                 if owner_git_write:
                     # Preserve the native workspace policy (including network
                     # and temporary-directory settings). A separate named
@@ -1151,8 +1172,10 @@ class CodexChatAgentSession:
                     model=model,
                     reasoning_effort=reasoning_effort,
                     dynamic_tools=dynamic_tools,
-                    host_config=host_config,
+                    host_config=account_base_config if api_transport is not None else host_config,
                     launch_guard=launch_guard,
+                    account_runtime_root=account_runtime_root,
+                    account_consumer=account_consumer,
                     _compatibility_catalog_path=catalog_path,
                 )
         except Exception:

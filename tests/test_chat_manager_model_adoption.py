@@ -476,7 +476,8 @@ def test_native_account_epoch_reopens_only_unstarted_codex_adapter(conversation,
     class Accounts:
         def __init__(self, path):
             assert path == runtime.coordination_runtime_root
-        def conversation_epoch(self, *, codex_home):
+        def conversation_epoch(self, *, codex_home, consumer="worker", model=None):
+            assert consumer == "steward"
             observed.append(codex_home)
             return tuple(epoch)
     module.NativeAccounts = Accounts

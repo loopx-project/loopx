@@ -1,8 +1,31 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { account, decide, observerHealth } from "../src/loopx_codex_provider_routing/native_policy.ts";
+import { account, apiRole, decide, modelRoute, observerHealth, stewardRoute } from "../src/loopx_codex_provider_routing/native_policy.ts";
 
 const now = 1000;
+test("consumer API roles never make a working Agent API primary", () => {
+  const policy = {enabled: false, slots: [], cooldown_seconds: 300, api_fallback: false, steward_api_role: "primary"};
+  const native = {policy, active_slot: "a", api_active: false};
+  assert.equal(apiRole(policy, "worker"), "disabled");
+  assert.equal(apiRole({...policy, api_fallback: true}, "worker"), "fallback");
+  assert.equal(apiRole(policy, "unrecognized-consumer"), "disabled");
+  assert.equal(modelRoute({consumer: "worker", native, api_ready: true}).api, false);
+  assert.equal(modelRoute({consumer: "steward", native, api_ready: true}).api, true);
+  assert.equal(modelRoute({consumer: "steward", native, api_ready: false}).api, false);
+  assert.equal(stewardRoute({now, primary: "antigravity", pool: ["antigravity", "codex"],
+    current: "antigravity", native, api_ready: true, primary_capacity: null}).endpoint, "codex");
+  assert.equal(stewardRoute({now, primary: "antigravity", pool: ["antigravity"],
+    current: "antigravity", native, api_ready: true, primary_capacity: null}).endpoint, null);
+  for (const role of ["disabled", "fallback", "corrupt-role"]) {
+    assert.equal(modelRoute({consumer: "steward", native: {...native, policy: {...policy, steward_api_role: role}}, api_ready: true}).api, false);
+  }
+  // Legacy fallback remains the account owner's already admitted route.
+  const fallback = {...native, policy: {...policy, enabled: true, api_fallback: true, steward_api_role: "fallback"},
+    api_active: true, login_matches: true, recovery_required: false, action: "api_active"};
+  assert.equal(modelRoute({consumer: "steward", native: fallback, api_ready: true}).api, true);
+  assert.equal(modelRoute({consumer: "steward", native: {...fallback, recovery_required: true}, api_ready: true}).api, false);
+  assert.equal(modelRoute({consumer: "steward", native: {...fallback, policy: {...fallback.policy, steward_api_role: "disabled"}}, api_ready: true}).api, false);
+});
 test("observer health requires a held owner and a fresh matching build heartbeat", () => {
   const healthy = {now, owner_locked: true, build: "current",
     heartbeat: {checked_at: now, deadline_at: now + 75, next_check_at: now + 60,

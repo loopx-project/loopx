@@ -170,6 +170,7 @@ class NativeAccounts:
                 "observer": self.observer_health(state["policy"]["enabled"]),
                 "active_slot": native.get("active_slot"),
                 "api_fallback_supported": native.get("api_fallback_supported", False),
+                "steward_api_role_supported": True,
                 "api_active": native.get("api_slot") is not None and native.get("active_slot") == native.get("api_slot"),
                 "selection_revision": native.get("selection_revision"),
                 "login_matches": native.get("current_login_matches"),
@@ -217,7 +218,7 @@ class NativeAccounts:
         native = self.transport(adapter, "status")
         return self._projection(state, native)
 
-    def conversation_epoch(self, *, codex_home: Path) -> tuple[str, str] | None:
+    def conversation_epoch(self, *, codex_home: Path, consumer: str = "worker", model: str | None = None) -> tuple[str, str] | None:
         """An existing Chat process observes the native owner's login revision.
 
         The caller may reopen its idle adapter, never restart the account owner
@@ -225,8 +226,12 @@ class NativeAccounts:
         """
         state = self._load()
         adapter = state.get("adapter")
-        if (state["policy"].get("enabled") is not True or not adapter
-                or Path(adapter.get("profile", {}).get("home", "")).resolve() != codex_home.resolve()):
+        if adapter and Path(adapter.get("profile", {}).get("home", "")).resolve() != codex_home.resolve():
+            return None
+        if consumer == "steward" and policy({"operation": "api-role", "policy": state["policy"],
+                                             "consumer": consumer})["role"] == "primary":
+            return (f'steward-api:{state["revision"]}:{self.api_keys().status()["revision"]}:{bool(self.api_keys().candidates(model or ""))}', "openai-api")
+        if state["policy"].get("enabled") is not True or not adapter:
             return None
         native = self.transport(adapter, "status")
         if (native.get("current_login_matches") is not True or native.get("recovery_required")
@@ -236,18 +241,50 @@ class NativeAccounts:
         return (revision, slot) if isinstance(revision, str) and revision and isinstance(slot, str) and slot else None
 
     def steward_route(self, *, codex_home: Path, primary: str, pool: list[str], current: str,
-                      primary_capacity: dict | None, blocked_primary: dict | None = None) -> dict:
+                      primary_capacity: dict | None, blocked_primary: dict | None = None, model: str | None = None) -> dict:
         """Observe the existing account owner; never start a second watcher."""
         state = self._load()
         adapter = state.get("adapter")
-        if (state["policy"].get("enabled") is not True or not adapter
-                or Path(adapter.get("profile", {}).get("home", "")).resolve() != codex_home.resolve()):
+        if adapter and Path(adapter.get("profile", {}).get("home", "")).resolve() != codex_home.resolve():
+            return {"endpoint": None, "blocked_primary": blocked_primary}
+        api_ready = bool(self.api_keys().candidates(model or "")) if state["policy"].get("steward_api_role") == "primary" else False
+        if api_ready:
+            return policy({"operation": "steward-route", "now": self.clock(), "primary": primary,
+                "pool": pool, "current": current, "native": self._projection(state), "api_ready": True,
+                "primary_capacity": primary_capacity, "blocked_primary": blocked_primary})
+        if primary_capacity is None:
+            return {"endpoint": None, "blocked_primary": blocked_primary}
+        if state["policy"].get("enabled") is not True or not adapter:
             return {"endpoint": None, "blocked_primary": blocked_primary}
         native = self.transport(adapter, "status")
         return policy({"operation": "steward-route", "now": self.clock(),
             "primary": primary, "pool": pool, "current": current,
             "native": self._projection(state, native), "primary_capacity": primary_capacity,
             "blocked_primary": blocked_primary})
+
+    def model_transport(self, *, codex_home: Path, consumer: str, model: str | None = None) -> dict | None:
+        """A model-only local relay; never select the desktop login or copy keys."""
+        state = self._load()
+        adapter = state.get("adapter")
+        if adapter and Path(adapter.get("profile", {}).get("home", "")).resolve() != codex_home.resolve():
+            return None
+        role = policy({"operation": "api-role", "policy": state["policy"], "consumer": consumer})["role"]
+        if role == "primary":
+            native = self._projection(state)
+        else:
+            if state["policy"].get("enabled") is not True or not adapter:
+                return None
+            native = self._projection(state, self.transport(adapter, "status"))
+        route = policy({"operation": "model-route", "consumer": consumer, "native": native,
+                        "api_ready": bool(self.api_keys().candidates(model or "")) if role == "primary" else False})
+        if not route["api"]:
+            if native.get("api_active") and consumer == "steward" and role == "disabled":
+                raise HostError("steward_api_disabled")
+            if role == "primary" and native.get("api_active"):
+                raise HostError("api_keys_unavailable")
+            return None
+        from .openai_relay import ensure
+        return ensure(self, consumer=consumer)
 
     def clients(self) -> dict:
         state = self._load()
@@ -267,7 +304,7 @@ class NativeAccounts:
 
     def configure(self, *, expected_revision: int, enabled: bool, slots: list[str], reconnect: bool = False,
                   restart_clients: bool | None = None, force_quit_clients: bool | None = None,
-                  api_fallback: bool | None = None) -> dict:
+                  api_fallback: bool | None = None, steward_api_role: str | None = None) -> dict:
         if type(enabled) is not bool or not isinstance(slots, list) or len(slots) > 16 or len(slots) != len(set(slots)):
             raise HostError("invalid_policy")
         if restart_clients is not None and type(restart_clients) is not bool:
@@ -275,6 +312,8 @@ class NativeAccounts:
         if force_quit_clients is not None and type(force_quit_clients) is not bool:
             raise HostError("invalid_policy")
         if api_fallback is not None and type(api_fallback) is not bool:
+            raise HostError("invalid_policy")
+        if steward_api_role is not None and steward_api_role not in ("disabled", "fallback", "primary"):
             raise HostError("invalid_policy")
         # Stop requests fence new effects at the Watcher first, then persist
         # after an already dispatched atomic switch finishes. Other mutations
@@ -288,6 +327,9 @@ class NativeAccounts:
                 raise HostError("handoff_pending")
             # Disabling works offline and never needs credentials or a client.
             use_api = api_fallback if api_fallback is not None else state["policy"].get("api_fallback", False)
+            use_steward = steward_api_role if steward_api_role is not None else state["policy"].get("steward_api_role")
+            if steward_api_role == "primary" and not self.api_keys().status()["keys"]:
+                raise HostError("api_keys_missing")
             if enabled or reconnect or api_fallback is True:
                 adapter = discover() if reconnect or "adapter" not in state else state["adapter"]
                 native = self.transport(adapter, "status")
@@ -307,6 +349,8 @@ class NativeAccounts:
                          revision=state["revision"] + 1, retry_at=None, code=None,
                          intent=pending if pending.get("handoff_receipt") else None,
                          action="checking" if enabled else "disabled", failure_count=0)
+            if use_steward is not None:
+                state["policy"]["steward_api_role"] = use_steward
             atomic(self.path, state)
             return self._projection(state)
 

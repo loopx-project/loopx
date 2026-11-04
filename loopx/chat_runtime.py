@@ -416,6 +416,8 @@ class ChatRuntimeController:
             from .chat_loopx_mode import TOOL as COLLABORATION_TOOL
             return CodexAppServerAdapter.start(
                 codex_bin=self.codex_bin,
+                account_runtime_root=self.coordination_runtime_root,
+                account_consumer="steward" if manager_profile is not None or metadata_review_context is not None else "worker",
                 codex_home=codex_home_override or self.codex_home,
                 work_dir=Path(metadata_review_context["workspace_path"]) if metadata_review_context else work_dir,
                 goal_id=None if metadata_review_context else goal_id,
@@ -864,7 +866,10 @@ class ChatRuntimeController:
                 and active.get("origin") != "native_loopx"):
             try:
                 from loopx_codex_provider_routing.native import NativeAccounts
-                native_account_epoch = NativeAccounts(self.coordination_runtime_root).conversation_epoch(codex_home=selected_codex_home)
+                native_account_epoch = NativeAccounts(self.coordination_runtime_root).conversation_epoch(
+                    codex_home=selected_codex_home, **({"consumer": "steward",
+                        "model": (model_allocation or {}).get("model") or session.get("agent_model_id")}
+                        if manager_runtime is not None else {}))
             except ImportError:
                 pass  # Optional account automation is absent, not a Chat failure.
             except Exception as exc:

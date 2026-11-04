@@ -117,3 +117,42 @@ def for_isolated_process(base_home: Path, isolated_home: Path, codex_bin: str) -
     if (isolated_home / "auth.json").exists() or not (base_home / "auth.json").exists():
         return None
     return CodexHostModelAuth(base_home, codex_bin)
+
+
+@dataclass(repr=False)
+class CodexApiTransport:
+    """Only a consumer-scoped loopback token reaches the model process."""
+    endpoint: str
+    token: str = field(repr=False)
+    provider: str = "loopx_account_api"
+    env_key: str = "LOOPX_MODEL_RELAY_TOKEN"
+
+    def configuration(self, current: dict[str, Any], effective: dict[str, Any] | None = None) -> dict[str, Any]:
+        # Native overlays merge maps, so a lower-layer alias must not supply
+        # another URL/header/env key beneath our model-only transport.
+        if self.provider in (effective or {}).get("model_providers", {}):
+            raise CodexHostAuthUnavailable()
+        environment = current.get("shell_environment_policy", {})
+        exclude = [*environment.get("exclude", [])]
+        if self.env_key not in exclude:
+            exclude.append(self.env_key)
+        return {**current, "model_provider": self.provider, "model_providers": {
+            **current.get("model_providers", {}), self.provider: {
+                "name": "LoopX account API", "base_url": self.endpoint,
+                "env_key": self.env_key, "wire_api": "responses",
+                "requires_openai_auth": False, "supports_websockets": False}},
+            "shell_environment_policy": {**environment,
+                "exclude": exclude}}
+
+
+def native_api_transport(runtime_root: Path, base_home: Path, *, consumer: str,
+                         model: str | None = None) -> CodexApiTransport | None:
+    try:
+        from loopx_codex_provider_routing.native import NativeAccounts
+    except ImportError:
+        return None  # Optional provider absence preserves native authentication.
+    try:
+        endpoint = NativeAccounts(runtime_root).model_transport(codex_home=base_home, consumer=consumer, model=model)
+        return CodexApiTransport(endpoint['base_url'], endpoint['api_key']) if endpoint else None
+    except Exception:
+        raise CodexHostAuthUnavailable() from None
