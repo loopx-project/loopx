@@ -228,7 +228,7 @@ class NativeAccounts:
         adapter = state.get("adapter")
         if adapter and Path(adapter.get("profile", {}).get("home", "")).resolve() != codex_home.resolve():
             return None
-        if consumer == "steward" and policy({"operation": "api-role", "policy": state["policy"],
+        if consumer == "steward" and state["policy"].get("steward_api_role") == "primary" and policy({"operation": "api-role", "policy": state["policy"],
                                              "consumer": consumer})["role"] == "primary":
             return (f'steward-api:{state["revision"]}:{self.api_keys().status()["revision"]}:{bool(self.api_keys().candidates(model or ""))}', "openai-api")
         if state["policy"].get("enabled") is not True or not adapter:
@@ -267,6 +267,9 @@ class NativeAccounts:
         state = self._load()
         adapter = state.get("adapter")
         if adapter and Path(adapter.get("profile", {}).get("home", "")).resolve() != codex_home.resolve():
+            return None
+        if (state["policy"].get("enabled") is not True
+                and not (consumer == "steward" and state["policy"].get("steward_api_role") == "primary")):
             return None
         role = policy({"operation": "api-role", "policy": state["policy"], "consumer": consumer})["role"]
         if role == "primary":

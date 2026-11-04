@@ -57,6 +57,18 @@ def test_api_primary_cannot_replace_a_different_bound_native_profile(account_own
     assert calls == [] and owner.path.read_bytes() == before
 
 
+def test_disabled_account_automation_starts_no_policy_or_native_process(account_owner, monkeypatch):
+    owner, native, _, calls = account_owner
+    monkeypatch.setattr(native, 'policy', lambda *_: pytest.fail('Disabled observation must start no policy process'))
+    home = Path('/synthetic-home')
+    for consumer in ('worker', 'steward'):
+        assert owner.model_transport(codex_home=home, consumer=consumer) is None
+        assert owner.conversation_epoch(codex_home=home, consumer=consumer) is None
+    assert owner.steward_route(codex_home=home, primary='antigravity', pool=['antigravity', 'codex'],
+        current='antigravity', primary_capacity=None)['endpoint'] is None
+    assert calls == [] and not owner.path.exists()
+
+
 def test_steward_and_worker_tokens_cannot_cross_billing_routes(account_owner):
     owner, native, relay, _ = account_owner
     owner.configure(expected_revision=0, enabled=False, slots=[], steward_api_role='primary')
