@@ -38,6 +38,37 @@ def _commission_goal_identity(goal: dict[str, Any]) -> dict[str, str]:
     return identity
 
 
+class _RecoveryDiscoveryReads:
+    """Lazy facts for one queue-discovery pass, never recovery admission.
+
+    Historical requests share Session history. Retain queue/control/history
+    hints, never provider identity or a recovery decision. A new
+    pass builds new observations; normal admission never receives this object.
+    """
+
+    def __init__(self, core: ChatExternalConversations) -> None:
+        self.core = core
+        self.queues: dict[str, bool] = {}
+        self.histories: dict[str, list[dict[str, Any]]] = {}
+        self.controls: list[dict[str, Any]] | None = None
+
+    def queued(self, session_id: str) -> bool:
+        if session_id not in self.queues:
+            self.queues[session_id] = bool(self.core.controller.store.queued_turns(session_id))
+        return self.queues[session_id]
+
+    def user_messages(self, session_id: str) -> list[dict[str, Any]]:
+        if session_id not in self.histories:
+            self.histories[session_id] = [message for message in self.core.controller.store.messages(session_id)
+                if message.get("role") == "user"]
+        return self.histories[session_id]
+
+    def source_controls(self) -> list[dict[str, Any]]:
+        if self.controls is None:
+            self.controls = self.core.pending()
+        return self.controls
+
+
 class ChatExternalConversations:
     def __init__(self, controller: Any) -> None:
         self.controller = controller
@@ -52,10 +83,13 @@ class ChatExternalConversations:
                                selected_binding: dict[str, Any] | None = None,
                                discovery_only: bool = False,
                                preparation_scope_available: bool = False,
-                               metadata_capacity: dict[str, Any] | None = None) -> dict[str, Any]:
+                               metadata_capacity: dict[str, Any] | None = None,
+                               discovery_reads: _RecoveryDiscoveryReads | None = None) -> dict[str, Any]:
         from ...chat_manager import MANAGER_CONTEXT_VERSION
         from ...control_plane.effect_runtime import effect_runtime_result
 
+        if discovery_reads is not None and not discovery_only:
+            raise ValueError("discovery observations cannot authorize recovery")
         store = self.controller.store
         session = store.load_session(str(row.get("session_id") or ""))
         turn = store.load_turn(str(row.get("session_id") or ""), str(row.get("turn_id") or ""))
@@ -99,7 +133,8 @@ class ChatExternalConversations:
             later_equivalent = any(item.get("role") == "user" and item.get("turn_id") != turn["turn_id"]
                 and item.get("text") == row.get("message") and item.get("origin") in {None, "lark", "web"}
                 and datetime.fromisoformat(item["created_at"]) > created
-                for item in store.messages(session["session_id"]))
+                for item in (discovery_reads.user_messages(session["session_id"])
+                             if discovery_reads is not None else store.messages(session["session_id"])))
         from ...chat_manager import steward_machine_defaults
         return effect_runtime_result("collaboration.conversation.request", {
             "request": {key: value for key, value in row.items() if key != "attachments"},
@@ -107,10 +142,12 @@ class ChatExternalConversations:
             "context_recovery": {"version": MANAGER_CONTEXT_VERSION, "failed_turn": turn,
                 "observed_at": datetime.now(timezone.utc).isoformat(),
                 "admitted_turn": admitted,
-                "queued_input_present": bool(store.queued_turns(session["session_id"])),
+                "queued_input_present": (discovery_reads.queued(session["session_id"])
+                    if discovery_reads is not None else bool(store.queued_turns(session["session_id"]))),
                 "attachments_present": bool(row.get("attachments")),
                 "steering_observed": any(event.get("kind") == "turn.steered" for event in events),
-                "stop_observed": self._source_stop_observed(row, turn, events),
+                "stop_observed": self._source_stop_observed(row, turn, events,
+                    source_controls=discovery_reads.source_controls if discovery_reads is not None else None),
                 "preparation_observation": preparation,
                 "later_equivalent_input_present": later_equivalent,
                 "preparation_scope_available": preparation_scope_available,
@@ -187,7 +224,13 @@ class ChatExternalConversations:
             return effect_runtime_result("collaboration.conversation.request", params).get("pending") is True
         return True
 
-    def context_recovery_candidate(self, request_ref: str) -> bool:
+    def context_recovery_observer(self) -> Callable[[str], bool]:
+        """Reuse scan-local hints; reread each request, Turn and binding."""
+        reads = _RecoveryDiscoveryReads(self)
+        return lambda ref: self.context_recovery_candidate(ref, discovery_reads=reads)
+
+    def context_recovery_candidate(self, request_ref: str, *,
+                                   discovery_reads: _RecoveryDiscoveryReads | None = None) -> bool:
         """Discovery only; every authority and native fact is re-read at admission."""
         try:
             row = self.read_request(request_ref)
@@ -209,7 +252,8 @@ class ChatExternalConversations:
                 invalid_metadata = ((turn.get("response") or {}).get("gate") or {}).get("kind") == "response_metadata_invalid"
                 if not open_literal and not invalid_metadata:
                     return False  # A lexical probe hint, never permission to adopt or send.
-            return self._context_recovery_plan(row, discovery_only=True).get("recovery_candidate") is True
+            return self._context_recovery_plan(row, discovery_only=True,
+                discovery_reads=discovery_reads).get("recovery_candidate") is True
         except (KeyError, ValueError, RuntimeError, OSError):
             return False
 

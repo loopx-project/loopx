@@ -1290,9 +1290,11 @@ class LarkPrivateConversations:
             except (KeyError, ValueError, OSError):
                 return  # Unknown authority or provider effects stay pending.
 
+    @effect_runtime_request_scope()
     def pending_delivery_paths(self) -> list[Path]:
         """The durable transport store is the queue; no in-memory admission."""
         paths = []
+        recovery_candidate = self.core.context_recovery_observer()
         for path in sorted(self.root.glob("*.json")):
             row = _read_json(path)
             if row["status"] != "delivered":
@@ -1303,7 +1305,7 @@ class LarkPrivateConversations:
                 # The canonical request, provider effect inventory and source
                 # are independently re-read by recover_failed_request.
                 self._context_recovery_probe_at[path] = time.monotonic() + 60
-                if legacy_recovery_repairs(row) or self.core.context_recovery_candidate(row["request_ref"]):
+                if legacy_recovery_repairs(row) or recovery_candidate(row["request_ref"]):
                     paths.append(path)
         return [*paths, *self._web_projection_paths()]
 
