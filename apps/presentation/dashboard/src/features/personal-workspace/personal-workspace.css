@@ -219,6 +219,7 @@
 .personal-sidebar-footer { padding: 12px; border-top: 1px solid var(--pw-line); }
 .personal-sidebar-footer { flex-shrink: 0; }
 .personal-sidebar-actions { display: flex; align-items: center; gap: 8px; }
+.personal-sidebar-notifications { display: flex; align-items: center; gap: 4px; }
 .personal-sidebar-search { position: relative; margin-left: auto; }
 .personal-sidebar-search button { display: grid; place-items: center; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--pw-text); cursor: pointer; }
 .personal-sidebar-search button:hover { background: var(--pw-card); }
@@ -2330,6 +2331,7 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 /* Board cards read like the design: title first, meta underneath. */
 .personal-task-kanban .personal-task-lane-scroll > button,
 .personal-task-kanban .personal-task-card > button { grid-template-columns: minmax(0, 1fr); }
+.personal-task-kanban .personal-task-card > button > .personal-task-blocker { grid-column: 1 / -1; min-width: 0; }
 .personal-task-kanban .personal-task-lane-scroll > button > span[aria-hidden="true"]:first-child,
 .personal-task-kanban .personal-task-card > button > span[aria-hidden="true"]:first-child { display: none; }
 

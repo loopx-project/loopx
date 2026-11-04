@@ -4,7 +4,6 @@ import {
   createRootRoute,
   createRoute,
   createRouter,
-  useNavigate,
 } from "@tanstack/react-router";
 import { z } from "zod";
 
@@ -147,9 +146,8 @@ export const localDashboardDesignRoute = createRoute({
   validateSearch: (search) => searchSchema.parse(search),
   component: () => {
     const search = localDashboardDesignRoute.useSearch();
-    // Both routes share searchSchema; generic navigation preserves the active design path.
-    const navigate = useNavigate() as DashboardNavigate;
-    return <DashboardRouteContent search={search} navigate={navigate}/>;
+    // Keep old preview bookmarks readable without a second production entry.
+    return <Navigate replace to="/" search={search}/>;
   },
 });
 

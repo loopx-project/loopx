@@ -42,6 +42,11 @@ export async function verifyWorkspaceLocales({ browser, url, installApi, outputD
       await page.goto(url, { waitUntil: "networkidle" });
       await page.getByTestId("personal-goal-home").waitFor();
       assert.equal(await page.locator("html").getAttribute("lang"), scenario.expected, scenario.name);
+      const queued = page.locator('.personal-home-goal-card[data-goal-state="已安排"] .personal-home-goal-state').first();
+      await queued.waitFor({state: "visible"});
+      const queuedLabel = scenario.expected === "en" ? "Queued" : "已安排";
+      assert.equal(await queued.innerText(), queuedLabel, `${scenario.name}: a loaded Goal uses the interface language`);
+      assert.equal(await queued.getAttribute("title"), queuedLabel, `${scenario.name}: its tooltip uses the same language`);
       const label = scenario.expected === "en" ? "Settings" : "设置";
       assert.ok(await page.getByRole("button", { name: label, exact: true }).isVisible(), scenario.name);
       if (!scenario.blocked) {

@@ -16,6 +16,8 @@ const gateText = "Approve the restated FY2023 operating cash flow";
 const bellName = "桌面通知"; // t("settings.attentionNotifications")
 const bellToggleTitle = "有事项需要我决定时提醒我"; // t("settings.attentionNotificationsToggle")
 const bellHintTitle = "仅在本页面在此浏览器中保持打开时生效。进展和运行不会提醒，只提醒新出现的、等你决定的事项。开启后页面每 30 秒重新读取一次工作区。"; // t("settings.attentionNotificationsHint")
+const bellDeniedTitle = "此浏览器已拒绝。请在浏览器的站点设置中允许本站通知，然后重新开启。";
+const bellUnsupportedTitle = "当前环境不支持通知。";
 const bellSelector = `button[aria-label="${bellName}"]`;
 
 function installNotificationStub(page, { permission = "default" } = {}) {
@@ -186,9 +188,16 @@ export const attentionNotificationsScenario = {
         const bell = notificationBell(page);
         await bell.waitFor({ state: "visible", timeout: 15_000 });
         // Blocked: the same bell is offered but disabled and in its blocked square.
-        await expectBell(page, { pressed: false, state: "blocked", disabled: true, title: bellToggleTitle, dot: false });
+        await expectBell(page, { pressed: false, state: "blocked", disabled: true, title: bellDeniedTitle, dot: false });
+        const recovery = page.getByRole("button", {name: "浏览器已阻止通知", exact: true});
+        await recovery.focus();
+        await page.getByRole("tooltip").filter({hasText: bellDeniedTitle}).waitFor({state: "visible"});
+        await page.keyboard.press("Escape");
+        assert.ok(await recovery.evaluate(node => node === document.activeElement), "Closing permission help keeps focus on its reachable trigger");
+        assert.equal(await page.evaluate(() => window.__loopxPermissionRequests), 0, "Reading recovery help never requests permission");
         await page.evaluate(() => { window.Notification.permission = "granted"; window.dispatchEvent(new Event("focus")); });
         await expectBell(page, { pressed: false, state: "off", disabled: false, title: bellToggleTitle, dot: false });
+        assert.equal(await page.getByRole("button", {name: "浏览器已阻止通知", exact: true}).count(), 0, "Resolved permission removes stale recovery help");
         await page.clock.install();
         await bell.click();
         await expectBell(page, { pressed: true, state: "on", disabled: false, title: bellHintTitle, dot: true });
@@ -201,7 +210,7 @@ export const attentionNotificationsScenario = {
         await page.evaluate(() => { window.Notification.permission = "denied"; window.dispatchEvent(new Event("focus")); });
         // The preference is not rewritten behind the owner: the bell stays on
         // (pressed, dot) but is blocked, which is how a revocation shows here.
-        await expectBell(page, { pressed: true, state: "on", disabled: true, title: bellHintTitle, dot: true });
+        await expectBell(page, { pressed: true, state: "on", disabled: true, title: bellDeniedTitle, dot: true });
         const readsAfterRevoke = deniedApi.statusRequestCount;
         await page.clock.runFor(70_000);
         await page.waitForTimeout(1_000);
@@ -213,7 +222,21 @@ export const attentionNotificationsScenario = {
         await bell.click();
         await expectBell(page, { pressed: false, state: "off", disabled: false, title: bellToggleTitle, dot: false });
         assert.equal(await page.evaluate(() => localStorage.getItem("loopx-pw-attention-notifications")), null, "Turning it off clears the stored preference");
-        return { coverageEntries: [...coverageEntries, ...await denied.close()] };
+        const deniedCoverage = await denied.close();
+        const unsupported = await openWorkspacePage(browser, url, {collectCoverage, beforeGoto: async (_api, page) => {
+          await installNotificationStub(page);
+          await page.addInitScript(() => { window.Notification = undefined; });
+        }});
+        try {
+          await expectBell(unsupported.page, {pressed: false, state: "blocked", disabled: true, title: bellUnsupportedTitle, dot: false});
+          await unsupported.page.getByRole("button", {name: "当前环境不支持通知", exact: true}).click();
+          await unsupported.page.getByRole("tooltip").filter({hasText: bellUnsupportedTitle}).waitFor({state: "visible"});
+          assert.equal(await unsupported.page.evaluate(() => window.__loopxPermissionRequests), 0, "Unsupported notification help has no permission or execution effect");
+          return {coverageEntries: [...coverageEntries, ...deniedCoverage, ...await unsupported.close()]};
+        } catch (error) {
+          await unsupported.close().catch(() => {});
+          throw error;
+        }
       } catch (error) {
         await denied.close().catch(() => {});
         throw error;

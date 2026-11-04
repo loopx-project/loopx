@@ -39,6 +39,20 @@ export const goalShowcaseScenario = {
       assert.equal(await page.getByTestId("overview-composer-pill").count(), 1, "Overview folds the composer to one line");
       assert.equal(await page.getByRole("textbox", { name: /发送消息|Send a message/ }).count(), 0);
       await page.screenshot({ path: resolve(outputDir, "goal-showcase-overview.png"), animations: "disabled" });
+      await page.getByRole("navigation", {name: /^(Goal 视图|Goal view)$/}).getByRole("button", {name: "任务", exact: true}).click();
+      const deferredCard = page.locator('.personal-task-card > button').filter({hasText: "Retire the nightly CSV export job"});
+      await deferredCard.waitFor({state: "visible"});
+      assert.ok(await deferredCard.evaluate(button => {
+        const status = button.querySelector('.personal-task-session-status');
+        const blocker = button.querySelector('.personal-task-blocker');
+        if (!status || !blocker) return false;
+        const bounds = button.getBoundingClientRect();
+        const statusBounds = status.getBoundingClientRect();
+        const blockerBounds = blocker.getBoundingClientRect();
+        return statusBounds.height <= parseFloat(getComputedStyle(status).lineHeight) + 1
+          && blockerBounds.left >= bounds.left && blockerBounds.right <= bounds.right + 1;
+      }), "A deferred task keeps its status on one line and its reason inside the single-column card");
+      await page.getByRole("navigation", {name: /^(Goal 视图|Goal view)$/}).getByRole("button", {name: "概览", exact: true}).click();
       const suggestions = page.locator(".personal-composer-folded .personal-composer-tools > summary");
       await suggestions.click();
       await page.getByRole("button", { name: "配置定时检查" }).waitFor({ state: "visible" });

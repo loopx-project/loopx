@@ -234,6 +234,9 @@ function ManagerHomeBoard({
     // A Goal whose work runs in a bound host must name that host here; the raw
     // agent id reads as if LoopX itself were executing the work.
     const hostLabel = goalHostSurfaces(goal).map(hostSurfaceLabel).join(" / ");
+    const stateLabel = goal.loadState
+      ? t(goal.loadState === "error" ? "startup.goalError" : "startup.goalLoading")
+      : localizedGoalState(goal.state, locale);
     return (
       <button className="personal-home-goal-card" data-goal-state={goal.loadState ?? goal.state} data-load-error={goal.loadError} key={goal.goalId} onClick={() => onSelectGoal(goal.goalId)} type="button">
         <GoalIdentityMark goal={goal} />
@@ -242,7 +245,7 @@ function ManagerHomeBoard({
         <span className="personal-home-goal-meta" title={hostLabel || undefined}>{goal.loadError ? t(`startup.error.${goal.loadError}`) : hostLabel || (goal.agentLaneCount && goal.agentLaneCount > 1
           ? t("header.workAgentCount", { count: goal.agentLaneCount })
           : goal.agentLabel ?? goal.agentId)}</span>
-        <span className="personal-home-goal-state" title={goal.state}>{goal.loadState ? t(goal.loadState === "error" ? "startup.goalError" : "startup.goalLoading") : goal.state}</span>
+        <span className="personal-home-goal-state" title={stateLabel}>{stateLabel}</span>
         <small className="personal-home-goal-time" title={goal.latestActivity}>{goal.loadState ? "" : goal.latestActivity ? activityTimeLabel(goal.latestActivity, locale, t) : goal.agentTodos.length ? t("home.taskCount", { count: goal.agentTodos.length }) : t("home.noActivity")}</small>
       </button>
     );

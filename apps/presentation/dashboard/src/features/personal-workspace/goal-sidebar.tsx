@@ -1,5 +1,6 @@
 import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, Bell, Bot, ChevronDown, ChevronRight, Focus, LoaderCircle, Pause, Plus, RotateCcw, Search, Settings2, Trash2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
+import { ContextHelp } from "./context-help";
 import { DesktopUpdate } from "./desktop-update";
 import { useGoalOrder } from "./use-goal-order";
 import { goalHierarchy, visibleGoalTree } from "./goal-hierarchy";
@@ -62,6 +63,12 @@ export function GoalSidebar({
   statusSourceControl?: StatusSourceControl;
 }) {
   const { t } = useWorkspaceI18n();
+  const notificationReasonId = useId();
+  const notificationReason = attentionNotifications?.support === "denied"
+    ? t("settings.attentionNotificationsDenied")
+    : attentionNotifications?.support === "unsupported" ? t("settings.attentionNotificationsUnsupported") : null;
+  const notificationHelpLabel = attentionNotifications?.support === "denied"
+    ? t("settings.attentionNotificationsBlocked") : t("settings.attentionNotificationsUnavailable");
   const [sorting, setSorting] = useState(false);
   const tree = useMemo(() => goalHierarchy(goals), [goals]);
   const siblings = (from: string, to: string) => tree.parents.get(from) === tree.parents.get(to);
@@ -211,18 +218,25 @@ export function GoalSidebar({
         <DesktopUpdate />
         <div className="personal-sidebar-actions">
           {attentionNotifications && onToggleAttentionNotifications ? (
+            <div className="personal-sidebar-notifications">
             <button
               aria-label={t("settings.attentionNotifications")}
+              aria-describedby={notificationReason ? notificationReasonId : undefined}
               aria-pressed={attentionNotifications.enabled}
               className={`personal-sidebar-utility personal-notification-bell is-${attentionNotifications.enabled ? "on" : attentionNotifications.support === "denied" || attentionNotifications.support === "unsupported" ? "blocked" : "off"}`}
               disabled={attentionNotifications.support === "denied" || attentionNotifications.support === "unsupported"}
               onClick={() => onToggleAttentionNotifications(!attentionNotifications.enabled)}
-              title={attentionNotifications.enabled ? t("settings.attentionNotificationsHint") : t("settings.attentionNotificationsToggle")}
+              title={notificationReason ?? (attentionNotifications.enabled ? t("settings.attentionNotificationsHint") : t("settings.attentionNotificationsToggle"))}
               type="button"
             >
               <Bell aria-hidden="true" size={17} />
               {attentionNotifications.enabled ? <span aria-hidden="true" className="personal-notification-dot" /> : null}
             </button>
+            {notificationReason ? <>
+              <span className="personal-sr-only" id={notificationReasonId}>{notificationReason}</span>
+              <ContextHelp icon={AlertTriangle} label={notificationHelpLabel}><p>{notificationReason}</p></ContextHelp>
+            </> : null}
+            </div>
           ) : null}
           {onOpenSettings ? (
             <button aria-label={t("settings.open")} className="personal-sidebar-utility" onClick={onOpenSettings} type="button">
