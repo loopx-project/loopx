@@ -994,6 +994,16 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-capability-scope-note p { margin: 0; font-size: var(--text-caption); line-height: var(--leading-caption); }
 .personal-capability-scope-note strong { display: block; color: var(--pw-text); }
 .personal-capability-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 24px; align-items: stretch; min-width: 0; min-height: 0; overflow: hidden; }
+.personal-capability-navigation { display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; overflow: hidden; }
+.personal-capability-navigation > .personal-capability-list { flex: 1; }
+.personal-capability-search { display: flex; flex: none; align-items: center; gap: 6px; min-width: 0; min-height: 44px; padding-inline: 8px; border: 1px solid var(--pw-line-strong); border-radius: 6px; background: var(--pw-card); }
+.personal-capability-search > svg { flex: none; color: var(--pw-muted); }
+.personal-capability-search:focus-within { outline: 2px solid var(--pw-blue); outline-offset: 1px; }
+.personal-capability-search input { flex: 1; width: 100%; min-width: 0; min-height: 42px; padding: 0; border: 0; background: transparent; color: var(--pw-text); font: inherit; font-size: var(--text-body); }
+.personal-capability-search input:focus-visible { outline: none; }
+.personal-capability-search input::-webkit-search-cancel-button { -webkit-appearance: none; }
+.personal-capability-search button { display: grid; place-items: center; flex: none; width: 36px; min-height: 40px; border: 0; border-radius: 4px; background: transparent; color: var(--pw-muted); cursor: pointer; }
+.personal-capability-search-result { margin: 0; padding-inline: 3px; color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); }
 .personal-capability-list { display: grid; align-content: start; gap: 6px; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 3px; }
 .personal-capability-list button { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 44px; padding: 10px 12px; border: 1px solid transparent; border-radius: 6px; background: #fff; color: var(--pw-text); cursor: pointer; text-align: left; }
 .personal-capability-list button:hover { border-color: #b8c9f5; }
