@@ -11,6 +11,7 @@ import pytest
 from loopx.capabilities.issue_fix import pr_lifecycle, pr_wait_reconcile
 from loopx.control_plane.agents.capability_memory import agent_capability_memory
 from loopx.capabilities.turn_start import extend_turn_start_dispatch
+from loopx.control_plane.turn_driver.decision_capture import read_context_capture_file
 from loopx.heartbeat_prequota import run_heartbeat_pre_quota
 from loopx.rollout_event_log import load_rollout_events, rollout_event_log_path
 from loopx.todos import add_goal_todo, list_goal_todos
@@ -25,9 +26,20 @@ def _declare_observation(registry):
     registry.write_text(json.dumps(config))
 
 
-def _guard_args(argv, identity):
-    return [*argv[:argv.index("turn")], "quota", "should-run", "--goal-id", "goal-a",
-            "--agent-id", "agent-a", "--codex-app", "--turn-instance-id", identity]
+def _invoke_guard(argv, identity, *options):
+    code, refusal = _invoke_turn([
+        *argv[:argv.index("turn")], "quota", "should-run", "--goal-id", "goal-a",
+        "--agent-id", "agent-a", "--codex-app", "--turn-instance-id", identity, *options,
+    ])
+    # These fixtures deliberately pause business compute. Native failure
+    # presentation keeps observation diagnostics in the original capture.
+    assert code == 1 and refusal["ok"] is False, refusal
+    assert refusal["decision"] == "skip" and refusal["should_run"] is False, refusal
+    capture = refusal["captured_decision"]
+    decision = read_context_capture_file(capture["path"], capture["sha256"], private=True)[2]
+    for field in ("ok", "decision", "should_run", "reason", "heartbeat_receipt"):
+        assert decision[field] == refusal[field]
+    return decision
 
 
 def _without_invocation_capability(argv):
@@ -53,7 +65,7 @@ def test_shared_cadence_across_quota_native_and_compatibility_prequota(tmp_path,
                 "mergedAt": None if len(calls) == 1 else "2026-10-01T01:12:00Z"}
 
     monkeypatch.setattr(pr_lifecycle, "fetch_github_pr_lifecycle_payload", fetch)
-    _, guard = _invoke_turn(_guard_args(argv, "configured-guard"))
+    guard = _invoke_guard(argv, "configured-guard")
     assert _observation(guard)["external_read_count"] == 1
     assert list_goal_todos(registry_path=registry, goal_id="goal-a", todo_id=todo_id)["todo"]["resume_ready"] is False
     _, native = _invoke_turn([*_without_invocation_capability(argv), "--turn-instance-id", "inherited-native"])
@@ -62,10 +74,10 @@ def test_shared_cadence_across_quota_native_and_compatibility_prequota(tmp_path,
         goal_id="goal-a", agent_id="agent-a")
     assert compat["checks"]["pr_dependencies"]["external_read_count"] == 0
     clock[0] = "2026-10-01T01:29:59Z"
-    _invoke_turn(_guard_args(argv, "not-yet-due"))
+    _invoke_guard(argv, "not-yet-due")
     assert len(calls) == 1
     clock[0] = "2026-10-01T01:30:00Z"
-    _, resumed = _invoke_turn(_guard_args(argv, "due-guard"))
+    resumed = _invoke_guard(argv, "due-guard")
     assert _observation(resumed)["merged_count"] == 1
     current = list_goal_todos(registry_path=registry, goal_id="goal-a", todo_id=todo_id)["todo"]
     assert current["resume_ready"] is True
@@ -89,18 +101,18 @@ def test_host_observation_inheritance_revocation_and_existing_fact_retention(tmp
                 "state": "MERGED", "mergedAt": "2026-10-01T00:00:00Z"}
 
     monkeypatch.setattr(pr_lifecycle, "fetch_github_pr_lifecycle_payload", fetch)
-    _, off = _invoke_turn(_guard_args(argv, "unconfigured"))
+    off = _invoke_guard(argv, "unconfigured")
     assert _observation(off) is None and calls == []
     agent_capability_memory(registry_path=registry, runtime_root=runtime, goal_id="goal-a",
         agent_id="agent-a", available=["external_evidence_poll"], execute=True)
-    _, inherited = _invoke_turn(_guard_args(argv, "host-inheritance"))
+    inherited = _invoke_guard(argv, "host-inheritance")
     assert _observation(inherited)["merged_count"] == 1
     next_id = add_goal_todo(registry_path=registry, goal_id="goal-a", role="agent",
         text="Observe the next dependency", claimed_by="agent-a", resume_when="pr_merged:owner/repo#43")["todo_id"]
     agent_capability_memory(registry_path=registry, runtime_root=runtime, goal_id="goal-a",
         agent_id="agent-a", unavailable=["external_evidence_poll"], execute=True)
     _declare_observation(registry)  # A remembered revocation also defeats inheritance.
-    _, revoked = _invoke_turn(_guard_args(argv, "revoked"))
+    revoked = _invoke_guard(argv, "revoked")
     assert _observation(revoked) is None and len(calls) == 1
     assert list_goal_todos(registry_path=registry, goal_id="goal-a", todo_id=next_id)["todo"]["resume_ready"] is False
     assert list_goal_todos(registry_path=registry, goal_id="goal-a", todo_id=todo_id)["todo"]["resume_ready"] is True
@@ -226,7 +238,7 @@ def test_app_lark_context_backend_reads_shared_facts_without_polling(tmp_path, m
 
     assert all(read(inspector)["resume_ready"] is False for inspector in inspectors)
     assert calls == []
-    _invoke_turn(_guard_args(argv, "observe-before-context"))
+    _invoke_guard(argv, "observe-before-context")
     events = load_rollout_events(rollout_event_log_path(runtime, "goal-a"))
     for inspector in inspectors:
         row = read(inspector)
@@ -241,7 +253,7 @@ def test_lost_observation_response_refreshes_cached_readiness(tmp_path, monkeypa
 
     registry, runtime, _, todo_id, argv = _native_wait_turn(tmp_path, monkeypatch, provider)
     # Capture the old pending projection before permission is configured.
-    _invoke_turn([*_guard_args(argv, "capture-pending"), "--write-projection-cache"])
+    _invoke_guard(argv, "capture-pending", "--write-projection-cache")
     _declare_observation(registry)
     monkeypatch.setattr(pr_lifecycle, "fetch_github_pr_lifecycle_payload", lambda *a, **kw: {
         "url": "https://github.com/owner/repo/pull/42", "state": "MERGED", "mergedAt": "2026-10-01T01:12:00Z"})
@@ -252,7 +264,7 @@ def test_lost_observation_response_refreshes_cached_readiness(tmp_path, monkeypa
         raise OSError("response lost after local commit")
 
     monkeypatch.setattr(pr_wait_hook, "reconcile_pr_wait_dependencies", response_lost)
-    _, result = _invoke_turn([*_guard_args(argv, "lost-response"), "--use-projection-cache"])
+    result = _invoke_guard(argv, "lost-response", "--use-projection-cache")
     readback = _observation(result)
     assert readback["external_read_count"] is None and readback["state_written"] is None
     todo = list_goal_todos(registry_path=registry, goal_id="goal-a", todo_id=todo_id)["todo"]
