@@ -864,16 +864,10 @@ class ChatRuntimeController:
         if (selected_agent == "codex" and active and active_id == accepted_turn_id
                 and active.get("status") == "queued" and not active.get("upstream_turn_id")
                 and active.get("origin") != "native_loopx"):
-            try:
-                from loopx_codex_provider_routing.native import NativeAccounts
-                native_account_epoch = NativeAccounts(self.coordination_runtime_root).conversation_epoch(
-                    codex_home=selected_codex_home, **({"consumer": "steward",
-                        "model": (model_allocation or {}).get("model") or session.get("agent_model_id")}
-                        if manager_runtime is not None else {}))
-            except ImportError:
-                pass  # Optional account automation is absent, not a Chat failure.
-            except Exception as exc:
-                logging.getLogger(__name__).warning("Native account epoch observation held (%s)", type(exc).__name__)
+            from .capabilities.native_chat.codex_auth import conversation_account_epoch
+            native_account_epoch = conversation_account_epoch(self.coordination_runtime_root, selected_codex_home,
+                **({"consumer": "steward", "model": (model_allocation or {}).get("model") or session.get("agent_model_id")}
+                   if manager_runtime is not None else {}))
         native_quota_refresh = bool(active and active_id == accepted_turn_id
             and active.get("status") == "queued" and active.get("origin") == "native_loopx"
             and active.get("loopx_execution") is True

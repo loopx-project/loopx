@@ -9,6 +9,7 @@ test("consumer API roles never make a working Agent API primary", () => {
   assert.equal(apiRole(policy, "worker"), "disabled");
   assert.equal(apiRole({...policy, api_fallback: true}, "worker"), "fallback");
   assert.equal(apiRole(policy, "unrecognized-consumer"), "disabled");
+  assert.equal(apiRole({...policy, api_fallback: true, steward_api_role: "corrupt-role"}, "steward"), "disabled");
   assert.equal(modelRoute({consumer: "worker", native, api_ready: true}).api, false);
   assert.equal(modelRoute({consumer: "steward", native, api_ready: true}).api, true);
   assert.equal(modelRoute({consumer: "steward", native, api_ready: false}).api, false);
@@ -16,6 +17,8 @@ test("consumer API roles never make a working Agent API primary", () => {
     current: "antigravity", native, api_ready: true, primary_capacity: null}).endpoint, "codex");
   assert.equal(stewardRoute({now, primary: "antigravity", pool: ["antigravity"],
     current: "antigravity", native, api_ready: true, primary_capacity: null}).endpoint, null);
+  assert.equal(stewardRoute({now, primary: "antigravity", pool: ["antigravity", "codex"],
+    current: "antigravity", native, api_ready: true, primary_capacity: null, blocked_primary: {corrupt: true}}).endpoint, null);
   for (const role of ["disabled", "fallback", "corrupt-role"]) {
     assert.equal(modelRoute({consumer: "steward", native: {...native, policy: {...policy, steward_api_role: role}}, api_ready: true}).api, false);
   }

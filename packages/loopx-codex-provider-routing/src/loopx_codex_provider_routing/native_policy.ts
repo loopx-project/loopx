@@ -28,8 +28,8 @@ export function apiRole(policy: Policy | undefined, consumer: string): ApiRole {
   if (consumer === "worker") return policy.api_fallback === true ? "fallback" : "disabled";
   if (consumer !== "steward") return "disabled";
   const role = policy.steward_api_role;
-  return role === "primary" || role === "disabled" || role === "fallback"
-    ? role : policy.api_fallback === true ? "fallback" : "disabled";
+  if (role === undefined) return policy.api_fallback === true ? "fallback" : "disabled";
+  return role === "primary" || role === "fallback" ? role : "disabled";
 }
 
 export function modelRoute(input: {consumer: string; native: Record<string, any>; api_ready: boolean}) {

@@ -155,7 +155,11 @@ existing endpoint pool to consider its subscription route; it does not move a
 worker to API. The API role is local vocabulary owned by this optional account
 provider, not a new Core execution authority or Goal state.
 
-Built account settings with synthetic account data / 使用合成账号数据的设置界面：
+In **Settings → Model Provider configuration**, keep the working-Agent checkbox
+for subscription exhaustion. Use **Steward API use → Prefer API** for an
+independent API primary; **Disabled** revokes it, including after the last key
+is removed. The saved selector reads back the choice. These canonical guide
+illustrations use synthetic accounts / 当前操作指南使用合成账号数据：
 
 ![Independent account priorities, desktop / 独立账号优先级，桌面](docs/assets/account-workload-primary-desktop.png)
 

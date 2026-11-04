@@ -156,3 +156,45 @@ def native_api_transport(runtime_root: Path, base_home: Path, *, consumer: str,
         return CodexApiTransport(endpoint['base_url'], endpoint['api_key']) if endpoint else None
     except Exception:
         raise CodexHostAuthUnavailable() from None
+
+
+def prepare_api_transport(runtime_root: Path | None, home: Path, *, isolated_home: Path | None,
+                          eligible: bool, consumer: str, model: str | None) -> CodexApiTransport | None:
+    if (runtime_root is None or not eligible or isolated_home is not None
+            and ((isolated_home / "auth.json").exists() or (isolated_home / "auth.json").is_symlink())):
+        return None
+    try:
+        return native_api_transport(runtime_root, home, consumer=consumer, model=model)
+    except CodexHostAuthUnavailable:
+        from ...chat_agent import CodexChatAgentError
+        raise CodexChatAgentError("Native account API transport is unavailable.",
+            error_code="model_auth_unavailable", gate=None) from None
+
+
+def authenticate_isolated(session, home: Path, isolated: Path, binary: str, *, api_transport) -> CodexHostModelAuth | None:
+    if api_transport is not None:
+        return None
+    try:
+        broker = for_isolated_process(home, isolated, binary)
+        if broker is not None:
+            login = session._request("account/login/start", {
+                "type": "chatgptAuthTokens", **broker.read()}, request_id=4)
+            if login.get("type") != "chatgptAuthTokens":
+                raise ValueError("unexpected native model authentication mode")
+        return broker
+    except Exception:
+        raise session._runtime_error(
+            "Trusted-host Codex model authentication is unavailable. "
+            "Restore the host account and retry this same Session.") from None
+
+
+def conversation_account_epoch(runtime_root: Path, home: Path, **consumer) -> tuple[str, str] | None:
+    try:
+        from loopx_codex_provider_routing.native import NativeAccounts
+        return NativeAccounts(runtime_root).conversation_epoch(codex_home=home, **consumer)
+    except ImportError:
+        return None
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning("Native account epoch observation held (%s)", type(exc).__name__)
+        return None

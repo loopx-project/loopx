@@ -853,22 +853,14 @@ class CodexChatAgentSession:
             if not execution_mode else ""
         )
         account_base_config = host_config
-        api_transport = None
-        if (account_runtime_root is not None and not execution_mode and not provider_override
-                and not (host_config or {}).get("model_provider")
-                and (not permissions_profile or not (runtime_home / "auth.json").exists()
-                     and not (runtime_home / "auth.json").is_symlink())):
-            from .capabilities.native_chat.codex_auth import native_api_transport
-            try:
-                api_transport = native_api_transport(account_runtime_root, base_home,
-                    consumer=account_consumer, model=model)
-                if api_transport is not None:
-                    runtime_env[api_transport.env_key] = api_transport.token
-                    host_config = api_transport.configuration(host_config or {})
-                    provider_override = api_transport.provider
-            except Exception:
-                raise CodexChatAgentError("Native account API transport is unavailable.",
-                    error_code="model_auth_unavailable", gate=None) from None
+        from .capabilities.native_chat.codex_auth import prepare_api_transport, authenticate_isolated
+        api_transport = prepare_api_transport(account_runtime_root, base_home,
+            isolated_home=runtime_home if permissions_profile else None,
+            eligible=not execution_mode and not provider_override and not (host_config or {}).get("model_provider"),
+            consumer=account_consumer, model=model)
+        if api_transport is not None:
+            runtime_env[api_transport.env_key] = api_transport.token
+            host_config, provider_override = api_transport.configuration(host_config or {}), api_transport.provider
         command = [resolved, "app-server"]
         if permissions_profile:
             # Keep this native store independent even when the account's
@@ -957,20 +949,8 @@ class CodexChatAgentSession:
                 request_id=1,
             )
             session._notify("initialized", {})
-            if permissions_profile and api_transport is None:
-                from .capabilities.native_chat.codex_auth import for_isolated_process
-                try:
-                    session._host_model_auth = for_isolated_process(base_home, runtime_home, resolved)
-                    if session._host_model_auth is not None:
-                        credentials = session._host_model_auth.read()
-                        login = session._request("account/login/start", {
-                            "type": "chatgptAuthTokens", **credentials}, request_id=4)
-                        if login.get("type") != "chatgptAuthTokens":
-                            raise ValueError("unexpected native model authentication mode")
-                except Exception:
-                    raise session._runtime_error(
-                        "Trusted-host Codex model authentication is unavailable. "
-                        "Restore the host account and retry this same Session.") from None
+            if permissions_profile:
+                session._host_model_auth = authenticate_isolated(session, base_home, runtime_home, resolved, api_transport=api_transport)
             read_project_defaults = project_context is not None and bool(resume_thread_id) and (
                 model is None or reasoning_effort is None
             )
@@ -1082,10 +1062,7 @@ class CodexChatAgentSession:
                 },
                 request_id=2,
             )
-            if provider_override and thread_result.get("modelProvider") != provider_override:
-                raise session._runtime_error(
-                    "Codex did not apply the requested conversation provider."
-                )
+            codex_context.verify_conversation_provider(session, provider_override, thread_result)
             if model and thread_result.get("model") not in {None, model}:
                 raise CodexChatAgentError(
                     "Codex did not apply the requested conversation model.",
