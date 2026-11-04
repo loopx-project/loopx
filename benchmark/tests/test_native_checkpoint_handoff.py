@@ -13,7 +13,7 @@ import time
 import pytest
 
 from loopx.hosts.codex_checkpoint import native_session_checkpoint
-from tests.control_plane.codex_checkpoint_fixture import real_native_source
+from tests.control_plane.codex_checkpoint_fixture import real_native_source, read_cli_policy_payload
 from loopx.capabilities.benchmark_toolkit.native_codex_goal import (
     NativeGoalProtocolError, StdioNativeGoalTransport,
 )
@@ -469,8 +469,7 @@ def test_actual_worker_captures_pending_replan_before_native_model(tmp_path, exp
             if phase["kind"] == "work" and not phase["tool_sent"]:
                 # Only after complete native input delivery, inspect the
                 # original decision as an independent authority oracle.
-                source = Path(reader.deliveries[-1]["recovery"]["path"]).with_name("decision.json")
-                current = json.loads(source.read_text())
+                current = read_cli_policy_payload(json.dumps(reader.deliveries[-1]), returncode=0)
                 assert not current.get("autonomous_replan_obligation")
                 assert current["interaction_contract"]["agent_channel"]["delivery_allowed"]
                 (project / "work-guard.json").write_text(json.dumps(current))

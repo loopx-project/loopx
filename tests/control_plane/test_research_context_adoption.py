@@ -15,6 +15,7 @@ from loopx.control_plane.effect_runtime import effect_runtime_result
 from loopx.hosts.research_checkpoint import canonical_context, research_context, verify_context_sources, adopt_todo_context, _encoded
 from canonical_authority_fixture import assert_todo_read_unchanged, isolate_sqlite_runtime
 from loopx.control_plane.turn_driver.codex_sessions import _store_codex_cli_session
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 
 
 @pytest.fixture(autouse=True)
@@ -45,7 +46,7 @@ def test_retained_context_is_adopted_only_with_fresh_current_ownership(tmp_path,
             code = main([*prefix,*args])
             output = capsys.readouterr().out
             assert code == 0, output
-            return json.loads(output)
+            return read_cli_policy_payload(output, returncode=code)
         run('bootstrap','--project',str(workspace),'--goal-id',name,'--objective','Investigate synthetic candidates.',
             '--adapter-kind','read_only_project_map_v0','--adapter-status','connected-read-only','--write-scope','**','--no-global-sync')
         run('configure-goal','--goal-id',name,'--registered-agent',agent,'--agent-work-mode',agent+'=active',
