@@ -1949,9 +1949,12 @@ python3 scripts/qualify-doubao-replan-semantic-action-live.py \
 
 The model does not receive a testing-only decision schema, expected command, or
 prebuilt quota packet. Clock and a small set of workspace reads are supported
-for normal heartbeat preflight. Commands are parsed into a strict allowlist
-without invoking a shell; quota and refresh may write only inside the temporary
-fixture, and no external or repository write is allowed. The actor independently
+for normal heartbeat preflight. Typed CLI commands use a strict allowlist;
+Vision/stride drafts use the existing OS-isolated shell after the projected
+frontier is read. Shell composition forwards only the same bounded CLI
+operations. Original inputs, authority stores, host-private
+data and networking remain protected. Quota and refresh may write only inside
+the temporary fixture, and no external or repository write is allowed. The actor independently
 qualifies the selected typed observation before executing it. Evidence-log-only,
 prose-only, pre-quota, equivalent-fingerprint, and ungrounded actions fail. The
 receipt retains only action kinds, command digests, and typed semantic outcomes.
@@ -1981,8 +1984,11 @@ progress observation 的隔离、public-safe 临时 Goal；模型接收正式 th
 heartbeat task body、受限执行环境说明和 `exec_command` tool。真实 quota 必须投影 host coverage context
 与最小 action packet，模型随后提交的 typed semantic delta 还要通过独立语义判定和真实
 写时闸门。若模型选择新 successor，资格门要求它以当前 `obligation_id` 调用真实
-`todo add`，验证 Todo 原子 receipt 与 `host_action=end_current_heartbeat`，且不得在同一
-turn 执行 successor；surface/hypothesis/probe 等结果仍走真实 `refresh-state`。仅读
+`todo add`，验证 Todo 原子 receipt，再由模型编写当前 evidence-linked Vision/stride，
+执行原 Turn 的 bound `refresh-state` 与返回的 spend，确认一次结算后才读取新 Turn；
+不得在同一 turn 执行 successor。surface/hypothesis/probe 等结果也通过同一真实
+写回与结算边界。草稿复用 OS 隔离 shell，原始输入与 authority 不可改写，草稿命令
+仅能组合相同的有界 CLI 操作。仅读
 evidence-log、只换措辞、quota 前动作、等价指纹或未落在当前状态中的 successor 都不算
 通过。receipt 只保留 action kind、command digest 与 typed semantic outcome。
 
@@ -2069,8 +2075,16 @@ The model authors its own decision; the host does not fill semantic fields or
 change evidence. An observed source's evidence id and exact source reference
 identify the same evidence. Checkpoint, one-spend and following-Turn verification
 remain independent of shell success. Receipts disclose native-shell execution
-without persisting raw conversations. Other actors retain their existing host
-and seven-call contracts. Earlier bounded-grammar failures remain failed
+without persisting raw conversations. The narrow semantic-action actor retains
+seven ordinary calls and its separate three-read native-context allowance.
+It now includes model-authored Vision/stride drafts and the original-Turn spend;
+successor creation and refresh alone cannot pass. A bound writer's context
+refusal can authorize its exact captured recovery reader, preserving the
+original Turn. Additional recovery reads consume the ordinary budget; they
+grant no extra calls. The model must reassess the changed facts and author a
+new decision before retrying. Draft authoring requires the same OS isolation
+prerequisite as the full journey. Other actors retain their
+existing host and call limits. Earlier bounded-grammar and missing-decision failures remain failed
 qualifications and are not evidence of core semantic rejection.
 The other turn cases remain
 bounded packet-interpretation checks. Nine core-contract scenarios cover
