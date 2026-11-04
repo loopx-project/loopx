@@ -112,6 +112,12 @@ def apply_selected_todo_execution_preparation(
         or action_portfolio_requires_explicit_selection(payload)
     ):
         return
+    # Consume the same explicit non-delivery fact as the typed interaction
+    # owner. Planning/control-plane work does not execute the selected Todo;
+    # its lifecycle or lease cannot replace that original operation. Omitted
+    # facts retain the existing preparation checks for ordinary delivery.
+    if obligation is not None and obligation.get("delivery_allowed") is False:
+        return
     preparation = project_selected_todo_execution_preparation(
         runtime_root=runtime_root,
         goal_id=goal_id,
