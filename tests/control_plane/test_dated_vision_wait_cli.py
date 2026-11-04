@@ -10,6 +10,7 @@ import tempfile
 
 import pytest
 from canonical_authority_fixture import read_fixture_todos, initialize_canonical_source_fixture
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 
 from loopx.control_plane.effect_runtime import restart_effect_runtime
 
@@ -79,7 +80,7 @@ def cli(registry: Path, runtime: Path, *args: str) -> tuple[int, dict]:
         cwd=REPO, env={**os.environ, "PYTHONPATH": str(REPO), "LOOPX_USAGE_PING": "0"},
         capture_output=True, text=True, check=False, timeout=90,
     )
-    return result.returncode, json.loads(result.stdout)
+    return result.returncode, read_cli_policy_payload(result.stdout, returncode=result.returncode)
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
