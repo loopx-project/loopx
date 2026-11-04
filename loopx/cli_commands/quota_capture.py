@@ -449,6 +449,9 @@ def _native_context_reference(projected: dict[str, Any], reference: dict[str, An
     if initial_read_pointers:
         overview = result.pop("overview")
         instruction = result["instruction"]
+        if any(pointer.endswith("/vision_authoring/rule") for pointer in initial_read_pointers):
+            instruction = ("Before composing a Vision, select the complete vision_authoring object "
+                "at the displayed step in this capture. " + instruction)
         result["instruction"] = ("Start with first_read_command for current facts and source navigation from this capture, "
             "without reading an older baseline. "
             "Read each complete optional attachment from its captured step before using it. " + instruction)

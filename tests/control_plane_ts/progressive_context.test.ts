@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import {visionAuthoringContract} from "../../loopx/control_plane/goals/vision_checkpoint.ts";
 import {initialContextReadPointers, progressiveContextPlan} from "../../loopx/control_plane/quota/progressive_context.ts";
 import {FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE} from "../../loopx/control_plane/work_items/interaction_contract.ts";
 
@@ -90,4 +91,21 @@ test("exact repeated Todo rows preserve membership without collapsing distinct e
   }
   assert.equal(progressiveContextPlan({surface: "quota_packet", payload: {...payload,
     contract_binding: {signature: "signed"}}}).references, undefined);
+});
+
+test("first read keeps decision rules and preserves nonstandard Vision obligations whole", () => {
+  const base = "/interaction_contract/cli_channel/settlement_plan/ordered_steps/0/vision_authoring";
+  for (const replan of [true, false]) {
+    const schema = visionAuthoringContract(replan);
+    const required = {kind: "durable_writeback", precondition: "Verify current evidence first.", vision_authoring: schema};
+    const context = {interaction_contract: {schema_version: "loopx_interaction_contract_v0", cli_channel: {
+      settlement_plan: {schema_version: "quota_settlement_plan_v1", ordered_steps: [required]},
+    }}};
+    const pointers = initialContextReadPointers(context, []);
+    assert.ok(pointers.includes(base + "/rule"));
+    assert.equal(pointers.includes(base + "/continuation_review"), Object.hasOwn(schema, "continuation_review"));
+    assert.ok(!pointers.includes(base));
+    required.vision_authoring = {...schema, new_stop: "Keep this changed policy visible."};
+    assert.ok(initialContextReadPointers(context, []).includes(base));
+  }
 });
