@@ -2031,3 +2031,59 @@ remain outside the exit-time audit. The original isolation guards are retained;
 this does not install or promote the candidate on the active runtime. The shared
 IO adapter is the bounded change; another contract projection or lifecycle
 wrapper would add ordering risk without a required caller.
+
+
+### Native quota capture publication
+
+The qualified native quota caller now reuses the complete decision it has just
+published as its source-recovery reference. Previously it wrote an identical
+complete projection before asking the same TypeScript owner for optional
+presentation. Thirty saved capture pairs in the preceding qualified workload
+are byte-identical. The adapter now passes that producer-owned reference into
+the existing native preparation; external continuity input cannot supply it.
+Derived required views still receive separate captures when their content
+differs. Standalone APIs and uninitialized native fallback keep their existing
+publication paths. There is no hard link, persistent cache, new file format,
+semantic owner, read obligation, permission or RPC. Existing historical paths
+remain readable under their original identity and digest.
+
+The original quota workload is repeated against main `6a9264034605`, with three
+repetitions of File/SQLite cold, warm and compaction recovery. All 36 conditions
+produce the same independently checked artifact and one debit including replay.
+The 252 parent/accounting-child source observations are clean; product hashes
+remain unchanged during measurement. All 30 candidate captures avoid the
+redundant complete projection. This removes a duplicate producer write; it does
+not omit the complete source or claim retained model input.
+
+| Provider / scenario | All caller stdout, main → candidate (bytes) | RPCs | RPC wire bytes | Observed Python reads | Observed Python writes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| File / cold | 55,429 → 35,654 | 241 → 208 | 1,459,302 → 1,424,420 | 336,589 → 287,832 | 127,933 → 120,437 |
+| File / warm | 67,723 → 61,768 | 332 → 290 | 2,133,937 → 2,137,552 | 552,218 → 511,741 | 238,580 → 201,925 |
+| File / recovery | 89,316 → 61,059 | 334 → 292 | 2,139,532 → 2,134,660 | 580,809 → 519,604 | 233,054 → 195,818 |
+| SQLite / cold | 55,826 → 35,728 | 241 → 208 | 1,461,076 → 1,426,174 | 344,133 → 295,172 | 129,145 → 122,147 |
+| SQLite / warm | 68,136 → 61,910 | 332 → 290 | 2,136,689 → 2,141,039 | 560,254 → 519,489 | 240,008 → 204,526 |
+| SQLite / recovery | 89,801 → 61,197 | 334 → 292 | 2,142,354 → 2,137,296 | 588,955 → 527,354 | 234,484 → 197,664 |
+
+Warm observed Python read-plus-write bytes fall 9.75% / 9.53%, and writes fall
+15.36% / 14.78%. RPCs fall 12.65%, while wire bytes still rise 0.169% / 0.204%.
+Current-step stdout excluding preparation rises 7.02% / 6.24%. The primary
+same-capture full-to-body reduction is 86.1% / 84.7% on the candidate versus
+87.9% on main; candidate cold/recovery still select the complete body. Tool
+stdout is not model-generated output. Native/provider IO, latency/CPU, model
+input/cache/output, invoices and natural long-horizon outcomes remain
+unqualified. Earlier cohorts retain their original negative observations;
+these separate cohorts are not subtracted to claim a causal cost reduction.
+
+The same test harness on frozen pre-repair C1 source retains four semantic
+controls and fails four duplicate-storage assertions. The candidate passes the
+full 265-case native/lifecycle/reader/cost suite; its final advertised-reference
+mutation also rejects changed bytes without changing the native journal. The
+64-case public capture/model/recovery run passes. A fresh isolated installed
+wheel passes 493 cases with one Linux thread-group exit skip. Its 1,897 compared
+packaged source files match the measured product, including both changed IO
+adapters; 278 completed processes and 45,049 Core-module observations have no
+source-origin violations. Seventeen undistributed tracked assets/dev fixtures
+remain separately listed, and abrupt exits remain outside the exit-time audit.
+This qualifies the packaged paths, not active installation or independent PR
+approval. The bounded change reuses the existing recovery reference rather than
+adding a writer, helper framework or second semantics owner.
