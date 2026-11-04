@@ -2087,3 +2087,76 @@ remain separately listed, and abrupt exits remain outside the exit-time audit.
 This qualifies the packaged paths, not active installation or independent PR
 approval. The bounded change reuses the existing recovery reference rather than
 adding a writer, helper framework or second semantics owner.
+
+### Settled result-value transport
+
+The existing combined-closeout caller requests `include_record_bodies=false`
+after the TypeScript settlement owner verifies the original identity and all
+receipts. That projection previously removed the top-level Run records but
+still returned the same writeback/spend bodies inside four result values.
+Those values are unused by this caller. The existing bundle helper now clears
+them in that already requested, fully settled projection; identity, receipt
+payloads, failures and all other controls retain their values. Default complete
+reads and every pending recovery retain their original bodies. The persisted
+Runs, historical readers, accounting and public CLI result are unchanged.
+There is no new option, schema, RPC, cache, Python rule or model-read obligation.
+
+This is an intentional change to the existing internal opt-in read projection,
+not to the default reader. The only production opt-in consumer remains the
+combined refresh/spend adapter. The same TypeScript harness first rejects the
+old duplicate-body behavior, then passes all 137 cases on the repair, including
+complete-read and pending-state parity. Real File/SQLite CLI tests independently
+check the omitted bodies, unchanged receipts, persisted readback and one debit
+through replay. A test-local variable collision discovered after those new
+assertions was corrected without changing an assertion or the product rule;
+the failed cohort remains recorded.
+
+The wider source run retains 276 passes, one native Windows rendering skip and
+those two fixture failures; the corrected File/SQLite cases pass. The isolated
+wheel retains 387 other passes, two platform skips and the same two failures,
+then passes both corrected cases without a product change. Its 1,897 compared
+packaged sources match the measured product, including the changed TypeScript
+owner; 17 undistributed assets/dev fixtures are separately listed. Across both
+wheel runs, 1,297 completed-process observations and 535,308 Core-module
+observations show no source-origin violations. Abrupt exits remain outside the
+exit-time audit. This qualifies the tested installed-wheel paths, not active
+installation, independent review or merge authority.
+
+The unchanged original-quota workload is repeated three times per provider and
+scenario against frozen main `0423908e9cf4`. The candidate includes that target
+and the earlier C1 changes. All 36 conditions reach the same independently
+checked artifact with one debit, including replay. All 252 parent/child source
+observations match their pinned arm, and product hashes remain stable through
+measurement. Child RPCs are already included in parent accounting.
+
+| Provider / scenario | All caller stdout, main → candidate (bytes) | RPCs | RPC wire bytes | Observed Python reads | Observed Python writes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| File / cold | 55,472 → 35,678 | 241 → 208 | 1,459,815 → 1,400,685 | 336,894 → 288,097 | 128,010 → 120,512 |
+| File / warm | 67,892 → 61,813 | 332 → 290 | 2,135,559 → 2,114,908 | 552,831 → 512,164 | 238,851 → 202,786 |
+| File / recovery | 89,386 → 61,102 | 334 → 292 | 2,140,392 → 2,111,166 | 581,330 → 520,030 | 233,207 → 195,945 |
+| SQLite / cold | 55,868 → 35,752 | 241 → 208 | 1,461,586 → 1,402,351 | 344,435 → 295,437 | 129,221 → 122,222 |
+| SQLite / warm | 67,403 → 61,955 | 332 → 290 | 2,136,570 → 2,116,685 | 559,999 → 519,924 | 239,399 → 203,919 |
+| SQLite / recovery | 89,875 → 61,240 | 334 → 292 | 2,143,241 → 2,113,734 | 589,491 → 527,788 | 234,645 → 197,795 |
+
+These are three-observation medians, not a significance claim. Warm wire bytes
+fall 0.97% / 0.93%; the observed ranges are 2,134,771–2,135,559 versus
+2,113,851–2,115,192 for File, and 2,136,570–2,138,375 versus
+2,115,544–2,117,498 for SQLite. Warm Python read-plus-write bytes fall
+9.69% / 9.45%, and RPCs fall 12.65%. These cumulative C1 comparisons do not
+attribute the earlier RPC/IO reductions to this small projection change.
+
+Current-step stdout excluding preparation still grows 6.66% / 8.73%.
+The primary same-capture full-to-selected-body reduction is 84.7% / 86.1%
+versus 87.7% / 89.2% on main; its three-repeat ranges are 84.6%–86.2% /
+84.7%–87.6% for the candidate and 87.7%–87.9% / 87.7%–89.2% for main.
+Candidate cold/recovery still select the full body. This projection changes
+internal transport, not model-generated output. CPU/latency, native/provider
+IO, model input/cache/output, invoices, natural adoption and whole-workflow
+net benefit remain unqualified. Earlier positive and negative cohorts retain
+their original versions and results; separate cohorts are not subtracted for
+causal attribution. C1, its final reader exits and overall acceptance remain open.
+
+During qualification main advanced to `7f550aef58a8`, changing the Chat
+original-conversation fallback and its two frontend fixtures. That later
+combination has not been qualified; the cohort and integration base remain
+`0423908e9cf4` rather than being relabeled as the moving target.
