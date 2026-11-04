@@ -206,6 +206,17 @@ class AccountTests(unittest.TestCase):
             self.manager.selected()
         self.assertEqual(self.manager.active.read_bytes(), before)
 
+    def test_unregistered_status_remains_unknown_without_creating_a_vault(self):
+        direct = accounts.encoded({'auth_mode': 'apikey', 'OPENAI_API_KEY': 'synthetic-external-key'})
+        for raw in (self.a, direct, b'null\n'):
+            with self.subTest(raw=raw):
+                accounts.atomic(self.manager.auth, raw)
+                before = {p: p.read_bytes() for p in self.home.rglob('*') if p.is_file()}
+                status = self.manager.status()
+                self.assertIsNone(status['active_slot'])
+                self.assertIsNone(status['current_login_matches'])
+                self.assertEqual({p: p.read_bytes() for p in self.home.rglob('*') if p.is_file()}, before)
+
     def test_native_enrollment_does_not_select_or_change_current_login(self):
         self.current()
         result = self.enroll_b()

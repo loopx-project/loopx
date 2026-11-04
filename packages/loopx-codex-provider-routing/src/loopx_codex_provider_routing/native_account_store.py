@@ -364,8 +364,8 @@ class Accounts:
                 if self.pending.exists() or identity(raw) != current:
                     return None
                 config = self.config.read_bytes() if self.config.exists() else b''
-                actual = tomllib.loads(config.decode())
                 expected = tomllib.loads(file_config(config, raw).decode())
+                actual = tomllib.loads(config.decode())
                 if (actual.get('model_provider', 'openai') != expected.get('model_provider', 'openai')
                         or actual.get('openai_base_url') != expected.get('openai_base_url')
                         or actual.get('forced_login_method') not in (None, expected['forced_login_method'])):
@@ -476,9 +476,9 @@ class Accounts:
                 current = identity(read_private(self.auth))
                 if not state or current != state['identity']:
                     state = self._adopt(current) or state
-                matches = bool(state and current == state['identity'])
+                matches = current == state['identity'] if state else None
             except ValueError:
-                matches = False
+                matches = False if state else None
         return {'slots': names, 'slot_kinds': kinds, 'active_slot': state['slot'] if state else None,
                 'current_login_matches': matches, 'recovery_required': self.pending.exists(),
                 'home': str(self.spec['home']), 'frontend': str(self.spec['frontend']),
