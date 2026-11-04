@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from pathlib import Path
+import hashlib
 import json
 import re
 from datetime import datetime, timedelta, timezone
@@ -29,6 +30,20 @@ from .codex_context import checked_session_home
 _REQUEST_JOURNAL_STEM = re.compile(r"[a-f0-9]{24}")
 QUOTA_BACKLOG_BATCH_SIZE = 64
 _QUOTA_BACKLOG_BATCH_BYTES = 1024 * 1024
+
+
+def _preparation_image_identity(value: Any) -> dict[str, Any] | None:
+    """Fingerprint already normalized Core images without exporting their bytes."""
+    if not isinstance(value, list) or not value:
+        return None
+    try:
+        images = normalize_chat_image_attachments(value)
+        if images != value:
+            return None
+        encoded = json.dumps(images, sort_keys=True, separators=(",", ":")).encode()
+        return {"count": len(images), "sha256": hashlib.sha256(encoded).hexdigest()}
+    except (ValueError, TypeError, OverflowError):
+        return None
 
 
 def _commission_goal_identity(goal: dict[str, Any]) -> dict[str, str]:
@@ -123,10 +138,12 @@ class ChatExternalConversations:
         _, open_literal, _ = _review_openings(str((turn.get("response") or {}).get("message") or ""), 0)
         preparation = None
         later_equivalent = None
-        if turn.get("error_code") == "manager_authorization_unavailable":
+        image_failure = turn.get("error_code") == "runtime_error" and bool(row.get("attachments"))
+        if turn.get("error_code") == "manager_authorization_unavailable" or image_failure:
             # Collect canonical facts only. The typed planner owns the exact
             # pre-dispatch sequence, retry budget and authority decision.
-            preparation = {"kind": "core_context_preparation_failure", "session_id": session["session_id"],
+            preparation = {"kind": ("core_attachment_preparation_failure" if image_failure
+                                    else "core_context_preparation_failure"), "session_id": session["session_id"],
                 "turn_id": turn["turn_id"], "events": [
                     {"event_id": item["event_id"], "kind": item["kind"],
                      **{key: item.get("payload", {})[key] for key in ("phase", "schema_version", "error_code")
@@ -141,9 +158,17 @@ class ChatExternalConversations:
         return effect_runtime_result("collaboration.conversation.request", {
             "request": {key: value for key, value in row.items() if key != "attachments"},
             "current_session": session, "binding": selected_binding,
-            "context_recovery": {"version": MANAGER_CONTEXT_VERSION, "failed_turn": turn,
+            "context_recovery": {"version": MANAGER_CONTEXT_VERSION,
+                "failed_turn": ({key: value for key, value in turn.items() if key != "attachments"}
+                                if image_failure else turn),
+                **({"image_attachments": {"request": _preparation_image_identity(row.get("attachments")),
+                    "failed": _preparation_image_identity(turn.get("attachments")),
+                    "admitted": _preparation_image_identity((admitted or {}).get("attachments"))},
+                    "native_result_present": bool(store.native_result(session["session_id"], turn["turn_id"]))}
+                   if image_failure else {}),
                 "observed_at": datetime.now(timezone.utc).isoformat(),
-                "admitted_turn": admitted,
+                "admitted_turn": ({key: value for key, value in admitted.items() if key != "attachments"}
+                                  if image_failure and admitted is not None else admitted),
                 "queued_input_present": (discovery_reads.queued(session["session_id"])
                     if discovery_reads is not None else bool(store.queued_turns(session["session_id"]))),
                 "attachments_present": bool(row.get("attachments")),
