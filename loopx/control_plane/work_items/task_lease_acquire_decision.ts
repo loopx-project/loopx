@@ -182,12 +182,12 @@ type GlobToken =
   | {kind: "question"}
   | {kind: "class"; body: string; negated: boolean};
 
-function globTokens(pattern: string): GlobToken[] {
+function globTokens(pattern: string, fold = true): GlobToken[] {
   const tokens: GlobToken[] = [];
   let literal = "";
   const flushLiteral = () => {
     if (literal.length === 0) return;
-    tokens.push({kind: "literal", folded: caseFold(literal)});
+    tokens.push({kind: "literal", folded: fold ? caseFold(literal) : literal});
     literal = "";
   };
   for (let index = 0; index < pattern.length; index += 1) {
@@ -372,9 +372,9 @@ function classHasMatch(body: string, negated: boolean): boolean {
  * No multi-symbol character fold crosses that slash, so the existing character
  * transitions also decide prefix reachability without splitting a folded atom.
  */
-function fnmatchcase(value: string, pattern: string, descendants = false): boolean {
-  const symbols = [...caseFold(value)];
-  const tokens = globTokens(pattern);
+function fnmatchcase(value: string, pattern: string, descendants = false, fold = true): boolean {
+  const symbols = [...(fold ? caseFold(value) : value)];
+  const tokens = globTokens(pattern, fold);
   const suffixPossible: boolean[] = [];
   if (descendants) {
     suffixPossible[tokens.length] = true;
@@ -402,12 +402,13 @@ function fnmatchcase(value: string, pattern: string, descendants = false): boole
       } else if (valueIndex === symbols.length) {
         result = false;
       } else if (token.kind === "question") {
-        result = singleCharacterMatchLengths(symbols, valueIndex)
+        result = (fold ? singleCharacterMatchLengths(symbols, valueIndex) : [1])
           .some((length) => match(valueIndex + length, tokenIndex + 1));
       } else if (token.kind === "class") {
-        const lengths = classMatchLengths(token.body, symbols, valueIndex);
+        const lengths = fold ? classMatchLengths(token.body, symbols, valueIndex)
+          : classContains(characterClass(token.body), symbols[valueIndex]) ? [1] : [];
         result = token.negated
-          ? singleCharacterMatchLengths(symbols, valueIndex).some((length) =>
+          ? (fold ? singleCharacterMatchLengths(symbols, valueIndex) : [1]).some((length) =>
             !lengths.includes(length) && match(valueIndex + length, tokenIndex + 1))
           : lengths.some((length) => match(valueIndex + length, tokenIndex + 1));
       } else {
@@ -784,4 +785,9 @@ export function materializeTaskLeaseAcquire(identity: {goal_id: string; todo_id:
     acquired_at: at, updated_at: at,
     expires_at: new Date(now.valueOf() + command.ttl_seconds * 1000).toISOString().replace(/\.\d{3}Z$/u, "Z"),
     status: "active"};
+}
+
+/** Goal allow scopes use case-sensitive fnmatch, unlike folded lease overlap. */
+export function schedulingWriteScopeAllowed(required: string, allowed: readonly string[]): boolean {
+  return !required || allowed.some(pattern => pattern === required || fnmatchcase(required, pattern, false, false));
 }

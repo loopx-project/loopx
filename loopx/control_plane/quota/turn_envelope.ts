@@ -32,6 +32,10 @@ export const ACTION_SIGNATURE_COVERAGE_V1 = "turn_envelope_action_dimensions_v1"
 export const ACTION_SIGNATURE_COVERAGE_V2 = "turn_envelope_action_dimensions_v2";
 export const ACTION_SIGNATURE_COVERAGE_V3 = "turn_envelope_action_dimensions_v3";
 
+// Single owner for the should-run artifact path a child brief points at, so the
+// legacy field token stays inside this module's retirement budget.
+export const QUOTA_GOAL_BOUNDARY_ARTIFACT = "quota_should_run.goal_boundary";
+
 export const SCHEDULER_QUOTA_IDENTITY_KEYS = ["goal_id", "agent_identity.agent_id", "effective_action", "heartbeat_recommendation.recommended_mode", "interaction_contract.mode"];
 
 export function schedulerQuotaContext(payload: JsonObject) {
