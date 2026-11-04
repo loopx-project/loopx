@@ -96,3 +96,12 @@ def test_unavailable_or_misaligned_batch_result_is_never_empty_work(tmp_path, mo
     monkeypatch.setattr(effect_runtime, "effect_runtime_result", lambda *_args, **_kwargs: result)
     with pytest.raises(ValueError, match="unavailable"):
         core.quota_backlog_observer()(rows)
+
+
+@pytest.mark.parametrize("code", ["runtime_error", "server_restarted"])
+def test_worker_or_preparation_failure_notice_does_not_answer_the_original_question(tmp_path, code):
+    store, _, transport, rows = fixture_history(tmp_path, count=1)
+    store.update_turn(rows[0]["session_id"], rows[0]["turn_id"], error_code=code)
+    before = durable_state(store)
+    assert transport.health()["b" * 24] == {"pending_count": 1, "recovery_count": 0}
+    assert durable_state(store) == before  # Visibility grants no execution or replay.

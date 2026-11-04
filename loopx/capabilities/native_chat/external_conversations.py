@@ -499,6 +499,9 @@ class ChatExternalConversations:
     def _native_result_text(recovered: dict[str, Any]) -> str:
         response = recovered["native_observation"]["response"]
         text = "已恢复本次请求的原答复：\n\n" + response["message"]
+        if recovered["native_observation"].get("latest_input_verified") is False:
+            text = ("已补回本次请求在原生会话中生成的历史答复。本次只补回正文，没有重新执行业务。"
+                    "文中提到其他消息“已处理”的说法仍需逐条核实，未答的问题继续保留。\n\n" + response["message"])
         if any(response.get(key) for key in ("context_handoff", "proposals", "protected_action", "goal_draft")):
             text += "\n\n操作状态：本次仅恢复原答复，结构化操作或委派尚未提交；未重新执行原请求。"
         if (response.get("gate") or {}).get("summary") and response["gate"]["summary"] not in text:
@@ -521,8 +524,8 @@ class ChatExternalConversations:
         if len(anchors) > 1:
             return None
         # Retained facts can repair only a completed Turn's text. Failed-Turn
-        # recovery keeps its live/latest-input requirements; old capture does
-        # not authorize another invocation or change unknown-effect handling.
+        # recovery keeps its live native read and exact input requirements; old
+        # capture does not authorize another invocation or unknown-effect replay.
         retained = self.controller.store.native_result(session["session_id"], turn["turn_id"])
         if (turn.get("status") == "completed" and len(anchors) == 1 and retained
                 and retained.get("upstream_turn_id") == turn.get("upstream_turn_id")):

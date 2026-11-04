@@ -243,6 +243,20 @@ test("native terminal recovery adopts a result without Turn admission or lost fa
   assert.equal(plan.operation, "adopt_native_result");
   assert.equal(plan.recovery_eligible, true);
   assert.equal(plan.client_turn_id, undefined);
+  const anchor = {thread_id: "native", start_step_index: proof.start_step_index, input_sha256: proof.input_sha256};
+  const historicalResult = {...packet, context_recovery: {...packet.context_recovery, native_input: anchor,
+    native_observation: {...proof, latest_input_verified: false, end_step_index: 6}}};
+  assert.equal(planBoundConversationRequest(historicalResult).recovery_eligible, true);
+  assert.equal(planBoundConversationRequest(historicalResult).client_turn_id, undefined);
+  for (const change of [{native_input: null}, {source_verified: false}, {stop_observed: true},
+    {native_input: {...anchor, input_sha256: "9".repeat(64)}},
+    {native_input: {...anchor, start_step_index: 3}},
+    {native_input: {...anchor, thread_id: "other"}},
+    ...[null, 5, 8, 9].map(end_step_index => ({native_observation: {
+      ...historicalResult.context_recovery.native_observation, end_step_index}}))]) {
+    assert.equal(planBoundConversationRequest({...historicalResult,
+      context_recovery: {...historicalResult.context_recovery, ...change}}).recovery_eligible, false);
+  }
   for (const field of ["input_sha256", "answer_sha256"]) {
     for (const invalid of [null, false, 1, [], {}, "", "1".repeat(63), "1".repeat(65),
       "A".repeat(64), `sha256:${"1".repeat(64)}`]) {
@@ -1187,7 +1201,7 @@ test("quota backlog projection retires explicit lifecycle stops, not unavailable
 });
 
 for (const errorCode of ["response_timeout", "upstream_transport_failure",
-  "antigravity_rpc_error", "antigravity_transport_error", "antigravity_step_error"]) {
+  "antigravity_rpc_error", "antigravity_transport_error", "antigravity_step_error", "runtime_error", "server_restarted"]) {
 test(`delivered ${errorCode} notices retain the exact failed request, including other executors`, () => {
   const request = {request_ref: "f".repeat(24), command: null, status: "accepted",
     session_id: "original", turn_id: "timed-out", delivery_verified: true};
