@@ -73,7 +73,7 @@ def test_interrupted_native_inventory_is_exact_stable_and_contains_no_reasoning(
     assert not set(calls) - {"GetCascadeTrajectory", "GetCascadeTrajectorySteps"}
 
 
-@pytest.mark.parametrize("fault", [None, "stop", "source-changed", "no-capacity", "review-action", "review-gate", "queue-change", "already-codex", "post-enqueue-crash", "lost-ack", "new-question-during-answer", "restricted-review", "primary-quota-unreadable", "native-tail"])
+@pytest.mark.parametrize("fault", [None, "stop", "source-changed", "no-capacity", "review-action", "review-gate", "queue-change", "already-codex", "post-enqueue-crash", "lost-ack", "new-question-during-answer", "restricted-review", "primary-quota-unreadable", "native-tail", "authenticated-host"])
 def test_original_worker_answers_interrupted_steward_question_once(tmp_path, language_server, monkeypatch, fault):  # noqa: F811
     import loopx.chat_manager as manager_module
     import loopx.chat_runtime as runtime_module
@@ -165,11 +165,25 @@ def test_original_worker_answers_interrupted_steward_question_once(tmp_path, lan
         if fault == "primary-quota-unreadable":
             monkeypatch.setattr(native.AntigravityAdapter, "metadata_review_capacity",
                 lambda **_: pytest.fail("a verified API-primary alternate must not probe unrelated primary quota"))
+        api_calls = []
+        auth_before = None
+        if fault == "authenticated-host":
+            from loopx.capabilities.native_chat import codex_auth
+            runtime.codex_home.mkdir(parents=True, exist_ok=True)
+            auth = runtime.codex_home / "auth.json"
+            auth.write_text('{"auth_mode":"chatgpt","fixture":"original-host-login"}')
+            auth_before = auth.read_bytes()
+            def api_route(runtime_root, home, *, consumer, model):
+                api_calls.append((runtime_root, home, consumer, model))
+                return codex_auth.CodexApiTransport("http://127.0.0.1:1/steward/v1", "synthetic-loopback-token")
+            monkeypatch.setattr(codex_auth, "native_api_transport", api_route)
         fake = Path(runtime.codex_bin)
         source = fake.read_text().replace('result = {"thread": {"id": "durable-thread"}}', '''result = {"thread": {"id": "durable-thread"}, "model": "gpt-6.1-sol"}
         permissions = request.get("params", {}).get("permissions")
         if permissions:
             result.update(activePermissionProfile={"id": permissions}, runtimeWorkspaceRoots=[request["params"]["cwd"]])''')
+        if fault == "authenticated-host":
+            source = source.replace('"model": "gpt-6.1-sol"}', '"model": "gpt-6.1-sol", "modelProvider": request.get("params", {}).get("modelProvider")}')
         if fault in {"review-action", "review-gate"}:
             response = {"message": "The existing evidence supports only this limited answer.", "proposals": [],
                 "gate": {"kind": "host_tool_gate", "summary": "Missing original validation evidence", "next_action": "Keep original question owed"} if fault == "review-gate" else None}
@@ -255,6 +269,11 @@ def test_original_worker_answers_interrupted_steward_question_once(tmp_path, lan
             assert permissions["network"]["enabled"] is False
             assert permissions["filesystem"][":root"] == ("read" if host_reads else "deny")
             assert permissions["filesystem"][":workspace_roots"]["."] == "read"
+            if fault == "authenticated-host":
+                assert api_calls == [(runtime.coordination_runtime_root, runtime.codex_home, "steward", "gpt-6.1-sol")]
+                assert review_opens[0]["modelProvider"] == "loopx_account_api"
+                assert review_opens[0]["config"]["model_providers"]["loopx_account_api"]["base_url"] == "http://127.0.0.1:1/steward/v1"
+                assert (runtime.codex_home / "auth.json").read_bytes() == auth_before
             after = capture.read_bytes()
             transport.reconcile_request(path)
             assert capture.read_bytes() == after

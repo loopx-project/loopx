@@ -574,30 +574,31 @@ the existing Turn or its recovery files.
 
 ### Machine default
 
-**Settings → This machine → Capabilities → Differential context** exposes independent
-application rows for **Codex** (`mode`) and **Antigravity** (`antigravity_mode`), using the
-existing revision-locked preview, apply and readback operations in one switch action.
-Switching off uses the same transaction. A saved preference does not certify native
-host setup or actual delta use; the settings view states this explicitly. Its
-`context_delivery` machine namespace accepts
-`{"schema_version":"context_delivery_machine_defaults_v0","mode":"off","antigravity_mode":"on"}`
-(or `"off"`/`"on"` for either field; omitting `antigravity_mode` defaults it to `"on"` while
-preserving the saved `mode`). The CLI exposes that same owner through
-`machine-config preview/apply --namespace context_delivery --config-json FILE`;
-apply requires the exact preview revision. Removing the namespace restores the on defaults for supported native Codex sessions and trusted-owner Antigravity manager history reads; save `mode: "off"` or `antigravity_mode: "off"` to keep either application disabled independently.
-Sibling settings and Goal records are preserved. The Codex row (`mode`) remains scoped to Codex,
-while `antigravity_mode` controls progressive private-capture reads of `recent_delivery_history`
-in trusted-owner Antigravity manager turns (`off` or `LOOPX_CONTEXT_DELIVERY=off` keeps full inline input),
-with no additional global switch or host configuration authority. Read-only editors cannot
-save it. Each application row leaves the other host unchanged and does not initialize the current native session.
+**Settings → This machine → Capabilities → Progressive context** exposes progressive
+reads (`mode`) and cross-Turn reuse (`delta_delivery`). It uses the same
+revision-locked preview, apply, readback, disable and rollback owner. Read-only
+editors cannot save; sibling settings and Goal records remain unchanged. No choice
+installs hooks, trusts a host or proves actual delivery or model retention.
 
-An explicit `--context-delivery on|off` wins; otherwise each invocation reads the
-machine preference, preserving a saved off. An absent preference defaults on only
-for supported POSIX native Codex App/SSH and declared benchmark heartbeat callers.
-Ordinary CLI, other hosts and unsupported platforms keep full delivery. Explicit
-on, or an explicitly saved on for an unknown declaration, still rejects unsupported
-or conflicting modes. The worker environment's `LOOPX_CONTEXT_DELIVERY=off` also
-overrides inheritance; environment on alone supplies no host or execution proof.
+The existing `context_delivery_machine_defaults_v0` namespace accepts
+`{"schema_version":"context_delivery_machine_defaults_v0","mode":"on","delta_delivery":"auto"}`.
+`mode` and `antigravity_mode` keep their `on|off` values; omitted `delta_delivery`
+defaults to `auto` and also accepts `off`. Old saved rows remain readable.
+`machine-config preview/apply --namespace context_delivery --config-json FILE`
+requires the original preview revision. Removing the namespace restores progressive
+reads, supported-host Delta AUTO and Antigravity manager history reads. Save the
+relevant off setting to keep it disabled. Manager history is delivered automatically. A trusted-owner native manager can read nonempty delivery history from a private snapshot using its permitted shell. Current facts stay inline. Existing explicit legacy `antigravity_mode=off` preferences remain effective.
+
+The CLI facade `--context-delivery auto` (also the omitted default) presents
+current requirements before expandable material across hosts. Stateless CLI,
+other declared hosts and recovery do not need native setup. A plain read-only
+`should-run` stays read-only: capture files do not create a Turn, receipt, session,
+journal or execution lease. `--delta-delivery off` independently disables Delta
+while retaining progressive reads. Delta AUTO only uses supported declared
+continuity hosts. Explicit `--context-delivery off`, a saved off or an inherited
+`LOOPX_CONTEXT_DELIVERY=off` keeps the original complete inline path. Environment
+on alone supplies no host, retention or execution proof. Private capture failure
+retains the complete current input rather than using an older capture.
 New benchmark heartbeat trials default to `context_delivery=on`; pass `off` to
 disable. Other benchmark modes remain off. Workers pin the resolved trial choice
 in preflight and solver subprocesses; existing saved/frozen trials must not be
@@ -619,7 +620,8 @@ must explicitly request raw output on internal `quota should-run` calls using
 and retain the exact registry, Goal, Agent and Turn. Enabled native output is a
 presentation/capture envelope, not a raw authority decision; a missing
 `should_run` in that envelope is not a denial. MCP settlement and Claude status
-readers use the existing `LOOPX_CONTEXT_DELIVERY=off` subprocess override, which
+readers, external scheduler workers and scheduler-hint readers use the existing
+`LOOPX_CONTEXT_DELIVERY=off` subprocess override, which
 also preserves compatibility with older CLI parsers. This does not change the
 machine preference or disable differential context for the interactive Agent.
 
@@ -627,16 +629,15 @@ machine preference or disable differential context for the interactive Agent.
 调用中通过 `--context-delivery off` 或子进程 `LOOPX_CONTEXT_DELIVERY=off`
 显式请求原始输出，并保留原 registry、Goal、Agent 和 Turn。
 开启差分后的原生输出是展示／快照封装；封装没有 `should_run` 不表示准入拒绝。
-MCP 结算和 Claude 状态读取在子进程内设置已有的 `LOOPX_CONTEXT_DELIVERY=off`，
+MCP 结算、Claude 状态读取、外部调度 worker 和调度提示读取在子进程内设置已有的 `LOOPX_CONTEXT_DELIVERY=off`，
 兼容旧版 CLI 解析器；不修改机器开关，也不关闭交互
 Agent 的差分上下文。
 
-On accepts the declared native scenarios: Codex App heartbeat (`--codex-app` or its equivalent complete scheduler
+Legacy explicit on with Delta AUTO accepts the declared native scenarios: Codex App heartbeat (`--codex-app` or its equivalent complete scheduler
 declaration), Codex App SSH Goal (`--runtime-profile codex_app_ssh_goal`), and the existing Codex benchmark heartbeat worker (`generic_cli`
 plus its explicit heartbeat worker environment). Missing, contradictory or
-unsupported Codex declarations return an error before admission. This machine
-preference is scoped to Codex: other explicitly resolved hosts keep full delivery.
-An explicit `--context-delivery on` on those hosts still errors. Declarations select
+unsupported Codex declarations still return an error before admission. Other hosts
+use the auto facade for stateless progressive reads. Declarations select
 an adapter; they do not authenticate a host or prove retained input.
 Native continuity currently requires POSIX; other platforms reject on explicitly.
 
@@ -662,6 +663,23 @@ The reference stays below 7900 serialized bytes (or the explicit smaller output
 ceiling); if metadata cannot fit, recovery retains the current capture. Reader
 pages remain independently bounded. A complete raw tool log is not proof that
 the Host retained the same bytes in model history.
+
+Each progressive `context_details.source_path` names this Turn's complete immutable
+`projection.json`, including when a warm wire omits unchanged material. The current
+`unread_context_index` preserves unobserved or changed supporting pointers and
+conservative partially read source blocks. It is navigation, not a full-read gate;
+select the facts required for the current decision from that current source.
+
+The private native journal records `consumed_pointers` and `confirmed_read_sections`
+only after byte-verified, contiguous complete delivery of a selected view, or the
+complete native input's actually included sections. Digests remain in the journal;
+they are not repeated in model-facing index rows. A list, partial page, EOF without
+earlier coverage, failed/damaged output, subagent hook or unrelated capture cannot
+acknowledge a section. Selected reads never establish a full retained-input baseline.
+Changed content remains unread; compaction or a different Goal/Agent/scope retires
+the old epoch's observations. Stateless hosts make no such observation claim and
+keep the complete current source available. These observations do not establish
+model comprehension, later retention, execution authority or billed-token savings.
 
 After the shared TypeScript codec accepts a delta, the native output adapter
 compares its final reference plus a complete explicit-file read against the
@@ -938,28 +956,42 @@ quota 能力候选沿用同一精确 codec 复用已登记 Todo 的正文、标�
 
 ### 机器级默认
 
-在**设置 → 本机设置 → 能力中心 → 差分上下文**分别提供 **Codex**（`mode`）与 **Antigravity**
-（`antigravity_mode`）两行独立开关，沿用现有精确修订预览、应用和读回，由一次开关操作完成；关闭也使用同一事务。
-设置页明确区分已保存偏好与尚未验证的原生初始化、实际差分使用。机器 namespace 为 `context_delivery`，配置为
-`{"schema_version":"context_delivery_machine_defaults_v0","mode":"off","antigravity_mode":"on"}`
-（两个字段各自支持 `"off"` 或 `"on"`；省略 `antigravity_mode` 时默认 `"on"` 并保留所选 `mode`）。CLI 的 `machine-config preview/apply --namespace context_delivery
---config-json FILE` 使用同一 owner；应用须带原预览修订。移除此 namespace 恢复受支持 Codex 原生会话与强能力 Antigravity 管家历史渐进读取的默认开启；保持关闭须分别保存 `mode: "off"` 或 `antigravity_mode: "off"`，
-不改写其他配置和 Goal 记录。`mode` 仍表示 Codex 偏好，`antigravity_mode` 控制强能力 Antigravity 管家是否将 `recent_delivery_history` 移至私有快照渐进读取（`off` 或 `LOOPX_CONTEXT_DELIVERY=off` 保持完整内联），
-不新增总开关或宿主配置 authority。只读编辑器不能保存；两行应用开关互不影响，也不会初始化当前原生会话。
+在**设置 → 本机设置 → 能力中心 → 渐进上下文**分别设置渐进读取（`mode`）、独立的跨轮差分
+（`delta_delivery`），沿用现有精确修订的预览、
+应用、读回、关闭和回滚 owner。只读编辑器不能保存；不改写其他配置和 Goal，不安装／信任 hook，
+保存偏好不证明原生初始化、实际投递或模型保留。
 
-显式 `--context-delivery on|off` 优先；省略时每次读取机器设置，已保存的关闭继续生效。
-未配置时，仅在受支持的 POSIX Codex App／SSH 和已声明的 benchmark 心跳入口默认开启；
-普通 CLI、其他宿主和不支持的平台仍完整交付。显式开启或已保存开启遇到未知／冲突声明
-仍拒绝。worker 环境的 `LOOPX_CONTEXT_DELIVERY=off` 也覆盖继承，环境 on 本身不证明宿主或执行权限。
+既有 `context_delivery_machine_defaults_v0` namespace 接受
+`{"schema_version":"context_delivery_machine_defaults_v0","mode":"on","delta_delivery":"auto"}`。
+`mode` 与 `antigravity_mode` 保留 `on|off`；可选的 `delta_delivery` 默认为 `auto`，也可为 `off`；旧配置继续可读。
+CLI 的 `machine-config preview/apply --namespace context_delivery --config-json FILE` 仍需原预览修订。
+移除 namespace 恢复渐进读取、支持宿主的 Delta AUTO 与 Antigravity 管家历史读取；要保持关闭应保存对应 off。
+管家自动选择交付历史的读取方式。有权限读取私有快照的原生管家可按需读取已有历史，当前目标与待办仍直接可见。既有显式 `antigravity_mode=off` 偏好继续生效。
+
+CLI 的 `--context-delivery auto`（省略时也使用此门面）跨宿主先呈现当前要求，再按需展开材料。
+普通 CLI、其他已声明宿主及恢复读取不要求原生初始化；只读 `should-run` 仍不创建 Turn、回执、会话、journal 或执行 lease。
+`--delta-delivery off` 可独立关闭跨轮差分而保留渐进读取；Delta AUTO 只使用支持连续性的已声明宿主。
+显式 `--context-delivery off`、已保存的关闭及继承的 `LOOPX_CONTEXT_DELIVERY=off` 保留原完整内联路径。
+环境 on 不证明宿主、保留或执行权限。私有捕获失败时保留本次完整输入，不借用旧捕获。
 新 benchmark heartbeat trial 默认 `context_delivery=on`，指定 `off` 可关闭；其他跑法仍关闭。
 worker 把本次运行已解析的选择固定传给预检和 solver 子进程，不改写调用方原设置，
 不修改或复用旧的在途／冻结 trial 来宣称新默认合格。
-开启接受以下原生声明：Codex App 心跳（`--codex-app` 或等价完整调度声明）、
+兼容的显式 on 与 Delta AUTO 接受以下原生声明：Codex App 心跳（`--codex-app` 或等价完整调度声明）、
 Codex App SSH Goal（`--runtime-profile codex_app_ssh_goal`），以及现有 Codex benchmark 心跳 worker（`generic_cli` 与其显式心跳环境）。缺失、冲突、
-不支持的 Codex 声明在准入前报错。机器偏好仅作用于 Codex；其他已明确解析的宿主
-继续完整投递，对这些宿主显式指定 `--context-delivery on` 仍报错。声明只选择 adapter，
+不支持的 Codex 声明仍在准入前报错；其他宿主通过 auto 门面使用无状态渐进读取。声明只选择 adapter，
 不证明宿主身份或上下文保留。
 当前原生连续性依赖 POSIX；其他平台显式拒绝开启。
+
+每轮 `context_details.source_path` 都指向当轮完整且不可变的 `projection.json`，暖差分也可通过
+该文件选读未变化但此前未读的内容。`unread_context_index` 保留尚未观测到完整读取或已经变化的
+支持材料指针，以及保守标记的部分未读来源块；它是导航，不是要求读完整包的 gate。
+仅在当前决策依赖相关事实前选读必要部分。
+
+私有原生 journal 的 `consumed_pointers` 与 `confirmed_read_sections` 只记录经过字节核对、
+连续完整交付的选读视图，或完整原生输入中实际包含的部分；摘要留在 journal，不反复展示给模型。
+目录、部分页、仅 EOF、失败／篡改输出、子 Agent hook、无关捕获都不构成读取确认；选读不建立全量
+模型保留基线。内容变化继续标为未读；压缩、Goal／Agent／scope 变化使旧 epoch 观测失效。
+无状态宿主不声称观测确认，完整当前来源始终可达；这些记录不证明理解、后续保留、执行权限或计费下降。
 
 受支持的 Codex 声明尚未完成原生连续性初始化时（包括尚未提供会话 id），
 guard 仍通过文件 reader 交付本次完整捕获，

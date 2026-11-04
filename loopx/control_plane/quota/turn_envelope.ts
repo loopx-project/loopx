@@ -1,5 +1,5 @@
 import {capturedContextSelection} from "./context_selection.ts";
-import {initialContextReadPointers, prepareProgressiveContextDelivery} from "./progressive_context.ts";
+import {contextReadSectionDigests, initialContextReadPointers, prepareProgressiveContext, prepareProgressiveContextDelivery} from "./progressive_context.ts";
 import {contextProjectionChanges, projectQuotaDiagnostics} from "./diagnostic_projection.ts";
 import type { LoopXTurnRouteValue } from "../turn_driver/turn_contract_generated.ts";
 import { EffectiveAction, type QuotaEffectiveActionValue } from "./effective_action.generated.ts";
@@ -1492,6 +1492,12 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     return contextProjectionChanges(source, payload);
   }
   if (operation === "build") return buildTurnEnvelope(request);
+  if (operation === "context_read_sections") {
+    const selected = capturedContextSelection({...request, list_fields: false});
+    return {sections: contextReadSectionDigests(request,
+      (selected.selections as {path: (string | number)[]}[]).map(row => row.path))};
+  }
+  if (operation === "progressive_context_delivery") return prepareProgressiveContext(request);
   if (operation === "context_delivery") return request.native_projection === undefined
     ? prepareContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS)
     : prepareProgressiveContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS);

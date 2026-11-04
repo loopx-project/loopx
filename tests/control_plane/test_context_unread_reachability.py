@@ -9,6 +9,7 @@ import pytest
 
 from loopx.cli_commands.quota_capture import read_context_capture
 from loopx.control_plane.turn_driver import codex_context as context
+from tests.control_plane.codex_checkpoint_fixture import selected_context_values
 from test_codex_context_lifecycle import setup, project
 from test_progressive_native_context import payload, outcome
 from test_quota_settlement_cli import _run_cli
@@ -44,8 +45,9 @@ def test_unconfirmed_material_reaches_next_turn_work_from_current_capture(
     argv = shlex.split(navigation["first_read_command"])
     code, initial = _run_cli(registry, runtime, *argv[argv.index("quota"):], cwd=tmp_path)
     assert code == 0 and initial["eof"], initial
-    shown = {row["pointer"]: row["value"] for row in json.loads(initial["content"])["selections"]}
-    assert shown["/context_details/unread_context_index"] == first_index
+    shown = selected_context_values(initial["content"])
+    for field in ("source", "coverage_confirmed", "read_before_dependent_work"):
+        assert shown[f"/context_details/unread_context_index/{field}"] == first_index[field]
 
     def read_detail(source, pointer):
         words = ["quota", "context-read", "--capture-file", source["path"],
@@ -62,6 +64,7 @@ def test_unconfirmed_material_reaches_next_turn_work_from_current_capture(
             argv = shlex.split(page["next_command"])
             words = argv[argv.index("quota"):]
 
+    assert read_detail(first["recovery"], "/context_details/unread_context_index") == first_index
     if previous_detail_read:
         previous_note = next(pointer for pointer in first_index["pointers"]
             if pointer.endswith("/outcomes/0/requirements/0/agent_review/note"))

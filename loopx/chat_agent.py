@@ -821,7 +821,7 @@ class CodexChatAgentSession:
         account_base_config = host_config
         from .capabilities.native_chat.codex_auth import prepare_api_transport, authenticate_isolated
         api_transport = prepare_api_transport(account_runtime_root, base_home,
-            isolated_home=runtime_home if permissions_profile else None,
+            isolated_home=runtime_home if runtime_home != base_home else None,
             eligible=not execution_mode and not provider_override and not (host_config or {}).get("model_provider"),
             consumer=account_consumer, model=model)
         if api_transport is not None:
