@@ -500,3 +500,32 @@ def context_selection_bytes(payload: dict[str, Any], selections: list[dict[str, 
     view_options = {"list_depth": list_depth} if list_depth is not None and list_depth != 1 else {}
     return json.dumps({"schema_version": "context_capture_index_v1" if list_fields else "context_capture_selection_v1",
         "selections": views, **view_options}, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
+
+
+def context_selection_view(payload: dict[str, Any], *, select: list[str] | None,
+                           initial_read: bool, list_fields: bool, list_depth: int | None,
+                           expected_sha256: str | None, preserve_selection_order: bool = False,
+                           ) -> tuple[dict[str, Any], bytes | None, str | None]:
+    """Replay the TS selector and verify the original digest-pinned view."""
+    from ..quota.turn_envelope import _turn_envelope_result
+
+    context = payload if initial_read or list_fields else context_selection_transport(payload)
+    selection = {"initial_read": True} if initial_read else {"select": select}
+    depth = {"list_depth": list_depth} if list_depth is not None else {}
+    order = {"preserve_selection_order": True} if preserve_selection_order else {}
+    plan = _turn_envelope_result("context_select", context=context, list_fields=list_fields,
+        recover_selection_errors=not initial_read, **selection, **depth, **order)
+    if plan.get("rejected_selection"):
+        return plan, None, None
+    raw = context_selection_bytes(payload, plan["selections"], list_fields=list_fields, list_depth=list_depth)
+    digest = hashlib.sha256(raw).hexdigest()
+    if preserve_selection_order and expected_sha256 != digest:
+        # Historical explicit references may pin canonical output despite
+        # retaining caller order. Only the same source and addresses can replay.
+        plan = _turn_envelope_result("context_select", context=context,
+            list_fields=list_fields, **selection, **depth)
+        raw = context_selection_bytes(payload, plan["selections"], list_fields=list_fields, list_depth=list_depth)
+        digest = hashlib.sha256(raw).hexdigest()
+    if expected_sha256 is not None and expected_sha256 != digest:
+        raise ValueError("selected view digest changed; restore the original selection and reader")
+    return plan, raw, digest

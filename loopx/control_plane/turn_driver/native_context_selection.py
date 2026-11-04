@@ -6,12 +6,11 @@ Successful observations are section reads, never full model-retention receipts.
 """
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 from typing import Any
 
 from .decision_capture import (read_context_capture_file, read_context_read_reference,
-    context_selection_transport, context_selection_bytes)
+    context_selection_view)
 
 
 def verified_context_selection(state: dict[str, Any], page: dict[str, Any]) -> dict[str, Any] | None:
@@ -45,7 +44,9 @@ def verified_context_selection(state: dict[str, Any], page: dict[str, Any]) -> d
     physical = physical.parent.resolve(strict=True) / physical.name
     trusted = next((entry for entry in references if entry.get("sha256") == source_digest
         and Path(entry["path"]).parent.resolve(strict=True) / Path(entry["path"]).name == physical), None)
-    if trusted is None or not isinstance(pointers, list) or not pointers or not all(isinstance(p, str) for p in pointers):
+    initial_read = selected is not None and selected.get("initial_read") is True
+    if trusted is None or (initial_read and pointers is not None) or (not initial_read and (
+            not isinstance(pointers, list) or not pointers or not all(isinstance(p, str) for p in pointers))):
         return None
     offset, total = page.get("offset"), page.get("total_bytes")
     content = page.get("content")
@@ -55,12 +56,17 @@ def verified_context_selection(state: dict[str, Any], page: dict[str, Any]) -> d
     if not actual or offset + len(actual) > total:
         return None
     _, raw, source = read_context_capture_file(str(physical), source_digest, private=True)
+    actual_digest = source_digest
     if selected is not None or "selected_pointers" in page:
-        selection = _turn_envelope_result("context_select", context=context_selection_transport(source),
-            select=pointers, list_fields=False)
-        raw = context_selection_bytes(source, selection["selections"], list_fields=False,
-            list_depth=selected.get("list_depth") if selected else None)
-    if hashlib.sha256(raw).hexdigest() != view_digest or len(raw) != total or raw[offset:offset + len(actual)] != actual:
+        selection, selected_raw, actual_digest = context_selection_view(source, select=pointers,
+            initial_read=initial_read, list_fields=False,
+            list_depth=selected.get("list_depth") if selected else None,
+            expected_sha256=view_digest, preserve_selection_order=selected is not None and not initial_read)
+        if selected_raw is None:
+            return None
+        raw = selected_raw
+        pointers = [item["pointer"] for item in selection["selections"]]
+    if actual_digest != view_digest or len(raw) != total or raw[offset:offset + len(actual)] != actual:
         return None
     end = offset + len(actual)
     if ((page.get("eof") is True and (end != total or page.get("next_offset") is not None))
