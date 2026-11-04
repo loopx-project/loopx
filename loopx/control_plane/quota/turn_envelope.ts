@@ -1495,7 +1495,7 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
   if (operation === "context_read_sections") {
     const selected = capturedContextSelection({...request, list_fields: false});
     return {sections: contextReadSectionDigests(request,
-      (selected.selections as JsonObject[]).map(row => String(row.pointer)))};
+      (selected.selections as {path: (string | number)[]}[]).map(row => row.path))};
   }
   if (operation === "progressive_context_delivery") return prepareProgressiveContext(request);
   if (operation === "context_delivery") return request.native_projection === undefined

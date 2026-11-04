@@ -18,19 +18,17 @@ const known = (row: JsonObject, fields: string[]): boolean => Object.keys(row).e
 
 /** Digests stay in the private observed-read journal, never repeated to the model.
  * The existing exact-source identity preserves non-JS numeric spellings. */
-export function contextReadSectionDigests(request: JsonObject, pointers: string[]): JsonObject {
+export function contextReadSectionDigests(request: JsonObject, paths: Path[]): JsonObject {
   const context = requireJsonObject(request.context, "read section source");
   const identity = contextSourceIdentity(request, request.source_number_tokens);
-  return Object.fromEntries(pointers.map(address => {
-    const path = address === "" ? [] : address.slice(1).split("/").map(key => key.replaceAll("~1", "/").replaceAll("~0", "~"));
-    return [address, createHash("sha256").update(identity(at(context, path), ["context", ...path])).digest("hex")];
-  }));
+  return Object.fromEntries(paths.map(path => [pointer(path),
+    createHash("sha256").update(identity(at(context, path), ["context", ...path])).digest("hex")]));
 }
 
 function inlineReadSections(request: JsonObject, required: JsonObject): JsonObject {
-  const original = requireJsonObject(request.context, "inline source"), paths: string[] = [];
+  const original = requireJsonObject(request.context, "inline source"), paths: Path[] = [];
   const visit = (source: unknown, shown: unknown, path: Path) => {
-    if (source === shown) { paths.push(pointer(path)); return; }
+    if (source === shown) { paths.push(path); return; }
     if (!source || !shown || typeof source !== "object" || typeof shown !== "object") return;
     for (const key of Object.keys(source)) if (Object.hasOwn(shown, key)) visit(
       (source as JsonObject)[key], (shown as JsonObject)[key], [...path, Array.isArray(source) ? Number(key) : key]);
