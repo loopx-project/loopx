@@ -266,6 +266,91 @@ def flow(tmp_path):
     return tmp_path, registry, store, create
 
 
+@pytest.mark.parametrize("external", [False, True], ids=["owner", "original-audience"])
+def test_handoff_reader_retains_partial_scope_after_delivery_and_later_results(flow, external):
+    from loopx.capabilities.manager_context.inspection import ManagerInspection, TOOL_NAME
+
+    root, registry, store, create = flow
+    session, _, receipt = create(external=external)
+    rid = receipt["request_id"]
+    acknowledge(root, "research", "worker", rid, "adopt", "Inspect original evidence")
+    tool = ManagerInspection(context={"goals": [{"goal_id": "research"}]},
+        registry_path=registry, runtime_root=root, owner_scope=not external,
+        channel_id=session["channel_id"], scope_valid=lambda: True, record=lambda _: None)
+
+    def read():
+        before = {str(p): p.read_bytes() for p in _root(root).rglob("*.json")}
+        page = tool.read(TOOL_NAME, {"view": "handoffs", "request_id": rid})
+        assert page["ok"] and not page["unknown"] and len(page["rows"]) == 1
+        assert {str(p): p.read_bytes() for p in _root(root).rglob("*.json")} == before
+        return page["rows"][0]
+
+    remaining = {"summary": "Measure the original revision sequence", "resume_when": "The original evidence is available"}
+    sender = lambda *_: {"ok": True, "reply_verified": True}
+    report(root, "research", "worker", rid, "conclusion", "An initial analysis is available.", remaining_work=remaining)
+    assert read()["remaining_work"] == remaining
+    assert drain(root, registry, store, sender) == 1
+    partial = read()
+    assert partial["return_replies"][0]["status"] == "delivered"
+    assert partial["inbox_state"] == "awaiting_conclusion"
+    assert partial["agenda"]["remaining_work"] == remaining
+    assert partial["agenda"]["step"] == "await_peer_result"
+
+    report(root, "research", "worker", rid, "conclusion", "Original evidence measured.", update_id="measured")
+    queued = read()
+    assert "remaining_work" not in queued
+    assert queued["agenda"]["step"] == "await_return_delivery"
+    assert drain(root, registry, store, sender) == 1
+    complete = read()
+    assert complete["inbox_state"] == "settled" and complete["agenda"] is None
+
+    # An old delivered conclusion must not erase a later explicit remainder.
+    report(root, "research", "worker", rid, "conclusion", "A qualification gap remains.",
+           update_id="qualification", remaining_work=remaining)
+    assert drain(root, registry, store, sender) == 1
+    restarted = ManagerInspection(context=tool.context, registry_path=registry, runtime_root=root,
+        owner_scope=not external, channel_id=session["channel_id"], scope_valid=lambda: True, record=lambda _: None)
+    row = restarted.read(TOOL_NAME, {"view": "handoffs", "request_id": rid})["rows"][0]
+    assert row["remaining_work"] == remaining and row["agenda"]["receipt_state"] == "awaiting_conclusion"
+    scope_reads = []
+
+    def revoked_after_read():
+        scope_reads.append(True)
+        return len(scope_reads) == 1
+
+    restarted.scope_valid = revoked_after_read
+    assert restarted.read(TOOL_NAME, {"view": "handoffs", "request_id": rid}) == {
+        "ok": False, "error": "authorization_changed"}
+
+
+def test_handoff_reader_keeps_conflicting_result_scope_unknown_and_audience_bound(flow):
+    from loopx.capabilities.manager_context.inspection import ManagerInspection, TOOL_NAME
+
+    root, registry, store, create = flow
+    session, _, receipt = create(external=True)
+    rid = receipt["request_id"]
+    acknowledge(root, "research", "worker", rid, "adopt", "Checked")
+    report(root, "research", "worker", rid, "conclusion", "Original partial result.",
+           remaining_work={"summary": "Validate", "resume_when": "Evidence available"})
+    assert drain(root, registry, store, lambda *_: {"ok": True, "reply_verified": True}) == 1
+    path = _root(root) / "replies" / rid / "conclusion.json"
+    saved = json.loads(path.read_text())
+    saved["remaining_work"] = {"summary": "Missing continuation condition"}
+    path.write_text(json.dumps(saved))
+    tool = ManagerInspection(context={"goals": [{"goal_id": "research"}]},
+        registry_path=registry, runtime_root=root, owner_scope=False,
+        channel_id=session["channel_id"], scope_valid=lambda: True, record=lambda _: None)
+    page = tool.read(TOOL_NAME, {"view": "handoffs", "request_id": rid})
+    assert page["unknown"]
+    row = page["rows"][0]
+    assert row["inbox_state"] == "receipt_unavailable"
+    assert row["agenda"]["step"] == "recover_evidence"
+    assert "conclusion_unreadable_or_conflicting" in row["warnings"]
+    tool.channel_id = "manager.external.another-owner"
+    other = tool.read(TOOL_NAME, {"view": "handoffs", "request_id": rid})
+    assert other["ok"] and other["rows"] == []
+
+
 @pytest.mark.parametrize("project", [False, True], ids=["steward", "project"])
 def test_single_request_returns_to_original_transcript_without_second_model_turn(flow, project):
     root, registry, store, create = flow
