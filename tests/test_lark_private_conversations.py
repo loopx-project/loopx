@@ -59,8 +59,9 @@ def test_original_worker_continues_proven_unstarted_argon_quota_on_codex(tmp_pat
         fake = Path(runtime.codex_bin)
         fake.write_text(fake.read_text().replace('result = {"thread": {"id": "durable-thread"}}',
             'result = {"thread": {"id": "durable-thread"}, "model": "gpt-6.1-sol"}'))
-        route = lambda *_: None if fault == "no-capacity" else {"allocation": allocation,
-            "blocked_primary": None, "observed_at": time.time()}
+        def route(*_):
+            return None if fault == "no-capacity" else {"allocation": allocation,
+                "blocked_primary": None, "observed_at": time.time()}
         monkeypatch.setattr(manager_module, "manager_session_quota_route", route)
         monkeypatch.setattr(runtime_module, "manager_session_quota_route", route)
         class Ahead(datetime):
