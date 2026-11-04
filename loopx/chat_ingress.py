@@ -151,10 +151,15 @@ class ChatIngressStore:
             return turn
         turn = {**turn, "_queue_steering": plan["reservation"]}
         if plan["action"] == "complete":
-            turn.update(status="completed", completed_at=turn.get("completed_at") or utc_now(), response="")
+            # Keep the existing SSE response envelope for older readers. The
+            # adoption marker distinguishes this receipt from a model answer;
+            # no assistant transcript row or invented answer is published.
+            response = {"schema_version": "loopx_chat_agent_response_v0", "message": "",
+                        "proposals": [], "protected_action": None, "gate": None}
+            turn.update(status="completed", completed_at=turn.get("completed_at") or utc_now(), response=response)
         _atomic_write_json(self._turn_path(session_id, turn["turn_id"]), turn, preserve_mode=True)
         if plan["action"] == "complete":
-            payload = {"steered_into_turn_id": plan["reservation"]["target_turn_id"]}
+            payload = {"steered_into_turn_id": plan["reservation"]["target_turn_id"], "response": turn["response"]}
             if not any(e.get("kind") == "turn.completed" and e.get("payload") == payload
                        for e in self.events_after(session_id, turn["turn_id"], None)):
                 self.append_event(session_id, turn["turn_id"], kind="turn.completed", payload=payload)

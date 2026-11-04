@@ -62,7 +62,10 @@ def test_queued_steering_uses_original_input_once_and_replays_after_target_finis
     steers = [r for r in rows if r["method"] == "turn/steer"]
     assert len(steers) == 1 and steers[0]["params"]["input"][0]["text"] == original["message"]
     assert [r["text"] for r in store.messages(sid) if r["role"] == "user"] == ["wait for steer", original["message"]]
-    assert len([e for e in store.events_after(sid, queued, None) if e["kind"] == "turn.completed"]) == 1
+    completions = [e for e in store.events_after(sid, queued, None) if e["kind"] == "turn.completed"]
+    assert len(completions) == 1
+    assert completions[0]["payload"]["steered_into_turn_id"] == active
+    assert completions[0]["payload"]["response"]["message"] == ""
 
 
 def test_unknown_native_delivery_stays_reserved_across_reload_retry_and_queue_claim(ordinary, monkeypatch):  # noqa: F811

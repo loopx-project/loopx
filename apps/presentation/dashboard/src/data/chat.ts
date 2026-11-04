@@ -1633,8 +1633,8 @@ async function receiveChatTurnStreaming(
         if (event.kind === "turn.completed") {
           if (typeof event.payload.steered_into_turn_id === "string" && event.payload.steered_into_turn_id) {
             steeredIntoTurnId = event.payload.steered_into_turn_id;
-            finalResponse = {schema_version: "loopx_chat_agent_response_v0", message: "", proposals: [], gate: null};
-          } else finalResponse = event.payload.response;
+          }
+          finalResponse = event.payload.response;
         }
         if (event.kind === "turn.failed") {
           outcome.failure = event.payload;
