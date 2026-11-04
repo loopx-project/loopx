@@ -735,7 +735,10 @@ function prepareVisionRefresh(request: VisionRefreshPrepareRequest): JsonObject 
   for (const [field, limit] of Object.entries(GOAL_VISION_FIELD_LIMITS)) {
     let text = packetText(source, field, limit, diagnostics);
     if (text === null) continue;
-    if (field === "advancement_policy") text = normalizeAdvancementPolicy(text);
+    // An over-budget enum already has its original field-level rejection.
+    // Decoding that same invalid value must not replace it with invalid_request;
+    // unrelated structural/privacy checks below still run normally.
+    if (field === "advancement_policy" && text.length <= limit) text = normalizeAdvancementPolicy(text);
     visionPatch[field] = text;
     fieldUsage[field] = text.length;
   }
