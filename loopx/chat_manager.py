@@ -967,8 +967,9 @@ def manager_session_quota_route(controller: Any, session: Mapping[str, Any]) -> 
         accounts = NativeAccounts(controller.coordination_runtime_root)
         route_inputs = dict(codex_home=controller.codex_home, primary="antigravity",
             pool=_manager_eligible_endpoints(defaults), current=str(session["agent_id"]),
-            blocked_primary=session.get("manager_quota_block"),
-            model=manager_model_resolution(codex_environment, endpoint="codex", machine_defaults=defaults)[0])
+            blocked_primary=session.get("manager_quota_block"))
+        if callable(getattr(accounts, "model_transport", None)):
+            route_inputs["model"] = manager_model_resolution(codex_environment, endpoint="codex", machine_defaults=defaults)[0]
         capacity = None
         # Explicit API primary does not depend on an unrelated subscription
         # transport being up. The same owner holds when that role is absent.

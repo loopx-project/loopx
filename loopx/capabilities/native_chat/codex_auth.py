@@ -152,7 +152,8 @@ def native_api_transport(runtime_root: Path, base_home: Path, *, consumer: str,
     except ImportError:
         return None  # Optional provider absence preserves native authentication.
     try:
-        endpoint = NativeAccounts(runtime_root).model_transport(codex_home=base_home, consumer=consumer, model=model)
+        prepare = getattr(NativeAccounts(runtime_root), 'model_transport', None)
+        endpoint = prepare(codex_home=base_home, consumer=consumer, model=model) if callable(prepare) else None
         return CodexApiTransport(endpoint['base_url'], endpoint['api_key']) if endpoint else None
     except Exception:
         raise CodexHostAuthUnavailable() from None
@@ -191,7 +192,9 @@ def authenticate_isolated(session, home: Path, isolated: Path, binary: str, *, a
 def conversation_account_epoch(runtime_root: Path, home: Path, **consumer) -> tuple[str, str] | None:
     try:
         from loopx_codex_provider_routing.native import NativeAccounts
-        return NativeAccounts(runtime_root).conversation_epoch(codex_home=home, **consumer)
+        owner = NativeAccounts(runtime_root)
+        return owner.conversation_epoch(codex_home=home,
+            **(consumer if callable(getattr(owner, 'model_transport', None)) else {}))
     except ImportError:
         return None
     except Exception as exc:

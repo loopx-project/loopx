@@ -69,6 +69,24 @@ def test_disabled_account_automation_starts_no_policy_or_native_process(account_
     assert calls == [] and not owner.path.exists()
 
 
+def test_older_optional_provider_preserves_its_native_auth_and_epoch(tmp_path, monkeypatch):
+    import sys
+    from types import ModuleType
+    from loopx.capabilities.native_chat import codex_auth
+    module = ModuleType('loopx_codex_provider_routing.native')
+    calls = []
+    class LegacyOwner:
+        def __init__(self, root): assert root == tmp_path
+        def conversation_epoch(self, *, codex_home):
+            calls.append(codex_home)
+            return ('legacy-revision', 'subscription-a')
+    module.NativeAccounts = LegacyOwner
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    assert codex_auth.native_api_transport(tmp_path, tmp_path, consumer='steward') is None
+    assert codex_auth.conversation_account_epoch(tmp_path, tmp_path, consumer='steward', model='fixture') == ('legacy-revision', 'subscription-a')
+    assert calls == [tmp_path]
+
+
 def test_steward_and_worker_tokens_cannot_cross_billing_routes(account_owner):
     owner, native, relay, _ = account_owner
     owner.configure(expected_revision=0, enabled=False, slots=[], steward_api_role='primary')
