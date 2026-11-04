@@ -2364,6 +2364,8 @@ function PersonalGoalHome({
     let submittedTurnId: string | undefined;
     let submittedSessionId: string | undefined;
     let streamController: AbortController | undefined;
+    const previousStreamController = streamControllers.current.get(targetContextId);
+    let submittedAsQueue = Boolean(route?.queue);
     let queueAccepted = false;
     let streamEnded = false;
     let handedOff = false;
@@ -2431,14 +2433,24 @@ function PersonalGoalHome({
             sourceTurnId: turnId, sourceSessionId: sessionId,
             ...(phase === "turn.accepted" ? { activity: [locale === "zh-CN" ? "请求已接收，等待执行器输出" : "Request accepted · waiting for executor output"] } : {}),
           });
-          if (route?.queue) {
-            if (phase === "turn.queued") {
-              updateConversationMessage(targetContextId, streamingMessageId, {
-                pending: false, preparing: false, endedAt: undefined,
-                text: "", queued: true, activity: [],
-              });
-              return;
+          if (phase === "turn.queued") {
+            submittedAsQueue = true;
+            updateConversationMessage(targetContextId, streamingMessageId, {
+              pending: false, preparing: false, endedAt: undefined,
+              text: "", queued: true, activity: [],
+            });
+            // Native hosts can queue ordinary sends; their receipt must not
+            // replace the observed running Turn's stream controls.
+            if (!route?.queue && streamControllers.current.get(targetContextId) === streamController) {
+              if (previousStreamController && !previousStreamController.signal.aborted) {
+                streamControllers.current.set(targetContextId, previousStreamController);
+              } else {
+                streamControllers.current.delete(targetContextId);
+              }
             }
+            return;
+          }
+          if (submittedAsQueue) {
             // Queued is a durable receipt, not observed execution. Only the
             // original worker's start/stream may take the active controls.
             if (phase === "turn.started") {

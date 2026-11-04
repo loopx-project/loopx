@@ -1391,7 +1391,9 @@ export function PersonalWorkspacePage({
   const conversationTurnRunning = !loopxDeliveryOpen && !conversationQueuesFollowUps && Boolean(runningMessage);
   const steeringTurnId = conversationTurnRunning && conversationSupportsSteering && !readOnly
     && callbacks.onSteerConversationTurn ? runningMessage?.sourceTurnId : undefined;
-  const queueTurnId = conversationTurnRunning && !readOnly && callbacks.onQueueConversationTurn
+  const queueTurnId = !loopxDeliveryOpen && !readOnly && callbacks.onQueueConversationTurn
+    ? runningMessage?.sourceTurnId : undefined;
+  const interruptTurnId = !readOnly && callbacks.onInterruptConversationTurn
     ? runningMessage?.sourceTurnId : undefined;
   const conversationQueue = useConversationQueue({
     sessionId: !readOnly && !workspaceConversations?.entryGate ? conversationSessionId : undefined,
@@ -3291,10 +3293,10 @@ export function PersonalWorkspacePage({
                   onEffort={effort => saveModelSettings(() => callbacks.onSelectAgentReasoningEffort?.(selectedAgentId, effort))}
                   onDefaults={selectedGoal && !originalConversation ? () => openSettings({kind: "settings", tab: "conversation"}, true) : undefined}
                 /> : null}
-              {queueTurnId && callbacks.onInterruptConversationTurn ? <button className="personal-composer-stop"
-                data-turn-id={queueTurnId}
+              {interruptTurnId && callbacks.onInterruptConversationTurn ? <button className="personal-composer-stop"
+                data-turn-id={interruptTurnId}
                 aria-label={locale === "zh-CN" ? "停止当前回合" : "Stop current turn"} type="button"
-                onClick={() => void callbacks.onInterruptConversationTurn!(conversationKey, queueTurnId).catch(cause =>
+                onClick={() => void callbacks.onInterruptConversationTurn!(conversationKey, interruptTurnId).catch(cause =>
                   setActionFeedback(cause instanceof Error ? cause.message : (locale === "zh-CN" ? "停止失败，请查看当前回合。" : "Stop failed. Check the current turn.")))}>
                 <Square size={16}/>
               </button> : null}

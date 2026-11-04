@@ -1592,7 +1592,7 @@ export async function sendChatTurnStreaming(
     options.attachments,
     options.signal,
   );
-  options.onPhase?.("turn.accepted", accepted.turn_id);
+  options.onPhase?.(accepted.status === "queued" ? "turn.queued" : "turn.accepted", accepted.turn_id);
   return receiveChatTurnStreaming(
     sessionId,
     accepted.turn_id,
