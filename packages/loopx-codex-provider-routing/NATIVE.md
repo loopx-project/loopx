@@ -52,6 +52,14 @@ therefore never sent to the other route. A custom provider must not shadow the
 built-in `openai` provider, and profile overrides remain ineligible because their
 effective provider cannot be bound safely to the transaction.
 
+Every custom provider that can carry the loopback relay credential must declare
+its `base_url` (for example `http://127.0.0.1:57500/v1`). A definition without
+`base_url` resolves to `api.openai.com`; Codex context compaction can use that
+default even while another provider is selected, so the relay-scoped credential
+is presented to OpenAI and rejected with `401 invalid_api_key`. Installers that
+add chat transports should write the relay endpoint into each provider
+definition and verify it on readback.
+
 A local authenticated transport sends the original selected model and Responses
 body to OpenAI. An explicit upstream quota rejection, 401, 403 or temporary 429 can
 try the next configured key before output. Each key is attempted at most once per
