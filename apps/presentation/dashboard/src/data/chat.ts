@@ -2813,9 +2813,8 @@ export async function resolveBoundConversation(target: BoundConversationTarget, 
     throw new Error("This service cannot verify the original conversation. Update LoopX and retry.");
   }
   const session = listed.sessions[0], source = parsed.data;
-  if (source.executor_endpoint_id !== session.agent_id) {
-    throw new Error("The original conversation's executor no longer matches its connection.");
-  }
+  // Core qualifies this exact Session, including its original quota fallback.
+  // The connection's configured preference need not be its active executor.
   return {session, source};
 }
 

@@ -19,8 +19,8 @@ import pytest
 REPO = Path(__file__).resolve().parents[4]
 BACKEND = Path(os.environ.get("LOOPX_CHAT_FIXTURE_BACKEND_ROOT", REPO)).resolve()
 sys.path[:0] = [str(BACKEND), str(REPO), str(REPO / "tests/control_plane")]
-from canonical_authority_fixture import isolate_sqlite_runtime, promoted_create_fixture
-from loopx.chat_server import serve_chat
+from canonical_authority_fixture import isolate_sqlite_runtime, promoted_create_fixture  # noqa: E402
+from loopx.chat_server import serve_chat  # noqa: E402
 
 
 class SyntheticPrivateSource:
@@ -54,18 +54,40 @@ class SyntheticPrivateSource:
         runtime.codex_home = self.root / "synthetic-model-home"
         runtime.codex_home.mkdir(exist_ok=True)
         bindings = runtime.project_contexts.conversation_bindings
+        fallback = "--steward-fallback" in sys.argv and not self.peer
         binding = bindings.configure(transport_ref=self.transport_ref,
             project_ref=runtime.project_contexts.available()[0]["project_ref"],
-            executor_endpoint_id="codex", context_kind="steward" if self.steward else "project", project_grant="workspace_read")
+            executor_endpoint_id="antigravity" if fallback else "codex",
+            context_kind="steward" if self.steward else "project", project_grant="workspace_read")
         source = {"source_ref": ("b" if self.peer else "a") * 24,
                   "sender_ref": ("f" if self.peer else "d") * 24, "private_human_message": True}
         if "--reply-context" in sys.argv and not self.peer:
             from loopx.extensions.lark.conversation_identity import lark_private_source
             source = lark_private_source(provider_ref=self.observe()["provider_ref"], event=self.reply_event())
-        original, _ = runtime.open_session(goal_id=None, agent_id="codex", objective="",
-            work_dir=self.root / "project", mode="resume_latest",
-            conversation_binding_id=binding["binding_id"], source_context=source)
+        if fallback:
+            scoped = bindings.resolve(binding_id=binding["binding_id"], **source)
+            original = server.chat_store.create_session(goal_id="loopx-manager", agent_id="codex",
+                adapter_kind="codex_app_server", upstream_thread_id="durable-thread", upstream_mode="chat",
+                codex_home=str(runtime.codex_home), channel_id=scoped["channel_id"], steward_context=scoped["context"])
+        else:
+            original, _ = runtime.open_session(goal_id=None, agent_id="codex", objective="",
+                work_dir=self.root / "project", mode="resume_latest",
+                conversation_binding_id=binding["binding_id"], source_context=source)
         sid = original["session_id"]
+        # Seed the canonical post-recovery state in this disposable fixture.
+        # Core still checks its exact original context, allocation and history;
+        # this scenario tests UI readback, not the quota transition worker.
+        if fallback:
+            original = server.chat_store.update_session(sid,
+                manager_executor_allocation={"schema_version": "manager_executor_allocation_v0",
+                    "selection_policy": "flexible", "configured_endpoint": "antigravity",
+                    "executor_endpoint": "codex", "allocation_reason": "flexible_availability_fallback",
+                    "executor_endpoint_source": "flexible_pool", "executor_endpoint_default_reason": "",
+                    "model": "gpt-6.1-sol", "model_source": "vendor_default", "reasoning_effort": "high",
+                    "configuration_revision": "synthetic-flexible-routing-v1",
+                    "eligible_endpoints": ["antigravity", "codex"], "available": True},
+                upstream_context_history=[{"agent_id": "antigravity", "thread_id": "synthetic-original-argon",
+                    "agent_model_id": "gemini-4-argon-high", "manager_context_version": None}])
         if self.peer:
             server.chat_store.append_message(sid, role="agent", text="Different private steward: keep this source separate.")
             return
@@ -143,6 +165,16 @@ class SyntheticPrivateSource:
                     server.RequestHandlerClass._private_conversations = (
                         unavailable if command == "settings-unavailable" else settings_handler)
                     result = {"settings_available": command == "settings-recover"}
+                elif fallback and command.startswith("fallback-"):
+                    allocation = dict(original["manager_executor_allocation"])
+                    if command == "fallback-invalid-allocation":
+                        allocation["allocation_reason"] = "configured_preference"
+                    elif command == "fallback-wrong-configured-endpoint":
+                        allocation["configured_endpoint"] = "codex"
+                    elif command != "fallback-restore":
+                        raise ValueError("unknown synthetic fallback state")
+                    server.chat_store.update_session(sid, manager_executor_allocation=allocation)
+                    result = {"fallback_state": command}
                 elif command == "populate":
                     for index in range(6):
                         server.chat_store.append_message(sid, role="user", text=f"Synthetic source request {index + 1}: 保留原任务与尚未确认的结果。")
@@ -188,7 +220,7 @@ def main():
             '        output.write(json.dumps(request) + "\\n")\n    method = request.get("method")')
         fake.write_text(model)
         fake.chmod(0o700)
-        steward = "--steward" in sys.argv or "--reply-context" in sys.argv
+        steward = any(flag in sys.argv for flag in ("--steward", "--reply-context", "--steward-fallback"))
         source = SyntheticPrivateSource(root, steward=steward)
         peer = SyntheticPrivateSource(root, steward=True, peer=True) if steward and "--reply-context" not in sys.argv else None
         source.peer_provider = peer
