@@ -241,6 +241,31 @@ def test_reference_is_frozen_before_first_core_admission(ordinary, monkeypatch):
         runtime.close()
 
 
+def test_long_astral_reference_is_readable_through_original_session_http(ordinary):  # noqa: F811
+    _, runtime, provider, transport = connect(ordinary)
+    _, _, _, request_http, _, _, _ = ordinary
+    event = quoted(provider)
+    provider.messages[event["parent_id"]]["content"] = "🧭" * 3000
+    try:
+        assert transport.admit("notes-app", event)["status"] == "durably_accepted"
+        row = native_request(transport, event)
+        assert runtime.wait_for_turn(
+            session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10
+        )["status"] == "completed"
+        status, inventory = request_http(
+            f"/api/chat/sessions/{row['session_id']}?message_limit=200"
+        )
+        assert status == 200, inventory
+        user_message = next(
+            item["text"] for item in inventory["messages"] if item["role"] == "user"
+        )
+        assert "chars omitted" in user_message
+        assert user_message.endswith("Current user message:\nApproved")
+        user_message.encode("utf-8")
+    finally:
+        runtime.close()
+
+
 def test_original_source_can_continue_after_ancestry_verification_recovers(ordinary):  # noqa: F811
     store, runtime, provider, transport = connect(ordinary)
     event = quoted(provider)
