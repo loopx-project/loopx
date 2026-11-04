@@ -66,8 +66,8 @@ LoopX 管家最初只有受限的规划会话：它可以读取 LoopX 提供的�
   执行供应的选择命令，不知道时再查目录。这是冻结快照读取，不是 Codex 专属的实时
   `loopx_manager_read` 工具或差分基线。依赖该历史前，应读完所需片段的全部页；上下文
   丢失后从同一 capture 恢复，不重新发送请求或重复副作用。
-- 机器配置 `context_delivery.antigravity_mode=off` 或宿主环境变量 `LOOPX_CONTEXT_DELIVERY=off`
-  使后续原生管家输入保持完整内联，`context_delivery.mode` 仍保持为独立的 Codex 偏好。
+- 管家依据已授权的读取能力自动选择历史交付方式。既有显式 `context_delivery.antigravity_mode=off` 偏好
+  或宿主环境变量 `LOOPX_CONTEXT_DELIVERY=off` 使后续原生管家输入保持完整内联。
   受限/文本宿主、配置损坏或私有 capture IO 不可用时
   也保留原输入，不改变宿主权限或审批。引用只保留原已授权快照，不是新鲜观察或动作
   授权；capture 私有保存于 Chat 存储，不写入所选项目的检出目录。RPC 与真实 CLI fixture

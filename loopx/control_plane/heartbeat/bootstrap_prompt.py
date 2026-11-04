@@ -72,6 +72,7 @@ def _goal_command(args: Any, *, registry: Path, legacy: bool) -> list[str]:
         ("decision_output_root", "--decision-output-root"),
         ("codex_context_root", "--codex-context-root"),
         ("context_delivery", "--context-delivery"),
+        ("delta_delivery", "--delta-delivery"),
     ):
         value = getattr(args, field, None)
         if value is not None:
@@ -130,7 +131,7 @@ def host_bootstrap_binding(prompt: str) -> dict[str, Any] | None:
             "registry", "runtime_root", "goal_id", "agent_id", "active_state",
             "material_rule", "permission_rule", "runtime_profile", "visible_goal_host",
             "host_surface", "scheduler_owner", "execution_mode", "cli_bin",
-            "decision_output_root", "codex_context_root", "context_delivery")}
+            "decision_output_root", "codex_context_root", "context_delivery", "delta_delivery")}
         repeated = {"--agent-scope": "agent_scopes", "--available-capability": "available_capabilities"}
         booleans = {
             "--codex-app": "codex_app",

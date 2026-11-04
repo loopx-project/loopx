@@ -193,6 +193,7 @@ def cli(launcher: Path, *args: str) -> dict:
     result = subprocess.run(
         [str(launcher), "--format", "json", *args], cwd=launcher.parent.parent,
         capture_output=True, text=True, timeout=120,
+        env={**os.environ, "LOOPX_CONTEXT_DELIVERY": "off"},
     )
     if result.returncode:
         raise RuntimeError("fixture_cli_failed")

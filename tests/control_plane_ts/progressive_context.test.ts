@@ -17,7 +17,7 @@ test("initial navigation keeps unknown supporting-index obligations whole", () =
   const base = "/context_details/unread_context_index";
   for (const index of [{...known, future_obligation: "Preserve the newly required stop."},
     {...known, coverage_confirmed: true}, {...known, read_before_dependent_work: false},
-    {...known, pointers: [42]}, {...known, source: null}]) {
+    {...known, pointers: [42]}, {...known, source: null}, {...known, source_blocks: [42]}]) {
     const context = {interaction_contract: {schema_version: "loopx_interaction_contract_v0"},
       context_details: {instruction: "Read applicable supporting evidence before dependent work.", unread_context_index: index}};
     const before = structuredClone(context);
@@ -27,6 +27,14 @@ test("initial navigation keeps unknown supporting-index obligations whole", () =
   assert.ok(initialContextReadPointers({interaction_contract: {schema_version: "loopx_interaction_contract_v0"},
     context_details: {unread_context_index: known}}, []).includes(base));
   assert.deepEqual(initialContextReadPointers({interaction_contract: {schema_version: "loopx_interaction_contract_v0"}}, []), []);
+  for (const index of [known, {...known, source_blocks: ["/supporting/source/content"]}]) {
+    const pointers = initialContextReadPointers({interaction_contract: {schema_version: "loopx_interaction_contract_v0"},
+      context_details: {instruction: "Read applicable evidence before dependent work.", unread_context_index: index}}, []);
+    assert.ok(pointers.includes(`${base}/source`));
+    assert.ok(pointers.includes(`${base}/read_before_dependent_work`));
+    assert.ok(pointers.includes("/context_details/instruction"));
+    assert.ok(!pointers.includes(base), "address inventories remain reachable without crowding out current obligations");
+  }
 });
 
 test("only supporting materials move; cumulative obligations and merged source guidance survive", () => {

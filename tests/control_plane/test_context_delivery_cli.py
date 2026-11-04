@@ -462,7 +462,8 @@ def test_real_cli_host_rendezvous_sends_delta_and_keeps_same_capture_full(tmp_pa
         "retained": {"complete": True, "target": cold["target"]}}, setting="off")
     assert "target" not in disabled and not (disabled_directory / "projection.json").exists()
     ordinary, directory = invoke(None, opt_in=False)
-    assert "target" not in ordinary and not (directory / "projection.json").exists()
+    assert "target" not in ordinary and ordinary["mode"] == "full"
+    assert (directory / "projection.json").exists(), "ordinary defaults present the current source without native continuity"
     assert state.read_bytes() == before_source and _spend_run_count(runtime) == 0
     assert all(path.read_bytes() == raw for path, raw in saved)
 

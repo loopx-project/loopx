@@ -217,13 +217,15 @@ def register_quota_command(
     # Host preflight captures the complete native input, then presents that same
     # immutable view after the model's lifecycle hooks establish continuity.
     quota_parser.add_argument("--defer-context-presentation", action="store_true", help=argparse.SUPPRESS)
-    from ..control_plane.turn_driver.codex_context import CONTEXT_DELIVERY_SETTINGS
+    from ..control_plane.turn_driver.codex_context import CONTEXT_DELIVERY_SETTINGS, DELTA_DELIVERY_SETTINGS
 
     quota_parser.add_argument("--context-delivery", choices=CONTEXT_DELIVERY_SETTINGS,
-        help="Experimental native packet reuse; inherits the machine setting, otherwise off. Explicit off bypasses machine defaults. On uses existing host declarations: "
+        help="Auto defaults to progressive current-context reads on every host, with Delta on supported continuity hosts. Explicit off keeps the original inline path. Legacy on uses existing host declarations: "
              "Codex App heartbeat/resume/recovery (--codex-app), or the Codex benchmark heartbeat worker "
              "(generic_cli plus its explicit heartbeat worker settings). On rejects missing, contradictory or unsupported modes. "
              "Enabled supported calls choose private context/capture paths automatically unless overridden. A directory alone never enables it; declarations are not retention proof.")
+    quota_parser.add_argument("--delta-delivery", choices=DELTA_DELIVERY_SETTINGS,
+        help="Independently disable cross-Turn Delta or use it automatically on supported continuity hosts. Does not disable progressive presentation or grant host continuity.")
     context_location = quota_parser.add_mutually_exclusive_group()
     context_location.add_argument("--codex-context-dir",
         help="Opt-in private native Codex lifecycle directory. For context-hook, consume one native hook event on stdin. "
