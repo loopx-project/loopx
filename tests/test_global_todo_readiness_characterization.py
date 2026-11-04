@@ -14,6 +14,7 @@ import loopx.control_plane.effect_runtime as runtime
 
 FIXTURE = Path(__file__).parent / "fixtures/global_todo_readiness.json"
 NOW = "2026-11-02T00:00:00+00:00"
+BASE_REVISION = "d4aaaaefbd37a83a30f10681de839b45d631eeb9"
 
 
 def observe(case, monkeypatch, tmp_path):
@@ -90,8 +91,12 @@ def test_production_cli_archive_parity(provider, tmp_path):
     source = Path(__file__).resolve().parents[1]
     base = tmp_path / "base"
     base.mkdir()
+    assert subprocess.run(
+        ["git", "merge-base", "--is-ancestor", BASE_REVISION, "HEAD"],
+        cwd=source,
+    ).returncode == 0
     archive = subprocess.run(
-        ["git", "archive", "HEAD"], cwd=source, capture_output=True, check=True,
+        ["git", "archive", BASE_REVISION], cwd=source, capture_output=True, check=True,
     )
     subprocess.run(["tar", "-xf", "-", "-C", str(base)], input=archive.stdout, check=True)
     home = tmp_path / "home"
