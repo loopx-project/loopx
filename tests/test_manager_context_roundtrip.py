@@ -4,6 +4,7 @@ import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -112,14 +113,15 @@ def private_snapshot(frozen_private_reply, tmp_path):
         thread.join(timeout=2)
 
 
-def test_frozen_private_reply_projects_original_text_without_mutating_model_input(frozen_private_reply, tmp_path, private_snapshot):
+@pytest.mark.parametrize("scoped", [False, True])
+def test_frozen_private_reply_projects_original_text_without_mutating_model_input(frozen_private_reply, tmp_path, private_snapshot, scoped):
     store, session, turn, _, _, _, source_text, parent = frozen_private_reply
     before = {str(p): p.read_bytes() for p in store.root.rglob("*") if p.is_file()}
     # The core projection carries no provider history; the composition root joins it.
     generic = project_chat_session_snapshot(tmp_path, store, session["session_id"], registry=tmp_path / "absent.json",
                                           message_limit=1)
     assert "reply_context" not in generic["messages"][0]
-    snapshot = private_snapshot(message_limit=1)
+    snapshot = private_snapshot(message_limit=1, **({"turn_id": turn["turn_id"]} if scoped else {}))
     message = snapshot["messages"][0]
     assert message["text"] == turn["message"]
     assert message["reply_context"]["source_text"] == source_text
@@ -924,6 +926,96 @@ def test_chat_snapshot_keeps_current_session_delivery_after_unrelated_route_limi
     assert returned == expected
 
 
+@pytest.fixture
+def returned_history(flow):
+    root, registry, store, create = flow
+    session, turn, receipt = create()
+    acknowledge(root, "research", "worker", receipt["request_id"], "adopt", "Checked")
+    report(root, "research", "worker", receipt["request_id"], "conclusion", "Completed the original request.")
+    assert drain(root, registry, store, None) == 1
+    return root, registry, store, session, turn, receipt
+
+
+@pytest.mark.parametrize("plural", [False, True])
+def test_history_delivery_reads_original_route_without_global_scan_and_stays_fresh(returned_history, monkeypatch, plural):
+    root, _, store, session, turn, receipt = returned_history
+    sid, rid = session["session_id"], receipt["request_id"]
+    if plural:
+        store.update_turn(sid, turn["turn_id"], response={"context_handoff_receipts": [receipt]})
+    messages = store.messages(sid)
+    followups = [message for message in messages if message.get("origin") == "manager_followup"]
+    routes = _root(root) / "roundtrips"
+    for index in range(10):
+        _write(routes / f"{index:064x}.json", {"request_id": f"{index:064x}", "session_id": "unrelated"})
+    original_glob = Path.glob
+
+    def no_global_routes(path, pattern, **kwargs):
+        assert path != routes, "A known original receipt must not enumerate all conversations"
+        return original_glob(path, pattern, **kwargs)
+
+    monkeypatch.setattr(Path, "glob", no_global_routes)
+    before = {path: path.read_bytes() for path in root.rglob("*.json")}
+    projected = project_chat_return_deliveries(root, sid, followups, source_store=store)
+    assert len(projected) == len(followups) == 1
+    assert projected[0]["return_delivery"]["status"] == "delivered"
+    assert {path: path.read_bytes() for path in root.rglob("*.json")} == before
+    # Delivery state remains current even when the original transcript is unchanged.
+    _write(_root(root) / "replies" / rid / "conclusion.delivery.json", {
+        "status": "verification_required", "error": "provider_delivery_unverified",
+    })
+    latest = project_chat_return_deliveries(root, sid, followups, source_store=store)
+    assert latest[0]["return_delivery"]["status"] == "verification_required"
+    assert latest[0]["return_delivery"]["error"] == "provider_delivery_unverified"
+    assert store.messages(sid) == messages
+
+
+@pytest.mark.parametrize("receipt_state", ["lost", "malformed", "unreadable_turn", "unmatched"])
+def test_history_delivery_keeps_fallback_for_missing_original_locators(returned_history, monkeypatch, receipt_state):
+    root, _, store, session, turn, receipt = returned_history
+    sid = session["session_id"]
+    if receipt_state == "unreadable_turn":
+        (store.root / "sessions" / sid / "turns" / (turn["turn_id"] + ".json")).write_text("{")
+    else:
+        response = {"context_handoff_receipts": "unsupported"} if receipt_state == "malformed" else (
+            {"context_handoff_receipts": [None, {"request_id": "../outside"}, {"request_id": "0" * 64}]}
+            if receipt_state == "unmatched" else None
+        )
+        store.update_turn(sid, turn["turn_id"], response=response)
+    messages = store.messages(sid)
+    routes, scanned = _root(root) / "roundtrips", []
+    original_glob = Path.glob
+
+    def observe(path, pattern, **kwargs):
+        if path == routes:
+            scanned.append(path)
+        return original_glob(path, pattern, **kwargs)
+
+    monkeypatch.setattr(Path, "glob", observe)
+    projected = project_chat_return_deliveries(root, sid, messages, source_store=store)
+    assert len(scanned) == 1
+    assert len(projected) == len(messages)
+    returned = next(message for message in projected if message.get("origin") == "manager_followup")
+    assert returned["return_delivery"] == {"schema_version": "manager_return_delivery_status_v0", **reply_status(root, receipt)[0]}
+    assert store.messages(sid) == messages
+
+
+@pytest.mark.parametrize("drift", ["session", "host", "request"])
+def test_history_original_receipt_is_only_a_locator_not_route_authority(returned_history, drift):
+    root, _, store, session, _, receipt = returned_history
+    sid, rid = session["session_id"], receipt["request_id"]
+    path = _root(root) / "roundtrips" / (rid + ".json")
+    route = json.loads(path.read_text())
+    if drift == "session":
+        route["session_id"] = "another-session"
+    elif drift == "host":
+        route["source_chat_runtime_root"] = str(root / "another-host")
+    else:
+        route["request_id"] = "0" * 64
+    _write(path, route)
+    messages = store.messages(sid)
+    assert project_chat_return_deliveries(root, sid, messages, source_store=store) == messages
+
+
 def test_provider_verification_outage_retries_read_only_without_resend(flow):
     root, registry, store, create = flow
     _, _, receipt = create(True)
@@ -1255,6 +1347,83 @@ def test_return_service_can_close_before_start(flow):
 
     assert service.stop.is_set()
     assert not service.thread.is_alive()
+
+
+def test_host_recovery_returns_the_original_result_once(flow, monkeypatch):
+    from loopx.capabilities.manager_context import roundtrip
+    root, registry, store, create = flow
+    _, _, receipt = create(True)
+    rid = receipt["request_id"]
+    acknowledge(root, "research", "worker", rid, "no_change", "Reviewed")
+    report(root, "research", "worker", rid, "conclusion", "Original result after host recovery.")
+    original, attempts, sends = roundtrip.drain, [], []
+    sent = threading.Event()
+    provenance = roundtrip.recover_source_chat_provenance
+    starts = []
+
+    def discover(*args, **kwargs):
+        starts.append(True)
+        return provenance(*args, **kwargs)
+
+    def failed_once(*args, **kwargs):
+        attempts.append(True)
+        if len(attempts) == 1:
+            raise AssertionError("synthetic host failure")
+        return original(*args, **kwargs)
+
+    def transport(*_):
+        sends.append(True)
+        sent.set()
+        return {"reply_verified": True, "idempotency_key": "sha256:synthetic-proof"}
+
+    monkeypatch.setattr(roundtrip, "drain", failed_once)
+    monkeypatch.setattr(roundtrip, "recover_source_chat_provenance", discover)
+    service = ReturnService(root, registry, store, transport)
+    service.start()
+    service.start()
+    try:
+        assert sent.wait(10)
+    finally:
+        service.close()
+    drain(root, registry, store, transport)
+    assert sends == [True]
+    assert starts == [True], "Step recovery must retain its scope instead of replaying startup discovery"
+    state = json.loads((_root(root) / "replies" / rid / "conclusion.delivery.json").read_text())
+    assert state["status"] == "delivered"
+
+
+def test_host_recovery_retains_the_queued_source_probe_backoff(flow, monkeypatch):
+    from loopx.capabilities.manager_context import execution
+    root, registry, store, _ = flow
+    original = execution.QueuedSourcePump
+    created, probes, deadlines = [], [], []
+    recovered = threading.Event()
+
+    def make_pump(*args):
+        pump = original(*args)
+        tick = pump.tick
+        created.append(pump)
+
+        def fail_after_first_probe(**kwargs):
+            tick(**kwargs)
+            probes.append(True)
+            deadlines.append(pump.next_probe)
+            if len(probes) == 1:
+                raise AssertionError("synthetic host failure after a real bounded probe")
+            recovered.set()
+
+        pump.tick = fail_after_first_probe
+        return pump
+
+    monkeypatch.setattr(execution, "QueuedSourcePump", make_pump)
+    service = ReturnService(root, registry, store, lambda *_: pytest.fail("No send is authorized"))
+    service.start()
+    try:
+        assert recovered.wait(10)
+    finally:
+        service.close()
+    assert len(created) == 1 and deadlines[0] == deadlines[1]
+    assert store.list_sessions() == [], "Host recovery cannot enroll a new Turn"
 
 
 @pytest.mark.parametrize("project", [False, True], ids=["steward", "project"])

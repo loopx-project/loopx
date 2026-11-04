@@ -110,23 +110,13 @@ def _source_content(read, *, registry_path, runtime_root, goal_id, todo_id, agen
 
 def _user_context(*, registry_path, runtime_root, goal_id, agent_id):
     # Reuse the canonical scope owner (global/blocks_agent/bound_agent and
-    # legacy scoping). Exact reads restore full text after scope filtering.
+    # legacy scoping). The typed owner restores full text after scope filtering
+    # from this same canonical snapshot, not a separate read for each body.
     inventory = list_goal_todos(registry_path=registry_path, goal_id=goal_id,
         role="user", status="open", agent_id=agent_id,
-        runtime_root_arg=str(runtime_root))
-    records = []
-    revision = (inventory.get("authority_read") or {}).get("provider_revision")
-    for row in inventory.get("todos", []):
-        detail = list_goal_todos(registry_path=registry_path, goal_id=goal_id,
-            role="user", status="open", agent_id=agent_id, todo_id=row["todo_id"],
-            runtime_root_arg=str(runtime_root))
-        if not detail.get("matched") or detail.get("ambiguous"):
-            raise ValueError("User context changed during source read; rerun guard")
-        if (detail.get("authority_read") or {}).get("provider_revision") != revision:
-            raise ValueError("User context source revision changed; rerun guard")
-        records.append(detail["todo"])
+        runtime_root_arg=str(runtime_root), full_text=True)
     return {"source": inventory["source"], "authority_read": inventory.get("authority_read"),
-        "todos": records}
+        "todos": inventory["todos"]}
 
 
 def attach_work_context(payload: dict[str, Any], *, registry_path: Path,

@@ -23,6 +23,7 @@ from .doubao_model_behavior_actor import (
     _direct_ark_transport,
 )
 from .model_tool_behavior import (
+    QuotaToolContext,
     DoubaoExecToolClient,
     QUOTA_FIRST_TOOL_INSTRUCTION,
     LoopxCliExecutionError,
@@ -120,6 +121,7 @@ class _QualificationState:
     turn_instance_id: str
     steps: list[dict[str, Any]] = field(default_factory=list)
     quota_packet: dict[str, Any] | None = None
+    quota_context: QuotaToolContext | None = None
     contract: dict[str, Any] | None = None
     proof_read: bool = False
     writeback_committed: bool = False
@@ -931,10 +933,18 @@ def _execute_terminal_cli(
         if state.quota_packet is not None:
             raise _TerminalToolViolation("repeated_quota_should_run")
         payload = _execute_cli(command, state)
-        state.quota_packet = payload
-        state.contract = _quota_contract(payload)
+        state.quota_context = QuotaToolContext.from_output(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        state.quota_packet = state.quota_context.packet
+        state.contract = _quota_contract(state.quota_packet)
         kind = "quota_should_run"
-        output = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        output = state.quota_context.output
+    elif command_kind == "quota" and command_action == "context-read":
+        if state.quota_context is None:
+            raise _TerminalToolViolation("context_read_before_quota")
+        output = state.quota_context.read(command, source_root=state.fixture.source_root,
+            project_root=state.fixture.project_root)
+        kind = "context_read"
     elif command_kind == "refresh_state":
         if state.quota_packet is None:
             raise _TerminalToolViolation("writeback_before_quota")

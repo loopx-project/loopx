@@ -18,6 +18,7 @@ import tempfile
 from typing import Any
 from ...control_plane.content_digest import BARE_SHA256_PATTERN
 from ...control_plane.work_items.progress_review_policy import (
+    PROGRESS_REVIEW_PENDING_REASON,
     PROGRESS_REVIEW_SIGNALS as PROGRESS_REVIEW_SIGNAL_KEYS,
 )
 
@@ -44,7 +45,6 @@ PROGRESS_REVIEW_SIGNAL_RULE_VERSIONS = (
     PROGRESS_REVIEW_LEGACY_SIGNAL_RULE_VERSION,
     PROGRESS_REVIEW_SIGNAL_RULE_VERSION,
 )
-PROGRESS_REVIEW_PENDING_REASON = "pending_evaluation"
 MAX_RECEIPT_BYTES = 65536
 MAX_LOADED_RECEIPTS = 256
 _TEXT_LIMIT = 200

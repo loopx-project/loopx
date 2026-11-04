@@ -60,6 +60,8 @@ def _goal_command(args: Any, *, registry: Path, legacy: bool) -> list[str]:
             command.append("--codex-app")
         if getattr(args, "trae_app", False):
             command.append("--trae_app")
+        if getattr(args, "antigravity_app", False):
+            command.append("--antigravity_app")
     command += ["--goal-id", args.goal_id]
     for field, flag in (
         ("agent_id", "--agent-id"), ("active_state", "--active-state"),
@@ -89,6 +91,8 @@ def _goal_command(args: Any, *, registry: Path, legacy: bool) -> list[str]:
             command.append("--codex-app")
         if getattr(args, "trae_app", False):
             command.append("--trae_app")
+        if getattr(args, "antigravity_app", False):
+            command.append("--antigravity_app")
         command.append("--" + mode)
     return command
 
@@ -98,8 +102,9 @@ def goal_bootstrap(args: Any, *, registry: Path) -> str:
     heartbeat = (
         args.codex_app
         or getattr(args, "trae_app", False)
+        or getattr(args, "antigravity_app", False)
         or getattr(args, "runtime_profile", None)
-        in {"codex_app_heartbeat", "trae_app"}
+        in {"codex_app_heartbeat", "trae_app", "antigravity_app"}
     )
     command = _goal_command(args, registry=registry, legacy=not heartbeat)
     if heartbeat:
@@ -117,7 +122,7 @@ def host_bootstrap_binding(prompt: str) -> dict[str, Any] | None:
         if command[1:3] != ["--format", "json"]:
             return None
         values: dict[str, Any] = dict(cli_bin=command[0], turn_instance_id=None, codex_app=False,
-                      trae_app=False,
+                      trae_app=False, antigravity_app=False,
                       full=False, compact=False, brief=False, thin=False, turn_envelope=False,
                       visible_goal_host=None, available_capabilities=[], agent_scopes=[],
                       runtime_root=None)
@@ -130,6 +135,7 @@ def host_bootstrap_binding(prompt: str) -> dict[str, Any] | None:
         booleans = {
             "--codex-app": "codex_app",
             "--trae_app": "trae_app",
+            "--antigravity_app": "antigravity_app",
             "--turn-envelope": "turn_envelope",
             **{"--" + name.replace("_", "-"): name for name in ("full", "compact", "brief", "thin")},
         }

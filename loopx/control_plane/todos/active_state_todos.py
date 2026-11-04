@@ -111,6 +111,9 @@ def active_state_todo_fields(
     from .goal_todo_projection import observe_todo_acceptance
     fields = observe_todo_acceptance(canonical["_todo_fields"], canonical,
         registry_path=source_registry, goal_id=goal_id)
+    # Execution guidance must use the same canonical policy as the Todo read,
+    # never the historical Markdown frontmatter or a registry default.
+    fields["handoff_mode"] = canonical.get("handoff_mode")
     # Material existence is a local read projection, not persisted Todo state.
     # Derive it from the canonical text so stale display links cannot take over.
     for key in ("user_todos", "agent_todos"):

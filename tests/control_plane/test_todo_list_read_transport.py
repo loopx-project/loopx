@@ -83,7 +83,7 @@ def read_cli(tmp_path, monkeypatch, request):
 def test_unmigrated_query_variants_refuse_without_changing_source(read_cli):
     _, run, _, state = read_cli
     before = state.read_bytes()
-    for options in [(), ("--todo-id", OWN), ("--limit", "1"), ("--thin",)]:
+    for options in [(), ("--todo-id", OWN), ("--limit", "1"), ("--thin",), ("--summary",)]:
         result = run(*options, expected_exit=1)
         assert result["error_code"] == "canonical_authority_required"
         assert result["legacy_fallback_used"] is False
@@ -147,6 +147,21 @@ def test_display_limits_report_complete_sources_and_actual_shown_items(read_cli)
         assert coverage["available_count"] == available
         assert coverage["shown_count"] == len(payload["todos"])
         assert coverage["truncated"] == (len(payload["todos"]) < available)
+
+
+def test_read_lenses_report_the_actual_canonical_source(read_cli):
+    provider, run, _, state = read_cli
+    before = state.read_bytes()
+    expected = f"{provider}_v0"
+    for options in [(), ("--agent-id", "agent-a"), ("--limit", "1"),
+                    ("--thin",), ("--summary",), ("--todo-id", OWN),
+                    ("--todo-id", "todo_missing"), ("--status", "done")]:
+        payload = run(*options)
+        assert payload["source"] == expected
+        assert payload["authority_read"]["source_authority"] == expected
+        assert [source["source_id"] for source in payload["projection_envelope"]["sources"]] == [expected]
+    assert f"- source: `{expected}`" in run(format_name="markdown")
+    assert state.read_bytes() == before
 
 
 def test_read_entrypoint_does_not_load_mutation_owners(read_cli):

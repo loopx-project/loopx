@@ -129,6 +129,11 @@ def test_cumulative_review_evidence_reuses_real_quota_sources_without_hiding_new
         "note": ("Retain the measured result and its applicability. " * 10).strip()} for r in declared["requirements"]]}
     (code, result), _ = record(project, cli, review, "review")
     assert code == 0, result
+    companion = {**declared, "outcome_id": "compatibility", "objective": "Keep the compatible export",
+        "requirements": [{"id": f"tail{i}", "description": ("Keep the compatibility tail. " * 16).strip()}
+            for i in range(12)]}
+    (code, companion_result), _ = record(project, cli, companion, "companion")
+    assert code == 0, companion_result
 
     def capture():
         code, packet = run("quota", "should-run", "--goal-id", "goal-acceptance", "--agent-id", "agent-a")
@@ -141,11 +146,17 @@ def test_cumulative_review_evidence_reuses_real_quota_sources_without_hiding_new
     review["review"][0]["conclusion"] = "unmet"
     assert record(project, cli, review, "negative-review")[0][0] == 0
     current = capture()
+    def outcomes(context):
+        return next(s["content"]["goal_acceptance_contract"]["outcome_requirements"]["outcomes"]
+            for s in context["sources"] if s.get("source") == "goal_acceptance")
     full = prepare_context_delivery(current, scope=scope, capture_id="current")
     delta = prepare_context_delivery(current, scope=scope, capture_id="current", baseline=baseline,
         retained={"complete": True, "target": baseline["target"]})
     assert delta["mode"] == "delta", delta.get("reason")
     assert "segment/" not in json.dumps(delta), "unchanged evidence must not be retransmitted"
+    assert "Keep the compatibility tail" not in json.dumps(delta), "an unrelated outcome must not be retransmitted"
+    assert [row["id"] for row in outcomes(current)] == [row["id"] for row in outcomes(original)]
+    assert outcomes(current)[1] == outcomes(original)[1], "another outcome's requirements and evidence stay intact"
     restored = restore_context_delivery(delta, baseline=baseline, current=full)
     assert restored["context"] == current
     acceptance = next(s["content"] for s in restored["context"]["sources"] if s.get("source") == "goal_acceptance")

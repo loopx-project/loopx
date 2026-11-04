@@ -21,6 +21,154 @@ import loopx.chat_runtime as chat_runtime
 import pytest
 
 
+@pytest.mark.parametrize("failure_kind", ["agent", "timeout", "runtime"])
+@pytest.mark.parametrize("control_unavailable", [False, True])
+def test_failed_worker_preserves_original_error_and_drains_followup(tmp_path, monkeypatch, failure_kind, control_unavailable):
+    from loopx.chat_store import ChatSessionStore
+    from loopx.control_plane import chat_turn_acceptance
+    from loopx.control_plane.effect_runtime import EffectRuntimeResponseAmbiguous
+
+    store = ChatSessionStore(tmp_path / "chat")
+    sid = store.create_session(goal_id="fixture", agent_id="codex",
+        adapter_kind="codex_app_server", upstream_thread_id="saved-thread")["session_id"]
+    first, _ = store.create_queued_turn(sid, client_turn_id="original", message="Keep original request.")
+    following, _ = store.create_queued_turn(sid, client_turn_id="following", message="Independent follow-up.")
+    runtime = chat_runtime.ChatRuntimeController(store=store, codex_bin="unused")
+    calls, failed = [], []
+    allowed = chat_turn_acceptance.managed_turn_execution_allowed
+
+    def checked(session, turn):
+        if control_unavailable and failed and turn["turn_id"] == first["turn_id"]:
+            raise EffectRuntimeResponseAmbiguous("chat.turn.execution_allowed", timeout=10)
+        return allowed(session, turn)
+
+    class Adapter:
+        upstream_thread_id = "saved-thread"
+
+        def capabilities(self):
+            return {}
+
+        def healthcheck(self):
+            return True
+
+        def interrupt_turn(self):
+            pass
+
+        def close_session(self):
+            pass
+
+        def start_turn(self, message, event_sink):
+            calls.append(message)
+            event_sink("turn.started", {"upstream_turn_id": "native-" + str(len(calls))})
+            if len(calls) == 1:
+                failed.append(True)
+                if failure_kind == "runtime":
+                    raise ValueError("Original provider failure.")
+                error = chat_agent.CodexChatTimeoutError if failure_kind == "timeout" else chat_agent.CodexChatAgentError
+                raise error("Original provider failure.", gate=None, error_code="response_timeout" if failure_kind == "timeout" else "upstream_transport_failure")
+            return {"message": "Follow-up completed."}
+
+    adapter = Adapter()
+    monkeypatch.setattr(chat_turn_acceptance, "managed_turn_execution_allowed", checked)
+    monkeypatch.setattr(runtime, "_ensure_adapter", lambda *a, **kw: adapter)
+    try:
+        runtime._drain_session_queue(session_id=sid, work_dir=tmp_path, objective="Research")
+        result = store.load_turn(sid, first["turn_id"])
+        assert result["status"] == ("timed_out" if failure_kind == "timeout" else "failed")
+        assert result["error"] == "Original provider failure."
+        assert result["error_code"] == {"agent": "upstream_transport_failure", "timeout": "response_timeout", "runtime": "runtime_error"}[failure_kind]
+        assert store.load_turn(sid, following["turn_id"])["status"] == "completed"
+        assert store.load_session(sid)["active_turn_id"] is None
+        assert calls == ["Keep original request.", "Independent follow-up."]
+        assert sum(row["kind"] == "turn.failed" for row in store.events_after(sid, first["turn_id"], None)) == 1
+        assert [row["text"] for row in store.messages(sid) if row["role"] == "error"] == ["Original provider failure."]
+    finally:
+        runtime.close()
+
+
+def test_transport_retry_refuses_unavailable_control_without_sending(tmp_path, monkeypatch):
+    from loopx.chat_store import ChatSessionStore
+    from loopx.control_plane import chat_turn_acceptance
+    from loopx.control_plane.effect_runtime import EffectRuntimeResponseAmbiguous
+
+    store = ChatSessionStore(tmp_path / "chat")
+    sid = store.create_session(goal_id="fixture", agent_id="codex",
+        adapter_kind="codex_app_server", upstream_thread_id="saved-thread")["session_id"]
+    turn, _ = store.create_turn(sid, client_turn_id="original", message="Keep original request.")
+    runtime = chat_runtime.ChatRuntimeController(store=store, codex_bin="unused")
+    adapter = SimpleNamespace(healthcheck=lambda: True)
+    runtime.adapters[sid] = adapter
+
+    def unavailable(*args):
+        raise EffectRuntimeResponseAmbiguous("chat.turn.execution_allowed", timeout=10)
+
+    monkeypatch.setattr(chat_turn_acceptance, "managed_turn_execution_allowed", unavailable)
+    try:
+        assert not runtime._prepare_transport_retry(sid, turn["turn_id"], adapter, {}, {"serverOverloaded": {}})
+        assert not any(row["kind"] == "transport.retry_planned" for row in store.events_after(sid, turn["turn_id"], None))
+        assert store.load_turn(sid, turn["turn_id"]) == turn
+    finally:
+        runtime.adapters.clear()
+        runtime.close()
+
+
+@pytest.mark.parametrize("status", ["interrupting", "completed"])
+@pytest.mark.parametrize("failure_kind", ["agent", "timeout", "runtime"])
+def test_late_provider_failure_preserves_concurrent_stop_or_completion(tmp_path, monkeypatch, status, failure_kind):
+    from loopx.chat_store import ChatSessionStore
+    from loopx.control_plane import chat_turn_acceptance
+    from loopx.control_plane.effect_runtime import EffectRuntimeResponseAmbiguous
+
+    store = ChatSessionStore(tmp_path / "chat")
+    sid = store.create_session(goal_id="fixture", agent_id="codex",
+        adapter_kind="codex_app_server", upstream_thread_id="saved-thread")["session_id"]
+    turn, _ = store.create_turn(sid, client_turn_id="original", message="Keep original request.")
+    runtime = chat_runtime.ChatRuntimeController(store=store, codex_bin="unused")
+    allowed = chat_turn_acceptance.managed_turn_execution_allowed
+    preserved, effects = [], []
+
+    def checked(session, current):
+        if preserved:
+            raise EffectRuntimeResponseAmbiguous("chat.turn.execution_allowed", timeout=10)
+        return allowed(session, current)
+
+    def fail(message, event_sink):
+        if status == "interrupting":
+            store.begin_turn_interrupt(sid, turn["turn_id"], expected_statuses={"starting", "running"})
+        else:
+            store.update_turn(sid, turn["turn_id"], status="completing", response={"message": "Saved answer."})
+            store.finalize_managed_turn_completion(sid, turn["turn_id"])
+        preserved.append((store.session_snapshot(sid), store.load_turn(sid, turn["turn_id"])))
+        if failure_kind == "runtime":
+            raise ValueError("Late error.")
+        error = chat_agent.CodexChatTimeoutError if failure_kind == "timeout" else chat_agent.CodexChatAgentError
+        raise error("Late error.", gate=None)
+
+    adapter = SimpleNamespace(upstream_thread_id="saved-thread", start_turn=fail,
+        healthcheck=lambda: True, interrupt_turn=lambda: effects.append("cancel"))
+    monkeypatch.setattr(chat_turn_acceptance, "managed_turn_execution_allowed", checked)
+    try:
+        runtime._run_turn(session_id=sid, turn_id=turn["turn_id"], message=turn["message"], attachments=[], adapter=adapter)
+        after, (before, original_turn) = store.session_snapshot(sid), preserved[0]
+        # Closing the event buffer finishes activity timestamps, not ownership.
+        for view in (before, after):
+            for field in ("updated_at", "last_activity_at"):
+                view["session"].pop(field)
+            if view["active_turn"] is not None:
+                for field in ("first_event_at", "last_activity_at"):
+                    view["active_turn"].pop(field)
+        assert after == before
+        observed_turn = store.load_turn(sid, turn["turn_id"])
+        for record in (original_turn, observed_turn):
+            for field in ("first_event_at", "last_activity_at"):
+                record.pop(field)
+        assert observed_turn == original_turn
+        assert not effects
+        assert not any(row["kind"] == "turn.failed" for row in store.events_after(sid, turn["turn_id"], None))
+    finally:
+        runtime.close()
+
+
 @pytest.mark.parametrize("mode", ["chat", "execution", "structured", "review"])
 def test_native_turn_preserves_operator_material(monkeypatch, tmp_path, mode):
     material = "  修复下面的代码，保留字面值：\r\n```python\r\nif ready:\r\n\tprint('a  b')\r\n```\n\nname:\u00a0value  \n"
@@ -105,10 +253,14 @@ def test_interrupted_result_review_requires_stable_full_inventory_without_final_
 
 
 @pytest.mark.parametrize("background", [False, True])
-def test_result_review_enforces_workspace_read_profile_on_the_original_thread_and_home(monkeypatch, tmp_path, background):
+@pytest.mark.parametrize("metadata", [False, True])
+def test_result_review_enforces_workspace_read_profile_on_the_original_thread_and_home(monkeypatch, tmp_path, background, metadata):
     context = {"kind": "project_workspace", "project_ref": "a" * 24, "workspace_path": str(tmp_path),
         "audience": "bound_owner", "grant": "workspace_write", "binding_id": "b" * 24,
         "source_ref": "c" * 24, "provider_ref": "d" * 24, "operator_ref": "e" * 24}
+    if metadata:
+        context = {**context, "kind": "bound_steward", "grant": "portfolio_read", "goal_ids": []}
+    options = {"metadata_review_context" if metadata else "project_context": context}
     profile = "loopx_workspace_only_read"
     process = _FakeAppServerProcess(config_response={"config": {"features": {"apps": True},
         "mcp_servers": {"private_tool": {"command": "sensitive"}, "loopx_public_source_read": {"enabled": True}}}},
@@ -132,13 +284,13 @@ def test_result_review_enforces_workspace_read_profile_on_the_original_thread_an
     if background:
         with pytest.raises(chat_agent.CodexChatAgentError, match="still has background work"):
             chat_agent.CodexChatAgentSession.start(codex_bin="codex", work_dir=tmp_path,
-                goal_id=None, objective="project", project_context=context, codex_home=home,
+                goal_id=None, objective="project", **options, codex_home=home,
                 resume_thread_id="thread-loopx-chat", read_only_review=True, model="synthetic", reasoning_effort="high")
         assert process.returncode == 0
         assert not any(json.loads(line).get("method") == "turn/start" for line in process.stdin.getvalue().splitlines())
         return
     session = chat_agent.CodexChatAgentSession.start(codex_bin="codex", work_dir=tmp_path,
-        goal_id=None, objective="project", project_context=context, codex_home=home,
+        goal_id=None, objective="project", **options, codex_home=home,
         resume_thread_id="thread-loopx-chat", read_only_review=True, model="synthetic", reasoning_effort="high")
     try:
         sent = []
@@ -158,14 +310,18 @@ def test_result_review_enforces_workspace_read_profile_on_the_original_thread_an
         config = resume["config"]
         assert launched[0]["CODEX_HOME"] == str(home) and "PRIVATE_FIXTURE_TOKEN" not in launched[0]
         assert resume["threadId"] == "thread-loopx-chat" and resume["permissions"] == profile
-        assert "dynamicTools" not in resume and session.project_context == context
-        assert config["features"] == {"apps": False, "multi_agent": False, "multi_agent_v2": False}
+        assert "dynamicTools" not in resume and session.project_context == (None if metadata else context)
+        assert config["features"] == {"apps": False, "multi_agent": False, "multi_agent_v2": False,
+            **({"shell_tool": False, "apply_patch_freeform": False} if metadata else {})}
         assert resume["runtimeWorkspaceRoots"] == [str(tmp_path)]
         assert all(value == {"enabled": False} for value in config["mcp_servers"].values())
         policy = config["permissions"][profile]
         assert policy["filesystem"][":workspace_roots"] == {".": "read"} and policy["network"]["enabled"] is False
         turn = sent[0]
-        assert turn["permissions"] == profile and "do not re-execute" in turn["input"][0]["text"]
+        assert turn["permissions"] == profile
+        assert session.metadata_review == metadata
+        if not metadata:
+            assert "do not re-execute" in turn["input"][0]["text"]
     finally:
         session.close()
 
@@ -262,8 +418,7 @@ class _FakeAppServerProcess:
             {"id": 1, "result": {"serverInfo": {"name": "fake-codex"}}},
             {"id": 2, "result": thread_response or {"thread": {"id": thread_id}}},
         ]
-        if config_response is not None:
-            responses.insert(1, {"id": 3, "result": config_response})
+        responses.insert(1, {"id": 3, "result": config_response if config_response is not None else {"config": {}}})
         if model_provider is not None:
             responses[-1]["result"]["modelProvider"] = model_provider
         self.stdin = io.StringIO()
@@ -1526,6 +1681,39 @@ def test_codex_chat_pins_explicit_home_in_child_environment(monkeypatch, tmp_pat
         assert chat_agent.os.environ["CODEX_HOME"] == str(tmp_path / "ambient")
     finally:
         session.close()
+
+
+@pytest.mark.parametrize("provider", ["openai", "fixture-api-relay"])
+def test_resumed_chat_follows_native_account_route_without_replaying(monkeypatch, tmp_path, provider):
+    process = _FakeAppServerProcess(config_response={"config": {"model_provider": provider}},
+        model_provider=provider, thread_id="original-thread")
+    monkeypatch.delenv("LOOPX_CHAT_CODEX_MODEL_PROVIDER", raising=False)
+    monkeypatch.setattr(chat_agent.shutil, "which", lambda _: "codex")
+    monkeypatch.setattr(chat_agent.subprocess, "Popen", lambda *a, **k: process)
+    session = chat_agent.CodexChatAgentSession.start(codex_bin="codex", work_dir=tmp_path,
+        goal_id="fixture", objective="fixture", resume_thread_id="original-thread",
+        codex_home=tmp_path / "original-home")
+    try:
+        packets = [json.loads(line) for line in process.stdin.getvalue().splitlines()]
+        resume = next(p["params"] for p in packets if p.get("method") == "thread/resume")
+        assert resume["threadId"] == "original-thread" and resume["modelProvider"] == provider
+        assert resume["sandbox"] == "read-only" and resume["approvalPolicy"] == "never"
+        assert not any(p.get("method") in {"thread/start", "turn/start", "account/login/start"} for p in packets)
+    finally:
+        session.close()
+
+
+def test_native_route_readback_mismatch_blocks_dispatch(monkeypatch, tmp_path):
+    process = _FakeAppServerProcess(config_response={"config": {"model_provider": "openai"}},
+        model_provider="old-api-relay", thread_id="original-thread")
+    monkeypatch.delenv("LOOPX_CHAT_CODEX_MODEL_PROVIDER", raising=False)
+    monkeypatch.setattr(chat_agent.shutil, "which", lambda _: "codex")
+    monkeypatch.setattr(chat_agent.subprocess, "Popen", lambda *a, **k: process)
+    with pytest.raises(chat_agent.CodexChatAgentError, match="requested conversation provider"):
+        chat_agent.CodexChatAgentSession.start(codex_bin="codex", work_dir=tmp_path,
+            goal_id="fixture", objective="fixture", resume_thread_id="original-thread")
+    assert process.returncode == 0
+    assert not any(json.loads(line).get("method") == "turn/start" for line in process.stdin.getvalue().splitlines())
 
 
 def test_codex_chat_provider_override_resumes_original_thread_and_preserves_policy(monkeypatch, tmp_path):

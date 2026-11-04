@@ -173,7 +173,7 @@ def test_execution_scoped_planning_recovery_through_public_cli(tmp_path: Path, m
         assert recovery["execution_authority_granted"] is False
         rendered = render_todo_markdown(rejected)
         assert f"handoff_mode: `{mode}`" in rendered
-        assert "loopx todo claim" in rendered
+        assert "- claim: `loopx " in rendered
         assert "task-lease" not in json.dumps(recovery)
         assert "first-execution" not in rendered
         assert "first-execution" not in json.dumps(rejected)

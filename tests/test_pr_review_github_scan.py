@@ -857,16 +857,48 @@ def test_head_drift_observation_does_not_suppress_the_new_remote_head(
     assert item["merge_readiness_observation"] is None
 
 
-def test_merge_readiness_requires_goal_scope() -> None:
+@pytest.mark.parametrize("hold", [None, "head", "review", "ci", "thread", "pagination"])
+def test_standalone_merge_readiness_keeps_all_gates_without_goal_writes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    hold: str | None,
+) -> None:
+    pull_request = _merge_ready_pr()
+    threads = _complete_review_threads()
+    if hold == "head":
+        pull_request["headRefOid"] = HEAD_2
+    elif hold == "review":
+        pull_request["reviews"] = []
+    elif hold == "ci":
+        pull_request["statusCheckRollup"][0]["conclusion"] = "FAILURE"
+    elif hold == "thread":
+        threads = _complete_review_threads(1)
+    elif hold == "pagination":
+        threads["complete"] = False
+    monkeypatch.setattr(pr_review_cli_module, "resolve_current_github_login", lambda: "maintainer")
+    monkeypatch.setattr(pr_review_cli_module, "fetch_github_pull_request", lambda **_kwargs: pull_request)
+    monkeypatch.setattr(pr_review_cli_module, "fetch_github_review_thread_summary", lambda **_kwargs: threads)
+
+    def no_goal_access(**_kwargs):
+        raise AssertionError("Standalone readiness cannot read or write Goal observations")
+
+    monkeypatch.setattr(pr_review_cli_module, "read_readiness_observations", no_goal_access)
+    monkeypatch.setattr(pr_review_cli_module, "record_readiness_observation", no_goal_access)
     out: list[dict[str, object]] = []
     result = pr_review_cli_module.handle_pr_review_command(
         _merge_readiness_args(goal_id=None),
+        runtime_root=tmp_path,
         output_format=lambda _args: "json",
         print_payload=_capture_payload(out),
     )
 
-    assert result == 1
-    assert out[0]["error"] == "merge readiness requires --goal-id"
+    assert result == (0 if hold is None else 1)
+    assert out[0]["ready"] is (hold is None)
+    assert out[0]["source"] == "github_cli"
+    assert out[0]["expected_exact_head"] == f"4110@{HEAD_1}"
+    assert out[0]["local_goal_observation_write_performed"] is False
+    assert "readiness_observation" not in out[0]
+    assert not list(tmp_path.iterdir())
 
 
 def test_pr_review_cli_uses_machine_capability_priority_when_flag_is_omitted(
@@ -1030,7 +1062,42 @@ def test_merge_readiness_binds_review_body_checks_and_threads_to_exact_head() ->
     assert ready["ready"] is True, ready
     assert ready["blocking_reasons"] == [], ready
     assert ready["authority"]["grants_merge_authority"] is False, ready
+    assert ready["authority"]["admin_bypass_overrides_this_gate"] is True, ready
+    assert ready["authority"]["admin_bypass_scope"] == (
+        "readiness_and_github_review_policy"
+    ), ready
     assert ready["review_conclusion"]["verdict"] == "APPROVE", ready
+
+
+def test_explicit_admin_bypass_may_override_a_readiness_policy_hold() -> None:
+    pr = _merge_ready_pr(review_decision="REVIEW_REQUIRED")
+    pr["mergeStateStatus"] = "BLOCKED"
+    readiness = merge_readiness_module.build_pr_merge_readiness_packet(
+        pull_request=pr,
+        repository="owner/repo",
+        expected_exact_head=f"4110@{HEAD_1}",
+        reviewer_login="maintainer",
+        review_threads=_complete_review_threads(),
+        source="fixture",
+        wait_for_ci=False,
+    )
+
+    assert readiness["ready"] is False, readiness
+    assert readiness["blocking_reasons"] == ["github_review_decision_not_approved"]
+    assert readiness["admin_bypass_required"] is True
+    assert readiness["authority"] == {
+        "grants_merge_authority": False,
+        "admin_bypass_overrides_this_gate": True,
+        "admin_bypass_scope": "readiness_and_github_review_policy",
+        "admin_bypass_requires": [
+            "explicit_user_or_maintainer_merge_authorization",
+            "valid_exact_head_review_and_required_validation",
+            "complete_review_threads_without_unresolved_findings",
+            "open_unchanged_mergeable_head",
+        ],
+        "required_timing": "immediately_before_merge",
+        "head_change_action": "restart_review_and_rerun_gate",
+    }
 
 
 def test_merge_readiness_rejects_review_text_for_pre_update_head() -> None:
@@ -1051,6 +1118,7 @@ def test_merge_readiness_rejects_review_text_for_pre_update_head() -> None:
 
     assert stale["ready"] is False, stale
     assert "current_head_review_missing_or_invalid" in stale["blocking_reasons"]
+    assert stale["authority"]["admin_bypass_overrides_this_gate"] is False
     assert (
         "review_body_missing_standalone_bilingual_format"
         in (stale["review_conclusion"]["invalid_reasons"])

@@ -39,6 +39,29 @@ def test_inventory_pins_code_revision_but_rereads_original_source(api, monkeypat
     assert len(scans) == 2, "Each HTTP read must qualify its own runtime revision"
 
 
+def test_original_history_pins_code_revision_per_http_read_but_rereads_receipts(api, monkeypatch):
+    from loopx.control_plane import effect_runtime
+
+    _, call, route = _source(api)
+    _, _, server = api
+    original = effect_runtime._runtime_fingerprint
+    scans = []
+    def fingerprint():
+        scans.append(True)
+        return original()
+    monkeypatch.setattr(effect_runtime, "_runtime_fingerprint", fingerprint)
+    path = f"/api/chat/sessions/{route['session_id']}?message_limit=200"
+    code, first = call(path=path)
+    assert code == 200 and any(message.get("collaboration") for message in first["messages"])
+    assert len(scans) == 1, "A history page must not rescan the source tree for each collaboration rule"
+    turn = server.chat_store.load_turn(route["session_id"], route["turn_id"])
+    server.chat_store.update_turn(route["session_id"], route["turn_id"], response={"context_handoff_receipt": {
+        **turn["response"]["context_handoff_receipt"], "request_id": "b" * 64}})
+    code, changed = call(path=path)
+    assert code == 200 and not any(message.get("collaboration") for message in changed["messages"])
+    assert len(scans) == 2, "A new HTTP read must independently qualify code and current source receipts"
+
+
 def test_read_and_adoption_still_owe_conclusion_and_queued_return_stays_visible(api):
     _, _, route = _source(api)
     _, f, server = api
@@ -127,6 +150,7 @@ def test_paging_and_unreadable_source_do_not_report_empty_or_mutate_receipts(api
     import loopx.chat_store as chat_store
     from loopx.control_plane.collaboration import source_chat_observation
     from loopx.presentation.request_control_api import RequestControlMixin
+    from loopx.control_plane.collaboration import conversation_inventory
 
     _, _, route = _source(api)
     _, f, server = api
@@ -152,12 +176,26 @@ def test_paging_and_unreadable_source_do_not_report_empty_or_mutate_receipts(api
         return read_json(path)
     monkeypatch.setattr(source_chat_observation, "_read_json", counted_read)
     monkeypatch.setattr(chat_store, "_read_json", counted_read)
+    linked_reads = []
+    original_work = conversation_inventory.read_linked_work
+    def linked_work(*args, **kwargs):
+        linked_reads.append(args[2]["request_id"])
+        return original_work(*args, **kwargs)
+    monkeypatch.setattr(conversation_inventory, "read_linked_work", linked_work)
     code, first = _inventory(api, route["session_id"])
     assert code == 200 and first["pending_count"] == 13 and len(first["rows"]) == 12, first
     assert len(turn_reads) <= 3 * 13, "One inventory must not rescan full Turn history for every request"
     assert len(verified) == 2, "Provider scope verification must not grow with rows from one source"
+    assert linked_reads == [row["request_id"] for row in first["rows"]], "Only the selected page may read linked Core work"
+    linked_reads.clear()
     second = _inventory(api, route["session_id"], offset=first["next_offset"])[1]
     assert len(verified) == 4, "A new HTTP read must verify the source independently"
+    assert linked_reads == [row["request_id"] for row in second["rows"]]
+    linked_reads.clear()
+    light = _inventory(api, route["session_id"], include_work="false")[1]
+    assert linked_reads == [], "A collapsed list must not block on any Core work"
+    assert light["pending_count"] == first["pending_count"] and light["snapshot_digest"] == first["snapshot_digest"]
+    assert light["rows"] == first["rows"], "An unlinked fixture has the same facts on both read paths"
     assert len(second["rows"]) == 1 and second["next_offset"] is None
     assert second["snapshot_digest"] == first["snapshot_digest"]
     assert not {row["request_id"] for row in first["rows"]} & {row["request_id"] for row in second["rows"]}
@@ -275,10 +313,15 @@ def test_inventory_refresh_window_is_bounded_and_preserves_default_page(api):
     code, default = _inventory(api, route["session_id"])
     assert code == 200 and len(default["rows"]) == 1
     assert _inventory(api, route["session_id"], limit=12)[1]["rows"] == default["rows"]
+    assert _inventory(api, route["session_id"], include_work="false")[0] == 200
+    for value in ("", "False", "1", "unknown"):
+        code, refused = _inventory(api, route["session_id"], include_work=value)
+        assert code == 400 and "rows" not in refused
 
 
 @pytest.mark.parametrize("limit", [12, 48])
-def test_inventory_withholds_all_content_when_closing_source_scope_changes(api, monkeypatch, limit):
+@pytest.mark.parametrize("include_work", ["true", "false"])
+def test_inventory_withholds_all_content_when_closing_source_scope_changes(api, monkeypatch, limit, include_work):
     from loopx.presentation.request_control_api import RequestControlMixin
 
     _, _, route = _source(api)
@@ -289,7 +332,7 @@ def test_inventory_withholds_all_content_when_closing_source_scope_changes(api, 
         verified.append(session_id)
         return (observed, [], core) if len(verified) == 2 else (observed, goals, core)
     monkeypatch.setattr(RequestControlMixin, "_request_inventory_scope", observe_scope)
-    code, denied = _inventory(api, route["session_id"], limit=limit)
+    code, denied = _inventory(api, route["session_id"], limit=limit, include_work=include_work)
     assert code == 400 and denied["error_code"] == "request_inventory_unavailable"
     assert "rows" not in denied and "Check the current contract" not in str(denied)
 

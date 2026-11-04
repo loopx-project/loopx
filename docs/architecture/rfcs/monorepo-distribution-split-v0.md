@@ -736,6 +736,56 @@ Approval needs a reviewed decision, not implementation progress or silence.
   by the guard, and covering it would be a runtime change with its own
   acceptance, not a documentation change.
 
+### 2026-11-03 — Selected host-mode discovery loading
+
+- **Baseline:** `6a6a8590e`. Earlier selected routes for `performance-diagnosis`
+  and `goal-acceptance` are already on this baseline; the Section 4 audit above
+  remains historical, not the current implementation inventory.
+- **Delta:** `host-mode-plan` uses its existing registrar and handler through
+  `cli_runtime`, without loading the full CLI or Chat graph on valid requests.
+  Rejected syntax retains the full-parser diagnostic path. The host selector,
+  preview commands, readiness and authority rules do not move or change.
+- **M1 integration:** [#7878](https://github.com/loopx-project/loopx/pull/7878)
+  is merged at `ffe84a693`: 17 internal-only Chat owners are under `loopx/chat/`,
+  with the top-level count and budget both 128 (145 before this move group).
+  This is a structural delta, not a performance or full-M1 qualification.
+- **Evidence:** `tests/test_cli_entrypoint.py` checks owner-only help, JSON and
+  Markdown parity, unavailable-host previews, invalid requests and zero process,
+  network or file-write activation. A separately installed wheel exercises help,
+  ready/unavailable previews and rejection without Node or a live registry.
+  Local paired fresh-process measurements use 20 samples per revision/workload,
+  one discarded warm-up and alternating order, with telemetry off and warm file
+  caches. On macOS arm64/Python 3.13.5, the help/preview LoopX closure falls
+  from 1,149 to 57 modules; byte-identical output is retained. Timing/RSS belong
+  to the PR's scoped evidence, not a portable threshold or task-outcome claim.
+- **Remaining:** this extends R0-style loading qualification to discovery;
+  it does not complete R0's full V10 census, M1 public-import migration, split
+  packaging or R1 managed minimal. D1–D7 remain open. No new preset or default.
+
+### 2026-11-03 — M1 public status compatibility characterization
+
+- **Boundary:** `ChatStatusRequestMixin` and `goal_read_runtime_root` still live
+  in `loopx.chat_status_api`. The Chat HTTP handler and Todo detail are active
+  consumers. This is a characterization prerequisite, not a relocated owner.
+- **Compatibility evidence:** `tests/test_chat_status_public_compatibility.py`
+  protects historical imports in three fresh-process import orders, historical
+  pickle lookups, reload with already-imported references, and live registry,
+  collector and host-observation patch points through the real HTTP handler.
+  Discovery tolerates a missing registry, not unreadable or invalid metadata.
+  A copied-export facade mutation fails the source-bound Todo-consumer patch
+  oracle: re-exported functions alone do not preserve legacy module globals.
+- **Next reviewed slice:** move the complete status owner under `loopx/chat/`
+  with an identity-compatible public bridge and documented I3 deprecation.
+  Retarget both the exact loader path and `_discovery_registry` exception in
+  `tests/architecture/test_source_session_registry_denial.py` together, retaining
+  metadata-only discovery and executable source-session refusal. The present
+  slice leaves that owner and oracle unchanged; do not split ownership or relax
+  the denial oracle just to make a partial move pass.
+- **Remaining:** status relocation and its installed-wheel integration are not
+  delivered by characterization. I3 retains at least one minor release; D3's
+  exact expiry remains a release-owner decision. M1 is open. No module-count,
+  loading-performance, split-package or R1 managed-Turn benefit is claimed.
+
 ## Appendix B: Decision log
 
 | Date | Decision | Owner / approval | Alternatives | Normative sections changed |

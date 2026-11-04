@@ -63,7 +63,7 @@ def wide_goal(tmp_path, monkeypatch, request):
             "status": "open",
             "done": False,
             "text": f"Retained work {index}",
-            "note": "完整🙂" * 1600,
+            "note": "完整🙂" * 6000,
             "archive_state": "active",
             "source_section": "Agent Todo",
             "index": index + 1,

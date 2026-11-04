@@ -12,6 +12,57 @@ from loopx.capabilities.native_chat.conversation_bindings import ChatConversatio
 from loopx.extensions.lark.conversation_identity import identity_ref
 
 
+@pytest.mark.parametrize("command", ["stop", "new"])
+def test_quota_backlog_observes_a_later_source_stop_before_new_admission(ordinary, monkeypatch, command):  # noqa: F811
+    from datetime import datetime, timedelta, timezone
+    from loopx.capabilities.native_chat import external_conversations
+    from test_lark_private_conversations import connect
+
+    store, runtime, provider, transport = connect(ordinary)
+    fake = ordinary[-2]
+    fake.write_text(fake.read_text().replace('"codexErrorInfo": "cyberPolicy"',
+        '"codexErrorInfo": "usageLimitExceeded"').replace(
+        '            print(json.dumps({"method": "item/agentMessage/delta", "params": {"threadId": "durable-thread", "turnId": active_turn, "delta": "Partial answer."}}), flush=True)\n', ''))
+    try:
+        transport.admit("notes-app", provider.event("notes-app", "quota-stop", "typed terminal failure"))
+        row = transport.core.pending()[0]
+        failed = runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)
+        assert failed["error_code"] == "usage_limit_exceeded"
+        transport.reconcile()
+        clock = datetime.now(timezone.utc) + timedelta(seconds=61)
+        class AfterBackoff(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return clock
+        monkeypatch.setattr(external_conversations, "datetime", AfterBackoff)
+        original = transport.core.read_request(row["request_ref"])
+        assert transport.core._context_recovery_plan(original, discovery_only=True)["recovery_candidate"]
+        transport.admit("steward-app", provider.event("steward-app", "unrelated-stop", "/stop"))
+        assert transport.core._context_recovery_plan(original, discovery_only=True)["recovery_candidate"]
+        assert transport.health()[row["binding_id"]]["pending_count"] == 1
+        transport.admit("notes-app", provider.event("notes-app", "later-stop", f"/{command}"))
+        transport.reconcile()
+        assert transport.health()[row["binding_id"]]["pending_count"] == 0
+        calls = ordinary[4].read_bytes()
+        assert not transport.core._context_recovery_plan(original, discovery_only=True)["recovery_candidate"]
+        assert ordinary[4].read_bytes() == calls
+        assert store.load_turn(row["session_id"], row["turn_id"]) == failed
+        transport.admit("notes-app", provider.event("notes-app", "future-request", "A new independent request"))
+        newer = next(x for x in transport.core.pending() if x.get("message") == "A new independent request")
+        completed = runtime.wait_for_turn(session_id=newer["session_id"], turn_id=newer["turn_id"], timeout_sec=10)
+        assert completed["status"] == "completed"
+        transport.reconcile()
+        from loopx.extensions.lark.private_conversations import LarkPrivateConversations
+        restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+            runner=provider, cli_bin="lark-cli")
+        before = ordinary[4].read_bytes(), list(provider.calls)
+        assert restarted.health()[row["binding_id"]]["pending_count"] == 0
+        assert (ordinary[4].read_bytes(), provider.calls) == before
+        assert store.load_turn(row["session_id"], row["turn_id"]) == failed
+    finally:
+        runtime.close()
+
+
 @pytest.fixture
 def recorded_return_continuation(private_return, monkeypatch):  # noqa: F811
     """Use the real admission/recovery owners; only model/provider IO is fake."""
@@ -294,6 +345,33 @@ def test_return_delivery_readback_survives_a_separate_history_page(flow):  # noq
     assert sum(bool(row.get("collaboration")) for row in rows) == 1
 
 
+def test_turn_history_matches_full_history_collaboration_and_returns(flow):  # noqa: F811
+    from loopx.capabilities.manager_context import acknowledge
+    from loopx.capabilities.manager_context.roundtrip import drain, report, project_chat_session_snapshot
+
+    root, registry, store, create = flow
+    session, turn, receipt = create(brief=_history_page_brief())
+    sid, tid = session["session_id"], turn["turn_id"]
+    store.append_message(sid, role="agent", text="Original commitment", turn_id=tid)
+    acknowledge(root, "research", "worker", receipt["request_id"], "adopt", "Keep original audience")
+    report(root, "research", "worker", receipt["request_id"], "conclusion", "Original conclusion")
+    drain(root, registry, store, lambda *_: pytest.fail("A private App return cannot send to a provider"))
+    store.append_message(sid, role="user", text="Unrelated history")
+    whole = project_chat_session_snapshot(root, store, sid, registry=registry)
+    expected = [row for row in whole["messages"] if row.get("turn_id") == tid]
+    cursor, rows = None, []
+    while True:
+        page = project_chat_session_snapshot(root, store, sid, registry=registry,
+            message_limit=1, message_cursor=cursor, turn_id=tid)
+        rows.extend(page["messages"])
+        cursor = page["message_page"]["next_cursor"]
+        if cursor is None:
+            break
+    assert rows == expected
+    assert sum(bool(row.get("collaboration")) for row in rows) == 1
+    assert rows[-1].get("return_delivery"), "Scoped history retains actual return delivery readback"
+
+
 def test_original_history_pages_freeze_append_boundary_and_keep_full_rows(ordinary, monkeypatch):  # noqa: F811
     from urllib.parse import urlencode
     from loopx.chat_server import ChatHTTPServer
@@ -337,6 +415,63 @@ def test_original_history_pages_freeze_append_boundary_and_keep_full_rows(ordina
     assert code == 503 and "private journal path" not in json.dumps(unavailable)
 
 
+def test_original_turn_history_keeps_complete_rows_and_scope_fences(ordinary, monkeypatch):  # noqa: F811
+    from urllib.parse import urlencode
+    from loopx.chat_server import ChatHTTPServer
+
+    store, runtime, contexts, request, capture, _, _ = ordinary
+    monkeypatch.setattr(ChatHTTPServer, "runtime_root", store.root.parent, raising=False)
+    monkeypatch.setattr(ChatHTTPServer, "registry_path", runtime.registry_path, raising=False)
+    _, opened = request("/api/chat/sessions", {
+        "context_kind": "project", "project_ref": contexts.available()[0]["project_ref"],
+    })
+    sid = opened["session_id"]
+    for i in range(430):
+        store.append_message(sid, role="user", text=f"Unrelated history {i}")
+    turn, _ = store.create_turn(sid, client_turn_id="selected-original", message="完整原始要求" * 3000, origin="web")
+    tid = turn["turn_id"]
+    for i in range(202):
+        store.append_message(sid, role="agent", text=f"Original response {i}", turn_id=tid,
+            attachments=[{"name": "original.png", "data_url": "data:image/png;base64,AA=="}] if i == 201 else None)
+    store.update_turn(sid, tid, status="completed", response={"message": "Original response 201"})
+    path = f"/api/chat/sessions/{sid}"
+    before = capture.read_bytes()
+    whole = request(path)[1]
+    expected = [row for row in whole["messages"] if row.get("turn_id") == tid]
+    recovered, recover = [], runtime.recover_exited_turn
+    def observe_recovery(source):
+        recovered.append(source)
+        return recover(source)
+    monkeypatch.setattr(runtime, "recover_exited_turn", observe_recovery)
+    query = {"message_limit": 200, "turn_id": tid}
+    code, first = request(path + "?" + urlencode(query))
+    assert code == 200 and first["message_page"]["turn_id"] == tid
+    assert len(first["messages"]) == 200 and first["message_page"]["total"] == len(expected) == 203
+    cursor = first["message_page"]["next_cursor"]
+    store.append_message(sid, role="agent", text="Outside the frozen original prefix", turn_id=tid)
+    code, rest = request(path + "?" + urlencode({**query, "message_cursor": cursor}))
+    assert code == 200 and rest["message_page"]["next_cursor"] is None
+    assert first["messages"] + rest["messages"] == expected
+    assert recovered == [], "A historical Turn read must not recover the Session's active execution"
+    assert capture.read_bytes() == before, "A scoped read cannot execute or recover model work"
+    assert "turn_id" not in request(path + "?message_limit=200")[1]["message_page"]
+    assert recovered == [sid], "An unscoped Chat refresh keeps its ordinary recovery behavior"
+    other, _ = store.create_turn(sid, client_turn_id="other-original", message="Other question", origin="web")
+    store.update_turn(sid, other["turn_id"], status="completed", response={"message": "Other answer"})
+    for selected in [None, other["turn_id"]]:
+        wrong = {"message_limit": 200, "message_cursor": cursor, **({"turn_id": selected} if selected else {})}
+        assert request(path + "?" + urlencode(wrong))[0] == 400
+    for invalid in ["turn_id=missing", "message_limit=200&turn_id=missing", "message_limit=200&turn_id=..",
+                    "message_limit=200&turn_id=", "message_limit=200&turn_id=a&turn_id=b"]:
+        assert request(path + "?" + invalid)[0] == 400
+    journal = store._session_dir(sid) / "messages.jsonl"
+    original = journal.read_bytes()
+    journal.write_bytes(original + b'{invalid record}\n')
+    assert request(path + "?" + urlencode(query))[0] == 400
+    journal.write_bytes(original)
+    assert request(path + "?" + urlencode(query))[1]["message_page"]["total"] == 204
+
+
 def test_app_steward_corrupt_legacy_configuration_never_falls_back(tmp_path):
     bindings = ChatConversationBindings(root=tmp_path, project_contexts=None,
         observe=lambda _: pytest.fail("an unselected entry must not probe a provider"))
@@ -353,6 +488,70 @@ def test_app_steward_corrupt_legacy_configuration_never_falls_back(tmp_path):
     assert bindings.path.read_bytes() == before
     assert bindings.select_app_steward(None, expected_revision=valid["revision"])["bindings"] == []
     assert bindings.path.read_bytes() == before
+
+
+def test_app_steward_snapshot_does_not_wait_for_background_mutation(steward):  # noqa: F811
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from loopx.file_lock import exclusive_file_lock
+
+    store, runtime, provider, transport, binding, capture, _ = steward
+    event = provider.event("steward-app", "snapshot-original", "Read the workspace")
+    transport.admit("steward-app", event)
+    request = transport.core.read_request(identity_ref(binding["provider_ref"], event["message_id"]))
+    sid = request["session_id"]
+    assert runtime.wait_for_turn(session_id=sid, turn_id=request["turn_id"], timeout_sec=10)["status"] == "completed"
+    bindings = transport.bindings
+    bindings.select_app_steward(binding["binding_id"], expected_revision=bindings.read()["revision"])
+    expected = {"binding_id": binding["binding_id"], "session_id": sid}
+    assert bindings.app_steward_target() == expected
+    before = capture.read_bytes(), store.messages(sid), bindings.path.read_bytes()
+    held, release = threading.Event(), threading.Event()
+
+    def background_inspection():
+        with runtime.lock, exclusive_file_lock(bindings.path, operation="inspect_native_steward_turn"):
+            held.set()
+            assert release.wait(10)
+
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        inspection = workers.submit(background_inspection)
+        try:
+            assert held.wait(2)
+            target = workers.submit(bindings.app_steward_target)
+            assert target.result(timeout=.75) == expected
+            assert not release.is_set(), "Snapshot discovery must complete while inspection is blocked"
+        finally:
+            release.set()
+            inspection.result(timeout=2)
+    assert (capture.read_bytes(), store.messages(sid), bindings.path.read_bytes()) == before
+
+
+@pytest.mark.parametrize("change", ["selection", "revocation"])
+def test_app_steward_snapshot_rechecks_grant_after_core_discovery(steward, monkeypatch, change):  # noqa: F811
+    store, runtime, provider, transport, binding, capture, _ = steward
+    event = provider.event("steward-app", "snapshot-race", "Read the workspace")
+    transport.admit("steward-app", event)
+    request = transport.core.read_request(identity_ref(binding["provider_ref"], event["message_id"]))
+    sid = request["session_id"]
+    assert runtime.wait_for_turn(session_id=sid, turn_id=request["turn_id"], timeout_sec=10)["status"] == "completed"
+    bindings = transport.bindings
+    bindings.select_app_steward(binding["binding_id"], expected_revision=bindings.read()["revision"])
+    before = capture.read_bytes(), store.messages(sid)
+    core = bindings._core
+
+    def change_after_discovery(operation, params, **kwargs):
+        result = core(operation, params, **kwargs)
+        if operation == "collaboration.conversation.local_sessions":
+            if change == "selection":
+                bindings.select_app_steward(None, expected_revision=bindings.read()["revision"])
+            else:
+                bindings.disconnect(binding["binding_id"], expected_revision=bindings.read()["revision"])
+        return result
+
+    monkeypatch.setattr(bindings, "_core", change_after_discovery)
+    with pytest.raises(ValueError, match="changed"):
+        bindings.app_steward_target()
+    assert (capture.read_bytes(), store.messages(sid)) == before
 
 
 def _request_for_event(transport, event):
@@ -1319,7 +1518,7 @@ def test_read_only_bound_project_rejects_write_scoped_executor_before_session_cr
         project_grant="workspace_read",
     )
     monkeypatch.setattr(
-        "loopx.chat_endpoint_catalog.shutil.which",
+        "loopx.chat.endpoint_catalog.shutil.which",
         lambda executable: executable if executable == "kiro-cli" else None,
     )
     starts = []
@@ -1363,7 +1562,7 @@ def test_read_only_bound_project_rejects_write_scoped_executor_before_session_cr
         project_grant="workspace_read",
     )
     monkeypatch.setattr(
-        "loopx.chat_endpoint_catalog.shutil.which",
+        "loopx.chat.endpoint_catalog.shutil.which",
         lambda executable: executable
         if executable in {"kiro-cli", runtime.codex_bin}
         else None,

@@ -105,6 +105,12 @@ loopx check \
   --scan-path examples/
 ```
 
+The credential rule also rejects unlabeled provider token shapes (GitHub, Slack,
+AWS, Google, Stripe, npm, PyPI, JWT) anywhere in a file. A fixture or example
+that must demonstrate a redaction keeps the value split, for example
+`"ghp_" + "<suffix>"` in Python or a `\u` escape in JSON, so the test still
+exercises the scan without a raw token entering the repository or the PR diff.
+
 ## Local Development
 
 Use the [developer guide](docs/development/README.md) as the stable entry point.

@@ -53,6 +53,8 @@ select_loopx_python() {
     authoritative=1
   elif [ -f "${REPO_ROOT}/.loopx-python" ]; then
     IFS= read -r configured_python <"${REPO_ROOT}/.loopx-python"
+    # Installer records can use Windows CRLF; the CR is not part of the path.
+    configured_python="${configured_python%$'\r'}"
   fi
 
   if [ -n "${configured_python}" ]; then
@@ -75,11 +77,14 @@ select_loopx_python() {
   fi
 
   while IFS= read -r candidate; do
-    resolved="$(resolve_candidate "${candidate}")"
-    if [ -n "${resolved}" ] && python_version_ok "${resolved}"; then
-      printf '%s\n' "${resolved}"
-      return 0
-    fi
+    # A broken earlier executable must not hide a usable equal-minor runtime.
+    for directory in "${path_directories[@]}"; do
+      resolved="$(resolve_candidate "${directory:-.}/${candidate}")"
+      if [ -n "${resolved}" ] && python_version_ok "${resolved}"; then
+        printf '%s\n' "${resolved}"
+        return 0
+      fi
+    done
   done < <(versioned_python_names "${path_directories[@]}")
 
   resolved="$(resolve_candidate python3)"

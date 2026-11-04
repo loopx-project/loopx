@@ -25,7 +25,6 @@ from ..todos.contract import normalize_todo_claimed_by
 
 HOST_POLL_RECEIPT_SCHEMA_VERSION = "loopx_host_poll_receipt_v0"
 HOST_POLL_RECEIPT_DIRNAME = ".loopx-host-poll-receipts"
-HOST_POLL_STALE_MINUTES = 240
 _UNCHANGED_WORKER_OBSERVATION = object()
 
 
@@ -262,46 +261,3 @@ def read_host_poll_receipt_observation(
     except ValueError:
         return {"read_status": "unreadable", "receipt": None}
     return {"read_status": "read", "receipt": payload}
-
-
-def stale_host_poll_risk(
-    receipt: dict[str, Any],
-    *,
-    now: datetime | None = None,
-    stale_minutes: int = HOST_POLL_STALE_MINUTES,
-) -> dict[str, Any] | None:
-    """Derive a compact stale-loop risk row from one receipt."""
-
-    if not isinstance(receipt, dict):
-        return None
-    if receipt.get("expected_continuation") is not True:
-        return None
-    raw_last_poll = receipt.get("last_poll_at")
-    if not isinstance(raw_last_poll, str):
-        return None
-    try:
-        last_poll = datetime.fromisoformat(raw_last_poll)
-    except ValueError:
-        return None
-    current = now or datetime.now(timezone.utc)
-    if last_poll.tzinfo is None:
-        last_poll = last_poll.replace(tzinfo=timezone.utc)
-    age_minutes = (current - last_poll).total_seconds() / 60
-    if age_minutes < stale_minutes:
-        return None
-    return {
-        "schema_version": "loopx_stale_host_poll_risk_v0",
-        "kind": "stale_host_poll",
-        "goal_id": str(receipt.get("goal_id") or ""),
-        "agent_id": str(receipt.get("agent_id") or ""),
-        "last_poll_at": raw_last_poll,
-        "age_minutes": round(age_minutes, 1),
-        "stale_minutes": stale_minutes,
-        "poll_count": receipt.get("poll_count"),
-        "reason": (
-            "The host loop polled quota while expecting continuation but has "
-            "gone quiet for longer than the staleness window. The driver may "
-            "have died mid-wait, or the loop may have been paused or stopped "
-            "intentionally; check the session and LoopX gates before resuming."
-        ),
-    }

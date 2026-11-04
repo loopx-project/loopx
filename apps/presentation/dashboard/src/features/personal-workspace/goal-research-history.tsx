@@ -15,7 +15,7 @@ import {ExploreMeasurements, formatExploreMeasurementValue} from "./explore-meas
 import {projectTrajectoryDisplay, trajectoryDisplaySnapshotText} from "../../../../../../loopx/control_plane/capabilities/trajectory_assessment_display.js";
 
 type CollectionSelection = {nodes: string[]; day: string | null};
-type Selection = CollectionSelection & {finding?: string; collection?: CollectionSelection};
+type Selection = CollectionSelection & {finding?: string; collection?: CollectionSelection; question?: boolean; returnKey?: string};
 type Lens = "timeline" | "graph";
 type Read = {events: ExploreHistoryEvent[]; total: number | null; complete: boolean};
 const selectedFromUrl = (goal: string): Selection => {
@@ -34,7 +34,9 @@ const selectedFromUrl = (goal: string): Selection => {
   const parentDay = query.get("research_parent_group"), parentNodes = ids("research_parent_node");
   const collection = nodes.length === 1 && (parentDay !== null || (parentNodes.length > 1 && parentNodes.includes(nodes[0]!)))
     ? {nodes: parentDay === null ? parentNodes : [], day: parentDay} : undefined;
-  return {nodes, day, finding: query.get("research_finding") || undefined, collection};
+  const finding = query.get("research_finding") || undefined;
+  return {nodes, day, finding, collection, question: query.get("research_question") === "1" || !finding,
+    returnKey: query.get("research_return") || undefined};
 };
 
 const viewFromUrl = (goal: string) => {
@@ -83,8 +85,8 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
   const [loaded, setLoaded] = useState(0);
   const [revision, setRevision] = useState(0);
   const [selection, setSelection] = useState(() => selectedFromUrl(goalId));
-  // Pinning the displayed finding must not collapse a newly opened question.
-  const [questionExpanded, setQuestionExpanded] = useState(() => !selectedFromUrl(goalId).finding);
+  // The same finding can be read directly or as part of its complete question.
+  const questionExpanded = selection.question ?? !selection.finding;
   const [recordsOpen, setRecordsOpen] = useState(false);
   const records = useRef<HTMLDetailsElement>(null);
   const [lens, setLens] = useState<Lens>(() => viewFromUrl(goalId).lens);
@@ -95,7 +97,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
   const opener = useRef<HTMLElement | null>(null);
   const collectionOpener = useRef<HTMLElement | null>(null);
   const focusPending = useRef(Boolean(selection.nodes.length || selection.day !== null));
-  const focusReturn = useRef<{nodeId?: string; eventId?: string; collection?: CollectionSelection; element: HTMLElement | null} | null>(null);
+  const focusReturn = useRef<{nodeId?: string; eventId?: string; returnKey?: string; collection?: CollectionSelection; element: HTMLElement | null} | null>(null);
   const copy = zh ? {
     title: "研究历程", loading: "正在读取完整记录", reading: "读取中", refresh: "刷新记录",
     all: "回到全图", scope: "Explore 已记录历史", coverage: "其他来源覆盖、尝试发生时序尚未核验",
@@ -141,7 +143,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
   const findingBody = (finding: ExploreHistoryEvent) => {
     const execution = finding.execution_observation;
     const measured = (value: unknown) => value === null ? (zh ? "未测量" : "Not measured") : String(value);
-    return <>{finding.measurements ? <ExploreMeasurements measurements={finding.measurements} zh={zh}/> : null}{findingNarrative(finding)}{execution ? <details><summary>{zh ? "实际执行与资源观测" : "Execution and resource observations"}</summary>
+    return <>{finding.measurements ? <ExploreMeasurements measurements={finding.measurements} zh={zh}/> : null}{findingNarrative(finding)}{execution ? <details><summary><span>{zh ? "实际执行与资源观测" : "Execution and resource observations"}</span> <ContextHelp label={zh ? "执行观测说明" : "Execution observation guide"}><p>{zh ? "来源记录的执行观测；不等于方法有效或当前候选已通过验收。" : "Source-recorded execution observations; not proof of method benefit or current-candidate acceptance."}</p></ContextHelp></summary>
       <dl className="research-finding-sections">
         <dt>{zh ? "计划方法 → 实际方法" : "Planned → executed method"}</dt><dd>{String(execution.planned_method_id)} → {String(execution.executed_method_id)}</dd>
         {execution.change_reason ? <><dt>{zh ? "改向原因" : "Reason for change"}</dt><dd>{String(execution.change_reason)}</dd></> : null}
@@ -150,7 +152,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
         <dt>{zh ? "结束原因" : "Termination reason"}</dt><dd>{measured(execution.stop_reason)}</dd>
         <dt>{zh ? "执行候选 SHA-256" : "Executed candidate SHA-256"}</dt><dd><code>{String(execution.candidate_sha256)}</code></dd>
         {execution.result_ref ? <><dt>{zh ? "该候选的结果引用" : "Result for this candidate"}</dt><dd><code>{String(execution.result_ref)}</code></dd></> : null}
-      </dl><p>{zh ? "来源记录的执行观测；不等于方法有效或当前候选已通过验收。" : "Source-recorded execution observations; not proof of method benefit or current-candidate acceptance."}</p>
+      </dl>
     </details> : null}</>;
   };
   const findingMeta = (finding: ExploreHistoryEvent) => <small>{timeLabel(finding.recorded_at)} · {stateLabel(finding.status)}{finding.confidence !== null ? ` · ${zh ? "来源自报置信度" : "Source-reported confidence"} ${finding.confidence}` : ""}</small>;
@@ -266,10 +268,9 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
       const returning = returningToCollection || returningToGraph;
       focusReturn.current = returning ? {nodeId: returningToCollection ? selectedId : undefined,
         collection: returningToGraph ? {nodes: selection.nodes, day: selection.day} : undefined,
-        eventId: selectedFinding?.event_id, element: opener.current} : null;
+        eventId: selectedFinding?.event_id, returnKey: selection.returnKey, element: opener.current} : null;
       focusPending.current = !returning;
       setSelection(next);
-      setQuestionExpanded(!next.finding);
       const view = viewFromUrl(goalId); setLens(view.lens); setPhase(view.phase);
     };
     window.addEventListener("popstate", pop);
@@ -278,11 +279,11 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
   useLayoutEffect(() => {
     if (!active) return;
     if (focusReturn.current) {
-      const {nodeId, eventId, collection, element} = focusReturn.current;
+      const {nodeId, eventId, returnKey: savedReturnKey, collection, element} = focusReturn.current;
       // The full-history view moves while reading. Resolve its remounted
       // control by the local return key rather than losing keyboard position.
       const origin = !element?.dataset.researchDecision || element.dataset.researchDecision === eventId ? element : null;
-      const returnKey = origin?.dataset.researchReturn;
+      const returnKey = origin?.dataset.researchReturn ?? savedReturnKey;
       const target = nodeId ? detail.current?.querySelector<HTMLButtonElement>(`[data-research-node="${CSS.escape(nodeId)}"] button`)
         : (origin?.isConnected ? origin : null)
           ?? (returnKey ? graph.current?.querySelector<HTMLButtonElement>(`[data-research-return="${CSS.escape(returnKey)}"]`) : null)
@@ -309,27 +310,31 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
       opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       focusPending.current = true;
     }
+    next = {...next, question: next.question ?? !next.finding,
+      returnKey: next.returnKey ?? (focus ? opener.current?.dataset.researchReturn : selection.returnKey)};
     setSelection(next);
-    setQuestionExpanded(!next.finding);
     const url = new URL(window.location.href);
     url.searchParams.delete("research_node"); url.searchParams.delete("research_group"); url.searchParams.delete("research_finding");
     url.searchParams.delete("research_parent_node"); url.searchParams.delete("research_parent_group");
+    url.searchParams.delete("research_question"); url.searchParams.delete("research_return");
     if (next.nodes.length || next.day !== null) {
       if (next.day !== null) url.searchParams.set("research_group", next.day);
       else url.searchParams.set("research_node", next.nodes.length === 1 ? next.nodes[0]! : JSON.stringify(next.nodes));
       if (next.finding) url.searchParams.set("research_finding", next.finding);
+      if (next.question) url.searchParams.set("research_question", "1");
+      if (next.returnKey) url.searchParams.set("research_return", next.returnKey);
       if (next.collection?.day !== null && next.collection?.day !== undefined) url.searchParams.set("research_parent_group", next.collection.day);
       else if (next.collection?.nodes.length) url.searchParams.set("research_parent_node", JSON.stringify(next.collection.nodes));
       url.searchParams.set("research_goal", goalId);
     }
     else url.searchParams.set("research_goal", goalId);
-    if (selection.finding !== next.finding || selection.day !== next.day || selection.nodes.length !== next.nodes.length || selection.nodes.some((id, index) => id !== next.nodes[index])) window.history.pushState(null, "", url);
+    if (selection.finding !== next.finding || selection.question !== next.question || selection.returnKey !== next.returnKey || selection.day !== next.day || selection.nodes.length !== next.nodes.length || selection.nodes.some((id, index) => id !== next.nodes[index])) window.history.pushState(null, "", url);
   };
-  const choose = (id: string, focus = true, finding?: string) => {collectionOpener.current = null; select({nodes: id ? [id] : [], day: null, finding}, focus);};
+  const choose = (id: string, focus = true, finding?: string, returnKey?: string) => {collectionOpener.current = null; select({nodes: id ? [id] : [], day: null, finding, returnKey}, focus);};
   const closeReader = () => {
     focusPending.current = false;
     focusReturn.current = {nodeId: collection ? selectedId : undefined, eventId: selectedFinding?.event_id,
-      collection: !collection ? {nodes: selection.nodes, day: selection.day} : undefined, element: opener.current};
+      returnKey: selection.returnKey, collection: !collection ? {nodes: selection.nodes, day: selection.day} : undefined, element: opener.current};
     if (collection) opener.current = collectionOpener.current;
     collectionOpener.current = null;
     select(collection ?? {nodes: [], day: null}, false);
@@ -371,8 +376,9 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
     setSelection(previous => ({...previous, finding}));
     const url = new URL(window.location.href);
     url.searchParams.set("research_finding", finding);
+    if (questionExpanded) url.searchParams.set("research_question", "1");
     window.history.replaceState(null, "", url);
-  }, [active, selection.finding, selectedFinding, selected]);
+  }, [active, selection.finding, selectedFinding, selected, questionExpanded]);
   const displayControl = display ? <div className="research-display-language">
       <button type="button" disabled={!currentDisplay} aria-pressed={originalDisplay} onClick={() => setOriginalDisplay(value => !value)}>
         {originalDisplay ? (zh ? "查看译文" : "Show translation") : (zh ? "查看原文" : "Show originals")}
@@ -412,7 +418,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
           {layout.map(({node, x, y}) => {
             const measured = measurementFeedback.find(item => item.node_id === node.id);
             return <button key={node.id} type="button" className={`research-history-node is-${node.latest.status}${selection.nodes.includes(node.id) ? " is-selected" : ""}`}
-            style={{left: x, top: y}} aria-pressed={selection.nodes.includes(node.id)} aria-label={`${node.latest.title} · ${stateLabel(node.latest.status)}`} onClick={() => choose(node.id)}>
+            data-research-return={`graph:${node.id}`} style={{left: x, top: y}} aria-pressed={selection.nodes.includes(node.id)} aria-label={`${node.latest.title} · ${stateLabel(node.latest.status)}`} onClick={event => choose(node.id, true, undefined, event.currentTarget.dataset.researchReturn)}>
             <span className="research-node-meta">{node.latest.node_kind === "experiment" ? <FlaskConical size={13} aria-hidden/> : <Circle size={12} aria-hidden/>}{kindLabel(node.latest.node_kind)}<small>{stateLabel(node.latest.status)}</small></span>
             <strong>{node.latest.title}</strong>{measured ? <span className="research-node-count" title={`${measured.metric} (${measured.unit}) · ${measured.comparison_scope} · ${measured.evaluation_ref}`}>
               {measured.metric} {formatExploreMeasurementValue(measured.latest.measurement.value, zh)} · best {formatExploreMeasurementValue(measured.best?.value ?? null, zh)} {measured.higher_is_better ? "↑" : "↓"}
@@ -525,7 +531,10 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
         {!hasQuestionNavigation ? selected.findings.length ? hasSeparateQuestion && questionExpanded ? <details className="research-reader-question" key={`question:${selected.id}`} open onToggle={event => {
           if (event.currentTarget.open) return;
           if (event.currentTarget.contains(document.activeElement)) detail.current?.focus({preventScroll: true});
-          setQuestionExpanded(false);
+          setSelection(previous => ({...previous, question: false}));
+          const url = new URL(window.location.href);
+          url.searchParams.delete("research_question");
+          window.history.replaceState(null, "", url);
         }}>
           <summary><span>{selected.latest.title}</span></summary>
           {selected.latest.summary ? <p>{selected.latest.summary}</p> : null}
@@ -534,7 +543,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
         {selected.findings.length ? <>
           {selected.findings.length > 1 ? <nav className="research-finding-navigation" aria-label={zh ? "问题结论" : "Question findings"}>
             <label><span>{zh ? "结论" : "Finding"}</span><select aria-label={zh ? "选择问题结论" : "Choose a question finding"} value={selectedFinding?.result_id ?? ""}
-                onChange={event => select({...selection, finding: event.target.value}, false)}>
+                onChange={event => select({...selection, finding: event.target.value, question: false}, false)}>
                 {!selectedFinding ? <option value="" disabled>{zh ? "所选结论未找到" : "Selected finding not found"}</option> : null}
                 {selected.findings.map((finding, index) => <option key={finding.result_id} value={finding.result_id}>
                   {index + 1}. {finding.title} · {stateLabel(finding.status)} · {timeLabel(finding.recorded_at)}
@@ -546,7 +555,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
               {([-1, 1] as const).map(step => {
                 const next = selectedFinding ? selected.findings[selected.findings.indexOf(selectedFinding) + step] : undefined;
                 return <button key={step} type="button" disabled={!next} aria-label={step < 0 ? (zh ? "上一条结论" : "Previous finding") : (zh ? "下一条结论" : "Next finding")}
-                  onClick={() => {if (next) select({...selection, finding: next.result_id}, false);}}>
+                  onClick={() => {if (next) select({...selection, finding: next.result_id, question: false}, false);}}>
                   {step < 0 ? <ArrowLeft size={16} aria-hidden/> : <ArrowRight size={16} aria-hidden/>}
                 </button>;
               })}

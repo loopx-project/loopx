@@ -644,6 +644,46 @@ journey or qualify the model assessor.
 
 ## Measured solver session cost (optional)
 
+### Find expensive Turns and inspect their evidence
+
+In a Goal's **Research** view, select a registered capture with solver usage.
+The first screen keeps aggregate cost and coverage together; expand **Sources
+and usage**, then **Find time and input hotspots** to inspect individual Turns.
+No analysis execution or model call is needed for this path.
+
+![Research entry with measured totals and unknown attribution](../images/research-turn-costs-overview.png)
+
+Choose **Most input**, **Longest elapsed** or **Chronological**. Each page shows
+at most eight Turns with elapsed time, input, its cached subset, uncached input
+and output. Cached input is already included in input. An unfinished Turn is
+labelled observed-only; a dash means unavailable, never zero. The following
+synthetic example puts the largest input Turn first, even though another Turn
+took longest.
+
+![Turn input hotspot and cached versus uncached counters](../images/research-turn-costs-desktop.png)
+
+**Counter evidence** opens the existing source reader. It shows the preceding
+cumulative counter observation, this Turn's start, its latest counters and its
+completion when present, with original line numbers and capture digest. These
+are filtered counter/lifecycle fields, not a contiguous transcript: prompts,
+tool content and account metadata are excluded. Escape closes the reader and
+returns focus to the selected Turn. Sorting, paging and evidence reading also
+work in the narrow layout.
+
+![Narrow Turn cost reader](../images/research-turn-costs-mobile.png)
+
+The read endpoint accepts only the registered Goal, pack, analysis key and Turn
+identifier. It verifies the complete source digest before returning evidence;
+a missing or changed source stays unavailable rather than being substituted.
+
+This inspection compares Turns only within the selected capture. Turn input
+is **not** control-layer input; the separate measured LoopX input share retains
+its own coverage rules. Elapsed time includes tools, waiting and orchestration.
+Different source revisions, capture windows and incomplete runs are not matched
+experiments. These counters do not establish waste, monetary cost, avoidable
+time or a causal benefit from LoopX. The screenshots use synthetic data from the
+retained `research-turn-costs` browser scenario, not a live benchmark.
+
 ### Native outcome readback (optional, separate from analyzer judgments)
 
 The trusted provider/Agent may add `--native-outcomes-json native-outcomes.json`
@@ -789,7 +829,7 @@ counter observations are differenced across Turns; summing the cumulative
 part of input, and reasoning is part of output, not another additive cost.
 
 Complete counter histories use the existing private local snapshot transport
-when they exceed the ordinary 2 MiB RPC wire. Only this explicitly allowed
+when they exceed the ordinary [8 MiB RPC wire](canonical-snapshot-pagination.md#shared-rpc-byte-budget). Only this explicitly allowed
 method opts in; reduced snapshots retain the 64 MiB ceiling and digest checks.
 Oversized captures fail explicitly rather than dropping earlier Turns.
 
@@ -1063,6 +1103,42 @@ values with the existing warning and never borrow another pack's measurement.
 含缓存；重复处理按请求计量，重复回执不重复记账。需要宿主真实归因，现有历史计数
 不能反推 packet token；未采集、部分覆盖与真实零分开。比例是结构开销，不能单独
 当作净效率损失、可避免成本或因果贡献。普通阅读不调用模型。
+
+### Captured tool context inventory
+
+Add `--include-tool-context` to `trajectory-pack-register` with the existing
+`--usage-jsonl` and `--usage-session-id` to measure appended input text. The
+Research workbench's existing Sources and usage disclosure displays the saved
+inventory beside request-token attribution; browsing never launches a model.
+Omitting the option preserves historical registration and projections.
+
+The numerator is the UTF-8 text returned by recognized simple LoopX CLI calls;
+the denominator includes captured user/system/developer text and tool returns.
+Native `response_item` records are used, not their event-message mirrors.
+Duplicate output records for one call count once. Identical output from two
+different calls is still two pieces of appended input; it is not automatically
+redundant research. Operation counts distinguish context reads/projects from
+other LoopX returns. No output or command argument text is sent to the browser.
+Task lease acquisition, inspection, renewal, release and transfer have separate
+rows, as do common Todo operations such as claim and completion. These count
+observed replies, not successful mutations or proved unnecessary recovery.
+
+Only literal simple shell argv, Python `-m loopx`, `-m loopx.cli` or
+`-m loopx.entrypoint`, and an exact
+single literal `const/await tools.exec_command/text` wrapper are recognized.
+Compound shell, arbitrary JavaScript, indirect commands, continuation tools and
+file reads remain unassigned. Non-text content is counted as unmeasured parts.
+The byte share covers the recorded component only: injected LoopX instructions
+can remain unassigned, and useful domain evidence may be present in LoopX
+returns. It is neither whole control-plane overhead nor per-request replay,
+billable tokens, avoidable cost, or causal benefit. Keep the separate Turn-packet
+estimate and provider counters; do not add their different units or denominators.
+
+中文：可选统计在原轨迹分析工作台中展示 LoopX 工具返回占已记录输入文本的字节
+比例，并拆出 context-read/project 等操作。未知和非文本内容分别保留；同内容的
+再次返回不等于无益重复。这不是全量控制面、逐请求重放或计费 token 的占比。
+租约获取、检查、续租、释放、转移及常见 Todo 操作分别列示；计数表示可识别的返回，
+不证明状态写入成功或恢复操作可以省略。
 
 ### Recorded Turn packet estimate
 

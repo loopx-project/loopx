@@ -130,8 +130,10 @@
       "@deepseek-ai/libreoffice-kit>fflate": "0.8.3",
       "@modelcontextprotocol/client@<2.3.0": "2.3.0",
       "@modelcontextprotocol/sdk@<1.32.0": "1.32.0",
-      "fast-uri@>=3.0.0 <3.1.8": "3.1.8",
-      "vite@>=8.2.0 <=8.2.3": "8.2.4"
+      "fast-uri@>=3.0.0 <3.1.9": "3.1.9",
+      "undici@>=8.0.0 <8.12.2": "8.12.2",
+      "vite@>=8.2.0 <=8.2.3": "8.2.4",
+      "zod@>=4.0.0 <4.6.6": "4.6.6"
     }
   },
   "repository": {

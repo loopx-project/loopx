@@ -5,6 +5,7 @@ import http.client
 import json
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -113,6 +114,45 @@ def test_chat_capabilities_expose_public_runtime_identity() -> None:
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
+
+
+def test_readiness_is_independent_of_blocked_capability_discovery(monkeypatch):
+    from loopx.dashboard_launcher import _probe_existing_chat
+    server, thread = _start_server()
+    entered, release = threading.Event(), threading.Event()
+    requests, results = [], []
+
+    def blocked():
+        requests.append("capabilities")
+        entered.set()
+        assert release.wait(5)
+        return []
+    monkeypatch.setattr(server.runtime_controller, "capabilities", blocked)
+    def full_read():
+        response = _request(server.server_port, method="GET", origin=None)
+        results.append(response.read())
+    reader = threading.Thread(target=full_read)
+    reader.start()
+    try:
+        assert entered.wait(3)
+        start = time.monotonic()
+        assert _probe_existing_chat("127.0.0.1", server.server_port) == "matching"
+        assert time.monotonic() - start < 0.5
+        response = _request(server.server_port, method="GET", origin=None, path="/api/chat/readiness")
+        payload = json.loads(response.read())
+        assert payload == {"ok": True, "schema_version": "loopx_chat_readiness_v1",
+            "state": "ready", "runtime_identity": server.runtime_identity}
+        assert requests == ["capabilities"] and not results
+        denied = _request(server.server_port, method="GET", origin="https://foreign.example", path="/api/chat/readiness")
+        assert denied.status == 403
+        denied.read()
+    finally:
+        release.set()
+        reader.join(5)
+        server.shutdown()
+        thread.join(5)
+        server.server_close()
+    assert len(results) == 1
 
 
 def test_chat_keeps_its_startup_identity_after_package_replacement(monkeypatch: pytest.MonkeyPatch) -> None:

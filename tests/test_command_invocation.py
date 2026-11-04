@@ -7,7 +7,11 @@ import subprocess
 
 import pytest
 
-from loopx.command_invocation import command_argv, resolve_command_path
+from loopx.command_invocation import (
+    command_argv,
+    current_loopx_cli_argv,
+    resolve_command_path,
+)
 
 
 def test_loopx_route_is_one_argument_and_does_not_leak_on_failure():
@@ -21,6 +25,29 @@ def test_loopx_route_is_one_argument_and_does_not_leak_on_failure():
             raise RuntimeError("failed invocation")
         assert loopx_cli_argv()[0] == "candidate's CLI"
     assert loopx_cli_argv() == ["loopx"]
+
+
+def test_current_cli_uses_exact_active_release_launcher(monkeypatch):
+    import loopx.command_invocation as invocation
+
+    release_root = Path(invocation.__file__).resolve().parents[1]
+    launcher = release_root / "scripts" / ("loopx.ps1" if os.name == "nt" else "loopx")
+    monkeypatch.setenv("LOOPX_RELEASE_ROOT", str(release_root))
+
+    assert current_loopx_cli_argv() == [
+        str(launcher), "--cli-bin", str(launcher),
+    ]
+
+
+def test_current_cli_ignores_foreign_release_root(tmp_path, monkeypatch):
+    launcher = tmp_path / "scripts" / ("loopx.ps1" if os.name == "nt" else "loopx")
+    launcher.parent.mkdir()
+    launcher.write_text("foreign release")
+    monkeypatch.setenv("LOOPX_RELEASE_ROOT", str(tmp_path))
+
+    assert current_loopx_cli_argv() == [
+        __import__("sys").executable, "-m", "loopx.entrypoint",
+    ]
 
 
 @pytest.mark.parametrize("value", ["", " ", "-invalid", "name\nnext", "name\x00next"])

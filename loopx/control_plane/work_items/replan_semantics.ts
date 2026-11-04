@@ -5,6 +5,8 @@ import { optionalNonEmptyString, requireJsonObject, requireNonEmptyString } from
 import { visionAuthoringContract } from "../goals/vision_checkpoint.ts";
 import { parseTodoTimestampMicros } from "../runtime_timestamp.ts";
 import { TODO_COMPLETION_RECOVERIES } from "../todos/completion_state.ts";
+import { id as todoId, readResume, taskClass } from "../todos/read_codec.ts";
+import { indexInferredSuccessors } from "../todos/succession.ts";
 import {normalizeStrideDecision, normalizeStrideStrategy, STRIDE_DECISION_SCHEMA, strideControlContract, strideReviewMismatch} from "./stride_policy.ts";
 import { projectProgressDelta } from "./progress_delta.ts";
 
@@ -134,6 +136,21 @@ function lifecycleSource(request: JsonObject): JsonObject {
   // second is possible; the exact obligation digest must still prove identity.
   // Older terminal rows were already absent from the admitted frontier.
   const admissionSecond = admitted / 1_000_000n * 1_000_000n;
+  // The admitted summary also closes a gap through inferred resume/unblock
+  // edges. Reuse the succession owner's index, with its active-generation
+  // identity rule, so a row which already had a successor cannot re-enter the
+  // reconstructed source and break the admitted obligation digest.
+  const generations = new Map<string, JsonObject>();
+  for (const item of request.items.map(object)) {
+    const key = todoId(item.todo_id);
+    if (key && ((item.archive_state ?? "active") === "active" || !generations.has(key))) generations.set(key, item);
+  }
+  const inferred = indexInferredSuccessors([...generations.values()].map(item => {
+    const resume = readResume(item.resume_when) ?? "";
+    return {id: todoId(item.todo_id), advancement: taskClass(item) === "advancement_task",
+      unblocks: todoId(item.unblocks_todo_id),
+      resumes: resume.startsWith("todo_done:") ? todoId(resume.slice(10)) : null};
+  }));
   const items = request.items.map(object).filter(item => {
     const completed = typeof item.completed_at === "string" ? parseTodoTimestampMicros(item.completed_at) : null;
     const updated = typeof item.updated_at === "string" ? parseTodoTimestampMicros(item.updated_at) : null;
@@ -142,6 +159,7 @@ function lifecycleSource(request: JsonObject): JsonObject {
       item.claimed_by === agent && item.last_actor_agent_id === agent &&
       completed !== null && completed <= admitted &&
       strings(item.successor_todo_ids).length === 0 && !item.superseded_by &&
+      !inferred.get(todoId(item.todo_id) ?? "")?.length &&
       // Either canonical closeout path can finish after this review was
       // admitted. The exact trigger/identity checks below still own reentry.
       (item.no_followup !== true || (TODO_COMPLETION_RECOVERIES.some(recovery => recovery === item.completion_recovery) &&

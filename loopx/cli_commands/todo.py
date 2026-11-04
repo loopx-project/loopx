@@ -6,6 +6,7 @@ from collections.abc import Callable, Sequence
 from operator import itemgetter
 from pathlib import Path
 
+from ..command_invocation import loopx_cli_argv
 from ..capabilities.todo_replan_cadence.machine_defaults import resolve_todo_replan_cadence_goal
 from ..control_plane.work_items.replan_history_codec import effective_turn_cadence_context
 from ..control_plane.coordination.local_authority import (
@@ -144,6 +145,7 @@ def _todo_settlement_plan(
     path_args = ""
     for name, option in (
         ("project", "--project"), ("state_file", "--state-file"),
+        ("claim_operation_id", "--claim-operation-id"),
         ("task_lease_idempotency_key", "--task-lease-idempotency-key"),
         ("task_lease_expected_version", "--task-lease-expected-version"),
     ):
@@ -507,7 +509,7 @@ def handle_todo_command(
                 dry_run=bool(args.dry_run),
             )
             if payload.get("ok") and payload.get("execution_managed") and not args.dry_run:
-                route = ["loopx", "--registry", str(registry_path), "--runtime-root",
+                route = [*loopx_cli_argv(), "--registry", str(registry_path), "--runtime-root",
                     str(resolve_runtime_root(load_registry(registry_path), runtime_root_arg)), "--format", "json"]
                 selected = ["--goal-id", args.goal_id, "--todo-id", args.todo_id,
                     "--agent-id", args.agent_id, "--claim-operation-id", payload["claim_operation_id"]]
@@ -791,6 +793,13 @@ def handle_todo_command(
         payload = todo_error_payload(
             args, exc, registry_path=registry_path, runtime_root_arg=runtime_root_arg,
         )
+    if (
+        args.todo_command == "complete"
+        and payload.get("ok")
+        and settlement_identity is None
+        and isinstance(payload.get("settlement_identity"), dict)
+    ):
+        settlement_identity = SettlementIdentity.from_runtime_payload(payload["settlement_identity"])
     append_todo_rollout_event(
         payload,
         args=args,
@@ -801,8 +810,8 @@ def handle_todo_command(
 
     if (
         args.todo_command == "complete"
-        and getattr(args, "turn_instance_id", None)
         and payload.get("ok")
+        and settlement_identity is not None
         and not payload.get("dry_run")
     ):
         runtime_root = resolve_runtime_root(
@@ -814,7 +823,7 @@ def handle_todo_command(
             goal_id=args.goal_id,
             agent_id=args.agent_id,
             todo_id=args.todo_id,
-            turn_instance_id=getattr(args, "turn_instance_id", None),
+            turn_instance_id=settlement_identity.turn_instance_id,
             registry_path=registry_path,
             goal_ref=goal_ref,
         )
@@ -858,6 +867,7 @@ def handle_todo_command(
         and not payload.get("dry_run")
         and post_writeback_hooks
         and settlement_identity is not None
+        and not getattr(args, "completion_identity_key", None)
     ):
         identity = settlement_identity.as_dict()
         committed_at = str(payload.get("updated_at") or "").strip()

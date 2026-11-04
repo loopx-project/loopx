@@ -9,6 +9,7 @@ import { projectTodoResumePlanning } from "../todos/resume_planning.ts";
 import { monitorIsActive } from "../todos/summary_lanes.ts";
 import { authorityUnicodeCompare } from "../coordination/authority_store_codec.ts";
 import { qualifySettlementHistory } from "../quota/settlement_phase.ts";
+import { normalizeStrideStrategy } from "./stride_policy.ts";
 
 export const PROGRESS_RESULT_CLASSES = [
   "advanced", "unchanged", "blocked", "exploration_exhausted", "no_followup",
@@ -64,6 +65,7 @@ interface Request {
   neutral: ReadonlySet<string>;
   stall: number;
   periodic: number;
+  stride: string;
   monitor: number;
   streak: number;
   monitorSchema: string;
@@ -134,9 +136,13 @@ function decode(value: unknown): Request {
     retryObservedAt: optionalNonEmptyString(raw.retry_observed_at, "retry_observed_at"),
     agent: optionalNonEmptyString(raw.agent_id, "agent_id"),
     monitorAgent: optionalNonEmptyString(raw.monitor_agent_id, "monitor_agent_id"),
-    neutral: new Set(requireStringArray(raw.neutral_classifications, "neutral_classifications")),
+    // Older callers may omit canonical no-change writebacks. They are neutral
+    // for lane selection, work counting and feedback selection alike.
+    neutral: new Set([...requireStringArray(raw.neutral_classifications, "neutral_classifications"),
+      "replan_noop", "repair_noop"]),
     stall: integer(raw.stall_threshold, "stall_threshold", 2),
     periodic: integer(raw.periodic_threshold, "periodic_threshold", 1),
+    stride: normalizeStrideStrategy(raw.stride_strategy),
     monitor: integer(raw.monitor_threshold, "monitor_threshold", 1),
     streak: integer(raw.streak_threshold, "streak_threshold", 1),
     monitorSchema: requireNonEmptyString(raw.monitor_schema, "monitor_schema"),
@@ -182,18 +188,17 @@ function decode(value: unknown): Request {
 }
 
 /** Scope before ACK: a peer's acknowledgement cannot discharge this lane. */
+function historyLane(request: Request): string | null {
+  return request.agent ?? (request.operation === "all"
+    ? request.runs.find(run => !request.neutral.has(run.classification) && run.agent)?.agent ?? null : null);
+}
 function historyWindow(request: Request): Run[] {
-  // These canonical writeback classes carry no accepted replan work. Older
-  // callers may omit them from their neutral inventory; neither their repeated
-  // observations nor their timestamps can create a replacement review duty.
-  const neutral = new Set([...request.neutral, "replan_noop", "repair_noop"]);
-  const agent = request.agent ?? (request.operation === "all"
-    ? request.runs.find(run => !neutral.has(run.classification) && run.agent)?.agent : null);
+  const agent = historyLane(request);
   const result: Run[] = [];
   for (const run of request.runs) {
     if (agent && run.agent && run.agent !== agent) continue;
     if (run.ack) break;
-    if (neutral.has(run.classification)) continue;
+    if (request.neutral.has(run.classification)) continue;
     result.push(run);
   }
   return result;
@@ -350,6 +355,7 @@ function monitorStreak(request: Request): Trigger | null {
 }
 
 export function projectReplanHistory(value: unknown, qualified?: ReadonlySet<string>): JsonObject {
+  // Work-shape decisions do not silently reconfigure the review interval.
   const request = decode(value);
   const runs = historyWindow(request);
   let trigger: Trigger | null;

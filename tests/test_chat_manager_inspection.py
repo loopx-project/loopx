@@ -18,8 +18,8 @@ from loopx.capabilities.manager_context.inspection import (
     manager_index,
 )
 from loopx.chat_agent import CodexChatAgentSession, CodexChatAgentError
-from loopx.chat_manager_history import read_manager_delivery_history
-import loopx.chat_manager_details as details
+from loopx.chat.manager_history import read_manager_delivery_history
+import loopx.chat.manager_details as details
 from tests.control_plane.host_process_fixture import write_python_host_fixture
 
 

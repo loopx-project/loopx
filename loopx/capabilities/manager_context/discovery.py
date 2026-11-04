@@ -13,9 +13,41 @@ from enum import Enum
 
 from ...agent_registry import agent_profile_for_goal, registered_agent_ids_for_goal
 from ...control_plane.goals.activation import goal_activation_state
-from ...control_plane.runtime.public_safety import public_safe_compact_text
+from ...control_plane.runtime.public_safety import (
+    public_safe_compact_text,
+    validate_public_safe_value,
+)
 from ...history import decode_registry_snapshot
+from ...public_safe_text import classify_private_text
 from ...thread_agent_binding import summarize_agent_binding_routes
+
+
+def _public_safe_host_surface(value: object) -> str | None:
+    """Publish only public-safe host surface labels; compact tokens are not proof."""
+    if not isinstance(value, str):
+        return None
+    surface = value.strip()
+    if (
+        not surface
+        or len(surface) > 64
+        or any(char.isspace() or ord(char) < 32 for char in surface)
+        or any(char in surface for char in ("/", "\\", '"', "'"))
+    ):
+        return None
+    try:
+        validate_public_safe_value(surface, path="agent_page.host_surface")
+    except ValueError:
+        return None
+    if (
+        classify_private_text(
+            surface,
+            include_path_gaps=True,
+            include_compound_field_assignment=True,
+        )
+        is not None
+    ):
+        return None
+    return public_safe_compact_text(surface, limit=64)
 
 
 class ContextDelivery(str, Enum):
@@ -72,6 +104,14 @@ def agent_page(
             continue
         for aid in sorted(registered_agent_ids_for_goal(goal)):
             profile = agent_profile_for_goal(goal, aid) or {}
+            bindings = summarize_agent_binding_routes([goal], agent_id=aid)
+            host_surfaces = sorted(
+                {
+                    surface
+                    for c in bindings["candidates"]
+                    if (surface := _public_safe_host_surface(c.get("host_surface")))
+                }
+            )
             row = {
                 "goal_id": gid, "agent_id": aid, "registered": True,
                 "goal_description": public_safe_compact_text(
@@ -87,22 +127,30 @@ def agent_page(
                     ContextDelivery.ALLOWED if delivery_known and (gid, aid) in allowed else
                     ContextDelivery.NOT_GRANTED if delivery_known else ContextDelivery.NOT_CHECKED
                 ),
+                "host_surfaces": host_surfaces,
+                "registered_host_binding": {
+                    key: bindings[key] for key in
+                    ("outcome", "candidate_count", "address_shared", "scope")
+                },
             }
             if needle and needle not in " ".join(
-                str(row[k] or "") for k in
-                ("goal_id", "agent_id", "goal_description", "profile_role", "scope_summary")
+                [
+                    *(
+                        str(row[k] or "")
+                        for k in (
+                            "goal_id",
+                            "agent_id",
+                            "goal_description",
+                            "profile_role",
+                            "scope_summary",
+                        )
+                    ),
+                    *host_surfaces,
+                ]
             ).casefold():
                 continue
             rows.append(row)
     page = rows[offset:offset + limit]
-    by_goal = {goal["id"]: goal for goal in visible}
-    for row in page:
-        bindings = summarize_agent_binding_routes(
-            [by_goal[row["goal_id"]]], agent_id=row["agent_id"])
-        row["registered_host_binding"] = {
-            key: bindings[key] for key in
-            ("outcome", "candidate_count", "address_shared", "scope")
-        }
     end = offset + len(page)
     return {
         "ok": True, "view": "agents", "rows": page, "offset": offset,

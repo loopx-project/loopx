@@ -109,7 +109,7 @@ export async function readCanonicalSnapshotFromStore(value: unknown, store: Auth
   const metadata = {todo_read_model: readModel,
     ...(!!configuredGoalChecks(acceptance) || acceptance.outcome_requirements || acceptance.goal_objective ? {goal_acceptance_contract: acceptance} : {}),
     ...(oracleObservationBasis === null ? {} : {goal_acceptance_oracle_observation_basis: oracleObservationBasis}),
-    ...(leases === null ? {} : {handoff_mode: head.head.handoff_mode ?? "legacy"}),
+    handoff_mode: head.head.handoff_mode ?? "legacy",
     ...(readback === null ? {} : {projection_readback: confirmProjectionReadback(readback, head.provider_revision)})};
   function result(chosenTodos: readonly string[], chosenLeases: readonly string[], guards: JsonObject): JsonObject {
     const todoEnd = todoStart + chosenTodos.length, leaseEnd = leaseStart + chosenLeases.length;

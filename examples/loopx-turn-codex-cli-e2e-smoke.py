@@ -147,6 +147,7 @@ if marker.is_file():
         raise SystemExit("unexpected marker value")
     turn_number = int(match.group(1)) + 1
 marker.write_text({MARKER_PREFIX!r} + str(turn_number), encoding="utf-8")
+assert marker.read_text(encoding="utf-8") == {MARKER_PREFIX!r} + str(turn_number)
 print(json.dumps({{
     "type": "thread.started",
     "thread_id": "session-fixture-0001",
@@ -164,6 +165,8 @@ output_path.write_text(json.dumps({{
     "delivery_outcome": "outcome_progress",
     "vision_unchanged_reason": "The fixture objective remains unchanged.",
     "summary": f"The isolated public marker reached step {{turn_number}}.",
+    "work_evidence": ["artifact:turn-e2e-marker"],
+    "validation_evidence": ["check:marker-file-readback"],
 }}), encoding="utf-8")
 """,
     )

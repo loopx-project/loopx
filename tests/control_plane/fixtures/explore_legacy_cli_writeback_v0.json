@@ -1,0 +1,925 @@
+{
+  "source_revision": "37cedac966dda06ad6605fc389abab8bc2686777",
+  "provenance": "Synthetic FileAuthorityStore and complete primary writeback, hook and result events created by the real base CLI. Only the filesystem state address is parameterized. Index fields reuse equal base-writeback values plus the original compact state projection. No model, task trajectory or live Goal data.",
+  "attachment": {
+    "schema_version": "explore_result_attachment_v0",
+    "node_id": "measured-candidate",
+    "question": "Which candidate improves the bounded case?",
+    "applicability": "Synthetic fixed input and budget",
+    "input_revision": "fixture-v1",
+    "observation": "A legacy measured result was recorded.",
+    "interpretation": "Retain the original statement for audit; do not infer execution authority.",
+    "status": "tentative",
+    "evidence_refs": [
+      "result:a",
+      "result:b"
+    ],
+    "execution_observation": {
+      "schema_version": "explore_execution_observation_v0",
+      "candidate_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input_revision": "fixture-v1",
+      "planned_method_id": "probe",
+      "executed_method_id": "probe",
+      "change_reason": null,
+      "elapsed_seconds": 1,
+      "limit_seconds": 10,
+      "search_iterations": null,
+      "stop_reason": "process_exit:0",
+      "evidence_refs": [
+        "result:a"
+      ],
+      "result_ref": "result:a",
+      "result_candidate_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "measurements": [
+      {
+        "metric": "quality",
+        "value": 8,
+        "unit": "points",
+        "higher_is_better": true,
+        "comparison_scope": "validation:budget",
+        "input_revision": "fixture-v1",
+        "evaluation_ref": "evaluator:v1",
+        "candidate_ref": "candidate:b",
+        "evidence_ref": "result:b"
+      }
+    ]
+  },
+  "runtime_files": {
+    "authority/file-v0/authority-store-ebdd5eb7e94ef0c5.json": {
+      "json": {
+        "committed": [
+          {
+            "cursor": "1",
+            "events": [],
+            "operation_id": "canonical-fixture",
+            "provider_revision": "file:1:f9c67d2bde7f7d8b39351bc9",
+            "receipts": [],
+            "state": {
+              "kind": "checkpoint",
+              "projection": {
+                "goal_id": "settlement-cli-fixture",
+                "handoff_mode": "soft_claim",
+                "leases": [],
+                "partitions": {
+                  "leases": null,
+                  "todos": null
+                },
+                "schema_version": "loopx_coordination_runtime_shadow_projection_v0",
+                "source_authority": "legacy_markdown_and_task_lease",
+                "todo_read_model": {
+                  "contract_fields": [
+                    "index",
+                    "done",
+                    "text",
+                    "schema_version",
+                    "todo_id",
+                    "role",
+                    "status",
+                    "priority",
+                    "title",
+                    "archive_state",
+                    "source_section",
+                    "task_class",
+                    "action_kind",
+                    "task_domain",
+                    "capability_binding_ref",
+                    "task_repository",
+                    "continuation_policy",
+                    "removed_continuation_policy",
+                    "required_write_scopes",
+                    "required_capabilities",
+                    "target_capabilities",
+                    "explore_result_node_refs",
+                    "decision_scope",
+                    "required_decision_scopes",
+                    "decision_outcome",
+                    "decision_scope_outcomes",
+                    "claimed_by",
+                    "created_by",
+                    "last_actor_agent_id",
+                    "bound_agent",
+                    "goal_bound",
+                    "blocks_agent",
+                    "excluded_agents",
+                    "global_gate",
+                    "unblocks_todo_id",
+                    "resume_when",
+                    "resume_monitor_generation",
+                    "resume_condition",
+                    "resume_ready",
+                    "no_followup",
+                    "successor_todo_ids",
+                    "completion_continuation",
+                    "completion_recovery",
+                    "completion_receipt_id",
+                    "replan_obligation_id",
+                    "target_key",
+                    "cadence",
+                    "next_due_at",
+                    "expires_at",
+                    "watch_only",
+                    "last_checked_at",
+                    "result_hash",
+                    "consecutive_no_change",
+                    "material_change",
+                    "material_change_generation",
+                    "max_no_change_before_replan",
+                    "monitor_effect_id",
+                    "note",
+                    "evidence",
+                    "reason",
+                    "completed_at",
+                    "completion_turn_key",
+                    "completion_result",
+                    "updated_at",
+                    "superseded_by",
+                    "completion_validation_required",
+                    "completion_validation_sha256",
+                    "completion_validation_revision",
+                    "completion_validation_revision_history",
+                    "handoff_note"
+                  ],
+                  "records_sha256": "97d288258b609e6e4f61555b9533afaf6a142ccfe517f8fd1b20b09fcb14950f",
+                  "schema_version": "loopx_todo_canonical_read_record_v0",
+                  "todo_count": 1
+                },
+                "todos": [
+                  {
+                    "action_kind": "validate",
+                    "archive_state": "active",
+                    "claimed_by": "codex-settlement-cli",
+                    "done": false,
+                    "index": 1,
+                    "priority": "P1",
+                    "role": "agent",
+                    "schema_version": "todo_item_v0",
+                    "source_section": "Agent Todo",
+                    "status": "open",
+                    "task_class": "advancement_task",
+                    "text": "[P1] Validate and settle the selected delivery.",
+                    "title": "Validate and settle the selected delivery.",
+                    "todo_id": "todo_fixture_settlement"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "cursor": "2",
+            "events": [],
+            "operation_id": "todo-claim:settlement-cli-fixture:todo_fixture_settlement:e1535cd2228d4d6ea91c10926eefd87b",
+            "provider_revision": "file:2:1e67e94cbc52370f980d67d0",
+            "receipts": [
+              {
+                "goal_id": "settlement-cli-fixture",
+                "operation_id": "todo-claim:settlement-cli-fixture:todo_fixture_settlement:e1535cd2228d4d6ea91c10926eefd87b",
+                "request_sha256": "3f4b8d97ed5ae14b2b45fda314925553b7368f64b2ff0519ebbbc44aa74a9dac",
+                "result": {
+                  "changed": false,
+                  "claim_operation_id": "todo-claim:settlement-cli-fixture:todo_fixture_settlement:e1535cd2228d4d6ea91c10926eefd87b",
+                  "claimed_by": "codex-settlement-cli",
+                  "execution_managed": true,
+                  "handoff_mode": "soft_claim",
+                  "mutation_authority": {
+                    "actor_agent_id": "codex-settlement-cli",
+                    "command": "claim",
+                    "mode": "single_agent_compatibility",
+                    "registered_agent_count": 1,
+                    "schema_version": "todo_mutation_authority_v0",
+                    "todo_id": "todo_fixture_settlement"
+                  },
+                  "todo_id": "todo_fixture_settlement"
+                },
+                "schema_version": "loopx_coordination_todo_claim_receipt_v0"
+              }
+            ],
+            "state": {
+              "delta": {
+                "operations": [],
+                "schema_version": "authority_state_delta_v0"
+              },
+              "kind": "delta"
+            }
+          },
+          {
+            "cursor": "3",
+            "events": [
+              {
+                "goal_id": "settlement-cli-fixture",
+                "mutation_kinds": [
+                  "todo_upsert"
+                ],
+                "mutation_sha256": "f91b740698e06bcffac2b5c5cc7d8ea73d471dac37c9fcafd242265ae1c094ec",
+                "next_projection_sha256": "a27014ecf1124b4294d71adfae935a3ee7bfdcda730b011cbaad5ec0d4f85bf8",
+                "operation_id": "todo-update:81ebb9dad7d14ce7afefbb45f09b7e18",
+                "previous_projection_sha256": "af00a29781233df18bf489f98f895591dd7321b2d6567337b44d74417f03a5eb",
+                "schema_version": "loopx_coordination_projection_mutation_event_v0",
+                "targets": [
+                  "todo:todo_fixture_settlement"
+                ]
+              }
+            ],
+            "operation_id": "todo-update:81ebb9dad7d14ce7afefbb45f09b7e18",
+            "provider_revision": "file:3:86e825a267fcd06f5d09785d",
+            "receipts": [
+              {
+                "changed": true,
+                "goal_id": "settlement-cli-fixture",
+                "operation_id": "todo-update:81ebb9dad7d14ce7afefbb45f09b7e18",
+                "request_sha256": "99101bd347cc493ec2a63d055f00c76e78599fb2ce8a1c600de38629f77a2c4c",
+                "schema_version": "loopx_coordination_todo_update_receipt_v0",
+                "todo_id": "todo_fixture_settlement"
+              }
+            ],
+            "state": {
+              "delta": {
+                "operations": [
+                  {
+                    "op": "set",
+                    "path": [
+                      "todo_read_model",
+                      "records_sha256"
+                    ],
+                    "value": "e205d17cfd80ba60c87cee0a33108a045d6ccc86ab6ffa582c79749cbda48642"
+                  },
+                  {
+                    "index": 0,
+                    "insert": [
+                      {
+                        "action_kind": "validate",
+                        "archive_state": "active",
+                        "claimed_by": "codex-settlement-cli",
+                        "done": false,
+                        "explore_result_node_refs": [
+                          "measured-candidate"
+                        ],
+                        "index": 1,
+                        "priority": "P1",
+                        "role": "agent",
+                        "schema_version": "todo_item_v0",
+                        "source_section": "Agent Todo",
+                        "status": "open",
+                        "task_class": "advancement_task",
+                        "text": "[P1] Validate and settle the selected delivery.",
+                        "title": "Validate and settle the selected delivery.",
+                        "todo_id": "todo_fixture_settlement",
+                        "updated_at": "2026-11-01T04:22:20Z"
+                      }
+                    ],
+                    "op": "splice",
+                    "path": [
+                      "todos"
+                    ],
+                    "remove": 1
+                  }
+                ],
+                "schema_version": "authority_state_delta_v0"
+              },
+              "kind": "delta"
+            }
+          }
+        ],
+        "cursor": "3",
+        "goal_id": "settlement-cli-fixture",
+        "head": {
+          "goal_id": "settlement-cli-fixture",
+          "handoff_mode": "soft_claim",
+          "leases": [],
+          "partitions": {
+            "leases": null,
+            "todos": null
+          },
+          "schema_version": "loopx_coordination_runtime_shadow_projection_v0",
+          "source_authority": "legacy_markdown_and_task_lease",
+          "todo_read_model": {
+            "contract_fields": [
+              "index",
+              "done",
+              "text",
+              "schema_version",
+              "todo_id",
+              "role",
+              "status",
+              "priority",
+              "title",
+              "archive_state",
+              "source_section",
+              "task_class",
+              "action_kind",
+              "task_domain",
+              "capability_binding_ref",
+              "task_repository",
+              "continuation_policy",
+              "removed_continuation_policy",
+              "required_write_scopes",
+              "required_capabilities",
+              "target_capabilities",
+              "explore_result_node_refs",
+              "decision_scope",
+              "required_decision_scopes",
+              "decision_outcome",
+              "decision_scope_outcomes",
+              "claimed_by",
+              "created_by",
+              "last_actor_agent_id",
+              "bound_agent",
+              "goal_bound",
+              "blocks_agent",
+              "excluded_agents",
+              "global_gate",
+              "unblocks_todo_id",
+              "resume_when",
+              "resume_monitor_generation",
+              "resume_condition",
+              "resume_ready",
+              "no_followup",
+              "successor_todo_ids",
+              "completion_continuation",
+              "completion_recovery",
+              "completion_receipt_id",
+              "replan_obligation_id",
+              "target_key",
+              "cadence",
+              "next_due_at",
+              "expires_at",
+              "watch_only",
+              "last_checked_at",
+              "result_hash",
+              "consecutive_no_change",
+              "material_change",
+              "material_change_generation",
+              "max_no_change_before_replan",
+              "monitor_effect_id",
+              "note",
+              "evidence",
+              "reason",
+              "completed_at",
+              "completion_turn_key",
+              "completion_result",
+              "updated_at",
+              "superseded_by",
+              "completion_validation_required",
+              "completion_validation_sha256",
+              "completion_validation_revision",
+              "completion_validation_revision_history",
+              "handoff_note"
+            ],
+            "records_sha256": "e205d17cfd80ba60c87cee0a33108a045d6ccc86ab6ffa582c79749cbda48642",
+            "schema_version": "loopx_todo_canonical_read_record_v0",
+            "todo_count": 1
+          },
+          "todos": [
+            {
+              "action_kind": "validate",
+              "archive_state": "active",
+              "claimed_by": "codex-settlement-cli",
+              "done": false,
+              "explore_result_node_refs": [
+                "measured-candidate"
+              ],
+              "index": 1,
+              "priority": "P1",
+              "role": "agent",
+              "schema_version": "todo_item_v0",
+              "source_section": "Agent Todo",
+              "status": "open",
+              "task_class": "advancement_task",
+              "text": "[P1] Validate and settle the selected delivery.",
+              "title": "Validate and settle the selected delivery.",
+              "todo_id": "todo_fixture_settlement",
+              "updated_at": "2026-11-01T04:22:20Z"
+            }
+          ]
+        },
+        "provider_revision": "file:3:86e825a267fcd06f5d09785d",
+        "schema_version": "loopx_file_authority_store_v1",
+        "store_identity": "file:5065b6be99a348769e985629ab4434b2"
+      }
+    },
+    "authority/file-v0/store-identity": {
+      "text": "file:5065b6be99a348769e985629ab4434b2"
+    },
+    "authority-transition/file-v0/legacy-writer-fence-ebdd5eb7e94ef0c5.json": {
+      "json": {
+        "expected_shadow_provider_revision": "file:1:f9c67d2bde7f7d8b39351bc9",
+        "fence_id": "canonical-fixture",
+        "goal_id": "settlement-cli-fixture",
+        "schema_version": "loopx_legacy_coordination_writer_fence_v0",
+        "source_projection_sha256": "af00a29781233df18bf489f98f895591dd7321b2d6567337b44d74417f03a5eb",
+        "source_version": "canonical-fixture",
+        "state": "engaged"
+      }
+    },
+    "goals/settlement-cli-fixture/explore-result-log.jsonl": {
+      "jsonl": [
+        {
+          "agent_id": "codex-settlement-cli",
+          "boundary": {
+            "absolute_paths_recorded": false,
+            "credential_values_recorded": false,
+            "raw_logs_recorded": false,
+            "raw_session_transcript_recorded": false,
+            "raw_task_text_recorded": false,
+            "raw_trajectory_recorded": false
+          },
+          "event_id": "e9177bd26c42ebb0",
+          "event_kind": "node",
+          "goal_id": "settlement-cli-fixture",
+          "node_kind": "question",
+          "recorded_at": "2026-11-01T12:22:19+08:00",
+          "result_id": "measured-candidate",
+          "schema_version": "loopx_explore_result_event_v0",
+          "status": "open",
+          "summary": "Synthetic fixed input and budget",
+          "title": "Which candidate improves the bounded case?"
+        },
+        {
+          "agent_id": "codex-settlement-cli",
+          "boundary": {
+            "absolute_paths_recorded": false,
+            "credential_values_recorded": false,
+            "raw_logs_recorded": false,
+            "raw_session_transcript_recorded": false,
+            "raw_task_text_recorded": false,
+            "raw_trajectory_recorded": false
+          },
+          "event_id": "4a78fdc40f43455f",
+          "event_kind": "finding",
+          "evidence_refs": [
+            "result:a",
+            "result:b"
+          ],
+          "execution_observation": {
+            "candidate_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "change_reason": null,
+            "elapsed_seconds": 1,
+            "evidence_refs": [
+              "result:a"
+            ],
+            "executed_method_id": "probe",
+            "input_revision": "fixture-v1",
+            "limit_seconds": 10,
+            "planned_method_id": "probe",
+            "result_candidate_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "result_ref": "result:a",
+            "schema_version": "explore_execution_observation_v0",
+            "search_iterations": null,
+            "stop_reason": "process_exit:0"
+          },
+          "goal_id": "settlement-cli-fixture",
+          "measurements": [
+            {
+              "candidate_ref": "candidate:b",
+              "comparison_scope": "validation:budget",
+              "evaluation_ref": "evaluator:v1",
+              "evidence_ref": "result:b",
+              "higher_is_better": true,
+              "input_revision": "fixture-v1",
+              "metric": "quality",
+              "unit": "points",
+              "value": 8
+            }
+          ],
+          "node_id": "measured-candidate",
+          "recorded_at": "2026-11-01T12:22:19+08:00",
+          "result_id": "finding_80c27c98aa8a2b26a2d337158467748b0333b395ada4bbac58ff19613c825048",
+          "schema_version": "loopx_explore_result_event_v0",
+          "status": "tentative",
+          "summary": "Input revision: fixture-v1 Applicability: Synthetic fixed input and budget Observation: A legacy measured result was recorded. Interpretation: Retain the original statement for audit; do not infer execution authority.",
+          "tags": [
+            "writeback-result"
+          ],
+          "title": "Which candidate improves the bounded case?"
+        }
+      ]
+    },
+    "goals/settlement-cli-fixture/post_writeback_hooks/pwh_1f5ad15373f5da1c466032ad630963681afd7d6f7eb0722cd5798945f5a21fbe.json": {
+      "json": {
+        "schema_version": "loopx_post_writeback_capability_hook_receipt_v0",
+        "dispatch_id": "pwh_1f5ad15373f5da1c466032ad630963681afd7d6f7eb0722cd5798945f5a21fbe",
+        "hook_id": "explore.result_writeback",
+        "capability_id": "explore",
+        "source_receipt_id": "pwr_473c886d7f1df851fc19aad5",
+        "status": "intent_recorded",
+        "intent": {
+          "schema_version": "loopx_capability_intent_v0",
+          "intent_kind": "explore.result_ingestion",
+          "idempotency_key": "explore-result:80c27c98aa8a2b26a2d337158467748b0333b395ada4bbac58ff19613c825048",
+          "source_receipt_id": "pwr_473c886d7f1df851fc19aad5",
+          "payload": {
+            "attachment": {
+              "schema_version": "explore_result_attachment_v0",
+              "node_id": "measured-candidate",
+              "question": "Which candidate improves the bounded case?",
+              "applicability": "Synthetic fixed input and budget",
+              "input_revision": "fixture-v1",
+              "observation": "A legacy measured result was recorded.",
+              "interpretation": "Retain the original statement for audit; do not infer execution authority.",
+              "status": "tentative",
+              "evidence_refs": [
+                "result:a",
+                "result:b"
+              ],
+              "execution_observation": {
+                "schema_version": "explore_execution_observation_v0",
+                "candidate_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "input_revision": "fixture-v1",
+                "planned_method_id": "probe",
+                "executed_method_id": "probe",
+                "change_reason": null,
+                "elapsed_seconds": 1,
+                "limit_seconds": 10,
+                "search_iterations": null,
+                "stop_reason": "process_exit:0",
+                "evidence_refs": [
+                  "result:a"
+                ],
+                "result_ref": "result:a",
+                "result_candidate_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              },
+              "measurements": [
+                {
+                  "metric": "quality",
+                  "unit": "points",
+                  "value": 8,
+                  "higher_is_better": true,
+                  "comparison_scope": "validation:budget",
+                  "input_revision": "fixture-v1",
+                  "evaluation_ref": "evaluator:v1",
+                  "candidate_ref": "candidate:b",
+                  "evidence_ref": "result:b"
+                }
+              ]
+            }
+          },
+          "requested_write_scope": []
+        },
+        "error_code": null,
+        "attempt_count": 1,
+        "recorded_at": "2026-11-01T12:22:19+08:00"
+      }
+    },
+    "goals/settlement-cli-fixture/rollout-event-log.jsonl": {
+      "jsonl": [
+        {
+          "agent_id": "codex-settlement-cli",
+          "boundary": {
+            "absolute_paths_recorded": false,
+            "credential_values_recorded": false,
+            "raw_logs_recorded": false,
+            "raw_session_transcript_recorded": false,
+            "raw_task_text_recorded": false,
+            "raw_trajectory_recorded": false
+          },
+          "details": {
+            "added": false,
+            "already_exists": false,
+            "changed": false,
+            "command": "todo",
+            "completion_continuation": null,
+            "completion_recovery": null,
+            "decision_outcome": null,
+            "decision_scope": null,
+            "mutation_authority": "{'actor_agent_id': 'codex-settlement-cli', 'command': 'claim', 'mode': 'single_agent_compatibility', 'registered_agent_count': 1, 'schema_version': 'todo_mutation_authority_v0', 'todo_id': 'todo_fixture_settlement'}",
+            "no_followup": false,
+            "replan_transition": null,
+            "role": "agent",
+            "settlement_effect_id": null,
+            "task_class": null,
+            "todo_command": "claim"
+          },
+          "event_id": "4f544db230a001c7",
+          "event_kind": "todo_claim",
+          "goal_id": "settlement-cli-fixture",
+          "recorded_at": "2026-11-01T04:22:16.135165Z",
+          "schema_version": "loopx_rollout_event_v0",
+          "status": "no_change",
+          "summary": "todo claim recorded for todo_fixture_settlement",
+          "todo_id": "todo_fixture_settlement"
+        },
+        {
+          "agent_id": "codex-settlement-cli",
+          "boundary": {
+            "absolute_paths_recorded": false,
+            "credential_values_recorded": false,
+            "raw_logs_recorded": false,
+            "raw_session_transcript_recorded": false,
+            "raw_task_text_recorded": false,
+            "raw_trajectory_recorded": false
+          },
+          "details": {
+            "admission_resume_ready": null,
+            "admission_resume_when": null,
+            "appended": false,
+            "applied_rrule": null,
+            "closeout_required": true,
+            "command": "quota",
+            "delivery_allowed": true,
+            "delivery_workspace_causality_reason": "todo_write_contract_not_explicit",
+            "delivery_workspace_causality_schema_version": "delivery_workspace_causality_v0",
+            "delivery_workspace_causality_source": "selected_todo_contract",
+            "delivery_workspace_causality_todo_id": "todo_fixture_settlement",
+            "delivery_workspace_requirement": "unknown",
+            "interaction_mode": "bounded_delivery",
+            "must_attempt_work": true,
+            "ok": true,
+            "quiet_noop_allowed": false,
+            "quota_command": "should-run",
+            "quota_spend_source": "heartbeat",
+            "replan_obligation_id": null,
+            "selected_todo_id": "todo_fixture_settlement",
+            "semantic_replan_obligation_id": null,
+            "settlement_effect_id": "settlement-cli-fixture:codex-settlement-cli:todo_fixture_settlement:turn-settlement-cli-1",
+            "should_run": true,
+            "slots": null,
+            "source": "run_history",
+            "stall_observation": "not_applicable",
+            "successor_todo_ids": null,
+            "target_key": null,
+            "todo_id": "todo_fixture_settlement",
+            "turn_instance_id": "turn-settlement-cli-1"
+          },
+          "event_id": "fbfa67f85d844cff",
+          "event_kind": "quota_should_run",
+          "goal_id": "settlement-cli-fixture",
+          "recorded_at": "2026-11-01T04:22:18.641918Z",
+          "run_id": "turn-settlement-cli-1",
+          "schema_version": "loopx_rollout_event_v0",
+          "status": "normal_run",
+          "summary": "heartbeat quota receipt committed for turn=turn-settlement-cli-1 stall=not_applicable"
+        },
+        {
+          "agent_id": "codex-settlement-cli",
+          "boundary": {
+            "absolute_paths_recorded": false,
+            "credential_values_recorded": false,
+            "raw_logs_recorded": false,
+            "raw_session_transcript_recorded": false,
+            "raw_task_text_recorded": false,
+            "raw_trajectory_recorded": false
+          },
+          "details": {
+            "replan_obligation_id": null,
+            "resume_key": "f84400a5e68b1107c22d17a165b7d30f927f144d8bb099606832ca77f4d1ca1d",
+            "schema_version": "refresh_external_delivery_v0",
+            "settlement_effect_id": "settlement-cli-fixture:codex-settlement-cli:todo_fixture_settlement:turn-settlement-cli-1",
+            "state": "paused"
+          },
+          "event_id": "940cc2476f42c47b",
+          "event_kind": "refresh_external_delivery",
+          "goal_id": "settlement-cli-fixture",
+          "recorded_at": "2026-11-01T04:22:19.320822Z",
+          "run_id": "turn-settlement-cli-1",
+          "schema_version": "loopx_rollout_event_v0",
+          "status": "paused",
+          "summary": "Refresh external delivery preference recorded.",
+          "todo_id": "todo_fixture_settlement"
+        },
+        {
+          "agent_id": "codex-settlement-cli",
+          "boundary": {
+            "absolute_paths_recorded": false,
+            "credential_values_recorded": false,
+            "raw_logs_recorded": false,
+            "raw_session_transcript_recorded": false,
+            "raw_task_text_recorded": false,
+            "raw_trajectory_recorded": false
+          },
+          "classification": "validated_change",
+          "delivery_outcome": "outcome_progress",
+          "details": {
+            "agent_lane": "codex-settlement-cli",
+            "autonomous_replan_recorded": false,
+            "command": "refresh-state",
+            "global_sync_wrote": false,
+            "progress_scope": "agent_lane",
+            "replan_obligation_id": null,
+            "reward_memory_candidate_id": null,
+            "reward_memory_candidate_status": null,
+            "reward_memory_reflection_digest": null,
+            "settlement_effect_id": "settlement-cli-fixture:codex-settlement-cli:todo_fixture_settlement:turn-settlement-cli-1"
+          },
+          "event_id": "fa0319a22957d928",
+          "event_kind": "refresh_state",
+          "goal_id": "settlement-cli-fixture",
+          "recorded_at": "2026-11-01T04:22:19.801108Z",
+          "run_id": "turn-settlement-cli-1",
+          "schema_version": "loopx_rollout_event_v0",
+          "status": "appended",
+          "summary": "refresh-state appended compact control-plane state with classification=validated_change",
+          "todo_id": "todo_fixture_settlement"
+        }
+      ]
+    }
+  },
+  "writeback_relative_path": "goals/settlement-cli-fixture/runs/2026-11-01T12-22-19-08-00.json",
+  "writeback": {
+    "generated_at": "2026-11-01T12:22:19+08:00",
+    "goal_id": "settlement-cli-fixture",
+    "classification": "validated_change",
+    "recommended_action": "[P1] Validate and settle the selected delivery.",
+    "recommended_action_source": "settlement_bound_todo",
+    "health_check": "state_file 1/1; registry_goal 1/1; authority_sources 0",
+    "state": {
+      "path": "$STATE_FILE",
+      "sha256_16": "40dbb5013f59c3e8",
+      "frontmatter": {
+        "status": "active-read-only",
+        "owner_mode": "goal",
+        "objective": "Settle one standard Codex App delivery.",
+        "updated_at": "2026-01-01T00:00:00+00:00"
+      },
+      "next_action": [
+        "Validate and settle the selected delivery."
+      ],
+      "recent_feedback": [],
+      "progress": []
+    },
+    "registry_goal": {
+      "present": true,
+      "domain": "settlement-cli-fixture",
+      "status": "active-read-only",
+      "adapter": {
+        "kind": "read_only_project_map_v0",
+        "status": "connected-read-only"
+      },
+      "authority_source_count": 0
+    },
+    "recommended_action_resolution": {
+      "schema_version": "refresh_recommendation_v0",
+      "recommended_action": "[P1] Validate and settle the selected delivery.",
+      "recommended_action_source": "settlement_bound_todo",
+      "authority": "settlement",
+      "settlement_alignment": "exact",
+      "todo_id": "todo_fixture_settlement",
+      "selection_binding": "heartbeat_receipt",
+      "claim_required_before_work": false
+    },
+    "delivery_batch_scale": "implementation",
+    "delivery_outcome": "outcome_progress",
+    "delivery_workspace": {
+      "schema_version": "delivery_workspace_v1",
+      "workspace_identity": "git:github.com/loopx-project/loopx",
+      "identity_kind": "git_repository",
+      "task_repository": "git:github.com/loopx-project/loopx",
+      "workspace_revision_digest": "a64a1cc8a41cd813a1da746e08427a5adc458beaf686111d68cd30a75e3c2172",
+      "repository_source": "current_git_origin",
+      "workspace_kind": "canonical_checkout",
+      "peer_independent_worktree_required": false
+    },
+    "settlement_identity": {
+      "schema_version": "quota_settlement_identity_v0",
+      "effect_id": "settlement-cli-fixture:codex-settlement-cli:todo_fixture_settlement:turn-settlement-cli-1",
+      "goal_id": "settlement-cli-fixture",
+      "agent_id": "codex-settlement-cli",
+      "todo_id": "todo_fixture_settlement",
+      "turn_instance_id": "turn-settlement-cli-1"
+    },
+    "turn_instance_id": "turn-settlement-cli-1",
+    "todo_id": "todo_fixture_settlement",
+    "vision_checkpoint": {
+      "schema_version": "vision_checkpoint_v0",
+      "agent_id": "codex-settlement-cli",
+      "required": true,
+      "satisfied": false,
+      "decision": "missing_required",
+      "triggers": [
+        {
+          "kind": "material_delivery_outcome",
+          "delivery_outcome": "outcome_progress"
+        }
+      ],
+      "delivery_boundary": "semantic_closeout",
+      "required_resolution": [
+        "write_vision_patch"
+      ],
+      "missing_baseline": true
+    },
+    "explore_result": {
+      "schema_version": "explore_result_attachment_v0",
+      "node_id": "measured-candidate",
+      "question": "Which candidate improves the bounded case?",
+      "applicability": "Synthetic fixed input and budget",
+      "input_revision": "fixture-v1",
+      "observation": "A legacy measured result was recorded.",
+      "interpretation": "Retain the original statement for audit; do not infer execution authority.",
+      "status": "tentative",
+      "evidence_refs": [
+        "result:a",
+        "result:b"
+      ],
+      "execution_observation": {
+        "schema_version": "explore_execution_observation_v0",
+        "candidate_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "input_revision": "fixture-v1",
+        "planned_method_id": "probe",
+        "executed_method_id": "probe",
+        "change_reason": null,
+        "elapsed_seconds": 1,
+        "limit_seconds": 10,
+        "search_iterations": null,
+        "stop_reason": "process_exit:0",
+        "evidence_refs": [
+          "result:a"
+        ],
+        "result_ref": "result:a",
+        "result_candidate_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "measurements": [
+        {
+          "metric": "quality",
+          "unit": "points",
+          "value": 8,
+          "higher_is_better": true,
+          "comparison_scope": "validation:budget",
+          "input_revision": "fixture-v1",
+          "evaluation_ref": "evaluator:v1",
+          "candidate_ref": "candidate:b",
+          "evidence_ref": "result:b"
+        }
+      ]
+    },
+    "explore_result_recorded_at": "2026-11-01T12:22:19+08:00",
+    "progress_scope": "agent_lane",
+    "agent_id": "codex-settlement-cli",
+    "agent_lane": "codex-settlement-cli",
+    "todo_source": {
+      "source_authority": "file_v0",
+      "store_identity": "file:5065b6be99a348769e985629ab4434b2",
+      "provider_revision": "file:2:1e67e94cbc52370f980d67d0",
+      "cursor": "2"
+    },
+    "delivery_workspace_causality": {
+      "schema_version": "delivery_workspace_causality_v0",
+      "todo_id": "todo_fixture_settlement",
+      "requirement": "unknown",
+      "source": "selected_todo_contract",
+      "reason": "todo_write_contract_not_explicit"
+    },
+    "refresh_recovery": {
+      "schema_version": "refresh_recovery_v0",
+      "decision": "append",
+      "reason": "first_writeback",
+      "vision_request_digest": null,
+      "mutation_digest": "1451817afe250f88d1509692b01b2486fc7173036d689e83432656f20cfceff6",
+      "original_generated_at": null
+    },
+    "settlement_workspace_requirement": {
+      "schema_version": "settlement_workspace_requirement_v0",
+      "requirement": "unknown",
+      "reason": "todo_write_contract_not_explicit",
+      "settlement_binding_kind": "todo",
+      "source": "selected_todo_contract"
+    },
+    "runtime_projection_route": {
+      "schema_version": "runtime_projection_route_v0",
+      "route_id": "9cca71239c99ed5a",
+      "status": "single_runtime",
+      "projection_required": false,
+      "declaration_source": "source_runtime_fallback",
+      "match_count": 0,
+      "source_mirror_match_count": 0,
+      "conflict_count": 0,
+      "unreadable_target_count": 0,
+      "source_registry_sha256_16": "5920ce82616ed364",
+      "source_runtime_sha256_16": "09bf0c30c91ef1e5",
+      "target_runtime_sha256_16": "09bf0c30c91ef1e5",
+      "projection_enabled": false,
+      "projection_marker_field": "shared_runtime_projection"
+    }
+  },
+  "index_fields": [
+    "generated_at",
+    "goal_id",
+    "classification",
+    "recommended_action",
+    "recommended_action_source",
+    "health_check",
+    "state",
+    "runtime_projection_route",
+    "recommended_action_resolution",
+    "delivery_batch_scale",
+    "delivery_outcome",
+    "delivery_workspace",
+    "settlement_identity",
+    "todo_source",
+    "refresh_recovery",
+    "turn_instance_id",
+    "todo_id",
+    "vision_checkpoint",
+    "explore_result",
+    "explore_result_recorded_at",
+    "progress_scope",
+    "agent_id",
+    "agent_lane"
+  ],
+  "index_overrides": {
+    "state": {
+      "sha256_16": "40dbb5013f59c3e8",
+      "frontmatter": {
+        "updated_at": "2026-01-01T00:00:00+00:00"
+      }
+    }
+  }
+}

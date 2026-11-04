@@ -9,8 +9,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from ...chat_manager_details import read_manager_goal_details
-from ...chat_manager_history import delivery_history_window, read_manager_delivery_history
+from ...chat.manager_details import read_manager_goal_details
+from ...chat.manager_history import delivery_history_window, read_manager_delivery_history
 from ...control_plane.effect_runtime import effect_runtime_result
 
 

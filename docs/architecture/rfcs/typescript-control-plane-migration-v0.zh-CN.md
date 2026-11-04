@@ -246,7 +246,10 @@ Canonical 摘要仅在某角色组包含恢复条件时准备恢复历史。
 继任计算仍使用完整的活跃与归档血缘。
 角色摘要复用一次请求内的血缘事实和继任 owner 的既有上下文字段。
 该 owner 先校验并索引完整图，再生成需要返回的评估。
-源码指纹仍读取每个已准入字节并复查新鲜度；顺序读取省去每个进程的线程池创建。
+源码指纹对每个已准入字节求哈希并复查新鲜度；顺序读取省去线程池创建。
+在 POSIX 上，按 release、解释器与完整源码元数据建键的私有用户级摘要，使后续进程无需重新打开未变化的源码。
+仅记录两秒内未变化的源码；键不匹配或记录不可信时重读每个字节。
+size、mtime 与 ctime 均相同的另一文件（例如重新指向的 symlink）或不维护 ctime 的文件系统可能掩盖修改；其他平台每个进程仍全量重读。
 正常读取直接使用注册表和路径的 canonical owner，发生错误时才导入相关错误类型。
 精确详情查询在完整来源校验后，将筛选下推到既有来源投影。
 需报告未筛选数量的查询仍保留完整的首次投影。
@@ -841,8 +844,9 @@ promotion 的 Goal 继续使用旧 writer。这是有边界的 T1 闭合，不�
 
 已闭合的前置项：`todos/public_update.ts` 在同一锁内快照上组合 authoring scope、
 external-wait 拓扑和 Monitor/field 规划。公开 Python writer 不再逐个调用这些
-leaf RPC，也不推导 Monitor 等待基线。`update_source.py` 只输送完整、紧凑的
-active/archive 事实，不使用受展示条数限制的 inventory。局部拓扑修改必须验证
+leaf RPC，也不推导 Monitor 等待基线。更正（2026-11-02）：`update_source.py`
+已无剩余调用方，现已删除；规划仍要求完整、紧凑的 active/archive 事实，
+不使用受展示条数限制的 inventory。局部拓扑修改必须验证
 保留的等待条件；纯文案修改保留原 fence，不重新设置等待。显式清除条件后，仍可
 修改原来的拓扑。锁内 completion proof 先于纯规划检查，因此 proof 已过期时，
 优先返回该失败而非其他非法字段诊断；两种失败均不写入。
@@ -1073,7 +1077,10 @@ T3 完成，也不授予 amendment commit／整 Goal promotion 权限。
 
 Standing decision consumer 收口：`todos/standing_decision.ts` 统一可复用决策的
 资格与先后关系，供 status/quota 读取和 archive selection 共用。Python 只解码旧
-metadata 并批量调用，删除旧 receipt selector 与 TS archive 内的重复资格判断。
+metadata 并交给组合后的 `todo.read` 批量调用，删除旧 receipt selector 与 TS archive
+内的重复资格判断。现已删除无调用方的 `build_standing_decision_authority` 包装及其
+独立 `todo.standing_decision.project` handler／请求解码器；测试与示例改用组合读取，
+共享 TS owner 保留。
 Canonical 读取在生成展示 index 前使用完整 Todo 快照，包括保留的归档决策。
 后续拒绝／取消按决策时间覆盖旧批准，不再依赖 Todo ID；矛盾历史无法定序时给出
 诊断且不提供 active receipt。此授权面必须有显式 user-gate metadata，不再借用
@@ -2097,3 +2104,7 @@ SQLite 中位数略升，收益不能外推为全面加速。这只资格化本�
 原生查询统一拥有恢复定位和 completion capability 证据，并共享写入／回读的状态阶段约束。兼容变更、实测代价、验证范围与 facade 退出条件见 [2026-10-02 检查点](ledger/typescript-control-plane-migration-v0/2026-10-02-turn-journal-readback.zh-CN.md)。
 
 - 摘要展示最终 head 验收与历史尾延迟批次：[2026-10-27 后续记录](ledger/typescript-control-plane-migration-v0/2026-10-27-todo-summary-qualification.zh-CN.md)。
+- 配额摘要经来源引用在一次 `todo.quota_planning.project` 跨运行时调用内完成组合：[2026-11-02 切换记录](ledger/typescript-control-plane-migration-v0/2026-11-02-quota-summary-transaction.zh-CN.md)。
+- 完整全局摘要与门禁读取事务：[2026-11-02 检查点](ledger/typescript-control-plane-migration-v0/2026-11-02-global-manager-reads.zh-CN.md)。
+- 完整全局风险读取所有权：[2026-11-02](ledger/typescript-control-plane-migration-v0/2026-11-02-global-risks-read.zh-CN.md)。
+- 完整 durable-completion 证据读取：[2026-11-02 owner 与调用边界记录](ledger/typescript-control-plane-migration-v0/2026-11-02-completion-evidence-read.zh-CN.md)。

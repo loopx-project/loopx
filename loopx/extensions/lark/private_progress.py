@@ -1,7 +1,8 @@
 """Lark presentation of persisted Core events; never execution authority.
 
-Only the visible answer stream and coarse, observed activity kinds are shown.
-Reasoning text, tool arguments and command output stay out of the transport.
+The original private owner sees bounded reasoning summaries in the same shape
+as Codex, without repeating tool/command titles. Hidden reasoning, tool
+arguments and output never travel here.
 """
 from __future__ import annotations
 
@@ -71,8 +72,13 @@ def legacy_recovery_repairs(record: Mapping[str, Any]) -> list[dict[str, Any]]:
     return repairs
 
 
-def project_progress(state: dict[str, Any], events: list[dict[str, Any]]) -> str | None:
+def project_progress(state: dict[str, Any], events: list[dict[str, Any]], *,
+                     owner_private: bool = False) -> str | None:
     """Fold each exact Turn event once into a bounded, replayable view."""
+    state.pop("activities", None)
+    if not owner_private:
+        state.pop("public_summary", None)
+        state.pop("thinking_summaries", None)
     for event in events:
         state["cursor"] = event["event_id"]
         payload = event.get("payload") or {}
@@ -84,8 +90,10 @@ def project_progress(state: dict[str, Any], events: list[dict[str, Any]]) -> str
         elif event.get("kind") == "agent.phase":
             step = payload.get("step")
             kind = step.get("kind") if isinstance(step, Mapping) else None
-            # Summary deltas contain reasoning, not owner-facing progress.
-            if str(payload.get("method") or "").startswith("item/reasoning/"):
+            method = str(payload.get("method") or "")
+            if method.startswith("item/reasoning/") and not (
+                    owner_private and method == "item/reasoning/summaryTextDelta"
+                    and isinstance(step, Mapping) and step.get("reasoning_summary") is True):
                 continue
             # Core preparation and confirmed host start precede model output.
             # Render fixed activity text, never the context/provider label.
@@ -96,6 +104,25 @@ def project_progress(state: dict[str, Any], events: list[dict[str, Any]]) -> str
             label = {"reasoning": "正在思考", "command": "正在执行命令", "tool": "正在调用工具",
                      "search": "正在检索资料", "file_change": "正在修改文件"}.get(kind) if isinstance(kind, str) else None
             if label and isinstance(step, Mapping):
+                if owner_private and kind == "reasoning" and step.get("reasoning_summary") is True:
+                    summary = step.get("detail") or step.get("title")
+                    if isinstance(summary, str) and summary.strip():
+                        cleaned = " ".join(summary.split())[:280]
+                        step_id = str(step.get("id") or "reasoning")
+                        summaries = [
+                            row
+                            for row in state.get("thinking_summaries", [])
+                            if isinstance(row, Mapping) and row.get("id") != step_id
+                        ]
+                        summaries.append({"id": step_id, "text": cleaned})
+                        summaries = summaries[-4:]
+                        state["thinking_summaries"] = summaries
+                        if len(summaries) == 1:
+                            state["public_summary"] = summary.strip()[:1200]
+                        else:
+                            state["public_summary"] = "\n".join(
+                                f"• {row['text']}" for row in summaries
+                            )[:1200]
                 if step.get("state") == "completed":
                     label = "已结束当前步骤，继续处理"
                 elif step.get("state") == "failed":
@@ -124,6 +151,8 @@ def project_progress(state: dict[str, Any], events: list[dict[str, Any]]) -> str
     if not state.get("label") and not state.get("answer"):
         return None
     header = f"⏳ **{state.get('label') or '正在处理'}**"
+    if owner_private and state.get("public_summary"):
+        header += "\n\n**思考摘要**\n" + state["public_summary"]
     answer = str(state.get("answer") or "")
     if answer:
         if state.get("clipped"):

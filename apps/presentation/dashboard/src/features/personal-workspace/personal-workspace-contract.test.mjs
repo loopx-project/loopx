@@ -177,7 +177,7 @@ assert.match(timeline, /t\("timeline\.waitingConfirmation"\)/, "Historical gated
 assert.match(timeline, /gatedItems\.length/, "The compact Gate summary exposes the pending count");
 assert.match(timeline, /Boolean\(item\.run\.sessionId\)/, "Running count requires a discovered execution Session");
 assert.match(timeline, /Boolean\(item\.run\.canInterrupt\)/, "Running count requires an active interruptible turn");
-assert.match(page, /accept="image\/png,image\/jpeg,image\/webp,image\/gif"/, "Composer accepts bounded image types");
+assert.match(page, /accept="image\/png,image\/jpeg,image\/webp,image\/gif,\.md,\.txt"/, "Composer accepts bounded image types");
 assert.match(page, /imageInputRef\.current\?\.click\(\)/, "Attachment button explicitly opens the native file chooser");
 assert.match(page, /onDrop=\{\(event\)/, "Composer accepts dragged image files");
 assert.match(page, /onPaste=\{[^}]*handleComposerPaste/s, "Composer accepts pasted clipboard images");
@@ -722,3 +722,18 @@ assert.match(source("./context-drawer.tsx"), /selection\.item\.gate\?\.kind === 
 for (const key of ["proposal.agentGate.title", "proposal.agentGate.summary", "proposal.agentGate.reason.executable_not_found", "proposal.agentGate.reason.api_key_not_set", "proposal.agentGate.reason.unregistered", "proposal.agentGate.reason.unavailable", "proposal.agentGate.nextAction", "proposal.agentGate.impact"]) {
   assert.equal((i18n.match(new RegExp(`"${key.replace(/\./g, "\\.")}":`, "g")) ?? []).length, 2, `${key} exists in both locales`);
 }
+
+// S5/S11 Design hierarchy convergence & Explanations on Demand:
+// Layout explains itself; auxiliary explanation prose in overview & research history
+// is collapsed into ContextHelp instead of cluttering the primary reading view.
+const overview = source("./goal-overview.tsx");
+const overviewCss = source("./goal-overview.css");
+const researchHistory = source("./goal-research-history.tsx");
+const researchHistoryCss = source("./goal-research-history.css");
+
+assert.match(overview, /goal-overview-worker-status[\s\S]*?<ContextHelp/, "WorkerReadback puts explanation into ContextHelp beside status");
+assert.match(overview, /details className="goal-overview-worker-details"/, "WorkerReadback technical details start collapsed");
+assert.match(overviewCss, /\.goal-overview-worker-status\s*\{[^}]*display:\s*flex/, "Worker status row is structured via flex");
+assert.match(overviewCss, /@media\s*\(max-width:\s*640px\)\s*\{[\s\S]*?\.goal-overview-worker-state dl/, "Worker state has narrow mobile grid rules");
+assert.match(researchHistory, /execution_observation[\s\S]*?<ContextHelp label=\{zh \? "执行观测说明"/, "Execution observation explanation is attached to summary ContextHelp");
+assert.match(researchHistoryCss, /margin-inline-start:\s*0;\s*margin-top:\s*8px;/, "Research history mobile action wraps cleanly on 390px");

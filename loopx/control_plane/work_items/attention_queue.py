@@ -189,6 +189,7 @@ def build_attention_queue(
     include_task_graph: bool = False,
     goal_id_filter: str | None = None,
     include_stopped_goal_context: bool = False,
+    include_goal_channel_projection: bool = True,
 ) -> dict[str, Any]:
     """Build the executable attention queue or a stopped-Goal archive view.
 
@@ -239,7 +240,11 @@ def build_attention_queue(
             item = active_state_item
         else:
             item = context.goal_attention(goal)
-            if not item:
+            if not item or (
+                current_status_run is None
+                and item.get("status") == "unknown"
+                and active_state_item
+            ):
                 item = active_state_item
         if item:
             item, projection_warning = _reconcile_active_state_item(
@@ -380,12 +385,13 @@ def build_attention_queue(
                 )
                 if task_graph_projection:
                     item["task_graph_projection"] = task_graph_projection
-            context.attach_goal_channel_projection(
-                item,
-                goal=goal,
-                goal_latest_runs=goal_latest_runs,
-                runtime_root=runtime_root,
-            )
+            if include_goal_channel_projection:
+                context.attach_goal_channel_projection(
+                    item,
+                    goal=goal,
+                    goal_latest_runs=goal_latest_runs,
+                    runtime_root=runtime_root,
+                )
             history_items.append(item)
 
     merge_global_registry_findings(

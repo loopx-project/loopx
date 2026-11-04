@@ -93,5 +93,6 @@ def original_delivery_facts(row: dict[str, Any], route: dict[str, Any], turn: di
             "client_turn_id": turn.get("client_turn_id"),
             "status": turn.get("status"),
             "context_handoff_receipt": (turn.get("response") or {}).get("context_handoff_receipt"),
+            "context_handoff_receipts": (turn.get("response") or {}).get("context_handoff_receipts"),
         },
     }

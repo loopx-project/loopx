@@ -58,6 +58,13 @@ helper delivery neither launches trials nor changes frozen historical arms.
 
 ## Current work
 
+- [FrontierCS-2 compatibility repair v2](frontiercs2/README.md) provides an opt-in
+  patch and synthetic HTTP/client/Docker checks for the frozen single-host v1
+  sources. It preserves historical attribution and does not launch a model or
+  native-grader trial.
+- [Native Claude Code](runtime/NATIVE_CLAUDE.md) provides an independent,
+  explicitly pinned SForge worker with native Stop hooks and session recovery.
+  Model, tool, Goal/Plan and submission qualification precedes long trials.
 - [Execution observations through ordinary Goal planning](runtime/EXECUTION_OBSERVATIONS.md)
   covers independent local measurements with ordinary Goal/Todo planning and
   stride selection, complete initial Goal retention, and migration from the
@@ -133,6 +140,11 @@ preserved for inspection; the companion notice governs their current evidence
 status. Neither archive category is the architecture for new work or grants
 runner, verifier, submission, or publication authority.
 
+The [FrontierCS-2 single-host v1 archive note](frontiercs2-single-host-versions.md)
+registers the frozen native-client, HTTP bridge, Docker transport and verifier
+wrapper used by a one-task four-arm pilot. The companion note links the separate
+data release, dependencies, read-only identity check and qualification limits.
+
 ## Matched model provider routing
 
 For a custom Responses-compatible model endpoint, set `OPENAI_BASE_URL` and
@@ -160,6 +172,18 @@ a URL or configuration digest does not prove provider identity or quality.
 This routing repair enables matched experiments under the
 [long-horizon research contract](../docs/architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.md);
 it establishes neither sustained operation nor a solver-quality improvement.
+
+When the runner, native judge and credential gateway run **inside the Docker
+VM**, pass `--docker-host-bridge` to every matched arm. Some VM runtimes map
+Docker's `host-gateway` alias to the desktop host, where that gateway is not
+listening. This explicit option pins `host.docker.internal` to the default
+bridge's inspected IPv4 gateway, matching the native firewall's host-service
+endpoints. A missing or ambiguous IPv4 gateway fails before container creation;
+it never guesses a fixed subnet. All services using that alias must be reachable
+on the bridge. Omit the option when services run on the desktop host or another
+topology; omitted behavior is unchanged. Select it only for new attempts and
+retain the setting in each arm's runtime receipt. It changes routing, not
+credentials, allowed ports, task input or feedback policy.
 
 ## Inert checkpoint capture
 
@@ -407,8 +431,8 @@ python -m benchmark.edgebench.checkpoint_judge --checkpoint-capture \
 
 Select the checkpoint provider through the same
 [shared EdgeBench source protocol](edgebench/README.md#select-and-freeze-the-native-provider)
-as the workers and judge. A new qualification cohort resolves the canonical
-integration branch and applies the reviewed native compatibility patch under
+as the workers and judge. A new default qualification cohort fetches the reviewed
+integration commit paired with the native compatibility patch under
 that protocol; its `.edgebench-source/receipt.json` records the effective provider
 commit, upstream revision and patch digest. Existing cohorts remain frozen.
 Patch representation changes receive a new digest and effective commit even
@@ -507,6 +531,18 @@ and a matching capture digest; source movement requires a new owned boundary.
 The local `sforge_checkpoint_opportunity_v0`
 artifact records these facts; it grants no restored admission. Disabling capture
 means omitting both the judge flag and worker declaration option on a new run.
+
+Finite opportunity responses and saved participants keep that existing JSON
+shape. Released history/results containing non-finite numbers use the explicit
+[`sforge_nonfinite_json: 1` envelope](edgebench/README.md#feedback-protocol-new-run-default-native)
+over the same logical artifact. The client decodes it before checking the
+incumbent; checkpoint capture saves it through the same lossless codec.
+Only released result fields may contain encoded numbers: opportunity clocks,
+round counters and authority fields retain their original strict representation.
+The archive binding covers the canonical encoded state, including numeric kinds,
+so repeated NaN reads retain a binding and changed released data invalidates it.
+Use `benchmark.runtime.sforge_json.loads` for saved participant readback. This
+transport neither changes native selection nor qualifies continued execution.
 
 For an isolated single-Goal trial, `"loopx_state": true` adds the existing
 state-backup owner's inventory: registered active state, project research state,
@@ -726,6 +762,13 @@ later files with an older native point. Missing paths, archive links, traversal 
 Declare only the intended private code/state stores: a whole home can contain
 credentials, and neither archive filtering nor a freeze is privacy certification.
 
+Supervisor failure receipts retain the exception-class `error_kind`. Failures
+from the managed Effect runtime additionally expose `runtime_failure.error_kind`
+and `runtime_failure.diagnostic_code`, without copying the error message or raw
+provider response into the worker reply. An expired artifact capture window is
+`request_rejected` / `checkpoint_capture_window_closed`. These diagnostics do not
+retry the capture, extend its deadline or grant execution authority.
+
 This explicit command produces an **inert joint file snapshot**, still
 `research_point_qualified=false`. It does not snapshot process memory, freeze
 external writers or activate canonical research state. Ordinary native restore
@@ -847,7 +890,10 @@ must actually deliver a complete full packet and later deltas across worker
 wakes; every fresh receiver must begin with a complete current full packet.
 The static inference follows model-visible page cursors, and a separate byte-map
 oracle checks complete delivery and retained delta bases before candidate work.
-The default remains `off`. Neither mode measures paid inference, task quality or
+This joint qualifier deliberately retains its explicit `off` control by default;
+new benchmark heartbeat workers default on and can select `--context-delivery off`.
+Do not mutate a frozen trial to adopt that changed default.
+Neither qualifier mode measures paid inference, task quality or
 fees; reusing a point still does not count its source test as passed in this run.
 
 The public fixture runs six actual native work wakes, captures the pending

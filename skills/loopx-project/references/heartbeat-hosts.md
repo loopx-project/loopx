@@ -4,6 +4,55 @@ Read before creating, repairing or changing a recurring host loop. Save only the
 
 ## Set Up Recurring Heartbeats
 
+### Antigravity App
+
+Select `antigravity-app` explicitly; `agy` remains the legacy CLI. Install its
+skill facade with `slash-commands --install --surface antigravity-app` and
+workflow skills with `workflow-skills --install --host-surface antigravity-app`.
+Use the activation packet for the already registered Goal/Agent. Bind its native
+conversation id from the current host's `ANTIGRAVITY_CONVERSATION_ID`, never
+another chat's title or the only registered lane.
+
+Write only `sidecar_template.sidecar_json` to its `sidecar_config_path` under
+`~/.gemini/config/sidecars/<sidecar-id>/sidecar.json`. Native `builtin: schedule`
+requires an `args` array beginning with the cron expression. `config.cron`, a
+top-level `sidecar` wrapper and LoopX's template metadata are not native config.
+Preserve an existing sidecar's id, enable choice and scoped permissions. New
+sidecars retain the host's user enable step; configuration does not prove a live
+loop. Inspect native startup/tick results after any change.
+
+The native schedule starts a fresh conversation with the stable bootstrap.
+That conversation must load fresh Core admission before work, preserving its
+registered Goal/Agent and current settlement identity. A fresh native context
+is not a new Goal or authority to replay the failed task. A successful schedule
+or conversation-start receipt does not establish completed work; inspect the
+resulting admission and settlement. Native timer dispatch still starts a model
+conversation when Core later selects a quiet no-op; no lower model cost is claimed.
+
+`hooks_template` is a native top-level named `loopx` group containing `Stop`
+handlers, not `hooks.loopx` or a `before_continuation` event. Global
+`--with-agy-hooks` installation is disabled until a concrete Goal, Agent and
+native conversation are bound. Bound recovery handles only the native `ERROR`
+event with a recognized Google model transport failure and fresh admission.
+The latest native input must match before and after admission; its index and
+creation time distinguish repeated identical messages. Missing native readback
+does not admit a continuation;
+it reserves at most two additional continuations per original input, at least
+60 seconds apart. Normal completion, user cancellation, permission/auth/quota
+failures and unrelated conversations remain untouched. The hook uses its
+corresponding Python installation and resolved LoopX executable, ignoring an
+unrelated inherited `PYTHONPATH`. This provider recovery
+is not a generic pre-invocation enforcement gate and does not repair an upstream
+network connection. Uninstall removes only an unchanged, recorded managed entry.
+
+Follow fresh `scheduler_hint.app_automation` for cadence and terminal actions.
+Update the existing native schedule or the same sidecar's `args[0]`, inspect host
+readback, then execute the current `ack_hint.cli_args`; on failure execute the
+current failure hint without ACK. A terminal stop requires no scheduler ACK.
+Never copy a Codex automation's identity or claim cadence applied from the
+template alone. In-session one-shot timers use `DurationSeconds`; recurring
+timers use `CronExpression`, without combining both forms.
+
 When the exact host is Codex App connected to a remote workspace over SSH and
 `automation_update` is unavailable because of that host boundary, use the
 visible Goal integration instead of reporting a missing-automation blocker:

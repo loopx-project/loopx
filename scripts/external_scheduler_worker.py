@@ -675,6 +675,10 @@ def build_should_run_command(args: argparse.Namespace) -> list[str]:
             args.runtime_profile,
             "--include-detail",
             "scheduler",
+            # This observer consumes the decision itself. The admitted wake
+            # owns its Turn, native context and capture; keep its env unchanged.
+            "--context-delivery",
+            "off",
         ]
     )
     return command

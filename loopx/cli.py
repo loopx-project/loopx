@@ -176,14 +176,15 @@ from .cli_commands.shared_goal_alignment import (
     handle_shared_goal_alignment_command,
     register_shared_goal_alignment_command,
 )
-from .cli_commands.goal_acceptance import (
-    handle_goal_acceptance_command,
-    register_goal_acceptance_command,
-)
+from .cli_commands.goal_acceptance import register_goal_acceptance_command
 from .cli_commands.goal_direction import register_goal_direction, handle_goal_direction
 from .cli_commands.goal_amendment_proposal import (
     handle_goal_amendment_proposal_command,
     register_goal_amendment_proposal_command,
+)
+from .cli_commands.anti_entropy import (
+    handle_anti_entropy_command,
+    register_anti_entropy_commands,
 )
 from .cli_commands.reliability_diagnostics import (
     handle_reliability_diagnostics_command,
@@ -284,6 +285,8 @@ def build_parser() -> LoopXArgumentParser:
     register_canary_commands(sub, add_subcommand_format)
 
     register_capability_commands(sub, add_subcommand_format)
+
+    register_anti_entropy_commands(sub, add_subcommand_format)
 
     register_reliability_diagnostics_commands(sub, add_subcommand_format)
 
@@ -491,6 +494,16 @@ def _main(argv: list[str] | None = None) -> int:
     )
     if capability_result is not None:
         return capability_result
+
+    anti_entropy_result = handle_anti_entropy_command(
+        args,
+        registry_path=registry_path,
+        runtime_root_arg=args.runtime_root,
+        output_format=output_format,
+        print_payload=print_payload,
+    )
+    if anti_entropy_result is not None:
+        return anti_entropy_result
 
     reliability_diagnostics_result = handle_reliability_diagnostics_command(
         args,
@@ -843,13 +856,6 @@ def _main(argv: list[str] | None = None) -> int:
     )
     if authority_shadow_result is not None:
         return authority_shadow_result
-
-    goal_acceptance_result = handle_goal_acceptance_command(
-        args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
-        output_format=output_format, print_payload=print_payload,
-    )
-    if goal_acceptance_result is not None:
-        return goal_acceptance_result
 
     shared_goal_alignment_result = handle_shared_goal_alignment_command(
         args,

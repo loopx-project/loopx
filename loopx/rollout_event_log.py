@@ -5,7 +5,7 @@ import json
 from collections import Counter, deque
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
+from typing import Any, BinaryIO, Callable, Iterable, Iterator, Mapping, Sequence
 
 from .file_lock import exclusive_cross_runtime_file_lock
 
@@ -513,43 +513,98 @@ def append_rollout_event_once(
     return payload, True
 
 
+def _parse_rollout_event_line(
+    line: str, *, line_number: int = 0, strict: bool = False,
+) -> dict[str, Any] | None:
+    if not line.strip():
+        return None
+    try:
+        parsed = json.loads(line)
+    except json.JSONDecodeError:
+        if strict:
+            raise ValueError(
+                f"rollout event log line {line_number} must contain valid JSON"
+            ) from None
+        return None
+    if not isinstance(parsed, dict):
+        if strict:
+            raise ValueError(
+                f"rollout event log line {line_number} must contain an object"
+            )
+        return None
+    if parsed.get("schema_version") != ROLLOUT_EVENT_SCHEMA_VERSION:
+        if strict:
+            raise ValueError(
+                f"rollout event log line {line_number} must use "
+                f"{ROLLOUT_EVENT_SCHEMA_VERSION}"
+            )
+        return None
+    return parsed
+
+
 def iter_rollout_events(
     log_path: Path,
     *,
     strict: bool = False,
 ) -> Iterator[dict[str, Any]]:
     for line_number, line in _iter_rollout_event_lines(log_path, strict=strict):
-        if not line.strip():
+        event = _parse_rollout_event_line(line, line_number=line_number, strict=strict)
+        if event is not None:
+            yield event
+
+
+def _reverse_rollout_lines(handle: BinaryIO) -> Iterator[bytes]:
+    """Read from the opened EOF, assembling complete UTF-8 rows before decoding."""
+    position = handle.seek(0, 2)
+    fragments: list[bytes] = []
+    while position:
+        size = min(position, 64 * 1024)
+        position -= size
+        handle.seek(position)
+        parts = handle.read(size).split(b"\n")
+        if len(parts) == 1:
+            fragments.append(parts[0])
             continue
-        try:
-            parsed = json.loads(line)
-        except json.JSONDecodeError:
-            if strict:
-                raise ValueError(
-                    f"rollout event log line {line_number} must contain valid JSON"
-                ) from None
-            continue
-        if not isinstance(parsed, dict):
-            if strict:
-                raise ValueError(
-                    f"rollout event log line {line_number} must contain an object"
-                )
-            continue
-        if parsed.get("schema_version") != ROLLOUT_EVENT_SCHEMA_VERSION:
-            if strict:
-                raise ValueError(
-                    f"rollout event log line {line_number} must use "
-                    f"{ROLLOUT_EVENT_SCHEMA_VERSION}"
-                )
-            continue
-        yield parsed
+        yield b"".join([parts.pop(), *reversed(fragments)])
+        fragments.clear()
+        yield from reversed(parts[1:])
+        fragments.append(parts[0])
+    if fragments:
+        yield b"".join(reversed(fragments))
+
+
+def _recent_rollout_events(log_path: Path, *, limit: int) -> list[dict[str, Any]]:
+    events: deque[dict[str, Any]] = deque(maxlen=limit)
+    try:
+        handle = log_path.open("rb")
+    except OSError:
+        return []
+
+    def parsed_lines(lines: Iterable[bytes]) -> Iterator[dict[str, Any]]:
+        for encoded in lines:
+            try:
+                line = encoded.decode("utf-8")
+            except UnicodeDecodeError:
+                continue
+            event = _parse_rollout_event_line(line)
+            if event is not None:
+                yield event
+
+    with handle:
+        if not handle.seekable():
+            events.extend(parsed_lines(handle))
+        else:
+            for event in parsed_lines(_reverse_rollout_lines(handle)):
+                events.appendleft(event)
+                if len(events) == events.maxlen:
+                    break
+    return list(events)
 
 
 def load_rollout_events(log_path: Path, *, limit: int | None = None) -> list[dict[str, Any]]:
-    events = iter_rollout_events(log_path)
     if limit is None or limit <= 0:
-        return list(events)
-    return list(deque(events, maxlen=limit))
+        return list(iter_rollout_events(log_path))
+    return _recent_rollout_events(log_path, limit=limit)
 
 
 class RolloutEventSnapshot:

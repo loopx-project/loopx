@@ -13,7 +13,7 @@ import urllib.request
 import pytest
 
 from loopx.chat_agent import CodexChatAgentError
-from loopx.chat_coordination import PROJECT_CONTEXT_VERSION
+from loopx.chat.coordination import PROJECT_CONTEXT_VERSION
 from loopx.chat_runtime import ChatRuntimeController, CodexAppServerAdapter
 from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
 from loopx.chat_store import ChatSessionStore
@@ -38,15 +38,20 @@ def session_runtime(tmp_path, *, channel="goal.public-research"):
     )
 
 
-def test_restarted_queue_delivers_original_material_to_native_turn(tmp_path, monkeypatch):
+@pytest.mark.parametrize("document", [False, True])
+def test_restarted_queue_delivers_original_material_to_native_turn(tmp_path, monkeypatch, document):
     import queue
     from types import SimpleNamespace
     from loopx.chat_agent import CodexChatAgentSession
 
     store, sid, _ = session_runtime(tmp_path)
     material = "Explain this exact source:\n```python\nif ready:\n    print('a  b')\n```\n\n原文：a\u00a0b"
+    import base64
+    raw = material.encode("utf-8")
+    attachments = [{"id": "source", "name": "source.txt", "mime_type": "text/plain", "size": len(raw),
+                    "data_url": "data:text/plain;base64," + base64.b64encode(raw).decode()}] if document else []
     original, _ = store.create_queued_turn(
-        sid, client_turn_id="material-request", message=material, origin="web")
+        sid, client_turn_id="material-request", message=material, attachments=attachments, origin="web")
     store = ChatSessionStore(tmp_path)
     runtime = ChatRuntimeController(store=store, codex_bin="unused-test-codex")
     native = CodexChatAgentSession(process=SimpleNamespace(poll=lambda: None),
@@ -70,6 +75,9 @@ def test_restarted_queue_delivers_original_material_to_native_turn(tmp_path, mon
     assert sent[0]["input"][0]["text"].endswith(material)
     assert store.turn_for_client(sid, "material-request")["message"] == material
     assert store.messages(sid)[0]["text"] == material
+    if document:
+        assert sent[0]["input"][-1] == {"type": "text", "text": material}
+        assert store.messages(sid)[0]["attachments"] == attachments
 
 
 @pytest.mark.parametrize("failure", ["before_message", "after_message", "before_event"])
@@ -547,7 +555,7 @@ def test_stop_wins_over_late_preparation_failure(tmp_path, monkeypatch):
 @pytest.mark.parametrize("delay_stage", ["context", "provider"])
 def test_http_stop_retains_fence_until_late_worker_acknowledges(tmp_path, monkeypatch, delay_stage):
     """A failed stop retains authority; retry settles only after the worker exits."""
-    import loopx.chat_coordination as coordination
+    import loopx.chat.coordination as coordination
     from loopx.capabilities import manager_context
 
     store, sid, runtime = session_runtime(tmp_path)

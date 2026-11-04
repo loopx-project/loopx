@@ -299,12 +299,13 @@ class CodexAppServerAdapter:
         resume_thread_id: str | None = None,
         startup_timeout_sec: float = 30.0,
         idle_timeout_sec: float = 180.0,
-        hard_timeout_sec: float = 900.0,
+        hard_timeout_sec: float | None = None,
         execution_mode: bool = False,
         runtime_profile: str = "restricted",
         sandbox: str | None = None,
         project_context: dict[str, str] | None = None,
         read_only_review: bool = False,
+        metadata_review_context: dict[str, Any] | None = None,
         codex_home: Path | None = None,
         model: str | None = None,
         reasoning_effort: str | None = None,
@@ -340,6 +341,7 @@ class CodexAppServerAdapter:
                     sandbox=sandbox,
                     project_context=project_context,
                     read_only_review=read_only_review,
+                    metadata_review_context=metadata_review_context,
                     resume_thread_id=resume_thread_id,
                     codex_home=codex_home,
                     model=model,
@@ -419,3 +421,14 @@ class CodexAppServerAdapter:
 
     def healthcheck(self) -> bool:
         return self.session.process.poll() is None
+
+
+def start_attachment_turn(adapter: Any, session: dict[str, Any], turn: dict[str, Any], message: str,
+                          event_sink: Callable[[str, dict[str, Any]], None], attachments: list[dict[str, Any]]) -> dict[str, Any]:
+    """Keep attachment support and recovered source-route checks at the adapter."""
+    from ...chat_attachments import require_text_document_route
+    from .antigravity_adapter import AntigravityAdapter
+    require_text_document_route(session, attachments, origin=str(turn.get("origin") or "web"))
+    if not isinstance(adapter, (CodexAppServerAdapter, AntigravityAdapter)):
+        raise ValueError("attachments currently require the Codex or Antigravity Agent endpoint")
+    return adapter.start_turn_with_attachments(message, event_sink, attachments)

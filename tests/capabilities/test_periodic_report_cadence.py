@@ -114,7 +114,7 @@ def test_timezone_conflict_is_not_silently_reinterpreted():
 def test_configure_goal_persists_and_clears_schedule(tmp_path):
     import json
     from loopx.configure_goal import configure_goal
-    from loopx.chat_goal_configuration_api import _goal_capability_options
+    from loopx.chat.goal_configuration_api import _goal_capability_options
     from loopx.capabilities.periodic_report.machine_defaults import resolve_goal_periodic_report_subscription
     registry = tmp_path / "registry.json"
     registry.write_text(json.dumps({"goals": [{"id": "example", "repo": str(tmp_path),

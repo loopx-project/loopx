@@ -68,6 +68,22 @@ def test_explicit_scan_file_keeps_unsupported_suffix(tmp_path: Path) -> None:
         ("credential", "tok" + "en=literal"),
         ("credential", "pass" + "word=literal"),
         ("credential", "Author" + "ization: literal"),
+        # Provider tokens carry their issuer in the prefix instead of a label.
+        # Every shape the canonical owner matches needs a prefilter literal, or
+        # the rule is silently skipped for that whole issuer family.
+        ("credential", "ghp_" + "16C7e42F292c6912E7710c838347Ae178B4a"),
+        ("credential", "ghs_" + "16C7e42F292c6912E7710c838347Ae178B4a"),
+        ("credential", "github_pat_" + "11ABCDEFG0123456789_abcdefghijklmnopqrstuvwxyz0123456789"),
+        ("credential", "AS" + "IA1234567890ABCDEF"),
+        ("credential", "xoxb-" + "123456789012-abcdefghijkl"),
+        ("credential", "AIza" + "SyD-1234567890abcdefghijklmnopqrstu"),
+        ("credential", "sk_live_" + "abcdefghijklmnopqrst"),
+        ("credential", "sk_test_" + "abcdefghijklmnopqrst"),
+        ("credential", "rk_live_" + "abcdefghijklmnopqrst"),
+        ("credential", "rk_test_" + "abcdefghijklmnopqrst"),
+        ("credential", "npm_" + "abcdefghijklmnopqrstuvwxyz"),
+        ("credential", "pypi-" + "abcdefghijklmnopqrst"),
+        ("credential", "eyJ" + "hbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.dozjgNryP4J3jVmNHl0w5N_XgL0n3"),
         ("local_private_path", "/" + "Users/alice/Documents/example.md"),
         ("local_private_path", "/" + "Users/alice/code-reading/example.md"),
         ("local_private_path", "/ext" + "_data/example.md"),

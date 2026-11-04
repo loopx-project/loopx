@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 from ...agent_registry import load_goal_from_registry
 from ...collaboration_mcp import Delegations
 from ...control_plane.collaboration import conversation_scope
-from ...control_plane.collaboration.inbox import _root
+from ...control_plane.collaboration.inbox import _root, normalize_handoff
 from ...control_plane.content_digest import BARE_SHA256_PATTERN
 from ...control_plane.collaboration.source_grant_observation import (
     read_delegation_source_execution, source_execution_bindings,
@@ -237,13 +237,14 @@ def handoff_message(
     execution: dict[str, Any],
     *,
     brief: dict[str, Any] | None = None,
+    recipient_label: str | None = None,
 ) -> str:
     """Summarize delivered context; execution facts come only from dispatch.
 
     Display limits do not change the full normalized brief in the inbox.
     The sender's free-form message cannot establish delivery or completion.
     """
-    blocks = [f"**已转交给 `{receipt['agent_id']}`。**"]
+    blocks = [f"**已转交给 `{recipient_label or receipt['agent_id']}`。**"]
 
     def preview(value: str, limit: int) -> str:
         # One display item stays one line. This is not a semantic parser and
@@ -295,6 +296,33 @@ def handoff_response(
     evidence or replace the answer already shown by the Chat stream.
     """
     from . import deliver
+
+    if isinstance(response.get("context_handoff"), list):
+        # Validate the entire shape before publishing the first recipient. The
+        # existing single-request path rechecks live authority for every effect.
+        requests = normalize_handoff(response["context_handoff"]) or []
+        answer = response.get("message")
+        answer = answer if isinstance(answer, str) and answer.strip() else ""
+        receipts, executions, failures, notices = [], [], [], []
+        for request in requests:
+            current = handoff_response(root, registry, session=session, turn=turn,
+                response={"context_handoff": request}, source_authorized=source_authorized,
+                execution_allowed=execution_allowed, source_store=source_store)
+            receipt = current.get("context_handoff_receipt")
+            if receipt:
+                receipts.append(receipt)
+                executions.append({"goal_id": request["goal_id"], "agent_id": request["agent_id"],
+                    **current["context_execution"]})
+            else:
+                failures.append({"goal_id": request["goal_id"], "agent_id": request["agent_id"]})
+            label = f"{request['goal_id']} / {request['agent_id']}"
+            notices.append(handoff_message(receipt, current["context_execution"],
+                brief=None if answer else request.get("brief"), recipient_label=label) if receipt
+                else f"**{label}**\n\n" + current["message"])
+        return {**response, "proposals": [], "gate": None,
+            "context_handoff_receipts": receipts, "context_executions": executions,
+            "context_handoff_failures": failures,
+            "message": "\n\n".join(([answer] if isinstance(answer, str) and answer.strip() else []) + notices)}
 
     answer = response.get("message")
     answer = answer if isinstance(answer, str) and answer.strip() else ""

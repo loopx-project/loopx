@@ -66,6 +66,71 @@ def test_explicit_capture_and_selected_details_ignore_conflicting_defaults(tmp_p
 
 
 @pytest.mark.parametrize("module", ["loopx.entrypoint", "loopx.cli"])
+@pytest.mark.parametrize("route", ["implicit", "missing", "global"])
+def test_saved_projection_without_native_transport_needs_no_goal_route(
+    tmp_path, conflicting_defaults, module, route,
+):
+    original = {"ok": True, "goal_id": "fixture", "agent_identity": {"agent_id": "agent"},
+        "heartbeat_receipt": {"turn_instance_id": "original-turn"},
+        "requirement": "Preserve the original source and final stop.", "counter": 9007199254740993}
+    capture = tmp_path / "original.json"
+    raw = json.dumps(original, ensure_ascii=False).encode()
+    capture.write_bytes(raw)
+    digest = hashlib.sha256(raw).hexdigest()
+    missing = tmp_path / "unrelated-registry.json"
+    options = {"implicit": (), "missing": ("--registry", str(missing)),
+        "global": ("--registry", HOST_GLOBAL_REGISTRY_SELECTOR)}[route]
+    command = ("quota", "context-project", "--capture-file", str(capture),
+        "--capture-sha256", digest, "--goal-id", "fixture", "--agent-id", "agent",
+        "--turn-instance-id", "original-turn", "--context-delivery", "off")
+    result = run_cli(module, tmp_path, *options, *command)
+    assert result.returncode == 0, result.stdout + result.stderr
+    projected = json.loads(result.stdout)
+    assert projected["ok"] and projected["mode"] == "full"
+    assert projected["recovery"]["path"] == str(capture)
+    assert projected["recovery"]["sha256"] == digest
+    reader = shlex.split(projected["command"])
+    result = run_cli(module, tmp_path, *options, *reader[reader.index("quota"):])
+    assert result.returncode == 0, result.stdout + result.stderr
+    page = json.loads(result.stdout)
+    assert page["ok"] and page["eof"] and json.loads(page["content"]) == original
+
+    # Routing cannot hide the saved reader's digest, identity or source errors.
+    for option, value, reason in [("--capture-sha256", "0" * 64, "digest mismatch"),
+        ("--goal-id", "other", "exact Goal, Agent and Turn"),
+        ("--agent-id", "other", "exact Goal, Agent and Turn"),
+        ("--turn-instance-id", "other", "exact Goal, Agent and Turn"),
+        ("--capture-file", str(tmp_path / "absent.json"), "original capture could not be read")]:
+        invalid = list(command)
+        invalid[invalid.index(option) + 1] = value
+        rejected = run_cli(module, tmp_path, *options, *invalid)
+        assert rejected.returncode == 1, rejected.stdout + rejected.stderr
+        payload = json.loads(rejected.stdout)
+        assert not payload["ok"] and reason in payload["reason"]
+    assert capture.read_bytes() == raw and not missing.exists()
+
+
+@pytest.mark.parametrize("module", ["loopx.entrypoint", "loopx.cli"])
+@pytest.mark.parametrize("mode", [None, "on"])
+def test_saved_projection_keeps_machine_configuration_route_conflicts(
+    tmp_path, conflicting_defaults, module, mode,
+):
+    capture = tmp_path / "original.json"
+    capture.write_text(json.dumps({"ok": True, "goal_id": "fixture",
+        "agent_identity": {"agent_id": "agent"},
+        "heartbeat_receipt": {"turn_instance_id": "original-turn"}}))
+    command = ["quota", "context-project", "--capture-file", str(capture),
+        "--capture-sha256", hashlib.sha256(capture.read_bytes()).hexdigest(),
+        "--goal-id", "fixture", "--agent-id", "agent", "--turn-instance-id", "original-turn",
+        "--codex-app", "--codex-context-dir", str(tmp_path / "native")]
+    if mode is not None:
+        command.extend(["--context-delivery", mode])
+    result = run_cli(module, tmp_path, *command)
+    assert result.returncode != 0
+    assert "Both default LoopX runtime roots contain state" in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("module", ["loopx.entrypoint", "loopx.cli"])
 def test_explicit_native_location_recovers_without_goal_routing(tmp_path, monkeypatch, conflicting_defaults, module):
     native = tmp_path / "native"
     native.mkdir(mode=0o700)
@@ -129,6 +194,21 @@ def test_replan_stages_read_original_authority_capture_without_registry(
         source = json.loads(capture.read_bytes())
         identity = source["heartbeat_receipt"]["settlement_identity"]
         assert (identity["goal_id"], identity["agent_id"], identity["turn_instance_id"]) == (GOAL, AGENT, TURN)
+        if guard.get("schema_version") == "context_capture_navigation_v1":
+            command, observed = guard["recovery"]["command"], bytearray()
+            while True:
+                argv = shlex.split(command)
+                result = run_cli("loopx.cli", fixture["project"], *argv[argv.index("quota"):])
+                assert result.returncode == 0, result.stdout + result.stderr
+                page = json.loads(result.stdout)
+                assert page["ok"] and page["offset"] == len(observed)
+                observed.extend(page["content"].encode("utf-8"))
+                if page["eof"]:
+                    assert page["next_offset"] is None and len(observed) == page["total_bytes"]
+                    break
+                assert page["next_offset"] == len(observed)
+                command = page["next_command"]
+            guard = json.loads(observed)
         missing = tmp_path / "unrelated-missing-registry.json"
 
         def snapshot():

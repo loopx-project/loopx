@@ -3,6 +3,7 @@ import { createServer, type Socket } from "node:net";
 import { realpath, type FileHandle } from "node:fs/promises";
 
 import type { JsonObject } from "./effect_program.ts";
+import localSnapshotMethods from "./effect_runtime_snapshot_methods.json" with { type: "json" };
 import {
   createEffectRuntimeHandlers,
   dispatchEffectRuntimeMethod,
@@ -24,36 +25,10 @@ const REQUEST_SCHEMA = "loopx_effect_runtime_request_v0";
 const RESPONSE_SCHEMA = "loopx_effect_runtime_response_v1";
 const INFO_SCHEMA = "loopx_effect_runtime_info_v0";
 const STARTUP_ERROR_SCHEMA = "loopx_effect_runtime_startup_error_v0";
-const MAX_REQUEST_BYTES = 2 * 1024 * 1024;
-const MAX_INLINE_RESPONSE_BYTES = 2 * 1024 * 1024;
-// Explicit opt-in: ordinary effects retain the 2 MiB request/response wire.
-const LOCAL_SNAPSHOT_METHODS = new Set([
-  "todo.read",
-  "todo.quota_planning.project",
-  "goal.vision_wait.project",
-  "collaboration.inbox.read",
-  "collaboration.delegation.inventory_page",
-  "benchmark.trajectory.codex-usage",
-  "coordination.local_authority.todo_source",
-  "coordination.local_authority.todo_snapshot",
-  "todo.context.page",
-  "work_item.context.project",
-  "work_item.interaction_reads.project",
-  "scheduler.hint.project",
-  "work_item.task_graph.goal_topology",
-  "work_item.replan_semantics.project",
-  "quota.settlement.read",
-  "quota.spend.commit",
-  "quota.turn_envelope.evaluate",
-  "turn.controller",
-  "goal.checkpoint_read_context.resolve",
-  "goal.checkpoint_read_context.commit",
-  "goal.checkpoint_read_context.inspect_replay",
-  "performance_diagnosis.inspect",
-  "state.recovery.archive.verify",
-  "state.recovery.manifest.verify",
-  "runtime.checkpoint_artifacts",
-]);
+const MAX_REQUEST_BYTES = 8 * 1024 * 1024;
+const MAX_INLINE_RESPONSE_BYTES = 8 * 1024 * 1024;
+// Explicit opt-in: ordinary effects retain a bounded request/response wire.
+const LOCAL_SNAPSHOT_METHODS = new Set(localSnapshotMethods);
 const DEFAULT_IDLE_MS = 5 * 60 * 1_000;
 // Bounds for LOOPX_EFFECT_RUNTIME_IDLE_MS. The upper bound is the largest
 // delay `setTimeout` accepts: a larger delay overflows and fires immediately,
@@ -186,14 +161,16 @@ const server = createServer((socket) => {
         request_id: "unknown",
         ok: false,
         error: effectRuntimeErrorPayload(new EffectRuntimeRequestError(
-          "Effect runtime request exceeds the 2 MiB limit",
+          "Effect runtime request exceeds the 8 MiB limit",
           "request_too_large",
         )),
       })}\n`);
       return;
     }
     raw += chunk;
-    if (!raw.includes("\n")) return;
+    // Earlier chunks had no delimiter. Scanning the accumulated string on each
+    // chunk repeatedly flattens it; only the newly received chunk can finish it.
+    if (!chunk.includes("\n")) return;
     socket.pause();
     pendingRequests += 1;
     clearTimeout(idleTimer);

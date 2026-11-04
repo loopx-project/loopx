@@ -11,7 +11,7 @@ import hashlib
 import json
 from typing import Any
 
-from ...chat_manager_history import delivery_history_window
+from ...chat.manager_history import delivery_history_window
 from ..periodic_report.adapters import PeriodicReportSourceAdapter, build_periodic_report_source_result
 
 SOURCE_ID = "manager_portfolio"

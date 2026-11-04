@@ -530,6 +530,46 @@ R0 可以先于目录移动交付，但不代表内核合格。R3/R4 可选，�
   待处理的入口收据仍不被该栅栏覆盖；要覆盖它是一次带自有验收的运行时变更，
   而不是文档变更。
 
+### 2026-11-03 — 所选宿主模式发现路径的加载
+
+- **基线：** `6a6a8590e`。此前 `performance-diagnosis` 与 `goal-acceptance`
+  的 selected 路由已在该基线上；第 4 节审计仍为历史记录，不是当前实现清单。
+- **变化：** `host-mode-plan` 经 `cli_runtime` 使用原有 registrar 与 handler，
+  合法请求不再加载完整 CLI 或 Chat 依赖图。非法语法保留完整 parser 的诊断路径。
+  宿主选择器、预览命令、readiness 与 authority 规则均不移动、不改变。
+- **M1 集成：** [#7878](https://github.com/loopx-project/loopx/pull/7878) 已在
+  `ffe84a693` 合入：17 个仅内部使用的 Chat owner 位于 `loopx/chat/`，顶层模块
+  数量和预算均为 128（该移动组之前为 145）。这是结构变化，不代表性能或完整 M1 合格。
+- **证据：** `tests/test_cli_entrypoint.py` 覆盖仅加载 owner 的 help、JSON 与
+  Markdown 一致性、宿主不可用预览、非法请求及零进程、网络或文件写入激活。
+  独立安装的 wheel 在没有 Node 或实时 registry 时验证 help、ready／unavailable
+  预览及拒绝。每个版本／负载做 20 次本地成对新进程测量，丢弃一次预热、交替
+  顺序、关闭遥测并保留热文件缓存。在 macOS arm64／Python 3.13.5 上，help／
+  preview 的 LoopX 加载闭包从 1,149 降到 57 个模块，输出字节保持一致。时间／RSS
+  留在 PR 的限定证据中，不作为可移植阈值或任务成果收益声明。
+- **剩余：** 将 R0 类型的加载验证扩展到发现路径；不关闭 R0 的完整 V10 清点、
+  M1 公开 import 迁移、发行物拆分或 R1 managed minimal。D1–D7 仍未决，
+  不新增预设或改变默认值。
+
+### 2026-11-03 — M1 公开 status 兼容性刻画
+
+- **边界：** `ChatStatusRequestMixin` 与 `goal_read_runtime_root` 仍由
+  `loopx.chat_status_api` 所有，Chat HTTP handler 与 Todo detail 是活跃调用方。
+  本片交付刻画前置条件，不是 owner 迁移。
+- **兼容证据：** `tests/test_chat_status_public_compatibility.py` 保护三个新进程
+  import 顺序下的历史 import、历史 pickle 查找、reload 后已导入引用，以及经真实
+  HTTP handler 生效的 registry、collector 和宿主观察 patch 点。发现路径仅容忍
+  registry 缺失，不吞掉不可读或非法元数据。复制导出的 facade mutation 被源绑定
+  Todo 调用方的 patch oracle 拒绝：仅 re-export 函数不能保留旧模块的 globals。
+- **下一完整评审片：** 将完整 status owner 迁入 `loopx/chat/`，保留模块身份兼容的
+  公开 bridge，并文档化 I3 弃用。同步重定向
+  `tests/architecture/test_source_session_registry_denial.py` 中精确 loader 路径与
+  `_discovery_registry` 函数例外，保留仅元数据发现及可执行 source-session 拒绝。
+  本片不改变该 owner 或 oracle；不能为通过部分迁移而拆散所有权或放松拒绝 oracle。
+- **剩余：** 刻画不交付 status 迁移及其安装 wheel 集成。I3 至少保留一个 minor
+  版本，D3 精确退役时间仍由发布负责人决定。M1 未关闭，不声明模块数量、加载性能、
+  拆包或 R1 managed Turn 收益。
+
 ## 附录 B：决策日志
 
 | 日期 | 决策 | 负责人 / 批准 | 备选 | 变更的规范章节 |

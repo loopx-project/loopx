@@ -68,7 +68,7 @@ def register_update_command(
     update_parser.add_argument(
         "update_action",
         nargs="?",
-        choices=(*tuple(action.value for action in UpdateAction), "status"),
+        choices=(*tuple(action.value for action in UpdateAction), "status", "activate"),
         help="Explicit intent: check (read only), plan (read only), or apply (mutating).",
     )
     update_mode = update_parser.add_mutually_exclusive_group()
@@ -104,6 +104,12 @@ def register_update_command(
     update_parser.add_argument("--allow-downgrade", action="store_true", help="Explicitly accept an older, diverged or unverified snapshot target.")
     update_parser.add_argument("--background", action="store_true", help="Start or observe one durable update and return its operation id immediately.")
     update_parser.add_argument("--operation-id", help="Read a previous update with `update status --operation-id ID`.")
+    update_parser.add_argument("--service", choices=("all", "chat"),
+        help="With update activate, retry installed managed services (default: all).")
+    update_parser.add_argument("--port", type=int,
+        help="With update activate --service chat, select its loopback port (default: 8767).")
+    update_parser.add_argument("--runtime-executable",
+        help="With update activate --service all, align managed services with this qualified runtime while retaining their data and account routes.")
     update_parser.add_argument(
         "--archive-url",
         help="Explicit tarball URL passed to the installer as LOOPX_ARCHIVE_URL.",
@@ -140,6 +146,23 @@ def handle_update_command(
 
     progress = UpdateProgress(json_output=output_format(args) == "json", pending=os.environ.get("LOOPX_UPDATE_WORKER") != "1")
     try:
+        if args.update_action == "activate":
+            if upgrade or any((args.check, args.dry_run, args.execute, args.rollback,
+                    args.repo, args.ref, args.archive_url, args.installed_doctor_json,
+                    args.operation_id, args.source, args.allow_downgrade, args.background)):
+                raise ValueError("use update activate only with --service, --port and --runtime-executable; no installation is performed")
+            if args.port is not None and args.service != "chat":
+                raise ValueError("--port requires update activate --service chat")
+            if args.runtime_executable is not None and args.service == "chat":
+                raise ValueError("--runtime-executable requires update activate --service all")
+            from ..runtime_activation import activate_runtime_services
+            options = {"runtime_executable": args.runtime_executable} if args.runtime_executable is not None else {}
+            payload = activate_runtime_services(service=args.service or "all", port=args.port if args.port is not None else 8767, **options)
+            print_payload(payload, output_format(args), lambda value:
+                f"Managed service activation: {value['status']} ({value.get('reason') or 'verify service readiness'})")
+            return 0 if payload.get("ok") else 1
+        if any(getattr(args, name, None) is not None for name in ("service", "port", "runtime_executable")):
+            raise ValueError("--service, --port and --runtime-executable require update activate")
         if args.update_action == "status":
             if any((args.check, args.dry_run, args.execute, args.rollback, args.repo, args.ref, args.archive_url,
                     getattr(args, "source", False), getattr(args, "allow_downgrade", False), getattr(args, "background", False))):
@@ -186,7 +209,8 @@ def handle_update_command(
             payload = operation if getattr(args, "background", False) else observe(
                 operation["operation_id"], json_output=output_format(args) == "json")
             if getattr(args, "background", False):
-                renderer = lambda value: f"Update {value['operation_id']}: {value['status']}\nRead back with loopx update status --operation-id {value['operation_id']}"
+                def renderer(value):
+                    return f"Update {value['operation_id']}: {value['status']}\nRead back with loopx update status --operation-id {value['operation_id']}"
             elif upgrade:
                 from .support_control_upgrade import render_upgrade_markdown
                 renderer = render_upgrade_markdown

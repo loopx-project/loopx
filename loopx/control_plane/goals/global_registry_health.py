@@ -31,6 +31,58 @@ def global_registry_finding(
     return finding
 
 
+def _multi_goal_source_entry_unchanged(
+    goal: dict[str, Any],
+    *,
+    goal_id: str,
+    source_path: Path,
+    source_goals_cache: dict[str, list[dict[str, Any]] | None],
+    load_registry: Callable[[Path], dict[str, Any]],
+    registry_goals: Callable[[dict[str, Any]], list[dict[str, Any]]],
+) -> bool:
+    cache_key = str(source_path)
+    if cache_key not in source_goals_cache:
+        try:
+            source_goals_cache[cache_key] = registry_goals(load_registry(source_path))
+        except Exception:  # noqa: BLE001
+            source_goals_cache[cache_key] = None
+    source_goals = source_goals_cache[cache_key]
+    if not source_goals:
+        return False
+    candidates = [
+        row for row in source_goals if str(row.get("id") or "") == goal_id
+    ]
+    if len(candidates) != 1:
+        return False
+    source_goal = candidates[0]
+    if source_goal.get("source_registry"):
+        return False
+    try:
+        from ...global_registry import (
+            preserve_attention_override,
+            sanitize_goal_for_global,
+        )
+
+        resolved_source = source_path.expanduser().resolve()
+        expected = preserve_attention_override(
+            {},
+            sanitize_goal_for_global(
+                source_goal, source_registry=resolved_source, synced_at=""
+            ),
+        )
+        observed = preserve_attention_override(
+            {},
+            {
+                **goal,
+                "source_registry": str(resolved_source),
+                "synced_at": "",
+            },
+        )
+        return observed == expected
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def collect_global_registry_health(
     *,
     registry_path: Path,
@@ -104,6 +156,7 @@ def collect_global_registry_health(
     global_ids = [str(goal.get("id")) for goal in global_goals if goal.get("id")]
     global_id_set = set(global_ids)
     source_registries: set[str] = set()
+    source_goals_cache: dict[str, list[dict[str, Any]] | None] = {}
     findings: list[dict[str, Any]] = []
     checks: list[str] = list(current_checks)
 
@@ -161,7 +214,17 @@ def collect_global_registry_health(
                 synced_at = parse_timestamp(goal.get("synced_at"))
                 if synced_at:
                     source_mtime = datetime.fromtimestamp(source_path.stat().st_mtime, tz=timezone.utc)
-                    if source_mtime > synced_at.astimezone(timezone.utc) + timedelta(seconds=5):
+                    if (
+                        source_mtime > synced_at.astimezone(timezone.utc) + timedelta(seconds=5)
+                        and not _multi_goal_source_entry_unchanged(
+                            goal,
+                            goal_id=goal_id,
+                            source_path=source_path,
+                            source_goals_cache=source_goals_cache,
+                            load_registry=load_registry,
+                            registry_goals=registry_goals,
+                        )
+                    ):
                         findings.append(
                             global_registry_finding(
                                 kind="stale_source_registry",

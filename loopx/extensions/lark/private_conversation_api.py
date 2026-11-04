@@ -58,9 +58,12 @@ class PrivateConversationRequestMixin:
                 and hasattr(self.server.lark_private_conversations, "ingress") else {}),
              **({"owner_attention": self.server.lark_private_conversations.owner_attention.health(row["binding_id"])}
                 if row["context_kind"] == "steward" and row.get("audience", "owner") == "owner" else {}),
-             **({"managed_steward": self.server.lark_private_conversations.managed_steward.health(row["binding_id"])}
+             **({"managed_steward": {
+                    **self.server.lark_private_conversations.managed_steward.health(row["binding_id"]),
+                    **({"execution_available": False, "execution_error_code": "unsupported_executor"}
+                       if row["executor_endpoint_id"] != "codex" else {})}}
                 if row["context_kind"] == "steward" and row.get("audience", "owner") == "owner"
-                and row["executor_endpoint_id"] == "codex"
+                and (row["executor_endpoint_id"] == "codex" or row.get("managed_actor"))
                 and hasattr(self.server.lark_private_conversations, "managed_steward") else {}),
              **deliveries.get(row["binding_id"], {"pending_count": 0, "recovery_count": 0})}
             for row in current["bindings"]],

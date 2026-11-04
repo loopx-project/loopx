@@ -93,24 +93,29 @@ def _managed_service_plists() -> list[Path]:
     ]
 
 
-def _managed_service_pid(plist: Path, *, label: str | None = None) -> int | None:
+def _managed_service_state(plist: Path, *, label: str | None = None,
+        payload: dict[str, Any] | None = None) -> tuple[bool | None, int | None]:
     result = subprocess.run(
         ["launchctl", "print", f"gui/{os.getuid()}/{label or plist.stem}"],
         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5,
     )
     if result.returncode != 0:
-        return None
-    payload = plistlib.loads(plist.read_bytes())
+        return None, None
+    payload = payload if payload is not None else plistlib.loads(plist.read_bytes())
     if not isinstance(payload, dict):
-        return None
+        return False, None
     configured = payload.get("ProgramArguments")
     arguments = re.findall(r"^\s*arguments = \{\n(.*?)^\s*\}", result.stdout, re.MULTILINE | re.DOTALL)
     if (not isinstance(configured, list) or not all(isinstance(arg, str) for arg in configured)
             or len(arguments) != 1
             or [line.strip() for line in arguments[0].splitlines()] != configured):
-        return None  # An edited plist is not proof of the running process's route.
+        return False, None  # An edited plist is not proof of the running process's route.
     pids = re.findall(r"^\s*pid = ([0-9]+)\s*$", result.stdout, re.MULTILINE)
-    return int(pids[0]) if len(pids) == 1 else None
+    return True, int(pids[0]) if len(pids) == 1 else None
+
+
+def _managed_service_pid(plist: Path, *, label: str | None = None) -> int | None:
+    return _managed_service_state(plist, label=label)[1]
 
 
 @contextmanager
@@ -130,16 +135,30 @@ def managed_chat_activation_guard(
     with ExitStack() as locks:
         for root in roots:
             locks.enter_context(chat_runtime_activation_lock(root, timeout_seconds=2.0))
-        for root in roots:
-            if chat_runtime_activation_state(root)["nonterminal_turns"]:
-                raise RuntimeActivationDeferred("chat_work_pending", labels)
         for plist, (label, pid) in (expected_services or {}).items():
             if plist not in plists or _managed_service_pid(plist, label=label) != pid:
                 raise ValueError("chat_service_route_unresolved")
+        for root in roots:
+            if chat_runtime_activation_state(root)["nonterminal_turns"]:
+                from .chat_runtime import ChatRuntimeController
+                from .chat_store import ChatSessionStore
+
+                # Data/lifecycle recovery only: this controller opens no adapter,
+                # starts no queue worker and never resends accepted input. Keep
+                # unrelated completion/compaction out of this scoped repair.
+                store = ChatSessionStore(root, startup_maintenance=False)
+                recovery = ChatRuntimeController(store=store, codex_bin="codex")
+                for session in store.list_sessions():
+                    recovery.recover_exited_turn(str(session["session_id"]))
+                if chat_runtime_activation_state(root)["nonterminal_turns"]:
+                    raise RuntimeActivationDeferred("chat_work_pending", labels)
         yield
 
 
-def replace_managed_loopx_chat(host: str, port: int, *, timeout_seconds: float = 5.0) -> str:
+def replace_managed_loopx_chat(
+    host: str, port: int, *, timeout_seconds: float = 5.0,
+    restart_managed: bool = False,
+) -> str:
     """Replace the exact managed listener only while its accepted work is idle.
 
     The listener's live manager supplies its route, never the new command's
@@ -187,6 +206,17 @@ def replace_managed_loopx_chat(host: str, port: int, *, timeout_seconds: float =
             deadline = time.monotonic() + max(0.1, timeout_seconds)
             while time.monotonic() < deadline:
                 if pid not in _listener_pids(port):
+                    if restart_managed:
+                        # Keep the same ingress fence through the original
+                        # manager's restart. Desktop never starts a replacement
+                        # consumer or infers ownership from a Python template.
+                        started = subprocess.run(
+                            ["launchctl", "kickstart", f"gui/{os.getuid()}/{plist.stem}"],
+                            capture_output=True, text=True, encoding="utf-8",
+                            errors="replace", timeout=5,
+                        )
+                        if started.returncode != 0:
+                            raise RuntimeActivationFailed([], labels)
                     return existing
                 time.sleep(0.1)
             raise RuntimeError("the managed Chat listener did not stop after SIGTERM; no stronger signal was sent")
@@ -197,7 +227,50 @@ def replace_managed_loopx_chat(host: str, port: int, *, timeout_seconds: float =
         raise RuntimeActivationDeferred("chat_state_unverified", labels) from exc
 
 
-def restart_managed_loopx_services() -> list[str]:
+def activate_runtime_services(*, service: str = "all", port: int = 8767,
+        runtime_executable: str | None = None) -> dict[str, Any]:
+    """Retry installed-service adoption without reinstalling or running work.
+
+    The desktop Chat caller uses the existing verified listener/manager/store
+    owner. A version mismatch is not permission to kill a busy worker.
+    Readiness and the selected artifact's identity still need a fresh HTTP read.
+    """
+    if service not in {"all", "chat"} or not 1 <= port <= 65535:
+        raise ValueError("select all or chat with a valid loopback port")
+    payload: dict[str, Any] = {
+        "schema_version": "loopx_runtime_service_activation_v1",
+        "service": service, "readiness_verified": False,
+    }
+    if sys.platform != "darwin":
+        return {**payload, "ok": False, "status": "unsupported",
+            "reason": "managed_service_activation_unavailable"}
+    try:
+        if runtime_executable is not None:
+            if service != "all":
+                raise ValueError("service_runtime_route_unverified")
+            from .hosts.managed_service_runtime import align_managed_runtime
+            return {**payload, "ok": True, **align_managed_runtime(runtime_executable)}
+        if service == "chat":
+            observed = replace_managed_loopx_chat("127.0.0.1", port, restart_managed=True)
+            status = "not_running" if observed == "unavailable" else "restart_requested"
+        else:
+            restarted = restart_managed_loopx_services()
+            payload["restarted_services"] = restarted
+            status = "restart_requested" if restarted else "not_running"
+        return {**payload, "ok": True, "status": status}
+    except RuntimeActivationDeferred as exc:
+        return {**payload, "ok": False, "status": "deferred", "reason": str(exc)}
+    except (RuntimeActivationFailed, OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+        # Public diagnostics carry a coarse cause, never manager commands,
+        # local paths or the contents of accepted messages.
+        reason = str(exc) if str(exc) in {
+            "service_runtime_unverified", "service_runtime_route_unverified",
+            "service_runtime_alignment_failed", "service_runtime_rollback_failed",
+        } else "chat_service_unverified"
+        return {**payload, "ok": False, "status": "failed", "reason": reason}
+
+
+def restart_managed_loopx_services(*, plists: list[Path] | None = None) -> list[str]:
     """Switch managed macOS services only with no accepted Chat work outstanding.
 
     After ``loopx update`` replaces the installed release, running status/chat
@@ -209,7 +282,7 @@ def restart_managed_loopx_services() -> list[str]:
         return []
     labels: list[str] = []
     chat_plists: list[Path] = []
-    for plist in _managed_service_plists():
+    for plist in _managed_service_plists() if plists is None else plists:
         stem = plist.stem.lower()
         labels.append(plist.stem)
         if stem.endswith(".chat"):
@@ -289,6 +362,23 @@ def restart_services_for_runtime_activation(
             "restart_status": "skipped_custom_installation",
         }
     try:
+        from .hosts.managed_service_runtime import align_managed_runtime, has_runtime_binding
+        if sys.platform == "darwin" and has_runtime_binding():
+            # Preserve the existing pending-work result even when the new
+            # installation cannot yet be qualified. Alignment rechecks under
+            # its own lock before any manager mutation.
+            with managed_chat_activation_guard([p for p in _managed_service_plists() if p.stem.endswith(".chat")]):
+                pass
+            if installed_bin is None:
+                from .doctor import current_script_invocation_path
+                installed_bin = current_script_invocation_path()
+            if installed_bin is None:
+                raise RuntimeActivationDeferred("service_runtime_unverified", ["com.loopx.status", "com.loopx.chat"])
+            aligned = align_managed_runtime(str(installed_bin))
+            other = [p for p in _managed_service_plists() if p.stem not in {"com.loopx.status", "com.loopx.chat"}]
+            restarted = restart_managed_loopx_services(plists=other) if other else []
+            return {"restarted_services": [*aligned["restarted_services"], *restarted],
+                "restart_status": "restarted", "activation_pending": False}
         return {
             "restarted_services": restart_managed_loopx_services(),
             "restart_status": "restarted",
@@ -310,3 +400,6 @@ def restart_services_for_runtime_activation(
             "restart_reason": str(exc),
             "activation_pending": True,
         }
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
+        return {"restarted_services": [], "restart_status": "failed",
+            "restart_reason": "service_runtime_alignment_failed", "activation_pending": True}

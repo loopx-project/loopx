@@ -31,6 +31,13 @@ attachments also require the same `input_revision`. Use a new finding id per
 evaluated candidate, and reuse an id only to correct that finding. Missing values
 are explicit `null`; zero and negative values remain valid measurements.
 
+When an `execution_observation` declares a `result_ref`, each measurement must
+cite that same result. This applies to manual findings and writeback attachments,
+including shared comparison contexts. Listing both receipts in `evidence_refs`
+does not bind a different result to the executed candidate. No result is inferred
+when execution has not declared one. These consistency checks do not independently
+verify a producer's calculator or turn `confirmed` into an evaluator attestation.
+
 To reuse verified comparison conditions, save these three fields once in
 `conditions.json`:
 
@@ -1413,3 +1420,57 @@ outcomes.
 Native research completion retains the graph lock and, when inheriting, the
 device-configuration lock until its transaction finishes. Inherited planning
 requires the same exact typed experiment evidence as an explicit Goal mode.
+
+Historical compatibility: stricter execution/measurement attribution is a new-write
+rule. Canonical readers preserve earlier records and their identities, including
+an inconsistent original followed by a correction. Current finding views expose
+`measurement_error` and omit contradictory quantities from comparison; raw history
+retains the producer's original statement. A matching correction becomes usable
+without deleting its prior version. Explicit ordered-prefix archival replay keeps
+the same audit boundary; ordinary single/batch writes still reject contradictions.
+Malformed, unsafe, unknown-field or forged canonical records remain rejected.
+Completed delivery replays only the original durable ingestion intent, exact
+source and recorded time, matching canonical finding and existing Todo link.
+That path performs no graph or Todo mutation; missing delivery still requires the
+ordinary write/ownership checks, and conflicting attachment retries reject.
+CLI attachment parsing preserves structurally valid historical input until the
+existing primary owner matches the immutable retry. New primary writes and new
+ingestion intents still validate execution/measurement attribution before effects;
+parsing is not a new-write eligibility decision or a public bypass.
+
+`explore source-history-reconcile` merges the latest missing registered results;
+it does not restore a complete archival prefix. Preview and execution apply the
+same ordinary-write validation to that subset; execution binds to the canonical
+snapshot under lock. Eligible results can be restored
+even when other historical findings contradict their execution. The plan reports
+`blocked_event_count`, a digest of the blocked event ids and `blocked_reasons`;
+warnings also show the reasons in Markdown output. Blocked records remain in the
+unchanged candidate source, do not enter quantitative comparison and do not by
+themselves require deleting registered sink rows. An all-blocked subset reports
+`blocked`; a partial recovery reports `would_reconcile_with_blocked_history` or
+`reconciled_with_blocked_history`. Append a valid correction for the same result
+id to the candidate history and preview again; recovery selects that latest
+record without rewriting its older evidence. Unrelated remote orphans retain
+their existing classification and status suffix.
+
+历史兼容：执行与测量的一致性约束限制新写入，不能阻断旧记录及其后续更正的读取。
+当前 finding 若有归因矛盾，会返回 `measurement_error` 并排除该数量比较；历史仍保留
+生产者的原始声明。正确更正可恢复当前比较，不能删改旧行。显式按顺序恢复归档前缀也
+保留此审计边界；普通单条和批量写入仍拒绝新矛盾，结构损坏、不安全及伪造记录仍拒绝。
+已完成交付仅重放原始持久化
+ingestion intent，并精确匹配来源、记录时间、canonical finding 与既有 Todo 关联；
+此路径不写图或 Todo。未完成交付仍须遵守普通写入与归属检查，冲突附件重试仍拒绝。
+CLI 附件解析保留结构合法的历史输入，由既有 primary owner 精确匹配不可变重试；
+新 primary 写入和新 ingestion intent 仍在产生效果前检查执行与测量归属。
+解析成功不代表新写入合格，也不提供公开的绕过参数。
+
+`explore source-history-reconcile` 合并已注册且缺失的各结果最新记录，不是恢复完整
+归档前缀。预览与执行对该子集应用相同的普通写入校验，并在锁内绑定 canonical
+快照；部分旧 finding 归因矛盾不会
+阻断其他合法结果恢复。计划通过 `blocked_event_count`、被阻断事件 id 的摘要和
+`blocked_reasons` 报告原因，Markdown 的 warnings 同时显示这些原因。被阻断记录
+保留在未改动的候选源中，不进入数量比较，也不因此要求删除已注册的 sink 行。
+全部阻断时状态为 `blocked`，部分恢复时为 `would_reconcile_with_blocked_history`
+或 `reconciled_with_blocked_history`。在候选历史中为同一 result id 追加正确更正后
+重新预览；恢复选择该最新记录，不能覆写旧证据。其他远端孤儿仍保留原有分类与状态
+后缀。

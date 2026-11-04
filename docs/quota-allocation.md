@@ -1001,6 +1001,19 @@ settlement still closes this resume path. This differs from executable work
 which became deferred after admission: that existing no-execution/no-spend
 boundary remains intact, and independent work is selected under a fresh Turn.
 
+For a Todo-bound resume, the generated CLI sequence therefore places the
+original Turn's guard immediately after reopening, rather than instructing
+the worker to settle and wait for another wake. Read that guard before
+delivery and acquire the required fresh execution claim/lease; only admission
+of the same Todo permits continued work. Validate and settle that original
+binding once after the authorized work. A refusal, changed wait, supersession
+or no-follow-up decision still follows its own recovery/closeout contract.
+
+Todo 绑定的恢复命令因此在重开后直接给出原 Turn 的 guard，而非要求先结算再等一次
+唤醒。执行前须读取 guard 并取得所需的新执行 claim/lease；仅同一 Todo 获得准入后
+才能继续工作，完成授权工作后验证并结算原绑定一次。拒绝、新等待、替代或无需后续
+的决定仍遵循对应的恢复／关闭契约；重开本身不授予执行权限。
+
 Priority remains authoritative across the resume boundary. When a ready
 current-agent or unclaimed deferred successor has strictly higher priority than
 the selected open advancement todo, quota also returns
@@ -1690,8 +1703,13 @@ CLI-produced ACK hints bind that argument vector to the exact registry and
 effective runtime root that produced `quota should-run`. Hosts must execute the
 complete vector; stripping its leading global options can route a
 project-launched ACK into project-local scheduler state instead of the shared
-control plane. When the decision is heartbeat-receipted, ACK and failure hints
-also bind the originating `turn_instance_id`. The follow-up rebuilds the same
+control plane. `fallback_hint.cli_args` receives the same registry binding, and
+its `--turn-instance-id` value is always the reference the current host shell can
+expand: `"${LOOPX_TURN:?}"` on POSIX and `$LOOPX_TURN` on native Windows, so a
+PowerShell host does not replay an empty Turn. When the decision is
+heartbeat-receipted, ACK, failure, and fallback hints also bind the originating
+concrete `turn_instance_id`, and `fallback_hint.route_binding.turn_instance_bound`
+records whether that binding is present. The follow-up rebuilds the same
 receipt-bound live decision before validating its reset token and identity;
 later Todos or a different unscoped wait lane cannot replace the decision that
 requested the host action.

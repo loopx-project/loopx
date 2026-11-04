@@ -9,6 +9,7 @@ import sys
 import pytest
 
 from tests.control_plane.test_quota_settlement_cli import _run_cli
+from tests.control_plane.codex_checkpoint_fixture import reference_metadata_oracle as machine_reference_oracle
 
 
 @pytest.mark.parametrize("failure", [None, "digest", "goal", "agent", "turn", "symlink", "object"])
@@ -86,6 +87,7 @@ def test_enabled_cache_preparation_failure_returns_error_with_original_reference
 def test_saved_projection_manages_private_cache_without_authority_io(tmp_path, monkeypatch, enabled, cache_location):
     from loopx.control_plane.turn_driver.codex_context import read_codex_context_reference
 
+    native_enabled = enabled is True or (enabled is None and os.name == "posix")
     context, root = tmp_path / "native", tmp_path / "cache"
     context.mkdir(mode=0o700)
     if cache_location == "existing":
@@ -99,7 +101,7 @@ def test_saved_projection_manages_private_cache_without_authority_io(tmp_path, m
     digest = hashlib.sha256(raw).hexdigest()
     monkeypatch.setenv("CODEX_THREAD_ID", "native-session")
     monkeypatch.chdir(tmp_path)
-    if enabled:
+    if native_enabled:
         from loopx.control_plane.turn_driver.codex_context import codex_context_hook
         codex_context_hook(str(context), {"hook_event_name": "SessionStart", "source": "startup",
             "session_id": "native-session", "cwd": str(tmp_path)})
@@ -114,10 +116,12 @@ def test_saved_projection_manages_private_cache_without_authority_io(tmp_path, m
     code, result = _run_cli(registry, runtime, *args, cwd=tmp_path)
     assert code == 0 and result["ok"] and result["mode"] == "full", result
     assert path.read_bytes() == raw and not registry.exists() and not runtime.exists()
-    if enabled:
+    if native_enabled:
+        assert result["schema_version"] == "context_capture_navigation_v1", result
         assert "content" not in result and "offset" not in result
-        assert "index_command" in result and "select_command" in result
-        assert json.loads(Path(result["path"]).read_bytes()) == original
+        machine = machine_reference_oracle(result)
+        assert "index_command" in machine and "select_command" in machine
+        assert json.loads(Path(machine["path"]).read_bytes()) == original
         actual_root = context if cache_location == "default" else root
         assert actual_root.stat().st_mode & 0o077 == 0
         assert list(actual_root.glob("context-*"))
@@ -171,9 +175,10 @@ def test_saved_projection_reference_allows_optional_exact_read_and_restart(tmp_p
     # read remains lossless and paginated, without changing the saved decision.
     assert "content" not in result and "offset" not in result
     assert len(json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 8192
-    delivered = Path(result["path"]).read_bytes()
+    machine = machine_reference_oracle(result)
+    delivered = Path(machine["path"]).read_bytes()
     delivered_digest = hashlib.sha256(delivered).hexdigest()
-    assert result["sha256"] == delivered_digest and json.loads(delivered) == json.loads(raw)
+    assert machine["sha256"] == delivered_digest and json.loads(delivered) == json.loads(raw)
     combined = b""
     command = result["command"]
     while True:
@@ -195,10 +200,11 @@ def test_saved_projection_reference_allows_optional_exact_read_and_restart(tmp_p
     assert source.read_bytes() == raw and not registry.exists() and not runtime.exists()
 
 
-@pytest.mark.parametrize("failure", ["wire", "inline_read"])
+@pytest.mark.parametrize("failure", ["wire", "inline_read", "reader_reference", "reader_recovery_reference"])
 def test_saved_projection_wire_failure_keeps_committed_current_recovery(tmp_path, monkeypatch, failure):
-    from loopx.cli import build_parser
-    from loopx.cli_commands.quota_capture import project_saved_context_capture
+    import errno
+
+    from loopx.cli_commands import quota_capture
     from loopx.control_plane.turn_driver import codex_context, decision_capture
 
     path, root, context = tmp_path / "original.json", tmp_path / "cache", tmp_path / "native"
@@ -221,14 +227,25 @@ def test_saved_projection_wire_failure_keeps_committed_current_recovery(tmp_path
 
     monkeypatch.setattr(decision_capture, "write_decision_capture", fail_optional_wire)
     if failure == "inline_read":
-        from loopx.cli_commands import quota_capture
         monkeypatch.setattr(quota_capture, "read_context_capture", lambda args, **kwargs: {"ok": False})
+    elif failure.startswith("reader_"):
+        publish = quota_capture.write_context_read_reference
+        calls = []
+
+        def fail_reference(*args, **kwargs):
+            calls.append(args)
+            if len(calls) == (2 if failure == "reader_recovery_reference" else 1):
+                raise OSError(errno.ENOSPC, "synthetic reference publication failure")
+            return publish(*args, **kwargs)
+
+        monkeypatch.setattr(quota_capture, "write_context_read_reference", fail_reference)
     digest = hashlib.sha256(raw).hexdigest()
-    args = build_parser().parse_args(["--format", "json", "quota", "context-project",
+    code, wire = _run_cli(tmp_path / "absent.json", tmp_path / "absent-runtime", "quota", "context-project",
         "--capture-file", str(path), "--capture-sha256", digest, "--goal-id", "saved-goal",
         "--agent-id", "saved-agent", "--turn-instance-id", "saved-turn", "--context-delivery", "on",
-        "--codex-app", "--codex-context-dir", str(context), "--decision-output-root", str(root)])
-    result = project_saved_context_capture(args)
+        "--codex-app", "--codex-context-dir", str(context), "--decision-output-root", str(root), cwd=tmp_path)
+    assert code == 0, wire  # Actual CLI must return JSON, never an IO traceback.
+    result = machine_reference_oracle(wire)
     assert result["ok"] and result["mode"] == "full"
     recovered_path, recovered_digest = codex_context.read_codex_context_reference(str(context),
         goal_id="saved-goal", agent_id="saved-agent")
@@ -237,7 +254,7 @@ def test_saved_projection_wire_failure_keeps_committed_current_recovery(tmp_path
         assert result["path"] == recovered_path and result["sha256"] == recovered_digest
     else:
         assert "content" not in result and result["recovery"]["sha256"] == recovered_digest
-        argv = shlex.split(result["command"])
+        argv = shlex.split(wire["command"])
         code, page = _run_cli(tmp_path / "absent.json", tmp_path / "absent-runtime",
             *argv[argv.index("quota"):], cwd=tmp_path)
         assert code == 0 and page["offset"] == 0 and json.loads(page["content"]) == original
@@ -274,7 +291,7 @@ def test_saved_projection_planner_process_exit_keeps_current_recovery(tmp_path, 
         "import os\n"
         "from loopx.control_plane.quota import turn_envelope\n"
         "def interrupt(*args, **kwargs): os._exit(37)\n"
-        "turn_envelope.plan_progressive_context = interrupt\n"
+        "turn_envelope.effect_runtime_projection_result = interrupt\n"
         "from loopx.cli import main\n"
         "raise SystemExit(main())\n"
     )
@@ -442,7 +459,7 @@ def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monk
             data.extend(page["content"].encode())
             codex_context_hook(str(native), {**event, "hook_event_name": "PostToolUse", "tool_response": json.dumps(page)})
             if page["eof"]:
-                assert hashlib.sha256(data).hexdigest() == wire["sha256"]
+                assert hashlib.sha256(data).hexdigest() == machine_reference_oracle(wire)["sha256"]
                 return json.loads(data)
             argv = shlex.split(page["next_command"])
             rc, page = _run_cli(registry, runtime, *argv[argv.index("quota"):], cwd=project)
@@ -474,7 +491,7 @@ def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monk
         assert len(json.dumps(bound, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 32000
         delivered = consume(bound)
         if not compacted:
-            assert delivered["base"]["capture_id"] == cold["target"]["capture_id"]
+            assert delivered["base"]["capture_id"] == machine_reference_oracle(cold)["target"]["capture_id"]
     else:
         assert bound["mode"] == "should-run" and not list(native.iterdir())
     assert _heartbeat_receipt_count(runtime, turn) == 2 and _spend_run_count(runtime) == 0
@@ -483,12 +500,14 @@ def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monk
 
 
 @pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"), reason="Explicit native Codex; loopback inference only")
-@pytest.mark.parametrize("host", ["app_server", "benchmark", "benchmark_progressive", "app_machine", "app_code_mode", "app_progressive"])
+@pytest.mark.parametrize("host", ["app_server", "benchmark", "benchmark_progressive", "app_machine", "app_code_mode", "app_progressive", "app_progressive_large", "app_program_route", "app_code_mode_program_route"])
 def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, monkeypatch, host):
     from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
     from loopx.control_plane.quota.turn_envelope import prepare_context_delivery, restore_context_delivery
-    from tests.control_plane.codex_checkpoint_fixture import last_context_page, local_inference_provider
+    from tests.control_plane.codex_checkpoint_fixture import (
+        last_context_page, local_inference_provider, native_process_continuation,
+    )
     from tests.control_plane.test_codex_context_boundary import _app_server, _configure_provider, _native_fixture, _input_text
     from tests.control_plane.test_codex_context_capture import _delivered
     from tests.control_plane.test_quota_settlement_cli import (
@@ -498,7 +517,14 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     benchmark = host in ("benchmark", "benchmark_progressive")
-    progressive = host in ("app_progressive", "benchmark_progressive")
+    progressive = host in ("app_progressive", "benchmark_progressive", "app_progressive_large")
+    large_capture = host == "app_progressive_large"
+    routed_program = host.endswith("_program_route")
+    code_mode = host.startswith("app_code_mode")
+    if routed_program and os.name == "nt":
+        pytest.skip("POSIX console alias and controlled PATH")
+    unicode_requirement = "保留原始目标、范围与停止条件🙂\n" * 120
+    supporting_material = "资料🙂" * 390_000 if large_capture else ""
     binary, env, workspace, home = _native_fixture(tmp_path)
     env.update(NODE_OPTIONS="--experimental-sqlite", LOOPX_USAGE_PING="0")
     env.pop("CODEX_ROLLOUT_TRACE_ROOT", None)
@@ -516,8 +542,16 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
         code, decision = _run_cli(registry, runtime, "quota", "should-run", "--goal-id", GOAL_ID,
             "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", "saved-native-turn", "--codex-app", cwd=project)
         assert code == 0, decision
+        if large_capture:
+            # Unknown supporting fields are part of the saved capture's
+            # forward-compatible lossless contract. Only the requested field
+            # should enter model input; the full material must remain recoverable.
+            decision["retained_material"] = {
+                "requirement": unicode_requirement, "supporting": supporting_material}
         source = workspace / (name + "-source.json")
         source.write_text(json.dumps(decision, ensure_ascii=False))
+        if large_capture:
+            assert 2 * 1024 * 1024 < source.stat().st_size < 8 * 1024 * 1024
         sources.append((source, source.read_bytes()))
     receipts = _heartbeat_receipt_count(runtime, "saved-native-turn")
     context, cache = workspace / "context", workspace / "cache"
@@ -525,6 +559,20 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
     cache.mkdir(mode=0o700)
     program = os.environ.get("LOOPX_NATIVE_CONTEXT_CLI") or str(Path(sys.executable).with_name("loopx"))
     cli = [program, "--cli-bin", program]
+    wrong_runtime = workspace / "wrong-runtime"
+    if routed_program:
+        bin_dir = workspace / "candidate bin"
+        bin_dir.mkdir()
+        poison = bin_dir / "loopx"
+        poison.write_text(f"#!{sys.executable}\nfrom pathlib import Path\n"
+                          f"Path({str(wrong_runtime)!r}).touch()\nraise SystemExit(97)\n")
+        poison.chmod(0o755)
+        candidate = bin_dir / "candidate's cli"
+        candidate.symlink_to(Path(program))
+        cli = ([sys.executable, "-m", "loopx.entrypoint"] if code_mode
+               else [str(candidate), "--cli-bin", str(candidate)])
+        cli += ["--registry", str(registry), "--runtime-root", str(runtime)]
+        env["PATH"] = str(bin_dir) + os.pathsep + env["PATH"]
     from loopx.control_plane.turn_driver.codex_context import codex_context_configuration
     configuration = codex_context_configuration(str(context), goal_id=GOAL_ID, agent_id=AGENT_ID, cli_argv=cli, scenario="codex_app_heartbeat")
     if host == "app_machine":
@@ -540,10 +588,35 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
     phase, queue, observed, errors = "cold", [], {}, []
     read_offsets = {}
     actual_turn = None
+    rejected_read = False
+    reading_initial = False
+    initial_content = {}
 
     def response(request, number, message):
-        nonlocal phase, queue, actual_turn, receipts
+        nonlocal phase, queue, actual_turn, receipts, rejected_read, reading_initial
         try:
+            if continuation := native_process_continuation(request, f"projection_{number}",
+                    code_mode=code_mode):
+                return continuation
+            if reading_initial:
+                name = phase.removesuffix("_read")
+                page = last_context_page(request, allow_selection=True)
+                assert page and page["ok"] and page["offset"] == len(initial_content[name])
+                initial_content[name] += page["content"].encode()
+                assert len(initial_content[name]) == (page["total_bytes"] if page["eof"] else page["next_offset"])
+                if page["eof"]:
+                    from tests.control_plane.codex_checkpoint_fixture import selected_context_values
+                    assert selected_context_values(initial_content[name].decode())["/goal_id"] == GOAL_ID
+                    reading_initial = False
+                else:
+                    queue.insert(0, page["next_command"])
+            if rejected_read:
+                output = [item["output"] for item in request["input"]
+                    if item.get("type") in ("function_call_output", "custom_tool_call_output")][-1]
+                rejected = json.loads(output.split("\nOutput:\n", 1)[-1])
+                assert rejected["ok"] is False and "content" not in rejected
+                assert "digest" in rejected["reason"]
+                rejected_read = False
             if queue:
                 command = queue.pop(0)
             elif phase in ("cold", "warm"):
@@ -572,10 +645,14 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                     if item.get("type") in ("function_call_output", "custom_tool_call_output")][-1]
                 if isinstance(output, list):
                     output = [part["text"] for part in output if part.get("type") == "input_text"][-1]
-                descriptor = json.loads(output.split("\nOutput:\n", 1)[-1])
-                assert descriptor["ok"] and descriptor["mode"] == ("full" if name == "cold" else "delta")
+                navigation = json.loads(output.split("\nOutput:\n", 1)[-1])
+                descriptor = machine_reference_oracle(navigation)
+                # A selectively read large capture cannot become a retained
+                # full baseline; its next projection must remain full.
+                assert descriptor["ok"] and descriptor["mode"] == (
+                    "full" if name == "cold" or large_capture else "delta")
                 if benchmark:
-                    assert len(json.dumps(descriptor, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 32000
+                    assert len(json.dumps(navigation, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 32000
                 data = Path(descriptor["path"]).read_bytes()
                 assert hashlib.sha256(data).hexdigest() == descriptor["sha256"]
                 published = json.loads(data)
@@ -586,13 +663,34 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                 # Follow the public reader's actual page cursor rather than
                 # guessing offsets from the capture size. This keeps each
                 # request's real page budget and avoids overlapping reads.
-                queue.append(descriptor["command"])
+                queue.append(navigation["command"])
+                if routed_program and descriptor["mode"] == "full":
+                    # Execute the returned initial navigation unchanged inside
+                    # real native tools, then retain the existing full-source
+                    # oracle and lifecycle proof. PATH's ambient CLI must fail.
+                    initial_content[name] = b""
+                    reading_initial = True
+                    queue.insert(0, navigation["first_read_command"])
                 if progressive:
                     # Exercise the actual small reference and selective public
                     # reader in native model input; never consume either file in full.
                     assert "content" not in descriptor
-                    queue = [descriptor["index_command"], descriptor["recovery"]["command"]
-                        + " --select /goal_id --select /heartbeat_receipt"]
+                    queue = [navigation["recovery"]["command"] + " --list", navigation["recovery"]["command"]
+                        + " --select /goal_id --select /heartbeat_receipt"
+                        + (" --select /retained_material/requirement" if large_capture else "")]
+                    if large_capture:
+                        # Reject a different digest through the real native CLI,
+                        # then continue with the unchanged original reference.
+                        argv = shlex.split(navigation["recovery"]["command"])
+                        index = argv.index("--reference-file") + 1
+                        reference = json.loads(Path(argv[index]).read_text())
+                        reference["sha256"] = "0" * 64
+                        damaged = workspace / (name + "-damaged.reader.json")
+                        damaged.write_text(json.dumps(reference))
+                        damaged.chmod(0o600)
+                        argv[index] = str(damaged)
+                        queue.insert(0, shlex.join(argv))
+                        rejected_read = True
                 phase = name + "_read"
                 if not queue:
                     return response(request, number, message)
@@ -600,13 +698,18 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
             else:
                 name = phase.removesuffix("_read")
                 descriptor = observed[name][1]
-                page = last_context_page(request)
+                page = last_context_page(request, allow_selection=progressive)
                 assert page and page["ok"]
                 if progressive:
                     values = {item["pointer"]: item["value"] for item in json.loads(page["content"])["selections"]}
                     assert values["/goal_id"] == GOAL_ID
                     assert values["/heartbeat_receipt"]["turn_instance_id"] == (
                         actual_turn if benchmark else "saved-native-turn")
+                    if large_capture:
+                        assert page["offset"] == 0 and page["eof"]
+                        assert len(page["content"].encode()) == page["total_bytes"]
+                        assert values["/retained_material/requirement"] == unicode_requirement
+                        assert "资料🙂" not in _input_text(request)
                     native_context = home / "loopx-context" if benchmark else context
                     assert "candidate" not in json.loads((native_context / "session.json").read_bytes())
                 else:
@@ -640,14 +743,19 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                     if benchmark:
                         return message
                     return response(request, number, message)
-            if host == "app_code_mode":
+            arguments = {"cmd": command, "max_output_tokens": 22000}
+            if routed_program:
+                # A login shell may replace the controlled PATH before it
+                # executes the otherwise unchanged generated reader command.
+                arguments["login"] = False
+            if code_mode:
                 return {"type": "custom_tool_call", "id": f"fc_{number}", "call_id": f"call_{number}",
                     "name": "exec", "input": '// @exec: {"max_output_tokens":24000}\ntext((await tools.exec_command('
-                        + json.dumps({"cmd": command, "max_output_tokens": 22000}) + ')).output);'}
+                        + json.dumps(arguments) + ')).output);'}
             # Match the generated native profile's 64000-byte page transport;
             # the old 3000-token tool cap truncated its valid JSON first page.
             return {"type": "function_call", "id": f"fc_{number}", "call_id": f"call_{number}",
-                "name": "exec_command", "arguments": json.dumps({"cmd": command, "max_output_tokens": 22000})}
+                "name": "exec_command", "arguments": json.dumps(arguments)}
         except Exception as error:
             errors.append(error)
             return message
@@ -695,11 +803,13 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
             config.write_text(overrides + config.read_text())
             with (home / "config.toml").open("a") as config:
                 config.write("[sandbox_workspace_write]\nnetwork_access=true\n")
-            if host == "app_code_mode":
+            if code_mode:
                 config = home / "config.toml"
                 config.write_text(config.read_text().replace("[features]\n", "[features]\ncode_mode=true\n"))
             _app_server(binary, env, workspace, home, True, sandbox="workspace-write")
-    assert not errors and phase == "done", errors
+    assert not errors and phase == "done", (errors, phase, wrong_runtime.exists())
+    if routed_program:
+        assert set(initial_content) == {"cold"} and not wrong_runtime.exists()
     if benchmark:
         turns = [json.loads(raw)["heartbeat_receipt"]["turn_instance_id"] for _, raw in sources]
         assert len(set(turns)) == 2
@@ -721,6 +831,9 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
         assert current["target"] == descriptor["target"]
         restored = restore_context_delivery(wire, baseline=baseline, current=current)
         assert restored["context"] == projected
+        if large_capture:
+            assert restored["context"]["retained_material"] == {
+                "requirement": unicode_requirement, "supporting": supporting_material}
         if wire["mode"] == "delta":
             assert restored["mode"] == "delta"  # A fallback would hide a broken baseline chain.
         # Match the native journal's exact prior full capture and depth. The

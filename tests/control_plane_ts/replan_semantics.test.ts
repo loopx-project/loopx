@@ -39,6 +39,35 @@ test("open-work review guidance does not require configured checks or outcome de
   }
 });
 
+test("autonomous checkpoints reuse owner review while ordinary checkpoints keep continuation guidance", () => {
+  assert.equal(typeof visionAuthoringContract().continuation_review, "string");
+  assert.equal(Object.hasOwn(visionAuthoringContract(true), "continuation_review"), false);
+  for (const kind of ["vision_acceptance_gap", "periodic_review_due", "external_progress_review_drift"]) {
+    for (const stride_strategy of ["off", "evidence_conditioned_v1"]) {
+      const projection = projectReplanSemantics({operation: "requirements", obligation: {
+        obligation_id: "replan-1111111111111111", triggers: [{kind}], replan_context: {stride_strategy},
+      }});
+      const authoring = (projection.writeback_contract as JsonObject).vision_authoring as JsonObject;
+      assert.deepEqual(authoring, visionAuthoringContract(true));
+      const guidance = (projection.planning_guidance as string[]).join(" ");
+      for (const clause of ["original intent", "every requirement", "full marginal cost",
+        "Before no_followup, review unmet acceptance", "reasonable in-scope next step remains, continue or replan",
+        "evidence and judgment in existing Vision/path_delta", "budget or stops", "planning grant no authority",
+        "never forces a pivot", "do not invent work or consume budget merely to stay active"]) {
+        assert.ok(guidance.includes(clause), clause);
+      }
+      if (stride_strategy === "evidence_conditioned_v1") {
+        const review = (projection.stride_control as JsonObject).decision_value_review as JsonObject;
+        const advice = Object.values(review).join(" ");
+        for (const clause of ["feasible alternative", "complete experiment", "headroom",
+          "artifact version, input conditions and original budget", "budget, feedback and permission limits"]) {
+          assert.ok(advice.includes(clause), clause);
+        }
+      }
+    }
+  }
+});
+
 test("a revalidated successor receipt settles only its exact original Turn guard", () => {
   const id = "replan-1111111111111111";
   const delta = {schema_version: "replan_semantic_delta_v0", accepted: true,
@@ -579,6 +608,10 @@ test(`${recovery} restores only its exact admitted review and still owes Vision`
   const packet = result.settlement_action_packet as JsonObject;
   assert.equal(packet.settlement_only, true);
   assert.equal(packet.semantic_delta, null);
+  const writeback = packet.writeback_contract as JsonObject;
+  assert.match(String(writeback.rule), /Reassess the original acceptance with evidence.*do not repeat the original work/);
+  assert.deepEqual(writeback.vision_authoring, visionAuthoringContract(true));
+  assert.equal(Object.hasOwn(writeback.vision_authoring as JsonObject, "continuation_review"), false);
   assert.equal(projectReplanSemantics({operation: "qualify", obligation: result}).accepted, false);
   assert.equal(projectReplanSemantics({operation: "qualify", obligation: result, agent_vision: vision}).accepted, true);
   const historical = {...row, todo_id: "todo_historical", completion_turn_key: "historical-completion",
@@ -622,6 +655,41 @@ test("lifecycle reconstruction restores completion order before its trigger boun
   assert.deepEqual((projectReplanSemantics({operation: "lifecycle_source", agent_id: agent,
     guard_recorded_at: "2026-08-01T00:00:05Z", items: ties}).items as JsonObject[])
     .map(item => item.todo_id), ["todo_4", "todo_3", "todo_2", "todo_1"]);
+});
+
+test("lifecycle reconstruction excludes rows closed by an inferred successor", () => {
+  const agent = "synthetic-agent", id = "replan-1111111111111111";
+  const row = {todo_id: "todo_settled", status: "done", done: true, task_class: "advancement_task",
+    claimed_by: agent, last_actor_agent_id: agent, completed_at: "2026-08-01T00:00:00Z",
+    updated_at: "2026-08-01T00:00:10Z", completion_turn_key: "settled-completion",
+    no_followup: true, completion_continuation: "no_followup",
+    completion_recovery: "lifecycle_reentry_terminal_closeout"};
+  // The admitted summary had no gap for this older row: a later row resumes on it.
+  const resumed = {...row, todo_id: "todo_resumed", completed_at: "2026-07-31T00:00:00Z",
+    updated_at: "2026-07-31T00:00:00Z", completion_turn_key: "resumed-completion",
+    no_followup: null, completion_continuation: "active_goal", completion_recovery: null};
+  const resumer = {...resumed, todo_id: "todo_resumer", completion_turn_key: "resumer-completion",
+    successor_todo_ids: [resumed.todo_id], resume_when: `todo_done:${resumed.todo_id}`};
+  const original = {required: true, obligation_id: id, resolution_mode: "todo_lifecycle_settlement",
+    triggers: [{kind: "completed_advancement_without_successor", todo_id: row.todo_id,
+      completion_turn_key: row.completion_turn_key, agent_id: agent}]};
+  const candidate = {obligation: original, source_obligation: original, lifecycle_settled: true,
+    guard_recorded_at: "2026-08-01T00:00:05.123456Z", items: [row, resumed, resumer]};
+  const request = {operation: "receipt_bound_obligation", guard_scoped: true, replay_phase: "open",
+    selected_obligation_id: id, agent_id: agent, current_obligation: null, transition_candidates: [candidate]};
+  assert.deepEqual((projectReplanSemantics({operation: "lifecycle_source", agent_id: agent,
+    guard_recorded_at: candidate.guard_recorded_at, items: candidate.items}).items as JsonObject[])
+    .map(item => item.todo_id), [row.todo_id]);
+  const result = projectReplanSemantics(request).obligation as JsonObject;
+  assert.equal(result.obligation_id, id);
+  assert.equal(result.resolution_mode, "receipt_bound_replan_settlement");
+  // An unblock edge closes the gap the same way. A non-advancement resumer
+  // infers no edge, so the row stays and the exact trigger check still fails.
+  const unblocker = {...resumer, resume_when: null, unblocks_todo_id: resumed.todo_id};
+  assert.equal((projectReplanSemantics({...request, transition_candidates: [{...candidate,
+    items: [row, resumed, unblocker]}]}).obligation as JsonObject).obligation_id, id);
+  assert.throws(() => projectReplanSemantics({...request, transition_candidates: [{...candidate,
+    items: [row, resumed, {...resumer, task_class: "continuous_monitor"}]}]}), /identity conflicts/);
 });
 
 

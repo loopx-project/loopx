@@ -106,7 +106,7 @@
 }
 
 
-.delivery-notice summary { cursor: pointer; min-height: 24px; }
+.delivery-notice summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; }
 
 .delivery-acceptance-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .delivery-acceptance-controls label, .delivery-acceptance-controls details { flex-basis: 100%; min-width: 0; }

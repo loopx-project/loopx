@@ -384,7 +384,9 @@ def test_actual_worker_captures_pending_replan_before_native_model(tmp_path, exp
     from benchmark.runtime.worker import run_once
     from tests.control_plane import test_quota_settlement_cli as cli
     from tests.control_plane.canonical_authority_fixture import initialize_canonical_source_fixture
-    from tests.control_plane.codex_checkpoint_fixture import NativeContextReader, native_context_command
+    from tests.control_plane.codex_checkpoint_fixture import (
+        NativeContextReader, native_context_command, native_process_continuation,
+    )
 
     project, runtime, registry = cli._write_fixture(tmp_path / "authority")
     document = json.loads(registry.read_text())
@@ -403,7 +405,7 @@ def test_actual_worker_captures_pending_replan_before_native_model(tmp_path, exp
     executable.chmod(0o700)
     skills = tmp_path / "skills"
     skills.mkdir()
-    requests, guards, work_turns = [], [], []
+    requests, guards, work_turns, process_continuations = [], [], [], []
     phase = {"kind": "initial", "values": [], "tool_sent": False}
     reader = NativeContextReader()
 
@@ -425,6 +427,9 @@ def test_actual_worker_captures_pending_replan_before_native_model(tmp_path, exp
 
     def response(payload, index, message):
         requests.append(payload)
+        if continuation := native_process_continuation(payload, f"checkpoint_{index}"):
+            process_continuations.append(index)
+            return continuation
         if context_delivery == "on" and phase["kind"] != "initial":
             follow = reader.follow(payload)
             if follow:
@@ -537,7 +542,7 @@ def test_actual_worker_captures_pending_replan_before_native_model(tmp_path, exp
             settle_work(prior, value)
         assert len(set(work_turns)) == 6
         if context_delivery == "off":
-            assert len(calls) == 13
+            assert len(calls) == 13 + len(process_continuations)
         else:
             assert reader.deliveries[0]["mode"] == "full"
             assert any(row["mode"] == "delta" for row in reader.deliveries[1:])
@@ -574,7 +579,7 @@ def test_actual_worker_captures_pending_replan_before_native_model(tmp_path, exp
         assert result["session"]["session_id"] == prior["session"]["session_id"]
         assert not result.get("checkpoint_handoffs")
         if context_delivery == "off":
-            assert len(calls) == 15
+            assert len(calls) == 15 + len(process_continuations)
         assert cli._heartbeat_receipt_count(runtime, result["turn_id"]) == 1
         assert "settlement_binding_owed" in json.dumps(requests[-1]) and len(guards) == 1
 
@@ -624,7 +629,7 @@ def test_actual_worker_captures_pending_replan_before_native_model(tmp_path, exp
         settle_work(adopted, 8)
         assert len(work_turns) == 7
         if context_delivery == "off":
-            assert len(calls) == 17
+            assert len(calls) == 17 + len(process_continuations)
         assert all(json.loads((project / f"evidence-{v}.json").read_text())["value"] == v for v in (7, 8))
         (tmp_path / "controller-result.json").write_text(json.dumps({**result["checkpoint"],
             "natural_work_turns": work_turns[:6], "stride_action": "grow", "explore_mode": explore_mode,

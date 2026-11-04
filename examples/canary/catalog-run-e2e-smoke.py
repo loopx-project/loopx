@@ -13,7 +13,6 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-import loopx.canary.runner as runner_module  # noqa: E402
 from loopx.canary.runner import (  # noqa: E402
     build_catalog_canary_run,
     normalize_canary_command,
@@ -107,22 +106,24 @@ def assert_domain_checks_precede_family_checks() -> None:
 
 
 def assert_git_required_smoke_skips_without_git_worktree() -> None:
-    original_root = runner_module.REPO_ROOT
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_root = Path(temp_dir).resolve()
         (temp_root / "examples" / "control_plane").mkdir(parents=True)
-        runner_module.REPO_ROOT = temp_root
-        try:
-            payload = build_catalog_canary_run(
-                catalog_path=REPO_ROOT / "docs/concepts/interaction-pattern-catalog.md",
-                profiles=["repo-architecture-budget"],
-                max_checks_per_profile=1,
-                check_limit=1,
-                execute=True,
-                timeout_seconds=10,
-            )
-        finally:
-            runner_module.REPO_ROOT = original_root
+        # TMPDIR may be inside a checkout. A bare repository stops Git's
+        # ancestor discovery without providing a worktree to the check.
+        subprocess.run(
+            ["git", "init", "--bare", "--quiet", str(temp_root)], check=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        payload = build_catalog_canary_run(
+            catalog_path=REPO_ROOT / "docs/concepts/interaction-pattern-catalog.md",
+            profiles=["repo-architecture-budget"],
+            max_checks_per_profile=1,
+            check_limit=1,
+            execute=True,
+            timeout_seconds=10,
+            repo_root=temp_root,
+        )
 
     assert payload["ok"] is True, payload
     assert payload["failure_count"] == 0, payload

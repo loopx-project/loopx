@@ -157,7 +157,7 @@ def test_byte_bounded_context_batches_retain_every_record(monkeypatch):
 
     monkeypatch.setattr(effect_runtime, "effect_runtime_result", track)
     rows = [{"todo_id": f"todo_large_{i}", "text": "Work", "status": "open",
-             "task_class": "advancement_task", "note": "a" * 120000} for i in range(20)]
+             "task_class": "advancement_task", "note": "a" * 480000} for i in range(20)]
     result = compact_todo_summary_items(rows)
     assert len(result) == 20
     assert [row["todo_id"] for row in result] == [row["todo_id"] for row in rows]

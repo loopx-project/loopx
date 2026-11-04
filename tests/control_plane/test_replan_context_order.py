@@ -57,6 +57,36 @@ def test_named_newest_first_builder_preserves_order_without_a_status_source():
     _assert_followthrough(context)
 
 
+@pytest.mark.parametrize("typed", [False, True])
+def test_declared_results_survive_busy_work_through_the_source_codec(typed):
+    _, decision, work = _rows()
+    decision["agent_vision"]["todo_delta"] = ["retain:todo-busy", "retain:todo-comparison"]
+
+    def result(todo, index):
+        item = {**work, "todo_id": todo, "turn_instance_id": f"turn-work-{index}",
+            "settlement_identity": {**work["settlement_identity"], "todo_id": todo,
+                "turn_instance_id": f"turn-work-{index}"},
+            "health_check": f"Independent measured result {index}."}
+        if typed:
+            item["progress_observation"] = {**work["progress_observation"], "work_item_id": todo,
+                "surface_id": f"surface-{index}"}
+        else:
+            item.pop("progress_observation", None)
+        return item
+
+    rows = [decision, result("todo-comparison", 0), *[result("todo-busy", i + 1) for i in range(12)]]
+    for strategy in ("off", "evidence_conditioned_v1"):
+        context = project_replan_context(goal_id="evidence-goal", agent_id="agent-a", runs=rows,
+            history_newest_first=False, stride_strategy=strategy)
+        follow = context["decision_followthrough"]
+        observed = follow["observations"] if typed else follow["ordinary_work"]["evidence"]
+        assert len(observed) == 6
+        assert {row["todo_id"] for row in observed} == {"todo-busy", "todo-comparison"}
+        planned = next(work for work in follow["planned_work"] if work["todo_id"] == "todo-comparison")
+        assert len(planned["observation_refs"] if typed else planned["ordinary_evidence_refs"]) == 1
+        assert follow["execution_and_goal_gain"] == "unknown"
+
+
 def test_real_append_index_ignores_compact_display_order_and_clock_skew(tmp_path):
     registry = tmp_path / "registry.json"
     registry.write_text(json.dumps({"goals": [{"id": "evidence-goal", "repo": str(tmp_path)}]}))

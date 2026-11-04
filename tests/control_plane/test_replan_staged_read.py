@@ -78,7 +78,7 @@ def test_staged_packet_budget_and_lossless_authority(stride):
         control = writer["stride_control"]
         assert control["previous_decision_ref"] == source["replan_action_packet"]["stride_control"]["previous_decision_ref"]
         assert "decision_followthrough" not in control and "decision_value_review" not in control
-        assert "minimal_example" not in control
+        assert control["minimal_example"] == source["replan_action_packet"]["stride_control"]["minimal_example"]
         assert control["basis_options"] == ["supported_progress", "unexplained_gap", "uncertain_evidence", "useful_new_route", "decision_failure"]
         assert {"basis", "action", "axes", "next_probe"} <= set(control["required_fields"])
     assert source == original
@@ -611,6 +611,18 @@ def test_native_reader_keeps_its_installation_across_acceptance_and_writeback(tm
     from loopx.control_plane.turn_driver.decision_capture import write_decision_capture
     from loopx.control_plane.turn_driver.host_candidate import extract_turn_authority, render_prompt
 
+    release_root = Path(__file__).resolve().parents[2]
+    release_cli = release_root / "scripts" / "loopx"
+    stale_root = tmp_path / "stale-system-module"
+    stale_package = stale_root / "loopx"
+    stale_package.mkdir(parents=True)
+    (stale_package / "__init__.py").write_text("")
+    (stale_package / "entrypoint.py").write_text(
+        "raise SystemExit('stale system LoopX must not handle captured readers')\n"
+    )
+    monkeypatch.setenv("LOOPX_RELEASE_ROOT", str(release_root))
+    monkeypatch.setenv("PYTHONPATH", str(stale_root))
+
     source = _quota_payload()
     outcome = {"id": "original-outcome", "objective": "Deliver the original accepted artifact.",
         "requirements": [{"id": "original-stop", "description": "Stop before publication."}]}
@@ -623,7 +635,9 @@ def test_native_reader_keeps_its_installation_across_acceptance_and_writeback(tm
     args = {"captured_decision_path": str(capture), "turn_instance_id": "original-native-turn", "turn_key": "sha256:" + "0" * 64}
     legacy = bind_turn_decision_capture(source, envelope, **args)
     assert "read autonomous_replan_obligation.replan_context" in render_prompt(extract_turn_authority({"turn_envelope": legacy}))
-    bound = bind_turn_decision_capture(source, envelope, **args, reader_argv=current_loopx_cli_argv())
+    reader_argv = current_loopx_cli_argv()
+    assert reader_argv == [str(release_cli), "--cli-bin", str(release_cli)]
+    bound = bind_turn_decision_capture(source, envelope, **args, reader_argv=reader_argv)
     authority = extract_turn_authority({"turn_envelope": bound})
     trap = tmp_path / "bin"
     trap.mkdir()
@@ -672,7 +686,18 @@ def test_explore_uses_its_own_incremental_budget_and_real_result_log(tmp_path):
     cli_detail = call_progress_cli(reader_fixture, *command[3:])
     assert cli_detail["explore_basis"] == basis
     assert {row["status"] for row in basis["finding_refs"]} >= {"confirmed", "refuted"}
-    _, _, params = _views(enabled)
-    writer = _turn_envelope_result("replan_view", **params, stage="writeback")
+    writer_command = shlex.split(cli_review["next"]["writeback"])
+    writer = call_progress_cli(reader_fixture, *writer_command[3:])
     assert writer["stride_control"]["reference_context_id"] == review["context_id"]
+    control = writer["stride_control"]
+    example = control["minimal_example"]
+    assert set(control["required_fields"]) <= example.keys()
+    assert set(example["previous_review"]) == {
+        "reference_decision_ref", "adoption", "information_gain", "goal_gain", "evidence_refs", "lesson",
+    }
+    assert example["previous_review"]["reference_decision_ref"] == control["previous_decision_ref"]
+    assert {example["previous_review"][key] for key in ("adoption", "information_gain", "goal_gain")} == {"unknown"}
+    assert set(example["explore_review"]) >= {"revision", "disposition", "considered_refs", "reason"}
+    assert example["explore_review"]["revision"] == basis["revision"]
+    assert example["explore_review"]["considered_refs"] == []
     assert json_bytes(writer) <= 16 * 1024

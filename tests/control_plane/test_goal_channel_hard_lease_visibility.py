@@ -410,3 +410,53 @@ def test_status_attention_queue_surfaces_hard_lease_end_to_end(
             "claimed_by": "agent-b",
         }
     ]
+
+
+def test_decision_status_read_omits_only_presentation_projections(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The real collector's decision read keeps every attention-item field."""
+
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    from loopx.control_plane.todos.todo_summary import canonical_todo_read_record, structured_todo_item
+    from loopx.status import collect_status
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, repo, runtime_root = _write_status_workspace(tmp_path)
+    lease = _write_active_lease(runtime_root, owner="agent-a")
+    initialize_canonical_authority(
+        runtime_root, GOAL_ID,
+        build_todo_runtime_shadow_projection(
+            goal_id=GOAL_ID, handoff_mode="hard_lease", leases=[lease],
+            todos=[canonical_todo_read_record(structured_todo_item({
+                "todo_id": TODO_ID, "role": "agent", "status": "open",
+                "text": "Deliver one bounded control-plane change.",
+                "task_class": "advancement_task", "claimed_by": "agent-b",
+            }, role="agent", source_section="Agent Todo"))],
+        ),
+        state_path=repo / "ACTIVE_GOAL_STATE.md", provider="sqlite",
+    )
+
+    def read(**kwargs: Any) -> dict[str, Any]:
+        return collect_status(
+            registry_path=registry, runtime_root_override=None, limit=5,
+            goal_id=GOAL_ID, **kwargs,
+        )
+
+    full = read()
+    decision = read(include_presentation_projections=False)
+
+    assert "promotion_gate" in full
+    assert "promotion_gate" not in decision
+    full_items = full["attention_queue"]["items"]
+    decision_items = decision["attention_queue"]["items"]
+    assert [item.get("goal_id") for item in decision_items] == [
+        item.get("goal_id") for item in full_items
+    ]
+    for full_item, decision_item in zip(full_items, decision_items):
+        assert "goal_channel_projection" not in decision_item
+        assert decision_item == {
+            key: value
+            for key, value in full_item.items()
+            if key != "goal_channel_projection"
+        }

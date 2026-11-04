@@ -29,7 +29,7 @@ SEMANTIC_CONTEXT_RUN_FIELDS = (
     "latest_evidence_delivery_run",
 )
 SEMANTIC_CONTEXT_RUN_PAYLOAD_FIELDS = {
-    "latest_lane_step_run": ("generated_at", "goal_id", "agent_id", "recommended_action_resolution"),
+    "latest_lane_step_run": ("generated_at", "json_path", "goal_id", "agent_id", "recommended_action_resolution"),
     "latest_agent_vision_run": (
         "generated_at",
         "agent_id",
@@ -135,6 +135,8 @@ def goal_semantic_history_from_runs(
     bounded list.
     """
 
+    from ..work_items.recommendation_source_io import recommendation_run_decision
+
     contexts: dict[str, dict[str, Any]] = {}
     resolved_agent_vision: set[str] = set()
     latest_owner_correction_run: dict[str, Any] | None = None
@@ -162,8 +164,8 @@ def goal_semantic_history_from_runs(
                     active_blocked_retry_runs.append(run)
         context = contexts.setdefault(agent_id, {"agent_id": agent_id})
 
-        resolution = run.get("recommended_action_resolution")
-        if "latest_lane_step_run" not in context and isinstance(resolution, dict) and resolution.get("step_revision"):
+        if ("latest_lane_step_run" not in context and run.get("agent_id") == agent_id
+                and recommendation_run_decision(run) is not None):
             context["latest_lane_step_run"] = run
         checkpoint = run.get("vision_checkpoint")
         if "latest_vision_checkpoint_run" not in context and isinstance(

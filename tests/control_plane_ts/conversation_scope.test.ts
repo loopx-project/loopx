@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {resolveConversationScope, projectConversationIdentity} from "../../loopx/control_plane/collaboration/conversation_scope.ts";
+import {resolveConversationScope, projectConversationIdentity, stewardConversationIdentity} from "../../loopx/control_plane/collaboration/conversation_scope.ts";
 
 test("result review narrows runtime effects without rewriting the original grant or native store", () => {
   const context = {kind: "project_workspace", project_ref: "a".repeat(24), workspace_path: "/synthetic/project",
@@ -82,4 +82,19 @@ test("declared project identity cannot fall back to a legacy manager channel", (
     assert.deepEqual(resolveConversationScope({channel_id: channel, goal_id: null}),
       {kind: "unavailable", goal_ids: [], private_conversation: false});
   }
+});
+
+
+test("steward metadata formatting keeps the original audience with no execution tools", () => {
+  const context = {kind: "bound_steward", project_ref: "a".repeat(24), workspace_path: "/synthetic/project",
+    audience: "bound_owner", grant: "portfolio_read", binding_id: "b".repeat(24), goal_ids: ["work"],
+    source_ref: "c".repeat(24), provider_ref: "d".repeat(24), operator_ref: "e".repeat(24)};
+  const review = stewardConversationIdentity({context, metadata_review: true}) as Record<string, any>;
+  assert.deepEqual(review.context, context);
+  assert.equal(review.channel_id, stewardConversationIdentity({context}).channel_id);
+  assert.equal(review.host_store_key, undefined);
+  assert.equal(review.host_config.features.shell_tool, false);
+  assert.equal(review.host_config.features.apply_patch_freeform, false);
+  assert.equal(review.host_config.permissions.loopx_workspace_only_read.network.enabled, false);
+  assert.throws(() => stewardConversationIdentity({context: {...context, audience: "bound_group"}, metadata_review: true}));
 });

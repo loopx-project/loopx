@@ -37,6 +37,8 @@ from .executor import (
     HOST_RESULT_EVIDENCE_LIMITS,
     HOST_RESULT_TEXT_LIMITS,
     LOOPX_TURN_HOST_REQUEST_SCHEMA_VERSION,
+    MATERIAL_HOST_RESULT_KINDS,
+    STOP_HOST_RESULT_KINDS,
 )
 from ..capability_hooks import capability_result_fields
 from .execution_profile import require_supported_reasoning_effort
@@ -263,8 +265,9 @@ def codex_cli_result_schema(
         HOST_RESULT_EVIDENCE_LIMITS.items()
     ):
         properties[evidence_field] = {
-            "type": "array",
+            "type": ["array", "null"],
             "items": {"type": "string", "maxLength": max_item_chars},
+            "minItems": 1,
             "maxItems": max_items,
         }
     properties.update(capability_result_fields(request))
@@ -276,34 +279,37 @@ def codex_cli_result_schema(
             "enum": ["codex-cli"],
         }
         properties["child_execution_receipts"] = child_receipts
-    envelope = _mapping(request.get("turn_envelope")) if request else {}
-    capsule = _mapping(envelope.get("contract_capsule"))
-    profile = capsule.get("execution_profile")
-    evidence_required = isinstance(profile, Mapping) and bool(profile)
-    schema: dict[str, Any] = {
+    # Codex strict output requires every property and forbids conditional schemas.
+    return {
         "type": "object",
         "properties": properties,
-        "required": [
-            field for field in properties
-            if field not in HOST_RESULT_EVIDENCE_LIMITS
-        ],
+        "required": list(properties),
         "additionalProperties": False,
     }
-    if evidence_required:
-        schema["allOf"] = [
-            {
-                "if": {
-                    "properties": {
-                        "result_kind": {"enum": list(CODEX_CLI_RESULT_KINDS[:3])}
-                    },
-                    "required": ["result_kind"],
-                },
-                "then": {
-                    "required": list(HOST_RESULT_EVIDENCE_LIMITS),
-                },
-            }
-        ]
-    return schema
+
+
+def normalize_codex_result(
+    request: Mapping[str, Any], result: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Translate strict-output null placeholders at both Codex boundaries."""
+    normalized = dict(result)
+    kind = normalized.get("result_kind")
+    if not isinstance(kind, str):
+        return normalized
+    if kind in STOP_HOST_RESULT_KINDS:
+        for field in HOST_RESULT_EVIDENCE_LIMITS:
+            if normalized.get(field) is None:
+                normalized.pop(field, None)
+    elif kind in MATERIAL_HOST_RESULT_KINDS:
+        envelope = _mapping(request.get("turn_envelope"))
+        profile = _mapping(envelope.get("contract_capsule")).get("execution_profile")
+        if isinstance(profile, Mapping) and profile and any(
+            normalized.get(field) is None for field in HOST_RESULT_EVIDENCE_LIMITS
+        ):
+            raise BuiltInHostError("codex_material_result_missing_evidence")
+    # Preserve non-null evidence, including malformed/empty arrays, for the
+    # existing executor validator. Legacy material results may omit evidence.
+    return normalized
 
 
 def _prompt(request: Mapping[str, Any]) -> str:
@@ -330,7 +336,7 @@ def _prompt(request: Mapping[str, Any]) -> str:
         + "Read work_context and remaining required_reads before primary_action; do not repeat fulfilled reads; perform work only when its contract allows it. The selected Todo summary is not its full requirements, and completing that work does not prove Goal completion.",
         "Do not write LoopX state, spend quota, or apply scheduler changes; the adapter owns those effects.",
         "Return only the schema-constrained result. For validated_progress, repair_required, or replan_required, fill every material field with public-safe evidence.",
-        "For those material results, preserve the actual delivery_batch_scale and delivery_outcome selected from the signed execution_profile's work and outcome requirements. Return work_evidence and validation_evidence as separate arrays of short public-safe strings; name the artifact or observed work in the first and the independent command or readback in the second. Omit both arrays for stop results.",
+        "For those material results, preserve the actual delivery_batch_scale and delivery_outcome selected from the signed execution_profile's work and outcome requirements. Return work_evidence and validation_evidence as separate non-empty arrays of short public-safe strings; name the artifact or observed work in the first and the independent command or readback in the second. For legacy requests without execution_profile, use null when evidence is not supplied. For stop results, set both evidence fields to null.",
         "For those material results, set path_delta_mode=material_replan only when this Turn changes a prior assumption, route, scope, acceptance rule, or stops prior work; then provide a complete bounded agent vision packet with goal_path_delta_v0 in agent_vision_json and leave vision_unchanged_reason empty.",
         "For routine continuation, retry, successor creation, or no-change replanning, set path_delta_mode=unchanged, leave agent_vision_json empty, and provide vision_unchanged_reason.",
         "When replan_action_packet requires a semantic delta, return progress_observation_json as a JSON-encoded typed_progress_observation_v0 with result_class, the observed surface_id/hypothesis_id/probe_kind or blocker/coverage fields, and opaque evidence_ids. Report only independently checked evidence; a plan summary or a vision change alone cannot substitute for the required observation. Otherwise leave this field empty.",
@@ -943,4 +949,4 @@ def run_codex_cli_host(
             raise BuiltInHostError("codex_cli_final_result_missing") from exc
         if not isinstance(result, dict):
             raise BuiltInHostError("codex_cli_final_result_not_object")
-        return result
+        return normalize_codex_result(request, result)

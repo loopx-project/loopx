@@ -131,7 +131,26 @@ claim matched evaluations, improved quality or acceptance. Partial/stale history
 retains the reader's coverage warning; refresh to retry. Closing and reopening the
 comparison does not change either source record.
 
-Choose **Download matches (JSON)** to keep all matching original records, including
+Choose **Reading report (Markdown)** in **Download format**, then **Download reading
+report** to read the matching evidence outside the workbench. The report includes
+original text, blocked reasons, source/revision identities, execution observations
+and native measurement values with their units, direction and comparison conditions.
+Unknown measurements remain unknown; zero remains zero. Source markup stays literal,
+so opening the report does not load embedded remote images. Report headings follow
+the interface language; original evidence is never translated by exporting it.
+
+在**下载格式**中选择**阅读报告（Markdown）**，再点**下载阅读报告**，即可离线阅读
+匹配的原文、受阻原因、版本与证据标识、执行观察，以及测量值、单位、方向和比较条件。
+未知测量不替换成零，原文标记不会加载远端图片。报告标题沿用界面语言，导出不翻译
+原始证据。报告保留筛选、部分历史和刷新失败提示，不代表分析或验收。
+
+![Choose a reading report for the currently filtered original evidence](../../docs/images/research-record-report.png)
+
+The narrow view above uses synthetic mixed-language records in the packaged
+workbench. Format selection stays beside the existing download action; it does
+not add a setup step or change the default Research overview.
+
+The default **Download matches (JSON)** still keeps all matching original records, including
 those not yet expanded on screen. The file includes the Goal, export time, literal
 filters and loaded/exported counts. `history_complete` and `refresh_failed` preserve
 the reading limits: a partial or stale snapshot is not current complete evidence.
@@ -144,14 +163,14 @@ loading or no records match, downloading is unavailable; retry after a download
 failure or refresh the history after a read failure.
 
 The synthetic packaged regression exercises native paged history, an old negative
-revision after 75 other findings, status filtering, full/filtered JSON downloads,
+revision after 75 other findings, status filtering, full/filtered JSON and Markdown downloads,
 original-version comparison (including unmeasured versus zero), partial/stale
 coverage, interrupted reads/downloads and retry, Goal isolation and
 desktop/narrow layouts without dispatching an Agent:
 
 ```sh
 node --experimental-strip-types --test apps/presentation/dashboard/src/features/personal-workspace/research-record-search.test.mjs apps/presentation/dashboard/src/features/personal-workspace/research-record-versions.test.mjs
-node --experimental-strip-types --test apps/presentation/dashboard/src/features/personal-workspace/research-record-export.test.mjs
+node --experimental-strip-types --test apps/presentation/dashboard/src/features/personal-workspace/research-record-export.test.mjs apps/presentation/dashboard/src/features/personal-workspace/research-record-report.test.mjs
 LOOPX_PERSONAL_WORKSPACE_PACKAGED=1 LOOPX_PERSONAL_WORKSPACE_SCENARIO=research-record-search node examples/personal-workspace-browser-smoke.mjs
 ```
 

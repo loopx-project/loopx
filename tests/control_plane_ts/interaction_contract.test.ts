@@ -9,6 +9,8 @@ import type { JsonObject } from "../../loopx/control_plane/effect_program.ts";
 import { interpretQuotaShouldRunPacket } from "../../loopx/control_plane/effect_program.ts";
 import {
   decodeInteractionContract,
+  selectedWorkTodo,
+  selectedWorkTodoId,
   projectInteractionExecution,
   INTERACTION_EXECUTION_FACTS_SCHEMA_VERSION,
   projectInteractionRequiredReads,
@@ -18,6 +20,23 @@ import {
   type AgentInteractionChannel,
 } from "../../loopx/control_plane/work_items/interaction_contract.ts";
 import { evaluateTodoResumeConditions } from "../../loopx/control_plane/todos/resume_condition.ts";
+
+test("shared selection keeps current typed identity separate from historical decoding", () => {
+  const selected = {todo_id: "fallback", future: {keep: true}};
+  const packet = {selected_todo: selected, task_orchestration_contract: {
+    schema_version: "task_orchestration_contract_v2", mode: "adaptive", primary_todo_id: " primary "}};
+  assert.deepEqual(selectedWorkTodo(packet),
+    {todo_id: "primary", source: "task_orchestration_contract.primary_todo_id"});
+  assert.equal(selectedWorkTodoId(packet), "primary");
+  assert.deepEqual(selectedWorkTodo(packet, "\uFEFFprimary\uFEFF"),
+    {todo_id: "\uFEFFprimary\uFEFF", source: "task_orchestration_contract.primary_todo_id"});
+  assert.strictEqual(selectedWorkTodo(packet, ""), selected);
+  const numeric = {...packet, task_orchestration_contract: {...packet.task_orchestration_contract, primary_todo_id: 7}};
+  assert.strictEqual(selectedWorkTodo(numeric), selected);
+  assert.equal(selectedWorkTodoId(numeric), "fallback");
+  assert.deepEqual(selectedWorkTodo(numeric, "7"),
+    {todo_id: "7", source: "task_orchestration_contract.primary_todo_id"});
+});
 
 test("only a positively qualified unbound scheduled wait can omit observation", () => {
   const todo = {todo_id: "todo_scheduled", status: "deferred", role: "agent",
