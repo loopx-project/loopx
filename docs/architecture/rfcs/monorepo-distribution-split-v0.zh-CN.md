@@ -570,6 +570,28 @@ R0 可以先于目录移动交付，但不代表内核合格。R3/R4 可选，�
   版本，D3 精确退役时间仍由发布负责人决定。M1 未关闭，不声明模块数量、加载性能、
   拆包或 R1 managed Turn 收益。
 
+### 2026-11-04 — M1 公开 status owner 与兼容 bridge
+
+- **变化：** 完整 `ChatStatusRequestMixin` 与 `goal_read_runtime_root` 实现迁入
+  `loopx.chat.status_api`，Chat HTTP 与 Todo detail 直接导入该 owner。刻画前置
+  [#8001](https://github.com/loopx-project/loopx/pull/8001) 已合入。
+- **公开兼容：** `loopx.chat_status_api` 是弃用的模块身份 alias，而非复制导出或第二
+  实现。历史 patch 点、import 和 pickle 查找到达同一 canonical 模块；reload 后
+  已导入函数仍使用活跃 globals。旧 import 每进程仅警告一次，新 import 不警告。
+  移动后至少保留一个 minor 版本，D3 精确退役期限仍由发布负责人决定。
+- **权限边界：** 同步重定向
+  `tests/architecture/test_source_session_registry_denial.py` 的两个精确 owner
+  路径项，全部拒绝断言及 `_discovery_registry` 例外不变。真实 HTTP 覆盖允许仅生命周期
+  registry 的发现，但在 collector 执行前拒绝完整 status。移动 presentation owner
+  不授予新的 runtime、来源、provider 或执行权威。
+- **证据：** 公开兼容测试新增 canonical-first import、模块身份、warning／reload
+  及两种 pickle 路径。既有 HTTP、File／SQLite 源路由、源丢失／恢复和 delivery review
+  测试保护原行为。解析为绝对 import 后的 AST 对比覆盖完整 owner；拒绝 oracle
+  仅有两个 owner 路径差异。
+- **剩余：** 这是 M1 的一个公开 owner 片，不关闭更广的公开 Chat 迁移、D3、发行物
+  拆分或 R1 managed minimal。保留 alias，因此顶层模块数量及预算无净减少；不声明
+  加载性能或长程成果收益。源码与隔离 wheel 验证不等于升级既有已安装宿主。
+
 ## 附录 B：决策日志
 
 | 日期 | 决策 | 负责人 / 批准 | 备选 | 变更的规范章节 |

@@ -16,7 +16,8 @@ from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
 
 
 @pytest.mark.parametrize("first_import", [
-    "loopx.chat_status_api", "loopx.chat_server", "loopx.chat.todo_detail",
+    "loopx.chat_status_api", "loopx.chat.status_api", "loopx.chat_server",
+    "loopx.chat.todo_detail",
 ])
 def test_historical_status_imports_survive_import_order_reload_and_pickle(first_import):
     # A fresh process avoids an earlier test silently choosing the import order.
@@ -28,14 +29,21 @@ from types import SimpleNamespace
 
 importlib.import_module(sys.argv[1])
 public = importlib.import_module('loopx.chat_status_api')
+canonical = importlib.import_module('loopx.chat.status_api')
 from loopx.chat_status_api import ChatStatusRequestMixin, goal_read_runtime_root
 from loopx.chat_server import ChatRequestHandler
 from loopx.chat.todo_detail import goal_read_runtime_root as todo_runtime_root
 
 assert issubclass(ChatRequestHandler, ChatStatusRequestMixin)
+assert public is canonical
+assert sys.modules['loopx.chat_status_api'] is canonical
+assert ChatStatusRequestMixin.__module__ == 'loopx.chat.status_api'
+assert goal_read_runtime_root.__module__ == 'loopx.chat.status_api'
 assert todo_runtime_root is goal_read_runtime_root
 assert pickle.loads(b'cloopx.chat_status_api\\nChatStatusRequestMixin\\n.') is ChatStatusRequestMixin
 assert pickle.loads(b'cloopx.chat_status_api\\ngoal_read_runtime_root\\n.') is goal_read_runtime_root
+assert pickle.loads(pickle.dumps(ChatStatusRequestMixin)) is ChatStatusRequestMixin
+assert pickle.loads(pickle.dumps(goal_read_runtime_root)) is goal_read_runtime_root
 
 # Reload replaces definitions, but already-imported functions keep live globals.
 assert importlib.reload(public) is public
@@ -47,6 +55,34 @@ assert todo_runtime_root(server) is None
 """
     result = subprocess.run(
         [sys.executable, "-c", code, first_import],
+        capture_output=True, text=True, timeout=60, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_historical_status_deprecation_is_once_per_process_and_not_on_canonical_import():
+    code = """
+import importlib
+import sys
+import warnings
+
+with warnings.catch_warnings(record=True) as seen:
+    warnings.simplefilter('always', DeprecationWarning)
+    canonical = importlib.import_module('loopx.chat.status_api')
+    assert not seen
+    public = importlib.import_module('loopx.chat_status_api')
+    assert public is canonical
+    assert importlib.import_module('loopx.chat_status_api') is canonical
+    assert importlib.reload(public) is canonical
+    del sys.modules['loopx.chat_status_api']
+    assert importlib.import_module('loopx.chat_status_api') is canonical
+    assert len(seen) == 1
+    assert seen[0].category is DeprecationWarning
+    assert 'loopx.chat.status_api' in str(seen[0].message)
+    assert 'at least one minor release' in str(seen[0].message)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code],
         capture_output=True, text=True, timeout=60, check=False,
     )
     assert result.returncode == 0, result.stderr
@@ -95,7 +131,39 @@ def test_historical_discovery_patch_only_tolerates_missing_registry(monkeypatch,
             public.goal_read_runtime_root(server)
 
 
-def test_historical_status_patch_points_reach_the_real_http_handler(monkeypatch, tmp_path):
+@pytest.fixture
+def status_server(tmp_path):
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.registry_path = tmp_path / "registry.json"
+    server.runtime_root = tmp_path / "runtime"
+    server.runtime_root_override = None
+    server.selected_goal_id = None
+    server.scan_roots = []
+    server.limit = 20
+    server.verbose = False
+    server.goal_subagent_configuration_enabled = False
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def get(query):
+        connection = http.client.HTTPConnection(*server.server_address, timeout=5)
+        try:
+            connection.request("GET", "/status.json" + query)
+            response = connection.getresponse()
+            return response.status, json.loads(response.read())
+        finally:
+            connection.close()
+
+    try:
+        yield server, get
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+def test_historical_status_patch_points_reach_the_real_http_handler(monkeypatch, status_server):
+    server, get = status_server
     registry = {"goals": [{"id": "alpha"}]}
     registry_reads, collected = [], []
 
@@ -119,30 +187,31 @@ def test_historical_status_patch_points_reach_the_real_http_handler(monkeypatch,
     monkeypatch.setattr("loopx.chat_status_api.attach_host_thread_activity", attach_activity)
     monkeypatch.setattr("loopx.chat_status_api.attach_host_delivery_windows", attach_delivery)
     monkeypatch.setattr("loopx.chat_status_api.codex_thread_observers", lambda **_: [])
-    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
-    server.registry_path = tmp_path / "registry.json"
-    server.runtime_root = tmp_path / "runtime"
-    server.runtime_root_override = None
-    server.selected_goal_id = None
-    server.scan_roots = []
-    server.limit = 20
-    server.verbose = False
-    server.goal_subagent_configuration_enabled = False
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    connection = http.client.HTTPConnection(*server.server_address, timeout=5)
-    try:
-        connection.request("GET", "/status.json?goal_id=alpha")
-        response = connection.getresponse()
-        payload = json.loads(response.read())
-        assert response.status == 200, payload
-        assert payload["compatibility_probe"] == "collector"
-        assert payload["compatibility_activity"] is True
-        assert payload["compatibility_delivery"] is True
-        assert len(collected) == 1 and collected[0]["goal_id"] == "alpha"
-        assert registry_reads == [server.registry_path, server.registry_path]
-    finally:
-        connection.close()
-        server.shutdown()
-        thread.join(timeout=5)
-        server.server_close()
+    code, payload = get("?goal_id=alpha")
+    assert code == 200, payload
+    assert payload["compatibility_probe"] == "collector"
+    assert payload["compatibility_activity"] is True
+    assert payload["compatibility_delivery"] is True
+    assert len(collected) == 1 and collected[0]["goal_id"] == "alpha"
+    assert registry_reads == [server.registry_path, server.registry_path]
+
+
+def test_lifecycle_registry_discovery_does_not_grant_status_execution(monkeypatch, status_server):
+    server, get = status_server
+    server.registry_path.write_text(json.dumps({
+        "schema_version": 1, "profile_id": "source_session_v1",
+        "goals": [{"id": "alpha"}],
+    }))
+    collected = []
+
+    def forbidden(**kwargs):
+        collected.append(kwargs)
+        pytest.fail("lifecycle metadata must not reach the status collector")
+
+    monkeypatch.setattr("loopx.chat.status_api.collect_status", forbidden)
+    code, directory = get("?view=workspace-directory")
+    assert code == 200, directory
+    assert [row["id"] for row in directory["goals"]] == ["alpha"]
+    code, refused = get("?goal_id=alpha")
+    assert code >= 400 and not refused["ok"]
+    assert collected == []
