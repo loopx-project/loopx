@@ -1376,8 +1376,11 @@ capability-ready Todo. That request is a pending selection, not a committed
 receipt identity. Quota first re-runs current lane arbitration and eligibility;
 a newly due hard-priority monitor, blocking user gate, or other preemption
 defers the request and keeps the receipt identity-less. A qualified request does
-not need to have appeared in the bounded suggestions. Only the upgraded response
-restores delivery and its settlement plan. If there is only one admitted action,
+not need to have appeared in the bounded suggestions. A qualified selection with
+a missing hard lease binds the same Todo/Turn for preparation only: delivery stays
+denied and the only action is the ordinary claim. The same-Turn guard must observe
+`execution_preparation.state=ready` before restoring delivery and its settlement
+plan. If there is only one admitted action,
 no portfolio selection phase is added.
 
 When selected work has meaningful typed lineage, waiting, sibling, or

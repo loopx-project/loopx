@@ -10,6 +10,7 @@ import sys
 import pytest
 
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.runtime.time import now_utc, utc_isoformat
 from loopx.control_plane.testing.canary_harness import write_fixture_registry, run_json_cli_result
@@ -66,6 +67,7 @@ def _run(
     provider: str,
     leases: list[dict[str, object]],
     *guard_args: str,
+    todos: list[dict[str, object]] | None = None,
 ):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     runtime = tmp_path / "runtime"
@@ -94,7 +96,7 @@ def _run(
     )
     projection = build_todo_runtime_shadow_projection(
         goal_id=GOAL,
-        todos=[_todo()],
+        todos=[_todo()] if todos is None else todos,
         leases=leases,
         handoff_mode="hard_lease",
     )
@@ -171,8 +173,9 @@ def test_projected_claim_prepares_the_same_todo_for_a_fresh_guard(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("multiple_candidates", [False, True])
 def test_projected_claim_prepares_the_same_receipt_bound_turn(
-    tmp_path, monkeypatch, provider,
+    tmp_path, monkeypatch, provider, multiple_candidates,
 ):
     unbound = _run(
         tmp_path,
@@ -184,11 +187,15 @@ def test_projected_claim_prepares_the_same_receipt_bound_turn(
         "--context-delivery",
         "off",
         "--begin-turn",
+        todos=[_todo(), {**_todo(), "todo_id": "todo_other_candidate", "index": 2}]
+        if multiple_candidates else None,
     )
     assert "heartbeat_receipt" in unbound, json.dumps(
         unbound, ensure_ascii=False, indent=2,
     )
     turn = unbound["heartbeat_receipt"]["turn_instance_id"]
+    if multiple_candidates:
+        assert unbound["interaction_contract"]["cli_channel"]["selection_required"] is True
     guard_code, before = run_json_cli_result(
         "quota", "should-run",
         "--runtime-profile", "codex_app_ssh_goal",
@@ -203,6 +210,18 @@ def test_projected_claim_prepares_the_same_receipt_bound_turn(
     assert guard_code == 0, json.dumps(before, ensure_ascii=False, indent=2)
     assert before["execution_preparation"]["state"] == "claim_required"
     assert before["heartbeat_receipt"]["turn_instance_id"] == turn
+    assert before["selected_todo"]["todo_id"] == TODO
+    assert before["selected_todo"]["selection_binding"] == "heartbeat_receipt"
+    assert before["normal_delivery_allowed"] is False
+    contract = before["interaction_contract"]
+    assert contract["agent_channel"]["delivery_allowed"] is False
+    assert contract["cli_channel"]["next_cli_actions"] == [
+        before["execution_preparation"]["claim"]["command_line"],
+    ]
+    assert "settlement_plan" not in contract["cli_channel"]
+    assert not read_canonical_todos_if_promoted(
+        runtime_root=tmp_path / "runtime", goal_id=GOAL, include_leases=True,
+    )["leases"]
 
     claim_code, claim = run_json_cli_result(
         *before["execution_preparation"]["claim"]["cli_args"],
