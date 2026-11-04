@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from ..agents.runtime_model import normalized_peer_agent_ids
 from ..effect_runtime import effect_runtime_result
@@ -107,7 +107,7 @@ def build_adaptive_task_orchestration_contract(
             normalize_todo_task_domain(value) for value in raw_domains
         ]
         allowed_domains = [domain for domain in normalized_domains if domain]
-    return effect_runtime_result(
+    contract = effect_runtime_result(
         "quota.task_orchestration.admit",
         {
             "agent_id": agent_id,
@@ -135,3 +135,4 @@ def build_adaptive_task_orchestration_contract(
             "max_children": int(max_children),
         },
     )
+    return cast("dict[str, Any] | None", contract)
