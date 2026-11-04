@@ -141,6 +141,82 @@ class AccountTests(unittest.TestCase):
         for path in self.manager.root.rglob('*'):
             self.assertEqual(path.stat().st_mode & 0o777, 0o700 if path.is_dir() else 0o600)
 
+    def test_selected_adopts_unique_external_slot_login(self):
+        self.ready()
+        self.assertEqual(self.manager.status()['active_slot'], 'a')
+        # An operator or another tool restores slot b's vault entry directly.
+        accounts.atomic(self.manager.auth, self.b)
+        self.assertEqual(self.manager.status()['active_slot'], 'b')
+
+    def test_adoption_waits_for_an_interrupted_transaction(self):
+        self.ready()
+        accounts.atomic(self.manager.auth, self.b)
+        before = self.manager.active.read_bytes()
+        accounts.atomic(self.manager.pending, b'{}\n')
+        status = self.manager.status()
+        self.assertTrue(status['recovery_required'])
+        self.assertFalse(status['current_login_matches'])
+        self.assertEqual(self.manager.active.read_bytes(), before)
+
+    def test_adoption_resumes_after_the_account_lock_releases(self):
+        self.ready()
+        accounts.atomic(self.manager.auth, self.b)
+        before = self.manager.active.read_bytes()
+        with self.manager.lock():
+            self.assertFalse(self.manager.status()['current_login_matches'])
+            self.assertEqual(self.manager.active.read_bytes(), before)
+        self.assertEqual(self.manager.status()['active_slot'], 'b')
+        self.assertEqual(self.manager.auth.read_bytes(), self.b)
+
+    def test_adoption_requires_the_restored_login_and_route_to_agree(self):
+        self.ready()
+        subscription_config = self.manager.config.read_bytes()
+        self.manager.enroll_api('openai-api', api_key='sk-loopx-relay-synthetic-local-token',
+                                base_url='http://127.0.0.1:32100/v1')
+        self.manager.switch('openai-api')
+        accounts.atomic(self.manager.auth, self.b)
+        before = self.manager.active.read_bytes(), self.manager.config.read_bytes()
+        self.assertFalse(self.manager.status()['current_login_matches'])
+        self.assertEqual((self.manager.active.read_bytes(), self.manager.config.read_bytes()), before)
+        # The external tool finishes restoring its matching subscription route.
+        accounts.atomic(self.manager.config, subscription_config)
+        self.assertEqual(self.manager.status()['active_slot'], 'b')
+
+    def test_status_recognizes_a_known_login_without_an_active_annotation(self):
+        self.ready()
+        accounts.atomic(self.manager.auth, self.b)
+        self.manager.active.unlink()
+        self.assertEqual(self.manager.status()['active_slot'], 'b')
+        self.assertTrue(self.manager.status()['current_login_matches'])
+
+    def test_adoption_keeps_an_ambiguous_identity_unselected(self):
+        self.ready()
+        accounts.atomic(self.manager.slot('c'), self.b)
+        accounts.atomic(self.manager.auth, self.b)
+        before = self.manager.active.read_bytes()
+        self.assertFalse(self.manager.status()['current_login_matches'])
+        self.assertEqual(self.manager.active.read_bytes(), before)
+
+    def test_adoption_does_not_skip_an_unreadable_slot(self):
+        self.ready()
+        accounts.atomic(self.manager.slot('c'), b'{}\n')
+        accounts.atomic(self.manager.auth, self.b)
+        before = self.manager.active.read_bytes()
+        with self.assertRaisesRegex(ValueError, 'Invalid native account cache'):
+            self.manager.selected()
+        self.assertEqual(self.manager.active.read_bytes(), before)
+
+    def test_unregistered_status_remains_unknown_without_creating_a_vault(self):
+        direct = accounts.encoded({'auth_mode': 'apikey', 'OPENAI_API_KEY': 'synthetic-external-key'})
+        for raw in (self.a, direct, b'null\n'):
+            with self.subTest(raw=raw):
+                accounts.atomic(self.manager.auth, raw)
+                before = {p: p.read_bytes() for p in self.home.rglob('*') if p.is_file()}
+                status = self.manager.status()
+                self.assertIsNone(status['active_slot'])
+                self.assertIsNone(status['current_login_matches'])
+                self.assertEqual({p: p.read_bytes() for p in self.home.rglob('*') if p.is_file()}, before)
+
     def test_native_enrollment_does_not_select_or_change_current_login(self):
         self.current()
         result = self.enroll_b()

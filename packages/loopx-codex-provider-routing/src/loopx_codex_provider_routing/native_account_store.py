@@ -330,12 +330,57 @@ class Accounts:
         state = self.state()
         if state:
             raw = read_private(self.auth)
-            if identity(raw) != state['identity']:
+            current = identity(raw)
+            if current != state['identity']:
+                adopted = self._adopt(current)
+                if adopted is not None:
+                    return adopted, raw
                 raise ValueError('GPT login changed outside the slot manager; inspect before overwriting any account')
             return state, raw
         if self.auth.exists():
+            raw = read_private(self.auth)
+            adopted = self._adopt(identity(raw))
+            if adopted is not None:
+                return adopted, raw
             raise ValueError('Register the current GPT login first: codex app enroll a --current')
         return None, None
+
+    def _adopt(self, current):
+        """Adopt the home login when it matches exactly one stored slot.
+
+        An operator or another tool can restore a slot's credentials directly,
+        for example when returning from the API route after an outage. Only a
+        unique identity match is adopted; an unknown or ambiguous login still
+        requires inspection.
+        """
+        folder = checked(self.root / 'slots')
+        if not folder.is_dir() or self.pending.exists():
+            return None
+        try:
+            # Metadata adoption must not race a credential transaction. Shared
+            # credential access does not rewrite or refresh the current login.
+            with self.lock(enrollment=True):
+                raw = read_private(self.auth)
+                if self.pending.exists() or identity(raw) != current:
+                    return None
+                config = self.config.read_bytes() if self.config.exists() else b''
+                expected = tomllib.loads(file_config(config, raw).decode())
+                actual = tomllib.loads(config.decode())
+                if (actual.get('model_provider', 'openai') != expected.get('model_provider', 'openai')
+                        or actual.get('openai_base_url') != expected.get('openai_base_url')
+                        or actual.get('forced_login_method') not in (None, expected['forced_login_method'])):
+                    return None
+                # Use the same complete, validated slot inventory as status;
+                # an unreadable slot is not proof that the match is unique.
+                matches = [entry.name for entry in sorted(folder.iterdir())
+                           if identity(read_private(self.slot(entry.name))) == current]
+                if len(matches) != 1:
+                    return None
+                state = {'slot': matches[0], 'identity': current, 'binding': self.binding}
+                atomic(self.active, encoded(state))
+                return state
+        except BlockingIOError:
+            return None  # The existing owner retries after its lock releases.
 
     def targets(self, key):
         if key in ('auth', 'config', 'active', 'binding'):
@@ -426,11 +471,14 @@ class Accounts:
                 kinds[child.name] = auth_kind(read_private(self.slot(child.name)))
         state = self.state()
         matches = None
-        if state and self.auth.exists():
+        if self.auth.exists():
             try:
-                matches = identity(read_private(self.auth)) == state['identity']
+                current = identity(read_private(self.auth))
+                if not state or current != state['identity']:
+                    state = self._adopt(current) or state
+                matches = current == state['identity'] if state else None
             except ValueError:
-                matches = False
+                matches = False if state else None
         return {'slots': names, 'slot_kinds': kinds, 'active_slot': state['slot'] if state else None,
                 'current_login_matches': matches, 'recovery_required': self.pending.exists(),
                 'home': str(self.spec['home']), 'frontend': str(self.spec['frontend']),

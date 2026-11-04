@@ -124,6 +124,14 @@ It does not implement hot login replacement, job replay or
 resumption of an interrupted turn. If every
 account is unavailable, it waits for the observed reset and checks again.
 
+Version 0.14.1 reconciles selected-slot metadata when the current login uniquely
+matches an existing slot and its configured provider route agrees. Status and
+launch preflight use the existing account locks; a pending transaction, occupied
+lock, ambiguous identity or inconsistent route retains the old selection.
+An invalid or unreadable slot is not skipped to manufacture a unique match.
+This reconciliation never rewrites credentials or configuration, and does not
+prove that an already running client has reloaded its login.
+
 ## Prerequisites and activation
 
 Install in the same Python environment as LoopX, then restart its App/Chat service:
