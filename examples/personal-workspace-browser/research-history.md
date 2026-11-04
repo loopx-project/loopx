@@ -46,6 +46,19 @@ original JSONL digests and sizes. The two source byte totals are 80,992 and
 20,575; their exact original serialization can be reconstructed as described
 below. No model or solver is called by this scenario.
 
+The attached work-conversation scenario also uses the complete Grid context-on
+fixture as a tool result, replacing repeated invented validation lines. The
+production attached reader and HTTP detail pages must deliver the entire JSON
+object into the packaged conversation, including every original observation and
+its diagnostic/unknown boundaries, at desktop and 390px widths. A single synthetic
+Unicode prefix retains the character-offset regression. The disposable host peer,
+tool call and carrier messages are synthetic; this does not reconstruct a real
+benchmark conversation or qualify model, installed App or original-host adoption.
+The peer registry pins its disposable runtime instead of consulting the operator's
+implicit default roots; conflicting defaults are covered by the HTTP regression.
+The separate artificial paging, transport-failure and heavy-tool stress cases
+remain boundary tests.
+
 The same core scenario now includes two record-rich histories from different
 tasks, with all **349 original events** retained:
 

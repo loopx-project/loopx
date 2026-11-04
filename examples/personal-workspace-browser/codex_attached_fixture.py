@@ -118,12 +118,20 @@ with (
                     self._send_json({"ok": True})
                     return
                 if self.path == "/fixture/work-records":
+                    # Genuine, already public-safe display data; only the host
+                    # protocol and carrier messages are synthetic. Keep one
+                    # non-BMP prefix to exercise character-based detail offsets.
+                    reference = (
+                        Path(__file__).resolve().parents[2]
+                        / "apps/presentation/dashboard/src/data/fixtures"
+                        / "edgebench-grid-context-on-20261103-history.json"
+                    )
                     records = [
                         {
                             "type": "function_call",
-                            "name": "validate",
+                            "name": "read_file",
                             "call_id": "work-1",
-                            "arguments": "Check the release artifact",
+                            "arguments": json.dumps({"path": reference.name}),
                         },
                         {
                             "type": "function_call_output",
@@ -131,9 +139,7 @@ with (
                             "output": [
                                 {
                                     "type": "text",
-                                    "text": "Validation output\n"
-                                    + "🧭验证结果\n" * 6000
-                                    + "COMPLETE TOOL RESULT",
+                                    "text": "🧭\n" + reference.read_text().strip(),
                                 }
                             ],
                         },
