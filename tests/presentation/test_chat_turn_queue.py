@@ -7,8 +7,8 @@ import pytest
 from test_chat_ordinary_project import ordinary  # noqa: F401
 
 
-def held_queue(ordinary, text="Check the second source.", attachments=None):
-    store, runtime, contexts, request, capture, *_ = ordinary
+def held_queue(project_fixture, text="Check the second source.", attachments=None):
+    store, runtime, contexts, request, capture, *_ = project_fixture
     sid = request("/api/chat/sessions", {"context_kind": "project",
         "project_ref": contexts.available()[0]["project_ref"]})[1]["session_id"]
     first = request(f"/api/chat/sessions/{sid}/turns", {
