@@ -786,6 +786,35 @@ Approval needs a reviewed decision, not implementation progress or silence.
   exact expiry remains a release-owner decision. M1 is open. No module-count,
   loading-performance, split-package or R1 managed-Turn benefit is claimed.
 
+### 2026-11-04 — M1 public status owner and compatibility bridge
+
+- **Delta:** the complete `ChatStatusRequestMixin` and `goal_read_runtime_root`
+  implementation moves to `loopx.chat.status_api`. Chat HTTP and Todo detail
+  import that owner directly. The characterization prerequisite
+  [#8001](https://github.com/loopx-project/loopx/pull/8001) is already merged.
+- **Public compatibility:** `loopx.chat_status_api` is a deprecated module-identity
+  alias, not copied exports or a second implementation. Historical patch points,
+  imports and pickle lookups reach the canonical module; reload retains live
+  globals for already-imported functions. The legacy import warns once per
+  process, while the canonical import does not warn. Retain the alias for at least
+  one minor release after the move; the release owner still decides D3's expiry.
+- **Authority boundary:** retarget both exact owner-path entries in
+  `tests/architecture/test_source_session_registry_denial.py`, leaving every
+  denial assertion and the `_discovery_registry` exception unchanged. Real HTTP
+  coverage permits lifecycle-only registry discovery but refuses full status
+  before collector execution. Moving the presentation owner grants no new
+  runtime, source, provider or execution authority.
+- **Evidence:** the public compatibility suite now includes canonical-first
+  import, module identity, warning/reload and both pickle paths. Existing HTTP,
+  File/SQLite source routing, source loss/recovery and delivery-review tests
+  protect the original behavior. Absolute-import-resolved AST comparison covers
+  the complete owner; the denial oracle differs only in its two owner paths.
+- **Remaining:** this is one public-owner M1 slice, not completion of the wider
+  public Chat migration, D3, split distributions or R1 managed minimal. The alias
+  means no net top-level module or budget reduction; no loading-performance or
+  long-horizon outcome benefit is claimed. Source and isolated-wheel qualification
+  do not establish an upgrade of an existing installed host.
+
 ## Appendix B: Decision log
 
 | Date | Decision | Owner / approval | Alternatives | Normative sections changed |

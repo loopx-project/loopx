@@ -42,7 +42,7 @@ from .chat.goal_subagent_api import (
     add_goal_subagent_routes,
 )
 from .capabilities.native_chat.model_settings_api import ChatModelSettingsRequestMixin
-from .chat_status_api import ChatStatusRequestMixin
+from .chat.status_api import ChatStatusRequestMixin
 from .chat_runtime import (
     STEERING_NOT_DELIVERED_CODES,
     ChatRuntimeController,
