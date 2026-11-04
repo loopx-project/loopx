@@ -1857,3 +1857,55 @@ invoice or full net-benefit result. The original five size holds and whole-C1
 writer/reader and outcome acceptance remain open. Consolidating journal writes
 needs its own interruption/recovery qualification; this ordering fix does not
 coalesce the durable Host-attempt checkpoint or confirmation boundary.
+
+
+### Current main integration and the original quota workload
+
+The complete-source path now reuses main's Progressive and Delta owners. The
+existing complete-decision owner checks the original source before presentation
+plans are applied. Saved-capture transport options change only the derived
+selection recipe; they do not mutate the signed original or create another
+admission. The shared source-preserving edit transport retains sparse numeric
+identity, current requirements, explicit-off behavior and same-capture recovery.
+The replaced native-quota and bounded-settlement adapters are retired rather
+than retained as competing production paths.
+
+The original fixed quota task is repeated against main `24f46874bc97` and the
+integrated runtime `675cd9d23b5b`: three repetitions of cold, warm and compaction
+recovery on File and SQLite (36 conditions). All conditions produce the same
+independently checked artifact and one debit, including replay. Both arms use
+the same Python executable and unchanged workload/observer. The provenance
+check covers 252 parent and internal-child observations. Counts include all
+caller output, accounting-child RPC directions and observed Python regular-file
+IO. Concurrent validation prevents a latency/CPU conclusion; native provider IO,
+model input/cache/output, billing and natural effectiveness remain unmeasured.
+
+| Provider / scenario | All caller stdout, main → candidate (bytes) | RPCs | RPC wire bytes |
+| --- | ---: | ---: | ---: |
+| File / cold | 55,754 → 35,834 | 242 → 209 | 1,468,459 → 1,474,720 |
+| File / warm | 68,136 → 62,107 | 334 → 292 | 2,151,083 → 2,217,775 |
+| File / recovery | 89,861 → 61,384 | 336 → 294 | 2,156,745 → 2,214,069 |
+| SQLite / cold | 56,155 → 35,908 | 242 → 209 | 1,470,295 → 1,476,592 |
+| SQLite / warm | 68,557 → 62,249 | 334 → 292 | 2,153,959 → 2,218,459 |
+| SQLite / recovery | 90,349 → 61,522 | 336 → 294 | 2,159,660 → 2,216,837 |
+
+These are medians, not an efficiency promotion. Warm output including baseline
+preparation falls about 9%, but current-step output excluding that preparation
+increases 7.0% on File and 6.2% on SQLite. Warm wire bytes increase about 3%;
+observed Python read-plus-write bytes increase about 4%. The primary
+same-capture full-to-selected-body reduction is about 87.8% on main and
+82.6% / 85.4% on the candidate's File / SQLite warm paths. Candidate cold and
+recovery select the full body (0% primary reduction); this is not zero net value.
+Fewer RPCs and a complete checked source do not establish overall net benefit.
+Original quota, writer/reader retirement and long-horizon acceptance remain open;
+these observations do not erase earlier negative cohorts or frozen size holds.
+
+The integrated source suites pass 448 complete-caller/settlement cases, 156
+context cases and 14 work-acceptance cases; their five and ten skipped cases
+remain explicitly outside this run. The two focused TypeScript modules pass
+67 tests and the control-plane typecheck passes. The isolated installed wheel
+passes 258 cases with one platform skip. Its 476 completed process observations
+and 136,450 Core-module observations show no source-origin violations; abrupt
+exit probes do not emit the audit's exit-time observation. All 1,897 compared
+packaged source files match the measured product source. This qualifies the
+packaged paths above, not live installation or the outstanding net-benefit gate.
