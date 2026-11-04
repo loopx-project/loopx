@@ -22,8 +22,8 @@ from .capabilities.steward_executor.allocation import (
     normalize_manager_executor_allocation,
 )
 from .capabilities.native_chat.model_settings import (
-    MODEL_SELECTION_UNSET as _MODEL_SELECTION_UNSET, normalize_agent_model_id, normalize_session_model_settings,
-    session_model_settings_supported,
+    MODEL_SELECTION_UNSET as _MODEL_SELECTION_UNSET, normalize_agent_model_id as normalize_agent_model_id,
+    normalize_session_model_settings, session_model_settings_supported, normalize_session_model_changes,
 )
 from .chat.event_cache import ChatEventCache
 from .chat_ingress import (
@@ -441,6 +441,7 @@ class ChatSessionStore(ChatIngressStore):
     def update_session(self, session_id: str, *, expected_statuses: set[str] | None = None,
                        expected_upstream_thread_id: str | None = None, metadata_review: bool = False,
                        quota_recovery: bool = False,
+                       answer_review_admission: bool = False,
                        **changes: Any) -> dict[str, Any]:
         path = self._session_path(session_id)
         with self._session_lock(session_id):
@@ -487,10 +488,14 @@ class ChatSessionStore(ChatIngressStore):
                     "requested_agent_model_id", "requested_agent_reasoning_effort",
                     "goal_id",
                     "agent_id", "executor_endpoint_id", "adapter_kind", "manager_quota_block",
+                    "answer_review",
                 }
                 unknown = set(changes) - allowed
                 if unknown:
                     raise ValueError(f"unsupported chat session fields: {sorted(unknown)}")
+                if "answer_review" in changes and (type(changes["answer_review"]) is not bool
+                        or changes["answer_review"] and payload.get("steward_context") is None):
+                    raise ValueError("answer review requires a bound steward and a boolean adapter marker")
                 if "manager_quota_block" in changes and "agent_id" not in changes:
                     raise ValueError("quota observation belongs to an executor transition")
                 if any(key in changes for key in ("agent_id", "executor_endpoint_id", "adapter_kind")):
@@ -503,10 +508,11 @@ class ChatSessionStore(ChatIngressStore):
                             or payload.get("upstream_mode") not in {"default", "chat"}
                             or not active or active.get("status") != "queued" or active.get("upstream_turn_id")
                             or active.get("origin") == "native_loopx"
-                            or ("-recovery-" in str(active.get("client_turn_id")) and not ((metadata_review or quota_recovery)
+                            or answer_review_admission and changes.get("answer_review") is not True
+                            or ("-recovery-" in str(active.get("client_turn_id")) and not ((metadata_review or quota_recovery or answer_review_admission)
                                 and payload.get("steward_context") is not None and endpoint == "codex"
                                 and str(active.get("client_turn_id")).endswith(
-                                    "-metadata-1" if metadata_review else "-quota-1")))
+                                    "-metadata-1" if metadata_review else "-review-1" if answer_review_admission else "-quota-1")))
                             or allocation["selection_policy"] != "flexible"
                             or allocation["configured_endpoint"] != "antigravity"
                             or set(allocation["eligible_endpoints"]) != {"antigravity", "codex"}
@@ -550,14 +556,7 @@ class ChatSessionStore(ChatIngressStore):
                         raise ValueError("only the owner manager may migrate to global identity")
                 if "upstream_thread_id" in changes:
                     changes["upstream_thread_id"] = _upstream_id(changes["upstream_thread_id"])
-                if "agent_model_id" in changes:
-                    changes["agent_model_id"] = normalize_agent_model_id(changes["agent_model_id"]) if changes["agent_model_id"] else None
-                for field in ("requested_agent_model_id", "requested_agent_reasoning_effort"):
-                    if field in changes:
-                        changes[field] = normalize_agent_model_id(changes[field]) if changes[field] is not None else None
-                for key in ("agent_reasoning_effort", "agent_service_tier"):
-                    if key in changes:
-                        changes[key] = normalize_agent_model_id(changes[key]) if changes[key] else None
+                normalize_session_model_changes(changes)
                 if "upstream_mode" in changes:
                     changes["upstream_mode"] = _opaque_id(changes["upstream_mode"], field="upstream_mode")
                 if "manager_authorization_scope_id" in changes:

@@ -1,5 +1,5 @@
 import {useEffect, useId, useLayoutEffect, useRef, useState} from "react";
-import {Keyboard} from "lucide-react";
+import {ExternalLink, Keyboard} from "lucide-react";
 import {AttachedConversationTimeline, type ConversationRecord, type ContentPage} from "./attached-conversation-record";
 import {composerKeyAction} from "./composer-keyboard";
 import {ContextHelp} from "./context-help";
@@ -411,7 +411,8 @@ export function AttachedConversation({goalId, binding, zh, reconnect}: {
       {recoveryError ? <p role="alert">{recoveryError} <button type="button" disabled={sending} onClick={nextReply}>{zh ? "已在原 App 核对，清理本页回执" : "Checked in original App; clear this receipt"}</button></p> : null}
       {sendNotice ? <p role="status">{sendNotice}</p> : null}
         <div className="attached-connection-status"><div><div className="attached-conversation-source">Codex App <ContextHelp label={zh ? "原会话来源与更新" : "Original conversation source and updates"}><p>{zh ? "已保存消息与工具记录自动更新；实时内容来自原宿主。" : "Saved messages and tools update automatically; live content comes from the original host."}</p></ContextHelp></div><p role="status">{!snapshot ? (zh ? "正在连接或连接不可用" : "Connecting or unavailable") : snapshot.can_reply ? (zh ? "原会话可回复" : "Original conversation accepts replies") : snapshot.activity.state === "turn_open" ? (zh ? "原会话有未结束执行；可在原 App 中追加输入" : "The original conversation has an unfinished turn; add input in the original App") : (zh ? "历史可读；回复连接或执行状态尚未确认" : "History available; reply connection or execution state unconfirmed")}</p></div>
-        <button type="button" className="attached-conversation-open" aria-disabled={opening} aria-busy={opening} onClick={() => void openOriginal()}>{zh ? "在 Codex App 中打开" : "Open in Codex App"}</button></div>
+        <button type="button" className="attached-conversation-open" aria-label={zh ? "在 Codex App 中打开" : "Open in Codex App"}
+          title={zh ? "在 Codex App 中打开" : "Open in Codex App"} aria-disabled={opening} aria-busy={opening} onClick={() => void openOriginal()}><ExternalLink size={18} aria-hidden="true" /></button></div>
         {openRequested ? <p role="status">{zh ? "已请求打开原会话，请在 Codex App 中查看。" : "Requested opening the original conversation; check Codex App."}</p> : null}
         {openError ? <p role="alert">{openError}</p> : null}
         <div className="attached-history-status" role="status">{loadingOlder ? (zh ? "正在加载消息…" : "Loading messages…") : readingHistory ? <span>{zh ? "正在回看历史" : "Reading history"}{unread ? (zh ? " · 有新活动" : " · new activity") : ""}</span> : null}</div>
