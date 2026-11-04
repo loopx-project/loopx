@@ -242,3 +242,15 @@ def session_model_settings_pending(session: dict[str, Any]) -> bool:
         session.get(requested) is not None and session[requested] != session.get(observed)
         for requested, observed in (("requested_agent_model_id", "agent_model_id"),
                                     ("requested_agent_reasoning_effort", "agent_reasoning_effort"))))
+
+
+def normalize_session_model_changes(changes: dict[str, object]) -> None:
+    """Normalize the existing mutable store fields through their shared grammar."""
+    if "agent_model_id" in changes:
+        changes["agent_model_id"] = normalize_agent_model_id(changes["agent_model_id"]) if changes["agent_model_id"] else None
+    for field in ("requested_agent_model_id", "requested_agent_reasoning_effort"):
+        if field in changes:
+            changes[field] = normalize_agent_model_id(changes[field]) if changes[field] is not None else None
+    for key in ("agent_reasoning_effort", "agent_service_tier"):
+        if key in changes:
+            changes[key] = normalize_agent_model_id(changes[key]) if changes[key] else None
