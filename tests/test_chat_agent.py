@@ -813,6 +813,49 @@ def test_historical_context_recovery_reads_only_proven_pre_execution_failure(tmp
     assert set(calls) <= {"thread/turns/list", "thread/items/list"}
 
 
+@pytest.mark.parametrize("fault", [None, "older", "active", "tool", "answer", "reasoning", "compaction",
+    "unknown", "correction", "foreign", "duplicate", "changed-items", "changed-turn", "native-error"])
+def test_disconnected_latest_interruption_requires_stable_user_only_inventory(tmp_path, monkeypatch, fault):
+    session = chat_agent.CodexChatAgentSession(process=SimpleNamespace(poll=lambda: None),
+        messages=queue.Queue(), thread_id="original", work_dir=tmp_path, response_timeout_sec=.2)
+    calls, counts = [], {"thread/turns/list": 0, "thread/items/list": 0}
+
+    def write(packet):
+        method, params = packet["method"], packet["params"]
+        calls.append(method)
+        assert params["threadId"] == "original"
+        if method == "thread/turns/list":
+            counts[method] += 1
+            rows = [{"id": "interrupted", "status": "interrupted"}]
+            if fault == "native-error":
+                rows[0]["error"] = {"codexErrorInfo": "cyberPolicy"}
+            if fault in {"older", "active"} or fault == "changed-turn" and counts[method] > 1:
+                rows.insert(0, {"id": "later", "status": "inProgress" if fault == "active" else "completed"})
+        elif method == "thread/items/list":
+            counts[method] += 1
+            rows = [{"turnId": "foreign" if fault == "foreign" else "interrupted",
+                "item": {"id": "user", "type": "userMessage"}}]
+            kind = {"tool": "commandExecution", "answer": "agentMessage", "unknown": "futureItem",
+                "correction": "userMessage", "duplicate": "userMessage", "reasoning": "reasoning",
+                "compaction": "contextCompaction"}.get(fault)
+            if fault == "changed-items" and counts[method] > 1:
+                kind = "commandExecution"
+            if kind:
+                rows.append({"turnId": "interrupted", "item": {
+                    "id": "user" if fault == "duplicate" else "extra", "type": kind}})
+        else:
+            pytest.fail("The original user-only inventory must not require an unsupported or unrelated native RPC")
+        session.messages.put({"id": packet["id"], "result": {"data": rows}})
+
+    monkeypatch.setattr(session, "_write", write)
+    proof = failed_request_readback(session, "interrupted")
+    assert proof == ({"thread_id": "original", "turn_id": "interrupted", "only_original_user_item": True,
+        "interrupted_before_execution": True} if fault is None else None)
+    assert set(calls) <= {"thread/turns/list", "thread/items/list"}
+    if fault is None:
+        assert counts == {"thread/turns/list": 2, "thread/items/list": 2}
+
+
 @pytest.mark.parametrize("compact", [False, True])
 @pytest.mark.parametrize("reverse", [False, True])
 @pytest.mark.parametrize("diagnostic", ["timed out", "failed"])

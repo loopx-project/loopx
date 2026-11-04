@@ -1166,14 +1166,19 @@ function planRoutingRecovery(recovery: JsonObject, row: JsonObject, current: Jso
   if (previous !== null && previous.failed_turn_id === failed.turn_id && previous[attemptKey] === undefined) return null;
   const raw = preparation ? recovery.preparation_observation : recovery.native_observation;
   const observed = raw == null ? null : requireJsonObject(raw, "pre-execution failure readback");
-  if (observed && !quota && !preparation && observed.pre_execution_routing_timeout !== true) return null;
+  const interrupted = observed?.interrupted_before_execution === true
+    && ["host_gate", "upstream_transport_failure"].includes(String(failed.error_code));
+  if (observed && !quota && !preparation && observed.pre_execution_routing_timeout !== true && !interrupted) return null;
   const no = {operation: "admit_turn", recovery_candidate: false, recovery_eligible: false};
   const reserved = previous?.failed_turn_id === failed.turn_id;
   const priorAttempt = previous?.[attemptKey] ?? 0;
   if (!Number.isSafeInteger(priorAttempt) || Number(priorAttempt) < 0) return no;
   const attempt = Number(priorAttempt) + (reserved ? 0 : 1);
+  const disconnected = current.status === "stale" && current.last_error_code === "transport_disconnected"
+    && ["host_gate", "upstream_transport_failure"].includes(String(failed.error_code));
   if (attempt < 1 || attempt > 3 || typeof current.upstream_thread_id !== "string"
-      || !current.upstream_thread_id || current.active_turn_id != null || current.status !== "ready") return no;
+      || !current.upstream_thread_id || current.active_turn_id != null
+      || (current.status !== "ready" && !disconnected)) return no;
   const now = typeof recovery.observed_at === "string" ? Date.parse(recovery.observed_at) : NaN;
   const completed = typeof failed.completed_at === "string" ? Date.parse(failed.completed_at) : NaN;
   const notBefore = completed + 60_000 * 2 ** (attempt - 1);
@@ -1208,6 +1213,7 @@ function planRoutingRecovery(recovery: JsonObject, row: JsonObject, current: Jso
     && (quota ? observed.codex_error_info === "usageLimitExceeded" && observed.only_original_user_item === true
       && observed.quota_available === true && typeof observed.quota_observed_at === "number"
       && now / 1000 >= observed.quota_observed_at && now / 1000 - observed.quota_observed_at <= 120
+      : interrupted ? recovery.stop_observed === false && observed.only_original_user_item === true
       : observed.codex_error_info === "other" && observed.only_pre_execution_items === true)};
 }
 
