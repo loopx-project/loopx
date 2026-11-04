@@ -1759,6 +1759,7 @@ print(json.dumps([
           text: completeTask, explore_result_node_refs: ["question"]}]}));
       emptyOwner = await startHistoryOwner([emptyFixture, taskFixture]);
       const previousOwner = owner; owner = emptyOwner; await previousOwner.close();
+      analysisFixture = false;
       await page.reload({waitUntil: "networkidle"});
       await history.getByRole("status").filter({hasText: "0 / 0"}).waitFor();
       const emptyHistory = history.locator('.research-history-empty');
@@ -1766,7 +1767,15 @@ print(json.dumps([
       await emptyHistory.getByRole('button', {name: '查看研究模式', exact: true}).click();
       assert(await page.locator("[data-testid='goal-research-mode']").evaluate(element => element.contains(document.activeElement)),
         'The empty-state action focuses the existing research-mode control');
+
+      analysisFixture = true;
+      await page.reload({waitUntil: "networkidle"});
+      await progress.locator(':scope > header select').selectOption('d'.repeat(64));
       await progress.locator(`.research-progress-scope[data-pack-id="${"d".repeat(64)}"]`).waitFor();
+      await history.getByRole('status').filter({hasText: '0 / 0'}).waitFor();
+      assert.equal(await emptyHistory.count(), 0,
+        'Saved measurements remain readable without a redundant empty-history setup card');
+      assert.match(await history.locator('.research-history-coverage').innerText(), /这个 Goal 尚无研究历程/);
 
       comparisonFixture = true;
       await progress.locator(':scope > header select').selectOption('a'.repeat(64));

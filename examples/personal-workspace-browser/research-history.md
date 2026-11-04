@@ -176,6 +176,13 @@ request identities. Other cited ranges return an explicit unavailable response;
 no transcript or failure stack is substituted. These analysis Goals have no
 Explore logs: their empty histories are preserved, separately from the recent
 real-history cases above.
+
+When saved analysis or native measurements exist without an Explore log, the
+missing-history status stays inline above the results. Goals without saved
+results retain their empty-history entry. Expand the retained-improvement value
+for the full baseline, retained candidate and citations; the compact summary does
+not change those source records.
+
 The same fixture also freezes the original registered feedback snapshot, whose
 native retention is unknown. Select it through **Evaluation scope / 评估范围**:
 the best valid value remains `0.849544264387785` and the last valid candidate

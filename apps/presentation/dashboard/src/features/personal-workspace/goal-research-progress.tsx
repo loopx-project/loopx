@@ -133,7 +133,7 @@ function RetainedImprovement({native, zh, onCitation}: {native: NonNullable<Rese
     {native.applicability === "historical" ? <p className="research-progress-warning" role="status">{zh ? "历史捕获 · 当前结果未核验" : "Historical capture · current result unverified"}</p> : null}
     <details><summary aria-label={`${label}: ${improvement.value === null ? (zh ? "未知" : "Unknown") : `${format(improvement.value)} ${outcomes.metric.unit}`}`}>
       <strong data-retained-improvement>{improvement.value === null ? "—" : format(improvement.value)}</strong>
-      <span>{improvement.value === null ? (zh ? "未知" : "Unknown") : outcomes.metric.unit} · {outcomes.metric.name}{improvement.baseline ? ` · ${zh ? "基线" : "baseline"} ${formatNativeMeasurement(improvement.baseline.value, zh)}` : ""}</span><ChevronDown size={14} aria-hidden/>
+      <span>{improvement.value === null ? (zh ? "未知" : "Unknown") : outcomes.metric.unit}</span><ChevronDown size={14} aria-hidden/>
     </summary><dl>
       {([[improvement.baseline, zh ? "比较基线" : "Comparison baseline"], [outcomes.retained, zh ? "实际保留" : "Actually retained"]] as const).map(([point, title]) => <div key={title}><dt>{title}</dt><dd>{point ? <button type="button" onClick={event => onCitation(point.citation, event.currentTarget)}>{String(point.value)} · {point.candidate_ref}<ArrowUpRight size={13} aria-hidden/></button> : (zh ? "未知" : "Unknown")}</dd></div>)}
       <div><dt>{zh ? "保留依据" : "Retention evidence"}</dt><dd>{improvement.retention_citation ? <button type="button" onClick={event => onCitation(improvement.retention_citation!, event.currentTarget)}>{zh ? "查看原文" : "Read original evidence"}<ArrowUpRight size={13} aria-hidden/></button> : (zh ? "未采集" : "Uncaptured")}</dd></div>
