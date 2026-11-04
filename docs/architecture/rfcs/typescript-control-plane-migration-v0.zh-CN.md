@@ -617,6 +617,11 @@ Legacy/File/SQLite 重试与负例只验收这个边界。较大错误与省掉 
 token／重试成本、source-mode 修复和常规短上下文／replan 完整历史仍是分别待验证的
 问题；不代表长目标或 provider 性能验收完成。
 
+Vision prepare 在既有 TypeScript owner 中集中报告可独立发现的数值预算问题；共享运行时
+传输可选、有界的 request-error 明细，Python 只展示，不复制校验规则。原有限制、原包内容、
+首条错误兼容性和写前拒绝保持。File/SQLite CLI 拒绝、修正包独立回读与固定调用者的
+base/head 对照只验收该恢复边界；模型采纳、账单、已安装行为与持续长程收益分别保留待验收。
+
 ### 交付语义：先修正规则，再迁移
 
 Replan 的义务结果规则现收敛到 `work_items/replan_semantics.ts`：接受结果选择、
