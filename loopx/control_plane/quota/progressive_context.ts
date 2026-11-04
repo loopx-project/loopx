@@ -388,7 +388,9 @@ export function initialContextReadPointers(context: JsonObject, decisionFields: 
   // Keep its original source, unknown coverage and read-before-work obligation
   // inline; the complete pointer list remains at this same captured address.
   // Unknown/future layouts stay whole rather than hiding a new obligation.
-  if (unread && Object.keys(unread).length === 4 && unread.coverage_confirmed === false
+  if (unread && Object.keys(unread).every(key => ["source", "coverage_confirmed", "read_before_dependent_work", "pointers", "source_blocks"].includes(key))
+      && (unread.source_blocks === undefined || Array.isArray(unread.source_blocks)
+        && unread.source_blocks.every(pointer => typeof pointer === "string")) && unread.coverage_confirmed === false
       && unread.read_before_dependent_work === true && Array.isArray(unread.pointers)
       && unread.pointers.every(pointer => typeof pointer === "string")
       && typeof source?.path === "string" && typeof source.sha256 === "string"

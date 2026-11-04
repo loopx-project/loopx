@@ -303,6 +303,26 @@ def _heartbeat_prompt_commands(
     return commands
 
 
+def _heartbeat_context_capture_activation(*, context_delivery: str | None, delta_delivery: str,
+        runtime_profile: str | None, scheduler_execution_context: Any, decision_output_root: Path | None,
+        decision_handoff_socket: str | None, codex_context_dir: str | None,
+        codex_context_root: str | None) -> tuple[dict[str, Any], str, str | None, str | None]:
+    from ..turn_driver.codex_context import context_delivery_activation
+    import os
+
+    activation = context_delivery_activation(context_delivery or "off", runtime_profile=runtime_profile,
+        scheduler_execution_context=scheduler_execution_context, delta_delivery=delta_delivery,
+        benchmark_mode=os.environ.get("LOOPX_EXECUTION_MODE")
+            if os.environ.get("LOOPX_CONTEXT_DELIVERY") == "on" else None)
+    if not activation["enabled"]:
+        codex_context_dir = codex_context_root = None
+    effective = "on" if activation["enabled"] else "off"
+    if context_delivery != "on" and not any((decision_output_root, decision_handoff_socket,
+            codex_context_dir, codex_context_root)):
+        effective = "off"  # Rendering a prompt does not start native transport.
+    return activation, effective, codex_context_dir, codex_context_root
+
+
 def build_heartbeat_prompt(
     *,
     goal_id: str,
@@ -393,21 +413,11 @@ def build_heartbeat_prompt(
         runtime_profile=runtime_profile,
         scheduler_execution_context=scheduler_execution_context,
     )
-    from ..turn_driver.codex_context import context_delivery_activation
-
-    import os
-
-    activation = context_delivery_activation(context_delivery or "off", runtime_profile=runtime_profile,
+    activation, effective_context_delivery, codex_context_dir, codex_context_root = _heartbeat_context_capture_activation(
+        context_delivery=context_delivery, delta_delivery=delta_delivery, runtime_profile=runtime_profile,
         scheduler_execution_context=scheduler_execution_context,
-        delta_delivery=delta_delivery,
-        benchmark_mode=os.environ.get("LOOPX_EXECUTION_MODE")
-            if os.environ.get("LOOPX_CONTEXT_DELIVERY") == "on" else None)
-    if not activation["enabled"]:
-        codex_context_dir = codex_context_root = None
-    effective_context_delivery = "on" if activation["enabled"] else "off"
-    if context_delivery != "on" and not any((decision_output_root, decision_handoff_socket,
-            codex_context_dir, codex_context_root)):
-        effective_context_delivery = "off"  # prompt rendering is not native capture activation
+        decision_output_root=decision_output_root, decision_handoff_socket=decision_handoff_socket,
+        codex_context_dir=codex_context_dir, codex_context_root=codex_context_root)
     decision_output_root = resolve_heartbeat_capture_root(
         decision_output_root,
         thin=thin, full=full, compact=compact, brief=brief,

@@ -442,3 +442,61 @@ def project_captured_context(
         # The original full payload is already available. An unavailable optional
         # codec/capture must not convert safe full delivery into an execution gate.
         return payload
+
+
+def context_index_fields(payload: dict[str, Any], children: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Serialize metadata for TS-verified addresses, preserving Python JSON values."""
+    fields = []
+    for child in children:
+        value: Any = payload
+        for key in child["path"]:
+            value = value[key]
+        field = {"pointer": child["pointer"], "type":
+            "object" if isinstance(value, dict) else "array" if isinstance(value, list)
+            else "null" if value is None else "boolean" if isinstance(value, bool)
+            else "string" if isinstance(value, str) else "number",
+            "bytes": len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))}
+        if isinstance(value, (dict, list)):
+            field["count"] = len(value)
+        fields.append(field)
+    return fields
+
+
+def context_selection_transport(payload: dict[str, Any]) -> dict[str, Any]:
+    """Keep address structure without retransmitting unused scalar prose.
+
+    The TS owner validates pointers; selected values still come from the fully
+    digest-checked original. Initial navigation and discovery need real scalar
+    values and do not use this adapter. JSON null takes four bytes, so replacing
+    only strings longer than two characters cannot increase request bytes.
+    Iteration preserves the original JSON reader's supported nesting depth.
+    """
+    result: dict[str, Any] = {}
+    pending: list[tuple[Any, Any]] = [(payload, result)]
+    while pending:
+        source, target = pending.pop()
+        for key, value in source.items() if isinstance(source, dict) else enumerate(source):
+            if isinstance(value, (dict, list)):
+                child: Any = {} if isinstance(value, dict) else [None] * len(value)
+                target[key] = child
+                pending.append((value, child))
+            else:
+                target[key] = None if isinstance(value, str) and len(value) > 2 else value
+    return result
+
+
+def context_selection_bytes(payload: dict[str, Any], selections: list[dict[str, Any]],
+                             *, list_fields: bool, list_depth: int | None) -> bytes:
+    """Render TS-verified addresses from original, digest-checked JSON values."""
+    views: list[dict[str, Any]] = []
+    for item in selections:
+        selected: Any = payload
+        for key in item["path"]:
+            selected = selected[key]
+        if list_fields:
+            views.append({"pointer": item["pointer"], "fields": context_index_fields(payload, item["children"])})
+        else:
+            views.append({"pointer": item["pointer"], "value": selected})
+    view_options = {"list_depth": list_depth} if list_depth is not None and list_depth != 1 else {}
+    return json.dumps({"schema_version": "context_capture_index_v1" if list_fields else "context_capture_selection_v1",
+        "selections": views, **view_options}, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"

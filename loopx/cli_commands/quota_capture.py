@@ -17,6 +17,9 @@ from ..control_plane.content_digest import BARE_SHA256_PATTERN
 from ..control_plane.effect_runtime import EffectRuntimeRejected, EffectRuntimeRemoteError, EffectRuntimeStartupError
 from ..control_plane.quota.error_codes import QuotaCommandValidationError, QuotaDecisionTransportError
 from ..control_plane.turn_driver.decision_capture import (
+    context_index_fields as _context_index_fields,
+    context_selection_transport as _context_selection_transport,
+    context_selection_bytes as _context_selection_bytes,
     validate_handoff_socket, CONTEXT_CAPTURE_READ_GUIDANCE, CONTEXT_CAPTURE_PAGE_GUIDANCE, context_capture_read_command,
     CONTEXT_CAPTURE_NAVIGATION_GUIDANCE,
     read_context_capture_file as _read_capture,
@@ -123,62 +126,10 @@ def _capture_page(path: Path, raw: bytes, digest: str, *, offset: int, size: int
     return best
 
 
-def _context_index_fields(payload: dict[str, Any], children: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Serialize metadata for TS-verified addresses, preserving Python JSON values."""
-    fields = []
-    for child in children:
-        value: Any = payload
-        for key in child["path"]:
-            value = value[key]
-        field = {"pointer": child["pointer"], "type":
-            "object" if isinstance(value, dict) else "array" if isinstance(value, list)
-            else "null" if value is None else "boolean" if isinstance(value, bool)
-            else "string" if isinstance(value, str) else "number",
-            "bytes": len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))}
-        if isinstance(value, (dict, list)):
-            field["count"] = len(value)
-        fields.append(field)
-    return fields
 
 
-def _context_selection_transport(payload: dict[str, Any]) -> dict[str, Any]:
-    """Keep address structure without retransmitting unused scalar prose.
-
-    The TS owner validates pointers; selected values still come from the fully
-    digest-checked original. Initial navigation and discovery need real scalar
-    values and do not use this adapter. JSON null takes four bytes, so replacing
-    only strings longer than two characters cannot increase request bytes.
-    Iteration preserves the original JSON reader's supported nesting depth.
-    """
-    result: dict[str, Any] = {}
-    pending: list[tuple[Any, Any]] = [(payload, result)]
-    while pending:
-        source, target = pending.pop()
-        for key, value in source.items() if isinstance(source, dict) else enumerate(source):
-            if isinstance(value, (dict, list)):
-                child: Any = {} if isinstance(value, dict) else [None] * len(value)
-                target[key] = child
-                pending.append((value, child))
-            else:
-                target[key] = None if isinstance(value, str) and len(value) > 2 else value
-    return result
 
 
-def _context_selection_bytes(payload: dict[str, Any], selections: list[dict[str, Any]],
-                             *, list_fields: bool, list_depth: int | None) -> bytes:
-    """Render TS-verified addresses from original, digest-checked JSON values."""
-    views: list[dict[str, Any]] = []
-    for item in selections:
-        selected: Any = payload
-        for key in item["path"]:
-            selected = selected[key]
-        if list_fields:
-            views.append({"pointer": item["pointer"], "fields": _context_index_fields(payload, item["children"])})
-        else:
-            views.append({"pointer": item["pointer"], "value": selected})
-    view_options = {"list_depth": list_depth} if list_depth is not None and list_depth != 1 else {}
-    return json.dumps({"schema_version": "context_capture_index_v1" if list_fields else "context_capture_selection_v1",
-        "selections": views, **view_options}, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
 
 
 def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, Any] | None = None,
@@ -607,6 +558,43 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
     register_native_context_view(context_directory,
         {**result, "ancestry": ancestry})
     return result
+
+
+def project_native_quota_context(payload: dict[str, Any], args: argparse.Namespace, *,
+                                 capture_directory: Path, decision_identity: tuple[str, str],
+                                 progressive_enabled: bool, reader_argv: list[str] | None) -> dict[str, Any]:
+    """Prepare one already-decided native view; callers retain receipt failures."""
+    from ..control_plane.turn_driver.codex_context import (
+        NativeContextSessionUnavailable, codex_context_directory, project_codex_context,
+    )
+    capture_id = hashlib.sha256((capture_directory / "decision.json").read_bytes()).hexdigest()
+    try:
+        directory = codex_context_directory(directory=args.codex_context_dir,
+            root=getattr(args, "codex_context_root", None), create=True)
+    except NativeContextSessionUnavailable:
+        directory = None  # Current full input, no fabricated native journal.
+    payload = project_codex_context(payload, directory=directory,
+        capture_directory=capture_directory, goal_id=decision_identity[0], agent_id=decision_identity[1],
+        surface="turn_envelope" if getattr(args, "turn_envelope", False) else "quota_packet",
+        capture_id=capture_id, continuity_generation=getattr(args, "_context_delivery_generation", None),
+        progressive_enabled=progressive_enabled)
+    recovery = payload.get("recovery")
+    view = native_context_capture_view(payload, capture_directory, context_directory=directory,
+        metadata={"capture_sha256": capture_id, **({"recovery": recovery} if recovery is not None else {})},
+        max_page_output_bytes=getattr(args, "max_page_output_bytes", None), reader_argv=reader_argv)
+    return model_context_reference(view, reader_argv=reader_argv)
+
+
+def progressive_context_or_current(payload: dict[str, Any], args: argparse.Namespace, *,
+                                   runtime_root: Path, directory: Path | None,
+                                   reader_argv: list[str] | None) -> dict[str, Any]:
+    """Optional stateless IO falls back to this complete decided input/receipt."""
+    try:
+        return progressive_context_capture_view(payload, args, runtime_root=runtime_root,
+            directory=directory, surface="turn_envelope" if getattr(args, "turn_envelope", False) else "quota_packet",
+            reader_argv=reader_argv)
+    except (QuotaDecisionTransportError, OSError, ValueError, EffectRuntimeRemoteError, EffectRuntimeStartupError):
+        return payload
 
 
 def progressive_context_capture_view(payload: dict[str, Any], args: argparse.Namespace, *,
