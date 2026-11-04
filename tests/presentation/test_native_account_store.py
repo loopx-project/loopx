@@ -148,6 +148,64 @@ class AccountTests(unittest.TestCase):
         accounts.atomic(self.manager.auth, self.b)
         self.assertEqual(self.manager.status()['active_slot'], 'b')
 
+    def test_adoption_waits_for_an_interrupted_transaction(self):
+        self.ready()
+        accounts.atomic(self.manager.auth, self.b)
+        before = self.manager.active.read_bytes()
+        accounts.atomic(self.manager.pending, b'{}\n')
+        status = self.manager.status()
+        self.assertTrue(status['recovery_required'])
+        self.assertFalse(status['current_login_matches'])
+        self.assertEqual(self.manager.active.read_bytes(), before)
+
+    def test_adoption_resumes_after_the_account_lock_releases(self):
+        self.ready()
+        accounts.atomic(self.manager.auth, self.b)
+        before = self.manager.active.read_bytes()
+        with self.manager.lock():
+            self.assertFalse(self.manager.status()['current_login_matches'])
+            self.assertEqual(self.manager.active.read_bytes(), before)
+        self.assertEqual(self.manager.status()['active_slot'], 'b')
+        self.assertEqual(self.manager.auth.read_bytes(), self.b)
+
+    def test_adoption_requires_the_restored_login_and_route_to_agree(self):
+        self.ready()
+        subscription_config = self.manager.config.read_bytes()
+        self.manager.enroll_api('openai-api', api_key='sk-loopx-relay-synthetic-local-token',
+                                base_url='http://127.0.0.1:32100/v1')
+        self.manager.switch('openai-api')
+        accounts.atomic(self.manager.auth, self.b)
+        before = self.manager.active.read_bytes(), self.manager.config.read_bytes()
+        self.assertFalse(self.manager.status()['current_login_matches'])
+        self.assertEqual((self.manager.active.read_bytes(), self.manager.config.read_bytes()), before)
+        # The external tool finishes restoring its matching subscription route.
+        accounts.atomic(self.manager.config, subscription_config)
+        self.assertEqual(self.manager.status()['active_slot'], 'b')
+
+    def test_status_recognizes_a_known_login_without_an_active_annotation(self):
+        self.ready()
+        accounts.atomic(self.manager.auth, self.b)
+        self.manager.active.unlink()
+        self.assertEqual(self.manager.status()['active_slot'], 'b')
+        self.assertTrue(self.manager.status()['current_login_matches'])
+
+    def test_adoption_keeps_an_ambiguous_identity_unselected(self):
+        self.ready()
+        accounts.atomic(self.manager.slot('c'), self.b)
+        accounts.atomic(self.manager.auth, self.b)
+        before = self.manager.active.read_bytes()
+        self.assertFalse(self.manager.status()['current_login_matches'])
+        self.assertEqual(self.manager.active.read_bytes(), before)
+
+    def test_adoption_does_not_skip_an_unreadable_slot(self):
+        self.ready()
+        accounts.atomic(self.manager.slot('c'), b'{}\n')
+        accounts.atomic(self.manager.auth, self.b)
+        before = self.manager.active.read_bytes()
+        with self.assertRaisesRegex(ValueError, 'Invalid native account cache'):
+            self.manager.selected()
+        self.assertEqual(self.manager.active.read_bytes(), before)
+
     def test_native_enrollment_does_not_select_or_change_current_login(self):
         self.current()
         result = self.enroll_b()
@@ -425,6 +483,29 @@ class AccountTests(unittest.TestCase):
         self.assertEqual(self.manager.slot('a').read_bytes(), self.a)
         with self.assertRaises(ValueError):
             apps.account_preflight(self.home, self.spec)
+
+    def test_direct_api_key_can_open_without_joining_the_native_vault(self):
+        self.current()
+        direct = accounts.encoded({'auth_mode': 'apikey',
+                                   'OPENAI_API_KEY': 'sk-proj-' + 'synthetic-project-key' * 2})
+        accounts.atomic(self.manager.auth, direct)
+        apps.account_preflight(self.home, self.spec)
+        self.assertFalse(self.manager.status()['current_login_matches'])
+        with self.assertRaises(ValueError):
+            self.manager.switch('a')
+        self.assertEqual(self.manager.auth.read_bytes(), direct)
+
+    def test_non_object_auth_retains_the_native_preflight_error(self):
+        self.current()
+        selected = self.manager.active.read_bytes()
+        for value in ([], None, True, 1, 'synthetic-invalid-cache'):
+            with self.subTest(value=value):
+                raw = accounts.encoded(value)
+                accounts.atomic(self.manager.auth, raw)
+                with self.assertRaisesRegex(ValueError, 'Invalid native account cache'):
+                    apps.account_preflight(self.home, self.spec)
+                self.assertEqual(self.manager.auth.read_bytes(), raw)
+                self.assertEqual(self.manager.active.read_bytes(), selected)
 
     def test_active_owner_refusal_has_no_vault_side_effects(self):
         self.idle.side_effect = ValueError('synthetic running process')

@@ -52,6 +52,14 @@ therefore never sent to the other route. A custom provider must not shadow the
 built-in `openai` provider, and profile overrides remain ineligible because their
 effective provider cannot be bound safely to the transaction.
 
+Every custom provider that can carry the loopback relay credential must declare
+its `base_url` (for example `http://127.0.0.1:57500/v1`). A definition without
+`base_url` resolves to `api.openai.com`; Codex context compaction can use that
+default even while another provider is selected, so the relay-scoped credential
+is presented to OpenAI and rejected with `401 invalid_api_key`. Installers that
+add chat transports should write the relay endpoint into each provider
+definition and verify it on readback.
+
 A local authenticated transport sends the original selected model and Responses
 body to OpenAI. An explicit upstream quota rejection, 401, 403 or temporary 429 can
 try the next configured key before output. Each key is attempted at most once per
@@ -115,6 +123,14 @@ Without this additional permission it continues to wait for closed clients.
 It does not implement hot login replacement, job replay or
 resumption of an interrupted turn. If every
 account is unavailable, it waits for the observed reset and checks again.
+
+Version 0.14.1 reconciles selected-slot metadata when the current login uniquely
+matches an existing slot and its configured provider route agrees. Status and
+launch preflight use the existing account locks; a pending transaction, occupied
+lock, ambiguous identity or inconsistent route retains the old selection.
+An invalid or unreadable slot is not skipped to manufacture a unique match.
+This reconciliation never rewrites credentials or configuration, and does not
+prove that an already running client has reloaded its login.
 
 ## Prerequisites and activation
 

@@ -75,6 +75,20 @@ def auth_kind(raw):
     return 'api' if obj.get('auth_mode') == 'apikey' else 'subscription'
 
 
+def external_api_auth(raw):
+    """Direct API-key login owned by Codex, not by the managed relay vault."""
+    try:
+        obj = json.loads(raw)
+        if not isinstance(obj, dict):
+            return False
+        key = obj.get('OPENAI_API_KEY')
+        return (obj.get('auth_mode') == 'apikey' and isinstance(key, str)
+                and bool(key) and not key.startswith('sk-loopx-relay-')
+                and not any(c.isspace() for c in key) and not obj.get('tokens'))
+    except (TypeError, ValueError):
+        return False
+
+
 def checked(path):
     path = Path(path)
     if any(p.is_symlink() for p in (path, *path.parents)):
@@ -339,22 +353,34 @@ class Accounts:
         unique identity match is adopted; an unknown or ambiguous login still
         requires inspection.
         """
-        folder = self.root / 'slots'
-        matches = []
-        if folder.is_dir() and not folder.is_symlink():
-            for entry in sorted(folder.iterdir()):
-                if entry.is_symlink() or not entry.is_dir():
-                    continue
-                try:
-                    if identity(read_private(entry / 'auth.json')) == current:
-                        matches.append(entry.name)
-                except (OSError, ValueError):
-                    continue
-        if len(matches) != 1:
+        folder = checked(self.root / 'slots')
+        if not folder.is_dir() or self.pending.exists():
             return None
-        state = {'slot': matches[0], 'identity': current, 'binding': self.binding}
-        atomic(self.active, encoded(state))
-        return state
+        try:
+            # Metadata adoption must not race a credential transaction. Shared
+            # credential access does not rewrite or refresh the current login.
+            with self.lock(enrollment=True):
+                raw = read_private(self.auth)
+                if self.pending.exists() or identity(raw) != current:
+                    return None
+                config = self.config.read_bytes() if self.config.exists() else b''
+                actual = tomllib.loads(config.decode())
+                expected = tomllib.loads(file_config(config, raw).decode())
+                if (actual.get('model_provider', 'openai') != expected.get('model_provider', 'openai')
+                        or actual.get('openai_base_url') != expected.get('openai_base_url')
+                        or actual.get('forced_login_method') not in (None, expected['forced_login_method'])):
+                    return None
+                # Use the same complete, validated slot inventory as status;
+                # an unreadable slot is not proof that the match is unique.
+                matches = [entry.name for entry in sorted(folder.iterdir())
+                           if identity(read_private(self.slot(entry.name))) == current]
+                if len(matches) != 1:
+                    return None
+                state = {'slot': matches[0], 'identity': current, 'binding': self.binding}
+                atomic(self.active, encoded(state))
+                return state
+        except BlockingIOError:
+            return None  # The existing owner retries after its lock releases.
 
     def targets(self, key):
         if key in ('auth', 'config', 'active', 'binding'):
@@ -445,13 +471,14 @@ class Accounts:
                 kinds[child.name] = auth_kind(read_private(self.slot(child.name)))
         state = self.state()
         matches = None
-        if state and self.auth.exists():
-            current = identity(read_private(self.auth))
-            if current != state['identity']:
-                adopted = self._adopt(current)
-                if adopted is not None:
-                    state = adopted
-            matches = current == state['identity']
+        if self.auth.exists():
+            try:
+                current = identity(read_private(self.auth))
+                if not state or current != state['identity']:
+                    state = self._adopt(current) or state
+                matches = bool(state and current == state['identity'])
+            except ValueError:
+                matches = False
         return {'slots': names, 'slot_kinds': kinds, 'active_slot': state['slot'] if state else None,
                 'current_login_matches': matches, 'recovery_required': self.pending.exists(),
                 'home': str(self.spec['home']), 'frontend': str(self.spec['frontend']),
