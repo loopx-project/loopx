@@ -1909,3 +1909,69 @@ and 136,450 Core-module observations show no source-origin violations; abrupt
 exit probes do not emit the audit's exit-time observation. All 1,897 compared
 packaged source files match the measured product source. This qualifies the
 packaged paths above, not live installation or the outstanding net-benefit gate.
+
+
+### Selected-reader and settled-record transport
+
+The explicit reader now sends only the source containers along the requested
+literal escaped addresses. The existing TypeScript selector still validates
+RFC 6901, array indexes, failed batches and their recovery parent; Python renders
+the original digest-checked values. Array lengths, container kinds, initial
+navigation, full discovery, historical pinned order and native section-read
+verification are retained. No additional cache, metadata file, pointer parser,
+read obligation or retention claim is introduced. Main's selected-source IO and
+shared native replay owner are reused.
+
+The combined refresh caller also requests a smaller final read from the existing
+TypeScript settlement owner. After that owner verifies a settled Turn, this
+explicit projection returns the same identity, controls and three receipts with
+six unused Run/event bodies set to null. Default/full reads and all pending
+recovery retain their complete original bodies. The optional internal RPC field
+changes neither admission nor accounting, and adds no CLI or product workflow.
+
+The unchanged original quota workload is repeated against main `886f2cdff4b2`
+with the same Python, materials, independent artifact check and replay: three
+repetitions of cold, warm and compaction recovery on File and SQLite, 36 conditions.
+All produce the same artifact and one debit. The 252 parent/accounting-child
+source observations are clean; the measured product source remains unchanged
+through the run. Medians include both RPC directions and all required reads:
+
+| Provider / scenario | All caller stdout, main → candidate (bytes) | RPCs | RPC wire bytes |
+| --- | ---: | ---: | ---: |
+| File / cold | 55,946 → 35,930 | 241 → 208 | 1,465,253 → 1,429,981 |
+| File / warm | 68,364 → 62,287 | 332 → 290 | 2,143,831 → 2,147,306 |
+| File / recovery | 90,181 → 61,556 | 334 → 292 | 2,149,657 → 2,143,784 |
+| SQLite / cold | 56,343 → 36,004 | 241 → 208 | 1,467,027 → 1,431,735 |
+| SQLite / warm | 68,793 → 62,429 | 332 → 290 | 2,146,719 → 2,149,912 |
+| SQLite / recovery | 90,666 → 61,694 | 334 → 292 | 2,152,475 → 2,146,508 |
+
+Warm RPC count falls 12.7%, but wire bytes still rise 0.16% / 0.15%. Current-step
+stdout excluding preparation rises 7.0% / 6.2%; observed Python read-plus-write
+bytes rise about 4%. The primary same-capture full-to-body reduction is 82.6%
+for the candidate's warm paths versus 87.8% for main. Candidate cold/recovery
+still select the complete body: 0% primary reduction does not mean zero net value.
+The earlier topology-only cohort also remained negative; it is not combined with
+this cohort. Lower cold/recovery transport does not establish overall benefit.
+CPU/latency, native provider IO, model input/cache/generated output, invoices and
+natural long-horizon outcomes remain unqualified. Earlier cohorts and frozen
+size holds retain their original results; original C1 acceptance stays open.
+
+Real public CLI replay preserves all 15 successful/rejected selection observations
+against main, including exact large integers, escaped keys, invalid indexes and
+whole-batch rejection. A dropped-source-structure mutation fails the independent
+value oracle through that same entrypoint. The settlement suite checks complete
+parity by default and throughout six recovery states; its 137 TypeScript tests
+and control-plane typecheck pass. Final installed-wheel and premerge readback
+are recorded with the submitted exact head, separately from live installation.
+
+The final isolated installed wheel passes 325 tests with one Linux-only skip;
+1,897 packaged source files match the measured product source. Completed-process
+module-origin audits are clean; abrupt exits remain outside that audit. The
+expanded source settlement run has 274 passes, four failures and one platform
+skip. Both File and SQLite failures reproduce unchanged on main `886f2cdff4b2`:
+a receipt-bound task becoming deferred returns `quota_skip` instead of its
+original closeout recovery, and due successor-replan replay loses its action.
+The positive guard records conflicting `should_run`/`delivery_allowed` facts.
+This admission/recovery consistency gap remains an explicit original-C1 hold;
+the smaller record projection is not used on those failing paths. No altered
+expectation or relaxed receipt rule is used to turn those failures into passes.
