@@ -72,7 +72,7 @@ def test_actual_producer_protects_before_socket_dispatch(monkeypatch):
             seen.append(request)
         def recv(self,size):return json.dumps({'schema_version':er.EFFECT_RUNTIME_RESPONSE_SCHEMA_VERSION,'request_id':'producer','ok':True,'result':{}}).encode()+b'\n'
     monkeypatch.setattr(er.socket,'create_connection',lambda *a,**k:Connection())
-    er._request_with_info({'token':'synthetic','host':'127.0.0.1','port':1},request_id='producer',method='goal.checkpoint_read_context.resolve',params={'large':'x'*2200000},timeout=2,large_local_snapshot=True)
+    er._request_with_info({'token':'synthetic','host':'127.0.0.1','port':1},request_id='producer',method='goal.checkpoint_read_context.resolve',params={'large':'x'*er.MAX_REQUEST_BYTES},timeout=2,large_local_snapshot=True)
     assert len(seen)==1 and not Path(seen[0]['response_sink']).exists()
 
 def test_large_protected_bytes_and_digest(snapshot):

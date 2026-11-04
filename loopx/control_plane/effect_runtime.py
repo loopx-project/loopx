@@ -70,6 +70,7 @@ DEFAULT_REQUEST_TIMEOUT_SECONDS = 10.0
 CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS = 45.0
 CANONICAL_AUTHORITY_READ_TIMEOUT_SECONDS = 15.0
 _RUNTIME_SOURCE_SUFFIXES = frozenset({".json", ".ts"})
+_RUNTIME_SOURCE_PATHS = frozenset({"runtime/private_permissions.py"})
 _RuntimeSourceSnapshot = tuple[tuple[str, int, int, int], ...]
 _SOURCE_DIGEST_SCHEMA_VERSION = "loopx_effect_runtime_source_digest_v1"
 _SOURCE_DIGEST_MAX_BYTES = 4096
@@ -305,8 +306,10 @@ def _scan_runtime_source_snapshot(root: Path) -> _RuntimeSourceSnapshot:
         if relative_directory == ".":
             relative_directory = ""
         for filename in sorted(filenames):
+            relative = Path(relative_directory, filename).as_posix()
             dot = filename.rfind(".")
-            if dot <= 0 or filename[dot:] not in _RUNTIME_SOURCE_SUFFIXES:
+            if ((dot <= 0 or filename[dot:] not in _RUNTIME_SOURCE_SUFFIXES)
+                    and relative not in _RUNTIME_SOURCE_PATHS):
                 continue
             source = Path(directory, filename)
             try:
@@ -319,7 +322,7 @@ def _scan_runtime_source_snapshot(root: Path) -> _RuntimeSourceSnapshot:
             except ValueError:
                 continue
             if stat.S_ISREG(metadata.st_mode):
-                snapshot.append((Path(relative_directory, filename).as_posix(),
+                snapshot.append((relative,
                     metadata.st_mtime_ns, metadata.st_ctime_ns, metadata.st_size))
     return tuple(sorted(snapshot))
 
