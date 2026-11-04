@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {progressiveContextPlan} from "../../loopx/control_plane/quota/progressive_context.ts";
+import {initialContextReadPointers, progressiveContextPlan} from "../../loopx/control_plane/quota/progressive_context.ts";
 import {FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE} from "../../loopx/control_plane/work_items/interaction_contract.ts";
 
 const outcome = {id: "o", objective: "Keep all requirements.", revision: 1, owner_agent_id: "a", todo_ids: ["t"],
@@ -10,6 +10,24 @@ const outcome = {id: "o", objective: "Keep all requirements.", revision: 1, owne
 const source = {source: "goal_acceptance", reason: "Adopt the current objective. " + FULL_OUTCOME_READ_GUIDANCE,
   content: {status: "loaded", goal_acceptance_contract: {outcome_requirements: {
     schema_version: "loopx_goal_outcomes_v0", outcomes: [outcome]}}}};
+
+test("initial navigation keeps unknown supporting-index obligations whole", () => {
+  const known = {coverage_confirmed: false, read_before_dependent_work: true,
+    pointers: ["/supporting/evidence"], source: {path: "complete.json", sha256: "fixture-digest"}};
+  const base = "/context_details/unread_context_index";
+  for (const index of [{...known, future_obligation: "Preserve the newly required stop."},
+    {...known, coverage_confirmed: true}, {...known, read_before_dependent_work: false},
+    {...known, pointers: [42]}, {...known, source: null}]) {
+    const context = {interaction_contract: {schema_version: "loopx_interaction_contract_v0"},
+      context_details: {instruction: "Read applicable supporting evidence before dependent work.", unread_context_index: index}};
+    const before = structuredClone(context);
+    assert.ok(initialContextReadPointers(context, []).includes(base));
+    assert.deepEqual(context, before);
+  }
+  assert.ok(initialContextReadPointers({interaction_contract: {schema_version: "loopx_interaction_contract_v0"},
+    context_details: {unread_context_index: known}}, []).includes(base));
+  assert.deepEqual(initialContextReadPointers({interaction_contract: {schema_version: "loopx_interaction_contract_v0"}}, []), []);
+});
 
 test("only supporting materials move; cumulative obligations and merged source guidance survive", () => {
   const payload = {ok: true, interaction_contract: {agent_channel: {work_context: {complete: true, sources: [source]}}}};

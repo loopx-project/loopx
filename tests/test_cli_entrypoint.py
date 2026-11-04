@@ -918,6 +918,142 @@ assert "loopx.cli" not in sys.modules
 	assert not list(tmp_path.iterdir())
 
 
+@pytest.mark.parametrize("arguments", [
+	["list"], ["show", "performance-diagnosis"],
+	["--help"], ["list", "--help"], ["show", "--help"],
+])
+def test_capability_discovery_skips_unselected_layers(tmp_path, arguments):
+	result = run_cli_main("loopx.entrypoint",
+		["--registry", str(tmp_path / "absent.json"), "--runtime-root", str(tmp_path / "runtime"),
+		 "capability", *arguments],
+		forbidden_modules=("loopx.cli", "loopx.chat_server", "loopx.chat_runtime",
+			"loopx.cli_commands.benchmark_dispatch", "loopx.capabilities.content_ops.cli"),
+		environment={"LOOPX_USAGE_PING": "0"})
+	assert result.returncode == 0, result.stderr
+	assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("format_name", ["json", "markdown"])
+@pytest.mark.parametrize("extension_mode", ["absent", "declared", "disabled"])
+@pytest.mark.parametrize("command", ["list", "show"])
+def test_capability_discovery_preserves_catalog_and_default_off(
+	tmp_path, format_name, extension_mode, command,
+):
+	from tests.capabilities.test_capability_extension_registry import _write_manifest
+	from loopx.extensions.runtime import default_extension_state_file, disable_extension, install_extension
+
+	registry, runtime = write_command_fixture(tmp_path)
+	declared_extension = extension_mode != "absent"
+	arguments = [command]
+	if command == "show":
+		arguments.append("sample-report" if declared_extension else "performance-diagnosis")
+	if declared_extension:
+		provider = None
+		if extension_mode == "disabled":
+			provider = tmp_path / "provider"
+			provider.write_text(f"#!{sys.executable}\nraise SystemExit(0)\n", encoding="utf-8")
+			provider.chmod(0o755)
+		manifest = _write_manifest(tmp_path / "extension.toml", entrypoint=provider)
+		arguments += ["--extension-manifest", str(manifest)]
+		if extension_mode == "disabled":
+			state_file = default_extension_state_file(runtime)
+			install_extension(manifest, state_file=state_file, execute=True)
+			disable_extension("sample-extension", state_file=state_file, execute=True)
+	argv = ["--registry", str(registry), "--runtime-root", str(runtime),
+		"--format", "markdown", "capability", *arguments, "--format", format_name]
+	before = {str(path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
+	selected = run_cli_main("loopx.entrypoint", argv, environment={"LOOPX_USAGE_PING": "0"})
+	full = run_cli_main("loopx.cli", argv, environment={"LOOPX_USAGE_PING": "0"})
+	assert selected.returncode == full.returncode == 0, (selected.stderr, full.stderr)
+	assert selected.stdout == full.stdout
+	assert selected.stderr == full.stderr == ""
+	assert {str(path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()} == before
+	assert runtime.exists() == (extension_mode == "disabled")
+	if format_name == "json":
+		payload = json.loads(selected.stdout)
+		assert payload["schema_version"] == (
+			"loopx_capability_catalog_v0" if command == "list" else "loopx_capability_detail_v0")
+		entries = payload["capabilities"] if command == "list" else [payload["capability"]]
+		assert any(item["id"] == ("sample-report" if declared_extension else "performance-diagnosis")
+			for item in entries)
+		assert all(item["id"] != "sample-internal-helper" for item in entries)
+		if declared_extension:
+			entry = next(item for item in entries if item["id"] == "sample-report")
+			assert entry["origin"] == "extension"
+			assert entry["provider_state"] == {
+				"declared": True, "installed": extension_mode == "disabled", "enabled": False, "ready": False}
+
+
+def test_capability_discovery_rejections_keep_canonical_diagnostics(tmp_path):
+	manifest = tmp_path / "invalid.toml"
+	manifest.write_text("not valid TOML [", encoding="utf-8")
+	prefix = ["--registry", str(tmp_path / "absent.json"),
+		"--runtime-root", str(tmp_path / "runtime"), "capability"]
+	cases = [["list", "--unknown"], ["show"], ["show", "absent-capability"],
+		["list", "--format", "yaml"], ["list", "--extension-manifest"],
+		["list", "--extension-manifest", str(tmp_path / "absent.toml")],
+		["list", "--extension-manifest", str(manifest)], ["list", "--ext"]]
+	assert run_cli_batch("loopx.entrypoint", [prefix + case for case in cases]) == (
+		run_cli_batch("loopx.cli", [prefix + case for case in cases]))
+	assert not (tmp_path / "runtime").exists()
+
+
+@pytest.mark.parametrize("command", ["inspect", "bind", "invoke"])
+def test_capability_non_discovery_retains_full_cli_patch_point(tmp_path, command):
+	arguments = ["inspect", "--goal-id", "fixture-goal"] if command == "inspect" else (
+		[command, "sample-report", "--goal-id", "fixture-goal", "--operation", "read", "--execute"])
+	if command == "invoke":
+		arguments += ["--input-json", str(tmp_path / "input.json")]
+	script = f"""
+import os
+os.environ["LOOPX_USAGE_PING"] = "0"
+import loopx.cli as full
+from loopx.entrypoint import main
+seen = []
+def original_path(args, **kwargs):
+    seen.append((args.capability_command, args.goal_id, getattr(args, "execute", False)))
+    return 73
+full.handle_capability_command = original_path
+assert main(["--registry", {str(tmp_path / "absent.json")!r}, "--runtime-root", {str(tmp_path / "runtime")!r},
+             "capability", *{arguments!r}]) == 73
+assert seen == [({command!r}, "fixture-goal", {command != 'inspect'!r})]
+"""
+	result = run_isolated_script(script)
+	assert result.returncode == 0, result.stderr
+	assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("arguments", [["list"], ["show", "performance-diagnosis"]])
+def test_capability_discovery_does_not_activate_providers(tmp_path, arguments):
+	from tests.capabilities.test_capability_extension_registry import _write_manifest
+
+	provider = tmp_path / "provider.py"
+	provider.write_text("raise AssertionError('discovery cannot run a provider')\n", encoding="utf-8")
+	manifest = _write_manifest(tmp_path / "extension.toml", entrypoint=provider)
+	script = f"""
+import os
+import sys
+os.environ["LOOPX_USAGE_PING"] = "0"
+sys.dont_write_bytecode = True
+os.chdir({str(tmp_path)!r})
+def reject_activation(event, args):
+    assert event not in ("subprocess.Popen", "os.system", "os.posix_spawn", "socket.connect"), event
+    if event == "open":
+        mode, flags = args[1:3]
+        assert not (isinstance(mode, str) and any(c in mode for c in "wax+")), args
+        assert not (isinstance(flags, int) and flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT)), args
+sys.addaudithook(reject_activation)
+from loopx.entrypoint import main
+assert main(["--registry", {str(tmp_path / "absent.json")!r}, "--runtime-root", {str(tmp_path / "runtime")!r},
+             "--format", "json", "capability", *{arguments!r}, "--extension-manifest", {str(manifest)!r}]) == 0
+"""
+	before = {str(path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
+	result = run_isolated_script(script, environment={"PATH": str(tmp_path / "no-node")})
+	assert result.returncode == 0, result.stderr
+	assert {str(path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()} == before
+	assert not (tmp_path / "runtime").exists()
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_selected_refresh_preview_keeps_canonical_state_without_full_cli(tmp_path, monkeypatch, provider):
 	from tests.control_plane.canonical_authority_fixture import initialize_canonical_source_fixture, isolate_sqlite_runtime

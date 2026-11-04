@@ -52,6 +52,14 @@ therefore never sent to the other route. A custom provider must not shadow the
 built-in `openai` provider, and profile overrides remain ineligible because their
 effective provider cannot be bound safely to the transaction.
 
+Every custom provider that can carry the loopback relay credential must declare
+its `base_url` (for example `http://127.0.0.1:57500/v1`). A definition without
+`base_url` resolves to `api.openai.com`; Codex context compaction can use that
+default even while another provider is selected, so the relay-scoped credential
+is presented to OpenAI and rejected with `401 invalid_api_key`. Installers that
+add chat transports should write the relay endpoint into each provider
+definition and verify it on readback.
+
 A local authenticated transport sends the original selected model and Responses
 body to OpenAI. An explicit upstream quota rejection, 401, 403 or temporary 429 can
 try the next configured key before output. Each key is attempted at most once per
@@ -115,6 +123,47 @@ Without this additional permission it continues to wait for closed clients.
 It does not implement hot login replacement, job replay or
 resumption of an interrupted turn. If every
 account is unavailable, it waits for the observed reset and checks again.
+
+Version 0.14.1 reconciles selected-slot metadata when the current login uniquely
+matches an existing slot and its configured provider route agrees. Status and
+launch preflight use the existing account locks; a pending transaction, occupied
+lock, ambiguous identity or inconsistent route retains the old selection.
+An invalid or unreadable slot is not skipped to manufacture a unique match.
+This reconciliation never rewrites credentials or configuration, and does not
+prove that an already running client has reloaded its login.
+
+Version 0.15.0 separates a consumer's API role from its model choice. Working
+Agents and Codex App retain subscription-first ordering: `api_fallback` permits
+API only after every allowed subscription has fresh measured exhaustion.
+Unknown allowance never authorizes paid fallback. The account settings also
+offer `steward_api_role`: `primary` prefers the existing API key pool for the
+steward, `fallback` follows subscription fallback, and `disabled` excludes API
+from the steward. An absent field preserves the prior fallback configuration.
+Steward API primary does not require enabling subscription automation.
+
+The steward uses a separate authenticated loopback route and a process-only
+token excluded from shell tool environments. Upstream keys stay in the same private
+key owner. Thread configuration selects this model transport without rewriting
+the desktop login or copying credentials/history into project stores. Explicit
+native provider overrides and independently authenticated project stores retain
+their chosen transport. Changes apply between Turns; they authorize neither
+redispatch nor replay of an interrupted request. A model-list check is not proof
+of inference allowance. Known quota/authentication/permission/rate-limit
+rejections may try another key before output; unknown network effects or an
+already started stream never replay. API primary unavailability allows the
+existing endpoint pool to consider its subscription route; it does not move a
+worker to API. The API role is local vocabulary owned by this optional account
+provider, not a new Core execution authority or Goal state.
+
+In **Settings → Model Provider configuration**, keep the working-Agent checkbox
+for subscription exhaustion. Use **Steward API use → Prefer API** for an
+independent API primary; **Disabled** revokes it, including after the last key
+is removed. The saved selector reads back the choice. These canonical guide
+illustrations use synthetic accounts / 当前操作指南使用合成账号数据：
+
+![Independent account priorities, desktop / 独立账号优先级，桌面](docs/assets/account-workload-primary-desktop.png)
+
+![Independent account priorities, narrow / 独立账号优先级，窄屏](docs/assets/account-workload-primary-narrow.png)
 
 ## Prerequisites and activation
 

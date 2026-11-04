@@ -165,7 +165,14 @@ def account_preflight(home, spec):
     if manager.pending.exists():
         raise ValueError('Interrupted account operation; run codex app recover with GPT closed')
     if manager.state():
-        manager.selected()  # Compare identity only; refreshed tokens may differ.
+        try:
+            manager.selected()  # Compare identity only; refreshed tokens may differ.
+        except ValueError:
+            # Direct API-key login belongs to Codex, while the native vault only
+            # owns relay credentials. Opening must not migrate or replace it.
+            if not manager.auth.exists() or not accounts.external_api_auth(
+                    accounts.read_private(manager.auth)):
+                raise
 
 
 def account_idle(home, spec, read_only_owners=()):

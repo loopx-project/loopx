@@ -552,7 +552,7 @@ def _heartbeat_commands(
     }
     agent_scope = scope_by_type.get(agent_type, scope_by_type["other-agent"])
     scheduler_binding = scheduler_command_binding_for_agent_type(agent_type)
-    renderer_binding = {"visible_goal_host": "traex-cli"} if agent_type == "traex-cli" else {}
+    renderer_binding: dict[str, Any] = {"visible_goal_host": "traex-cli"} if agent_type == "traex-cli" else {}
     commands = {
         "heartbeat_prompt_json": render_heartbeat_prompt_json_command(
             goal_id,

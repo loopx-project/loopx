@@ -157,6 +157,14 @@ class LarkGoalTopicRuntimeService:
                     # backoff. Retain its fairness count until the source is
                     # actually removed, so earlier hints cannot starve later work.
                     attempted = {path: count for path, count in attempted.items() if path.exists()}
+                    for path in paths:
+                        attempted.setdefault(path, 0)
+                    # A scan is not an attempt. Keep unsubmitted discoveries in
+                    # this same fairness map when the pool is full; discovery's
+                    # read-only backoff must not hide them after a slot opens.
+                    # Reconciliation re-reads the source and Core authority.
+                    paths = list(dict.fromkeys([
+                        *(path for path, count in attempted.items() if count == 0), *paths]))
                     owner_attention = getattr(transport, "owner_attention", None)
                     attention_ready = (owner_attention is not None and attention is None
                         and time.monotonic() >= attention_due and owner_attention.has_enabled())

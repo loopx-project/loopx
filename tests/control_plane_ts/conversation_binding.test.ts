@@ -4,7 +4,7 @@ import {createHash} from "node:crypto";
 import {planConversationBinding, resolveBoundConversation, planBoundConversationRequest,
   stewardCommand, authorizeStewardCreation, resolveConversationAgentTarget,
   listLocalBoundSessions} from "../../loopx/control_plane/collaboration/conversation_binding.ts";
-import {resolveConversationScope, projectConversationIdentity} from "../../loopx/control_plane/collaboration/conversation_scope.ts";
+import {resolveConversationScope, projectConversationIdentity, stewardConversationIdentity} from "../../loopx/control_plane/collaboration/conversation_scope.ts";
 import {stewardManagedBasis} from "../../loopx/control_plane/collaboration/steward_managed_mode.ts";
 
 const project = {kind: "project_workspace", project_ref: "a".repeat(24), workspace_path: "/authorized/notes",
@@ -18,6 +18,88 @@ const observation = {transport_ref: row.transport_ref, provider_ref: row.provide
 const current = {schema_version: "loopx_chat_conversation_bindings_v0", revision: 0, bindings: []};
 const request = {current, expected_revision: 0, operation: "configure", binding: row, observation,
   available_projects: [project]};
+
+test("settled historical native work permits only one restricted steward answer review", () => {
+  const selected = {...row, context_kind: "steward", grant: "portfolio_read", goal_ids: [], executor_endpoint_id: "antigravity"};
+  const configured = planConversationBinding({...request, binding: selected}).state;
+  const source = {source_ref: "e".repeat(24), sender_ref: row.operator_ref, private_human_message: true};
+  const context = resolveBoundConversation({current: configured, binding_id: row.binding_id,
+    observation, available_projects: [project], ...source}).context;
+  const ref = "f".repeat(24), message = "Analyze existing evidence";
+  const session = {session_id: "original", goal_id: "loopx-manager", agent_id: "antigravity",
+    agent_model_id: "gemini-4-argon-high", upstream_mode: "default", status: "ready", upstream_thread_id: "native",
+    active_turn_id: null, channel_id: `manager.external.native.${row.binding_id}.${source.source_ref}`, steward_context: context};
+  const failed = {session_id: "original", turn_id: "failed", client_turn_id: `external-${ref}`, message, origin: "lark",
+    status: "failed", delta_count: 0, response: null, upstream_turn_id: "native-failed", error_code: "antigravity_step_error",
+    started_at: "2026-01-01T00:00:00Z", completed_at: "2026-01-01T00:00:10Z"};
+  const at = Date.parse("2026-01-01T00:10:00Z") / 1000;
+  const anchor = {thread_id: "native", start_step_index: 10, input_sha256: "a".repeat(64)};
+  const proof = {...anchor, request_ref: ref, execution_id: "original-execution", end_step_index: 14, total_steps: 16,
+    input_created_at: "2026-01-01T00:00:05Z", read_only_review: true, no_final_answer: true, effects_observed: true,
+    visible_results: [{commandLine: "already ran", exitCode: 0, combinedOutput: "observed"}]};
+  const allocation = {schema_version: "manager_executor_allocation_v0", selection_policy: "flexible",
+    configured_endpoint: "antigravity", executor_endpoint: "codex", allocation_reason: "flexible_availability_fallback",
+    configuration_revision: "current-pool", available: true, eligible_endpoints: ["antigravity", "codex"]};
+  const configuration = {status: "ready", selection_policy: "flexible", executor_endpoint: "antigravity",
+    eligible_endpoints: ["antigravity", "codex"], configuration_revision: "current-pool"};
+  const capacity = {model_id: session.agent_model_id, account_ref: "c".repeat(64), remaining_fraction: 0,
+    reset_time: "2026-01-08T00:00:00Z", observed_at: at, quota_exhausted: true, normal_completion: false,
+    alternate_executor: {allocation, observed_at: at}};
+  const packet = {request: {request_ref: ref, command: null, status: "accepted", delivery_verified: true,
+    message, origin: "lark", binding_id: row.binding_id, session_id: "original", turn_id: "failed", source},
+    binding: selected, current_session: session, context_recovery: {version: 22, failed_turn: failed,
+      observed_at: "2026-01-01T00:10:00Z", steering_observed: false, stop_observed: false, attachments_present: false,
+      source_verified: true, queued_input_present: false, later_source_input_present: true,
+      native_input: anchor, native_observation: proof, metadata_capacity: capacity, executor_configuration: configuration}};
+  const plan = planBoundConversationRequest(packet);
+  assert.equal(plan.recovery_eligible, true);
+  assert.equal(plan.answer_executor, "codex");
+  assert.equal(plan.answer_review, true);
+  assert.equal(plan.read_only_review, true);
+  assert.equal(plan.quota_attempt, undefined);
+  assert.equal(plan.client_turn_id, `external-${ref}-recovery-22-review-1`);
+  assert.equal(planBoundConversationRequest({...packet, context_recovery: {...packet.context_recovery,
+    metadata_capacity: {alternate_executor: capacity.alternate_executor}}}).recovery_eligible, true,
+    "a verified alternate route does not depend on an unrelated primary quota read");
+  for (const change of [{source_verified: false}, {stop_observed: true}, {steering_observed: true},
+    {attachments_present: true}, {queued_input_present: true}, {native_input: null}, {metadata_capacity: null},
+    {metadata_capacity: {...capacity, alternate_executor: null}},
+    ...[{visible_results: []}, {visible_results: [{commandLine: "unknown", exitCode: null}]}, {thread_id: "other"},
+      {input_sha256: "b".repeat(64)}, {no_final_answer: false}, {effects_observed: false},
+      {end_step_index: 12}, {end_step_index: 17}].map(value => ({native_observation: {...proof, ...value}}))]) {
+    assert.notEqual(planBoundConversationRequest({...packet,
+      context_recovery: {...packet.context_recovery, ...change}}).recovery_eligible, true);
+  }
+  const policy = stewardConversationIdentity({context, answer_review: true});
+  const config = policy.host_config as {features: Record<string, unknown>;
+    permissions: {loopx_workspace_only_read: {network: {enabled: boolean}}}};
+  assert.equal(config.features.shell_tool, false);
+  assert.equal(config.features.apply_patch_freeform, false);
+  assert.equal(config.permissions.loopx_workspace_only_read.network.enabled, false);
+  const host = stewardConversationIdentity({context, answer_review: true, answer_review_host_read: true});
+  assert.equal(host.permissions_profile, "loopx_steward_host_read");
+  const hostConfig = host.host_config as {features: Record<string, unknown>;
+    permissions: {loopx_steward_host_read: {filesystem: Record<string, unknown>; network: {enabled: boolean}}}};
+  assert.equal(hostConfig.features.shell_tool, true);
+  assert.equal(hostConfig.features.apply_patch_freeform, false);
+  assert.equal(hostConfig.permissions.loopx_steward_host_read.filesystem[":root"], "read");
+  assert.equal(hostConfig.permissions.loopx_steward_host_read.network.enabled, false);
+  assert.equal(stewardConversationIdentity({context, metadata_review: true, answer_review_host_read: true}).permissions_profile,
+    "loopx_workspace_only_read", "a formatter cannot gain the trusted-owner read subset");
+  assert.throws(() => stewardConversationIdentity({context, metadata_review: true, answer_review: true,
+    answer_review_host_read: true}), /exclusive/);
+  const reservation = {version: 22, failed_turn_id: "failed", client_turn_id: plan.client_turn_id,
+    answer_review: true, read_only_review: true};
+  const admitted = {session_id: "original", turn_id: "reviewed", client_turn_id: plan.client_turn_id, message, origin: "lark"};
+  assert.equal(planBoundConversationRequest({...packet, request: {...packet.request, context_recovery: reservation},
+    context_recovery: {...packet.context_recovery, native_observation: null, admitted_turn: admitted}}).admitted_turn_id, "reviewed");
+  const pending = {request: {...packet.request, turn_id: "reviewed", context_recovery: reservation},
+    current_session: session, pending_observation: {stop_observed: false,
+      turn: {...admitted, status: "completed", response: {message: "Partial direct answer", gate: {kind: "host_tool_gate", summary: "Missing evidence"}}}}};
+  assert.equal(planBoundConversationRequest(pending).pending, true);
+  assert.equal(planBoundConversationRequest({...pending, pending_observation: {...pending.pending_observation,
+    turn: {...pending.pending_observation.turn, response: {message: "Complete direct answer", gate: null}}}}).pending, false);
+});
 
 test("an anchored pre-execution Argon quota failure resumes only through fresh original-source admission", () => {
   const selected = {...row, context_kind: "steward", grant: "portfolio_read", goal_ids: [], executor_endpoint_id: "antigravity"};
@@ -243,6 +325,20 @@ test("native terminal recovery adopts a result without Turn admission or lost fa
   assert.equal(plan.operation, "adopt_native_result");
   assert.equal(plan.recovery_eligible, true);
   assert.equal(plan.client_turn_id, undefined);
+  const anchor = {thread_id: "native", start_step_index: proof.start_step_index, input_sha256: proof.input_sha256};
+  const historicalResult = {...packet, context_recovery: {...packet.context_recovery, native_input: anchor,
+    native_observation: {...proof, latest_input_verified: false, end_step_index: 6}}};
+  assert.equal(planBoundConversationRequest(historicalResult).recovery_eligible, true);
+  assert.equal(planBoundConversationRequest(historicalResult).client_turn_id, undefined);
+  for (const change of [{native_input: null}, {source_verified: false}, {stop_observed: true},
+    {native_input: {...anchor, input_sha256: "9".repeat(64)}},
+    {native_input: {...anchor, start_step_index: 3}},
+    {native_input: {...anchor, thread_id: "other"}},
+    ...[null, 5, 8, 9].map(end_step_index => ({native_observation: {
+      ...historicalResult.context_recovery.native_observation, end_step_index}}))]) {
+    assert.equal(planBoundConversationRequest({...historicalResult,
+      context_recovery: {...historicalResult.context_recovery, ...change}}).recovery_eligible, false);
+  }
   for (const field of ["input_sha256", "answer_sha256"]) {
     for (const invalid of [null, false, 1, [], {}, "", "1".repeat(63), "1".repeat(65),
       "A".repeat(64), `sha256:${"1".repeat(64)}`]) {
@@ -1131,6 +1227,33 @@ test("local input cannot impersonate a group participant or inherit its workspac
     project_context: selected.context, origin: "web"}).kind, "unavailable");
 });
 
+test("pending batches preserve individual decisions and cannot enter execution or recovery", () => {
+  const request = {request_ref: "f".repeat(24), command: null, status: "accepted",
+    session_id: "original", turn_id: "failed"};
+  const turn = {session_id: "original", turn_id: "failed", status: "failed", error_code: "usage_limit_exceeded"};
+  const packet = {request, current_session: {session_id: "original", status: "ready"},
+    pending_observation: {turn, stop_observed: false}};
+  const observations = [packet,
+    {...packet, current_session: null},
+    {...packet, current_session: {...packet.current_session, status: "closed"}},
+    {...packet, pending_observation: {turn, stop_observed: true}},
+    ...[null, {...turn, error_code: "policy"}, {...turn, turn_id: "foreign"},
+      {...turn, status: "completed", response: {message: "Partial", proposals: [], gate: null,
+        protected_action: null, unfinished_work: {remaining: "Retained work", dependency: "offline", effects_settled: true}}}]
+      .map(value => ({...packet, pending_observation: {turn: value, stop_observed: false}}))];
+  const before = structuredClone(observations);
+  assert.deepEqual(planBoundConversationRequest({pending_observations: observations}),
+    {pending_flags: observations.map(item => planBoundConversationRequest(item).pending)});
+  assert.deepEqual(observations, before);
+  assert.deepEqual(planBoundConversationRequest({pending_observations: []}), {pending_flags: []});
+  for (const value of [null, {}, Array(65).fill(packet), [packet, {...packet, request: {}}],
+    [packet, {request, current_session: packet.current_session}],
+    [packet, {...packet, context_recovery: {}}], [{pending_observations: []}]]) {
+    assert.throws(() => planBoundConversationRequest({pending_observations: value}));
+  }
+  assert.throws(() => planBoundConversationRequest({pending_observations: [packet], request}));
+});
+
 test("quota backlog projection retires explicit lifecycle stops, not unavailable recovery", () => {
   const original = {request_ref: "f".repeat(24), command: null, status: "accepted",
     session_id: "original", turn_id: "failed"};
@@ -1160,7 +1283,7 @@ test("quota backlog projection retires explicit lifecycle stops, not unavailable
 });
 
 for (const errorCode of ["response_timeout", "upstream_transport_failure",
-  "antigravity_rpc_error", "antigravity_transport_error", "antigravity_step_error"]) {
+  "antigravity_rpc_error", "antigravity_transport_error", "antigravity_step_error", "runtime_error", "server_restarted"]) {
 test(`delivered ${errorCode} notices retain the exact failed request, including other executors`, () => {
   const request = {request_ref: "f".repeat(24), command: null, status: "accepted",
     session_id: "original", turn_id: "timed-out", delivery_verified: true};

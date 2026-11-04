@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
+
 
 from ..todos.contract import normalize_todo_claimed_by, normalize_todo_id
 from ..work_items.delivery_outcome import MATERIAL_DELIVERY_OUTCOMES
@@ -15,7 +16,7 @@ def goal_latest_run(goal: dict[str, Any]) -> dict[str, Any]:
     """Return the latest run object for one goal, or an empty mapping."""
 
     latest_runs = (
-        goal.get("latest_runs")
+        cast(list[Any], goal.get("latest_runs"))
         if isinstance(goal.get("latest_runs"), list)
         else []
     )
@@ -28,7 +29,7 @@ def _run_is_unchanged_monitor_observation(run: dict[str, Any]) -> bool:
     if str(run.get("classification") or "") != QUOTA_MONITOR_POLL_CLASSIFICATION:
         return False
     monitor_event = (
-        run.get("monitor_event") if isinstance(run.get("monitor_event"), dict) else {}
+        cast(dict[str, Any], run.get("monitor_event")) if isinstance(run.get("monitor_event"), dict) else {}
     )
     if monitor_event.get("material_change") is True or run.get("material_change") is True:
         return False
@@ -77,7 +78,7 @@ def consecutive_unchanged_monitor_observations(
         if not _run_is_unchanged_monitor_observation(run):
             break
         monitor_event = (
-            run.get("monitor_event")
+            cast(dict[str, Any], run.get("monitor_event"))
             if isinstance(run.get("monitor_event"), dict)
             else {}
         )
@@ -124,11 +125,11 @@ def build_monitor_debt_arbitration(
 
 def goal_latest_runs(status_payload: dict[str, Any], *, goal_id: str) -> list[dict[str, Any]]:
     run_history = (
-        status_payload.get("run_history")
+        cast(dict[str, Any], status_payload.get("run_history"))
         if isinstance(status_payload.get("run_history"), dict)
         else {}
     )
-    goals = run_history.get("goals") if isinstance(run_history.get("goals"), list) else []
+    goals = cast(list[Any], run_history.get("goals")) if isinstance(run_history.get("goals"), list) else []
     goal = next(
         (
             candidate
@@ -139,7 +140,7 @@ def goal_latest_runs(status_payload: dict[str, Any], *, goal_id: str) -> list[di
     )
     if not isinstance(goal, dict):
         return []
-    runs = goal.get("latest_runs") if isinstance(goal.get("latest_runs"), list) else []
+    runs = cast(list[Any], goal.get("latest_runs")) if isinstance(goal.get("latest_runs"), list) else []
     return [run for run in runs if isinstance(run, dict)]
 
 
@@ -202,7 +203,7 @@ def recent_external_monitor_observation_unchanged(
             continue
         if str(run.get("classification") or "") != QUOTA_MONITOR_POLL_CLASSIFICATION:
             continue
-        monitor_event = run.get("monitor_event") if isinstance(run.get("monitor_event"), dict) else {}
+        monitor_event = cast(dict[str, Any], run.get("monitor_event")) if isinstance(run.get("monitor_event"), dict) else {}
         monitor_mode = str(monitor_event.get("monitor_mode") or "").strip()
         if monitor_event.get("material_change") is True:
             return None
@@ -242,7 +243,7 @@ def latest_unchanged_monitor_observation(
             continue
         if classification != QUOTA_MONITOR_POLL_CLASSIFICATION:
             return None
-        monitor_event = run.get("monitor_event") if isinstance(run.get("monitor_event"), dict) else {}
+        monitor_event = cast(dict[str, Any], run.get("monitor_event")) if isinstance(run.get("monitor_event"), dict) else {}
         if not _run_is_unchanged_monitor_observation(run):
             return None
         monitor_mode = str(monitor_event.get("monitor_mode") or "").strip()

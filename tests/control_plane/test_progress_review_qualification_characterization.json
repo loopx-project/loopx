@@ -1,0 +1,841 @@
+{
+  "empty": {
+    "context": {
+      "policy": {"contract_revision": null, "drift_threshold": 2, "mode": "shadow", "schema_version": "progress_review_policy_v0", "signal": "noul"},
+      "receipts": [],
+      "summary": {
+        "authority": "none",
+        "contract_revision": null,
+        "drift_counts": {"choice": 0, "noul": 0},
+        "drift_threshold": 2,
+        "latest": null,
+        "mode": "shadow",
+        "pending_receipts": 0,
+        "read_state": "missing",
+        "receipt_count": 0,
+        "rejected_receipts": 0,
+        "schema_version": "progress_review_status_v0",
+        "signal": "noul",
+        "stale_receipts": 0,
+        "status_counts": {}
+      }
+    },
+    "markdown": "# LoopX Status\n\n- ok: `None`\n- registry: `None`\n- runtime_root: `None`\n- goals: `None`\n- runs: `None`\n- projection: 🔴 no projection envelope; freshness and coverage unknown\n- contract: ok=None, errors=None, warnings=None, checks=None\n- global_registry: available=None, ok=None, findings=None, high=None, action=None, info=None\n\n## Attention Queue\n- summary: items=None, needs_user_or_controller=None, needs_controller=None, needs_codex=None, watching_external_evidence=None, watching_monitor=None\n- `None`: status=None phase=None waiting_on=None severity=None source=None\n  - project_asset_source: project_asset\n  - project_asset: owner= gate= stop=\n\n## Run History\n- summary: goals=None, runs=None\n- none",
+    "status_review": {
+      "authority": "none",
+      "contract_revision": null,
+      "drift_counts": {"choice": 0, "noul": 0},
+      "drift_threshold": 2,
+      "latest": null,
+      "mode": "shadow",
+      "pending_receipts": 0,
+      "read_state": "missing",
+      "receipt_count": 0,
+      "rejected_receipts": 0,
+      "schema_version": "progress_review_status_v0",
+      "signal": "noul",
+      "stale_receipts": 0,
+      "status_counts": {}
+    }
+  },
+  "manual_legacy": {
+    "context": {
+      "policy": {"contract_revision": null, "drift_threshold": 2, "mode": "shadow", "schema_version": "progress_review_policy_v0", "signal": "noul"},
+      "receipts": [
+        {
+          "authority": "none",
+          "contract_revision": "f0369fccc1c2c86117197ae78432722d31ed600d0e3b6f6bd6908fd79f91d793",
+          "drift_signal": {"choice": true, "noul": true},
+          "event_id": "ce36863f51b6baf9d16397ffb3e9af506b284a816f72d487e55943c1fd974d6d",
+          "evidence_id": "5108deb71ee1d00d8e14ad48f2ddee3dca264528a5ae802ac5a682ee11ecc0d7",
+          "evidence_scope": {"coverage": "declared_file_net_change", "criterion_binding": {"criteria_sha256": "b081817a898310d49f65b65f567c59324cbf8b598aa11f5359b8955f1133728a", "origin": "operator_study"}, "files": []},
+          "goal_id": "synthetic-managed-research",
+          "judgments": {"choice": {"increment": "no_new_evidence", "relation": "off_goal"}, "noul": {"behavior_change": 0.05, "evidence_increment": 0.1, "serves_acceptance": 0.04}},
+          "label_probability_threshold": 0.6,
+          "model": "fixture-v1",
+          "question_version": "scoped-progress-sentinel-v2",
+          "reason": null,
+          "receipt_id": "ce36863f51b6baf9d16397ffb3e9af506b284a816f72d487e55943c1fd974d6d",
+          "recorded_at": 1700000000.0,
+          "run": {"agent_id": "worker", "generated_at": "2026-09-21T00:00:01Z", "todo_id": null, "turn_instance_id": "turn-1"},
+          "schema_version": "progress_review_receipt_v0",
+          "sequence": 0,
+          "signal_rule_version": "progress_review_signal_rule_v1",
+          "status": "completed",
+          "timing_ns": {"assessment_total": 1200000},
+          "usage": {"input_tokens": 1000}
+        },
+        {
+          "authority": "none",
+          "contract_revision": "f0369fccc1c2c86117197ae78432722d31ed600d0e3b6f6bd6908fd79f91d793",
+          "drift_signal": {"choice": true, "noul": true},
+          "event_id": "ce36863f51b6baf9d16397ffb3e9af506b284a816f72d487e55943c1fd974d6d",
+          "evidence_id": "5108deb71ee1d00d8e14ad48f2ddee3dca264528a5ae802ac5a682ee11ecc0d7",
+          "goal_id": "synthetic-managed-research",
+          "judgments": {"choice": {"increment": "no_new_evidence", "relation": "off_goal"}, "noul": {"behavior_change": 0.05, "evidence_increment": 0.1, "serves_acceptance": 0.04}},
+          "label_probability_threshold": 0.6,
+          "model": "fixture-v1",
+          "question_version": "scoped-progress-sentinel-v2",
+          "reason": null,
+          "receipt_id": "ce36863f51b6baf9d16397ffb3e9af506b284a816f72d487e55943c1fd974d6d",
+          "recorded_at": 1700000000.0,
+          "run": {"agent_id": "worker", "generated_at": "2026-09-21T00:00:01Z", "todo_id": null, "turn_instance_id": "turn-1"},
+          "schema_version": "progress_review_receipt_v0",
+          "sequence": 0,
+          "signal_rule_version": "progress_review_signal_rule_v1",
+          "status": "completed",
+          "timing_ns": {"assessment_total": 1200000},
+          "usage": {"input_tokens": 1000}
+        }
+      ],
+      "summary": {
+        "authority": "none",
+        "contract_revision": null,
+        "drift_counts": {"choice": 2, "noul": 2},
+        "drift_threshold": 2,
+        "latest": {
+          "drift_signal": {"choice": true, "noul": true},
+          "event_id": "ce36863f51b6baf9d16397ffb3e9af506b284a816f72d487e55943c1fd974d6d",
+          "evidence_id": "5108deb71ee1d00d8e14ad48f2ddee3dca264528a5ae802ac5a682ee11ecc0d7",
+          "evidence_scope": {"coverage": "declared_file_net_change", "criterion_binding": {"criteria_sha256": "b081817a898310d49f65b65f567c59324cbf8b598aa11f5359b8955f1133728a", "origin": "operator_study"}, "files": []},
+          "judgments": {"choice": {"increment": "no_new_evidence", "relation": "off_goal"}, "noul": {"behavior_change": 0.05, "evidence_increment": 0.1, "serves_acceptance": 0.04}},
+          "model": "fixture-v1",
+          "question_version": "scoped-progress-sentinel-v2",
+          "run": {"agent_id": "worker", "generated_at": "2026-09-21T00:00:01Z", "todo_id": null, "turn_instance_id": "turn-1"},
+          "status": "completed"
+        },
+        "mode": "shadow",
+        "newest_receipt_contract_revision": "f0369fccc1c2c86117197ae78432722d31ed600d0e3b6f6bd6908fd79f91d793",
+        "pending_receipts": 0,
+        "read_state": "observed",
+        "receipt_count": 2,
+        "rejected_receipts": 0,
+        "schema_version": "progress_review_status_v0",
+        "signal": "noul",
+        "stale_receipts": 0,
+        "status_counts": {"completed": 2}
+      }
+    },
+    "markdown": "# LoopX Status\n\n- ok: `None`\n- registry: `None`\n- runtime_root: `None`\n- goals: `None`\n- runs: `None`\n- projection: 🔴 no projection envelope; freshness and coverage unknown\n- contract: ok=None, errors=None, warnings=None, checks=None\n- global_registry: available=None, ok=None, findings=None, high=None, action=None, info=None\n\n## Attention Queue\n- summary: items=None, needs_user_or_controller=None, needs_controller=None, needs_codex=None, watching_external_evidence=None, watching_monitor=None\n- `None`: status=None phase=None waiting_on=None severity=None source=None\n  - project_asset_source: project_asset\n  - project_asset: owner= gate= stop=\n\n## Run History\n- summary: goals=None, runs=None\n- none",
+    "status_review": {
+      "authority": "none",
+      "contract_revision": null,
+      "drift_counts": {"choice": 2, "noul": 2},
+      "drift_threshold": 2,
+      "latest": {
+        "drift_signal": {"choice": true, "noul": true},
+        "event_id": "ce36863f51b6baf9d16397ffb3e9af506b284a816f72d487e55943c1fd974d6d",
+        "evidence_id": "5108deb71ee1d00d8e14ad48f2ddee3dca264528a5ae802ac5a682ee11ecc0d7",
+        "evidence_scope": {
+          "coverage": "declared_file_net_change",
+          "criterion_binding": {"criteria_sha256": "b081817a898310d49f65b65f567c59324cbf8b598aa11f5359b8955f1133728a", "origin": "operator_study"},
+          "files": []
+        },
+        "judgments": {
+          "choice": {"increment": "no_new_evidence", "relation": "off_goal"},
+          "noul": {"behavior_change": 0.05, "evidence_increment": 0.1, "serves_acceptance": 0.04}
+        },
+        "model": "fixture-v1",
+        "question_version": "scoped-progress-sentinel-v2",
+        "run": {"agent_id": "worker", "generated_at": "2026-09-21T00:00:01Z", "todo_id": null, "turn_instance_id": "turn-1"},
+        "status": "completed"
+      },
+      "mode": "shadow",
+      "newest_receipt_contract_revision": "f0369fccc1c2c86117197ae78432722d31ed600d0e3b6f6bd6908fd79f91d793",
+      "pending_receipts": 0,
+      "read_state": "observed",
+      "receipt_count": 2,
+      "rejected_receipts": 0,
+      "schema_version": "progress_review_status_v0",
+      "signal": "noul",
+      "stale_receipts": 0,
+      "status_counts": {"completed": 2}
+    }
+  },
+  "multiple": {
+    "context": {
+      "policy": {"contract_revision": null, "drift_threshold": 2, "mode": "shadow", "schema_version": "progress_review_policy_v0", "signal": "noul"},
+      "receipts": [
+        {
+          "authority": "none",
+          "contract_revision": "f0369fccc1c2c86117197ae78432722d31ed600d0e3b6f6bd6908fd79f91d793",
+          "criterion_current": true,
+          "drift_signal": {"choice": true, "noul": true},
+          "event_id": "ce36863f51b6baf9d16397ffb3e9af506b284a816f72d487e55943c1fd974d6d",
+          "evidence_id": "5108deb71ee1d00d8e14ad48f2ddee3dca264528a5ae802ac5a682ee11ecc0d7",
+          "evidence_scope": {"coverage": "declared_file_net_change", "criterion_binding": {"agent_id": "analyst", "contract_digest": "8159a3de1f613826a31b541cc5fe0eed6b24efa01994d740d865bcfe979fa58b", "contract_revision": 1, "criteria_sha256": "b60202ec386f3ec5e8e1ffcc90bf62eed6d821f16f1e42c17400fb389dc258de", "criterion_ids": ["analyst-initial"], "goal_id": "synthetic-managed-research", "origin": "goal_acceptance", "todo_id": "todo_analyst-initial", "todo_semantic_digest": "fcc5a4e2170eed7f6449935470ea194fc631d0c2c1a4377b63b28781b7aa100c"}, "files": ["output.json"]},
+          "goal_id": "synthetic-managed-research",
+          "judgments": {"choice": {"increment": "no_new_evidence", "relation": "off_goal"}, "noul": {"behavior_change": 0.05, "evidence_increment": 0.1, "serves_acceptance": 0.04}},
+          "label_probability_threshold": 0.6,
+          "model": "fixture-v1",
+          "question_version": "scoped-progress-sentinel-v2",
+          "reason": null,
+          "receipt_id": "ce36863f51b6baf9d16397ffb3e9af506b284a816f72d487e55943c1fd974d6d",
+          "recorded_at": 1700000000.0,
+          "run": {"agent_id": "analyst", "generated_at": "2026-09-21T00:00:01Z", "todo_id": "todo_analyst-initial", "turn_instance_id": "turn-1"},
+          "schema_version": "progress_review_receipt_v0",
+          "sequence": 0,
+          "signal_rule_version": "progress_review_signal_rule_v1",
+          "status": "completed",
+          "timing_ns": {"assessment_total": 1200000},
+          "usage": {"input_tokens": 1000}
+        },
+        {
+          "authority": "none",
+          "contract_revision": "f0369fccc1c2c86117197ae78432722d31ed600d0e3b6f6bd6908fd79f91d793",
+          "criterion_current": true,
+          "drift_signal": {"choice": true, "noul": true},
+          "event_id": "ce36863f51b6baf9d16397ffb3e9af506b284a816f72d487e55943c1fd974d6d",
+          "evidence_id": "5108deb71ee1d00d8e14ad48f2ddee3dca264528a5ae802ac5a682ee11ecc0d7",
+          "evidence_scope": {"coverage": "declared_file_net_change", "criterion_binding": {"agent_id": "reviewer", "contract_digest": "8159a3de1f613826a31b541cc5fe0eed6b24efa01994d740d865bcfe979fa58b", "contract_revision": 1, "criteria_sha256": "e69a1d751162826af65dab9f4321d060014a20dbd595c152eff875feeac208d0", "criterion_ids": ["reviewer-corrected"], "goal_id": "synthetic-managed-research", "origin": "goal_acceptance", "todo_id": "todo_reviewer-corrected", "todo_semantic_digest": "e6ac0dece9ade5c66e58eab709422248fcb8fa9fbb2812cffd2af46b55ecd3ed"}, "files": ["output.json"]},
+          "goal_id": "synthetic-managed-research",
+          "judgments": {"choice": {"increment": "no_new_evidence", "relation": "off_goal"}, "noul": {"behavior_change": 0.05, "evidence_increment": 0.1, "serves_acceptance": 0.04}},
+          "label_probability_threshold": 0.6,
+          "model": "fixture-v1",
+          "question_version": "scoped-progress-sentinel-v2",
+          "reason": null,
+          "receipt_id": "ce36863f51b6baf9d16397ffb3e9af506b284a816f72d487e55943c1fd974d6d",
+          "recorded_at": 1700000000.0,
+          "run": {"agent_id": "reviewer", "generated_at": "2026-09-21T00:00:01Z", "todo_id": "todo_reviewer-corrected", "turn_instance_id": "turn-1"},
+          "schema_version": "progress_review_receipt_v0",
+          "sequence": 0,
+          "signal_rule_version": "progress_review_signal_rule_v1",
+          "status": "completed",
+          "timing_ns": {"assessment_total": 1200000},
+          "usage": {"input_tokens": 1000}
+        }
+      ],
+      "summary": {
+        "authority": "none",
+        "contract_revision": null,
+        "drift_counts": {"choice": 2, "noul": 2},
+        "drift_threshold": 2,
+        "latest": {
+          "criterion_current": true,
+          "drift_signal": {"choice": true, "noul": true},
+          "event_id": "ce36863f51b6baf9d16397ffb3e9af506b284a816f72d487e55943c1fd974d6d",
+          "evidence_id": "5108deb71ee1d00d8e14ad48f2ddee3dca264528a5ae802ac5a682ee11ecc0d7",
+          "evidence_scope": {"coverage": "declared_file_net_change", "criterion_binding": {"agent_id": "analyst", "contract_digest": "8159a3de1f613826a31b541cc5fe0eed6b24efa01994d740d865bcfe979fa58b", "contract_revision": 1, "criteria_sha256": "b60202ec386f3ec5e8e1ffcc90bf62eed6d821f16f1e42c17400fb389dc258de", "criterion_ids": ["analyst-initial"], "goal_id": "synthetic-managed-research", "origin": "goal_acceptance", "todo_id": "todo_analyst-initial", "todo_semantic_digest": "fcc5a4e2170eed7f6449935470ea194fc631d0c2c1a4377b63b28781b7aa100c"}, "files": ["output.json"]},
+          "judgments": {"choice": {"increment": "no_new_evidence", "relation": "off_goal"}, "noul": {"behavior_change": 0.05, "evidence_increment": 0.1, "serves_acceptance": 0.04}},
+          "model": "fixture-v1",
+          "question_version": "scoped-progress-sentinel-v2",
+          "run": {"agent_id": "analyst", "generated_at": "2026-09-21T00:00:01Z", "todo_id": "todo_analyst-initial", "turn_instance_id": "turn-1"},
+          "status": "completed"
+        },
+        "mode": "shadow",
+        "newest_receipt_contract_revision": "f0369fccc1c2c86117197ae78432722d31ed600d0e3b6f6bd6908fd79f91d793",
+        "pending_receipts": 0,
+        "read_state": "observed",
+        "receipt_count": 2,
+        "rejected_receipts": 0,
+        "schema_version": "progress_review_status_v0",
+        "signal": "noul",
+        "stale_receipts": 0,
+        "status_counts": {"completed": 2}
+      }
+    },
+    "markdown": "# LoopX Status\n\n- ok: `None`\n- registry: `None`\n- runtime_root: `None`\n- goals: `None`\n- runs: `None`\n- projection: 🔴 no projection envelope; freshness and coverage unknown\n- contract: ok=None, errors=None, warnings=None, checks=None\n- global_registry: available=None, ok=None, findings=None, high=None, action=None, info=None\n\n## Attention Queue\n- summary: items=None, needs_user_or_controller=None, needs_controller=None, needs_codex=None, watching_external_evidence=None, watching_monitor=None\n- `None`: status=None phase=None waiting_on=None severity=None source=None\n  - project_asset_source: project_asset\n  - project_asset: owner= gate= stop=\n\n## Run History\n- summary: goals=None, runs=None\n- none",
+    "status_review": {
+      "authority": "none",
+      "contract_revision": null,
+      "drift_counts": {"choice": 2, "noul": 2},
+      "drift_threshold": 2,
+      "latest": {
+        "criterion_current": true,
+        "drift_signal": {"choice": true, "noul": true},
+        "event_id": "ce36863f51b6baf9d16397ffb3e9af506b284a816f72d487e55943c1fd974d6d",
+        "evidence_id": "5108deb71ee1d00d8e14ad48f2ddee3dca264528a5ae802ac5a682ee11ecc0d7",
+        "evidence_scope": {
+          "coverage": "declared_file_net_change",
+          "criterion_binding": {"agent_id": "analyst", "contract_digest": "8159a3de1f613826a31b541cc5fe0eed6b24efa01994d740d865bcfe979fa58b", "contract_revision": 1, "criteria_sha256": "b60202ec386f3ec5e8e1ffcc90bf62eed6d821f16f1e42c17400fb389dc258de", "criterion_ids": ["analyst-initial"], "goal_id": "synthetic-managed-research", "origin": "goal_acceptance", "todo_id": "todo_analyst-initial", "todo_semantic_digest": "fcc5a4e2170eed7f6449935470ea194fc631d0c2c1a4377b63b28781b7aa100c"},
+          "files": ["output.json"]
+        },
+        "judgments": {
+          "choice": {"increment": "no_new_evidence", "relation": "off_goal"},
+          "noul": {"behavior_change": 0.05, "evidence_increment": 0.1, "serves_acceptance": 0.04}
+        },
+        "model": "fixture-v1",
+        "question_version": "scoped-progress-sentinel-v2",
+        "run": {"agent_id": "analyst", "generated_at": "2026-09-21T00:00:01Z", "todo_id": "todo_analyst-initial", "turn_instance_id": "turn-1"},
+        "status": "completed"
+      },
+      "mode": "shadow",
+      "newest_receipt_contract_revision": "f0369fccc1c2c86117197ae78432722d31ed600d0e3b6f6bd6908fd79f91d793",
+      "pending_receipts": 0,
+      "read_state": "observed",
+      "receipt_count": 2,
+      "rejected_receipts": 0,
+      "schema_version": "progress_review_status_v0",
+      "signal": "noul",
+      "stale_receipts": 0,
+      "status_counts": {"completed": 2}
+    }
+  },
+  "off": {"context": null, "markdown": "# LoopX Status\n\n- ok: `None`\n- registry: `None`\n- runtime_root: `None`\n- goals: `None`\n- runs: `None`\n- projection: 🔴 no projection envelope; freshness and coverage unknown\n- contract: ok=None, errors=None, warnings=None, checks=None\n- global_registry: available=None, ok=None, findings=None, high=None, action=None, info=None\n\n## Attention Queue\n- summary: items=None, needs_user_or_controller=None, needs_controller=None, needs_codex=None, watching_external_evidence=None, watching_monitor=None\n- `None`: status=None phase=None waiting_on=None severity=None source=None\n  - project_asset_source: legacy/raw fallback; owner/gate/stop are not project_asset-backed\n\n## Run History\n- summary: goals=None, runs=None\n- none", "status_review": null},
+  "outside_pin": {
+    "context": {
+      "policy": {"contract_revision": "f0369fccc1c2c86117197ae78432722d31ed600d0e3b6f6bd6908fd79f91d793", "drift_threshold": 2, "mode": "assist", "schema_version": "progress_review_policy_v0", "signal": "noul"},
+      "receipts": [
+        {
+          "authority": "none",
+          "contract_revision": "f0369fccc1c2c86117197ae78432722d31ed600d0e3b6f6bd6908fd79f91d793",
+          "criterion_current": true,
+          "drift_signal": {"choice": true, "noul": true},
+          "event_id": "ce36863f51b6baf9d16397ffb3e9af506b284a816f72d487e55943c1fd974d6d",
+          "evidence_id": "5108deb71ee1d00d8e14ad48f2ddee3dca264528a5ae802ac5a682ee11ecc0d7",
+          "evidence_scope": {"coverage": "declared_file_net_change", "criterion_binding": {"agent_id": "analyst", "contract_digest": "8159a3de1f613826a31b541cc5fe0eed6b24efa01994d740d865bcfe979fa58b", "contract_revision": 1, "criteria_sha256": "b60202ec386f3ec5e8e1ffcc90bf62eed6d821f16f1e42c17400fb389dc258de", "criterion_ids": ["analyst-initial"], "goal_id": "synthetic-managed-research", "origin": "goal_acceptance", "todo_id": "todo_analyst-initial", "todo_semantic_digest": "fcc5a4e2170eed7f6449935470ea194fc631d0c2c1a4377b63b28781b7aa100c"}, "files": ["output.json"]},
+          "goal_id": "synthetic-managed-research",
+          "judgments": {"choice": {"increment": "no_new_evidence", "relation": "off_goal"}, "noul": {"behavior_change": 0.05, "evidence_increment": 0.1, "serves_acceptance": 0.04}},
+          "label_probability_threshold": 0.6,
+          "model": "fixture-v1",
+          "question_version": "scoped-progress-sentinel-v2",
+          "reason": null,
+          "receipt_id": "ce36863f51b6baf9d16397ffb3e9af506b284a816f72d487e55943c1fd974d6d",
+          "recorded_at": 1700000000.0,
+          "run": {"agent_id": "analyst", "generated_at": "2026-09-21T00:00:01Z", "todo_id": "todo_analyst-initial", "turn_instance_id": "turn-1"},
+          "schema_version": "progress_review_receipt_v0",
+          "sequence": 0,
+          "signal_rule_version": "progress_review_signal_rule_v1",
+          "status": "completed",
+          "timing_ns": {"assessment_total": 1200000},
+          "usage": {"input_tokens": 1000}
+        }
+      ],
+      "summary": {
+        "authority": "none",
+        "contract_revision": "f0369fccc1c2c86117197ae78432722d31ed600d0e3b6f6bd6908fd79f91d793",
+        "drift_counts": {"choice": 1, "noul": 1},
+        "drift_threshold": 2,
+        "latest": {
+          "criterion_current": true,
+          "drift_signal": {"choice": true, "noul": true},
+          "event_id": "ce36863f51b6baf9d16397ffb3e9af506b284a816f72d487e55943c1fd974d6d",
+          "evidence_id": "5108deb71ee1d00d8e14ad48f2ddee3dca264528a5ae802ac5a682ee11ecc0d7",
+          "evidence_scope": {"coverage": "declared_file_net_change", "criterion_binding": {"agent_id": "analyst", "contract_digest": "8159a3de1f613826a31b541cc5fe0eed6b24efa01994d740d865bcfe979fa58b", "contract_revision": 1, "criteria_sha256": "b60202ec386f3ec5e8e1ffcc90bf62eed6d821f16f1e42c17400fb389dc258de", "criterion_ids": ["analyst-initial"], "goal_id": "synthetic-managed-research", "origin": "goal_acceptance", "todo_id": "todo_analyst-initial", "todo_semantic_digest": "fcc5a4e2170eed7f6449935470ea194fc631d0c2c1a4377b63b28781b7aa100c"}, "files": ["output.json"]},
+          "judgments": {"choice": {"increment": "no_new_evidence", "relation": "off_goal"}, "noul": {"behavior_change": 0.05, "evidence_increment": 0.1, "serves_acceptance": 0.04}},
+          "model": "fixture-v1",
+          "question_version": "scoped-progress-sentinel-v2",
+          "run": {"agent_id": "analyst", "generated_at": "2026-09-21T00:00:01Z", "todo_id": "todo_analyst-initial", "turn_instance_id": "turn-1"},
+          "status": "completed"
+        },
+        "mode": "assist",
+        "newest_receipt_contract_revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "pending_receipts": 0,
+        "read_state": "observed",
+        "rebind_hint": "newer_receipts_under_unpinned_revision",
+        "receipt_count": 1,
+        "rejected_receipts": 0,
+        "schema_version": "progress_review_status_v0",
+        "signal": "noul",
+        "stale_receipts": 1,
+        "status_counts": {"completed": 1}
+      }
+    },
+    "markdown": "# LoopX Status\n\n- ok: `None`\n- registry: `None`\n- runtime_root: `None`\n- goals: `None`\n- runs: `None`\n- projection: 🔴 no projection envelope; freshness and coverage unknown\n- contract: ok=None, errors=None, warnings=None, checks=None\n- global_registry: available=None, ok=None, findings=None, high=None, action=None, info=None\n\n## Attention Queue\n- summary: items=None, needs_user_or_controller=None, needs_controller=None, needs_codex=None, watching_external_evidence=None, watching_monitor=None\n- `None`: status=None phase=None waiting_on=None severity=None source=None\n  - project_asset_source: project_asset\n  - project_asset: owner= gate= stop=\n\n## Run History\n- summary: goals=None, runs=None\n- none",
+    "status_review": {
+      "authority": "none",
+      "contract_revision": "f0369fccc1c2c86117197ae78432722d31ed600d0e3b6f6bd6908fd79f91d793",
+      "drift_counts": {"choice": 1, "noul": 1},
+      "drift_threshold": 2,
+      "latest": {
+        "criterion_current": true,
+        "drift_signal": {"choice": true, "noul": true},
+        "event_id": "ce36863f51b6baf9d16397ffb3e9af506b284a816f72d487e55943c1fd974d6d",
+        "evidence_id": "5108deb71ee1d00d8e14ad48f2ddee3dca264528a5ae802ac5a682ee11ecc0d7",
+        "evidence_scope": {
+          "coverage": "declared_file_net_change",
+          "criterion_binding": {"agent_id": "analyst", "contract_digest": "8159a3de1f613826a31b541cc5fe0eed6b24efa01994d740d865bcfe979fa58b", "contract_revision": 1, "criteria_sha256": "b60202ec386f3ec5e8e1ffcc90bf62eed6d821f16f1e42c17400fb389dc258de", "criterion_ids": ["analyst-initial"], "goal_id": "synthetic-managed-research", "origin": "goal_acceptance", "todo_id": "todo_analyst-initial", "todo_semantic_digest": "fcc5a4e2170eed7f6449935470ea194fc631d0c2c1a4377b63b28781b7aa100c"},
+          "files": ["output.json"]
+        },
+        "judgments": {
+          "choice": {"increment": "no_new_evidence", "relation": "off_goal"},
+          "noul": {"behavior_change": 0.05, "evidence_increment": 0.1, "serves_acceptance": 0.04}
+        },
+        "model": "fixture-v1",
+        "question_version": "scoped-progress-sentinel-v2",
+        "run": {"agent_id": "analyst", "generated_at": "2026-09-21T00:00:01Z", "todo_id": "todo_analyst-initial", "turn_instance_id": "turn-1"},
+        "status": "completed"
+      },
+      "mode": "assist",
+      "newest_receipt_contract_revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "pending_receipts": 0,
+      "read_state": "observed",
+      "rebind_hint": "newer_receipts_under_unpinned_revision",
+      "receipt_count": 1,
+      "rejected_receipts": 0,
+      "schema_version": "progress_review_status_v0",
+      "signal": "noul",
+      "stale_receipts": 1,
+      "status_counts": {"completed": 1}
+    }
+  },
+  "removed": {
+    "context": {
+      "policy": {"contract_revision": null, "drift_threshold": 2, "mode": "shadow", "schema_version": "progress_review_policy_v0", "signal": "noul"},
+      "receipts": [
+        {
+          "authority": "none",
+          "contract_revision": "f0369fccc1c2c86117197ae78432722d31ed600d0e3b6f6bd6908fd79f91d793",
+          "criterion_current": false,
+          "drift_signal": {"choice": null, "noul": null},
+          "event_id": "ce36863f51b6baf9d16397ffb3e9af506b284a816f72d487e55943c1fd974d6d",
+          "evidence_id": "5108deb71ee1d00d8e14ad48f2ddee3dca264528a5ae802ac5a682ee11ecc0d7",
+          "evidence_scope": {"coverage": "declared_file_net_change", "criterion_binding": {"agent_id": "analyst", "contract_digest": "8159a3de1f613826a31b541cc5fe0eed6b24efa01994d740d865bcfe979fa58b", "contract_revision": 1, "criteria_sha256": "b60202ec386f3ec5e8e1ffcc90bf62eed6d821f16f1e42c17400fb389dc258de", "criterion_ids": ["removed"], "goal_id": "synthetic-managed-research", "origin": "goal_acceptance", "todo_id": "todo_analyst-initial", "todo_semantic_digest": "fcc5a4e2170eed7f6449935470ea194fc631d0c2c1a4377b63b28781b7aa100c"}, "files": ["output.json"]},
+          "goal_id": "synthetic-managed-research",
+          "judgments": {"choice": {"increment": "no_new_evidence", "relation": "off_goal"}, "noul": {"behavior_change": 0.05, "evidence_increment": 0.1, "serves_acceptance": 0.04}},
+          "label_probability_threshold": 0.6,
+          "model": "fixture-v1",
+          "question_version": "scoped-progress-sentinel-v2",
+          "reason": "criterion_basis_unavailable",
+          "receipt_id": "ce36863f51b6baf9d16397ffb3e9af506b284a816f72d487e55943c1fd974d6d",
+          "recorded_at": 1700000000.0,
+          "run": {"agent_id": "analyst", "generated_at": "2026-09-21T00:00:01Z", "todo_id": "todo_analyst-initial", "turn_instance_id": "turn-1"},
+          "schema_version": "progress_review_receipt_v0",
+          "sequence": 0,
+          "signal_rule_version": "progress_review_signal_rule_v1",
+          "status": "stale",
+          "timing_ns": {"assessment_total": 1200000},
+          "usage": {"input_tokens": 1000}
+        }
+      ],
+      "summary": {
+        "authority": "none",
+        "contract_revision": null,
+        "drift_counts": {"choice": 0, "noul": 0},
+        "drift_threshold": 2,
+        "latest": {
+          "criterion_current": false,
+          "drift_signal": {"choice": null, "noul": null},
+          "event_id": "ce36863f51b6baf9d16397ffb3e9af506b284a816f72d487e55943c1fd974d6d",
+          "evidence_id": "5108deb71ee1d00d8e14ad48f2ddee3dca264528a5ae802ac5a682ee11ecc0d7",
+          "evidence_scope": {"coverage": "declared_file_net_change", "criterion_binding": {"agent_id": "analyst", "contract_digest": "8159a3de1f613826a31b541cc5fe0eed6b24efa01994d740d865bcfe979fa58b", "contract_revision": 1, "criteria_sha256": "b60202ec386f3ec5e8e1ffcc90bf62eed6d821f16f1e42c17400fb389dc258de", "criterion_ids": ["removed"], "goal_id": "synthetic-managed-research", "origin": "goal_acceptance", "todo_id": "todo_analyst-initial", "todo_semantic_digest": "fcc5a4e2170eed7f6449935470ea194fc631d0c2c1a4377b63b28781b7aa100c"}, "files": ["output.json"]},
+          "judgments": {"choice": {"increment": "no_new_evidence", "relation": "off_goal"}, "noul": {"behavior_change": 0.05, "evidence_increment": 0.1, "serves_acceptance": 0.04}},
+          "model": "fixture-v1",
+          "question_version": "scoped-progress-sentinel-v2",
+          "run": {"agent_id": "analyst", "generated_at": "2026-09-21T00:00:01Z", "todo_id": "todo_analyst-initial", "turn_instance_id": "turn-1"},
+          "status": "stale"
+        },
+        "mode": "shadow",
+        "newest_receipt_contract_revision": "f0369fccc1c2c86117197ae78432722d31ed600d0e3b6f6bd6908fd79f91d793",
+        "pending_receipts": 0,
+        "read_state": "observed",
+        "receipt_count": 1,
+        "rejected_receipts": 0,
+        "schema_version": "progress_review_status_v0",
+        "signal": "noul",
+        "stale_receipts": 1,
+        "status_counts": {"stale": 1}
+      }
+    },
+    "markdown": "# LoopX Status\n\n- ok: `None`\n- registry: `None`\n- runtime_root: `None`\n- goals: `None`\n- runs: `None`\n- projection: 🔴 no projection envelope; freshness and coverage unknown\n- contract: ok=None, errors=None, warnings=None, checks=None\n- global_registry: available=None, ok=None, findings=None, high=None, action=None, info=None\n\n## Attention Queue\n- summary: items=None, needs_user_or_controller=None, needs_controller=None, needs_codex=None, watching_external_evidence=None, watching_monitor=None\n- `None`: status=None phase=None waiting_on=None severity=None source=None\n  - project_asset_source: project_asset\n  - project_asset: owner= gate= stop=\n\n## Run History\n- summary: goals=None, runs=None\n- none",
+    "status_review": {
+      "authority": "none",
+      "contract_revision": null,
+      "drift_counts": {"choice": 0, "noul": 0},
+      "drift_threshold": 2,
+      "latest": {
+        "criterion_current": false,
+        "drift_signal": {"choice": null, "noul": null},
+        "event_id": "ce36863f51b6baf9d16397ffb3e9af506b284a816f72d487e55943c1fd974d6d",
+        "evidence_id": "5108deb71ee1d00d8e14ad48f2ddee3dca264528a5ae802ac5a682ee11ecc0d7",
+        "evidence_scope": {
+          "coverage": "declared_file_net_change",
+          "criterion_binding": {"agent_id": "analyst", "contract_digest": "8159a3de1f613826a31b541cc5fe0eed6b24efa01994d740d865bcfe979fa58b", "contract_revision": 1, "criteria_sha256": "b60202ec386f3ec5e8e1ffcc90bf62eed6d821f16f1e42c17400fb389dc258de", "criterion_ids": ["removed"], "goal_id": "synthetic-managed-research", "origin": "goal_acceptance", "todo_id": "todo_analyst-initial", "todo_semantic_digest": "fcc5a4e2170eed7f6449935470ea194fc631d0c2c1a4377b63b28781b7aa100c"},
+          "files": ["output.json"]
+        },
+        "judgments": {
+          "choice": {"increment": "no_new_evidence", "relation": "off_goal"},
+          "noul": {"behavior_change": 0.05, "evidence_increment": 0.1, "serves_acceptance": 0.04}
+        },
+        "model": "fixture-v1",
+        "question_version": "scoped-progress-sentinel-v2",
+        "run": {"agent_id": "analyst", "generated_at": "2026-09-21T00:00:01Z", "todo_id": "todo_analyst-initial", "turn_instance_id": "turn-1"},
+        "status": "stale"
+      },
+      "mode": "shadow",
+      "newest_receipt_contract_revision": "f0369fccc1c2c86117197ae78432722d31ed600d0e3b6f6bd6908fd79f91d793",
+      "pending_receipts": 0,
+      "read_state": "observed",
+      "receipt_count": 1,
+      "rejected_receipts": 0,
+      "schema_version": "progress_review_status_v0",
+      "signal": "noul",
+      "stale_receipts": 1,
+      "status_counts": {"stale": 1}
+    }
+  },
+  "repeated": {
+    "context": {
+      "policy": {"contract_revision": null, "drift_threshold": 2, "mode": "shadow", "schema_version": "progress_review_policy_v0", "signal": "noul"},
+      "receipts": [
+        {
+          "authority": "none",
+          "contract_revision": "f0369fccc1c2c86117197ae78432722d31ed600d0e3b6f6bd6908fd79f91d793",
+          "criterion_current": true,
+          "drift_signal": {"choice": true, "noul": true},
+          "event_id": "ce36863f51b6baf9d16397ffb3e9af506b284a816f72d487e55943c1fd974d6d",
+          "evidence_id": "5108deb71ee1d00d8e14ad48f2ddee3dca264528a5ae802ac5a682ee11ecc0d7",
+          "evidence_scope": {"coverage": "declared_file_net_change", "criterion_binding": {"agent_id": "analyst", "contract_digest": "8159a3de1f613826a31b541cc5fe0eed6b24efa01994d740d865bcfe979fa58b", "contract_revision": 1, "criteria_sha256": "b60202ec386f3ec5e8e1ffcc90bf62eed6d821f16f1e42c17400fb389dc258de", "criterion_ids": ["analyst-initial"], "goal_id": "synthetic-managed-research", "origin": "goal_acceptance", "todo_id": "todo_analyst-initial", "todo_semantic_digest": "fcc5a4e2170eed7f6449935470ea194fc631d0c2c1a4377b63b28781b7aa100c"}, "files": ["output.json"]},
+          "goal_id": "synthetic-managed-research",
+          "judgments": {"choice": {"increment": "no_new_evidence", "relation": "off_goal"}, "noul": {"behavior_change": 0.05, "evidence_increment": 0.1, "serves_acceptance": 0.04}},
+          "label_probability_threshold": 0.6,
+          "model": "fixture-v1",
+          "question_version": "scoped-progress-sentinel-v2",
+          "reason": null,
+          "receipt_id": "ce36863f51b6baf9d16397ffb3e9af506b284a816f72d487e55943c1fd974d6d",
+          "recorded_at": 1700000000.0,
+          "run": {"agent_id": "analyst", "generated_at": "2026-09-21T00:00:01Z", "todo_id": "todo_analyst-initial", "turn_instance_id": "turn-1"},
+          "schema_version": "progress_review_receipt_v0",
+          "sequence": 0,
+          "signal_rule_version": "progress_review_signal_rule_v1",
+          "status": "completed",
+          "timing_ns": {"assessment_total": 1200000},
+          "usage": {"input_tokens": 1000}
+        },
+        {
+          "authority": "none",
+          "contract_revision": "f0369fccc1c2c86117197ae78432722d31ed600d0e3b6f6bd6908fd79f91d793",
+          "criterion_current": true,
+          "drift_signal": {"choice": true, "noul": true},
+          "event_id": "ce36863f51b6baf9d16397ffb3e9af506b284a816f72d487e55943c1fd974d6d",
+          "evidence_id": "5108deb71ee1d00d8e14ad48f2ddee3dca264528a5ae802ac5a682ee11ecc0d7",
+          "evidence_scope": {"coverage": "declared_file_net_change", "criterion_binding": {"agent_id": "analyst", "contract_digest": "8159a3de1f613826a31b541cc5fe0eed6b24efa01994d740d865bcfe979fa58b", "contract_revision": 1, "criteria_sha256": "b60202ec386f3ec5e8e1ffcc90bf62eed6d821f16f1e42c17400fb389dc258de", "criterion_ids": ["analyst-initial"], "goal_id": "synthetic-managed-research", "origin": "goal_acceptance", "todo_id": "todo_analyst-initial", "todo_semantic_digest": "fcc5a4e2170eed7f6449935470ea194fc631d0c2c1a4377b63b28781b7aa100c"}, "files": ["output.json"]},
+          "goal_id": "synthetic-managed-research",
+          "judgments": {"choice": {"increment": "no_new_evidence", "relation": "off_goal"}, "noul": {"behavior_change": 0.05, "evidence_increment": 0.1, "serves_acceptance": 0.04}},
+          "label_probability_threshold": 0.6,
+          "model": "fixture-v1",
+          "question_version": "scoped-progress-sentinel-v2",
+          "reason": null,
+          "receipt_id": "ce36863f51b6baf9d16397ffb3e9af506b284a816f72d487e55943c1fd974d6d",
+          "recorded_at": 1700000000.0,
+          "run": {"agent_id": "analyst", "generated_at": "2026-09-21T00:00:01Z", "todo_id": "todo_analyst-initial", "turn_instance_id": "turn-1"},
+          "schema_version": "progress_review_receipt_v0",
+          "sequence": 0,
+          "signal_rule_version": "progress_review_signal_rule_v1",
+          "status": "completed",
+          "timing_ns": {"assessment_total": 1200000},
+          "usage": {"input_tokens": 1000}
+        }
+      ],
+      "summary": {
+        "authority": "none",
+        "contract_revision": null,
+        "drift_counts": {"choice": 2, "noul": 2},
+        "drift_threshold": 2,
+        "latest": {
+          "criterion_current": true,
+          "drift_signal": {"choice": true, "noul": true},
+          "event_id": "ce36863f51b6baf9d16397ffb3e9af506b284a816f72d487e55943c1fd974d6d",
+          "evidence_id": "5108deb71ee1d00d8e14ad48f2ddee3dca264528a5ae802ac5a682ee11ecc0d7",
+          "evidence_scope": {"coverage": "declared_file_net_change", "criterion_binding": {"agent_id": "analyst", "contract_digest": "8159a3de1f613826a31b541cc5fe0eed6b24efa01994d740d865bcfe979fa58b", "contract_revision": 1, "criteria_sha256": "b60202ec386f3ec5e8e1ffcc90bf62eed6d821f16f1e42c17400fb389dc258de", "criterion_ids": ["analyst-initial"], "goal_id": "synthetic-managed-research", "origin": "goal_acceptance", "todo_id": "todo_analyst-initial", "todo_semantic_digest": "fcc5a4e2170eed7f6449935470ea194fc631d0c2c1a4377b63b28781b7aa100c"}, "files": ["output.json"]},
+          "judgments": {"choice": {"increment": "no_new_evidence", "relation": "off_goal"}, "noul": {"behavior_change": 0.05, "evidence_increment": 0.1, "serves_acceptance": 0.04}},
+          "model": "fixture-v1",
+          "question_version": "scoped-progress-sentinel-v2",
+          "run": {"agent_id": "analyst", "generated_at": "2026-09-21T00:00:01Z", "todo_id": "todo_analyst-initial", "turn_instance_id": "turn-1"},
+          "status": "completed"
+        },
+        "mode": "shadow",
+        "newest_receipt_contract_revision": "f0369fccc1c2c86117197ae78432722d31ed600d0e3b6f6bd6908fd79f91d793",
+        "pending_receipts": 0,
+        "read_state": "observed",
+        "receipt_count": 2,
+        "rejected_receipts": 0,
+        "schema_version": "progress_review_status_v0",
+        "signal": "noul",
+        "stale_receipts": 0,
+        "status_counts": {"completed": 2}
+      }
+    },
+    "markdown": "# LoopX Status\n\n- ok: `None`\n- registry: `None`\n- runtime_root: `None`\n- goals: `None`\n- runs: `None`\n- projection: 🔴 no projection envelope; freshness and coverage unknown\n- contract: ok=None, errors=None, warnings=None, checks=None\n- global_registry: available=None, ok=None, findings=None, high=None, action=None, info=None\n\n## Attention Queue\n- summary: items=None, needs_user_or_controller=None, needs_controller=None, needs_codex=None, watching_external_evidence=None, watching_monitor=None\n- `None`: status=None phase=None waiting_on=None severity=None source=None\n  - project_asset_source: project_asset\n  - project_asset: owner= gate= stop=\n\n## Run History\n- summary: goals=None, runs=None\n- none",
+    "status_review": {
+      "authority": "none",
+      "contract_revision": null,
+      "drift_counts": {"choice": 2, "noul": 2},
+      "drift_threshold": 2,
+      "latest": {
+        "criterion_current": true,
+        "drift_signal": {"choice": true, "noul": true},
+        "event_id": "ce36863f51b6baf9d16397ffb3e9af506b284a816f72d487e55943c1fd974d6d",
+        "evidence_id": "5108deb71ee1d00d8e14ad48f2ddee3dca264528a5ae802ac5a682ee11ecc0d7",
+        "evidence_scope": {
+          "coverage": "declared_file_net_change",
+          "criterion_binding": {"agent_id": "analyst", "contract_digest": "8159a3de1f613826a31b541cc5fe0eed6b24efa01994d740d865bcfe979fa58b", "contract_revision": 1, "criteria_sha256": "b60202ec386f3ec5e8e1ffcc90bf62eed6d821f16f1e42c17400fb389dc258de", "criterion_ids": ["analyst-initial"], "goal_id": "synthetic-managed-research", "origin": "goal_acceptance", "todo_id": "todo_analyst-initial", "todo_semantic_digest": "fcc5a4e2170eed7f6449935470ea194fc631d0c2c1a4377b63b28781b7aa100c"},
+          "files": ["output.json"]
+        },
+        "judgments": {
+          "choice": {"increment": "no_new_evidence", "relation": "off_goal"},
+          "noul": {"behavior_change": 0.05, "evidence_increment": 0.1, "serves_acceptance": 0.04}
+        },
+        "model": "fixture-v1",
+        "question_version": "scoped-progress-sentinel-v2",
+        "run": {"agent_id": "analyst", "generated_at": "2026-09-21T00:00:01Z", "todo_id": "todo_analyst-initial", "turn_instance_id": "turn-1"},
+        "status": "completed"
+      },
+      "mode": "shadow",
+      "newest_receipt_contract_revision": "f0369fccc1c2c86117197ae78432722d31ed600d0e3b6f6bd6908fd79f91d793",
+      "pending_receipts": 0,
+      "read_state": "observed",
+      "receipt_count": 2,
+      "rejected_receipts": 0,
+      "schema_version": "progress_review_status_v0",
+      "signal": "noul",
+      "stale_receipts": 0,
+      "status_counts": {"completed": 2}
+    }
+  },
+  "unavailable_inspection": {
+    "context": {
+      "policy": {"contract_revision": null, "drift_threshold": 2, "mode": "shadow", "schema_version": "progress_review_policy_v0", "signal": "noul"},
+      "receipts": [
+        {
+          "authority": "none",
+          "contract_revision": "f0369fccc1c2c86117197ae78432722d31ed600d0e3b6f6bd6908fd79f91d793",
+          "criterion_current": false,
+          "drift_signal": {"choice": null, "noul": null},
+          "event_id": "ce36863f51b6baf9d16397ffb3e9af506b284a816f72d487e55943c1fd974d6d",
+          "evidence_id": "5108deb71ee1d00d8e14ad48f2ddee3dca264528a5ae802ac5a682ee11ecc0d7",
+          "evidence_scope": {"coverage": "declared_file_net_change", "criterion_binding": {"agent_id": "analyst", "contract_digest": "8159a3de1f613826a31b541cc5fe0eed6b24efa01994d740d865bcfe979fa58b", "contract_revision": 1, "criteria_sha256": "b60202ec386f3ec5e8e1ffcc90bf62eed6d821f16f1e42c17400fb389dc258de", "criterion_ids": ["analyst-initial"], "goal_id": "synthetic-managed-research", "origin": "goal_acceptance", "todo_id": "todo_missing", "todo_semantic_digest": "fcc5a4e2170eed7f6449935470ea194fc631d0c2c1a4377b63b28781b7aa100c"}, "files": ["output.json"]},
+          "goal_id": "synthetic-managed-research",
+          "judgments": {"choice": {"increment": "no_new_evidence", "relation": "off_goal"}, "noul": {"behavior_change": 0.05, "evidence_increment": 0.1, "serves_acceptance": 0.04}},
+          "label_probability_threshold": 0.6,
+          "model": "fixture-v1",
+          "question_version": "scoped-progress-sentinel-v2",
+          "reason": "criterion_basis_unavailable",
+          "receipt_id": "ce36863f51b6baf9d16397ffb3e9af506b284a816f72d487e55943c1fd974d6d",
+          "recorded_at": 1700000000.0,
+          "run": {"agent_id": "analyst", "generated_at": "2026-09-21T00:00:01Z", "todo_id": "todo_missing", "turn_instance_id": "turn-1"},
+          "schema_version": "progress_review_receipt_v0",
+          "sequence": 0,
+          "signal_rule_version": "progress_review_signal_rule_v1",
+          "status": "stale",
+          "timing_ns": {"assessment_total": 1200000},
+          "usage": {"input_tokens": 1000}
+        },
+        {
+          "authority": "none",
+          "contract_revision": "f0369fccc1c2c86117197ae78432722d31ed600d0e3b6f6bd6908fd79f91d793",
+          "criterion_current": true,
+          "drift_signal": {"choice": true, "noul": true},
+          "event_id": "ce36863f51b6baf9d16397ffb3e9af506b284a816f72d487e55943c1fd974d6d",
+          "evidence_id": "5108deb71ee1d00d8e14ad48f2ddee3dca264528a5ae802ac5a682ee11ecc0d7",
+          "evidence_scope": {"coverage": "declared_file_net_change", "criterion_binding": {"agent_id": "reviewer", "contract_digest": "8159a3de1f613826a31b541cc5fe0eed6b24efa01994d740d865bcfe979fa58b", "contract_revision": 1, "criteria_sha256": "e69a1d751162826af65dab9f4321d060014a20dbd595c152eff875feeac208d0", "criterion_ids": ["reviewer-corrected"], "goal_id": "synthetic-managed-research", "origin": "goal_acceptance", "todo_id": "todo_reviewer-corrected", "todo_semantic_digest": "e6ac0dece9ade5c66e58eab709422248fcb8fa9fbb2812cffd2af46b55ecd3ed"}, "files": ["output.json"]},
+          "goal_id": "synthetic-managed-research",
+          "judgments": {"choice": {"increment": "no_new_evidence", "relation": "off_goal"}, "noul": {"behavior_change": 0.05, "evidence_increment": 0.1, "serves_acceptance": 0.04}},
+          "label_probability_threshold": 0.6,
+          "model": "fixture-v1",
+          "question_version": "scoped-progress-sentinel-v2",
+          "reason": null,
+          "receipt_id": "ce36863f51b6baf9d16397ffb3e9af506b284a816f72d487e55943c1fd974d6d",
+          "recorded_at": 1700000000.0,
+          "run": {"agent_id": "reviewer", "generated_at": "2026-09-21T00:00:01Z", "todo_id": "todo_reviewer-corrected", "turn_instance_id": "turn-1"},
+          "schema_version": "progress_review_receipt_v0",
+          "sequence": 0,
+          "signal_rule_version": "progress_review_signal_rule_v1",
+          "status": "completed",
+          "timing_ns": {"assessment_total": 1200000},
+          "usage": {"input_tokens": 1000}
+        }
+      ],
+      "summary": {
+        "authority": "none",
+        "contract_revision": null,
+        "drift_counts": {"choice": 1, "noul": 1},
+        "drift_threshold": 2,
+        "latest": {
+          "criterion_current": false,
+          "drift_signal": {"choice": null, "noul": null},
+          "event_id": "ce36863f51b6baf9d16397ffb3e9af506b284a816f72d487e55943c1fd974d6d",
+          "evidence_id": "5108deb71ee1d00d8e14ad48f2ddee3dca264528a5ae802ac5a682ee11ecc0d7",
+          "evidence_scope": {"coverage": "declared_file_net_change", "criterion_binding": {"agent_id": "analyst", "contract_digest": "8159a3de1f613826a31b541cc5fe0eed6b24efa01994d740d865bcfe979fa58b", "contract_revision": 1, "criteria_sha256": "b60202ec386f3ec5e8e1ffcc90bf62eed6d821f16f1e42c17400fb389dc258de", "criterion_ids": ["analyst-initial"], "goal_id": "synthetic-managed-research", "origin": "goal_acceptance", "todo_id": "todo_missing", "todo_semantic_digest": "fcc5a4e2170eed7f6449935470ea194fc631d0c2c1a4377b63b28781b7aa100c"}, "files": ["output.json"]},
+          "judgments": {"choice": {"increment": "no_new_evidence", "relation": "off_goal"}, "noul": {"behavior_change": 0.05, "evidence_increment": 0.1, "serves_acceptance": 0.04}},
+          "model": "fixture-v1",
+          "question_version": "scoped-progress-sentinel-v2",
+          "run": {"agent_id": "analyst", "generated_at": "2026-09-21T00:00:01Z", "todo_id": "todo_missing", "turn_instance_id": "turn-1"},
+          "status": "stale"
+        },
+        "mode": "shadow",
+        "newest_receipt_contract_revision": "f0369fccc1c2c86117197ae78432722d31ed600d0e3b6f6bd6908fd79f91d793",
+        "pending_receipts": 0,
+        "read_state": "observed",
+        "receipt_count": 2,
+        "rejected_receipts": 0,
+        "schema_version": "progress_review_status_v0",
+        "signal": "noul",
+        "stale_receipts": 1,
+        "status_counts": {"completed": 1, "stale": 1}
+      }
+    },
+    "markdown": "# LoopX Status\n\n- ok: `None`\n- registry: `None`\n- runtime_root: `None`\n- goals: `None`\n- runs: `None`\n- projection: 🔴 no projection envelope; freshness and coverage unknown\n- contract: ok=None, errors=None, warnings=None, checks=None\n- global_registry: available=None, ok=None, findings=None, high=None, action=None, info=None\n\n## Attention Queue\n- summary: items=None, needs_user_or_controller=None, needs_controller=None, needs_codex=None, watching_external_evidence=None, watching_monitor=None\n- `None`: status=None phase=None waiting_on=None severity=None source=None\n  - project_asset_source: project_asset\n  - project_asset: owner= gate= stop=\n\n## Run History\n- summary: goals=None, runs=None\n- none",
+    "status_review": {
+      "authority": "none",
+      "contract_revision": null,
+      "drift_counts": {"choice": 1, "noul": 1},
+      "drift_threshold": 2,
+      "latest": {
+        "criterion_current": false,
+        "drift_signal": {"choice": null, "noul": null},
+        "event_id": "ce36863f51b6baf9d16397ffb3e9af506b284a816f72d487e55943c1fd974d6d",
+        "evidence_id": "5108deb71ee1d00d8e14ad48f2ddee3dca264528a5ae802ac5a682ee11ecc0d7",
+        "evidence_scope": {
+          "coverage": "declared_file_net_change",
+          "criterion_binding": {"agent_id": "analyst", "contract_digest": "8159a3de1f613826a31b541cc5fe0eed6b24efa01994d740d865bcfe979fa58b", "contract_revision": 1, "criteria_sha256": "b60202ec386f3ec5e8e1ffcc90bf62eed6d821f16f1e42c17400fb389dc258de", "criterion_ids": ["analyst-initial"], "goal_id": "synthetic-managed-research", "origin": "goal_acceptance", "todo_id": "todo_missing", "todo_semantic_digest": "fcc5a4e2170eed7f6449935470ea194fc631d0c2c1a4377b63b28781b7aa100c"},
+          "files": ["output.json"]
+        },
+        "judgments": {
+          "choice": {"increment": "no_new_evidence", "relation": "off_goal"},
+          "noul": {"behavior_change": 0.05, "evidence_increment": 0.1, "serves_acceptance": 0.04}
+        },
+        "model": "fixture-v1",
+        "question_version": "scoped-progress-sentinel-v2",
+        "run": {"agent_id": "analyst", "generated_at": "2026-09-21T00:00:01Z", "todo_id": "todo_missing", "turn_instance_id": "turn-1"},
+        "status": "stale"
+      },
+      "mode": "shadow",
+      "newest_receipt_contract_revision": "f0369fccc1c2c86117197ae78432722d31ed600d0e3b6f6bd6908fd79f91d793",
+      "pending_receipts": 0,
+      "read_state": "observed",
+      "receipt_count": 2,
+      "rejected_receipts": 0,
+      "schema_version": "progress_review_status_v0",
+      "signal": "noul",
+      "stale_receipts": 1,
+      "status_counts": {"completed": 1, "stale": 1}
+    }
+  },
+  "unavailable_store": {
+    "context": {
+      "policy": {"contract_revision": null, "drift_threshold": 2, "mode": "shadow", "schema_version": "progress_review_policy_v0", "signal": "noul"},
+      "receipts": [],
+      "summary": {
+        "authority": "none",
+        "contract_revision": null,
+        "drift_counts": {"choice": 0, "noul": 0},
+        "drift_threshold": 2,
+        "latest": null,
+        "mode": "shadow",
+        "pending_receipts": 0,
+        "read_error": "receipt_store_unavailable",
+        "read_state": "unavailable",
+        "receipt_count": 0,
+        "rejected_receipts": 0,
+        "schema_version": "progress_review_status_v0",
+        "signal": "noul",
+        "stale_receipts": 0,
+        "status_counts": {}
+      }
+    },
+    "markdown": "# LoopX Status\n\n- ok: `None`\n- registry: `None`\n- runtime_root: `None`\n- goals: `None`\n- runs: `None`\n- projection: 🔴 no projection envelope; freshness and coverage unknown\n- contract: ok=None, errors=None, warnings=None, checks=None\n- global_registry: available=None, ok=None, findings=None, high=None, action=None, info=None\n\n## Attention Queue\n- summary: items=None, needs_user_or_controller=None, needs_controller=None, needs_codex=None, watching_external_evidence=None, watching_monitor=None\n- `None`: status=None phase=None waiting_on=None severity=None source=None\n  - project_asset_source: project_asset\n  - project_asset: owner= gate= stop=\n\n## Run History\n- summary: goals=None, runs=None\n- none",
+    "status_review": {
+      "authority": "none",
+      "contract_revision": null,
+      "drift_counts": {"choice": 0, "noul": 0},
+      "drift_threshold": 2,
+      "latest": null,
+      "mode": "shadow",
+      "pending_receipts": 0,
+      "read_error": "receipt_store_unavailable",
+      "read_state": "unavailable",
+      "receipt_count": 0,
+      "rejected_receipts": 0,
+      "schema_version": "progress_review_status_v0",
+      "signal": "noul",
+      "stale_receipts": 0,
+      "status_counts": {}
+    }
+  },
+  "wrong_instance": {
+    "context": {
+      "policy": {"contract_revision": null, "drift_threshold": 2, "mode": "shadow", "schema_version": "progress_review_policy_v0", "signal": "noul"},
+      "receipts": [
+        {
+          "authority": "none",
+          "contract_revision": "f0369fccc1c2c86117197ae78432722d31ed600d0e3b6f6bd6908fd79f91d793",
+          "criterion_current": false,
+          "drift_signal": {"choice": null, "noul": null},
+          "event_id": "ce36863f51b6baf9d16397ffb3e9af506b284a816f72d487e55943c1fd974d6d",
+          "evidence_id": "5108deb71ee1d00d8e14ad48f2ddee3dca264528a5ae802ac5a682ee11ecc0d7",
+          "evidence_scope": {"coverage": "declared_file_net_change", "criterion_binding": {"agent_id": "analyst", "contract_digest": "8159a3de1f613826a31b541cc5fe0eed6b24efa01994d740d865bcfe979fa58b", "contract_revision": 1, "criteria_sha256": "b60202ec386f3ec5e8e1ffcc90bf62eed6d821f16f1e42c17400fb389dc258de", "criterion_ids": ["analyst-initial"], "goal_id": "synthetic-managed-research", "origin": "goal_acceptance", "todo_id": "todo_analyst-initial", "todo_semantic_digest": "fcc5a4e2170eed7f6449935470ea194fc631d0c2c1a4377b63b28781b7aa100c"}, "files": ["output.json"]},
+          "goal_id": "synthetic-managed-research",
+          "judgments": {"choice": {"increment": "no_new_evidence", "relation": "off_goal"}, "noul": {"behavior_change": 0.05, "evidence_increment": 0.1, "serves_acceptance": 0.04}},
+          "label_probability_threshold": 0.6,
+          "model": "fixture-v1",
+          "question_version": "scoped-progress-sentinel-v2",
+          "reason": "criterion_basis_unavailable",
+          "receipt_id": "ce36863f51b6baf9d16397ffb3e9af506b284a816f72d487e55943c1fd974d6d",
+          "recorded_at": 1700000000.0,
+          "run": {"agent_id": "analyst", "generated_at": "2026-09-21T00:00:01Z", "todo_id": "todo_analyst-initial", "turn_instance_id": "turn-1"},
+          "schema_version": "progress_review_receipt_v0",
+          "sequence": 0,
+          "signal_rule_version": "progress_review_signal_rule_v1",
+          "status": "stale",
+          "timing_ns": {"assessment_total": 1200000},
+          "usage": {"input_tokens": 1000}
+        }
+      ],
+      "summary": {
+        "authority": "none",
+        "contract_revision": null,
+        "drift_counts": {"choice": 0, "noul": 0},
+        "drift_threshold": 2,
+        "latest": {
+          "criterion_current": false,
+          "drift_signal": {"choice": null, "noul": null},
+          "event_id": "ce36863f51b6baf9d16397ffb3e9af506b284a816f72d487e55943c1fd974d6d",
+          "evidence_id": "5108deb71ee1d00d8e14ad48f2ddee3dca264528a5ae802ac5a682ee11ecc0d7",
+          "evidence_scope": {"coverage": "declared_file_net_change", "criterion_binding": {"agent_id": "analyst", "contract_digest": "8159a3de1f613826a31b541cc5fe0eed6b24efa01994d740d865bcfe979fa58b", "contract_revision": 1, "criteria_sha256": "b60202ec386f3ec5e8e1ffcc90bf62eed6d821f16f1e42c17400fb389dc258de", "criterion_ids": ["analyst-initial"], "goal_id": "synthetic-managed-research", "origin": "goal_acceptance", "todo_id": "todo_analyst-initial", "todo_semantic_digest": "fcc5a4e2170eed7f6449935470ea194fc631d0c2c1a4377b63b28781b7aa100c"}, "files": ["output.json"]},
+          "judgments": {"choice": {"increment": "no_new_evidence", "relation": "off_goal"}, "noul": {"behavior_change": 0.05, "evidence_increment": 0.1, "serves_acceptance": 0.04}},
+          "model": "fixture-v1",
+          "question_version": "scoped-progress-sentinel-v2",
+          "run": {"agent_id": "analyst", "generated_at": "2026-09-21T00:00:01Z", "todo_id": "todo_analyst-initial", "turn_instance_id": "turn-1"},
+          "status": "stale"
+        },
+        "mode": "shadow",
+        "newest_receipt_contract_revision": "f0369fccc1c2c86117197ae78432722d31ed600d0e3b6f6bd6908fd79f91d793",
+        "pending_receipts": 0,
+        "read_state": "observed",
+        "receipt_count": 1,
+        "rejected_receipts": 0,
+        "schema_version": "progress_review_status_v0",
+        "signal": "noul",
+        "stale_receipts": 1,
+        "status_counts": {"stale": 1}
+      }
+    },
+    "markdown": "# LoopX Status\n\n- ok: `None`\n- registry: `None`\n- runtime_root: `None`\n- goals: `None`\n- runs: `None`\n- projection: 🔴 no projection envelope; freshness and coverage unknown\n- contract: ok=None, errors=None, warnings=None, checks=None\n- global_registry: available=None, ok=None, findings=None, high=None, action=None, info=None\n\n## Attention Queue\n- summary: items=None, needs_user_or_controller=None, needs_controller=None, needs_codex=None, watching_external_evidence=None, watching_monitor=None\n- `None`: status=None phase=None waiting_on=None severity=None source=None\n  - project_asset_source: project_asset\n  - project_asset: owner= gate= stop=\n\n## Run History\n- summary: goals=None, runs=None\n- none",
+    "status_review": {
+      "authority": "none",
+      "contract_revision": null,
+      "drift_counts": {"choice": 0, "noul": 0},
+      "drift_threshold": 2,
+      "latest": {
+        "criterion_current": false,
+        "drift_signal": {"choice": null, "noul": null},
+        "event_id": "ce36863f51b6baf9d16397ffb3e9af506b284a816f72d487e55943c1fd974d6d",
+        "evidence_id": "5108deb71ee1d00d8e14ad48f2ddee3dca264528a5ae802ac5a682ee11ecc0d7",
+        "evidence_scope": {
+          "coverage": "declared_file_net_change",
+          "criterion_binding": {"agent_id": "analyst", "contract_digest": "8159a3de1f613826a31b541cc5fe0eed6b24efa01994d740d865bcfe979fa58b", "contract_revision": 1, "criteria_sha256": "b60202ec386f3ec5e8e1ffcc90bf62eed6d821f16f1e42c17400fb389dc258de", "criterion_ids": ["analyst-initial"], "goal_id": "synthetic-managed-research", "origin": "goal_acceptance", "todo_id": "todo_analyst-initial", "todo_semantic_digest": "fcc5a4e2170eed7f6449935470ea194fc631d0c2c1a4377b63b28781b7aa100c"},
+          "files": ["output.json"]
+        },
+        "judgments": {
+          "choice": {"increment": "no_new_evidence", "relation": "off_goal"},
+          "noul": {"behavior_change": 0.05, "evidence_increment": 0.1, "serves_acceptance": 0.04}
+        },
+        "model": "fixture-v1",
+        "question_version": "scoped-progress-sentinel-v2",
+        "run": {"agent_id": "analyst", "generated_at": "2026-09-21T00:00:01Z", "todo_id": "todo_analyst-initial", "turn_instance_id": "turn-1"},
+        "status": "stale"
+      },
+      "mode": "shadow",
+      "newest_receipt_contract_revision": "f0369fccc1c2c86117197ae78432722d31ed600d0e3b6f6bd6908fd79f91d793",
+      "pending_receipts": 0,
+      "read_state": "observed",
+      "receipt_count": 1,
+      "rejected_receipts": 0,
+      "schema_version": "progress_review_status_v0",
+      "signal": "noul",
+      "stale_receipts": 1,
+      "status_counts": {"stale": 1}
+    }
+  }
+}

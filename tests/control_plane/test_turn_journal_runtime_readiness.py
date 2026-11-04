@@ -84,6 +84,7 @@ def test_runtime_fingerprint_rotates_when_any_owned_source_changes(
     source_files = effect_runtime._runtime_source_files(source_root)
     assert "effect_runtime_server.ts" in source_files
     assert "runtime_decode.ts" in source_files
+    assert "runtime/private_permissions.py" in source_files
     assert "turn_transaction_contract.json" in source_files
     for relative in source_files:
         source = source_root / relative

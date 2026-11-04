@@ -786,6 +786,40 @@ Approval needs a reviewed decision, not implementation progress or silence.
   exact expiry remains a release-owner decision. M1 is open. No module-count,
   loading-performance, split-package or R1 managed-Turn benefit is claimed.
 
+### 2026-11-04 — Capability discovery selected loading
+
+- **Baseline:** `79b781865`. `capability list` / `show` and command help now
+  reuse the existing capability registrar and catalog handler without loading
+  the full CLI or Chat. `inspect`, `bind` and `invoke` execution, the explicit
+  full-CLI handler patch point, registry routing and canonical rejected-request
+  diagnostics retain their existing paths. The local discovery set reuses CLI
+  vocabulary; it creates no capability, provider, protocol or authority owner.
+- **Evidence:** `tests/test_cli_entrypoint.py` covers output/help parity,
+  declared-but-absent and real installed-disabled providers, hidden helpers,
+  missing/invalid manifests and no process/network/write activation. The five
+  loading oracles fail on the baseline and pass on the candidate. All 23 focused
+  cases also pass against an independently installed wheel outside the checkout
+  with Node absent; this does not upgrade an existing host. Eight additional
+  immutable base/candidate rejection pairs preserve output and exit status.
+- **Measured closure:** three fresh-process help/list/show workloads use 20
+  samples per revision, one discarded warm-up and alternating order on macOS
+  arm64/Python 3.13.5. Both source snapshots have warm filesystem caches and no
+  bytecode; Node and telemetry are absent. The real `main()` path loads 362
+  LoopX modules instead of 1,149, with 832 read-open observations instead of
+  2,494. Output bytes are identical; observed writes, process starts, network
+  connections and thread starts are zero. Timing and RSS evidence includes
+  equal instrumentation and interpreter startup; it is scoped PR evidence,
+  not a portable D6 threshold or installed-host/task-benefit claim.
+- **Validation holds:** the broader source selection has 320 passing cases and
+  one failing `test_settlement_plan_import_does_not_load_native_capture_io`.
+  The immutable baseline fails identically. Configured mypy likewise reports
+  the same 789 errors in 126 files on both revisions. Neither failure is waived
+  or relabeled as a pass; focused parity does not certify all required checks.
+- **Remaining:** this extends R0-style discovery qualification, independently
+  of the public-status proposal #8011. It does not close full R0/V10, M1, split
+  installation, R1 managed minimal or D1–D7. No preset, frontend operation,
+  permission or persisted state changes; protected execution keeps its owner.
+
 ## Appendix B: Decision log
 
 | Date | Decision | Owner / approval | Alternatives | Normative sections changed |

@@ -22,7 +22,7 @@ from loopx.control_plane.goals.goal_vision_policy import DEFAULT_PLANNING_HORIZO
 
 from .codex_offline import MODEL_CATALOG_REMOTE, CodexOffline, stage_portable_python
 from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution, turn_envelope_receipt
-from .layout import _ROOT, _SRC, _CONTROL, _CODEX_HOME
+from .layout import _ROOT, _SRC, _CONTROL, _CODEX_HOME, _REGISTRY, _LOOPX_RUNTIME
 
 
 _PYTHON = f"{_ROOT}/python"
@@ -32,8 +32,6 @@ _PROFILE_HOME = f"{_PROFILE}/home"
 _SHARED_CODEX_HOME = f"{_PROFILE}/codex-home"
 _SHARED_SKILLS = f"{_SHARED_CODEX_HOME}/skills"
 _CLI = f"{_PROFILE}/bin/loopx"
-_REGISTRY = f"{_CONTROL}/registry.json"
-_LOOPX_RUNTIME = f"{_ROOT}/state/runtime"
 _SCHEDULER_STATE = f"{_CONTROL}/scheduler-state.json"
 _TASK_DOC = f"{_CONTROL}/task.md"
 _BASH_ENV = f"{_CONTROL}/bash-env"
@@ -544,6 +542,11 @@ class BenchmarkCodex(CodexOffline):
         if self.execution.task_entry == "seeded-todo":
             await self._seed_phase(environment, cwd=cwd)
 
+        await self._verify_phase_configuration(environment, cwd=cwd)
+
+    async def _verify_phase_configuration(self, environment: BaseEnvironment, *, cwd: str) -> None:
+        """Read the treatment without reconfiguring a restored Goal or its queue."""
+        key, _, expected = self._replan_configuration()
         cadence = await self._loopx(
             environment, ["configure-goal", "--goal-id", self.goal_id], cwd=cwd,
         )

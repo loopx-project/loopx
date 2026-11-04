@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Mapping
+from typing import Any, Mapping, cast
+
 
 from ...orchestration import compact_orchestration_policy
 
@@ -58,9 +59,9 @@ def resolve_explore_harness_gate(
     """
 
     boundary_provided = isinstance(orchestration, Mapping) and bool(orchestration)
-    compact = compact_orchestration_policy(dict(orchestration) if boundary_provided else None)
+    compact = compact_orchestration_policy(dict(cast(Mapping[str, Any], orchestration)) if boundary_provided else None)
     harness_policy = (
-        compact.get("explore_harness") if isinstance(compact.get("explore_harness"), dict) else {}
+        cast(dict[str, Any], compact.get("explore_harness")) if isinstance(compact.get("explore_harness"), dict) else {}
     )
     enabled = bool(harness_policy.get("enabled"))
     spawn_allowed = bool(compact.get("spawn_allowed"))

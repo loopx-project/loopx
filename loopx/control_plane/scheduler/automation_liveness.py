@@ -1,7 +1,8 @@
 from __future__ import annotations
+
+from typing import Any, cast
 from ..quota.effective_action import EffectiveAction
 
-from typing import Any
 
 from ..agents.agent_scope_frontier import (
     AgentScopeFrontierAction,
@@ -15,12 +16,12 @@ AUTOMATION_LIVENESS_SCHEMA_VERSION = "automation_liveness_v0"
 
 def build_automation_liveness(payload: dict[str, Any]) -> dict[str, Any]:
     heartbeat_recommendation = (
-        payload.get("heartbeat_recommendation")
+        cast(dict[str, Any], payload.get("heartbeat_recommendation"))
         if isinstance(payload.get("heartbeat_recommendation"), dict)
         else {}
     )
     execution_obligation = (
-        payload.get("execution_obligation")
+        cast(dict[str, Any], payload.get("execution_obligation"))
         if isinstance(payload.get("execution_obligation"), dict)
         else {}
     )
@@ -153,7 +154,7 @@ def build_automation_liveness(payload: dict[str, Any]) -> dict[str, Any]:
         }
     if effective_action == AgentScopeFrontierAction.SUCCESSOR_REPLAN_REQUIRED.value:
         agent_scope_frontier = (
-            payload.get("agent_scope_frontier")
+            cast(dict[str, Any], payload.get("agent_scope_frontier"))
             if isinstance(payload.get("agent_scope_frontier"), dict)
             else {}
         )

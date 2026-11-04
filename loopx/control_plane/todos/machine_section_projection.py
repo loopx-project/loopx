@@ -8,12 +8,13 @@ readable Markdown syntax is regenerated and then parsed back for parity.
 
 from __future__ import annotations
 
+from typing import Any, Iterable, cast
+
 import hashlib
 import json
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
 
 from ..coordination.coordination_state_contract import (
     TODO_CANONICAL_READ_RECORD_FIELDS,
@@ -288,7 +289,7 @@ def _render_record(
         raise TodoSectionProjectionError(
             f"Todo {record.get('todo_id')!r} has empty projection text"
         )
-    metadata_values = {
+    metadata_values: dict[str, Any] = {
         field: record[field]
         for field in TODO_METADATA_FIELDS
         if field in record and record[field] is not None
@@ -781,7 +782,7 @@ def render_canonical_todo_sections(
                     goal_id=resolved_goal_id,
                     role=role,
                     todo_id=str(item["todo_id"]),
-                    omitted_fields=tuple(str(f) for f in item["omitted_fields"]),  # type: ignore[index]
+                    omitted_fields=tuple(str(f) for f in cast(Iterable[object], item["omitted_fields"])),
                 )
                 for item in omitted_active_by_role[role]
             ]

@@ -59,11 +59,11 @@
       "dict_any_count": 0
     },
     "loopx/control_plane/goals/goal_frontier/terminal.py": {
-      "any_count": 15,
+      "any_count": 22,
       "dict_any_count": 0
     },
     "loopx/control_plane/work_items/interaction_contract.py": {
-      "any_count": 85,
+      "any_count": 107,
       "dict_any_count": 0
     },
     "loopx/extensions/lark/goal_topic_runtime.py": {
@@ -90,7 +90,7 @@
       "dict_any_count": 0
     },
     "loopx/pr_review.py": {
-      "any_count": 49,
+      "any_count": 50,
       "dict_any_count": 0
     },
     "loopx/presentation/renderers/status_markdown.py": {
@@ -103,7 +103,7 @@
       "lines": 1999
     },
     "loopx/slash_command_install.py": {
-      "any_count": 11,
+      "any_count": 12,
       "dict_any_count": 0
     },
     "loopx/state_refresh.py": {

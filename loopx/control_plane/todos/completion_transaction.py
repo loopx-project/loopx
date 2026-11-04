@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 from collections.abc import Mapping
-from typing import Any
 
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from .contract import normalize_todo_id_list
@@ -291,7 +292,7 @@ def _valid_receipt(value: Any) -> bool:
             or (
                 isinstance(value.get("validation_declaration_sha256"), str)
                 and BARE_SHA256_PATTERN.fullmatch(
-                    value.get("validation_declaration_sha256")
+                    cast(str, value.get("validation_declaration_sha256"))
                 )
                 is not None
             )
@@ -406,7 +407,7 @@ def _valid_execute_validation_result(result: Mapping[str, Any]) -> bool:
             or (
                 isinstance(effect.get("validation_declaration_sha256"), str)
                 and BARE_SHA256_PATTERN.fullmatch(
-                    effect.get("validation_declaration_sha256")
+                    cast(str, effect.get("validation_declaration_sha256"))
                 )
                 is not None
             )
@@ -509,7 +510,7 @@ def _valid_result(
             completion_policy_required=completion_policy_required,
         )
     if decision == "replay":
-        return result["fence"].get("outcome") == "replay"
+        return cast(bool, result["fence"].get("outcome") == "replay")
     return _valid_reject_result(result)
 
 

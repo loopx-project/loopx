@@ -180,12 +180,14 @@ class CodexAgentSession:
 
     def _bind_verified_fork(self, session_id: str, verified_profile_digest: str,
                             checkpoint_artifact_sha256: str, checkpoint_artifact_root: str,
-                            *, model_transition: dict[str, str] | None = None) -> None:
+                            *, model_transition: dict[str, str] | None = None,
+                            expected_binding: dict[str, Any] | None = None) -> None:
         """Bind a controller-verified native fork through the existing session owner.
 
         This admits the conversation binding only. It does not claim work,
         restore research authority or start a model. Unknown result delivery
-        requires readback; it cannot replace an existing binding.
+        requires readback. An isolated full-state replacement may compare and
+        replace only its independently verified captured binding.
         """
         if self.session_id is not None:
             raise ValueError("checkpoint session adoption requires an absent destination binding")
@@ -198,7 +200,8 @@ class CodexAgentSession:
                 session_id=session_id,
                 goal_ref=self.goal_ref,
                 session_profile_digest=self.digest,
-                require_absent=True,
+                require_absent=expected_binding is None,
+                **({"expected_document": expected_binding} if expected_binding is not None else {}),
                 checkpoint_artifact_sha256=checkpoint_artifact_sha256,
                 checkpoint_artifact_root=checkpoint_artifact_root,
                 checkpoint_model_transition=model_transition,

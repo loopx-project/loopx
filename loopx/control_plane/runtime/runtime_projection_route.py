@@ -297,11 +297,11 @@ def resolve_runtime_projection_route(
             continue
         available_targets.append(root)
         try:
-            target_registry = load_registry(candidate_registry)
+            candidate_payload = load_registry(candidate_registry)
         except (OSError, ValueError, json.JSONDecodeError):
             unreadable_target_count += 1
             continue
-        for goal in registry_goals(target_registry):
+        for goal in registry_goals(candidate_payload):
             if str(goal.get("id") or "") != goal_id:
                 continue
             declared_source = _resolved_source_registry(

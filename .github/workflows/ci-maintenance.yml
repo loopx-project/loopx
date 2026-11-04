@@ -85,7 +85,11 @@ jobs:
                   if (!(await cancellationScopeUnchanged())) return core.info('PR or source branch changed; stop force cancellation.');
                   await github.request('POST /repos/{owner}/{repo}/actions/runs/{run_id}/force-cancel', params);
                   let terminal = false;
-                  for (let attempt = 0; attempt < 10; attempt++) {
+                  // Cancellation is asynchronous: runners can take tens of
+                  // seconds to settle after force-cancel is accepted.
+                  const deadline = Date.now() + 60_000;
+                  while (Date.now() < deadline) {
+                    if (!(await cancellationScopeUnchanged())) return core.info('PR or source branch changed; stop cancellation readback.');
                     await new Promise(resolve => setTimeout(resolve, 1000));
                     if ((await github.rest.actions.getWorkflowRun(params)).data.status === 'completed') {
                       terminal = true;

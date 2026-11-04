@@ -7,11 +7,12 @@ objects; transaction and admission authority stays with its typed owners.
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import json
 import math
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Any
 
 QUOTA_SLOT_SPENT_CLASSIFICATION = "quota_slot_spent"
 QUOTA_SLOT_VOIDED_CLASSIFICATION = "quota_slot_voided"
@@ -116,7 +117,7 @@ def _read_quota_event_artifact(raw_json_path: str) -> tuple[dict[str, Any] | Non
         return None, QUOTA_EVENT_UNREADABLE_ARTIFACT_INVALID_JSON
     if not isinstance(record, dict):
         return None, QUOTA_EVENT_UNREADABLE_ARTIFACT_NOT_OBJECT
-    event = record.get("quota_event") if isinstance(record.get("quota_event"), dict) else None
+    event = cast(dict[str, Any], record.get("quota_event")) if isinstance(record.get("quota_event"), dict) else None
     if not event:
         return None, QUOTA_EVENT_UNREADABLE_EVENT_MISSING
     return event, None
@@ -128,7 +129,7 @@ def load_quota_event_from_run(run: dict[str, Any]) -> dict[str, Any] | None:
         QUOTA_SLOT_VOIDED_CLASSIFICATION,
     }:
         return None
-    event = run.get("quota_event") if isinstance(run.get("quota_event"), dict) else None
+    event = cast(dict[str, Any], run.get("quota_event")) if isinstance(run.get("quota_event"), dict) else None
     if event:
         return event
 
@@ -155,7 +156,7 @@ def resolve_quota_event_from_run(
         QUOTA_SLOT_VOIDED_CLASSIFICATION,
     }:
         return None, None
-    event = run.get("quota_event") if isinstance(run.get("quota_event"), dict) else None
+    event = cast(dict[str, Any], run.get("quota_event")) if isinstance(run.get("quota_event"), dict) else None
     if event:
         return event, None
     raw_json_path = str(run.get("json_path") or "")

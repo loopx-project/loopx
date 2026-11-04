@@ -45,6 +45,31 @@ def body(binding, text="Owner follow-up"):
     }
 
 
+def test_protocol_fixture_ignores_conflicting_ambient_runtime_roots(tmp_path, monkeypatch):
+    from loopx import paths
+
+    current, legacy = tmp_path / "current", tmp_path / "legacy"
+    monkeypatch.setattr(paths, "DEFAULT_RUNTIME_ROOT", current)
+    monkeypatch.setattr(paths, "LEGACY_RUNTIME_ROOT", legacy)
+    ambient = []
+    for root in (current, legacy):
+        root.mkdir()
+        registry = paths.global_registry_path(root)
+        registry.write_text(json.dumps({"goals": []}))
+        ambient.append(registry)
+    assert paths.default_runtime_route()["status"] == "conflict"
+    before = {path: path.read_bytes() for path in ambient}
+    workspace = tmp_path / "isolated"
+    workspace.mkdir()
+    with fixture(workspace) as (request, _, _, inputs, _, _):
+        _, query = target(request)
+        status, result = request(query=query)
+        assert status == 200
+        assert any(row["text"] == "Original result" for row in result["messages"])
+        assert not inputs
+    assert {path: path.read_bytes() for path in ambient} == before
+
+
 def test_managed_directory_keeps_registered_identity_and_original_sessions(tmp_path):
     with fixture(tmp_path) as (request, _, methods, inputs, registry, _):
         store = request.server.chat_store

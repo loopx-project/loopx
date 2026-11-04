@@ -446,6 +446,20 @@ export function listLocalBoundSessions(params: JsonObject): JsonObject {
  * command; Core binds its exact target before IO. Replays retain that target.
  */
 export function planBoundConversationRequest(params: JsonObject): JsonObject {
+  if (params.pending_observations !== undefined) {
+    const observations = params.pending_observations;
+    if (Object.keys(params).length !== 1 || !Array.isArray(observations) || observations.length > 64) {
+      throw new EffectRuntimeRequestError("select at most 64 read-only pending observations");
+    }
+    return {pending_flags: observations.map(value => {
+      const item = requireJsonObject(value, "pending observation input");
+      if (Object.keys(item).some(key => !["request", "current_session", "pending_observation"].includes(key))
+          || item.pending_observation === undefined) {
+        throw new EffectRuntimeRequestError("pending batches cannot admit or recover work");
+      }
+      return planBoundConversationRequest(item).pending;
+    })};
+  }
   const row = requireJsonObject(params.request, "external request");
   const request = ref(row.request_ref, "external request identity");
   const command = row.command;
@@ -491,6 +505,9 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
       || !Array.isArray(metadataReceipts) || !Array.isArray(reservation.metadata_handoffs)
       || metadataReceipts.length !== reservation.metadata_handoffs.length
       || !Array.isArray(response?.context_handoff_failures) || response.context_handoff_failures.length > 0);
+    const answerReviewOwed = reservation?.answer_review === true
+      && turn?.client_turn_id === reservation.client_turn_id
+      && (turn?.status !== "completed" || response?.gate != null);
     const recovered = row.native_result_recovery == null ? null
       : requireJsonObject(row.native_result_recovery, "recovered native result");
     const native = recovered?.native_observation as JsonObject | undefined;
@@ -506,10 +523,10 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
       && extendsOriginalText(response, result);
     return {pending: !returned && row.command === null && row.status === "accepted"
       && turn?.session_id === row.session_id && turn?.turn_id === row.turn_id
-      && (expandedResult || metadataOwed || unfinished || turn?.status === "failed"
+      && (expandedResult || metadataOwed || answerReviewOwed || unfinished || turn?.status === "failed"
         && ["usage_limit_exceeded", "response_timeout", "upstream_transport_failure",
           "antigravity_rpc_error", "antigravity_transport_error", "antigravity_step_error",
-          "manager_authorization_unavailable"].includes(String(turn.error_code)))
+          "manager_authorization_unavailable", "runtime_error", "server_restarted"].includes(String(turn.error_code)))
       && !(current?.session_id === row.session_id && current?.status === "closed")
       && observation.stop_observed !== true};
   }
@@ -638,7 +655,10 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
         requireJsonObject(value, "prior preparation recovery").preparation_attempt != null))) return no;
   if (current.agent_id === "antigravity") {
     if (failed.error_code === "antigravity_step_error") {
-      return planNativeQuotaRecovery(recovery, row, current, failed, version);
+      const quota = planNativeQuotaRecovery(recovery, row, current, failed, version);
+      const observed = recovery.native_observation as JsonObject | null | undefined;
+      return quota.recovery_candidate === true && observed?.read_only_review !== true ? quota
+        : planInterruptedStewardAnswer(recovery, row, current, failed, version);
     }
     const originalResponse = failed.response && typeof failed.response === "object" && !Array.isArray(failed.response)
       ? failed.response as JsonObject : null;
@@ -687,6 +707,16 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
     const created = Date.parse(String(proof.input_created_at));
     const start = Date.parse(String(failed.started_at)), end = Date.parse(String(failed.completed_at));
     const response = proof.response == null ? null : requireJsonObject(proof.response, "native result response");
+    // Returning an already generated historical answer is not replay. Bind its
+    // exact original input and closed native segment; later ordinary questions
+    // must not strand that answer. Legacy unanchored results stay latest-only.
+    const anchoredHistorical = anchor !== null && anchor.thread_id === current.upstream_thread_id
+      && Number.isSafeInteger(anchor.start_step_index) && Number(anchor.start_step_index) >= 0
+      && typeof anchor.input_sha256 === "string" && BARE_SHA256_PATTERN.test(anchor.input_sha256)
+      && proof.start_step_index === anchor.start_step_index && proof.input_sha256 === anchor.input_sha256
+      && proof.latest_input_verified === false && Number.isSafeInteger(proof.end_step_index)
+      && Number(proof.end_step_index) > Number(proof.start_step_index) + 1
+      && Number(proof.end_step_index) < Number(proof.total_steps);
     return {...candidate, recovery_eligible: recovery.source_verified === true
       && proof.thread_id === current.upstream_thread_id && proof.request_ref === row.request_ref
       && typeof proof.execution_id === "string" && proof.execution_id.length > 0
@@ -697,7 +727,7 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
             && Number(proof.end_step_index) > Number(proof.start_step_index) + 1
             && Number(proof.end_step_index) < Number(proof.total_steps))
           && response !== null && extendsOriginalText(originalResponse!, response)
-        : proof.latest_input_verified === true)
+        : proof.latest_input_verified === true || anchoredHistorical)
       && proof.normal_terminal_verified === true
       && Number.isFinite(created) && created >= start && created <= end
       && Number.isSafeInteger(proof.start_step_index) && Number(proof.start_step_index) >= 0
@@ -958,16 +988,7 @@ function nativeRecoveryCapacity(recovery: JsonObject, row: JsonObject, current: 
   if (recovery.source_verified !== true) return candidate;
   const capacity = recovery.metadata_capacity as JsonObject | null | undefined;
   const now = Date.parse(String(recovery.observed_at)) / 1000;
-  if (!capacity || capacity.model_id !== (current.agent_model_id ?? "gemini-4-argon-high")
-      || typeof capacity.account_ref !== "string" || !BARE_SHA256_PATTERN.test(capacity.account_ref)
-      || typeof capacity.remaining_fraction !== "number" || !Number.isFinite(capacity.remaining_fraction)
-      || capacity.remaining_fraction < 0 || capacity.remaining_fraction > 1
-      || typeof capacity.observed_at !== "number" || !Number.isFinite(capacity.observed_at)
-      || !Number.isFinite(now) || now < capacity.observed_at || now - capacity.observed_at > 120
-      || typeof capacity.quota_exhausted !== "boolean" || typeof capacity.normal_completion !== "boolean"
-      || typeof capacity.reset_time !== "string"
-      || !Number.isFinite(Date.parse(String(capacity.reset_time)))) return candidate;
-  const alternate = capacity.alternate_executor as JsonObject | undefined;
+  const alternate = capacity?.alternate_executor as JsonObject | undefined;
   const allocation = alternate?.allocation as JsonObject | undefined;
   const configuration = recovery.executor_configuration as JsonObject | undefined;
   if (alternate && typeof alternate.observed_at === "number" && Number.isFinite(alternate.observed_at)
@@ -985,8 +1006,18 @@ function nativeRecoveryCapacity(recovery: JsonObject, row: JsonObject, current: 
       && typeof allocation.configuration_revision === "string" && allocation.configuration_revision.length > 0
       && allocation.configuration_revision === configuration.configuration_revision) {
     return {...candidate, recovery_eligible: true,
-      ...(candidate.metadata_review === true ? {metadata_executor: "codex"} : {quota_executor: "codex"})};
+      ...(candidate.metadata_review === true ? {metadata_executor: "codex"}
+        : candidate.answer_review === true ? {answer_executor: "codex"} : {quota_executor: "codex"})};
   }
+  if (!capacity || capacity.model_id !== (current.agent_model_id ?? "gemini-4-argon-high")
+      || typeof capacity.account_ref !== "string" || !BARE_SHA256_PATTERN.test(capacity.account_ref)
+      || typeof capacity.remaining_fraction !== "number" || !Number.isFinite(capacity.remaining_fraction)
+      || capacity.remaining_fraction < 0 || capacity.remaining_fraction > 1
+      || typeof capacity.observed_at !== "number" || !Number.isFinite(capacity.observed_at)
+      || !Number.isFinite(now) || now < capacity.observed_at || now - capacity.observed_at > 120
+      || typeof capacity.quota_exhausted !== "boolean" || typeof capacity.normal_completion !== "boolean"
+      || typeof capacity.reset_time !== "string"
+      || !Number.isFinite(Date.parse(String(capacity.reset_time)))) return candidate;
   const waiting = row.metadata_quota_wait as JsonObject | null | undefined;
   if (waiting != null && (typeof waiting.model_id !== "string" || typeof waiting.remaining_fraction !== "number"
       || typeof waiting.account_ref !== "string" || !BARE_SHA256_PATTERN.test(waiting.account_ref)
@@ -1066,9 +1097,61 @@ function planUnfinishedWork(recovery: JsonObject, row: JsonObject, current: Json
 
 /** Interrupted work may have effects. Never retry it. The original worker may
  * reserve one read-only review of existing results, with its own presentation.
- * The adapter enforces the existing workspace-only read policy, without tools
- * which could send, write, delegate or repeat the original business operation.
+ * The adapter retains only the original runtime's authorized reads, with
+ * filesystem writes, network effects and new delegated actions disabled.
  */
+function planInterruptedStewardAnswer(recovery: JsonObject, row: JsonObject, current: JsonObject,
+  failed: JsonObject, version: number): JsonObject {
+  const no = {operation: "admit_turn", recovery_candidate: false, recovery_eligible: false};
+  const anchor = recovery.native_input as JsonObject | null | undefined;
+  const previous = row.context_recovery as JsonObject | null | undefined;
+  const client = `external-${ref(row.request_ref, "original request")}-recovery-${version}-review-1`;
+  if (current.steward_context == null || failed.session_id !== current.session_id || failed.turn_id !== row.turn_id
+      || failed.client_turn_id !== `external-${row.request_ref}` || failed.message !== row.message || failed.origin !== row.origin
+      || failed.status !== "failed" || failed.response !== null || typeof failed.upstream_turn_id !== "string"
+      || recovery.attachments_present !== false || recovery.steering_observed !== false || recovery.stop_observed !== false
+      || !anchor || anchor.thread_id !== current.upstream_thread_id || !Number.isSafeInteger(anchor.start_step_index)
+      || Number(anchor.start_step_index) < 0 || typeof anchor.input_sha256 !== "string"
+      || !BARE_SHA256_PATTERN.test(anchor.input_sha256)
+      || (Array.isArray(row.context_recovery_history) && row.context_recovery_history.length)
+      || previous != null && (previous.answer_review !== true || previous.read_only_review !== true
+        || ["metadata_review", "quota_attempt", "routing_attempt", "preparation_attempt", "work_attempt"].some(key => previous[key] != null)
+        || previous.failed_turn_id !== failed.turn_id || previous.version !== version || previous.client_turn_id !== client)) return no;
+  const candidate = {...no, recovery_candidate: true, answer_review: true, read_only_review: true,
+    client_turn_id: client, session_id: current.session_id, failed_turn_id: failed.turn_id,
+    native_thread_ids: [current.upstream_thread_id]};
+  if (previous != null && recovery.admitted_turn != null) {
+    const admitted = requireJsonObject(recovery.admitted_turn, "admitted answer review");
+    if (admitted.client_turn_id !== client || admitted.session_id !== current.session_id
+        || admitted.turn_id === failed.turn_id || admitted.message !== row.message || admitted.origin !== row.origin
+        || !Array.isArray(admitted.attachments ?? []) || (admitted.attachments as unknown[] | undefined)?.length) return no;
+    return {...candidate, recovery_eligible: recovery.source_verified === true,
+      answer_executor: "codex", admitted_turn_id: sessionIdentity(admitted.turn_id, "answer review"), native_thread_ids: []};
+  }
+  const now = Date.parse(String(recovery.observed_at)), ended = Date.parse(String(failed.completed_at));
+  if (current.status !== "ready" || current.active_turn_id != null || recovery.queued_input_present !== false
+      || !Number.isFinite(now) || !Number.isFinite(ended) || now < ended + 60_000) return no;
+  if (recovery.native_observation == null) return candidate;
+  const proof = requireJsonObject(recovery.native_observation, "interrupted original answer inventory");
+  const created = Date.parse(String(proof.input_created_at));
+  if (proof.thread_id !== current.upstream_thread_id || proof.request_ref !== row.request_ref
+      || proof.start_step_index !== anchor.start_step_index || proof.input_sha256 !== anchor.input_sha256
+      || typeof proof.execution_id !== "string" || !proof.execution_id || !Number.isFinite(created)
+      || created < Date.parse(String(failed.started_at)) || created > ended
+      || !Number.isSafeInteger(proof.end_step_index) || Number(proof.end_step_index) <= Number(proof.start_step_index) + 2
+      || !Number.isSafeInteger(proof.total_steps) || Number(proof.end_step_index) > Number(proof.total_steps)
+      || proof.read_only_review !== true || proof.no_final_answer !== true || proof.effects_observed !== true
+      || !Array.isArray(proof.visible_results) || !proof.visible_results.length || proof.visible_results.length > 128
+      || Buffer.byteLength(JSON.stringify(proof.visible_results), "utf8") > 256 * 1024
+      || proof.visible_results.some(value => !value || typeof value !== "object" || Array.isArray(value)
+        || typeof (value as JsonObject).commandLine !== "string" || !(value as JsonObject).commandLine
+        || !Number.isSafeInteger((value as JsonObject).exitCode))) return candidate;
+  const capacity = nativeRecoveryCapacity(recovery, row, current, candidate);
+  // This is a new restricted answer review, never native business replay.
+  return {...capacity, recovery_eligible: capacity.recovery_eligible === true && capacity.answer_executor === "codex"};
+}
+
+/** Original project result reviews retain their workspace-only read policy. */
 function planResultReview(recovery: JsonObject, row: JsonObject, current: JsonObject,
   failed: JsonObject, previous: JsonObject | null, version: number): JsonObject {
   const no = {operation: "admit_turn", recovery_candidate: false, recovery_eligible: false};
@@ -1166,14 +1249,19 @@ function planRoutingRecovery(recovery: JsonObject, row: JsonObject, current: Jso
   if (previous !== null && previous.failed_turn_id === failed.turn_id && previous[attemptKey] === undefined) return null;
   const raw = preparation ? recovery.preparation_observation : recovery.native_observation;
   const observed = raw == null ? null : requireJsonObject(raw, "pre-execution failure readback");
-  if (observed && !quota && !preparation && observed.pre_execution_routing_timeout !== true) return null;
+  const interrupted = observed?.interrupted_before_execution === true
+    && ["host_gate", "upstream_transport_failure"].includes(String(failed.error_code));
+  if (observed && !quota && !preparation && observed.pre_execution_routing_timeout !== true && !interrupted) return null;
   const no = {operation: "admit_turn", recovery_candidate: false, recovery_eligible: false};
   const reserved = previous?.failed_turn_id === failed.turn_id;
   const priorAttempt = previous?.[attemptKey] ?? 0;
   if (!Number.isSafeInteger(priorAttempt) || Number(priorAttempt) < 0) return no;
   const attempt = Number(priorAttempt) + (reserved ? 0 : 1);
+  const disconnected = current.status === "stale" && current.last_error_code === "transport_disconnected"
+    && ["host_gate", "upstream_transport_failure"].includes(String(failed.error_code));
   if (attempt < 1 || attempt > 3 || typeof current.upstream_thread_id !== "string"
-      || !current.upstream_thread_id || current.active_turn_id != null || current.status !== "ready") return no;
+      || !current.upstream_thread_id || current.active_turn_id != null
+      || (current.status !== "ready" && !disconnected)) return no;
   const now = typeof recovery.observed_at === "string" ? Date.parse(recovery.observed_at) : NaN;
   const completed = typeof failed.completed_at === "string" ? Date.parse(failed.completed_at) : NaN;
   const notBefore = completed + 60_000 * 2 ** (attempt - 1);
@@ -1208,6 +1296,7 @@ function planRoutingRecovery(recovery: JsonObject, row: JsonObject, current: Jso
     && (quota ? observed.codex_error_info === "usageLimitExceeded" && observed.only_original_user_item === true
       && observed.quota_available === true && typeof observed.quota_observed_at === "number"
       && now / 1000 >= observed.quota_observed_at && now / 1000 - observed.quota_observed_at <= 120
+      : interrupted ? recovery.stop_observed === false && observed.only_original_user_item === true
       : observed.codex_error_info === "other" && observed.only_pre_execution_items === true)};
 }
 

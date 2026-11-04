@@ -5,9 +5,10 @@ legal discharge outcomes; the canonical acceptance owner still guards execution.
 """
 from __future__ import annotations
 
+from typing import Any, cast
+
 import hashlib
 import json
-from typing import Any
 
 from ...agents.agent_scope import agent_scope_item_claimed_by_agent_or_unclaimed
 from ...effect_runtime import CANONICAL_AUTHORITY_READ_TIMEOUT_SECONDS, effect_runtime_result
@@ -162,4 +163,4 @@ def project_legacy_acceptance_hold_ack(
     )} if isinstance(checkpoint, dict) else checkpoint for checkpoint in checkpoints]
     # This ephemeral projection feeds the existing exact typed ACK comparison.
     # Keep the original obligation identity, outcomes, durable record and debit.
-    return {**ack, "semantic_delta": {**delta, "trigger_checkpoints": projected}}
+    return {**cast(dict[str, Any], ack), "semantic_delta": {**delta, "trigger_checkpoints": projected}}

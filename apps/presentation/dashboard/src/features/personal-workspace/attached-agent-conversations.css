@@ -10,7 +10,7 @@
 .attached-conversation-content textarea {min-height: 88px; width: 100%; resize: vertical;}
 .attached-conversation-content button {font: inherit; padding: 8px 12px; border: 1px solid var(--pw-line); border-radius: 6px; background: var(--pw-card); color: var(--pw-text); cursor: pointer;}
 .attached-conversation-content button:disabled, .attached-conversation-content button[aria-disabled="true"] {opacity: .5; cursor: default;}
-.attached-conversation-content .attached-conversation-open {border: 0; padding: 0; border-radius: 0; background: transparent; text-decoration: underline; text-underline-offset: 3px;}
+.attached-conversation-content .attached-conversation-open {border: 0; padding: 0; border-radius: 0; background: transparent;}
 .attached-session-selection {display: flex; align-items: center; gap: 12px; margin-block: 12px 4px; min-width: 0;}
 .attached-session-selection > span {flex-shrink: 0;}
 .attached-session-selection select {min-width: 0; max-width: 100%; min-height: 44px; font: inherit; padding: 8px; border: 1px solid var(--pw-line); border-radius: 6px; background: var(--pw-card); color: var(--pw-text);}
@@ -59,9 +59,10 @@
 .goal-agent-work-page form button[type="submit"] {background: var(--pw-text); color: var(--pw-card); min-height: 44px;}
 @media (max-width: 640px) {.agent-work-navigation {width: 100%;} .agent-work-navigation select {flex: 1; min-width: 0;} .goal-agent-work-page .attached-conversation-messages {min-height: 120px;}}
 
-.attached-connection-status {display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 16px; padding-block: 8px;}
+.attached-connection-status {display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px 16px; padding-block: 8px; padding-inline-end: 4px;}
 .attached-connection-status p {margin: 0;}
-.attached-connection-status .attached-conversation-open {min-height: 44px; flex-shrink: 0;}
+.attached-connection-status .attached-conversation-open {display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; border-radius: 6px; color: var(--pw-muted);}
+.attached-connection-status .attached-conversation-open:hover {background: var(--pw-hover); color: var(--pw-text);}
 @media (max-width: 640px) {.goal-agent-work-page .attached-conversation-heading h2 {font-size: var(--text-lead);} .agent-work-navigation {width: auto; flex: 1;} .agent-work-navigation select {max-width: 140px;} .attached-conversation-heading button {padding-inline: 8px;}}
 
 .attached-conversation-messages summary > strong {font-weight: 500;}

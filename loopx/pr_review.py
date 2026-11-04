@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 import json
 import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 from .capabilities.pr_review_queue import (
     DEFAULT_REVIEW_PRIORITY,
@@ -37,7 +38,10 @@ from .capabilities.pr_review_queue.review_body import (
     check_review_body,
     english_review_verdict as _english_review_verdict,
 )
-from .capabilities.pr_review_queue.review_contract import CODE_AREAS, BEHAVIORAL_POLICY_AREAS
+from .capabilities.pr_review_queue.review_contract import (
+    CODE_AREAS as CODE_AREAS,
+    BEHAVIORAL_POLICY_AREAS as BEHAVIORAL_POLICY_AREAS,
+)
 from .control_plane.runtime.time import now_utc_iso
 from .presentation.markdown import as_dict as _as_dict
 from .presentation.markdown import as_list as _as_list
@@ -490,7 +494,7 @@ def _top_file_phrase(files: list[dict[str, Any]], *, limit: int = 3) -> str:
 
 def _int_or_zero(value: object) -> int:
     try:
-        return int(value or 0)
+        return int(cast(Any, value or 0))
     except (TypeError, ValueError):
         return 0
 
@@ -867,8 +871,8 @@ def _review_conclusion(
             "submitted_at": review.get("submittedAt"),
             "conclusion": conclusion}
             for review, conclusion in zip(reviews, conclusions)]})
-    return conclusions[selection["index"]] | ({"independent_review": selection["independent_review"]}
-        if "independent_review" in selection else {})
+    return cast(dict[str, Any], conclusions[selection["index"]] | ({"independent_review": selection["independent_review"]}
+        if "independent_review" in selection else {}))
 
 
 def _review_sequence_entry(item: dict[str, Any], *, rank: int) -> dict[str, Any]:

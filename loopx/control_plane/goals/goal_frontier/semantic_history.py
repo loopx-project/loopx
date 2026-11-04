@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
+
 
 from ..goal_vision_read_model import latest_agent_vision_from_runs as latest_agent_vision_from_runs
 
@@ -20,12 +21,12 @@ def _run_history_goal(
     goal_id: str,
 ) -> dict[str, Any] | None:
     run_history = (
-        status_payload.get("run_history")
+        cast(dict[str, Any], status_payload.get("run_history"))
         if isinstance(status_payload.get("run_history"), dict)
         else {}
     )
     goals = (
-        run_history.get("goals") if isinstance(run_history.get("goals"), list) else []
+        cast(list[Any], run_history.get("goals")) if isinstance(run_history.get("goals"), list) else []
     )
     return next(
         (
@@ -153,10 +154,10 @@ def _latest_missing_vision_checkpoint_from_runs(
             "goal_id": goal_id,
             "agent_id": checkpoint_agent_id or agent_id,
             "decision": checkpoint.get("decision"),
-            "triggers": checkpoint.get("triggers")
+            "triggers": cast(list[Any], checkpoint.get("triggers"))
             if isinstance(checkpoint.get("triggers"), list)
             else [],
-            "required_resolution": checkpoint.get("required_resolution")
+            "required_resolution": cast(list[Any], checkpoint.get("required_resolution"))
             if isinstance(checkpoint.get("required_resolution"), list)
             else [],
             "missing_baseline": checkpoint.get("missing_baseline") is True,

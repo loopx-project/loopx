@@ -153,7 +153,7 @@ def main(argv=None):
     parser.add_argument("--checkpoint-request", type=Path,
                         help="Explicit host JSON declaration staged into a heartbeat worker; omitted disables capture")
     parser.add_argument("--restore-checkpoint", type=Path,
-                        help="Explicit complete checkpoint to continue under fresh native/Goal identities")
+                        help="Explicit complete checkpoint to continue the retained Goal/Agent in an isolated replacement")
     parser.add_argument("--restore-sha256")
     retention = parser.add_mutually_exclusive_group()
     retention.add_argument("--checkpoint-retention-policy", type=Path,
@@ -169,7 +169,7 @@ def main(argv=None):
     parser.add_argument("--restore-research-component", action="append", default=[],
                         help="Opt-in captured file component ID to restore at its original research path; repeat per component")
     parser.add_argument("--restore-fresh-replan", action="store_true",
-                        help="Start a fresh conversation before checkpoint preparation and the first current replan")
+                        help="Start a fresh conversation before the retained pending replan while preserving full Goal state")
     parser.add_argument("--restore-phase-extension-seconds", type=int, default=0,
                         help="Explicit authorized extra continuation time; omitted preserves the checkpoint's remaining phase")
     parser.add_argument("--eval-interval", type=int,
@@ -238,7 +238,7 @@ def main(argv=None):
     restore_values = (args.restore_sha256, args.restore_config, args.restore_goal,
                       args.restore_agent, args.restore_source_todo)
     if bool(args.restore_checkpoint) != all(restore_values) or (not args.restore_checkpoint and any(restore_values)):
-        parser.error("Warm continuation requires checkpoint, digest, config, fresh Goal/Agent and source Todo together")
+        parser.error("Warm continuation requires checkpoint, digest, config, source Goal/Agent and source Todo together")
     if (not 0 <= args.restore_phase_extension_seconds < 2 ** 53 or
             (args.restore_phase_extension_seconds and not args.restore_checkpoint)):
         parser.error("A non-negative phase extension requires an explicit warm checkpoint continuation")
@@ -435,7 +435,8 @@ def main(argv=None):
         **({"restore_fresh_replan": True} if args.restore_fresh_replan else {}),
         **({"restored_checkpoint_sha256": warm_start.sha256,
             "original_deadline_epoch": warm_start.deadline_epoch,
-            "receiver_preparation_cadence": 1, "normal_replan_cadence": warm_start.normal_cadence}
+            "restored_loopx_state": True,
+            "normal_replan_cadence": warm_start.normal_cadence}
            if warm_start is not None else {}),
         **({"online_admission_epoch": sampler.epoch, "offline_scoring_complete": False}
            if sampler is not None else {}),
