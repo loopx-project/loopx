@@ -362,18 +362,25 @@ def test_invalid_request_entry_writes_nothing(h, damage, error):
     assert not default_issue_fix_domain_state_ledger_path(project=h.project, goal_id=GOAL_ID).exists()
 
 
-@pytest.mark.parametrize("change", ["checks", "revision"])
-def test_return_ledger_failure_replays_the_immutable_publication(h, monkeypatch, change):
+@pytest.mark.parametrize("change,prior_return", [
+    ("checks", False), ("revision", False), ("head", False), ("head", True),
+])
+def test_return_ledger_failure_replays_the_immutable_publication(h, monkeypatch, change, prior_return):
     from loopx.capabilities.issue_fix import correction_settlement
 
     event = _event("313")
     packet = h.run_json(metadata=observation([event]), correction=_correction_v1(event), origin=h.request_id)
     h.mark_done(h.entries()[0]["todo_id"])
+    if prior_return:
+        h.run_json(metadata=observation([event], "d" * 40), correction=None)
+    prior_replies = set(h.replies())
+    prior_returns = h.entries()[0].get("returns", [])
     packet["observation"]["head_commit_ref"] = "b" * 40
     original = correction_settlement.upsert_issue_fix_pr_lifecycle_ledger_jsonl
 
     def fail_return_write(path, payload):
-        if any(entry.get("returns") for entry in payload["maintainer_corrections"]):
+        if any(any(r["head_sha"] == "b" * 40 for r in entry.get("returns", []))
+               for entry in payload["maintainer_corrections"]):
             raise OSError("return ledger interrupted")
         return original(path, payload)
 
@@ -381,16 +388,18 @@ def test_return_ledger_failure_replays_the_immutable_publication(h, monkeypatch,
         patch.setattr(correction_settlement, "upsert_issue_fix_pr_lifecycle_ledger_jsonl", fail_return_write)
         with pytest.raises(OSError, match="return ledger interrupted"):
             settle(h, packet)
-    assert len(h.replies()) == 1
+    assert len(h.replies()) == len(prior_replies) + 1
+    published_path, = set(h.replies()) - prior_replies
+    published_reply = json.loads(published_path.read_text())
     pending = h.entries()[0]
-    assert not pending.get("returns")
+    assert pending.get("returns", []) == prior_returns
     publication = pending["pending_return"]
     assert publication["head_sha"] == "b" * 40
     assert "checks PASSING" in publication["text"]
     retry_observation = observation([event], "b" * 40)
     if change == "checks":
         retry_observation["statusCheckRollup"] = [{"name": "focused", "conclusion": "FAILURE"}]
-    else:
+    elif change == "revision":
         view = h.control("inspect")
         h.control("revise", {
             "operation_id": "revision-after-publication",
@@ -399,9 +408,24 @@ def test_return_ledger_failure_replays_the_immutable_publication(h, monkeypatch,
             "brief": {**view["brief"], "purpose": "Validate the changed correction"},
             "reason": "The request changed after publication",
         })
+    else:
+        retry_observation["headRefOid"] = "c" * 40
     h.run_json(metadata=retry_observation, correction=None)
-    assert len(h.replies()) == len(h.entries()[0]["returns"]) == 1
-    assert json.loads(h.replies()[0].read_text())["text"] == publication["text"]
+    assert json.loads(published_path.read_text()) == published_reply
+    assert published_reply["text"] == publication["text"]
+    settled = h.entries()[0]
+    assert settled["pending_return"] is None
+    returns = settled["returns"]
+    assert len(h.replies()) == len(returns) == len(prior_returns) + (2 if change == "head" else 1)
+    recovered = next(r for r in returns if r["head_sha"] == "b" * 40)
+    assert recovered["update_id"] == f"issue-fix-correction:{pending['operation_id']}:{'b' * 40}"
+    assert recovered["result_key"] == published_path.stem
+    if change == "head":
+        assert [r["head_sha"] for r in returns] == [r["head_sha"] for r in prior_returns] + ["b" * 40, "c" * 40]
+        h.run_json(metadata=observation([event], "b" * 40), correction=None)
+        assert h.entries()[0]["returns"] == returns
+        assert len(h.replies()) == len(returns)
     if change == "checks":
-        h.run_json(metadata=observation([event], "c" * 40), correction=None)
+        # Advance the head without also reactivating a completed checks monitor.
+        h.run_json(metadata={**retry_observation, "headRefOid": "c" * 40}, correction=None)
         assert len(h.replies()) == len(h.entries()[0]["returns"]) == 2

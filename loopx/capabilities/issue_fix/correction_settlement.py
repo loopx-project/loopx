@@ -323,59 +323,62 @@ def _settle_maintainer_correction_entries(
         head = str(observation.get("head_commit_ref") or "")
         for entry in entries:
             if (origin_refusal or not view or entry.get("disposition") != "accepted"
-                    or not entry.get("todo_id") or not head
-                    or head == entry.get("accepted_head_sha")
+                    or not entry.get("todo_id")
                     or todos.get(entry["todo_id"], {}).get("status") != "done"):
                 continue
             returns = entry.setdefault("returns", [])
-            if any(r["head_sha"] == head for r in returns):
-                continue
             operation_id = entry["operation_id"]
-            update_id = f"issue-fix-correction:{operation_id}:{head}"
             origin_root = resolve_runtime_root(
                 load_project_registry(Path(origin["registry_path"])),
                 origin["runtime_root"], registry_path=Path(origin["registry_path"]))
             pending = entry.get("pending_return")
-            if (
-                not isinstance(pending, dict)
-                or pending.get("head_sha") != head
-                or not isinstance(pending.get("text"), str)
-                or not isinstance(pending.get("request_revision"), int)
-            ):
-                event = entry.get("source_event") or {}
-                checks = observation.get("checks") or {}
-                text = (f"Maintainer correction {entry.get('correction_kind')} "
-                    f"({event.get('kind')} {event.get('id')}) applied in "
-                    f"{observation.get('permalink')} at head {head[:12]}; "
-                    f"PR state {observation.get('state')}, checks {checks.get('aggregate')}; "
-                    f"todo {entry['todo_id']} done.")
-                # The complete audience-visible publication is durable before
-                # report(). A crash after report() must replay this exact result,
-                # not reconstruct it from newer, mutable PR observations.
-                pending = {
-                    "schema_version": "issue_fix_maintainer_correction_publication_v1",
-                    "head_sha": head,
-                    "update_id": update_id if any(
-                        r["phase"] == "conclusion"
-                        for r in reply_status(origin_root, origin)
-                    ) else None,
-                    "text": text,
-                    "request_revision": view["revision"],
-                    "phase": "conclusion",
-                }
-                entry["pending_return"] = pending
+            pending_head = pending.get("head_sha") if (
+                isinstance(pending, dict)
+                and isinstance(pending.get("head_sha"), str)
+                and isinstance(pending.get("text"), str)
+                and isinstance(pending.get("request_revision"), int)
+            ) else None
+            # Finish the immutable publication before a newer observation can
+            # replace it, and record the return against its original full head.
+            for return_head in dict.fromkeys((pending_head, head)):
+                if (not return_head or return_head == entry.get("accepted_head_sha")
+                        or any(r["head_sha"] == return_head for r in returns)):
+                    continue
+                update_id = f"issue-fix-correction:{operation_id}:{return_head}"
+                if return_head != pending_head:
+                    event = entry.get("source_event") or {}
+                    checks = observation.get("checks") or {}
+                    text = (f"Maintainer correction {entry.get('correction_kind')} "
+                        f"({event.get('kind')} {event.get('id')}) applied in "
+                        f"{observation.get('permalink')} at head {return_head[:12]}; "
+                        f"PR state {observation.get('state')}, checks {checks.get('aggregate')}; "
+                        f"todo {entry['todo_id']} done.")
+                    # Persist the entire publication before report(), including
+                    # the first conclusion's absence of an update_id.
+                    pending = {
+                        "schema_version": "issue_fix_maintainer_correction_publication_v1",
+                        "head_sha": return_head,
+                        "update_id": update_id if any(
+                            r["phase"] == "conclusion"
+                            for r in reply_status(origin_root, origin)
+                        ) else None,
+                        "text": text,
+                        "request_revision": view["revision"],
+                        "phase": "conclusion",
+                    }
+                    entry["pending_return"] = pending
+                    upsert_issue_fix_pr_lifecycle_ledger_jsonl(ledger_path, payload)
+                result = report(origin_root, identity["goal_id"], identity["agent_id"],
+                    origin["request_id"], str(pending.get("phase") or "conclusion"),
+                    str(pending["text"]),
+                    registry=Path(origin["registry_path"]),
+                    update_id=pending.get("update_id"), workspace=project,
+                    request_revision=pending["request_revision"],
+                    caller_goal_ref=goal_ref)
+                entry["pending_return"] = None
+                returns.append({"update_id": update_id, "result_key": result.get("result_key", "conclusion"),
+                    "enqueued_at": now_utc_iso(), "head_sha": return_head})
                 upsert_issue_fix_pr_lifecycle_ledger_jsonl(ledger_path, payload)
-            result = report(origin_root, identity["goal_id"], identity["agent_id"],
-                origin["request_id"], str(pending.get("phase") or "conclusion"),
-                str(pending["text"]),
-                registry=Path(origin["registry_path"]),
-                update_id=pending.get("update_id"), workspace=project,
-                request_revision=pending["request_revision"],
-                caller_goal_ref=goal_ref)
-            entry.pop("pending_return", None)
-            returns.append({"update_id": update_id, "result_key": result.get("result_key", "conclusion"),
-                "enqueued_at": now_utc_iso(), "head_sha": head})
-            upsert_issue_fix_pr_lifecycle_ledger_jsonl(ledger_path, payload)
         statuses = {r.get("result_key", r["phase"]): r["status"]
             for r in reply_status(Path(origin["runtime_root"]), origin)}
         payload["return_delivery"] = [{"operation_id": e["operation_id"],
