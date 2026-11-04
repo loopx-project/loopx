@@ -594,6 +594,15 @@ async function runConversation(browser, uncertain) {
     await toolResult.locator('summary').click();
     await toolResult.locator('xpath=ancestor::details[contains(@class,"attached-record-group")]').locator(':scope > summary').click();
     await page.screenshot({path:resolve(outputDir,'attached-codex-work-timeline.png'),animations:'disabled'});
+    await page.setViewportSize({width:390,height:844});
+    const connection = direct.locator('.attached-connection-status');
+    assert.ok(await connection.getByRole('status').isVisible(), 'The native reply or unknown state stays visible');
+    await connection.getByRole('button',{name:'在 Codex App 中打开',exact:true}).focus();
+    assert.ok(await connection.getByRole('button',{name:'在 Codex App 中打开',exact:true})
+      .evaluate(node => document.activeElement === node), 'The compact original-App action remains keyboard reachable');
+    assert.ok(await page.locator('body').evaluate(node => node.scrollWidth <= innerWidth + 1));
+    await page.screenshot({path:resolve(outputDir,'attached-codex-work-timeline-narrow.png'),animations:'disabled'});
+    await page.setViewportSize({width:1512,height:982});
     await scrollHistory(page, direct, 1);
     await direct.getByText('工作结果已返回。',{exact:true}).waitFor();
     assert.equal(await direct.getByRole('button',{name:/^(读取更早的消息|较新记录|回到最新)$/}).count(),0,'History needs no pagination controls');

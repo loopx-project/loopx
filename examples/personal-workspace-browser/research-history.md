@@ -59,6 +59,10 @@ The peer registry pins its disposable runtime instead of consulting the operator
 implicit default roots; conflicting defaults are covered by the HTTP regression.
 The separate artificial paging, transport-failure and heavy-tool stress cases
 remain boundary tests.
+The narrow work view keeps the native source, reply/unknown state and original-App
+action in one status band. Its icon retains the full accessible action name,
+keyboard activation and native failure/recovery path; the original-App action is
+never a substitute for reading the complete record in LoopX.
 
 The same core scenario now includes two record-rich histories from different
 tasks, with all **349 original events** retained:
