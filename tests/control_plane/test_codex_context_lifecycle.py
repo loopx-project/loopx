@@ -1043,8 +1043,8 @@ def test_activation_reuses_declared_host_mode_and_off_is_inert(tmp_path, monkeyp
         return
     assert code == 0 and result["ok"] is True
     activation = result["context_delivery"]
-    expected = expected if setting == "on" else None
-    assert activation["requested"] == (setting or "off")
+    expected = expected if setting != "off" else None
+    assert activation["requested"] == (setting or "auto")
     assert activation["enabled"] is (expected is not None) and activation["scenario"] == expected
     assert activation["supported_scenarios"] == ["codex_benchmark_heartbeat", "codex_app_heartbeat", "codex_app_ssh_goal"]
     if expected is None:

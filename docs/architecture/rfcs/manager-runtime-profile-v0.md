@@ -83,9 +83,9 @@ These defaults do not change ordinary Goal Chat models or grant other Agents too
   frozen snapshot reader, not the Codex-only live `loopx_manager_read` tool or a delta baseline.
   Before relying on that history, read the required section through its final page. Context
   loss recovers from the same capture without resending the request or repeating effects.
-- The machine `context_delivery.antigravity_mode=off` preference or host environment
-  `LOOPX_CONTEXT_DELIVERY=off` keeps subsequent native manager inputs fully inline, while
-  `context_delivery.mode` remains the independent Codex preference.
+- The manager selects history delivery automatically according to its authorized reader.
+  Existing explicit `context_delivery.antigravity_mode=off` preferences and the host environment
+  `LOOPX_CONTEXT_DELIVERY=off` retain complete inline history.
   Restricted/text-only hosts, invalid settings and unavailable private capture IO also retain
   that input; no host permission or approval is changed. These references preserve only the
   already-authorized snapshot, not fresh observation or action authority. Capture files stay

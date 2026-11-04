@@ -170,6 +170,7 @@ def handle_heartbeat_prompt_command(
             codex_context_dir=args.codex_context_dir,
             codex_context_root=args.codex_context_root,
             context_delivery=args.context_delivery,
+            delta_delivery=args.delta_delivery or "auto",
             turn_envelope=args.turn_envelope,
             reward_memory_enabled=reward_memory_enabled,
         )

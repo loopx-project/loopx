@@ -76,7 +76,7 @@ def test_machine_catalog_discovers_context_delivery_without_activation(tmp_path)
     assert len(contexts) == 1
     assert contexts[0]["schema_versions"] == [CONTEXT_DELIVERY_MACHINE_SCHEMA]
     assert contexts[0]["configuration_template"] == {
-        "schema_version": CONTEXT_DELIVERY_MACHINE_SCHEMA, "mode": "on", "antigravity_mode": "on",
+        "schema_version": CONTEXT_DELIVERY_MACHINE_SCHEMA, "mode": "on", "delta_delivery": "auto",
     }
     assert not registry.exists() and not (runtime / "machine/configuration.json").exists()
     assert not (runtime / "context-delivery").exists()
@@ -207,14 +207,16 @@ def test_native_options_share_registry_runtime_without_explicit_root(
 @pytest.mark.parametrize("host", [[], ["--runtime-profile", "codex_cli"],
     ["--codex-app", "--runtime-profile", "codex_app_heartbeat"],
     ["--host-surface", "codex_app"], ["--runtime-profile", "generic_cli"]])
-def test_inherited_on_rejects_unknown_or_unsupported_before_admission(tmp_path, monkeypatch, host):
+def test_inherited_progressive_does_not_invent_unknown_native_continuity(tmp_path, monkeypatch, host):
     monkeypatch.delenv("LOOPX_CONTEXT_DELIVERY", raising=False)
     monkeypatch.delenv("LOOPX_EXECUTION_MODE", raising=False)
     registry, runtime = tmp_path / "absent.json", tmp_path / "runtime"
     assert configure(registry, runtime, tmp_path, "on")[0] == 0
     code, result = _run_cli(registry, runtime, "quota", "context-config", *host,
         "--goal-id", "fixture", "--agent-id", "worker")
-    assert code != 0 and not result["ok"], result
+    assert code == 0 and result["ok"], result
+    assert result["context_delivery"]["progressive_enabled"] is True
+    assert result["context_delivery"]["enabled"] is False and "native_config" not in result
     assert not (runtime / "context-delivery").exists() and not registry.exists()
     assert _spend_run_count(runtime) == 0
 
@@ -349,7 +351,7 @@ def test_bootstrap_reloads_machine_setting_and_preserves_explicit_off(tmp_path, 
     args = ["heartbeat-prompt", "--thin", "--codex-app", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID]
     assert configure(registry, runtime, tmp_path, "on")[0] == 0
     code, enabled = _run_cli(registry, runtime, *args)
-    assert code == 0 and "--context-delivery on" in enabled["task_body"], enabled
+    assert code == 0 and "--context-delivery auto" in enabled["task_body"], enabled
     code, bootstrap = _run_cli(registry, runtime, *args, "--bootstrap")
     assert code == 0, bootstrap
     assert "--context-delivery" not in bootstrap["task_body"]

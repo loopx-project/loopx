@@ -56,7 +56,7 @@ def _turn_envelope_result(
     """Call the coarse TS owner and fail closed on transport shape drift."""
 
     request = {"operation": operation, **params}
-    if operation in {"context_delivery", "context_recovery"}:
+    if operation in {"context_delivery", "context_recovery", "progressive_context_delivery", "context_read_sections"}:
         tokens = source_number_tokens(params)
         if tokens:
             request["source_number_tokens"] = tokens
@@ -180,6 +180,7 @@ def prepare_context_delivery(
     retained: Mapping[str, Any] | None = None,
     continuity: Mapping[str, Any] | None = None,
     surface: str = "work_context", native_projection: Mapping[str, Any] | None = None,
+    consumed_pointers: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Prepare under the Host's explicit continuity basis, not a model assertion.
 
@@ -196,8 +197,20 @@ def prepare_context_delivery(
         continuity=dict(continuity) if continuity is not None else None)
     if native_projection is not None:
         source["native_projection"] = dict(native_projection)
+    if consumed_pointers is not None:
+        source["consumed_pointers"] = dict(consumed_pointers)
     result = _turn_envelope_result("context_delivery", **source, source_edits=True)
     return _apply_context_projection_changes(source, result)
+
+
+def prepare_progressive_context(context: Mapping[str, Any], *, source_reference: Mapping[str, Any],
+                                surface: str = "quota_packet") -> dict[str, Any]:
+    """Stateless IO adapter to the same typed presentation owner; no Delta identity."""
+    from .cli_projection import _apply_context_projection_changes
+
+    source = dict(context=dict(context), native_projection=dict(source_reference), surface=surface)
+    return _apply_context_projection_changes(source,
+        _turn_envelope_result("progressive_context_delivery", **source, source_edits=True))
 
 
 def update_native_context_lifecycle(state: Mapping[str, Any], event: Mapping[str, Any], *,

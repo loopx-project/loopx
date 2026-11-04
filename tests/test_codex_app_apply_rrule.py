@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
 import sqlite3
+import sys
 import tomllib
 from pathlib import Path
 
@@ -11,6 +13,7 @@ import pytest
 
 from loopx.cli import build_parser
 from scripts.codex_app_apply_rrule import (
+    _load_scheduler_hint,
     _now_ms,
     _parse_args,
     _scheduler_hint_turn_instance_id,
@@ -19,6 +22,24 @@ from scripts.codex_app_apply_rrule import (
     _update_toml,
     main,
 )
+
+
+def test_scheduler_subprocess_reads_raw_hint_with_presentation_enabled(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", "on")
+    executable = tmp_path / "quota-probe"
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os\n"
+        "print(json.dumps({'scheduler_hint': {'codex_app': {'apply_needed': True, "
+        "'stateful_backoff': {'interval': 20}}}} "
+        "if os.environ.get('LOOPX_CONTEXT_DELIVERY') == 'off' "
+        "else {'reference_file': 'model-reader.json'}))\n"
+    )
+    executable.chmod(0o700)
+    hint, stateful = _load_scheduler_hint(loopx=str(executable), registry=tmp_path / "registry.json",
+        goal_id="fixture", agent_id="agent", parent_turn_instance_id="fixture-turn", capabilities=[])
+    assert hint["apply_needed"] is True and stateful == {"interval": 20}
+    assert os.environ["LOOPX_CONTEXT_DELIVERY"] == "on"
 
 
 def _write_toml(path: Path) -> None:
