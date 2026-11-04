@@ -1,7 +1,9 @@
 """Complete public-safe readback parity; retire crossing pins with the Python facade."""
 from collections import Counter
 from copy import deepcopy
+from datetime import datetime, timedelta, timezone
 from difflib import unified_diff
+import hashlib
 import json
 from pathlib import Path
 
@@ -158,3 +160,38 @@ def test_qualification_retains_historical_numeric_io(service):
     result = external_progress_review_context(goal, runner.root)
     assert json.dumps(result['receipts'], sort_keys=True) == json.dumps(loaded, sort_keys=True)
     assert result['summary']['latest']['drift_signal'] == {'choice': True, 'noul': True}
+
+
+def test_large_legal_receipt_batch_uses_the_existing_snapshot_transport(service):
+    from loopx.capabilities.progress_review.context import external_progress_review_context
+    from loopx.capabilities.progress_review.receipt import write_progress_review_receipt
+    from loopx.control_plane import effect_runtime
+
+    _, runner = service
+    goal = {'id': runner.goal_id, 'control_plane': {'progress_review': {'mode': 'shadow'}}}
+    binding = effect_runtime.effect_runtime_result('progress_review.criterion_basis', {
+        'requirements': None, 'acceptance': ['Synthetic large-batch criterion'],
+    })['binding']
+    files = [f'dir/{index:02d}/' + 'x' * 1_017 for index in range(32)]
+    for index in range(256):
+        observed = receipt(
+            goal_id=runner.goal_id,
+            event_id=hashlib.sha256(f'event-{index}'.encode()).hexdigest(),
+            evidence_id=hashlib.sha256(f'evidence-{index}'.encode()).hexdigest(),
+            contract_revision=hashlib.sha256(f'contract-{index}'.encode()).hexdigest(),
+            sequence=index,
+            evidence_scope={
+                'criterion_binding': binding,
+                'coverage': 'declared_file_net_change',
+                'files': files,
+            },
+        )
+        observed['run']['generated_at'] = (
+            datetime(2026, 9, 21, tzinfo=timezone.utc) + timedelta(seconds=index)
+        ).strftime('%Y-%m-%dT%H:%M:%SZ')
+        write_progress_review_receipt(runner.root, runner.goal_id, observed)
+    result = external_progress_review_context(goal, runner.root)
+    assert len(result['receipts']) == 256
+    assert result['receipts'][0]['contract_revision'] == hashlib.sha256(
+        b'contract-255'
+    ).hexdigest()

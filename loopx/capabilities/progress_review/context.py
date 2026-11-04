@@ -32,7 +32,10 @@ def external_progress_review_context(
     goal_id = str(goal.get("id") or "").strip()
     if policy["mode"] == "off" or runtime_root is None or not goal_id:
         return None
-    from ...control_plane.effect_runtime import effect_runtime_result, EffectRuntimeRemoteError
+    from ...control_plane.effect_runtime import (
+        EffectRuntimeRemoteError,
+        effect_runtime_projection_result,
+    )
     read_error = None
     try:
         loaded, rejected = load_progress_review_receipts(Path(runtime_root), goal_id)
@@ -40,7 +43,7 @@ def external_progress_review_context(
         loaded, rejected = [], 0
         read_error = "receipt_store_unavailable"
     # Empty IO results need no qualification; all nonempty decisions belong to TS.
-    qualification = effect_runtime_result("progress_review.context.qualify", {
+    qualification = effect_runtime_projection_result("progress_review.context.qualify", {
         "goal_id": goal_id, "runtime_root": str(runtime_root),
         "goal_instance_id": goal.get("goal_instance_id"),
         "receipts": loaded,
