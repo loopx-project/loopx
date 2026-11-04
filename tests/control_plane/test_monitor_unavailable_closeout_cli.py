@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 from loopx.cli import main as cli_main
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from test_quota_settlement_cli import (
@@ -55,7 +56,7 @@ def test_unavailable_monitor_closes_original_turn_without_observation_or_debit(
             context.chdir(project)
             rc = cli_main(["--registry", str(registry), "--runtime-root", str(runtime),
                            "--format", "json", *args])
-            return rc, json.loads(capsys.readouterr().out)
+            return rc, read_cli_policy_payload(capsys.readouterr().out, returncode=rc)
 
     if provider == "markdown":
         before = state.read_bytes()
@@ -327,7 +328,7 @@ def test_unavailable_closeout_does_not_accept_missing_evidence_or_wrong_identity
             context.chdir(project)
             rc = cli_main(["--registry", str(registry), "--runtime-root", str(runtime),
                            "--format", "json", *args])
-            return rc, json.loads(capsys.readouterr().out)
+            return rc, read_cli_policy_payload(capsys.readouterr().out, returncode=rc)
 
     binding = ("--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", "invalid-monitor")
     rc, guard = cli("quota", "should-run", "--goal-id", GOAL_ID, "--codex-app", *binding)
