@@ -761,7 +761,7 @@ Host 会话 owner 和 artifact provider；本 RFC 定义研究实验的一致性
 
 自动捕获策略提案是**默认关闭；显式开启后，在每个新的 replan 节点、策略决策
 之前捕获**。复用 canonical replan obligation 身份：重复读取 context 或重试
-同一节点不会生成另一研究点。普通工作 Turn 不触发完整捕获。成功研究点绑定
+同一节点不会生成另一研究点。普通工作 Turn 不自动触发完整捕获。成功研究点绑定
 replan 身份、已完成 Host cursor、来源 revision 及当前策略版本；这些是证据
 绑定，不是权限。不同分支可从同一份积累比较不同 replan 决策，包括保留原路线。
 
@@ -771,6 +771,19 @@ replan 身份、已完成 Host cursor、来源 revision 及当前策略版本；
 缺失研究点，按既有执行契约继续；不能用更晚状态代替该节点。先记录每个节点
 的捕获时间和存储量，再决定压缩、共享不可变成员或保留上限。保留策略须保护
 已声明研究点及其分支，不能静默挑选有利结果。
+
+显式请求的完整 benchmark 捕获也可使用既有 completed-wake 边界：省略声明的
+`trigger`，同时开启 native session、canonical 研究状态、evaluation opportunity
+和 controller handoff。原工作必须已结算、原生 turn 必须已完成；不虚构 replan、
+增加 guard 或多花工作 slot。继续使用同一 controller writer barrier、参与者
+复读与目标端新准入。文件读取和预加载的完整声明共享原有 90 秒捕获窗口，受
+来源 phase 上限约束，释放 writer 后再使用既有有界 sealing 余量。普通文件捕获
+保持 30 秒窗口。错过研究点时继续来源工作，不授权通过信号交接或把更晚状态
+改称原研究点。Host 保留每个声明 destination 的首次尝试，包括失败或回执丢失；
+重试不能替换原已结算来源。原 wake 先保留不可变声明见证，再写可选的 artifact
+侧索引；索引权限恢复不能让更晚状态成为原缺失研究点。原 phase 耗尽时不读取声明或来源。联合原生资格化
+提供显式 `settled_work` 变体；确定性推理只验证
+机械采用，不证明科学收益或允许在线推广。
 
 记录实际边界与 skew：
 
