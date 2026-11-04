@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { stripPythonWhitespace } from "../coordination/python_whitespace.ts";
 import { TODO_ITEM_SCHEMA } from "../coordination/coordination_state_contract.ts";
 import { projectTodoSummaryDisplay } from "../todos/context_projection.ts";
-import { compactTodoReadText, object, taskClass, recordFields, handoffSource } from "../todos/read_codec.ts";
+import { compactTodoReadText, object, taskClass, recordFields, handoffSource, readAgent } from "../todos/read_codec.ts";
 import { projectTodoHandoffContext } from "../todos/handoff_projection.ts";
 import { readTodoPriority, todoPriorityRank } from "../todos/priority.ts";
 import { todoPresentationMetadata } from "../coordination/todo_presentation.ts";
@@ -434,7 +434,7 @@ function publicTextCodec(request: JsonObject): {
 } {
   const texts = requireJsonObject(request.public_texts, "public text codecs");
   const composedTexts = new Set<string>();
-  const foldedTexts = new Set<string>();
+  const normalizedAgents = new Set<string>();
   const composed = (value: string, parts: unknown[] = []): string => {
     for (const part of parts) {
       const text = String(part);
@@ -449,9 +449,10 @@ function publicTextCodec(request: JsonObject): {
       if (typeof text === "string") composed(text);
     }
   }
-  for (const source of Object.keys(texts)) {
-    const folded = source.toLowerCase();
-    if (folded !== source) foldedTexts.add(folded);
+  for (const [source, facts] of Object.entries(texts)) {
+    const normalized = readAgent(source);
+    const approved = object(facts)["80"];
+    if (normalized && typeof approved === "string" && approved) normalizedAgents.add(normalized);
   }
   const safe: PublicText = (value, limit) => {
     if (!truthy(value)) return null;
@@ -465,10 +466,8 @@ function publicTextCodec(request: JsonObject): {
       if (result) composed(result);
       return result as string | null;
     }
-    // Agent identities are normalized case-insensitively by the existing
-    // handoff owner. The lower-case form is still derived from an approved
-    // source fact; accept it only without inventing or recompacting text.
-    if (foldedTexts.has(text) && Array.from(text).length <= limit) {
+    // Reuse the handoff owner's full normalization only for approved source text.
+    if (normalizedAgents.has(text) && Array.from(text).length <= limit) {
       composed(text);
       return text;
     }
