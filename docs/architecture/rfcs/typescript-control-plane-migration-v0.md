@@ -2844,3 +2844,6 @@ with shared write/read status-phase checks. See the [2026-10-02 checkpoint](ledg
 - Complete global-risk read ownership: [2026-11-02](ledger/typescript-control-plane-migration-v0/2026-11-02-global-risks-read.md).
 - Complete durable-completion evidence read: [2026-11-02 owner and crossings ledger](ledger/typescript-control-plane-migration-v0/2026-11-02-completion-evidence-read.md).
 - Complete status task-graph composition: [2026-11-02 checkpoint](ledger/typescript-control-plane-migration-v0/2026-11-02-status-task-graph.md).
+- Complete adaptive child admission decision: [2026-11-02 checkpoint](ledger/typescript-control-plane-migration-v0/2026-11-02-adaptive-child-admission.md).
+- Progress-review receipt qualification: [2026-11-02 checkpoint](ledger/typescript-control-plane-migration-v0/2026-11-02-progress-review-qualification.md).
+- Global Todo readiness complete owner cutover (both consumers): [2026-11-02 ledger](ledger/typescript-control-plane-migration-v0/2026-11-02-global-todo-readiness.md).

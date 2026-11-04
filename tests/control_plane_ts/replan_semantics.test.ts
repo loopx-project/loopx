@@ -153,7 +153,7 @@ test("verified original writeback projects only its outstanding debit even after
     current_obligation: null, transition_candidates: []}), /malformed/);
 });
 
-test("only a plain outcome review has a scalar receipt source", () => {
+test("only plain vision and outcome reviews have a scalar receipt source", () => {
   const source = {schema_version: "autonomous_replan_obligation_v0", required: true,
     obligation_id: "replan-1111111111111111", agent_id: "reviewer", trigger_count: 1,
     stop_condition: "Stop at owner-only decisions.",
@@ -166,6 +166,9 @@ test("only a plain outcome review has a scalar receipt source", () => {
     {triggers: []}, {trigger_count: 2}, {trigger_count: undefined},
     {triggers: [{kind: "periodic_review_due"}]},
     {triggers: [{kind: "goal_outcome_uncovered"}, {kind: "external_progress_review_drift"}]},
+    {trigger_count: 2, triggers: [{kind: "vision_acceptance_gap"}, {kind: "periodic_review_due"}]},
+    {trigger_count: 2, triggers: [{kind: "vision_acceptance_gap"}, {kind: "external_progress_review_drift"}]},
+    {trigger_count: 2, triggers: [{kind: "vision_acceptance_gap"}, {kind: "goal_acceptance_stale"}]},
     {satisfying_semantic_outcomes: ["new_runnable_successor"]},
     {progress_baseline: {}}, {progress_window: []},
     {triggers: [{kind: "goal_outcome_uncovered", progress_baseline: {}}]},
@@ -174,6 +177,32 @@ test("only a plain outcome review has a scalar receipt source", () => {
     {resolution_mode: "todo_lifecycle_settlement"},
     {capability_guard: {schema_version: "semantic_replan_capability_guard_v0"}}]) {
     assert.deepEqual(projectReplanSemantics({...request, obligation: {...source, ...patch}}), {review_source: null});
+  }
+});
+
+test("mixed vision/outcome recovery preserves the dominant policy without discharging review", () => {
+  for (const triggers of [[{kind: "vision_acceptance_gap"}],
+    [{kind: "goal_outcome_uncovered"}, {kind: "vision_acceptance_gap"}],
+    [{kind: "vision_acceptance_gap"}, {kind: "goal_outcome_uncovered"}]]) {
+    const source = {schema_version: "autonomous_replan_obligation_v0", required: true,
+      obligation_id: "replan-1111111111111111", agent_id: "reviewer", triggers,
+      trigger_count: triggers.length, stop_condition: "Stop at owner-only decisions."};
+    const review = projectReplanSemantics({operation: "receipt_review_source", agent_id: "reviewer",
+      obligation: source}).review_source;
+    assert.deepEqual(review, {kind: "vision_acceptance_gap", stop_condition: source.stop_condition});
+    const recovered = projectReplanSemantics({operation: "receipt_bound_obligation", guard_scoped: true,
+      replay_phase: "open", selected_obligation_id: source.obligation_id, current_obligation: null,
+      transition_candidates: [], agent_id: "reviewer", receipt_review: review}).obligation as JsonObject;
+    assert.equal(recovered.obligation_id, source.obligation_id);
+    assert.deepEqual(requiredSemanticOutcomes(recovered), requiredSemanticOutcomes(source));
+    assert.equal(recovered.selection_binding, "heartbeat_receipt");
+    assert.equal(recovered.replan_context, undefined);
+    assert.equal(recovered.settlement_action_packet, undefined);
+    assert.equal(projectReplanSemantics({operation: "qualify", obligation: recovered}).accepted, false);
+    assert.equal(projectReplanSemantics({operation: "qualify", obligation: recovered,
+      observation_delta: {delta_kinds: ["new_surface"]}}).accepted, false);
+    assert.equal(projectReplanSemantics({operation: "qualify", obligation: recovered,
+      agent_vision: vision}).accepted, true);
   }
 });
 

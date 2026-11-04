@@ -450,8 +450,15 @@ class SForgeWorker(CodexAgent):
                 raise RuntimeError("Native task prompt is unavailable")
             self.runtime._phase_number = 1
             if self.runtime.execution.uses_loopx:
-                asyncio.run(self.runtime._prepare_phase(self.environment, result.stdout, cwd=self.cwd))
-                if self.profile == "heartbeat-explore":
+                if self.warm_start is not None:
+                    # The sealed Goal, task graph, review counters and strategy
+                    # are the continuing state. Do not bootstrap, seed another
+                    # task, or reset an existing configuration during restore.
+                    asyncio.run(self.runtime._write_task_document(self.environment, result.stdout))
+                    asyncio.run(self.runtime._verify_phase_configuration(self.environment, cwd=self.cwd))
+                else:
+                    asyncio.run(self.runtime._prepare_phase(self.environment, result.stdout, cwd=self.cwd))
+                if self.profile == "heartbeat-explore" and self.warm_start is None:
                     observed = asyncio.run(self.runtime._loopx(self.environment, [
                         "configure-goal", "--goal-id", self.runtime.goal_id,
                         "--explore-graph-enabled", "--explore-harness-enabled",

@@ -1,9 +1,9 @@
 """Research checkpoint context IO through existing canonical Todo owners.
 
-Captured records are historical input, never a replacement authority store.
-Only the existing explicit continuation owner can adopt a note on an already
-claimed destination Todo. Verified Explore knowledge may seed a fresh graph;
-historical execution observations, effects and vision authority are not revived.
+Research import adopts historical input on a claimed destination Todo; verified
+Explore knowledge may seed a fresh graph. Explicit isolated full-state restore
+instead verifies the complete retained business state without rewriting it.
+Neither path grants a work admission or settles historical execution effects.
 """
 from __future__ import annotations
 
@@ -121,6 +121,43 @@ def verify_context_sources(context: dict, components: list[dict], witness: dict)
 
 def _encoded(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+
+
+def verify_restored_loopx_state(env: dict[str, str], unit: Path, metadata: dict, *, deadline: float) -> Path:
+    """Read back complete business state through its existing canonical owners.
+
+    The caller has verified the sealed artifact and materialized a quiescent,
+    isolated replacement at its original paths. Equality preserves receipts,
+    Todo identities/dependencies, acceptance, Explore and Vision history. It
+    does not settle an interrupted Turn or grant a lease/model invocation.
+    """
+    state = metadata["loopx_state"]
+    if any(env[key] != state[field] for key, field in
+           (("LOOPX_GOAL_ID", "goal_id"), ("LOOPX_AGENT_ID", "agent_id"))):
+        raise ValueError("full LoopX restore requires the captured Goal and Agent")
+    registry = Path(env["LOOPX_REGISTRY"])
+    if registry.resolve(strict=True) != registry or hashlib.sha256(registry.read_bytes()).hexdigest() != state["registry_sha256"]:
+        raise ValueError("restored LoopX registry differs from its sealed source")
+    roots = [entry for entry in state["source_inventory"] if entry["key"] == "runtime_root"]
+    if len(roots) != 1 or roots[0]["source_path"] != env["LOOPX_RUNTIME_ROOT"]:
+        raise ValueError("restored LoopX runtime differs from its captured route")
+    context = metadata["research_context"]
+    path = unit / "components" / context["component_id"] / context["member_path"]
+    raw = path.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != context["sha256"]:
+        raise ValueError("restored LoopX canonical context digest differs")
+    expected = json.loads(raw)
+    actual = research_context(env, deadline=deadline)
+    # The canonical cursor binds the complete business revision. Derived Todo
+    # resume/readiness observations may legitimately change as time elapses;
+    # they must be evaluated now, rather than frozen to their capture time.
+    identity = ("store_identity", "provider_revision", "cursor", "todo_ids")
+    if (actual["goal_id"] != expected["goal_id"]
+            or any(actual["snapshot"].get(key) != expected["snapshot"].get(key) for key in identity)
+            or actual["research_evidence"] != expected["research_evidence"]
+            or actual["source_files"] != expected["source_files"]):
+        raise ValueError("restored LoopX canonical state or research history differs from its sealed source")
+    return unit / "components" / roots[0]["component_id"]
 
 
 def _handoff(env, payload):

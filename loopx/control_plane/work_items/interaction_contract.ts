@@ -432,6 +432,10 @@ export function projectInteractionExecution(value: unknown): InteractionExecutio
     mode = "terminal_no_followup";
   } else if (action === EffectiveAction.PEER_COORDINATION_BLOCKED) {
     mode = action;
+  } else if (scopedFallback && action === EffectiveAction.AGENT_WORKSPACE_REPAIR) {
+    // The fallback proves gate independence, not permission to edit here.
+    // Keep the selected repair and its canonical delivery boundary visible.
+    mode = action;
   } else if (scopedFallback) {
     mode = "scoped_user_gate_fallback";
   } else if (notificationSuppressed) {

@@ -6,7 +6,7 @@ runner. Write it before admission so a crash can replay the same client identity
 """
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from pathlib import Path
 import json
@@ -27,6 +27,8 @@ from .codex_context import checked_session_home
 # Request journals are named by their 24-hex request_ref; lock metadata and
 # other siblings in this directory are not requests.
 _REQUEST_JOURNAL_STEM = re.compile(r"[a-f0-9]{24}")
+QUOTA_BACKLOG_BATCH_SIZE = 64
+_QUOTA_BACKLOG_BATCH_BYTES = 1024 * 1024
 
 
 def _commission_goal_identity(goal: dict[str, Any]) -> dict[str, str]:
@@ -186,8 +188,8 @@ class ChatExternalConversations:
                 and datetime.fromisoformat(item["created_at"]) >= datetime.fromisoformat(row["created_at"])
                 for item in (source_controls or self.pending)())))
 
-    def quota_backlog_observer(self) -> Callable[[dict[str, Any]], bool]:
-        """Share lazy journal IO within one read-only observation, never admission."""
+    def quota_backlog_observer(self) -> Callable[[Sequence[dict[str, Any]]], list[bool]]:
+        """Batch the existing typed projection; share controls only within this read."""
         controls: list[dict[str, Any]] | None = None
 
         def read_controls() -> list[dict[str, Any]]:
@@ -196,29 +198,87 @@ class ChatExternalConversations:
                 controls = self.pending()
             return controls
 
-        return lambda row: self.quota_backlog_pending(row, source_controls=read_controls)
+        def observe(rows: Sequence[dict[str, Any]]) -> list[bool]:
+            if len(rows) > QUOTA_BACKLOG_BATCH_SIZE:
+                raise ValueError("select at most 64 pending requests per observation")
+            params = [self._quota_pending_inputs(row) for row in rows]
+            flags = self._quota_pending_flags(params)
+            stopped = []
+            for index, (row, values, pending) in enumerate(zip(rows, params, flags, strict=True)):
+                if pending:
+                    events = self.controller.store.events_after(row["session_id"], row["turn_id"], None)
+                    if self._source_stop_observed(row, values["pending_observation"]["turn"], events,
+                                                 source_controls=read_controls):
+                        values["pending_observation"]["stop_observed"] = True
+                        stopped.append(index)
+            for index, pending in zip(stopped, self._quota_pending_flags([params[i] for i in stopped]), strict=True):
+                flags[index] = pending
+            return flags
+
+        return observe
+
+    @staticmethod
+    def _quota_pending_flags(params: Sequence[dict[str, Any]]) -> list[bool]:
+        from ...control_plane.effect_runtime import effect_runtime_result
+
+        flags: list[bool] = []
+        batch: list[dict[str, Any]] = []
+        size = 0
+
+        def flush() -> None:
+            if not batch:
+                return
+            result = effect_runtime_result("collaboration.conversation.request", {"pending_observations": batch})
+            values = result.get("pending_flags") if isinstance(result, dict) else None
+            if (not isinstance(values, list) or len(values) != len(batch)
+                    or any(type(value) is not bool for value in values)):
+                raise ValueError("pending observation results are unavailable")
+            flags.extend(values)
+            batch.clear()
+
+        for values in params:
+            encoded = len(json.dumps(values, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+            if batch and (len(batch) >= QUOTA_BACKLOG_BATCH_SIZE or size + encoded > _QUOTA_BACKLOG_BATCH_BYTES):
+                flush()
+                size = 0
+            if encoded > _QUOTA_BACKLOG_BATCH_BYTES:
+                # Preserve the original single-request transport and its byte
+                # refusal; batching must not introduce a new content limit.
+                result = effect_runtime_result("collaboration.conversation.request", values)
+                pending = result.get("pending") if isinstance(result, dict) else None
+                if type(pending) is not bool:
+                    raise ValueError("pending observation result is unavailable")
+                flags.append(pending)
+                continue
+            batch.append(values)
+            size += encoded
+        flush()
+        return flags
+
+    def _quota_pending_inputs(self, row: dict[str, Any]) -> dict[str, Any]:
+        store = self.controller.store
+        return {
+            "request": {key: value for key, value in row.items() if key != "attachments"},
+            "current_session": store.load_session(row["session_id"]),
+            "pending_observation": {"turn": store.load_turn(row["session_id"], row["turn_id"]),
+                                    "stop_observed": False},
+        }
 
     def quota_backlog_pending(self, row: dict[str, Any], *,
                               source_controls: Callable[[], list[dict[str, Any]]] | None = None) -> bool:
         """Retain quota and declared unfinished work without admitting recovery."""
         from ...control_plane.effect_runtime import effect_runtime_result
 
-        store = self.controller.store
-        session = store.load_session(row["session_id"])
-        turn = store.load_turn(row["session_id"], row["turn_id"])
-        observation = {"turn": turn, "stop_observed": False}
-        params = {
-            "request": {key: value for key, value in row.items() if key != "attachments"},
-            "current_session": session,
-            "pending_observation": observation,
-        }
+        params = self._quota_pending_inputs(row)
+        observation = params["pending_observation"]
+        turn = observation["turn"]
         # The typed owner first excludes work that has no retained obligation even
         # without a stop. Stop evidence can only remove a pending request;
         # never expose a positive result before reading those native facts.
         if effect_runtime_result("collaboration.conversation.request", params).get("pending") is not True:
             return False
         assert turn is not None  # Required by the typed pending projection.
-        events = store.events_after(row["session_id"], row["turn_id"], None)
+        events = self.controller.store.events_after(row["session_id"], row["turn_id"], None)
         if self._source_stop_observed(row, turn, events, source_controls=source_controls):
             observation["stop_observed"] = True
             return effect_runtime_result("collaboration.conversation.request", params).get("pending") is True
@@ -439,6 +499,9 @@ class ChatExternalConversations:
     def _native_result_text(recovered: dict[str, Any]) -> str:
         response = recovered["native_observation"]["response"]
         text = "已恢复本次请求的原答复：\n\n" + response["message"]
+        if recovered["native_observation"].get("latest_input_verified") is False:
+            text = ("已补回本次请求在原生会话中生成的历史答复。本次只补回正文，没有重新执行业务。"
+                    "文中提到其他消息“已处理”的说法仍需逐条核实，未答的问题继续保留。\n\n" + response["message"])
         if any(response.get(key) for key in ("context_handoff", "proposals", "protected_action", "goal_draft")):
             text += "\n\n操作状态：本次仅恢复原答复，结构化操作或委派尚未提交；未重新执行原请求。"
         if (response.get("gate") or {}).get("summary") and response["gate"]["summary"] not in text:
@@ -461,8 +524,8 @@ class ChatExternalConversations:
         if len(anchors) > 1:
             return None
         # Retained facts can repair only a completed Turn's text. Failed-Turn
-        # recovery keeps its live/latest-input requirements; old capture does
-        # not authorize another invocation or change unknown-effect handling.
+        # recovery keeps its live native read and exact input requirements; old
+        # capture does not authorize another invocation or unknown-effect replay.
         retained = self.controller.store.native_result(session["session_id"], turn["turn_id"])
         if (turn.get("status") == "completed" and len(anchors) == 1 and retained
                 and retained.get("upstream_turn_id") == turn.get("upstream_turn_id")):

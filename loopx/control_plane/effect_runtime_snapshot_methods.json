@@ -22,6 +22,7 @@
   "goal.checkpoint_read_context.commit",
   "goal.checkpoint_read_context.inspect_replay",
   "performance_diagnosis.inspect",
+  "progress_review.context.qualify",
   "state.recovery.archive.verify",
   "state.recovery.manifest.verify",
   "runtime.checkpoint_artifacts"

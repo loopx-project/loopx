@@ -607,8 +607,8 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
       {recordsOpen ? <ResearchRecordSearch key={JSON.stringify([goalId, readSourceUrl])} goalId={goalId} events={history.canonical?.events ?? []}
         displayEvents={currentDisplay && !originalDisplay ? value.events : undefined}
         displaySections={currentDisplay && !originalDisplay ? displayProjection.sections : undefined}
-        renderBody={currentDisplay && !originalDisplay ? findingBody : undefined}
-        renderSummary={currentDisplay && !originalDisplay ? findingNarrative : undefined}
+        renderBody={findingBody}
+        renderSummary={findingNarrative}
         complete={read.complete} stale={Boolean(error || history.error)} busy={busy} zh={zh} stateLabel={stateLabel} timeLabel={timeLabel}/> : null}
     </details> : null}
   </section>;

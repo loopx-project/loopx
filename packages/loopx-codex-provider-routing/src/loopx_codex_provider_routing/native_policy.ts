@@ -17,8 +17,30 @@ export type Account = {
   secondary_used: number | null;
   credits_available: boolean | null;
 };
+export type ApiRole = "disabled" | "fallback" | "primary";
 export type Policy = { enabled: boolean; slots: string[]; cooldown_seconds: number;
-  restart_clients?: boolean; force_quit_clients?: boolean; api_fallback?: boolean };
+  restart_clients?: boolean; force_quit_clients?: boolean; api_fallback?: boolean;
+  steward_api_role?: ApiRole };
+
+/** Billing priority belongs to the consumer, not the model or credential. */
+export function apiRole(policy: Policy | undefined, consumer: string): ApiRole {
+  if (!policy) return "disabled";
+  if (consumer === "worker") return policy.api_fallback === true ? "fallback" : "disabled";
+  if (consumer !== "steward") return "disabled";
+  const role = policy.steward_api_role;
+  if (role === undefined) return policy.api_fallback === true ? "fallback" : "disabled";
+  return role === "primary" || role === "fallback" ? role : "disabled";
+}
+
+export function modelRoute(input: {consumer: string; native: Record<string, any>; api_ready: boolean}) {
+  const native = input.native;
+  const role = apiRole(native.policy, input.consumer);
+  const primary = input.consumer === "steward" && role === "primary" && input.api_ready;
+  const fallback = role === "fallback" && native.policy.enabled === true
+    && native.policy.api_fallback === true && native.api_active === true
+    && native.login_matches === true && native.recovery_required === false && native.action === "api_active";
+  return {role, api: primary || fallback};
+}
 
 /** The steward's endpoint pool is separate from the native account ring.
  * Selection observes allowance only; it never changes a login or retries work.
@@ -27,6 +49,7 @@ export function stewardRoute(input: {
   now: number; primary: string; pool: string[]; current: string;
   native: Record<string, any>; primary_capacity: Record<string, any> | null;
   blocked_primary?: Record<string, any> | null;
+  api_ready?: boolean;
 }) {
   const no = {endpoint: null, blocked_primary: input.blocked_primary ?? null};
   if (!Number.isFinite(input.now) || !["antigravity", "codex"].includes(input.current)
@@ -41,10 +64,12 @@ export function stewardRoute(input: {
     && typeof row.execution_id === "string" && row.execution_id.length > 0
     && typeof row.quota_exhausted === "boolean" && typeof row.normal_completion === "boolean"
     && row.quota_exhausted !== row.normal_completion;
+  if (input.blocked_primary != null && !validCapacity(input.blocked_primary)) return no;
+  if (modelRoute({consumer: "steward", native: input.native, api_ready: input.api_ready === true}).api
+      && apiRole(input.native.policy, "steward") === "primary") return {endpoint: "codex", blocked_primary: input.blocked_primary ?? null};
   const capacity = input.primary_capacity;
   if (!validCapacity(capacity) || !capacity || input.now < capacity.observed_at
-      || input.now - capacity.observed_at > 120
-      || input.blocked_primary != null && !validCapacity(input.blocked_primary)) return no;
+      || input.now - capacity.observed_at > 120) return no;
   let blocked = input.blocked_primary ?? null;
   if (capacity.quota_exhausted && (!blocked || blocked.execution_id !== capacity.execution_id)) blocked = capacity;
   const restored = blocked && (blocked.account_ref !== capacity.account_ref
@@ -63,7 +88,7 @@ export function stewardRoute(input: {
     && current.observed_at <= input.now && input.now - current.observed_at <= 120;
   const usable = native.policy?.enabled === true && native.login_matches === true
     && native.recovery_required === false && (native.api_active === true
-      ? native.policy.api_fallback === true && native.action === "api_active"
+      ? modelRoute({consumer: "steward", native, api_ready: input.api_ready === true}).api
       : native.action === "ready" && fresh && current.availability === "available");
   return {endpoint: usable ? "codex" : null, blocked_primary: blocked};
 }

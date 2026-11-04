@@ -25,8 +25,8 @@ Agent 团队的长程效果和长程效率：在可比预算下取得更好的�
 - **Capabilities and extensions:** reusable engineering, research, knowledge,
   content and office workflows with explicit provider and permission boundaries.
 
-Start with [README](README.md), the [overall roadmap](docs/architecture/rfcs/loopx-overall-roadmap-v0.md),
-the [capability catalog](loopx/capabilities/README.md) and [stable protocols](docs/reference/protocols/README.md).
+Start with [README](README.md), the [roadmap](docs/architecture/rfcs/loopx-overall-roadmap-v0.md),
+the [capabilities](loopx/capabilities/README.md) and [protocols](docs/reference/protocols/README.md).
 The roadmap distinguishes shipped boundaries from acceptance still to qualify.
 Core rules live in `loopx/control_plane/`; capability contracts in
 `loopx/capabilities/`; extension lifecycle in `loopx/extensions/`; optional
@@ -39,10 +39,10 @@ and monitor targets in their canonical task/state, not in this file or a frozen
 prompt. Keep the root within both the 24,000-byte (24 KB) Antigravity per-file
 rule cap and the default 32 KiB Codex discovery budget, and do not eagerly
 import linked detail documents. See
-[loading and maintenance](docs/development/README.md#agent-instruction-loading-and-maintenance)
+[loading](docs/development/README.md#agent-instruction-loading-and-maintenance)
 for host-specific checks; delivery does not prove model compliance.
 
-Prefer [progressive context](docs/development/README.md#progressive-context-for-development):
+Prefer [context](docs/development/README.md#progressive-context-for-development):
 current goals, constraints and acceptance criteria first; supporting evidence and
 procedures on demand under their owning read/recovery contract.
 
@@ -50,13 +50,13 @@ procedures on demand under their owning read/recovery contract.
 
 Before selecting non-trivial work, resolve the requested outcome from user
 direction, the linked issue/task, accepted contract or demonstrated bug. For
-cross-cutting LoopX work, consult the [overall roadmap](docs/architecture/rfcs/loopx-overall-roadmap-v0.md)
+cross-cutting LoopX work, consult the [roadmap](docs/architecture/rfcs/loopx-overall-roadmap-v0.md)
 and domain acceptance without making every fix wait for every RFC or inventing a
 roadmap id. Check latest `main`, related PRs and canonical Todos so older task
 prose cannot override corrected direction or duplicate work.
 
 For recurring operational or performance failures, follow the
-[roadmap-aligned optimization guide](docs/development/testing-and-quality.md#roadmap-aligned-optimization):
+[optimization](docs/development/testing-and-quality.md#roadmap-aligned-optimization):
 bind the failure to its owning acceptance before repair, separate caller, shared
 typed transport/semantics and provider costs, and reuse the common contract. A
 faster lookup, timeout increase or promotion is only interim until sustained
@@ -76,7 +76,7 @@ Check whether new evidence changed the action or justified continuing it, and
 preserve negative results and uncertainty (`state survival`, graph edges, read
 receipts or replan records alone do not prove adoption or benefit). Compare
 outcomes and complete costs under comparable conditions using the
-[existing measurement contract](docs/architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.md#6-measurement-model);
+[measurement contract](docs/architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.md#6-measurement-model);
 do not force a direction change merely to increase replan counts.
 
 Continue through implementation, integration, negative cases and readback while
@@ -90,7 +90,7 @@ authorization, cost and operational stop gates remain.
 When adding or extending state/protocol vocabulary (Enum, `Literal`, named
 closed set or TypeScript `as const`), answer whether it reuses an owner, extends
 a registered vocabulary, remains local or creates a shared contract, and follow
-the [diff-scoped semantic advisory](CONTRIBUTING.md#check-new-semantic-vocabulary-while-developing)
+the [diff advisory](CONTRIBUTING.md#check-new-semantic-vocabulary-while-developing)
 before the full-tree check (including intentional untracked sources). For
 multi-Agent changes, qualify dependency artifacts, receiver adoption, claim/lease
 handling, independent acceptance and result return; sending a message or
@@ -164,14 +164,14 @@ Before staging non-trivial changes:
    absolute paths, raw benchmark logs/trajectories/verifier output and internal links.
 3. Stage explicit pathspecs only (`never git add .`), split by reviewer logic
    (runtime/API, public docs/protocols, validation/cleanup), and follow
-   [visual evidence retention](docs/development/documentation-layout.md#visual-evidence-retention)
+   [capture retention](docs/development/documentation-layout.md#visual-evidence-retention)
    before staging media or capture manifests.
 
 ### Merge Authority And Validation
 
 Before approval or merge, read the repository-kept
 [merge workflow](skills/loopx-pr-merge/SKILL.md) and its
-[self-merge eligibility](skills/loopx-pr-merge/SKILL.md#self-merge-eligibility-and-benchmark-exceptions);
+[self-merge rules](skills/loopx-pr-merge/SKILL.md#self-merge-eligibility-and-benchmark-exceptions);
 installing it is optional and does not replace repository policy or the current
 capability-owned review.
 
@@ -193,7 +193,7 @@ review on the exact head carrying the approval conclusion and an English verdict
 Maintainers may self-merge single-purpose, low-risk public-doc, contributor
 metadata, test, example or narrow-cleanup PRs (and the bounded benchmark
 seam/helper exceptions) only when all conditions in
-[self-merge eligibility](skills/loopx-pr-merge/SKILL.md#self-merge-eligibility-and-benchmark-exceptions)
+[self-merge rules](skills/loopx-pr-merge/SKILL.md#self-merge-eligibility-and-benchmark-exceptions)
 hold and `uv run --extra test loopx canary premerge --from-git-diff --git-diff-base "$PR_BASE_REF"`
 (or equivalent risk-based validation) passes. After merging, sync local `main`, preserve unrelated untracked artifacts
 and continue the next safe project batch.
@@ -206,11 +206,11 @@ Before completing a named public release, follow the existing release owners:
   verified personal user ownership, illustrated released UI, upgrade/use guidance
   and ownership/text/image readback; no corporate/bot substitution, implied
   announcement authority, or private account/draft/raw evidence exposure.
-- [Contributor attribution](docs/product/release-readiness.md#release-note-checklist):
+- [Attribution](docs/product/release-readiness.md#release-note-checklist):
   derive eligible non-founder community contributions from the tag range and
   merged PR metadata with concrete bilingual attribution and product-first
   ordering; omit both sections when none qualifies.
-- [Final release body](docs/product/release-readiness.md#final-release-body-usage-gate):
+- [Release body](docs/product/release-readiness.md#final-release-body-usage-gate):
   teach each changed optional surface's activation, validation, disable/rollback,
   authority/privacy boundary and versioned docs in both languages; validate the
   complete body before publishing and after remote readback.
@@ -234,7 +234,7 @@ install, release, paid-execution or sensitive-publication authority.
 
 ## Product Delivery Completeness
 
-For product changes, read [task-first frontend delivery](docs/development/frontend-delivery.md#task-first-delivery--从用户任务开始)
+For product changes, read [frontend delivery](docs/development/frontend-delivery.md#task-first-delivery--从用户任务开始)
 before implementation. Identify affected frontend/Lark/CLI entrypoints and
 inspect existing settings/capability editors before declaring a change backend-only.
 Every new or materially extended caller-facing capability needs a shipped
@@ -256,10 +256,10 @@ instructions from product UI. Preserve accessible control names, input
 constraints, permission/activation consequences, errors, recovery and action
 outcomes; place optional help on demand.
 
-Before changing or reproducing any UI, read [the design system](docs/development/design.md),
-especially [whole-viewport attention](docs/development/design.md#earn-the-users-attention),
+Before changing or reproducing any UI, read [design system](docs/development/design.md),
+especially [viewport attention](docs/development/design.md#earn-the-users-attention),
 and carry the primary user question, default-versus-detail choices and the
-[populated whole-page review](docs/development/design.md#populated-page-review)
+[populated-page review](docs/development/design.md#populated-page-review)
 in the task/PR evidence. Inspect the affected page with long, repeated content
 and mixed states rather than quiet fixtures alone, and name the observed
 composition and any remaining failure.
@@ -280,7 +280,7 @@ cleanup as an explicit user/support gate.
 
 For a requested GitHub PR review, publish validated actionable findings on the
 PR by default (unless local-only or private/security-sensitive), returning the
-published URL and compact summary. Use [the review workflow](skills/loopx-pr-review/SKILL.md)
+published URL and compact summary. Use [review workflow](skills/loopx-pr-review/SKILL.md)
 and execute the current capability-owned `pull_request_review_execution_contract_v2`.
 Apply its typed-state, domain-neutrality, behavior-change, guidance-vs-obligation,
 default-off-isolation and authority lenses; flag substring/prose-classification
@@ -304,7 +304,7 @@ a prerequisite for a bounded outcome.
 From the intended worktree root, prepare with `uv sync --extra test` and use
 `uv run --extra test python ...` / `uv run --extra test loopx ...` (or an
 activated compatible environment with that checkout installed), following the
-[environment guide](docs/development/testing-and-quality.md#local-validation-environment--本地验证环境).
+[environment](docs/development/testing-and-quality.md#local-validation-environment--本地验证环境).
 Verify `sys.executable` and `loopx.__file__` when provenance is uncertain, keep
 subprocesses on `sys.executable` (not nested `uv run`), preserve version coverage
 and fixtures, and never rewrite historical receipts or commit an unrelated `uv.lock`.
@@ -312,7 +312,7 @@ and fixtures, and never rewrite historical receipts or commit an unrelated `uv.l
 ### Evidence-Based Budget Decisions
 
 When a size, structure or latency budget fails, follow the
-[budget decision guide](docs/development/testing-and-quality.md#budget-failure-decisions):
+[budget decisions](docs/development/testing-and-quality.md#budget-failure-decisions):
 measure the same base/head workload, identify what the limit protects and
 compare information value and real redundancy before compaction, retention or
 an evidence-backed increase. Hard limits and frozen experiment/promotion criteria
@@ -326,7 +326,7 @@ rather than silent truncation.
 ### Refactor Real-Path Validation
 
 Before claiming refactor delivery, follow the [real-path gate](docs/development/testing-and-quality.md#refactor-real-path-gate--重构真实路径门)
-and the [default-provider rule](docs/development/testing-and-quality.md#default-provider-performance-qualification--默认-provider-性能资格):
+and the [default provider](docs/development/testing-and-quality.md#default-provider-performance-qualification--默认-provider-性能资格):
 validate the affected production entrypoint and real backend beyond mocks/unit
 tests. PostgreSQL authority-store changes require its integration suite on an
 isolated real server/tenant (unavailable environment is an evidence gap, not a
@@ -339,19 +339,19 @@ checks remain required for every affected backend.
 ### Bounded Future-Facing Refactoring
 
 During development and before approving or merging, apply the
-[bounded refactoring and scope-fit review](docs/development/README.md#engineering-scope-and-refactoring)
+[scope and refactoring](docs/development/README.md#engineering-scope-and-refactoring)
 to the touched behavior and adjacent owner. Include a same-domain, reversible,
 behavior-preserving improvement when locally reviewable and covered by parity;
 report applied/deferred/unnecessary with the concrete boundary.
 
 ## Capability And Extension Placement
 
-Before adding an ability, read [placement decisions](docs/reference/extensions.md#placement-decision-for-agents).
+Before adding an ability, read [placement](docs/reference/extensions.md#placement-decision-for-agents).
 Name public capabilities after caller outcomes; reuse the nearest capability
 and typed owner. Record capability id, provider id, builtin/extension origin
 and why that owner is or is not sufficient before editing. Before adding a
 module, builder, protocol field, CLI option, fixture, smoke section or
-abstraction, apply [scope-fit review](docs/development/README.md#scope-fit-review):
+abstraction, apply [scope fit](docs/development/README.md#scope-fit-review):
 require an active caller, shipped behavior or explicit compatibility contract,
 characterize before moving code, derive tests from independent semantics, keep
 state/delivery classifications typed and generic obligations domain-neutral, and
@@ -369,7 +369,7 @@ lifecycle contract changes or an explicit user scheduler request; see
 ## Projection Sink Design
 
 When adding a display sink (Lark Base, dashboard, chat summary or report), follow
-[the projection sink contract](docs/product/core-control-plane/state-machine.md#7-projection-sink-machine).
+[projection contract](docs/product/core-control-plane/state-machine.md#7-projection-sink-machine).
 Use bounded public-safe state projections rather than project-private raw files,
 retain source/evidence/gates and row lineage, redact public/multi-user sinks,
 and require explicit user authorization for owner-only private planning boards.
@@ -382,8 +382,8 @@ Before adding, retaining or consolidating a smoke, read
 contracts, boundary checks, automation regressions and representative public-safe
 fixtures with independent semantic oracles; do not freeze dated prose or
 temporary builders (~500 lines triggers review). For benchmark changes, follow
-[benchmark smoke boundaries](docs/development/good-smokes.md#benchmark-boundaries)
-and [archive placement](benchmark/README.md#archive-placement): active smokes
+[benchmark boundaries](docs/development/good-smokes.md#benchmark-boundaries)
+and [archives](benchmark/README.md#archive-placement): active smokes
 protect stable toolkit contracts without entering archives into CI or requiring
 raw tasks, trajectories, logs, verifier tails, credentials, uploads,
 leaderboard submissions or private local paths.

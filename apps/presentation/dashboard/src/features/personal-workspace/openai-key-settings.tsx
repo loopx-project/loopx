@@ -20,9 +20,10 @@ type KeyStatus = z.infer<typeof statusSchema>;
 
 const copy = {
   "zh-CN": {
-    title: "OpenAI API Key", configured: "已保存", boundary: "订阅账号优先，全部耗尽后使用 API",
-    help: "API Key 与额度", detail: "密钥只保存在本机，不回显完整值。启用 API 接续后，只有订阅账号均被确认耗尽才使用 API；订阅恢复后在安全边界回到订阅。API 额度或权限错误会在输出前尝试下一把 Key，保留当前模型，不重放已开始输出的请求。检查连接只读取模型列表，不能证明可消费额度。项目 Key 无法查询账单余额，费用查询需另有 Admin Key。",
-    auto: "订阅耗尽后使用 API（按用量计费）", autoOff: "需先启用下方的订阅自动切换", ownerMissing: "LoopX 账号扩展需要更新，暂不能启用 API 接续",
+    title: "OpenAI API Key", configured: "已保存", boundary: "工作 Agent 与 Codex App：订阅优先，API 仅作兜底",
+    help: "API Key 与额度", detail: "密钥只保存在本机，不回显完整值。工作 Agent 只有在全部订阅被确认耗尽后才使用 API，额度未知时等待。管家可独立优先使用 API，复用同一 Key 池，不切换工作 Agent 或 Codex App 的登录；关闭管家 API 不影响工作 Agent 的兜底。管家选择跟随订阅兜底时，使用下方订阅自动切换的耗尽证明。策略在下一条未开始的消息生效，不重放已有请求。API 额度或权限错误只在输出前尝试下一把 Key，模型不变。检查连接只读模型列表，不能证明可消费额度；项目 Key 无法查询账单余额。",
+    auto: "工作 Agent 订阅耗尽后使用 API（按用量计费）", autoOff: "需先启用下方的订阅自动切换", ownerMissing: "LoopX 账号扩展需要更新，暂不能启用 API 接续",
+    steward: "管家使用 API", primary: "优先使用（按用量计费）", fallback: "跟随订阅兜底", disabled: "不使用",
     lastRequest: "上次响应", accepted: "API 已接受请求", quota_exhausted: "API 额度不足", failed: "API 请求失败", tokens: "限流窗口 Token 余量", requests: "限流窗口请求余量",
     apiPermission: "API 模型权限不足", apiLimited: "API 请求限流",
     balance: "API 余额不可读取", billing: "查看 OpenAI 用量", add: "添加 Key", save: "保存 Key", cancel: "取消",
@@ -37,9 +38,10 @@ const copy = {
     key_limit_reached: "最多保存 16 把 Key。", key_not_found: "这把 Key 已被移除，列表已刷新。",
   },
   en: {
-    title: "OpenAI API keys", configured: "saved", boundary: "Subscriptions first; API only after all subscriptions are exhausted",
-    help: "API keys and quota", detail: "Keys stay on this machine and are never returned in full. API fallback is admitted only after every subscription is confirmed exhausted. Recovered subscriptions take priority at a safe handoff boundary. API quota or permission errors can try the next key before output, preserving the model. Requests that started output are never replayed. Connection checks only read the model list and do not establish spendable quota. Project keys cannot query billing balance; the Costs API requires a separate Admin key.",
-    auto: "Use API after subscription exhaustion (usage based billing)", autoOff: "Enable subscription automatic handoff below first", ownerMissing: "Update the LoopX accounts extension before enabling API fallback",
+    title: "OpenAI API keys", configured: "saved", boundary: "Working Agents and Codex App: subscriptions first; API as fallback",
+    help: "API keys and quota", detail: "Keys stay on this machine and are never returned in full. Working Agents use API only after every subscription is confirmed exhausted; unknown allowance holds. The steward can independently prefer API through the same key pool without changing worker or Codex App login. Disabling steward API preserves worker fallback. Following subscription fallback uses the native account owner's exhaustion proof. Changes apply to the next unstarted message and never replay existing requests. API quota or permission errors may try the next key only before output, preserving the model. Connection checks read models, not spendable quota. Project keys cannot query billing balance.",
+    auto: "Use API after working Agent subscriptions are exhausted (usage based billing)", autoOff: "Enable subscription automatic handoff below first", ownerMissing: "Update the LoopX accounts extension before enabling API fallback",
+    steward: "Steward API use", primary: "Prefer API (usage based billing)", fallback: "Follow subscription fallback", disabled: "Disabled",
     lastRequest: "Last response", accepted: "API accepted the request", quota_exhausted: "API quota exhausted", failed: "API request failed", tokens: "Rate-window tokens left", requests: "Rate-window requests left",
     apiPermission: "API model permission denied", apiLimited: "API request rate limited",
     balance: "API balance unavailable", billing: "View OpenAI usage", add: "Add key", save: "Save key", cancel: "Cancel",
@@ -55,8 +57,11 @@ const copy = {
   },
 };
 
-export function OpenAIKeySettings({ automatic, supported, apiEnabled, onToggle, nativeBusy = false }: {
+export function OpenAIKeySettings({ automatic, supported, apiEnabled, onToggle, nativeBusy = false,
+  stewardSupported = false, stewardRole = "disabled", onStewardRole }: {
   automatic: boolean; supported: boolean | null; apiEnabled: boolean; onToggle: (enabled: boolean) => void; nativeBusy?: boolean;
+  stewardSupported?: boolean; stewardRole?: "disabled" | "fallback" | "primary";
+  onStewardRole?: (role: "disabled" | "fallback" | "primary") => void;
 }) {
   const { locale } = useWorkspaceI18n();
   const c = copy[locale];
@@ -112,6 +117,13 @@ export function OpenAIKeySettings({ automatic, supported, apiEnabled, onToggle, 
       disabled={busy || nativeBusy || (!apiEnabled && (!automatic || !supported || !status?.keys.length))}
       onChange={event => onToggle(event.target.checked)} /><span>{c.auto}</span></label>
     {!apiEnabled && supported === false ? <p className="codex-account-effect">{c.ownerMissing}</p> : !apiEnabled && !automatic ? <p className="codex-account-effect">{c.autoOff}</p> : null}
+    {stewardSupported ? <label className="codex-account-enable"><span>{c.steward}</span>
+      <select aria-label={c.steward} value={stewardRole}
+        disabled={busy || nativeBusy || !status}
+        onChange={event => onStewardRole?.(event.target.value as "disabled" | "fallback" | "primary")}>
+        <option value="disabled">{c.disabled}</option><option value="fallback">{c.fallback}</option>
+        <option value="primary" disabled={!status?.keys.length}>{c.primary}</option>
+      </select></label> : null}
     {status ? <>
       <div className="codex-account-list">
         {status.keys.map(row => <article key={row.id}>

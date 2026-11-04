@@ -14,7 +14,6 @@ from ..work_items.work_lane import WORK_LANE_CONTRACT_SCHEMA_VERSION
 from ..work_items.work_lane_context import build_work_lane_context_contract
 from .recent_runs import latest_unchanged_monitor_observation
 from .task_orchestration_admission import (
-    SUBAGENT_SPAWN_CAPABILITY,
     build_adaptive_task_orchestration_contract,
 )
 
@@ -23,6 +22,7 @@ AGENT_SCOPE_NON_EXECUTION_ACTIONS = {
     AgentScopeFrontierAction.AGENT_SCOPE_WAIT.value,
     AgentScopeFrontierAction.REASSIGNMENT_REQUIRED.value,
 }
+SUBAGENT_SPAWN_CAPABILITY = "subagent_spawn"
 PEER_AGENT_ACTIVATION_CAPABILITY = "peer_agent_activation"
 PEER_COORDINATION_BLOCKED_ACTION = EffectiveAction.PEER_COORDINATION_BLOCKED.value
 

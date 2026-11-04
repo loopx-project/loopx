@@ -20,6 +20,7 @@ from loopx.control_plane.coordination.local_authority import read_canonical_todo
 from tests.control_plane.canonical_authority_fixture import (
     isolate_sqlite_runtime,
 )
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 from tests.test_loopx_turn_driver import _write_live_fixture
 
 
@@ -31,7 +32,7 @@ def _cli(args: list[str]) -> dict:
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
         status = cli_main(args)
-    result = json.loads(output.getvalue())
+    result = read_cli_policy_payload(output.getvalue(), returncode=status)
     assert status == 0, result
     return result
 
@@ -113,27 +114,44 @@ def test_turn_milestone_intent_is_replay_stable(
         "work_evidence": ["fixture:validated-artifact"],
         "validation_evidence": ["fixture:independent-artifact-check"],
     }
+    # Author from the original Host input's saved decision, without another guard.
+    # The existing report/replay assertions remain independent of this input.
+    author_candidate = (
+        "import json, shlex, subprocess\n"
+        f"candidate = {candidate!r}\n"
+        "def authored_candidate(authority):\n"
+        "    review = json.loads(subprocess.check_output(\n"
+        "        shlex.split(authority['replan_action_packet']['review']), text=True))\n"
+        "    writeback = json.loads(subprocess.check_output(\n"
+        "        shlex.split(review['next']['writeback']), text=True))\n"
+        "    vision = json.loads(candidate['agent_vision_json'])\n"
+        "    vision['stride_decision'] = writeback['stride_control']['minimal_example']\n"
+        "    return {**candidate, 'agent_vision_json': json.dumps(vision)}\n"
+    )
     host_runner = tmp_path / ("turn_replan_dsh_runner.py" if host_kind == "dsh" else "turn_replan_host.py")
     if host_kind == "dsh":
         host_runner.write_text(
-            "import json\nfrom pathlib import Path\n"
+            author_candidate + "from pathlib import Path\n"
             f"counter = Path({str(workspace / 'host-count.txt')!r})\n"
             "def run_dsh_turn(*, prompt, session_id, workspace, session_root, provider, model, "
             "reasoning_effort, max_tokens, cordis, runtime_bin, request_timeout_seconds):\n"
             "    counter.write_text(str(int(counter.read_text()) + 1 if counter.exists() else 1))\n"
             "    Path(workspace, 'validated-artifact.txt').write_text('validated')\n"
-            f"    return json.dumps({candidate!r})\n",
+            "    authority = json.loads(prompt.split('Turn authority JSON:\\n', 1)[1].split('\\n\\nWhen finished', 1)[0])\n"
+            "    return json.dumps(authored_candidate(authority))\n",
             encoding="utf-8",
         )
     else:
         host_runner.write_text(
-            "import json, pathlib, sys\n"
+            author_candidate + "import pathlib, sys\n"
+            "from loopx.control_plane.turn_driver.host_candidate import extract_turn_authority\n"
             "request = json.load(sys.stdin)\n"
             "counter = pathlib.Path('host-count.txt')\n"
             "counter.write_text(str(int(counter.read_text()) + 1 if counter.exists() else 1))\n"
             "pathlib.Path('validated-artifact.txt').write_text('validated')\n"
             "json.dump({'schema_version':'loopx_turn_result_v0','turn_key':request['turn_key'],"
-            "'completed_phases':['host_execute','typed_result'],**" + repr(candidate) + "},sys.stdout)\n",
+            "'completed_phases':['host_execute','typed_result'],"
+            "**authored_candidate(extract_turn_authority(request))},sys.stdout)\n",
             encoding="utf-8",
         )
     validator = 'import pathlib; raise SystemExit(0 if pathlib.Path("validated-artifact.txt").read_text() == "validated" else 7)'
