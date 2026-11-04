@@ -196,6 +196,10 @@ export function canonicalTodoReadItems(values: JsonObject[]): JsonObject[] {
   });
 }
 
+export function normalizedTodoTextRevision(normalizedText: string): string | null {
+  return normalizedText ? "sha256:" + hash(normalizedText) : null;
+}
+
 export function structureCanonicalTodo(item: JsonObject, role: unknown, section: unknown,
   limit: number | null = 500, revision = true): JsonObject {
   const full = compactPythonWhitespace(text(item.text)), body = compactTodoReadText(full, limit);
@@ -205,7 +209,7 @@ export function structureCanonicalTodo(item: JsonObject, role: unknown, section:
   return {...readMetadata(item), schema_version: "todo_item_v0", role, source_section: section,
     archive_state: item.archive_state ?? "active", status, done: status === "done" || status === "deferred",
     text: body, task_class: taskClass({...item, text: body}),
-    ...(revision && full ? {content_revision: "sha256:" + hash(full)} : {}),
+    ...(revision && full ? {content_revision: normalizedTodoTextRevision(full)} : {}),
     ...(parsed.priority ? {priority: parsed.priority, title: compactTodoReadText(parsed.title, limit)} : {})};
 }
 

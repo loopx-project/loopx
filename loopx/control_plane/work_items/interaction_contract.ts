@@ -20,6 +20,7 @@ import type { JsonObject } from "../effect_program.ts";
 import { AGENT_SCOPE_FRONTIER_ACTIONS, AgentScopeFrontierAction } from "../agents/agent_scope_frontier.generated.ts";
 import { pendingAutomaticResumeCondition } from "../goals/vision_wait_coverage.ts";
 import {compactTodoContextSource} from "../quota/context_delivery.ts";
+import {compactPythonWhitespace} from "../coordination/python_whitespace.ts";
 
 function exactBlockedSuccessorWait(request: JsonObject, monitorWait = false): JsonObject | null {
   const wait = jsonObject(request.vision_wait_state);
@@ -855,6 +856,55 @@ export function assertGoalContextDelivered(channel: JsonObject): void {
 
 /** Deliver full registered sources once. Ordinary mixed Goals retain progressive
  * reads; native delivery can require the complete original. */
+async function readSelectedTodoContext(source: JsonObject, todoId: unknown): Promise<JsonObject> {
+  if (typeof todoId !== "string" || !todoId) return {error_code: "context_source_unavailable"};
+  const {readCanonicalSnapshot, CANONICAL_SNAPSHOT_PAGE_REQUEST} =
+    await import("../coordination/canonical_snapshot_page.ts");
+  const {normalizedTodoTextRevision} = await import("../todos/read_codec.ts");
+  const matches: JsonObject[] = [];
+  let after: unknown = null;
+  let page: JsonObject;
+  do {
+    page = await readCanonicalSnapshot({schema_version: CANONICAL_SNAPSHOT_PAGE_REQUEST,
+      runtime_root: requireNonEmptyString(source.runtime_root, "runtime_root"),
+      goal_id: requireNonEmptyString(source.goal_id, "goal_id"),
+      include_leases: false, projection_readback: null, after});
+    if (page.status !== "page" || !Array.isArray(page.todos)) return {error_code: "context_source_unavailable"};
+    matches.push(...(page.todos as JsonObject[]).filter(todo =>
+      todo.todo_id === todoId && todo.archive_state !== "archive"));
+    after = page.next;
+  } while (after !== null);
+  const todo = matches.length === 1 ? {...matches[0]} : null;
+  if (todo !== null) {
+    if (!Object.hasOwn(todo, "status")) todo.status = todo.done === true ? "done" : "open";
+    if (typeof todo.text === "string") {
+      const revision = normalizedTodoTextRevision(compactPythonWhitespace(todo.text));
+      if (revision) todo.content_revision = revision;
+    }
+  }
+  return {content: {ok: true, matched: matches.length === 1, ambiguous: matches.length > 1, todo,
+    source: page.source_authority,
+    authority_read: {source_authority: page.source_authority,
+      provider_revision: (page.snapshot as JsonObject).provider_revision,
+      decision_read_from_provider: true, legacy_fallback_used: false}}};
+}
+
+export async function readAndProjectInteractionWorkContext(request: JsonObject): Promise<JsonObject> {
+  if (request.source_context === undefined) return projectInteractionWorkContext(request);
+  if (!Array.isArray(request.required_reads) || !Array.isArray(request.source_results)) {
+    throw new EffectRuntimeRequestError("context reads and source results must be arrays");
+  }
+  const reads = request.required_reads.map(value => requireJsonObject(value, "required read"))
+    .filter(read => read.source === "selected_todo");
+  if (reads.length === 0) return projectInteractionWorkContext(request);
+  const source = requireJsonObject(request.source_context, "work context source");
+  const selected = jsonObject(request.selected_todo);
+  const observed = await readSelectedTodoContext(source, selected?.todo_id);
+  return projectInteractionWorkContext({...request, source_results: [
+    ...request.source_results, ...reads.map(read => ({command: read.command, ...observed})),
+  ]});
+}
+
 export function projectInteractionWorkContext(request: JsonObject): JsonObject {
   if (request.require_full_goal_source !== undefined && typeof request.require_full_goal_source !== "boolean") {
     throw new EffectRuntimeRequestError("Goal source delivery requirement must be boolean");
