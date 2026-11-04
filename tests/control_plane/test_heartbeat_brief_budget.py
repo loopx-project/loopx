@@ -101,11 +101,9 @@ def test_brief_keeps_complete_routes_with_128_character_windows_root() -> None:
     for obligation in (
         "true=work+writeback; only false permits no-op",
         "Read agent_channel.work_context and required_reads (or envelope) before work",
-        "retain original and cumulative outcome requirements",
-        "reuse inline goal_acceptance, inspect only if absent, then refine",
-        "Known new-Turn choice: add `--todo-id <id>` to first guard; otherwise",
-        "use selection_command when required; re-enter as instructed, do/verify authorized work",
-        "Settle with current settlement_plan.ordered_steps, else next_cli_actions",
+        "Known new-Turn choice: add `--todo-id <id>` to first guard; else",
+        "use selection_command if required; re-enter as instructed, do/verify authorized work",
+        "Settle current settlement_plan.ordered_steps in order, else next_cli_actions",
         "preserve exact identities/effect ids and actual outcomes",
         "Never reconstruct static refresh/spend; ambiguous effects need readback/recovery, not blind retry",
         "Todo done≠Turn settled; no invented successor/--no-follow-up",
@@ -115,9 +113,19 @@ def test_brief_keeps_complete_routes_with_128_character_windows_root() -> None:
         "Fresh admission on resume",
         "No spend for waiting alone",
         "Finish Goal only on terminal no-follow-up",
-        "Destructive Git/production requires explicit authorization",
     ):
         assert obligation in body, obligation
+    # Both reviewed renderings express the same conditions. Do not freeze
+    # punctuation as an obligation or accept a bare field name as its proof.
+    for equivalents in (
+        ("retain original and cumulative outcome requirements",
+         "keep original/cumulative outcome requirements"),
+        ("reuse inline goal_acceptance, inspect only if absent, then refine",
+         "reuse inline goal_acceptance (inspect only if absent), then refine"),
+        ("Destructive Git/production requires explicit authorization",
+         "Destructive Git/production needs explicit authorization"),
+    ):
+        assert any(clause in body for clause in equivalents), equivalents
     spec = CLI_OUTPUT_MODE_VARIANT_BY_ID["heartbeat_prompt_brief"]
     assert spec.max_chars == {"json": 11_400, "markdown": 9_600}
     for output_format, text in (("json", encoded), ("markdown", markdown)):

@@ -169,9 +169,11 @@ def test_initial_reference_navigation_change_preserves_original_read_boundary(tm
         return original(operation, **kwargs)
 
     monkeypatch.setattr(turn_envelope, "_turn_envelope_result", changed_navigation)
-    # A fresh initial read now has different navigation over the same source.
-    current = read(model["first_read_command"])
+    # The explicit recipe replans; the prepared model cursor keeps the
+    # addresses selected when this immutable capture was presented.
+    current = read(machine["first_read_command"])
     assert json.loads(current["content"])["selections"] == [{"pointer": "/criterion", "value": payload["criterion"]}]
+    assert read(model["first_read_command"])["content"] == expected["content"]
     following = read(first["next_command"], reference_file=str(reference))
     if legacy:
         assert following["ok"] is False and "digest changed" in following["reason"]

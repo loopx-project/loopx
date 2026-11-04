@@ -210,7 +210,15 @@ def test_invalid_requests_and_corrupt_storage_do_not_become_empty_memory(tmp_pat
     assert "Use a reviewer." not in prompt and "{broken" not in prompt
     rc, quota_envelope = _run_cli(registry, runtime, "quota", "should-run", *scope, "--turn-envelope")
     assert rc == 0, quota_envelope
-    assert quota_envelope["contract_capsule"]["unavailable_context"] == unavailable
+    from loopx.control_plane.quota.turn_envelope import (
+        assert_complete_turn_decision, quota_action_signature_document,
+    )
+    assert_complete_turn_decision(quota_envelope)
+    # The complete source retains the failed hook; the existing executor
+    # projection owns its cache/dependent-action policy during migration.
+    assert quota_envelope["turn_start_capability_hook_dispatch"] == quota["turn_start_capability_hook_dispatch"]
+    executor = quota_action_signature_document(quota_envelope)
+    assert executor["contract_capsule"]["unavailable_context"] == unavailable
     changed = deepcopy(failed_plan)
     del changed["turn_envelope"]["contract_capsule"]["unavailable_context"]
     with pytest.raises(ValueError, match="signature"):

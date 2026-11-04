@@ -109,8 +109,8 @@ def test_selected_acceptance_read_keeps_global_requirements_and_exact_binding(
         goal_id=goal, todo_id="todo_missing")
     assert missing == {**full, "tasks": []}, "missing work must not fall back to another binding"
 
-    packet = cli("quota", "should-run", "--goal-id", goal, "--agent-id", "agent-a",
-        )
+    packet = read_cli_policy_payload(json.dumps(cli(
+        "quota", "should-run", "--goal-id", goal, "--agent-id", "agent-a")), returncode=0)
     channel = packet["interaction_contract"]["agent_channel"]
     assert channel["delivery_allowed"] is True and channel["work_context"]["complete"] is True
     # The public canonical reader retains its full format metadata. Host context
@@ -124,7 +124,10 @@ def test_selected_acceptance_read_keeps_global_requirements_and_exact_binding(
     }
     observed = next(row["content"] for row in channel["work_context"]["sources"]
         if row.get("source") == "goal_acceptance")
-    assert observed == exact
+    navigation = inspect_goal_acceptance(registry_path=registry, runtime_root=str(runtime), goal_id=goal,
+        todo_id=selected, context_agent_id="agent-a", include_work_details=False)
+    assert observed == navigation
+    assert {key: value for key, value in observed.items() if key != "outcome_context"} == exact
     assert any(row.get("source") == "goal_state" for row in channel["required_reads"])
     # The normal guard's complete captured basis is the envelope input; no
     # second guard may substitute a different observation for the host.
@@ -238,19 +241,25 @@ def test_captured_acceptance_does_not_replace_current_work_admission(acceptance_
     first = read_cli_policy_payload(json.dumps(first), returncode=0)
     saved = (capture / "decision.json").read_bytes()
     full = json.loads(saved)
-    basis = next(row["content"] for row in first["work_context"]["sources"]
+    from loopx.control_plane.quota.turn_envelope import build_turn_envelope
+    first_envelope = build_turn_envelope(first, captured_decision_path=str(capture / "decision.json"))
+    assert first["schema_version"] == "loopx_turn_envelope_v1"
+    assert first == full
+    basis = next(row["content"] for row in first_envelope["work_context"]["sources"]
         if row.get("source") == "goal_acceptance")
-    assert first["action"]["delivery_allowed"] is True
+    assert first["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
     assert basis["tasks"][0]["state"] == "ready"
     assert basis["goal_acceptance_contract"]["outcome_requirements"] == original
-    request = build_loopx_turn_host_request(build_loopx_turn_plan(first,
+    request = build_loopx_turn_host_request(build_loopx_turn_plan(first_envelope, work_contract=first,
         host="codex-cli", execution_mode="isolated-headless", turn_instance_id="original-delivery"))
     result = subprocess.run(_recording_host(project), input=json.dumps(request),
         capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
     prompt = (project / "received.txt").read_text()
-    authority = json.loads(prompt.split("Turn authority JSON:\n", 1)[1].split("\n\nWhen finished", 1)[0])
-    assert authority["work_context"] == first["work_context"]
+    authority = json.loads(prompt.split("Turn request:\n", 1)[1].split("\n\nWhen finished", 1)[0])
+    assert authority["schema_version"] == "loopx_turn_host_request_v1"
+    assert authority["work_contract"] == first
+    assert authority["work_contract"]["interaction_contract"]["agent_channel"]["work_context"] == first["interaction_contract"]["agent_channel"]["work_context"]
 
     # Finish the original synthetic work before attempting another managed
     # Turn. An unsettled receipt is its own legitimate recovery boundary.
@@ -321,13 +330,13 @@ def test_captured_acceptance_does_not_replace_current_work_admission(acceptance_
         assert current["interaction_contract"]["user_channel"]["action_required"] is False
     # The unselected normal/replan/wait view follows the same current owner,
     # including all cumulative requirements whenever execution needs a read.
-    inspection = cli(*guard[:-1])
+    inspection = read_cli_policy_payload(json.dumps(cli(*guard[:-1])), returncode=0)
     current_context = inspection["interaction_contract"]["agent_channel"].get("work_context", {})
     for source in current_context.get("sources", []):
         if source.get("source") == "goal_acceptance":
             assert source["content"]["goal_acceptance_contract"] == cold["goal_acceptance_contract"]
     before_read = {p: p.read_bytes() for p in capture.rglob("*") if p.is_file()}
-    detail = subprocess.run(shlex.split(first["detail_ref"]["full_decision"]),
+    detail = subprocess.run(shlex.split(first_envelope["detail_ref"]["full_decision"]),
         capture_output=True, check=True).stdout
     assert detail == saved and json.loads(detail) == full
     assert {p: p.read_bytes() for p in capture.rglob("*") if p.is_file()} == before_read

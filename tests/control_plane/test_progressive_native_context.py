@@ -412,7 +412,7 @@ def test_numeric_type_difference_cannot_hide_a_duplicate_rows_original_value(tmp
     assert "context_reference_instruction" not in required
 
 
-def test_public_quota_cli_delivers_required_view_and_original_evidence(acceptance_goal, tmp_path, monkeypatch):
+def test_public_quota_cli_delivers_required_view_and_signed_original_evidence(acceptance_goal, tmp_path, monkeypatch):
     workspace, document, cli, run = acceptance_goal
     original = {"outcome_id": "export", "owner_agent_id": "agent-a", "todo_ids": ["todo_export"],
         "objective": "Deliver the complete export.", "requirements": [
@@ -443,12 +443,21 @@ def test_public_quota_cli_delivers_required_view_and_original_evidence(acceptanc
     recovery = context._state(lifecycle)["recovery"]
     assert Path(recovery["path"]).name == "required-context.json"
     required = json.loads(Path(recovery["path"]).read_bytes())
+    assert required["schema_version"] == "loopx_turn_envelope_v1"
+    assert "read_scope" not in required
+    # Presentation keeps an address to the immutable checked complete source;
+    # the derived view never becomes another authoritative decision.
+    decision = json.loads((Path(recovery["path"]).parent / "decision.json").read_bytes())
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+
+    assert_complete_turn_decision(decision)
+    details = required["context_details"]
+    assert json.loads(Path(details["path"]).read_bytes()) == decision
     source = next(row for row in required["interaction_contract"]["agent_channel"]["work_context"]["sources"]
         if row["source"] == "goal_acceptance")
     shown = source["content"]["goal_acceptance_contract"]["outcome_requirements"]["outcomes"][0]
     assert [row["description"] for row in shown["requirements"]] == [row["description"] for row in original["requirements"]]
     assert "sources" not in shown and "on demand" in source["reason"]
-    details = required["context_details"]
     code, page = run("quota", "context-read", "--capture-file", details["path"],
         "--capture-sha256", details["sha256"], "--select", shown["supporting_material_pointer"] + "/sources",
         "--page-bytes", "16000", "--max-page-output-bytes", "20000")

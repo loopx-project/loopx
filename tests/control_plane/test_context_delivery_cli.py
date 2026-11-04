@@ -178,20 +178,42 @@ def test_reader_legacy_bytes_and_small_eof_budget(tmp_path):
 def test_bounded_continuation_rechecks_original_capture_and_utf8_cursor(tmp_path):
     import argparse
     from loopx.cli_commands.quota_capture import read_context_capture
+    from loopx.command_invocation import loopx_cli_route
     capture = tmp_path / "original.json"
     raw = json.dumps({"requirements": "🙂" * 900}, ensure_ascii=False).encode()
     capture.write_bytes(raw)
     args = argparse.Namespace(capture_file=str(capture), capture_sha256=hashlib.sha256(raw).hexdigest(),
         offset=0, page_bytes=8192, max_page_output_bytes=1600, format="json")
-    page = read_context_capture(args)
-    assert page["ok"] and not page["eof"]
-    args.offset = page["next_offset"] + 1
-    assert "UTF-8 boundary" in read_context_capture(args)["reason"]
-    args.offset = page["next_offset"]
-    capture.write_bytes(raw.replace(b"requirements", b"requirementX"))
-    result = read_context_capture(args)
-    assert not result["ok"] and "digest mismatch" in result["reason"]
-    assert "no guard, admission or spend" in result["recovery"]
+    # This fixture exercises byte cursors with its original small output cap;
+    # installation-path length is a separate metadata-budget input below.
+    with loopx_cli_route("fixture-loopx"):
+        page = read_context_capture(args)
+        assert page["ok"] and not page["eof"]
+        assert len(json.dumps(page, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 1600
+        args.offset = raw.index("🙂".encode()) + 1
+        assert "UTF-8 boundary" in read_context_capture(args)["reason"]
+        args.offset = page["next_offset"]
+        capture.write_bytes(raw.replace(b"requirements", b"requirementX"))
+        result = read_context_capture(args)
+        assert not result["ok"] and "digest mismatch" in result["reason"]
+        assert "no guard, admission or spend" in result["recovery"]
+
+
+def test_small_page_refuses_oversized_reader_metadata_without_raising_its_budget(tmp_path):
+    import argparse
+    from loopx.cli_commands.quota_capture import read_context_capture
+    from loopx.command_invocation import loopx_cli_route
+
+    capture = tmp_path / "original.json"
+    raw = json.dumps({"requirements": "🙂" * 900}, ensure_ascii=False).encode()
+    capture.write_bytes(raw)
+    args = argparse.Namespace(capture_file=str(capture), capture_sha256=hashlib.sha256(raw).hexdigest(),
+        offset=0, page_bytes=8192, max_page_output_bytes=1600, format="json")
+    with loopx_cli_route("/" + "installed-prefix/" * 160 + "loopx"):
+        refused = read_context_capture(args)
+    assert not refused["ok"] and "cannot fit page metadata" in refused["reason"]
+    assert "content" not in refused and args.max_page_output_bytes == 1600
+    assert capture.read_bytes() == raw
 
 
 @pytest.mark.parametrize("extra,limit,reason", [
@@ -236,14 +258,24 @@ def test_resumed_task_keeps_its_condition_without_expanding_diagnostic_siblings(
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
         "--turn-instance-id", "mixed-diagnostics", cwd=project)
     assert code == 0 and guard["should_run"], guard
+    assert guard["schema_version"] == "loopx_turn_envelope_v1"
     summary = guard["agent_todo_summary"]
-    assert [item["todo_id"] for item in summary["backlog_items"]] == ["todo_work_1"]
-    condition = summary["backlog_items"][0]["resume_condition"]
+    # The complete writer retains the original bounded source rows. It no
+    # longer emits the legacy display projection as its canonical decision.
+    assert [item["todo_id"] for item in summary["backlog_items"]] == [TODO_ID, "todo_work_1"]
+    condition = summary["backlog_items"][1]["resume_condition"]
     assert condition["satisfied"] and condition["target_todo_id"] == "todo_dependency"
     assert len(summary["first_executable_items"]) == 3
     candidates = guard["capability_gate"]["runnable_candidates"]
     assert {row["todo_id"] for row in candidates} == {row["todo_id"] for row in todos[:8]}
     assert all(row["title"].endswith("Final condition: stop before publication.") for row in candidates)
+    # The shared historical display owner still isolates the exceptional row;
+    # no resumed row expands known diagnostic siblings in that projection.
+    from loopx.control_plane.quota.cli_projection import compact_quota_should_run_cli_payload
+    displayed = compact_quota_should_run_cli_payload(deepcopy(guard))["agent_todo_summary"]
+    assert [item["todo_id"] for item in displayed["backlog_items"]] == ["todo_work_1"]
+    assert displayed["backlog_items"][0]["resume_condition"] == condition
+    assert len(displayed["first_executable_items"]) == 3
     assert state.read_bytes() == before and _spend_run_count(runtime) == 0
     code, detailed = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID,
         "--todo-id", "todo_work_7", cwd=project)
@@ -427,8 +459,12 @@ def test_real_cli_host_rendezvous_sends_delta_and_keeps_same_capture_full(tmp_pa
     assert source_ref not in json.dumps(warm["changes"])
     projection = json.loads((second / "projection.json").read_bytes())
     current = prepare_context_delivery(projection, scope=scope,
-        capture_id=warm["target"]["capture_id"], surface=surface)
-    assert restore_context_delivery(warm, baseline=cold, current=current)["context"] == projection
+        capture_id=warm["target"]["capture_id"], surface="complete_turn")
+    assert projection == json.loads((second / "decision.json").read_bytes())
+    assert projection["schema_version"] == "loopx_turn_envelope_v1"
+    assert current["target"] == warm["target"]
+    restored = restore_context_delivery(warm, baseline=cold, current=current)
+    assert restored["mode"] == "delta" and restored["context"] == projection
     assert len(json.dumps(warm)) < len(json.dumps(current))
     assert warm["recovery"]["path"] == str(second / "projection.json")
     assert warm["target"]["capture_id"] == hashlib.sha256((second / "decision.json").read_bytes()).hexdigest()
@@ -662,7 +698,7 @@ def test_native_projection_never_layers_host_projection(tmp_path, monkeypatch, n
             pytest.fail("failed native directory preparation must not reach projection")
         if native_failure == "projection":
             raise OSError("native observation unavailable")
-        return {"native_projection": payload}
+        return codex_context.NativeContextPreparation({"native_projection": payload})
 
     def unavailable_directory(**kwargs):
         raise OSError("native directory unavailable")
@@ -671,7 +707,7 @@ def test_native_projection_never_layers_host_projection(tmp_path, monkeypatch, n
         raise OSError("synthetic reader metadata unavailable")
 
     monkeypatch.setattr(quota, "project_captured_context", competing)
-    monkeypatch.setattr(codex_context, "project_codex_context", native)
+    monkeypatch.setattr(codex_context, "prepare_codex_context", native)
     if native_failure == "directory":
         monkeypatch.setattr(codex_context, "codex_context_directory", unavailable_directory)
     elif native_failure == "reader_reference":

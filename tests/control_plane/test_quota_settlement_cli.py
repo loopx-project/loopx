@@ -2254,13 +2254,21 @@ def test_settlement_read_snapshot_is_explicit_and_preserves_complete_facts() -> 
     request = {"schema_version": "loopx_quota_blocked_wait_request_v0",
                "todos": [{"todo_id": TODO_ID, "role": "agent", "status": "open",
                           "task_class": "advancement_task",
-                          "note": note_unit * (MAX_REQUEST_BYTES // len(note_unit.encode()) + 1)}],
+                          "note": note_unit * 150_000}],
                "todo_id": TODO_ID, "observed_at": "2026-01-01T00:00:00Z",
                "allow_turn_settlement_retry": True}
+    # Keep the original >2 MiB observation. Main's measured ordinary transport
+    # now supports 8 MiB; snapshot-only qualification must exceed that actual
+    # boundary rather than treating the retired 2 MiB ceiling as current.
+    assert 2 * 1024 * 1024 < len(json.dumps(request).encode()) <= MAX_REQUEST_BYTES
+    ordinary = effect_runtime_result("quota.settlement.read", request)
+    note = request["todos"][0]["note"]
+    request["todos"][0]["note"] = note * (MAX_REQUEST_BYTES // len(note.encode()) + 1)
     assert len(json.dumps(request).encode()) > MAX_REQUEST_BYTES
     with pytest.raises(EffectRuntimeRejected, match="request is oversized"):
         effect_runtime_result("quota.settlement.read", request)
     result = effect_runtime_result("quota.settlement.read", request, large_local_snapshot=True)
+    assert result == ordinary
     assert result == {"schema_version": "quota_blocked_retry_v0", "source": "turn_settlement",
                       "todo_id": TODO_ID, "resume_when": "resume_at:2026-01-01T00:05:00Z",
                       "observed_at": "2026-01-01T00:00:00Z", "due_at": "2026-01-01T00:05:00Z"}
@@ -4089,10 +4097,10 @@ def test_guided_start_begins_one_turn_and_executes_returned_selection(
     assert settlement_plan["identity"] == receipt_identity
     assert f"--turn-instance-id {turn_instance_id}" in json.dumps(settlement_plan)
     expected_source = "heartbeat" if host_surface == "codex-app" else "visible-goal"
-    assert any(
-        f"--source {expected_source}" in action
-        for action in cli_channel["next_cli_actions"]
-    )
+    assert cli_channel["quota_spend_source"] == expected_source
+    assert settlement_plan["schema_version"] == "quota_settlement_plan_v2"
+    assert next(step for step in settlement_plan["ordered_steps"] if step["kind"] == "quota_spend")["owner"] == "runtime"
+    assert any("--settle-turn" in action for action in cli_channel["next_cli_actions"])
     assert _heartbeat_receipt_count(runtime, turn_instance_id) == 2
 
 
@@ -4149,9 +4157,10 @@ def test_visible_goal_continuation_begins_turn_and_executes_returned_selection(
     assert settlement_plan["identity"] == selected["heartbeat_receipt"][
         "settlement_identity"
     ]
-    assert any(
-        "--source visible-goal" in action for action in cli_channel["next_cli_actions"]
-    )
+    assert cli_channel["quota_spend_source"] == "visible-goal"
+    assert settlement_plan["schema_version"] == "quota_settlement_plan_v2"
+    assert next(step for step in settlement_plan["ordered_steps"] if step["kind"] == "quota_spend")["owner"] == "runtime"
+    assert any("--settle-turn" in action for action in cli_channel["next_cli_actions"])
     assert _heartbeat_receipt_count(runtime, turn_instance_id) == 2
 
 
@@ -4261,11 +4270,12 @@ def test_single_claimed_todo_guided_start_keeps_direct_delivery_semantics(
     ]
     assert settlement_plan["identity"] == identity
     expected_source = "heartbeat" if host_surface == "codex-app" else "visible-goal"
-    assert expected_source in next(
-        step["command_template"]
-        for step in settlement_plan["ordered_steps"]
-        if step["kind"] == "quota_spend"
-    )
+    assert guard["interaction_contract"]["cli_channel"]["quota_spend_source"] == expected_source
+    assert settlement_plan["schema_version"] == "quota_settlement_plan_v2"
+    spend = next(step for step in settlement_plan["ordered_steps"] if step["kind"] == "quota_spend")
+    assert spend["owner"] == "runtime" and "command_template" not in spend
+    assert "--settle-turn" in next(step["command_template"] for step in settlement_plan["ordered_steps"]
+        if step["kind"] == "durable_writeback")
 
 
 @pytest.mark.parametrize("profile", ["codex_app_heartbeat", "codex_app_ssh_goal"])
@@ -6920,6 +6930,8 @@ def test_todoless_blocked_replan_settles_read_only_external_evidence_without_wor
 def test_unbound_visible_goal_todoless_replan_reenters_through_guided_turn(
     tmp_path: Path, provider: str,
 ) -> None:
+    from hashlib import sha256
+
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_autonomous_replan_fixture(project, runtime, registry_path)
 
@@ -6946,8 +6958,9 @@ def test_unbound_visible_goal_todoless_replan_reenters_through_guided_turn(
     assert "refresh-state" not in actions[0]
     assert "spend-slot" not in actions[0]
 
+    capture = tmp_path / "guided-replan-capture"
     bound_rc, bound = _run_generated_cli(
-        actions[0],
+        actions[0] + " --decision-output-dir " + shlex.quote(str(capture)),
         registry_path=registry_path,
     )
 
@@ -6960,31 +6973,35 @@ def test_unbound_visible_goal_todoless_replan_reenters_through_guided_turn(
     assert identity["replan_obligation_id"] == obligation_id
     assert identity["turn_instance_id"].startswith("guided-start:")
     cli_channel = bound["interaction_contract"]["cli_channel"]
-    assert cli_channel["settlement_identity"] == identity
-    assert cli_channel["settlement_read_ref"] == "$.replan_action_packet.writeback"
-    assert "settlement_plan" not in cli_channel
-    # Native admission defers the plan; consume its exact captured reader
-    # without another guard or a second guided-start Turn.
-    reader_argv = shlex.split(bound["replan_action_packet"]["writeback"])
+    assert bound["schema_version"] == "loopx_turn_envelope_v1"
+    assert cli_channel["settlement_plan"]["identity"] == identity
+    assert "settlement_read_ref" not in cli_channel
+    # The complete source replaces the staged writeback-only view. Read its
+    # original immutable capture, preserving the same no-reentry/side-effect
+    # oracle as the historical reader test.
+    decision_file = capture / "decision.json"
     source_paths = (
         registry_path,
         project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md",
         runtime / "goals" / GOAL_ID / "runs/index.jsonl",
-        Path(reader_argv[reader_argv.index("--decision-file") + 1]),
+        decision_file,
     )
     original_files = {path: path.read_bytes() for path in source_paths}
-    reader = subprocess.run(
-        reader_argv,
-        cwd=REPO_ROOT,
-        env={**os.environ, "PYTHONPATH": str(REPO_ROOT)},
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-    assert reader.returncode == 0, (reader.stdout, reader.stderr)
-    writeback = json.loads(reader.stdout)
-    assert writeback["obligation_id"] == obligation_id
-    plan = writeback["writeback"]["settlement_plan"]
+    reader_rc, page = _run_cli(registry_path, runtime, "quota", "context-read",
+        "--capture-file", str(decision_file), "--capture-sha256", sha256(original_files[decision_file]).hexdigest(),
+        "--page-bytes", "64000", "--max-page-output-bytes", "64000")
+    assert reader_rc == 0, page
+    content = [page["content"]]
+    while not page["eof"]:
+        reader = subprocess.run(shlex.split(page["next_command"]), cwd=REPO_ROOT,
+            env={**os.environ, "PYTHONPATH": str(REPO_ROOT)}, capture_output=True, text=True, timeout=60)
+        assert reader.returncode == 0, (reader.stdout, reader.stderr)
+        page = json.loads(reader.stdout)
+        content.append(page["content"])
+    complete = json.loads("".join(content))
+    assert complete == bound
+    assert complete["replan_action_packet"]["obligation_id"] == obligation_id
+    plan = complete["interaction_contract"]["cli_channel"]["settlement_plan"]
     assert plan["identity"] == identity
     assert [step["kind"] for step in plan["ordered_steps"]] == [
         "validation", "durable_writeback", "quota_spend",
