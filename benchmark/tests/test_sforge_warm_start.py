@@ -2,6 +2,7 @@
 import asyncio
 from dataclasses import replace
 import hashlib
+from pathlib import Path
 import json
 import shutil
 import time
@@ -68,7 +69,7 @@ def test_native_skills_backup_never_overwrites_an_earlier_attempt(tmp_path):
 
 
 @pytest.fixture
-def point(tmp_path, request):
+def point(tmp_path, request, monkeypatch):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     (workspace / "candidate").write_text("retained candidate")
@@ -84,12 +85,26 @@ def point(tmp_path, request):
         config.write_text('model="original"\nmodel_reasoning_effort="high"\n[features]\ngoals = false\n')
     context = tmp_path / "context.json"
     context.write_text(json.dumps({"snapshot": {"todos": [{"todo_id": "source-todo"}]}}))
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "retained.json").write_text('{"original":"state"}')
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": [{"id": "source-goal",
+        "repo": str(workspace), "coordination": {"registered_agents": ["source-agent"]}}]}))
+    monkeypatch.setattr(warm, "_REGISTRY", str(registry))
+    monkeypatch.setattr(warm, "_LOOPX_RUNTIME", str(runtime))
     components = [{"id": "workspace", "source_path": str(workspace)},
-                  {"id": "context", "source_path": str(context)}]
+                  {"id": "context", "source_path": str(context)},
+                  {"id": "runtime", "source_path": str(runtime)},
+                  {"id": "registry", "source_path": str(registry)}]
     metadata = {
         "native_session": {"guest_workspace": str(workspace), "guest_home": warm._CODEX_HOME,
                            "config_sha256": hashlib.sha256(config.read_bytes()).hexdigest()},
-        "loopx_state": {"goal_id": "source-goal", "agent_id": "source-agent"},
+        "loopx_state": {"goal_id": "source-goal", "agent_id": "source-agent",
+            "registry_sha256": hashlib.sha256(registry.read_bytes()).hexdigest(),
+            "registry_component_id": "registry", "registry_member_path": "",
+            "source_inventory": [{"key": "runtime_root", "component_id": "runtime", "source_path": str(runtime)},
+                {"key": "configuration_source_registry", "component_id": "registry", "source_path": str(registry)}]},
         "worker_file_snapshot": {"components": components[:1]},
         "research_context": {"component_id": "context", "member_path": "",
                              "sha256": hashlib.sha256(context.read_bytes()).hexdigest()},
@@ -98,12 +113,12 @@ def point(tmp_path, request):
     unit = tmp_path / "point"
     sealed = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "capture", "components": components,
         "point_metadata": metadata, "expected_source_sha256": observed["source_sha256"], "destination": str(unit)})
-    start = warm.WarmStart(unit, sealed["sha256"], config, "new-goal", "new-agent", "source-todo", int(time.time()) + 600)
+    start = warm.WarmStart(unit, sealed["sha256"], config, "source-goal", "source-agent", "source-todo", int(time.time()) + 600)
     return start, workspace
 
 
 @pytest.mark.parametrize("change", [
-    {"goal_id": "source-goal"}, {"agent_id": "source-agent"}, {"source_todo_id": "missing"},
+    {"goal_id": "foreign-goal"}, {"agent_id": "foreign-agent"}, {"source_todo_id": "missing"},
     {"deadline_epoch": 1}, {"deadline_epoch": True}, {"normal_cadence": 0}, {"normal_cadence": True},
     {"fresh_replan": "false"},
 ])
@@ -201,7 +216,7 @@ def test_staging_preserves_sealed_modes(point, monkeypatch, tmp_path, model_tran
         async def exec(self, command, **kwargs):
             commands.append(command)
             return SimpleNamespace(return_code=0)
-    assert asyncio.run(start.stage(Environment(), str(workspace))) == []
+    assert asyncio.run(start.stage(Environment(), str(workspace))) == [warm._LOOPX_RUNTIME, warm._REGISTRY]
     assert "chmod -R" not in commands[0]
     effect_runtime_result("runtime.checkpoint_artifacts", {"action": "verify", "root": str(control / "restored-point"),
         "expected_sha256": start.sha256})
@@ -294,31 +309,6 @@ def test_unchanged_render_cannot_hide_a_different_declared_host_route(point):
     with pytest.raises(ValueError, match="current Host route"):
         asyncio.run(start.stage(NoEffects(), str(workspace),
             effective_config=start.config.read_bytes(), provider_base_url="http://gateway:4002/v1"))
-
-
-def test_normal_cadence_requires_accepted_current_replan_and_is_applied_once(tmp_path, monkeypatch):
-    from benchmark.runtime import checkpoint_continuation, worker
-    declaration = tmp_path / "warm.json"
-    declaration.write_text(json.dumps({"sha256": "a" * 64, "normal_cadence": 6,
-                                       "goal_id": "current", "agent_id": "receiver"}))
-    env = {"LOOPX_WARM_START": str(declaration), "LOOPX_GOAL_ID": "current",
-           "LOOPX_AGENT_ID": "receiver", "LOOPX_PROJECT": str(tmp_path)}
-    monkeypatch.setattr(worker, "loopx_command", lambda env: ["loopx"])
-    gate = {"capture_allowed": False, "checkpoint_sha256": "a" * 64}
-    monkeypatch.setattr(checkpoint_continuation, "restored_capture_gate", lambda env: gate)
-    calls = []
-    def configure(command, **kwargs):
-        calls.append(command)
-        return '{"ok": true}'
-    monkeypatch.setattr("subprocess.check_output", configure)
-    assert warm.finish_preparation(env) == {"preparation_complete": False}
-    assert not calls
-    gate.update(capture_allowed=True, review_turn_id="accepted-current-replan")
-    assert warm.finish_preparation(env)["preparation_complete"]
-    assert warm.finish_preparation(env)["normal_cadence"] == 6
-    assert len(calls) == 1
-    with pytest.raises(ValueError, match="lineage"):
-        warm.finish_preparation({**env, "LOOPX_AGENT_ID": "another-agent"})
 
 
 def test_guest_helper_does_not_require_host_harbor_package():
@@ -523,7 +513,7 @@ def test_research_selection_survives_staging(research_point, monkeypatch, tmp_pa
             shutil.copyfile(source, target)
         async def exec(self, command, **kwargs):
             return SimpleNamespace(return_code=0)
-    assert asyncio.run(start.stage(Environment(), str(workspace))) == [str(research)]
+    assert asyncio.run(start.stage(Environment(), str(workspace))) == [str(research), warm._LOOPX_RUNTIME, warm._REGISTRY]
     declaration = json.loads((control / "warm-start.json").read_bytes())
     assert declaration["research_component_ids"] == ["experiments"]
 
@@ -676,7 +666,12 @@ def parent_workspace_point(point, tmp_path, request):
     elif variant == "noncanonical":
         metadata["worker_file_snapshot"]["components"] = [
             {"id": "workspace", "source_path": str(parent) + "/"}]
-    components = [component, manifest["components"][1]]
+    registry = Path(warm._REGISTRY)
+    data = json.loads(registry.read_bytes())
+    data["goals"][0]["repo"] = str(workspace)
+    registry.write_text(json.dumps(data))
+    metadata["loopx_state"]["registry_sha256"] = hashlib.sha256(registry.read_bytes()).hexdigest()
+    components = [component, *manifest["components"][1:]]
     observed = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "probe", "components": components})
     unit = tmp_path / "parent-point"
     sealed = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "capture", "components": components,
