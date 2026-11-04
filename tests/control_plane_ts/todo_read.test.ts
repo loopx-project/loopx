@@ -11,6 +11,8 @@ import {engageLegacyCoordinationWriterFence} from "../../loopx/control_plane/coo
 import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import {coordinationTodoReadModel} from "../../loopx/control_plane/coordination/coordination_projection.ts";
 import {TODO_CANONICAL_READ_RECORD_SCHEMA} from "../../loopx/control_plane/coordination/coordination_state_contract.ts";
+import {authorityProjectionFixture} from "./authority_projection_fixture.ts";
+import {goalAcceptanceTodoDigest, normalizeGoalAcceptanceDocument} from "../../loopx/control_plane/goals/acceptance_contract.ts";
 
 const now = "2026-10-19T07:00:00Z";
 const row = (todo_id: string, extra: JsonObject = {}): JsonObject => ({schema_version: "todo_item_v0", todo_id,
@@ -91,6 +93,18 @@ for (const provider of ["file", "sqlite"] as const) {
     assert.equal((payload.todo as JsonObject).resume_ready, true);
     assert.equal((payload.authority_read as JsonObject).provider_revision, committed.provider_revision);
     assert.equal((await store.loadAuthority()).status, "loaded");
+    const fullQuery = {...request, query: {...request.query, todo_id: null,
+      json_references: false, full_text: true}};
+    const full = (await readTodo(fullQuery)).payload as JsonObject;
+    assert.equal(full.full_text, true);
+    assert.equal((full.todos as JsonObject[])[0].text, body);
+    assert.equal((full.authority_read as JsonObject).provider_revision, committed.provider_revision);
+    const bounded = (await readTodo({...fullQuery, query: {...fullQuery.query, full_text: false}})).payload as JsonObject;
+    assert.equal(bounded.full_text, undefined);
+    assert.notEqual((bounded.todos as JsonObject[])[0].text, body);
+    await assert.rejects(() => readTodo({...fullQuery, query: {...fullQuery.query, thin: true}}), /compact presentation/);
+    await assert.rejects(() => readTodo({...fullQuery, query: {...fullQuery.query, summary: true}}), /compact presentation/);
+    await assert.rejects(() => readTodo({...fullQuery, query: {...fullQuery.query, full_text: "true"}}), /full_text/);
     const laterTodos = [row("todo_waiting", {status: "blocked", text: "Changed current requirement"}), todos.find(item => item.todo_id === "todo_archived")!]
       .sort((a, b) => String(a.todo_id).localeCompare(String(b.todo_id)));
     const changed = {...projection, todos: laterTodos,
@@ -102,6 +116,103 @@ for (const provider of ["file", "sqlite"] as const) {
     assert.equal((reread.todo as JsonObject).status, "blocked");
     assert.equal((reread.todo as JsonObject).text, "Changed current requirement");
     assert.notEqual((reread.authority_read as JsonObject).provider_revision, committed.provider_revision);
+  });
+}
+
+for (const provider of ["file", "sqlite"] as const) {
+  test(`${provider} include-archived keeps current acceptance limits on active Todos`, async t => {
+    const root = await mkdtemp(join(tmpdir(), "loopx-todo-mixed-archive-"));
+    t.after(() => rm(root, {recursive: true, force: true}));
+    const state = join(root, "state.md"), goal = "goal-a";
+    await writeFile(state, "# Synthetic Goal\n");
+    if (provider === "sqlite") await selectLocalSqliteAuthority(root, goal, true);
+    const store = await openLocalAuthorityStore(root, goal);
+    const bound = row("todo_bound", {text: "Original bound requirement"});
+    const unbound = row("todo_unbound", {index: 2, text: "Unbound active requirement"});
+    const archived = row("todo_archived", {index: 3, status: "done", done: true,
+      task_class: "advancement_task", archive_state: "archive", source_section: "Completed Work Archive"});
+    const document = normalizeGoalAcceptanceDocument({
+      objective: "Preserve current acceptance limits while reading history",
+      non_goals: [],
+      criteria: [{id: "criterion-a", description: "The bound work remains guarded",
+        validation_argv: ["true"]}],
+      bindings: [{todo_id: "todo_bound", criterion_ids: ["criterion-a"]}],
+    });
+    const acceptance = {
+      schema_version: "loopx_goal_acceptance_v0",
+      enabled: true,
+      revision: 1,
+      digest: canonicalAuthoritySha256(document),
+      document,
+      verification: null,
+      bindings: [{todo_id: "todo_bound", todo_semantic_digest: goalAcceptanceTodoDigest(bound),
+        revision: 1, criterion_ids: ["criterion-a"], confirmed_by: "owner"}],
+    };
+    const projection = authorityProjectionFixture(goal, [
+      {...bound, text: "Changed bound requirement"},
+      unbound,
+      archived,
+    ], [], "native", {goal_acceptance: acceptance});
+    const committed = await store.commitAuthority({
+      expected_provider_revision: null,
+      operation_id: "seed-mixed-archive",
+      events: [],
+      next_projection: projection,
+      receipts: [],
+    });
+    assert.equal(committed.status, "applied");
+    if (committed.status !== "applied") return;
+    const fence = await engageLegacyCoordinationWriterFence({
+      schema_version: "loopx_legacy_coordination_writer_fence_engage_request_v0",
+      runtime_root: root,
+      goal_id: goal,
+      state_path: state,
+      fence: {
+        schema_version: "loopx_legacy_coordination_writer_fence_v0",
+        state: "engaged",
+        goal_id: goal,
+        fence_id: "mixed-archive-fixture",
+        source_version: "fixture",
+        source_projection_sha256: canonicalAuthoritySha256(projection),
+        expected_shadow_provider_revision: committed.provider_revision,
+      },
+    });
+    assert.equal(fence.status, "applied");
+
+    const query = (include_archived: boolean, status: string | null = null) => readTodo({
+      schema_version: TODO_READ_REQUEST,
+      kind: "query",
+      source: {runtime_root: root, goal_id: goal},
+      observed_at: Date.parse(now) / 1000,
+      evaluated_at: now,
+      query: {goal_id: goal, role: "agent", status, todo_id: null, agent_id: null, limit: null,
+        read_scope: "active", include_archived, json_references: false, thin: false,
+        state_file: state, project: root},
+    });
+
+    const normalResult = await query(false);
+    const mixedResult = await query(true);
+    const openOnlyResult = await query(true, "open");
+    assert.ok(normalResult.payload, JSON.stringify(normalResult));
+    assert.ok(mixedResult.payload, JSON.stringify(mixedResult));
+    assert.ok(openOnlyResult.payload, JSON.stringify(openOnlyResult));
+    const normal = normalResult.payload as JsonObject;
+    const mixed = mixedResult.payload as JsonObject;
+    const openOnly = openOnlyResult.payload as JsonObject;
+    assert.deepEqual((normal.todos as JsonObject[]).map(item => item.todo_id), ["todo_bound", "todo_unbound"]);
+    assert.deepEqual(new Set((mixed.todos as JsonObject[]).map(item => item.todo_id)),
+      new Set(["todo_bound", "todo_unbound", "todo_archived"]));
+    assert.deepEqual(new Set((openOnly.todos as JsonObject[]).map(item => item.todo_id)),
+      new Set(["todo_bound", "todo_unbound"]));
+    for (const payload of [normal, mixed, openOnly]) {
+      const summary = payload.agent_todos as JsonObject;
+      const contract = summary.goal_acceptance_contract as JsonObject;
+      assert.equal(contract.status, "held");
+      assert.deepEqual(contract.held_todo_ids, ["todo_bound", "todo_unbound"]);
+      assert.deepEqual(summary.first_executable_items, []);
+      const active = (summary.items as JsonObject[]).filter(item => item.todo_id !== "todo_archived");
+      assert.ok(active.every(item => (item.goal_acceptance_guard as JsonObject).allowed === false));
+    }
   });
 }
 

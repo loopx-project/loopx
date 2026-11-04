@@ -171,6 +171,7 @@ def test_return_rechecks_actual_typed_binding_after_owner_disconnect(ordinary): 
 @pytest.mark.parametrize("installed", [False, True])
 def test_real_chat_entrypoint_composes_one_store_controller_and_return_service(tmp_path, monkeypatch, installed):
     import loopx.chat_server as chat
+    import loopx.chat.endpoint_catalog as endpoints
     from loopx.cli import build_parser
     from loopx.cli_commands.support_control_chat import chat_server_options
     from loopx.extensions.lark.cli_resolution import LarkCliResolution
@@ -185,6 +186,17 @@ def test_real_chat_entrypoint_composes_one_store_controller_and_return_service(t
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(chat, "build_lark_goal_topic_runtime_snapshot", lambda **kwargs: {})
     monkeypatch.setattr(chat, "resolve_lark_cli_for_runtime", lambda **kwargs: LarkCliResolution(None, False, "missing", None, "lark_cli_not_installed"))
+    observations = []
+
+    def observe_endpoint():
+        available = len(observations) % 2 == 0
+        observations.append(available)
+        return {"available": available, "executable": "synthetic-endpoint"}
+
+    monkeypatch.setattr(endpoints, "_antigravity_readiness", observe_endpoint)
+    monkeypatch.setattr(endpoints, "_executable_readiness", lambda executable: {
+        "available": executable == "unavailable-fixture", "executable": executable,
+    })
     entered = threading.Event()
     captured = []
     external = Transport("external-owner")
@@ -217,6 +229,32 @@ def test_real_chat_entrypoint_composes_one_store_controller_and_return_service(t
         server = captured[0]
         with urlopen(f"http://127.0.0.1:{server.server_port}/healthz", timeout=8) as response:
             assert json.load(response)["ok"] is True
+        from loopx.capabilities.machine_configuration.builtins import build_builtin_machine_configuration_registry
+        from loopx.capabilities.machine_configuration.store import configure_machine_configuration
+
+        configuration = {"schema_version": "loopx_machine_configuration_v0", "namespaces": {
+            "steward_executor": {"schema_version": "steward_executor_machine_defaults_v1",
+                "selection_policy": "flexible", "eligible_endpoints": ["antigravity", "codex"],
+                "executor_endpoint": "antigravity", "executor_model": "gemini-4-argon-high",
+                "executor_reasoning_effort": "high"}}}
+        configuration_args = {"runtime_root": server.runtime_root, "configuration": configuration,
+            "registry": build_builtin_machine_configuration_registry()}
+        preview = configure_machine_configuration(**configuration_args, execute=False)
+        configure_machine_configuration(**configuration_args, execute=True,
+            expected_plan_revision=preview["plan_revision"])
+        observations.clear()
+        for expected in (True, False, True):
+            with urlopen(f"http://127.0.0.1:{server.server_port}/api/chat/capabilities", timeout=8) as response:
+                capabilities = json.load(response)
+            available = {item["agent_id"]: item["available"] for item in capabilities["adapters"]}
+            assert available["antigravity"] is expected
+            # The channel must choose from the same observation shown in Settings,
+            # including when the preferred endpoint disappears and later returns.
+            selected = capabilities["manager"]["channel_binding"]["executor_endpoint"]
+            assert selected == ("antigravity" if expected else "codex")
+            assert available[selected] is True
+        assert observations == [True, False, True]
+        assert server.chat_store.list_sessions() == []
         assert server.runtime_controller.startup_timeout_sec == 30.0
         assert server.runtime_controller.acp_startup_timeout_sec is None
         if server.codex_account_service.provider is not None:

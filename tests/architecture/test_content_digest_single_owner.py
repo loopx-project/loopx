@@ -1744,6 +1744,35 @@ def test_benchmark_task_authorization_keeps_the_bare_digest_contract(
             _validated_task_environment_access(access)
 
 
+@pytest.mark.parametrize("digest", (*BARE_ACCEPTS, *BARE_REJECTS))
+def test_benchmark_task_service_authorization_keeps_the_bare_digest_contract(
+    digest: str,
+) -> None:
+    from loopx.capabilities.benchmark_toolkit.integrity import (
+        BENCHMARK_TASK_SERVICE_ACCESS_SCHEMA_VERSION,
+        _validated_task_service_access,
+    )
+
+    access = {
+        "schema_version": BENCHMARK_TASK_SERVICE_ACCESS_SCHEMA_VERSION,
+        "authorization_id": "digest-contract-fixture",
+        "authorization_sha256": digest,
+        "authority": "runner",
+        "purpose": "benchmark_task_service",
+        "origins": ["http://host.docker.internal:35103"],
+    }
+    if digest in BARE_ACCEPTS:
+        normalized = _validated_task_service_access(access)
+        assert normalized is not None
+        assert normalized["authorization_sha256"] == digest
+    else:
+        with pytest.raises(
+            ValueError,
+            match="benchmark_task_service_access_authorization_sha256_invalid",
+        ):
+            _validated_task_service_access(access)
+
+
 def test_benchmark_dynamic_regex_exemption_stays_in_the_marker_reader() -> None:
     analysis = _module_of("loopx.capabilities.benchmark_toolkit.integrity")
     unreadable = [item for item in analysis["constructions"] if not item["readable"]]

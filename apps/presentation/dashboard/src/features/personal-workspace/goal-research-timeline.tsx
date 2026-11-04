@@ -201,11 +201,13 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedEventId
     {unknownTime ? <div className="research-history-note"><ContextHelp label={zh ? "记录时间缺失" : "Missing record time"} icon={CircleHelp}><p>{zh ? "缺少记录时间的问题未放上时间轴" : "Questions without a record time are not placed on the axis"} · {unknownTime}</p></ContextHelp>
       {[...timeline.nodes.values()].filter(item => item.first === null).map(item => <button key={item.node.id} type="button" className="research-link" onClick={() => onSelect(item.node.id)}>{item.node.latest.title}</button>)}
     </div> : null}
-    <section className="research-trail" aria-label={copy.trail}>
+    {timeline.decisions.length ? <section className="research-trail" aria-label={copy.trail}>
       <h3>{copy.trail}</h3>
-      {!timeline.decisions.length ? <ContextHelp label={zh ? "暂无结构化决策记录" : "No structured decision records"} icon={CircleHelp}><p className="research-history-note">{timeline.structuredCount ? copy.none : copy.unstructured}</p></ContextHelp>
-        : <TrailList groups={trail} copy={copy} label={label} timeLabel={timeLabel} selectedEventId={selectedEventId} onSelect={onSelect}/>}
-    </section>
+      <TrailList groups={trail} copy={copy} label={label} timeLabel={timeLabel} selectedEventId={selectedEventId} onSelect={onSelect}/>
+    </section> : <details className="research-trail research-trail-empty">
+      <summary>{zh ? "暂无结构化决策记录" : "No structured decision records"}</summary>
+      <p className="research-history-note">{timeline.structuredCount ? copy.none : copy.unstructured}</p>
+    </details>}
   </div>;
 }
 

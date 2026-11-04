@@ -28,8 +28,19 @@ from loopx.control_plane.todos.decision_scope import (
     build_required_decision_scope_repair_hint,
 )
 from loopx.control_plane.todos.standing_decision import (
-    build_standing_decision_authority,
+    standing_decision_source_items,
 )
+
+
+def project_standing_authority(items, *, legacy_source_order=True, canonical_records=False):
+    """Exercise the production source decoder and composed Todo read transaction."""
+    from loopx.control_plane.todos.goal_todo_projection import source_todo_fields
+
+    return source_todo_fields(
+        [], lineage=[],
+        standing_items=standing_decision_source_items(items, canonical_records=canonical_records),
+        legacy_source_order=legacy_source_order and not canonical_records,
+    ).get("standing_decision_authority")
 
 
 def decision(todo_id: str, outcome: str, completed_at: str) -> dict:
@@ -52,7 +63,7 @@ def test_later_rejection_wins_even_when_older_approval_sorts_last() -> None:
         decision("todo_zzz_approve", "approve", "2026-09-10T01:00:00Z"),
     ]
     for ordered in [items, list(reversed(items))]:
-        result = build_standing_decision_authority(ordered)
+        result = project_standing_authority(ordered)
         assert result["active_count"] == 0
         assert result["entries"][0]["source_todo_id"] == "todo_aaa_reject"
 
@@ -66,7 +77,7 @@ def test_conflicts_survive_lane_filtering_without_granting_cross_agent_authority
     ]
     for item in items:
         item.update(global_gate=False, blocks_agent="agent-a")
-    result = build_standing_decision_authority(items, legacy_source_order=False)
+    result = project_standing_authority(items, legacy_source_order=False)
     scoped = standing_decision_authority_for_agent(result, agent_id="agent-a")
     assert scoped["active_count"] == 0
     assert scoped["entries"] == []
@@ -113,7 +124,7 @@ def test_canonical_identifiers_are_not_redecoded_as_markdown_tokens() -> None:
                 "scope_key": "release",
             },
         )
-    result = build_standing_decision_authority(items, canonical_records=True)
+    result = project_standing_authority(items, canonical_records=True)
     assert result["active_count"] == 0
     assert result["entries"][0]["source_todo_id"] == "receipt-revoke"
 

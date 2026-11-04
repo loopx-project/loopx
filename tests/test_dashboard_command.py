@@ -76,6 +76,10 @@ def _copy_dashboard_launcher(scripts_dir: Path) -> None:
     source_scripts = Path(__file__).resolve().parents[1] / "scripts"
     for name in ("dashboard-dev.sh", "loopx-python.sh"):
         shutil.copy2(source_scripts / name, scripts_dir / name)
+    contract = Path("loopx/control_plane/runtime/node_version.ts")
+    target = scripts_dir.parent / contract
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source_scripts.parent / contract, target)
 
 
 def test_release_runtime_identity_uses_immutable_manifest_fields(tmp_path: Path) -> None:

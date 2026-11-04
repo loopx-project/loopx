@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import subprocess
 import tempfile
 import time
@@ -55,9 +56,9 @@ def parse_checkpoint_request(raw: bytes) -> dict[str, Any]:
     if "controller_handoff" in request and type(request["controller_handoff"]) is not bool:
         raise ValueError("checkpoint controller_handoff must be an explicit boolean")
     if request.get("controller_handoff") and (
-            request.get("trigger") != "fresh_replan" or not request.get("native_session") or
+            not request.get("native_session") or
             not request.get("loopx_state") or not request.get("evaluation_opportunity")):
-        raise ValueError("controller handoff requires fresh_replan and all three state participants")
+        raise ValueError("controller handoff requires all three state participants")
     if "trigger" in request and request["trigger"] != "fresh_replan":
         raise ValueError("checkpoint trigger must be fresh_replan or omitted")
     if not isinstance(request["components"], list) or not request["components"]:
@@ -115,6 +116,66 @@ def _prior_replan_guard_seen(env: dict[str, str], current: Path, obligation_id: 
         if prior["capture"] and prior["obligation_id"] == obligation_id:
             return True
     return False
+
+
+def _write_checkpoint_attempt(path: Path, value: dict[str, str]) -> bool:
+    """Retain a private first-attempt record, including interrupted writes."""
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        if path.is_symlink():
+            raise ValueError("completed capture attempt must not be a symlink")
+        return False
+    with os.fdopen(descriptor, "w") as stream:
+        json.dump(value, stream)
+        stream.flush()
+        os.fsync(stream.fileno())
+    for parent in (path.parent, path.parent.parent, path.parent.parent.parent):
+        directory = os.open(parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    return True
+
+
+def _mark_completed_capture_attempt(destination: Path, effect_id: str, request_sha256: str,
+                                    wake_root: Path, turn_id: str) -> bool:
+    """Use the original wake witness when the artifact-side index was unavailable.
+
+    A controller export lives outside this guest. The declared destination names
+    one point, including a missed or uncertain capture; later work cannot replace
+    it. These private Host records grant no work or restore authority.
+    """
+    if (not wake_root.is_absolute() or wake_root.resolve() != wake_root or
+            not turn_id or Path(turn_id).name != turn_id):
+        raise ValueError("completed capture requires its physical owned wake")
+    for prior in sorted(wake_root.glob("*/checkpoint-completed-request.json")):
+        if prior.resolve(strict=True) != prior:
+            raise ValueError("completed capture wake witness must be physical")
+        value = json.loads(prior.read_bytes())
+        if (not isinstance(value, dict) or
+                set(value) != {"destination", "settlement_effect_id", "request_sha256"} or
+                any(not isinstance(item, str) or not item for item in value.values())):
+            raise ValueError("completed capture wake witness is incomplete")
+        if prior.parent.name == turn_id or value["destination"] == str(destination):
+            return False
+    wake = wake_root / turn_id
+    wake.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if wake.resolve() != wake:
+        raise ValueError("completed capture wake must be physical")
+    value = {"destination": str(destination), "settlement_effect_id": effect_id,
+             "request_sha256": request_sha256}
+    # This existing wake log owner is independent of the optional artifact
+    # directory. Index permission recovery cannot erase the original attempt.
+    if not _write_checkpoint_attempt(wake / "checkpoint-completed-request.json", value):
+        return False
+    attempts = destination.parent / ".completed-attempts"
+    attempts.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if attempts.resolve() != attempts:
+        raise ValueError("completed capture attempt directory must be physical")
+    marker = attempts / (hashlib.sha256(destination.name.encode()).hexdigest() + ".json")
+    return _write_checkpoint_attempt(marker, value)
 
 
 def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: str) -> str:
@@ -274,22 +335,28 @@ def capture_after_wake(env: dict[str, str], receipt: dict[str, Any], *,
         receipt["checkpoint"]["reason"] = "wake_not_successful_work"
         return
     started = time.monotonic()
+    capture_started = time.time()
     try:
         phase_deadline = env.get("LOOPX_PHASE_DEADLINE_EPOCH")
-        window = CHECKPOINT_CAPTURE_SECONDS if supplied_request and supplied_request[0].get("controller_handoff") else 30
-        deadline = time.time() + window
+        original_deadline = None
         if phase_deadline is not None:
             original_deadline = float(phase_deadline)
             if not math.isfinite(original_deadline):
                 raise ValueError("checkpoint requires a finite original phase deadline")
-            deadline = min(deadline, original_deadline)
-        if deadline <= time.time():
-            receipt["checkpoint"]["reason"] = "capture_window_closed"
-            return
+            if original_deadline <= capture_started:
+                receipt["checkpoint"]["reason"] = "capture_window_closed"
+                return
         if supplied_request is None:
             request, raw = read_checkpoint_request(request_path)
         else:
             request, raw = supplied_request
+        window = CHECKPOINT_CAPTURE_SECONDS if request.get("controller_handoff") else 30
+        deadline = capture_started + window
+        if original_deadline is not None:
+            deadline = min(deadline, original_deadline)
+        if deadline <= time.time():
+            receipt["checkpoint"]["reason"] = "capture_window_closed"
+            return
         if supplied_request is None:
             from .checkpoint_continuation import restored_capture_gate
             restore_gate = restored_capture_gate(env, full_history=not request.get("native_session", False))
@@ -319,6 +386,12 @@ def capture_after_wake(env: dict[str, str], receipt: dict[str, Any], *,
         identity = observed.identity.value
         if identity is None:
             raise ValueError("checkpoint settlement identity is unavailable")
+        request_sha256 = hashlib.sha256(raw).hexdigest()
+        if request.get("controller_handoff") and supplied_request is None:
+            if not _mark_completed_capture_attempt(destination, identity.effect_id, request_sha256,
+                    Path(env["LOOPX_WAKE_LOG_DIR"]), receipt["turn_id"]):
+                receipt["checkpoint"]["reason"] = "destination_already_attempted_no_replay"
+                return
         # Only this returned typed owner decision admits the capture boundary.
         # Point metadata remains evidence, never authority or scientific validity.
         metadata = {
@@ -326,7 +399,7 @@ def capture_after_wake(env: dict[str, str], receipt: dict[str, Any], *,
             "wake_turn_id": receipt["turn_id"],
             "settlement_effect_id": identity.effect_id,
             "session": receipt.get("session"),
-            "request_sha256": hashlib.sha256(raw).hexdigest(),
+            "request_sha256": request_sha256,
         }
         components = request["components"]
         if pending_guard is not None:
@@ -340,12 +413,13 @@ def capture_after_wake(env: dict[str, str], receipt: dict[str, Any], *,
             components, research = research_participants(env, components, metadata, destination, evidence, deadline)
         opportunity = None
         if request.get("evaluation_opportunity") and not request.get("controller_handoff"):
-            from .sforge_checkpoint import capture_opportunity
+            from . import sforge_json
+            from .sforge_checkpoint import capture_opportunity, RELEASED_FIELDS
 
             evidence = Path(env["LOOPX_WAKE_LOG_DIR"]) / receipt["turn_id"] / "checkpoint-opportunity.json"
             incumbent = evidence.with_name("checkpoint-incumbent.tar.gz")
             opportunity = capture_opportunity(env, timeout=max(.1, deadline - time.time()), incumbent_path=incumbent)
-            evidence.write_text(json.dumps(opportunity), encoding="utf-8")
+            evidence.write_text(sforge_json.dumps(opportunity, fields=RELEASED_FIELDS), encoding="utf-8")
             evidence.chmod(0o600)
             opportunity_id = _participant_id(components, "evaluation_opportunity")
             components = [*components, {"id": opportunity_id, "source_path": str(evidence)}]

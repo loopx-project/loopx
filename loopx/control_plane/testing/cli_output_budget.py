@@ -154,7 +154,14 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
             # Native Windows paired base/head both emit 40,701 JSON chars.
             # Retain complete routes/context and bounded host-path headroom;
             # line, per-Todo/fixed growth and all other ceilings stay unchanged.
-            "crowded": {"json": 42_000, "markdown": 10_500},
+            # Inherited Stride adds its complete decision/axis/source contract:
+            # the same native fixture measures 35,597 -> 42,281 characters on POSIX
+            # and 42,501 characters on native Windows due to drive and backslash paths.
+            # Preserve the original 42,000 failure and the required semantics;
+            # calibrate this regression allowance to 43,000, leaving bounded headroom
+            # (~499 chars on Windows, ~719 chars on POSIX) without widening collection
+            # or production transport limits.
+            "crowded": {"json": 43_000, "markdown": 10_500},
             # The unchanged 18-Todo / 3-Agent fixture on main ffc90182b and
             # this candidate both emit 25,836 JSON characters (96 matched
             # surface/mode measurements, no semantic or route differences).
@@ -191,11 +198,13 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
         markdown_anchor="# LoopX Turn Plan",
         max_chars={
             "small": {"json": 14_000, "markdown": 600},
-            # Pinned formatter base/head both emit 21,238 chars / 477 lines
-            # with complete vision authoring on the unchanged 36-Todo fixture.
-            # Keep executable evidence/continuation rules; 1,262 chars of
-            # headroom covers presentation variation, not extra Todo growth.
-            "crowded": {"json": 22_500, "markdown": 600},
+            # With an existing vision, the same 36-Todo fixture grows from
+            # 18,955 to 25,319 chars when inheriting the complete Stride contract
+            # (+6,364, identical to the no-vision route). Preserve the 22,500
+            # failure; 26,000 leaves 681 chars without relaxing collection,
+            # line or other-route limits. The earlier formatter observation
+            # was 21,238 chars / 477 lines, before these semantic changes.
+            "crowded": {"json": 26_000, "markdown": 600},
             "multi_agent": {"json": 15_500, "markdown": 600},
         },
         max_lines={
@@ -214,7 +223,11 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
         # 35*60 = 2,100 as the per-Todo allowance; the advice adds 673 fixed
         # chars, so 5,400 leaves 154 of headroom without widening per-Todo growth.
         # This is a regression budget, not authority.
-        max_json_fixed_semantic_growth_chars=5_400,
+        # Inherited Stride adds a fixed required-review decision contract;
+        # matched small/crowded output is 10,560/15,492 -> 10,560/21,856.
+        # Keep 35*60 collection growth; 9,300 covers 9,196 fixed chars with
+        # 104 headroom. Retain the earlier 5,400 failure, not a size reduction.
+        max_json_fixed_semantic_growth_chars=9_300,
     ),
     CliOutputBudgetSpec(
         surface_id="status",
@@ -612,6 +625,20 @@ CLI_OUTPUT_MODE_VARIANT_SPECS: tuple[CliOutputModeVariantSpec, ...] = (
         markdown_anchor="# LoopX Todo List",
         max_chars={"json": 20_000, "markdown": 6_000},
         max_lines={"json": 600, "markdown": 60},
+    ),
+    CliOutputModeVariantSpec(
+        variant_id="todo_list_summary",
+        parent_surface_id="todo_list",
+        command="todo list --summary",
+        output_formats=("json", "markdown"),
+        semantic_json_keys=(
+            "todos", "summary", "matched_todo_count", "returned_todo_count",
+            "omitted_todo_count", "authority_read", "todo_list_summary_projection",
+            "projection_envelope",
+        ),
+        markdown_anchor="# LoopX Todo List Summary",
+        max_chars={"json": 12_000, "markdown": 8_000},
+        max_lines={"json": 320, "markdown": 40},
     ),
 )
 

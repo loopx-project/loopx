@@ -239,9 +239,10 @@ def load_lark_event_inbox_config(
 
 
 def _load_processed(path: Path) -> set[str]:
-    if not path.is_file():
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
         return set()
-    payload = json.loads(path.read_text(encoding="utf-8"))
     if (
         not isinstance(payload, Mapping)
         or payload.get("schema_version") != PROCESSED_SCHEMA_VERSION
@@ -726,12 +727,13 @@ def inspect_lark_event_inbox(
 
 def _material_review_ledger(inbox: Path) -> tuple[Path, dict[str, Any]]:
     path = inbox / "material-review" / "receipts.json"
-    if not path.is_file():
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
         return path, {
             "schema_version": MATERIAL_REVIEW_LEDGER_SCHEMA_VERSION,
             "receipts": {},
         }
-    payload = json.loads(path.read_text(encoding="utf-8"))
     if (
         not isinstance(payload, dict)
         or payload.get("schema_version") != MATERIAL_REVIEW_LEDGER_SCHEMA_VERSION

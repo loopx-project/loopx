@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 from enum import Enum
 from functools import lru_cache
 import json
 from pathlib import Path
-from typing import Any
 
 
 
@@ -81,4 +82,4 @@ def require_todo_completion_metadata(key: str, value: Any) -> str | None:
         normalized = _normalize_cached("recovery", raw)
         if normalized is None and raw != "":
             raise ValueError("completion_recovery must be same_turn_terminal_closeout or lifecycle_reentry_terminal_closeout")
-    return normalized
+    return cast(str | None, normalized)

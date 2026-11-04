@@ -146,6 +146,11 @@ def register_quota_command(
         ),
     )
     quota_parser.add_argument(
+        "--antigravity_app",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    quota_parser.add_argument(
         "-H",
         "--host-surface",
         choices=[
@@ -154,6 +159,7 @@ def register_quota_command(
             "codex_app_ssh",
             "codex_cli",
             "trae_app",
+            "antigravity_app",
             "generic_cli",
             "claude_code",
             "kiro_cli",
@@ -207,16 +213,19 @@ def register_quota_command(
               "Waits at most 120s for a digest-bound release; failure retains the original receipt."),
     )
     quota_parser.add_argument("--capture-file", help="For context-read/context-project: original captured JSON file; no guard is evaluated.")
+    quota_parser.add_argument("--reference-file", help="For context-read: immutable private reader reference holding the complete capture/selection digests. No admission or live Goal lookup.")
     # Host preflight captures the complete native input, then presents that same
     # immutable view after the model's lifecycle hooks establish continuity.
     quota_parser.add_argument("--defer-context-presentation", action="store_true", help=argparse.SUPPRESS)
-    from ..control_plane.turn_driver.codex_context import CONTEXT_DELIVERY_SETTINGS
+    from ..control_plane.turn_driver.codex_context import CONTEXT_DELIVERY_SETTINGS, DELTA_DELIVERY_SETTINGS
 
     quota_parser.add_argument("--context-delivery", choices=CONTEXT_DELIVERY_SETTINGS,
-        help="Experimental native packet reuse; inherits the machine setting, otherwise off. Explicit off bypasses machine defaults. On uses existing host declarations: "
+        help="Auto defaults to progressive current-context reads on every host, with Delta on supported continuity hosts. Explicit off keeps the original inline path. Legacy on uses existing host declarations: "
              "Codex App heartbeat/resume/recovery (--codex-app), or the Codex benchmark heartbeat worker "
              "(generic_cli plus its explicit heartbeat worker settings). On rejects missing, contradictory or unsupported modes. "
              "Enabled supported calls choose private context/capture paths automatically unless overridden. A directory alone never enables it; declarations are not retention proof.")
+    quota_parser.add_argument("--delta-delivery", choices=DELTA_DELIVERY_SETTINGS,
+        help="Independently disable cross-Turn Delta or use it automatically on supported continuity hosts. Does not disable progressive presentation or grant host continuity.")
     context_location = quota_parser.add_mutually_exclusive_group()
     context_location.add_argument("--codex-context-dir",
         help="Opt-in private native Codex lifecycle directory. For context-hook, consume one native hook event on stdin. "
@@ -228,6 +237,9 @@ def register_quota_command(
              "Use for shared Codex App hook configuration; cannot combine with --codex-context-dir. "
              "context-config renders native configuration for the exact Goal/Agent; no host configuration, trust, guard or spend are changed.")
     quota_parser.add_argument("--capture-sha256", help="For context-read/context-project: exact SHA-256 supplied with the capture reference.")
+    quota_parser.add_argument("--initial-read", action="store_true",
+        help="For JSON context-read: read current controls, task text and source navigation from a recognized capture. "
+             "Detailed criteria and operation contracts remain required before dependent work. Start at offset zero; follow next_command for continuation.")
     quota_parser.add_argument("--select", action="append",
         help="For context-read: repeat an exact RFC 6901 JSON pointer to read a batch from the original capture. "
              "Selected detail pages never acknowledge full-context retention; omit for unchanged full capture reads.")
@@ -245,8 +257,9 @@ def register_quota_command(
              "Larger pages require a sufficient --max-page-output-bytes within the capture limit; "
              "use only with known sufficient direct and retained-history output budgets.")
     quota_parser.add_argument("--max-page-output-bytes", type=int,
-        help="For JSON context-read and enabled native should-run/context-project: optional positive byte limit for successful page stdout, including JSON framing and newline. "
-             "Content shrinks at UTF-8 boundaries; next_command preserves the limit. An insufficient limit returns an error.")
+        help="For JSON context-read, enabled native should-run/context-project, or Turn-bound JSON spend-slot: optional positive output byte limit. "
+             "Reader pages shrink at UTF-8 boundaries; oversized settlement diagnostics remain complete in a private immutable result with reader references. "
+             "An insufficient metadata budget returns an error; this option does not enable native context continuity.")
     quota_parser.add_argument(
         "--turn-instance-id",
         help=(

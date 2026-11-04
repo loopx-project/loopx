@@ -226,6 +226,8 @@ def main() -> int:
             agent_worktree,
             "quota",
             "should-run",
+            "--context-delivery",
+            "off",
             "--goal-id",
             GOAL_ID,
             "--agent-id",

@@ -8,9 +8,12 @@ import time
 from urllib.request import Request, urlopen
 from pathlib import Path
 
+from . import sforge_json
+
 SCHEMA = "sforge_checkpoint_opportunity_v0"  # Local provider artifact, not a LoopX authority contract.
 ROUTE = "/api/v1/checkpoint/opportunity"
 ARCHIVE_ROUTE = "/api/v1/checkpoint/incumbent"
+RELEASED_FIELDS = ("released_history", "released_results")
 
 
 def capture_opportunity(env, *, timeout, incumbent_path: Path):
@@ -23,7 +26,7 @@ def capture_opportunity(env, *, timeout, incumbent_path: Path):
         data=json.dumps({"token": env["SFORGE_TOKEN"]}).encode(),
         headers={"Content-Type": "application/json"}, method="POST")
     with urlopen(request, timeout=max(.1, stop - time.time())) as response:
-        packet = json.load(response)
+        packet = sforge_json.loads(response.read(), fields=RELEASED_FIELDS)
     if (packet.get("schema_version") != SCHEMA or packet.get("execution_authority_granted") is not False or
             packet.get("outstanding_evaluations") != 0):
         raise ValueError("native opportunity checkpoint readback is unavailable")

@@ -93,6 +93,8 @@ def main():
     parser.add_argument("--image", default="python:3.12-slim")
     parser.add_argument("--context-delivery", choices=("off", "on"), default="off",
                         help="Qualify the existing opt-in context transport through source and fresh receivers")
+    parser.add_argument("--capture-boundary", choices=("fresh_replan", "settled_work"), default="fresh_replan",
+                        help="Qualify the existing automatic pre-replan or explicit settled-wake full capture")
     parser.add_argument("--reuse-point", type=Path, help="Reuse an already sealed synthetic source; never count its source test as passed")
     parser.add_argument("--captured-config", type=Path, help="The reused point's matching native fixture configuration")
     args = parser.parse_args()
@@ -188,7 +190,8 @@ def main():
                 "action": "verify", "root": str(point), "expected_sha256": packet["sha256"]}, large_local_snapshot=True)
             assert verified["integrity_verified"]
             metadata = packet["point_metadata"]
-            assert metadata["held_decision_component_id"] and metadata["worker_file_snapshot"]["prepared_source_verified"]
+            assert metadata["worker_file_snapshot"]["prepared_source_verified"]
+            assert bool(metadata.get("held_decision_component_id")) == (args.capture_boundary == "fresh_replan")
             config = output / "native-config"
             config.write_bytes(config_source.read_bytes())
             config.chmod(0o600)
@@ -201,7 +204,7 @@ def main():
                       f"(p/'phase-deadline').write_text(str(int(time.time())+{SYNTHETIC_PHASE_SECONDS})); "
                       "code=pytest.main(["
                       "'/source/benchmark/tests/test_native_checkpoint_handoff.py::"
-                      f"test_actual_worker_captures_pending_replan_before_native_model[{args.context_delivery}-planning]',"
+                      f"test_actual_worker_captures_pending_replan_before_native_model[{args.context_delivery}-planning-{args.capture_boundary}]',"
                       "'-q','-rs','-p','no:cacheprovider','--basetemp=/qualification/source-tmp',"
                       "'--junitxml=/qualification/source.xml']); ")
             if args.context_delivery == "on":
@@ -243,7 +246,12 @@ def main():
             point = points[0]
             packet = json.loads((point / "checkpoint.json").read_bytes())
             metadata = packet["point_metadata"]
-            assert metadata["held_decision_component_id"] and metadata["decision_sha256"]
+            if args.capture_boundary == "fresh_replan":
+                assert metadata["held_decision_component_id"] and metadata["decision_sha256"]
+            else:
+                assert "held_decision_component_id" not in metadata and "replan" not in metadata
+                assert metadata["settlement_effect_id"] and metadata["wake_turn_id"]
+                assert metadata["native_session"]["completed_turn_id"] == metadata["native_session"]["turn_ids"][-1]
             git_object = point / "components/task_workspace/.git/objects/ab/retained-object"
             assert git_object.read_text() == "Readonly source evidence" and git_object.stat().st_mode & 0o777 == 0o444
             config = _stage_source_configuration(container, metadata["native_session"], output / "native-config")
@@ -329,7 +337,7 @@ def main():
         require_source_checkout(source, source_revision)
         receipt = {"passed": True, "controller_uid": os.getuid(), "provider_revision": args.provider_revision,
                    "source_revision": source_revision, "source_tree_dirty": False, "source_imports_verified": True,
-                   "context_delivery": args.context_delivery,
+                   "context_delivery": args.context_delivery, "capture_boundary": args.capture_boundary,
                    "native_context_reads": context_results,
                    "qualification_sha256": {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in
                        [Path(__file__), source / "benchmark/tests/test_native_checkpoint_handoff.py",

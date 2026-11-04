@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from ..capabilities.benchmark_toolkit import (
+    BENCHMARK_EXPERIMENT_BOARD_ROW_SCHEMA_VERSION,
     benchmark_experiment_board_row_key,
     build_benchmark_experiment_board,
     default_benchmark_experiment_board_path,
@@ -93,6 +94,14 @@ def register_benchmark_experiment_board_commands(
         help="Compact benchmark_experiment_board_row_v0 JSON path, or - for stdin.",
     )
     upsert_parser.add_argument(
+        "--include-board",
+        action="store_true",
+        help=(
+            "Return the full board projection (legacy response) instead of the "
+            "default affected row and write receipt. Board filters apply to this projection."
+        ),
+    )
+    upsert_parser.add_argument(
         "--execute",
         action="store_true",
         help="Write project-local domain state. Without this flag, preview only.",
@@ -133,6 +142,16 @@ def _board_payload(
         study_id=study_id,
         four_arm_contract=four_arm_contract,
     )
+
+
+def _render_upsert_receipt(payload: dict[str, object]) -> str:
+    return "\n".join([
+        "# Benchmark experiment row",
+        "",
+        "```json",
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        "```",
+    ])
 
 
 def _reconcile_experiment_board(
@@ -200,7 +219,9 @@ def handle_benchmark_experiment_board_command(
             row = _read_json_object(args.row_json)
             if args.execute:
                 receipt = upsert_benchmark_experiment_board_row(ledger_path, row)
-                rows = read_benchmark_experiment_board_rows(ledger_path)
+                affected_row = receipt["row"]
+                if args.include_board:
+                    rows = read_benchmark_experiment_board_rows(ledger_path)
                 write = {
                     **receipt["write"],
                     "dry_run": False,
@@ -209,6 +230,7 @@ def handle_benchmark_experiment_board_command(
                 rows, preview_status = preview_benchmark_experiment_board_upsert(
                     rows, row
                 )
+                affected_row = next(item for item in rows if _row_key(item) == _row_key(row))
                 write = {
                     "status": f"preview_{preview_status}",
                     "write_performed": False,
@@ -216,6 +238,22 @@ def handle_benchmark_experiment_board_command(
                     "path_recorded": False,
                     "dry_run": True,
                 }
+            if not args.include_board:
+                payload = {
+                    "ok": True,
+                    "schema_version": BENCHMARK_EXPERIMENT_BOARD_ROW_SCHEMA_VERSION,
+                    "goal_id": args.goal_id,
+                    "path_recorded": False,
+                    "row": affected_row,
+                    "write": write,
+                    "read_hint": (
+                        "Use this row and receipt for the update decision. For comparisons, "
+                        "use experiment-board-show with the same route and relevant "
+                        "--benchmark-id/--study-id; --include-board restores the full upsert response."
+                    ),
+                }
+                print_payload(payload, output_format(args), _render_upsert_receipt)
+                return 0
         elif args.benchmark_command == "experiment-board-reconcile":
             rows, write = _reconcile_experiment_board(
                 args,

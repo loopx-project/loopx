@@ -68,15 +68,17 @@ def _read_receipt_batch(root, rows):
         return [None] if len(rows) == 1 else [_read_receipt_batch(root, [row])[0] for row in rows]
 
 
-def _project_request_observations(root, registry, observations, *, core_goal_ids, history):
-    """Combine captured receipt facts with current linked Core observations."""
-    rows, unreadable, cache = [], 0, {}
+def _project_request_observations(observations, *, history):
+    """Project request facts before selecting the response window.
+
+    Linked Core work neither selects nor orders requests. Reading it here made
+    every page wait for unrelated Goals, including completed/filtered requests.
+    """
+    rows, unreadable = [], 0
     for row, source_session_id, turn, state, agenda, controlled, read, read_error, decision, decision_error, replies in observations:
         try:
             gid, aid = row["goal_id"], row["agent_id"]
-            work = read_linked_work(root, registry, row, cache,
-                include_core_details=core_goal_ids is None or gid in core_goal_ids)
-            warnings = list(state.get("warnings", [])) + work["warnings"]
+            warnings = list(state.get("warnings", []))
             warnings += [error for error in (read_error, decision_error) if error]
             if not history and agenda is None:
                 rows.append({"request_id": row["request_id"], "unfinished": False})
@@ -96,7 +98,7 @@ def _project_request_observations(root, registry, observations, *, core_goal_ids
                 "read_status": controlled["card_read_status"] if controlled else
                     "unavailable" if read_error or control_unavailable else "supplied" if read else "pending",
                 "decision": assessment["status"], "decision_reason": assessment.get("reason"),
-                "returns": replies, "linked_todos": work["linked_todos"], "evidence_refs": work["evidence_refs"],
+                "returns": replies,
                 "warnings": warnings, "source_session_id": source_session_id, "source_turn_id": turn["turn_id"],
                 "last_event_at": _last_event([row.get("delivered_at"), read_at, assessment.get("at"),
                     *(reply.get(key) for reply in replies for key in ("created_at", "delivered_at"))])})
@@ -140,7 +142,7 @@ def _request_groups(root, store, session, goal_ids, validate_source_session):
 
 
 def read_conversation_requests(root, registry, store, session, *, goal_ids, core_goal_ids,
-                               validate_source_session, history=False, offset=0, limit=12, search=""):
+                               validate_source_session, history=False, offset=0, limit=12, search="", include_work=True):
     """Read only this host's exact source Session, with fresh caller read scope.
 
     The caller supplies provider-validated Goal visibility and rechecks it after
@@ -152,6 +154,8 @@ def read_conversation_requests(root, registry, store, session, *, goal_ids, core
         raise ValueError("invalid request page")
     if not isinstance(search, str) or len(search) > 200:
         raise ValueError("request search must be at most 200 characters")
+    if type(include_work) is not bool:
+        raise ValueError("invalid linked work selection")
     query = search.strip().casefold()
     groups, unreadable, scan_complete = _request_groups(root, store, session, goal_ids, validate_source_session)
     turn_readers, diagnostics, work_reads = {}, [], []
@@ -231,8 +235,7 @@ def read_conversation_requests(root, registry, store, session, *, goal_ids, core
             unreadable += failed
     # Request/return observations are version-consistent. Core work is a
     # separate observation: release all lifetime/request guards before its IO.
-    rows, projection_failures = _project_request_observations(root, registry, work_reads,
-        core_goal_ids=core_goal_ids, history=history)
+    rows, projection_failures = _project_request_observations(work_reads, history=history)
     unreadable += projection_failures
     rows = list({row["request_id"]: row for row in rows}.values())
     pending_count = sum(row["unfinished"] for row in rows)
@@ -244,10 +247,19 @@ def read_conversation_requests(root, registry, store, session, *, goal_ids, core
             row["request_id"], row["goal_id"], row["agent_id"], row["source_question"],
             (row.get("brief") or {}).get("purpose"), (row.get("brief") or {}).get("context")))]
     visible.sort(key=lambda row: (row.get("last_event_at") or "", row["request_id"]), reverse=True)
-    page = visible[offset:offset + limit]
     coverage = {"scan_complete": scan_complete, "unreadable": unreadable, "diagnostics": diagnostics}
     # A page fence over observations, not an atomic snapshot or a new ledger.
     snapshot_digest = hashlib.sha256(json.dumps([visible, coverage, query], sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    # Core is a separate, current observation. It must not invalidate an
+    # otherwise unchanged request cursor, or load every Goal for a collapsed list.
+    sources = {row[0]["request_id"]: row[0] for row in work_reads}
+    cache, page = {}, []
+    for row in visible[offset:offset + limit]:
+        work = read_linked_work(root, registry, sources[row["request_id"]], cache,
+            include_core_details=core_goal_ids is None or row["goal_id"] in core_goal_ids) if include_work else {
+                "linked_todos": [], "evidence_refs": [], "warnings": []}
+        page.append({**row, "linked_todos": work["linked_todos"], "evidence_refs": work["evidence_refs"],
+                     "warnings": row["warnings"] + work["warnings"]})
     return {"ok": True, "session_id": session["session_id"], "rows": page,
         "pending_count": pending_count, "matched": len(visible),
         "snapshot_digest": snapshot_digest,

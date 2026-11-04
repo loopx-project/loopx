@@ -652,7 +652,9 @@ else:
             pending_body = capture_before_replan(env, pending_receipt, "Current destination contract.")
             assert pending_receipt["checkpoint"]["reason"] == "restored_replan_pending", pending_receipt
             assert not pending_receipt["checkpoint"]["captured"]
-            assert "Original pending packet" in pending_body and "checkpoint:" + digest in pending_body
+            has_pending = "held_decision_component_id" in metadata
+            assert ("Original pending packet" in pending_body) is has_pending
+            assert "checkpoint:" + digest in pending_body
             # Both stop locations share the same gate. Repeated/restarted
             # capture attempts neither interrupt the fork nor publish a point.
             for _ in range(2):
@@ -793,8 +795,11 @@ else:
             # owes this original Turn's settlement, so recapture stays closed.
             unconsumed = restored_capture_gate(env)
             assert not unconsumed["capture_allowed"]
-            original_packet = unit / "components" / metadata["held_decision_component_id"]
-            assert str(original_packet) in unconsumed["instructions"]
+            if has_pending:
+                original_packet = unit / "components" / metadata["held_decision_component_id"]
+                assert str(original_packet) in unconsumed["instructions"]
+            else:
+                assert "no retained pending replan packet" in unconsumed["instructions"]
             assert str(wakes / review_turn / "checkpoint-start-guard.json") not in unconsumed["instructions"]
             cli(
                 "quota",
@@ -984,14 +989,17 @@ print('Current grow adopted: two complete candidates 9 and 10 validated; origina
                     goal,
                     "--agent-id",
                     agent,
-                    "--turn-instance-id",
-                    "joint-next-audit",
+                    # Readback is a scheduler observation, not another work
+                    # Turn whose unperformed closeout could block recapture.
+                    "--context-delivery",
+                    "off",
                     "--runtime-profile",
                     "generic_cli",
                     "--available-capability",
                     "shell",
                 )
                 assert final["interaction_contract"]["mode"] == "bounded_delivery"
+                assert not final.get("heartbeat_receipt", {}).get("closeout_required")
             # The next genuinely new decision boundary can capture changed
             # research/code/native history, after actual useful continuation.
             # This partial point deliberately makes no evaluator qualification.

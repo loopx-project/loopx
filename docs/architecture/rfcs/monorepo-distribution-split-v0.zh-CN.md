@@ -530,6 +530,72 @@ R0 可以先于目录移动交付，但不代表内核合格。R3/R4 可选，�
   待处理的入口收据仍不被该栅栏覆盖；要覆盖它是一次带自有验收的运行时变更，
   而不是文档变更。
 
+### 2026-11-03 — 所选宿主模式发现路径的加载
+
+- **基线：** `6a6a8590e`。此前 `performance-diagnosis` 与 `goal-acceptance`
+  的 selected 路由已在该基线上；第 4 节审计仍为历史记录，不是当前实现清单。
+- **变化：** `host-mode-plan` 经 `cli_runtime` 使用原有 registrar 与 handler，
+  合法请求不再加载完整 CLI 或 Chat 依赖图。非法语法保留完整 parser 的诊断路径。
+  宿主选择器、预览命令、readiness 与 authority 规则均不移动、不改变。
+- **M1 集成：** [#7878](https://github.com/loopx-project/loopx/pull/7878) 已在
+  `ffe84a693` 合入：17 个仅内部使用的 Chat owner 位于 `loopx/chat/`，顶层模块
+  数量和预算均为 128（该移动组之前为 145）。这是结构变化，不代表性能或完整 M1 合格。
+- **证据：** `tests/test_cli_entrypoint.py` 覆盖仅加载 owner 的 help、JSON 与
+  Markdown 一致性、宿主不可用预览、非法请求及零进程、网络或文件写入激活。
+  独立安装的 wheel 在没有 Node 或实时 registry 时验证 help、ready／unavailable
+  预览及拒绝。每个版本／负载做 20 次本地成对新进程测量，丢弃一次预热、交替
+  顺序、关闭遥测并保留热文件缓存。在 macOS arm64／Python 3.13.5 上，help／
+  preview 的 LoopX 加载闭包从 1,149 降到 57 个模块，输出字节保持一致。时间／RSS
+  留在 PR 的限定证据中，不作为可移植阈值或任务成果收益声明。
+- **剩余：** 将 R0 类型的加载验证扩展到发现路径；不关闭 R0 的完整 V10 清点、
+  M1 公开 import 迁移、发行物拆分或 R1 managed minimal。D1–D7 仍未决，
+  不新增预设或改变默认值。
+
+### 2026-11-03 — M1 公开 status 兼容性刻画
+
+- **边界：** `ChatStatusRequestMixin` 与 `goal_read_runtime_root` 仍由
+  `loopx.chat_status_api` 所有，Chat HTTP handler 与 Todo detail 是活跃调用方。
+  本片交付刻画前置条件，不是 owner 迁移。
+- **兼容证据：** `tests/test_chat_status_public_compatibility.py` 保护三个新进程
+  import 顺序下的历史 import、历史 pickle 查找、reload 后已导入引用，以及经真实
+  HTTP handler 生效的 registry、collector 和宿主观察 patch 点。发现路径仅容忍
+  registry 缺失，不吞掉不可读或非法元数据。复制导出的 facade mutation 被源绑定
+  Todo 调用方的 patch oracle 拒绝：仅 re-export 函数不能保留旧模块的 globals。
+- **下一完整评审片：** 将完整 status owner 迁入 `loopx/chat/`，保留模块身份兼容的
+  公开 bridge，并文档化 I3 弃用。同步重定向
+  `tests/architecture/test_source_session_registry_denial.py` 中精确 loader 路径与
+  `_discovery_registry` 函数例外，保留仅元数据发现及可执行 source-session 拒绝。
+  本片不改变该 owner 或 oracle；不能为通过部分迁移而拆散所有权或放松拒绝 oracle。
+- **剩余：** 刻画不交付 status 迁移及其安装 wheel 集成。I3 至少保留一个 minor
+  版本，D3 精确退役时间仍由发布负责人决定。M1 未关闭，不声明模块数量、加载性能、
+  拆包或 R1 managed Turn 收益。
+
+### 2026-11-04 — Capability 发现路径的所选加载
+
+- **基线：** `79b781865`。`capability list` / `show` 及命令帮助复用既有
+  capability registrar 与 catalog handler，不再加载完整 CLI 或 Chat。
+  `inspect`、`bind`、`invoke` 的执行、显式完整 CLI 的 handler patch 点、registry
+  路由及非法请求的规范诊断仍保留原路径。本地发现集合复用 CLI 词汇，不新增
+  capability、provider、协议或权限 owner。
+- **证据：** `tests/test_cli_entrypoint.py` 覆盖输出／帮助一致性、已声明但未安装
+  及真实已安装且禁用的 provider、隐藏 helper、缺失／非法 manifest，以及不启动
+  进程、不联网、不写文件。五个加载 oracle 在基线失败、候选通过；全部 23 个聚焦
+  用例也在 checkout 外独立安装的 wheel 上、无 Node 条件下通过，不升级既有宿主。
+  另有八组不可变基线／候选拒绝对照保留输出和退出码。
+- **加载闭包测量：** macOS arm64/Python 3.13.5 上，三个新进程 help/list/show
+  负载各自每版本采样 20 次，丢弃一次 warm-up 并交替顺序。两份源码快照均为暖文件
+  缓存、无 bytecode，Node 与遥测关闭。真实 `main()` 路径加载的 LoopX 模块由
+  1,149 降到 362，read-open 观察由 2,494 降到 832。输出字节完全一致；观察到的
+  文件写入、进程启动、网络连接和线程启动均为零。耗时与 RSS 包含相同插桩及解释器
+  启动，是 PR 中的限定证据，不是跨机器 D6 阈值，也不声明已安装宿主或任务收益。
+- **验证保留项：** 更广的源码选择为 320 个通过，
+  `test_settlement_plan_import_does_not_load_native_capture_io` 一个失败；不可变
+  基线有完全相同的失败。配置的 mypy 在两个版本上同样报告 126 个文件中的 789 个
+  错误。两项失败均不豁免、不改写为通过；聚焦一致性不证明所有必需检查通过。
+- **剩余：** 本片独立于公开 status 提案 #8011，扩展 R0 类发现路径的资格证据，
+  不关闭完整 R0/V10、M1、拆包安装、R1 managed minimal 或 D1–D7。不改变 preset、
+  前端操作、权限或持久化状态；受保护执行仍由既有 owner 所有。
+
 ## 附录 B：决策日志
 
 | 日期 | 决策 | 负责人 / 批准 | 备选 | 变更的规范章节 |

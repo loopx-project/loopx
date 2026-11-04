@@ -405,6 +405,7 @@ def _load_scheduler_hint(
         check=False,
         capture_output=True,
         text=True,
+        env={**os.environ, "LOOPX_CONTEXT_DELIVERY": "off"},
     )
     if completed.returncode != 0:
         raise SystemExit(

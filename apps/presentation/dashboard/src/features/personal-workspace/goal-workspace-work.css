@@ -98,7 +98,7 @@
 .goal-work-rail-dialog .goal-all-work { border: 0; padding: 0; }
 .goal-work-rail-close { margin-bottom: 16px; }
 @media (max-width: 640px) {
-  .goal-overview .goal-direction-toggle { display: inline-flex; justify-self: start; min-height: 32px; border: 0; padding: 4px 0; background: transparent; color: var(--pw-muted); font-size: var(--text-caption); }
+  .goal-overview .goal-direction-toggle { display: inline-flex; align-items: center; justify-self: start; min-height: 44px; border: 0; padding: 4px 0; background: transparent; color: var(--pw-muted); font-size: var(--text-caption); }
 }
 
 .goal-owner-group > header .goal-owner-conversation { margin-left: auto; padding: 6px 8px; min-height: 44px; border: 0; background: transparent; color: var(--pw-text); font: inherit; font-size: var(--text-caption); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }

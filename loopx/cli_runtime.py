@@ -78,7 +78,12 @@ _SELECTED_COMMANDS = _STATUS_COMMANDS | GLOBAL_READ_COMMANDS | PROJECT_LIFECYCLE
 	"handoff", "handoff-mode",
 	"performance-diagnosis",
 	"heartbeat-prompt",
+	"goal-acceptance",
+	"host-mode-plan",
+	"capability",
 }
+# Existing CLI vocabulary; this set chooses loading, not operation authority.
+_CAPABILITY_DISCOVERY_COMMANDS = frozenset({"list", "show"})
 
 
 class LoopXArgumentParser(argparse.ArgumentParser):
@@ -178,12 +183,12 @@ def resolve_cli_registry(
 		# Service activation reads its route from the loaded original manager.
 		# It neither opens Goal authority nor guesses a default Chat store.
 		return registry_path, registry_was_configured
-	if args.command == "quota" and getattr(args, "quota_command", None) in {"context-read", "replan-view"}:
+	if args.command == "quota" and getattr(args, "quota_command", None) in {"context-read", "context-project", "replan-view"}:
 		from .cli_commands.context_machine import has_explicit_context_read_source
 
-		# Captured readers own source validation (including missing references)
-		# and native-session scope; neither reaches live Goal authority.
-		if args.quota_command == "replan-view" or has_explicit_context_read_source(args):
+		# Saved views own source validation (including missing references) and
+		# native-session scope; machine defaults keep their separate route owner.
+		if args.quota_command in {"context-project", "replan-view"} or has_explicit_context_read_source(args):
 			return registry_path, registry_was_configured
 	if str(args.registry) == HOST_GLOBAL_REGISTRY_SELECTOR:
 		try:
@@ -399,6 +404,18 @@ def _build_selected_parser(command: str) -> LoopXArgumentParser:
 		from .cli_commands.support_control_heartbeat_registration import register_heartbeat_control_commands
 
 		register_heartbeat_control_commands(subparsers, add_subcommand_format)
+	elif command == "goal-acceptance":
+		from .cli_commands.goal_acceptance import register_goal_acceptance_command
+
+		register_goal_acceptance_command(subparsers, add_subcommand_format)
+	elif command == "host-mode-plan":
+		from .cli_commands.host_mode_plan import register_host_mode_plan_command
+
+		register_host_mode_plan_command(subparsers, add_subcommand_format)
+	elif command == "capability":
+		from .cli_commands.capability import register_capability_commands
+
+		register_capability_commands(subparsers, add_subcommand_format)
 	else:  # pragma: no cover - caller guards the private interface
 		raise ValueError(f"unsupported selected command: {command}")
 	return parser
@@ -410,6 +427,12 @@ def _dispatch_common_command(
 	registry_path: Path,
 	allow_missing_registry: bool,
 ) -> int | None:
+	if args.command == "host-mode-plan":
+		from .cli_commands.host_mode_plan import handle_host_mode_plan_command
+
+		return handle_host_mode_plan_command(
+			args, output_format=output_format, print_payload=print_payload,
+		)
 	if args.command == "heartbeat-prompt":
 		from .cli_commands.support_control_heartbeat import handle_heartbeat_prompt_command
 
@@ -417,6 +440,13 @@ def _dispatch_common_command(
 			args, registry_path=registry_path,
 			registry_was_supplied=not allow_missing_registry,
 			print_payload=print_payload, output_format=output_format,
+		)
+	if args.command == "goal-acceptance":
+		from .cli_commands.goal_acceptance import handle_goal_acceptance_command
+
+		return handle_goal_acceptance_command(
+			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
+			output_format=output_format, print_payload=print_payload,
 		)
 	if args.command == "performance-diagnosis":
 		from .capabilities.performance_diagnosis.cli import handle_performance_diagnosis_command
@@ -680,11 +710,20 @@ def _dispatch_selected(args: argparse.Namespace, raw_argv: list[str]) -> int:
 	if guard_result is not None:
 		return guard_result
 	registry_path, _registry_was_configured = resolve_cli_registry(args, raw_argv)
-	result = dispatch_common_command(
-		args,
-		registry_path=registry_path,
-		allow_missing_registry=not user_supplied_registry(raw_argv),
-	)
+	if args.command == "capability":
+		from .cli_commands.capability import handle_capability_command
+
+		# Keep the explicit full CLI's handler and protected operations unchanged.
+		result = handle_capability_command(
+			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
+			output_format=output_format, print_payload=print_payload,
+		)
+	else:
+		result = dispatch_common_command(
+			args,
+			registry_path=registry_path,
+			allow_missing_registry=not user_supplied_registry(raw_argv),
+		)
 	if result is None:  # pragma: no cover - caller guards the private interface
 		raise AssertionError(f"selected command was not dispatched: {args.command}")
 	return result
@@ -732,6 +771,14 @@ def _run_command(command: str | None, raw_argv: list[str]) -> int:
 			args = _build_selected_parser(command).parse_args(raw_argv)
 		except _SelectedParseRejected:
 			return _run_full_cli(raw_argv)
+		if command == "capability":
+			if args.capability_command not in _CAPABILITY_DISCOVERY_COMMANDS:
+				return _run_full_cli(raw_argv)
+			try:
+				return _dispatch_selected(args, raw_argv)
+			except _SelectedParseRejected:
+				# Catalog/manifest refusals use their canonical argparse diagnostic.
+				return _run_full_cli(raw_argv)
 		return _dispatch_selected(args, raw_argv)
 	return _run_full_cli(raw_argv)
 

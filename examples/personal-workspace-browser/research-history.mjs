@@ -745,7 +745,9 @@ export const researchHistoryScenario = {
       await synthesisOwner.close();
     }
     const capture = JSON.parse(await readFile(resolve(repoRoot, "apps/presentation/dashboard/src/data/fixtures/edgebench-research-history.json")));
-    let owner = await startHistoryOwner();
+    let owner = await startHistoryOwner([
+      "edgebench-research-history.json", "edgebench-graph-checkpoint-history.json", "edgebench-ad-checkpoint-history.json",
+    ].map(name => resolve(repoRoot, "apps/presentation/dashboard/src/data/fixtures", name)));
     let collisionOwner, emptyOwner, temporary;
     let context;
     const pages = [];
@@ -766,7 +768,12 @@ export const researchHistoryScenario = {
           if (!analysisFixture) return route.fulfill({json: {ok: true, catalog: {availability: "unavailable", reason_code: "no_available_pack", default_pack_id: null, packs: []}, pack: null}});
           const query = new URL(route.request().url()).searchParams;
           const language = query.get('output_language');
-          assert(['zh', 'en'].includes(language), 'Every analysis and original-citation read binds the interface language');
+          if (language === null && new URL(route.request().url()).pathname === '/api/chat/research-analysis') {
+            const original = analysisReadback(["b", "c", "d"].find(id => query.get("pack_id") === id.repeat(64)) ?? "a");
+            original.pack.result = null; original.pack.job = null;
+            return route.fulfill({json: original});
+          }
+          assert(['zh', 'en'].includes(language), 'Language-scoped analysis and citation reads retain their requested language');
           if (new URL(route.request().url()).pathname.endsWith('/citation')) {
             if (holdCitation) {citationStarted(); await new Promise(resolve => {releaseCitation = resolve;});}
             if (failedCitation) return route.fulfill({status: 503, json: {error: 'Synthetic citation transport unavailable'}});
@@ -1762,7 +1769,7 @@ print(json.dumps([
       await progress.locator(`.research-progress-scope[data-pack-id="${"d".repeat(64)}"]`).waitFor();
 
       comparisonFixture = true;
-      await progress.locator('select').selectOption('a'.repeat(64));
+      await progress.locator(':scope > header select').selectOption('a'.repeat(64));
       await progress.locator(`.research-progress-scope[data-pack-id="${"a".repeat(64)}"]`).waitFor();
       await page.reload({waitUntil: "networkidle"});
       const comparison = progress.locator('[data-metric="goal_alignment"]');

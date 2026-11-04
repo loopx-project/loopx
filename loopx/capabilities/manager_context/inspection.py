@@ -9,8 +9,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from ...chat_manager_details import read_manager_goal_details
-from ...chat_manager_history import delivery_history_window, read_manager_delivery_history
+from ...chat.manager_details import read_manager_goal_details
+from ...chat.manager_history import delivery_history_window, read_manager_delivery_history
 from ...control_plane.effect_runtime import effect_runtime_result
 
 
@@ -24,6 +24,9 @@ READ_TOOL = {
         "For a current-work overview, start with the index's bounded Agent Todo summaries; "
         "use view=portfolio for source and coverage, and view=todos for needed detail. "
         "Delivery history answers past results, not live activity. "
+        "For handoffs, read inbox_state, remaining_work and the existing agenda together with return_replies: "
+        "a delivered conclusion can be a partial result, and an older delivered result does not settle a newer pending reply. "
+        "These receipt observations do not verify that the original question was substantively answered. "
         "Every portfolio row carries its Goal lifecycle readback: reached milestones with "
         "their evidence refs and the phase (starting/qualifying/waiting_owner/closing/closed), "
         "or a typed unavailable gap naming why it could not be derived. Use that to state where "
@@ -326,6 +329,48 @@ def _lifecycle_phase(readback: Any) -> str | None:
     return phase if isinstance(phase, str) and phase else None
 
 
+def handoff_receipt_readbacks(root, registry, rows):
+    """Join an audience-checked page to the existing Inbox's read-only agenda.
+
+    Transport delivery alone cannot tell whether the latest result retained
+    work, or whether a newer result still awaits its original return.
+    """
+    from ...chat import redact_local_paths
+    from ...control_plane.collaboration.inbox import _entry, read_inbox_transaction
+    from ...control_plane.collaboration.goal_instance_scope import collaboration_goal_scope
+
+    if not rows:
+        return []
+    requests = []
+    for row in rows:
+        with collaboration_goal_scope(registry, goal_id=row["goal_id"], agents=(),
+                caller_goal_ref=row.get("goal_ref")) as scope:
+            request = _entry(root, row["goal_id"], row["agent_id"], row["request_id"], scope=scope)
+        if any(request.get(key) != row.get(key) for key in ("request_id", "goal_id", "agent_id", "source_id", "goal_ref")):
+            raise ValueError("handoff receipt identity changed")
+        requests.append(request)
+    snapshot = read_inbox_transaction(root, {
+        "operation": "receipt_states", "rows": requests, "include_agenda": True,
+    })
+
+    def safe(value):
+        if isinstance(value, str):
+            return redact_local_paths(value)
+        return {key: safe(item) for key, item in value.items()} if isinstance(value, dict) else value
+
+    page = []
+    for row, state, agenda in zip(rows, snapshot["items"], snapshot["agenda_items"], strict=True):
+        if "request_revision" in row and row["request_revision"] != (state.get("readback") or {}).get("request_revision"):
+            raise ValueError("handoff request revision changed")
+        item = {**row, "inbox_state": state["kind"], "agenda": safe(agenda),
+                "warnings": list(dict.fromkeys([*row["warnings"], *state["warnings"]]))}
+        item.pop("remaining_work", None)
+        if state.get("remaining_work"):
+            item["remaining_work"] = safe(state["remaining_work"])
+        page.append(item)
+    return page
+
+
 class ManagerInspection:
     def __init__(
         self,
@@ -525,9 +570,9 @@ class ManagerInspection:
                     offset=offset,
                     limit=limit,
                 )
-            except (OSError, ValueError, TypeError):
+                page = handoff_receipt_readbacks(self.runtime_root, self.registry_path, source.pop("rows"))
+            except (OSError, ValueError, TypeError, KeyError):
                 return {"ok": False, "error": "handoff_query_unavailable_or_invalid"}
-            page = source.pop("rows")
             matched = source.pop("matched")
         elif view == "todos":
             source = read_manager_goal_details(
@@ -614,6 +659,7 @@ class ManagerInspection:
                     not source["coverage"]["scan_complete"]
                     or not source["coverage"]["legacy_audience_scan_complete"]
                     or bool(source["coverage"]["unreadable"])
+                    or any(row.get("inbox_state") == "receipt_unavailable" for row in page)
                 )
             ),
             "oversized_rows": oversized,

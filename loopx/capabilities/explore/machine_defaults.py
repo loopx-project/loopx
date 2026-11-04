@@ -1,12 +1,13 @@
 """Machine preference IO and adapters to Explore's existing typed mode owner."""
 from __future__ import annotations
 
+from typing import Any, cast
+
 from collections.abc import Mapping
 from copy import deepcopy
 from functools import lru_cache
 import json
 from pathlib import Path
-from typing import Any
 
 from ...control_plane.effect_runtime import effect_runtime_result
 from ...explore_graph import plan_explore_configuration
@@ -47,7 +48,7 @@ def explore_machine_configuration_namespace() -> MachineConfigurationNamespace:
 
 @lru_cache(maxsize=128)
 def _resolve(encoded: str) -> dict[str, Any]:
-    return effect_runtime_result("explore.configuration.goal", json.loads(encoded))
+    return cast(dict[str, Any], effect_runtime_result("explore.configuration.goal", json.loads(encoded)))
 
 
 def resolve_explore_configuration(
@@ -64,7 +65,7 @@ def resolve_explore_configuration(
 
 
 def configuration_summary(goal: Mapping[str, Any]) -> dict[str, Any] | None:
-    return resolve_explore_configuration(goal)["goal_override"]
+    return cast(dict[str, Any] | None, resolve_explore_configuration(goal)["goal_override"])
 
 
 def apply_explore_machine_default(
@@ -104,4 +105,5 @@ def resolve_explore_goal(goal: Mapping[str, Any], runtime_root: Path) -> dict[st
 
     return apply_explore_machine_default(goal, read_machine_configuration(
         runtime_root, registry=build_builtin_machine_configuration_registry(),
+        namespace_ids=("explore_harness",),
     ))

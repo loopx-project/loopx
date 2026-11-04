@@ -99,7 +99,7 @@ def _normalize_scope(raw: object) -> dict[str, Any]:
     )
     if not surfaces:
         raise ValueError("scope.surface_ids must not be empty")
-    scope = {
+    scope: dict[str, Any] = {
         "workspace_ref": _token(raw.get("workspace_ref"), "scope.workspace_ref"),
         "project_ref": _token(raw.get("project_ref"), "scope.project_ref"),
         "surface_ids": surfaces,

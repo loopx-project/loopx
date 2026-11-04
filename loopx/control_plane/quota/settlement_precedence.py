@@ -1,9 +1,10 @@
 from __future__ import annotations
+
+from typing import Any, cast
 from .effective_action import EffectiveAction
 from .selected_todo_projection import selected_todo_projection
 from ..work_items.work_lane import work_lane_contract_is_receipt_bound_monitor_settled
 
-from typing import Any
 
 
 
@@ -127,6 +128,7 @@ def apply_settled_monitor_precedence(payload: dict[str, Any]) -> None:
     lane = payload.get("work_lane_contract")
     if not work_lane_contract_is_receipt_bound_monitor_settled(lane):
         return
+    lane = cast(dict[str, Any], lane)
     recorded_action = payload.get("agent_lane_next_action")
     clear_quota_action_projections(payload)
     payload.update(settled_replay_fields())

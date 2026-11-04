@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any, Iterator, Mapping, cast
+
 from contextlib import contextmanager
 from importlib.metadata import PackageNotFoundError, distribution
 import json
@@ -8,9 +10,9 @@ from pathlib import Path, PurePosixPath
 import shutil
 import sys
 import tempfile
-from typing import Any, Iterator, Mapping
 
 from . import __version__
+from .agy_goal_mode import antigravity_config_home
 from .file_lock import exclusive_file_lock
 from .python_install_owner import interpreter_invocation
 from .skill_install_readback import (
@@ -117,7 +119,7 @@ def resolve_workflow_skill_source() -> dict[str, Any]:
                     "available": True,
                     "kind": "python_distribution",
                     "skills_root": skills_root,
-                    "source_root": Path(installed.locate_file("")).resolve(),
+                    "source_root": Path(cast(Path, installed.locate_file(""))).resolve(),
                     "distribution_version": installed.version,
                     "reason": "workflow skills are available from the installed Python distribution",
                 }
@@ -126,7 +128,7 @@ def resolve_workflow_skill_source() -> dict[str, Any]:
         # for ``--target`` installs, but keeps ``../../share`` RECORD rows.
         # ``importlib.metadata.files`` filters those parent-relative rows, so
         # validate the public distribution root fallback explicitly.
-        distribution_root = Path(installed.locate_file("")).resolve()
+        distribution_root = Path(cast(Path, installed.locate_file(""))).resolve()
         target_skills = distribution_root / "share" / "loopx" / "skills"
         if _valid_source_root(target_skills):
             return {
@@ -150,7 +152,14 @@ def resolve_workflow_skill_source() -> dict[str, Any]:
     }
 
 
-def default_workflow_skills_dir(env: Mapping[str, str] | None = None) -> Path:
+def default_workflow_skills_dir(
+    env: Mapping[str, str] | None = None,
+    *,
+    host_surface: str | None = None,
+    agy_home: str | None = None,
+) -> Path:
+    if agy_home or host_surface in {"agy", "antigravity-app"}:
+        return antigravity_config_home(agy_home) / "skills"
     source_env = os.environ if env is None else env
     configured = str(source_env.get("CODEX_HOME") or "").strip()
     codex_root = Path(configured).expanduser() if configured else Path.home() / ".codex"
@@ -280,8 +289,15 @@ def workflow_skill_install(
     uninstall: bool = False,
     cli_bin: str = "loopx",
     host_surface: str | None = None,
+    agy_home: str | None = None,
 ) -> dict[str, Any]:
-    target_root = (skills_dir or default_workflow_skills_dir()).expanduser().resolve()
+    target_root = (
+        skills_dir
+        or default_workflow_skills_dir(
+            host_surface=host_surface,
+            agy_home=agy_home,
+        )
+    ).expanduser().resolve()
     source = resolve_workflow_skill_source()
     source_root = Path(source["source_root"])
     frozen_source_revision = (

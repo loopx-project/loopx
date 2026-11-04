@@ -990,10 +990,13 @@ def embedded_report_python(tmp_path, monkeypatch):
     import os
     from types import SimpleNamespace
     from loopx.capabilities.native_chat import steward_reports
+    # A checkout-wide source bootstrap would make this empty child import
+    # LoopX even though the real embedding host has not installed it.
+    monkeypatch.delenv("PYTHONPATH", raising=False)
     folder = tmp_path / "embedded-python"
     subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(folder)], check=True)
     python = folder / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-    missing = subprocess.run([str(python), "-I", "-c", "import loopx"],
+    missing = subprocess.run([str(python), "-c", "import loopx"],
         cwd=tmp_path, capture_output=True, text=True)
     assert missing.returncode != 0 and "ModuleNotFoundError" in missing.stderr
     monkeypatch.setattr(steward_reports, "sys", SimpleNamespace(executable=str(python)))

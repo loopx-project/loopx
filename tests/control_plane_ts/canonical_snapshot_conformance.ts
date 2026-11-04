@@ -82,10 +82,13 @@ export function registerCanonicalSnapshotConformance(name: string, factory: Auth
       assert.deepEqual(todoOnly.todos, result.todos);
       assert.deepEqual(todoOnly.leases, []);
       assert.ok(todoOnly.pages.every(page => !("leases" in page)));
+      assert.ok(todoOnly.pages.every(page =>
+        (page.metadata as JsonObject).handoff_mode === fixture.projection.handoff_mode));
       const completeTodoOnly = await readCanonicalSnapshotFromStore(snapshotRequest({include_leases: false}),
         store, CANONICAL_SNAPSHOT_LOCAL_BYTES);
       assert.deepEqual(completeTodoOnly.todos, result.todos);
       assert.equal("leases" in completeTodoOnly, false);
+      assert.equal((completeTodoOnly.metadata as JsonObject).handoff_mode, fixture.projection.handoff_mode);
     });
   }
 

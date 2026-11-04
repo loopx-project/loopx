@@ -310,6 +310,34 @@ def test_recent_runs_are_strictly_bounded() -> None:
     assert latest_runs_with_agent_context(runs, limit=0) == []
 
 
+def test_explicit_lane_decision_keeps_source_identity_beyond_recent_history() -> None:
+    from loopx.control_plane.goals.goal_frontier.semantic_history import latest_lane_recommendation_from_status
+
+    decision = _run("2026-08-09T00:01:00Z", json_path="runs/decision.json",
+        recommended_action_resolution={"schema_version": "refresh_recommendation_v0",
+            "recommended_action_source": "explicit_arg", "recommended_action": "Choose another method."})
+    runs = [
+        _run(f"2026-08-09T00:02:{second:02d}Z") for second in reversed(range(40))
+    ] + [
+        _run("2026-08-09T00:01:30Z", agent_id=OTHER_AGENT_ID,
+            recommended_action_resolution={"recommended_action_source": "explicit_arg",
+                "recommended_action": "Review the independent route."}),
+        decision,
+        _run("2026-08-09T00:00:00Z",
+            recommended_action_resolution={"step_revision": "old-step"}),
+    ]
+    history = compact_goal_semantic_history(goal_semantic_history_from_runs(runs), compact_run=compact_run)
+    assert _agent_context(history, AGENT_ID)["latest_lane_step_run"]["json_path"] == "runs/decision.json"
+    status = {"run_history": {"goals": [{"id": "semantic-goal",
+        "semantic_history": history, "latest_runs": latest_runs_with_agent_context(runs, limit=1)}]}}
+    resolution = latest_lane_recommendation_from_status(status, goal_id="semantic-goal", agent_id=AGENT_ID)
+    assert resolution["recommended_action_source"] == "explicit_arg"
+    assert "step_revision" not in resolution
+    assert resolution["journal_source"] == {
+        "generated_at": decision["generated_at"], "json_path": "runs/decision.json"}
+    assert resolution["agent_id"] == AGENT_ID and resolution["goal_id"] == "semantic-goal"
+
+
 def test_agent_lane_status_keeps_only_selected_semantic_context() -> None:
     raw_history = goal_semantic_history_from_runs(
         [

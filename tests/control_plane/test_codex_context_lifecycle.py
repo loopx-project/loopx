@@ -35,6 +35,72 @@ def test_shared_root_keeps_interleaved_native_sessions_independent(tmp_path, mon
         assert (directory / "session.json").read_bytes() == raw
 
 
+def test_native_journal_projects_one_host_execution_request(tmp_path, monkeypatch):
+    event = setup(tmp_path, monkeypatch)
+    payload = {
+        "ok": True,
+        "goal_id": "fixture",
+        "registry": str(tmp_path / "registry.json"),
+        "runtime_root": str(tmp_path / "runtime"),
+        "should_run": True,
+        "selected_todo": {"todo_id": "todo_fixture", "claimed_by": "agent"},
+        "execution_preparation": {
+            "schema_version": "execution_preparation_v0",
+            "state": "claim_required",
+            "todo_id": "todo_fixture",
+            "agent_id": "agent",
+            "claim": {
+                "host_execution_allowed": True,
+                "cli_args": [
+                    "todo", "claim", "--goal-id", "fixture",
+                    "--todo-id", "todo_fixture", "--agent-id", "agent",
+                    "--claimed-by", "agent",
+                ],
+            },
+        },
+        "heartbeat_receipt": {"turn_instance_id": "turn-fixture"},
+    }
+    _, wire = project(tmp_path, payload=payload)
+    request = context.native_execution_preparation_request(
+        str(tmp_path), {**event, "hook_event_name": "PostToolUse"},
+    )
+    assert request == {
+        "goal_id": "fixture",
+        "agent_id": "agent",
+        "todo_id": "todo_fixture",
+        "claim_args": payload["execution_preparation"]["claim"]["cli_args"],
+        "authority_route": {
+            "registry_path": str(tmp_path / "registry.json"),
+            "runtime_root": str(tmp_path / "runtime"),
+        },
+        "turn_instance_id": "turn-fixture",
+        "source_sha256": wire["recovery"]["sha256"],
+    }
+    child_event = {**event, "hook_event_name": "PostToolUse", "agent_id": "child"}
+    assert context.native_execution_preparation_request(str(tmp_path), child_event) is None
+    receipt = {
+        "event": "host_execution_prepared",
+        "todo_id": "todo_fixture",
+        "turn_instance_id": "turn-fixture",
+    }
+    state_before_child = (tmp_path / "session.json").read_bytes()
+    context.record_native_execution_preparation(
+        str(tmp_path), child_event,
+        source_sha256=request["source_sha256"], receipt=receipt,
+    )
+    assert (tmp_path / "session.json").read_bytes() == state_before_child
+    context.record_native_execution_preparation(
+        str(tmp_path), event,
+        source_sha256=request["source_sha256"], receipt=receipt,
+    )
+    assert context.native_execution_preparation_request(
+        str(tmp_path), {**event, "hook_event_name": "PostToolUse"},
+    ) is None
+    assert context.native_execution_preparation_request(
+        str(tmp_path), {**event, "hook_event_name": "SessionStart"},
+    )["todo_id"] == "todo_fixture"
+
+
 def test_shared_root_read_does_not_create_unknown_session_or_follow_alias(tmp_path, monkeypatch):
     tmp_path.chmod(0o700)
     monkeypatch.setenv("CODEX_THREAD_ID", "unknown")
@@ -174,6 +240,9 @@ def test_complete_reader_delivery_allows_delta_without_diagnostics_or_ack(tmp_pa
     for name in ("PreToolUse", "PostToolUse", "Stop", "SessionEnd"):
         context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": name,
             "tool_response": "ordinary tool output"})
+    assert context._state(tmp_path) == state
+    context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": "PostToolUse",
+        "tool_response": {"isError": True, "content": [{"type": "text", "text": "Unrelated tool failed."}]}})
     assert context._state(tmp_path) == state
     _, second = project(tmp_path, "two", payload=payload)
     assert second["mode"] == "delta" and second["continuity_basis"] == "captured_file"
@@ -321,6 +390,8 @@ def test_native_reference_exposes_file_continuity_and_preserves_full_recovery(tm
     assert view["continuity_basis"] == "captured_file"
     assert view["baseline_reference"]["path"] == first["recovery"]["path"]
     assert view["recovery"]["path"] == second["recovery"]["path"]
+    assert [field["pointer"] for field in view["field_index"]] == list("/" + key for key in payload)
+    assert "/changes" not in [field["pointer"] for field in view["field_index"]], "index addresses current recovery, never the delta wire"
     for instruction in (view["instruction"], second["recovery"]["instruction"]):
         assert "Native input observation independently verifies" not in instruction
     deliver(tmp_path, event, capture_pages(view["path"], view["sha256"]))
@@ -441,7 +512,8 @@ def test_known_incomplete_delivery_cannot_establish_baseline(tmp_path, monkeypat
 
 
 @pytest.mark.parametrize("mode", ["full", "delta"])
-@pytest.mark.parametrize("damage", ["changed_bytes", "missing_file", "changed_file", "symlink"])
+@pytest.mark.parametrize("damage", ["changed_bytes", "missing_file", "changed_file", "symlink",
+    "failed_mcp", "failed_mcp_nested"])
 def test_hook_cli_rejects_changed_page_bytes_and_recovers_original(tmp_path, monkeypatch, mode, damage):
     event = setup(tmp_path, monkeypatch)
     payload = {"ok": True, "plan_summary": {"requirements": "Preserve every obligation. " * 1000}}
@@ -467,7 +539,7 @@ def test_hook_cli_rejects_changed_page_bytes_and_recovers_original(tmp_path, mon
         assert json.loads("".join(page["content"] for page in changed))
     elif damage == "changed_file":
         source.write_bytes(source_raw + b" ")  # valid JSON, different pinned digest
-    else:
+    elif damage in {"missing_file", "symlink"}:
         source.unlink()
         if damage == "symlink":
             alias_target = tmp_path / "same-bytes.json"
@@ -479,18 +551,21 @@ def test_hook_cli_rejects_changed_page_bytes_and_recovers_original(tmp_path, mon
         "--format", "json", "quota", "context-hook", "--context-delivery", "on", "--codex-app",
         "--codex-context-dir", str(tmp_path)]
 
-    def hook(values):
-        response = {"content": [{"type": "text", "text": json.dumps(page)} for page in values]}
+    def hook(values, *, failed=False, nested=False):
+        response = {"isError": failed,
+            "content": [{"type": "text", "text": json.dumps(page)} for page in values]}
+        if nested:
+            response = {"exit_code": 0, "output": json.dumps(response)}
         result = subprocess.run(cmd, input=json.dumps({**event, "hook_event_name": "PostToolUse",
             "tool_use_id": "capture-read", "tool_response": response}), capture_output=True, text=True,
             cwd=tmp_path, env={**os.environ, "PYTHONPATH": str(repo)}, timeout=20)
         assert result.returncode == 0, result.stderr
         assert json.loads(result.stdout) == {}
 
-    hook(changed)
+    hook(changed, failed=damage.startswith("failed_mcp"), nested=damage == "failed_mcp_nested")
     assert "candidate" not in context._state(tmp_path)
     assert context._state(tmp_path)["recovery"] == recovery
-    if damage != "changed_bytes":
+    if damage in {"missing_file", "changed_file", "symlink"}:
         source.unlink(missing_ok=True)
         source.write_bytes(source_raw)
         source.chmod(0o600)
@@ -1034,8 +1109,8 @@ def test_activation_reuses_declared_host_mode_and_off_is_inert(tmp_path, monkeyp
         return
     assert code == 0 and result["ok"] is True
     activation = result["context_delivery"]
-    expected = expected if setting == "on" else None
-    assert activation["requested"] == (setting or "off")
+    expected = expected if setting != "off" else None
+    assert activation["requested"] == (setting or "auto")
     assert activation["enabled"] is (expected is not None) and activation["scenario"] == expected
     assert activation["supported_scenarios"] == ["codex_benchmark_heartbeat", "codex_app_heartbeat", "codex_app_ssh_goal"]
     if expected is None:

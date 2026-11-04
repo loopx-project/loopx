@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 import shlex
 from collections.abc import Mapping
-from typing import Any
 
 from ..agents.capability_gate import runtime_capabilities_for_cli_projection
 from ..scheduler.execution_context import (
@@ -29,7 +30,7 @@ def build_runtime_capability_reentry_packet(
     """Project verified runtime-capability re-entry without persisting a grant."""
 
     capability_gate = (
-        payload.get("capability_gate")
+        cast(Mapping[str, Any], payload.get("capability_gate"))
         if isinstance(payload.get("capability_gate"), Mapping)
         else {}
     )
@@ -49,13 +50,13 @@ def build_runtime_capability_reentry_packet(
         return None
 
     selected_todo = (
-        payload.get("selected_todo")
+        cast(Mapping[str, Any], payload.get("selected_todo"))
         if isinstance(payload.get("selected_todo"), Mapping)
         else {}
     )
     goal_id = str(payload.get("goal_id") or "<GOAL_ID>")
     agent_identity = (
-        payload.get("agent_identity")
+        cast(Mapping[str, Any], payload.get("agent_identity"))
         if isinstance(payload.get("agent_identity"), Mapping)
         else {}
     )
@@ -100,7 +101,7 @@ def build_runtime_capability_reentry_packet(
         return None
     for candidate in result["candidates"]:
         candidate["command"] = shlex.join(candidate.pop("command_argv"))
-    return result
+    return cast(dict[str, Any] | None, result)
 
 
 def apply_agent_channel_projection(

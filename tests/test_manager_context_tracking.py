@@ -334,6 +334,26 @@ def test_cli_links_generated_core_id_and_reads_live_state(tmp_path, monkeypatch,
     cli("manager-inbox", "link", *inbox, "--evidence-id", ref)
     follow = cli("manager-inbox", "read", "--goal-id", "goal-a", "--agent-id", "agent-a")["items"][0]["receiver_followthrough"]
     assert follow["evidence_refs"] == [ref]
+
+    # Archiving completed work changes its storage lane, not the request's
+    # explicit link or the receiver's need to return an answer.
+    link_bytes = path.read_bytes()
+    cli("todo", "complete", "--goal-id", "goal-a", "--todo-id", tid,
+        "--agent-id", "agent-a", "--evidence", "Verified isolated result", "--no-follow-up")
+    cli("todo", "archive-completed", "--goal-id", "goal-a",
+        "--max-active-done", "0", "--execute")
+    archived = cli("todo", "list", "--goal-id", "goal-a", "--todo-id", tid)
+    assert archived["todo"]["archive_state"] == "archive"
+    assert archived["todo"]["status"] == "done"
+    follow = cli("manager-inbox", "read", "--goal-id", "goal-a", "--agent-id", "agent-a")["items"][0]["receiver_followthrough"]
+    assert follow["step"] == "review_request_work"
+    assert [(t["todo_id"], t["title"], t["status"]) for t in follow["linked_todos"]] == [
+        (tid, "[P1] Verified current work", "done")
+    ]
+    assert follow["recorded_decision"] == "adopt" and follow["answer_owed"] is True
+    assert cli("manager-inbox", "status", *inbox)["rows"][0]["linked_todos"] == follow["linked_todos"]
+    assert path.read_bytes() == link_bytes
+    assert cli("todo", "list", "--goal-id", "goal-a", "--todo-id", tid)["authority_read"]["provider_revision"] == archived["authority_read"]["provider_revision"]
     assert state.exists()
 
 
@@ -430,3 +450,59 @@ def test_receiver_keeps_unavailable_work_unknown_without_replaying_or_hiding_oth
     assert page[rid]["warnings"] == ["links_unreadable_or_conflicting"]
     assert page[other]["receiver_followthrough"]["step"] == "assess_request"
     assert path.read_text() == "{damaged"
+
+
+def test_history_links_are_scoped_and_do_not_hide_other_work(fixture, monkeypatch):
+    from loopx.control_plane.collaboration.peers import read_inbox
+    import loopx.control_plane.collaboration.links as links
+
+    root, registry, session, turn, target = fixture
+    active = {"todo_id": "todo_active", "claimed_by": "worker", "status": "open", "text": "Current work"}
+    history = {"todo_id": "todo_history", "claimed_by": "worker", "status": "done", "text": "Verified history"}
+    reads, unavailable = [], False
+
+    def core_read(**kwargs):
+        tid = kwargs.get("todo_id")
+        reads.append(tid)
+        if tid is None:
+            return {"ok": True, "todos": [active]}
+        assert tid == "todo_history"
+        if unavailable:
+            raise ValueError("Exact source unavailable")
+        return {"ok": True, "todo": history}
+
+    monkeypatch.setattr(links, "list_goal_todos", core_read)
+    ids = []
+    for key, tid in [("active", "todo_active"), ("history-1", "todo_history"), ("history-2", "todo_history")]:
+        rid = deliver(root, registry, session=session,
+                      turn=dict(turn, client_turn_id=key), request=target)["request_id"]
+        acknowledge(root, "research", "worker", rid, "adopt", "Use existing work")
+        link(root, registry, "research", "worker", rid, [tid], [])
+        ids.append(rid)
+    items = {item["request_id"]: item for item in read_inbox(root, registry, "research", "worker")["items"]}
+
+    def observe():
+        reads.clear()
+        rows = links.receiver_work_observations(root, registry, [items[rid] for rid in ids])
+        # A later request can need history after the Goal queue is cached;
+        # repeated links need no second exact lookup or complete history export.
+        assert reads == [None, "todo_history"]
+        assert rows[0]["linked_todos"][0]["status"] == "open"
+        assert rows[0]["evidence_unavailable"] is False
+        return rows
+
+    assert [row["linked_todos"][0]["status"] for row in observe()] == ["open", "done", "done"]
+    unavailable = True
+    missing = observe()[1:]
+    assert all(row["evidence_unavailable"] for row in missing)
+    assert all(row["linked_todos"][0]["status"] == "unknown" for row in missing)
+    assert all(row["linked_todos"][0]["title"] is None for row in missing)
+    unavailable = False
+    assert [row["linked_todos"][0]["status"] for row in observe()] == ["open", "done", "done"]
+    history["claimed_by"] = "peer"
+    history["text"] = "Other receiver's private work"
+    foreign = observe()[1:]
+    assert all(row["linked_todos"][0]["status"] == "unknown" for row in foreign)
+    assert "Other receiver's private work" not in json.dumps(foreign)
+    with pytest.raises(ValueError, match="must belong"):
+        link(root, registry, "research", "worker", ids[1], ["todo_history"], [])

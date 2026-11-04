@@ -23,6 +23,7 @@ from .codex_cli import (
     _prompt,
     normalize_codex_stdio_mcp_server,
     codex_cli_result_schema,
+    normalize_codex_result,
 )
 from .codex_sessions import _lineage, select_managed_operation_session
 from .executor import LOOPX_TURN_HOST_REQUEST_SCHEMA_VERSION
@@ -218,7 +219,7 @@ def run_codex_operation_host(
             turn_start_guard=lambda: launch_scope("codex_operation_turn_start"),
             on_native_item=observe_child if child_observer is not None else None,
         )
-        return result
+        return normalize_codex_result(request, result)
     except CodexChatAgentError as exc:
         raise BuiltInHostError(
             "codex_operation_host_" + exc.error_code,

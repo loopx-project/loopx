@@ -168,6 +168,7 @@ def action_selection_context(payload: Mapping[str, Any]) -> dict[str, Any]:
         ("selected_todo", ("todo_id", "selection_binding")),
         ("autonomous_replan_obligation", ("selection_binding",)),
         ("action_selection_qualification", ("state", "requested_todo_id", "recovery_action")),
+        ("execution_preparation", ("schema_version", "state", "todo_id", "delivery_allowed")),
     ):
         raw = payload.get(field)
         if isinstance(raw, Mapping):

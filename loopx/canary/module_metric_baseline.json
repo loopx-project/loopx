@@ -31,20 +31,20 @@
       "dict_any_count": 0
     },
     "loopx/chat_agent.py": {
-      "lines": 2007
+      "lines": 2031
     },
     "loopx/chat_runtime.py": {
       "any_count": 37,
       "dict_any_count": 0,
-      "lines": 2333
+      "lines": 2398
     },
     "loopx/chat_server.py": {
       "any_count": 25,
       "dict_any_count": 0,
-      "lines": 2034
+      "lines": 2039
     },
     "loopx/chat_store.py": {
-      "lines": 2066
+      "lines": 2113
     },
     "loopx/codex_cli_probe.py": {
       "any_count": 37,
@@ -59,11 +59,11 @@
       "dict_any_count": 0
     },
     "loopx/control_plane/goals/goal_frontier/terminal.py": {
-      "any_count": 15,
+      "any_count": 22,
       "dict_any_count": 0
     },
     "loopx/control_plane/work_items/interaction_contract.py": {
-      "any_count": 85,
+      "any_count": 107,
       "dict_any_count": 0
     },
     "loopx/extensions/lark/goal_topic_runtime.py": {
@@ -89,12 +89,12 @@
       "any_count": 51,
       "dict_any_count": 0
     },
-    "loopx/presentation/renderers/status_markdown.py": {
-      "any_count": 47,
+    "loopx/pr_review.py": {
+      "any_count": 50,
       "dict_any_count": 0
     },
-    "loopx/pr_review.py": {
-      "any_count": 49,
+    "loopx/presentation/renderers/status_markdown.py": {
+      "any_count": 47,
       "dict_any_count": 0
     },
     "loopx/quota.py": {
@@ -103,7 +103,7 @@
       "lines": 1999
     },
     "loopx/slash_command_install.py": {
-      "any_count": 11,
+      "any_count": 12,
       "dict_any_count": 0
     },
     "loopx/state_refresh.py": {

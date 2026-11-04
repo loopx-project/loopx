@@ -2,7 +2,7 @@ import {ContextHelp} from "./context-help";
 import {GoalAcceptanceContractSection} from "./goal-acceptance-contract";
 import {GoalObjectiveSettings} from "./goal-objective-settings";
 import {goalAcceptanceContractCopy} from "./delivery-review-copy";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type {SettingsTarget} from "./workspace-settings-route";
 import { ArrowLeft, Bot, Check, Clock3, KeyRound, Languages, Palette, ServerCog, Settings2 } from "lucide-react";
 
@@ -19,15 +19,31 @@ import { MachineConfigurationSettings } from "./machine-configuration-settings";
 import { ConfigurationBackupSettings } from "./configuration-backup-settings";
 import { OperatorCredentialSettings } from "./operator-credential-settings";
 import { CodexAccountSettings } from "./codex-account-settings";
+import { BackgroundServicesSettings } from "./background-services-settings";
 import type { PersonalWorkspaceCallbacks, WorkspaceGoal, WorkspaceGoalNotification } from "./personal-workspace-model";
 import type { WorkspaceTheme } from "./workspace-theme";
 
+// Preference cards share a single Tab stop and radio-group keyboard behavior.
+function movePreferenceSelection(event: KeyboardEvent<HTMLDivElement>) {
+  if (event.altKey || event.ctrlKey || event.metaKey) return;
+  const options = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('button[role="radio"]:not(:disabled)')];
+  const index = options.indexOf(event.target as HTMLButtonElement);
+  if (index < 0) return;
+  const next = event.key === "Home" ? 0 : event.key === "End" ? options.length - 1
+    : event.key === "ArrowRight" || event.key === "ArrowDown" ? (index + 1) % options.length
+      : event.key === "ArrowLeft" || event.key === "ArrowUp" ? (index + options.length - 1) % options.length : -1;
+  if (next < 0) return;
+  event.preventDefault();
+  options[next].focus();
+  options[next].click();
+}
 
-type WorkspaceSettingsTab = "ownership" | "steward" | "conversation" | "provider" | "machine" | "capabilities" | "cadence" | "lark" | "appearance" | "language";
+type WorkspaceSettingsTab = "ownership" | "steward" | "conversation" | "provider" | "machine" | "capabilities" | "cadence" | "lark" | "appearance" | "language" | "background";
 
 type SettingsPage = Exclude<WorkspaceSettingsTab, "machine">;
 
 const tabIcons: Record<SettingsPage, typeof Settings2> = {
+  background: ServerCog,
   ownership: KeyRound,
   appearance: Palette,
   capabilities: ServerCog,
@@ -74,6 +90,7 @@ export function WorkspaceSettingsPage({
     { key: "conversation", label: locale === "zh-CN" ? "对话与模型" : "Conversations and models" },
     { key: "provider", label: t("settings.modelProvider") },
     { key: "capabilities", label: t("settings.globalCapabilities") },
+    { key: "background", label: locale === "zh-CN" ? "后台服务" : "Background services" },
     { key: "lark", label: "Lark" },
     { key: "appearance", label: t("settings.appearance") },
     { key: "language", label: t("settings.language") },
@@ -107,6 +124,7 @@ export function WorkspaceSettingsPage({
     },
   ];
   const headings: Record<SettingsPage, { title: string }> = {
+    background: {title: locale === "zh-CN" ? "后台服务" : "Background services"},
     conversation: {title: locale === "zh-CN" ? "Goal 对话默认值" : "Goal conversation defaults"},
     ownership: {title: t("ownership.title")},
     appearance: {
@@ -135,6 +153,7 @@ export function WorkspaceSettingsPage({
   const bodyRef = useRef<HTMLElement>(null);
   useEffect(() => { if (bodyRef.current) bodyRef.current.scrollTop = 0; }, [scope, initialGoalId, tab]);
   const scopeHint = scope === "machine" ? {
+    background: "",
     steward: "",
     conversation: t("settings.effect.conversation"),
     provider: t("settings.effect.provider"),
@@ -165,7 +184,7 @@ export function WorkspaceSettingsPage({
         </fieldset>
         <label className="personal-settings-mobile-category">
           <span>{t("settings.categories")}</span>
-          <select value={tab} onChange={event => navigate(scope, initialGoalId ?? undefined, event.target.value as SettingsPage)}>
+          <select aria-label={t("settings.categories")} value={tab} onChange={event => navigate(scope, initialGoalId ?? undefined, event.target.value as SettingsPage)}>
             {tabs.map(item => <option key={item.key} value={item.key}>{item.label}</option>)}
           </select>
         </label>
@@ -226,6 +245,7 @@ export function WorkspaceSettingsPage({
           </div>
         ) : null}
 
+        {tab === "background" ? <BackgroundServicesSettings onOpenSettings={tab => navigate("machine", undefined, tab)} /> : null}
         {tab === "steward" ? <MachineConfigurationSettings
           onChanged={onChanged}
           section="steward"
@@ -257,16 +277,16 @@ export function WorkspaceSettingsPage({
 
         {tab === "appearance" ? (
           <section className="personal-detail-card personal-appearance-settings">
-            <div className="personal-settings-choice-group" role="radiogroup" aria-label={t("settings.workspaceTheme")}>
-              <button aria-checked={theme === "loopx"} onClick={() => onThemeChange("loopx")} role="radio" type="button">
+            <div className="personal-settings-choice-group" onKeyDown={movePreferenceSelection} role="radiogroup" aria-label={t("settings.workspaceTheme")}>
+              <button aria-checked={theme === "loopx"} tabIndex={theme === "loopx" ? 0 : -1} onClick={() => onThemeChange("loopx")} role="radio" type="button">
                 <span className="personal-settings-theme-swatch is-loopx" />
                 <strong>{t("settings.themeLoopx")}</strong>
               </button>
-              <button aria-checked={theme === "paper"} onClick={() => onThemeChange("paper")} role="radio" type="button">
+              <button aria-checked={theme === "paper"} tabIndex={theme === "paper" ? 0 : -1} onClick={() => onThemeChange("paper")} role="radio" type="button">
                 <span className="personal-settings-theme-swatch is-paper" />
                 <strong>{t("settings.themeDefault")}</strong>
               </button>
-              <button aria-checked={theme === "brutal"} onClick={() => onThemeChange("brutal")} role="radio" type="button">
+              <button aria-checked={theme === "brutal"} tabIndex={theme === "brutal" ? 0 : -1} onClick={() => onThemeChange("brutal")} role="radio" type="button">
                 <span className="personal-settings-theme-swatch is-brutal" />
                 <strong>{t("settings.themeHighContrast")}</strong>
               </button>
@@ -276,10 +296,11 @@ export function WorkspaceSettingsPage({
 
         {tab === "language" ? (
           <section className="personal-settings-card">
-            <div aria-label={t("settings.language")} className="personal-language-options" role="radiogroup">
+            <div aria-label={t("settings.language")} className="personal-language-options" onKeyDown={movePreferenceSelection} role="radiogroup">
               {localeOptions.map((option) => (
                 <button
                   aria-checked={locale === option.value}
+                  tabIndex={locale === option.value ? 0 : -1}
                   className={locale === option.value ? "is-selected" : ""}
                   key={option.value}
                   onClick={() => setLocale(option.value)}

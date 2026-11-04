@@ -46,6 +46,8 @@ def handle_heartbeat_prompt_command(
         if args.codex_app
         else SchedulerRuntimeProfile.TRAE_APP.value
         if getattr(args, "trae_app", False)
+        else SchedulerRuntimeProfile.ANTIGRAVITY_APP.value
+        if getattr(args, "antigravity_app", False)
         else args.runtime_profile
     )
     try:
@@ -101,12 +103,14 @@ def handle_heartbeat_prompt_command(
             args.scheduler_owner,
             args.execution_mode,
         )
-        app_alias_count = int(bool(args.codex_app)) + int(
-            bool(getattr(args, "trae_app", False))
+        app_alias_count = (
+            int(bool(args.codex_app))
+            + int(bool(getattr(args, "trae_app", False)))
+            + int(bool(getattr(args, "antigravity_app", False)))
         )
         if app_alias_count > 1:
             raise ValueError(
-                "--codex-app and --trae_app are mutually exclusive"
+                "--codex-app, --trae_app, and --antigravity_app are mutually exclusive"
             )
         if app_alias_count and (
             args.runtime_profile or any(explicit_scheduler_fields)
@@ -166,6 +170,7 @@ def handle_heartbeat_prompt_command(
             codex_context_dir=args.codex_context_dir,
             codex_context_root=args.codex_context_root,
             context_delivery=args.context_delivery,
+            delta_delivery=args.delta_delivery or "auto",
             turn_envelope=args.turn_envelope,
             reward_memory_enabled=reward_memory_enabled,
         )
@@ -223,6 +228,7 @@ def handle_heartbeat_prompt_command(
         None,
         SchedulerRuntimeProfile.CODEX_APP_HEARTBEAT.value,
         SchedulerRuntimeProfile.TRAE_APP.value,
+        SchedulerRuntimeProfile.ANTIGRAVITY_APP.value,
         SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP.value,
         # Kiro CLI moved off generic_cli onto its own profile; its facade
         # still reads the thin Agent input, so keep that output shape.

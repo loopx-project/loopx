@@ -279,10 +279,10 @@ export function MachineConfigurationSettings({ section, onChanged }: {
     setNotice(null);
   }
 
-  async function setContextDelivery(mode: "off" | "on") {
+  async function setContextDelivery(mode: "off" | "on" | "auto", key: "mode" | "delta_delivery" = "mode") {
     if (busy || !editorAvailable || selected?.capability_id !== "context_delivery" || !selected.machine_namespace) return;
     const namespace = selected.machine_namespace;
-    const configuration = {...selected.default, mode};
+    const configuration = {...selected.default, ...selectedCurrent, [key]: mode};
     const generation = editorGeneration.current;
     setBusy("apply"); setError(null); setNotice(null);
     try {
@@ -295,10 +295,13 @@ export function MachineConfigurationSettings({ section, onChanged }: {
       if (generation !== editorGeneration.current) return;
       setInspection(next);
       setReadbackPending(null);
-      if (next.machine_configuration?.namespaces[namespace]?.mode !== mode) {
+      if (next.machine_configuration?.namespaces[namespace]?.[key] !== mode) {
         throw new Error(locale === "zh-CN" ? "保存后的配置已变化，请刷新后重试。" : "The saved configuration changed. Refresh and retry.");
       }
-      setNotice(locale === "zh-CN" ? "Codex 偏好已保存。" : "Codex preference saved.");
+      const targetLabel = key === "delta_delivery"
+        ? locale === "zh-CN" ? "跨轮差分" : "Cross-turn delta"
+        : locale === "zh-CN" ? "渐进读取" : "Progressive reads";
+      setNotice(locale === "zh-CN" ? `${targetLabel}偏好已保存。` : `${targetLabel} preference saved.`);
       onChanged?.();
     } catch (cause) {
       if (generation === editorGeneration.current) setError(cause instanceof Error ? cause.message : t("machine.applyError"));
@@ -525,19 +528,21 @@ export function MachineConfigurationSettings({ section, onChanged }: {
             </section>
           ) : null}
 
-          {selected.capability_id === "context_delivery" ? <section aria-label={locale === "zh-CN" ? "使用差分上下文的应用" : "Applications using differential context"} className="personal-capability-field-summary">
+          {selected.capability_id === "context_delivery" ? <section aria-label={locale === "zh-CN" ? "上下文读取方式" : "Context reading"} className="personal-capability-field-summary">
             <div className="personal-capability-fields"><label className="is-boolean">
-              <span>Codex</span>
-              <input aria-label={locale === "zh-CN" ? "在 Codex 中使用差分上下文" : "Use differential context in Codex"}
-                type="checkbox" role="switch" checked={selectedCurrent?.mode === "on"} disabled={Boolean(busy) || !editorAvailable}
-                onChange={(event) => void setContextDelivery(event.target.checked ? "on" : "off")} />
+              <span>{locale === "zh-CN" ? "渐进读取" : "Progressive reads"}</span>
+              <input aria-label={locale === "zh-CN" ? "渐进读取上下文" : "Read context progressively"}
+                type="checkbox" role="switch" checked={(selectedCurrent?.mode ?? selected.default?.mode) === "on"} disabled={Boolean(busy) || !editorAvailable}
+                onChange={(event) => void setContextDelivery(event.target.checked ? "on" : "off", "mode")} />
+            </label><label className="is-boolean">
+              <span>{locale === "zh-CN" ? "跨轮差分" : "Cross-turn delta"}</span>
+              <input aria-label={locale === "zh-CN" ? "在受支持宿主中自动使用跨轮差分" : "Use cross-turn delta automatically on supported hosts"}
+                type="checkbox" role="switch" checked={(selectedCurrent?.delta_delivery ?? selected.default?.delta_delivery ?? "auto") === "auto"} disabled={Boolean(busy) || !editorAvailable}
+                onChange={(event) => void setContextDelivery(event.target.checked ? "auto" : "off", "delta_delivery")} />
             </label></div>
-            <p role="status">{selectedCurrent?.mode === "on"
-              ? locale === "zh-CN" ? "已为 Codex 保存开启偏好；宿主就绪与实际使用尚未验证。" : "Codex preference is on; host readiness and actual use are not verified."
-              : locale === "zh-CN" ? "Codex 未开启。" : "Off for Codex."}</p>
-            <ContextHelp label={locale === "zh-CN" ? "Codex 支持范围与生效条件" : "Codex support and activation requirements"}><p>{locale === "zh-CN"
-              ? "目前仅支持 Codex App 心跳和 benchmark 心跳，无法确认或不支持的跑法报错。保存偏好不代表当前会话已采用差分，也不会改变其他应用或显式关闭的实验。宿主准备就绪且旧上下文完整时才使用差分，否则保留完整上下文。私有存储与会话隔离自动管理；每轮回执显示实际传输方式。"
-              : "Currently supports only Codex App and benchmark heartbeats; unknown or unsupported declarations return an error. Saving a preference does not establish use in the current session or change other applications or explicitly disabled runs. Delta requires a ready host and complete retained context; otherwise full context is preserved. Private storage and session isolation are automatic; each delivery reports its actual mode."}</p></ContextHelp>
+            <ContextHelp label={locale === "zh-CN" ? "上下文开关的支持范围与生效条件" : "Context support and activation requirements"}><p>{locale === "zh-CN"
+              ? "渐进读取先提供当前要求，支持材料按需展开，适用于所有宿主。跨轮差分独立控制：仅在受支持的 POSIX Codex App／SSH、benchmark 心跳已保留完整旧上下文时自动使用，否则恢复完整当前输入。关闭偏好和实验显式关闭均继续生效。保存不会安装 hook、启动实验或证明当前会话已采用差分。"
+              : "Progressive reads present current requirements before expandable supporting material on every host. Cross-turn delta is independent: automatic reuse requires a supported POSIX Codex App/SSH or benchmark heartbeat and complete retained context; otherwise the current full input is restored. Saved off preferences and explicit experiment opt-outs remain effective. Saving installs no hook, starts no experiment and does not prove current-session delta use."}</p></ContextHelp>
           </section> : null}
           {editorAvailable && selected.capability_id !== "context_delivery" ? <>{editorMode === "json" || !selected.configuration_editor.fields.some((field) => field.key === "enabled" && field.input_kind === "boolean") ? <div className="personal-capability-editor-mode">
             <button disabled={Boolean(busy)} onClick={() => changeMode(editorMode === "guided" ? "json" : "guided")} type="button">

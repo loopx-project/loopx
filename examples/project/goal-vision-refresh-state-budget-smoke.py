@@ -62,6 +62,8 @@ def write_fixture(root: Path) -> tuple[Path, Path, Path]:
                         "status": "active",
                         "repo": str(project),
                         "state_file": state_file,
+                        # This fixture isolates vision authoring from Stride review.
+                        "execution_profile": {"stride_strategy": "off"},
                         "adapter": {"kind": "fixture", "status": "connected-read-only"},
                         "authority_sources": [],
                         "coordination": {
@@ -173,6 +175,8 @@ def run_quota(registry_path: Path, runtime: Path) -> dict:
             "json",
             "quota",
             "should-run",
+            "--context-delivery",
+            "off",
             "--goal-id",
             GOAL_ID,
             "--agent-id",

@@ -85,13 +85,16 @@ def capability_configuration_editor(
     # effort the owning namespace would reject.
     steward_endpoints, steward_efforts = _steward_executor_editor_options()
     from .native_chat.machine_defaults import codex_profile_options
-    from ..control_plane.turn_driver.codex_context import CONTEXT_DELIVERY_SETTINGS
     definitions: dict[str, dict[str, Any]] = {
         "context_delivery": {
             "supported_scopes": ["machine"], "writable_scopes": ["machine"],
-            "fields": [_field("mode", "Codex App / benchmark heartbeats", "select",
-                options=CONTEXT_DELIVERY_SETTINGS, required=True,
-                description="On accepts only declared Codex App or benchmark heartbeats. Native host setup is still required; unsupported or unknown modes return an error.")],
+            "fields": [
+                _field("mode", "Context presentation", "select",
+                    options=("off", "on"), required=True,
+                    description="Present current requirements before expandable supporting material on every host. Off keeps complete inline delivery."),
+                _field("delta_delivery", "Cross-Turn Delta", "select", options=("off", "auto"), required=True,
+                    description="Auto reuses exact saved captures only on supported continuity hosts. Off leaves progressive presentation enabled. Neither choice proves retained model input."),
+            ],
         },
         "codex_chat": {
             "supported_scopes": ["machine"], "writable_scopes": ["machine"],

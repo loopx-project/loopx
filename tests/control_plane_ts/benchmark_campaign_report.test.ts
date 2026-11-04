@@ -113,3 +113,60 @@ test('same-attempt recovered error is not a terminal failure', () => {
   const e=buildReport(d).summary[0].first_attempt_execution;
   assert.equal(e.outcomes.normal_end,1);assert.equal(e.outcomes.runtime_failure,0);
 });
+
+test('effort and score-time samples preserve coverage and unknowns', () => {
+  const d=fixture();
+  d.selection[0].effort={duration_ms:3_600_000,token_count:1200,model_request_count:null,evidence_ref:'usage:a-one'};
+  d.selection[0].score_samples=[
+    {elapsed_ms:60_000,value:10,normalization_id:'scale-one',evidence_ref:'score:first'},
+    {elapsed_ms:3_600_000,value:40,normalization_id:'scale-one',evidence_ref:'score:last'},
+  ];
+  const r=buildReport(d);
+  assert.deepEqual(r.summary[0].effort,{duration_known_runs:1,duration_ms:3_600_000,
+    token_known_runs:1,token_count:1200,model_request_known_runs:0,model_request_count:0,complete_runs:0});
+  assert.equal(r.score_time_series.length,2);assert.equal(r.score_time_series[1].run_id,'a-one');
+  assert.match(renderMarkdown(r),/1\.00/);assert.match(renderMarkdown(r),/未知不按零计/);
+  assert.match(renderMarkdown(r),/0\/3 \| — \| 0\/3 \| —/);
+  assert.match(renderCsv(r),/3600000/);
+});
+
+test('effort and score-time samples reject malformed measurements', () => {
+  const d=fixture();
+  d.selection[0].effort={duration_ms:null,token_count:null,model_request_count:null,evidence_ref:'usage:none'};
+  assert.throws(()=>buildReport(d),/entirely unknown/);
+  d.selection[0].effort={duration_ms:1,token_count:2,model_request_count:3,evidence_ref:'usage:ok'};
+  d.selection[0].score_samples=[
+    {elapsed_ms:2,value:10,normalization_id:'scale-one',evidence_ref:'score:2'},
+    {elapsed_ms:1,value:20,normalization_id:'scale-one',evidence_ref:'score:1'},
+  ];
+  assert.throws(()=>buildReport(d),/elapsed time must increase/);
+});
+
+test('configuration profiles preserve unknowns and split heterogeneous runs', () => {
+  const d=fixture();
+  d.selection[0].configuration={source_revision_id:'source@one',scorer_revision_id:'scorer@one',
+    model_id:'model-one',budget_ms:64_800_000,active_submission_cooldown_ms:3_600_000,
+    background_evaluation_interval_ms:300_000,resource_profile:'cpu4-mem16g',evidence_ref:'manifest:a-one'};
+  d.selection[1].configuration={source_revision_id:'source@two',scorer_revision_id:'scorer@one',
+    model_id:'model-one',budget_ms:64_800_000,active_submission_cooldown_ms:3_600_000,
+    background_evaluation_interval_ms:null,resource_profile:null,evidence_ref:'manifest:a-two'};
+  const r=buildReport(d);
+  const a=r.configuration_profiles.filter(p=>p.arm_id==='a');
+  assert.equal(a.length,3);assert.deepEqual(a.map(p=>p.run_count).sort(),[1,1,1]);
+  assert.equal(a.find(p=>p.source_revision_id==='source@two')?.background_evaluation_interval_ms,null);
+  assert.equal(a.find(p=>p.configuration_supplied===false)?.run_count,1);
+  const markdown=renderMarkdown(r);
+  assert.match(markdown,/运行配置矩阵/);assert.match(markdown,/未知/);assert.match(markdown,/同一组出现多行/);
+  assert.match(renderCsv(r),/source_revision_id/);assert.match(renderCsv(r),/manifest:a-one/);
+});
+
+test('configuration requires typed public-safe fields and evidence', () => {
+  const d=fixture();
+  d.selection[0].configuration={source_revision_id:'source',scorer_revision_id:'scorer',model_id:'model',
+    budget_ms:1,active_submission_cooldown_ms:2,background_evaluation_interval_ms:3,
+    resource_profile:'cpu4',evidence_ref:''};
+  assert.throws(()=>buildReport(d),/configuration evidence/);
+  d.selection[0].configuration.evidence_ref='manifest:one';
+  d.selection[0].configuration.budget_ms=-1;
+  assert.throws(()=>buildReport(d),/configuration numeric/);
+});

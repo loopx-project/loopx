@@ -537,3 +537,56 @@ def test_generic_ack_and_material_settlement_share_state_lock(
     inbox = tmp_path / ".loopx" / "inbox" / "lark" / "material-review"
     processed = json.loads((inbox / "processed.json").read_text(encoding="utf-8"))
     assert set(processed["message_ids"]) == {"om_material_text", "om_direct"}
+
+
+def test_processed_state_path_damage_never_reopens_acknowledged_events(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    _ingest(tmp_path, config)
+    acknowledge_lark_event_inbox(
+        project=tmp_path,
+        config_path=config,
+        message_ids=["om_direct"],
+        execute=True,
+    )
+    inbox = tmp_path / ".loopx" / "inbox" / "lark" / "material-review"
+    processed = inbox / "processed.json"
+    processed.unlink()
+    processed.mkdir()
+
+    with pytest.raises(IsADirectoryError):
+        inspect_lark_event_inbox(project=tmp_path, config_path=config)
+    with pytest.raises(IsADirectoryError):
+        project_lark_event_inbox_urgency(project=tmp_path, config_path=config)
+    with pytest.raises(IsADirectoryError):
+        acknowledge_lark_event_inbox(
+            project=tmp_path,
+            config_path=config,
+            message_ids=["om_direct"],
+        )
+
+
+def test_material_review_receipt_path_damage_is_not_an_empty_ledger(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    _ingest(tmp_path, config)
+    receipts = (
+        tmp_path
+        / ".loopx"
+        / "inbox"
+        / "lark"
+        / "material-review"
+        / "material-review"
+        / "receipts.json"
+    )
+    receipts.mkdir(parents=True)
+
+    with pytest.raises(IsADirectoryError):
+        settle_lark_event_inbox_material_review(
+            project=tmp_path,
+            config_path=config,
+            message_id="om_material_text",
+            no_follow_up_reason="Reviewed before ledger damage.",
+        )

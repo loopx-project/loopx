@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -901,15 +902,16 @@ def test_private_validation_store_is_owner_only_and_detects_tampering(
         todo_id="todo_private_validation",
     )
 
-    assert path.stat().st_mode & 0o777 == 0o600
-    assert (
-        read_completion_validation_declaration(
-            runtime_root=tmp_path,
-            goal_id=GOAL_ID,
-            todo_id="todo_private_validation",
-        )
-        == declaration
-    )
+    if os.name == "posix":
+        assert path.stat().st_mode & 0o777 == 0o600
+    else:
+        from tests.control_plane.windows_private_acl import assert_private_acl
+        assert_private_acl(path)
+    assert read_completion_validation_declaration(
+        runtime_root=tmp_path,
+        goal_id=GOAL_ID,
+        todo_id="todo_private_validation",
+    ) == declaration
     assert digest == completion_validation_declaration_sha256(declaration)
 
     stored = json.loads(path.read_text(encoding="utf-8"))

@@ -4,6 +4,8 @@ import {reportDownloadScenario} from "./personal-workspace-browser/report-downlo
 import { selectScenarioShard } from "./personal-workspace-browser/shard.mjs";
 import {completedHistoryIsolationScenario} from "./personal-workspace-browser/completed-history-isolation.mjs";
 import {researchWorkerReadbackScenario} from "./personal-workspace-browser/research-worker-readback.mjs";
+import {researchTurnCostsScenario} from "./personal-workspace-browser/research-turn-costs.mjs";
+import {researchToolContextScenario} from "./personal-workspace-browser/research-tool-context.mjs";
 import { zcodeGoalScenario } from "./personal-workspace-browser/zcode-goal.mjs";
 import {goalWorkspaceCreateScenario} from "./personal-workspace-browser/goal-workspace-create.mjs";
 import {agentModelSelectionScenario} from "./personal-workspace-browser/agent-model-selection.mjs";
@@ -73,6 +75,7 @@ import { managedGoalResultsScenario } from "./personal-workspace-browser/managed
 import { researchResultsScenario } from "./personal-workspace-browser/research-results.mjs";
 import { researchModeScenario } from "./personal-workspace-browser/research-mode.mjs";
 import { researchHistoryScenario } from "./personal-workspace-browser/research-history.mjs";
+import { researchRealBenchmarkScenario } from "./personal-workspace-browser/research-real-benchmark.mjs";
 import { researchFindingReaderScenario } from "./personal-workspace-browser/research-finding-reader.mjs";
 import { researchRecordSearchScenario } from "./personal-workspace-browser/research-record-search.mjs";
 import { researchRouteReadingScenario } from "./personal-workspace-browser/research-route-reading.mjs";
@@ -130,8 +133,10 @@ scenarioCatalog.push(configurationBackupScenario);
 scenarioCatalog.push(exploreCompositionOwnerScenario);
 scenarioCatalog.push(attentionUserActionScenario);
 scenarioCatalog.push(researchResultsScenario);
+scenarioCatalog.push(researchRealBenchmarkScenario);
 scenarioCatalog.push(researchHistoryScenario);
 scenarioCatalog.push(researchMeasurementsScenario);
+scenarioCatalog.push(researchToolContextScenario, researchTurnCostsScenario);
 scenarioCatalog.push(researchNativeReadingScenario);
 scenarioCatalog.push(researchFindingReaderScenario);
 scenarioCatalog.push(researchRecordSearchScenario);

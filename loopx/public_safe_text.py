@@ -301,6 +301,8 @@ PROVIDER_TOKEN_SHAPE_PATTERN_SOURCE = (
     r"\bxox[baprs]-[a-z0-9-]{10,}|"
     r"\baiza[a-z0-9_-]{20,}|"
     r"\b(?:sk|rk)_(?:live|test)_[a-z0-9]{12,}|"
+    r"\bsk-(?:proj|svcacct|admin)-[a-z0-9_-]{20,}|"
+    r"\bsk-ant-[a-z0-9_-]{20,}|"
     r"\bnpm_[a-z0-9]{20,}|"
     r"\bpypi-[a-z0-9_-]{20,}|"
     r"\beyj[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}\b"

@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import json
 import re
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
 
 from ...file_lock import exclusive_cross_runtime_file_lock, exclusive_file_lock
 from ..coordination.shadow_management import (
@@ -123,12 +124,12 @@ def load_loopx_turn_plan_from_journal(
     if not isinstance(plan, dict):
         raise TypeError("LoopX Turn resume journal does not contain a plan")
     transaction = (
-        plan.get("transaction") if isinstance(plan.get("transaction"), dict) else {}
+        cast(dict[str, Any], plan.get("transaction")) if isinstance(plan.get("transaction"), dict) else {}
     )
     if transaction.get("turn_key") != turn_key or journal.get("turn_key") != turn_key:
         raise ValueError("LoopX Turn resume journal has mismatched turn lineage")
     envelope = (
-        plan.get("turn_envelope") if isinstance(plan.get("turn_envelope"), dict) else {}
+        cast(dict[str, Any], plan.get("turn_envelope")) if isinstance(plan.get("turn_envelope"), dict) else {}
     )
     if envelope.get("goal_id") != goal_id or journal.get("goal_id") != goal_id:
         raise ValueError("LoopX Turn resume journal belongs to another goal")

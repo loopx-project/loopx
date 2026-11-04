@@ -182,12 +182,12 @@ type GlobToken =
   | {kind: "question"}
   | {kind: "class"; body: string; negated: boolean};
 
-function globTokens(pattern: string): GlobToken[] {
+function globTokens(pattern: string, fold = true): GlobToken[] {
   const tokens: GlobToken[] = [];
   let literal = "";
   const flushLiteral = () => {
     if (literal.length === 0) return;
-    tokens.push({kind: "literal", folded: caseFold(literal)});
+    tokens.push({kind: "literal", folded: fold ? caseFold(literal) : literal});
     literal = "";
   };
   for (let index = 0; index < pattern.length; index += 1) {
@@ -344,21 +344,55 @@ function singleCharacterMatchLengths(symbols: readonly string[], start: number):
   return lengths;
 }
 
+/** Whether a class can supply a character after the known directory prefix. */
+function classHasMatch(body: string, negated: boolean): boolean {
+  const members = characterClass(body);
+  const intervals = [...members.ranges, ...members.literals.map(character => {
+    const code = character.codePointAt(0)!;
+    return [code, code] as const;
+  })].filter(([low, high]) => low <= high).sort(([left], [right]) => left - right);
+  if (!negated) return intervals.length > 0;
+  // Only inspect gaps, never enumerate a wide class. A gap character can still
+  // be excluded by a case-fold alias inside the class (for example A versus a).
+  let candidate = 0;
+  for (const [low, high] of [...intervals, [0x110000, 0x110000]]) {
+    for (; candidate < low; candidate += 1) {
+      if (!classMemberMatches(body, String.fromCodePoint(candidate))) return true;
+    }
+    candidate = Math.max(candidate, high + 1);
+  }
+  return false;
+}
+
 /**
  * Match against the compared path's folded code points. One original code point
  * may fold to several symbols (ß/SS), so token boundaries intentionally operate
  * on the folded stream rather than assuming one symbol per host character.
+ * A literal directory can accept a matching continuation after its final slash.
+ * No multi-symbol character fold crosses that slash, so the existing character
+ * transitions also decide prefix reachability without splitting a folded atom.
  */
-function fnmatchcase(value: string, pattern: string): boolean {
-  const symbols = [...caseFold(value)];
-  const tokens = globTokens(pattern);
+function fnmatchcase(value: string, pattern: string, descendants = false, fold = true): boolean {
+  const symbols = [...(fold ? caseFold(value) : value)];
+  const tokens = globTokens(pattern, fold);
+  const suffixPossible: boolean[] = [];
+  if (descendants) {
+    suffixPossible[tokens.length] = true;
+    for (let index = tokens.length - 1; index >= 0; index -= 1) {
+      const token = tokens[index];
+      suffixPossible[index] = suffixPossible[index + 1] &&
+        (token.kind !== "class" || classHasMatch(token.body, token.negated));
+    }
+  }
   const memo = new Map<string, boolean>();
   const match = (valueIndex: number, tokenIndex: number): boolean => {
     const key = `${valueIndex}:${tokenIndex}`;
     const cached = memo.get(key);
     if (cached !== undefined) return cached;
     let result: boolean;
-    if (tokenIndex === tokens.length) {
+    if (descendants && valueIndex === symbols.length) {
+      result = suffixPossible[tokenIndex];
+    } else if (tokenIndex === tokens.length) {
       result = valueIndex === symbols.length;
     } else {
       const token = tokens[tokenIndex];
@@ -368,20 +402,22 @@ function fnmatchcase(value: string, pattern: string): boolean {
       } else if (valueIndex === symbols.length) {
         result = false;
       } else if (token.kind === "question") {
-        result = singleCharacterMatchLengths(symbols, valueIndex)
+        result = (fold ? singleCharacterMatchLengths(symbols, valueIndex) : [1])
           .some((length) => match(valueIndex + length, tokenIndex + 1));
       } else if (token.kind === "class") {
-        const lengths = classMatchLengths(token.body, symbols, valueIndex);
+        const lengths = fold ? classMatchLengths(token.body, symbols, valueIndex)
+          : classContains(characterClass(token.body), symbols[valueIndex]) ? [1] : [];
         result = token.negated
-          ? singleCharacterMatchLengths(symbols, valueIndex).some((length) =>
+          ? (fold ? singleCharacterMatchLengths(symbols, valueIndex) : [1]).some((length) =>
             !lengths.includes(length) && match(valueIndex + length, tokenIndex + 1))
           : lengths.some((length) => match(valueIndex + length, tokenIndex + 1));
       } else {
         const literal = [...token.folded];
         const end = valueIndex + literal.length;
-        result = end <= symbols.length &&
-          literal.every((symbol, index) => symbols[valueIndex + index] === symbol) &&
-          match(end, tokenIndex + 1);
+        const compared = literal.slice(0, symbols.length - valueIndex);
+        result = compared.every((symbol, index) => symbols[valueIndex + index] === symbol) &&
+          (end <= symbols.length ? match(end, tokenIndex + 1)
+            : descendants && suffixPossible[tokenIndex + 1]);
       }
     }
     memo.set(key, result);
@@ -407,11 +443,13 @@ function scopePairOverlaps(left: string, right: string): boolean {
   const leftGlob = ["*", "?", "["].some((token) => left.includes(token));
   const rightGlob = ["*", "?", "["].some((token) => right.includes(token));
   if (leftGlob && !rightGlob) {
+    if (right.endsWith("/")) return fnmatchcase(right, left, true);
     const prefix = scopeLiteralPrefix(left);
     return fnmatchcase(right, left) ||
       (prefix.endsWith("/") && equal(right.replace(/\/$/u, ""), prefix.replace(/\/$/u, "")));
   }
   if (rightGlob && !leftGlob) {
+    if (left.endsWith("/")) return fnmatchcase(left, right, true);
     const prefix = scopeLiteralPrefix(right);
     return fnmatchcase(left, right) ||
       (prefix.endsWith("/") && equal(left.replace(/\/$/u, ""), prefix.replace(/\/$/u, "")));
@@ -747,4 +785,9 @@ export function materializeTaskLeaseAcquire(identity: {goal_id: string; todo_id:
     acquired_at: at, updated_at: at,
     expires_at: new Date(now.valueOf() + command.ttl_seconds * 1000).toISOString().replace(/\.\d{3}Z$/u, "Z"),
     status: "active"};
+}
+
+/** Goal allow scopes use case-sensitive fnmatch, unlike folded lease overlap. */
+export function schedulingWriteScopeAllowed(required: string, allowed: readonly string[]): boolean {
+  return !required || allowed.some(pattern => pattern === required || fnmatchcase(required, pattern, false, false));
 }

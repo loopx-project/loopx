@@ -1,5 +1,9 @@
 # Required work context
 
+For a task example, supported setup, recovery and evaluation plan, start with the
+[context-delivery guide](../guides/context-delivery.md). This reference remains
+the owner of current delivery semantics.
+
 This page specifies current delivery behavior. The
 [unified-contract RFC](../architecture/rfcs/controller-executor-unified-contract-v0.md)
 proposes one full/delta/detail/recovery pipeline across entrypoints. Its
@@ -10,6 +14,22 @@ The proposed shared composition boundary preserves source revisions and pending
 read obligations before capture. Recovering delivery from that immutable capture
 does not refresh authority; a legitimate new selection/authority check remains
 distinct from retrying transport.
+
+The RFC's [two-layer delivery design](../architecture/rfcs/controller-executor-unified-contract-v0.md#differential-context)
+proposes host-independent Progressive defaults, independent qualified Delta and
+current-capture discovery of unread material, with an explicit legacy/off
+migration matrix. Those changes are **not shipped by this page**: current defaults
+and `context_delivery` on/off behavior below remain in force. Current selected
+reads already reach the complete capture; calling a reader or reaching EOF alone
+does not prove model-visible delivery, retention or adoption. Native saved-file
+Delta keeps its existing artifact proof without a full-model-read prerequisite.
+
+中文：RFC 的[双层交付设计](../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md#差分上下文)
+提议跨 Host 默认 Progressive、独立资格化 Delta，以及从当前 capture 发现未读材料，
+并明确旧配置/off 迁移矩阵。这些变更**尚未由本页交付**，下文当前默认值和
+`context_delivery` on/off 行为继续有效。当前选读已能到达完整 capture；调用 reader
+或到达 EOF 本身不证明模型可见交付、retention 或采用。原生文件 Delta 仍按既有产物
+证明复用，不增加模型全量读取前置。
 
 The RFC's [candidate context by decision stage](../architecture/rfcs/controller-executor-unified-contract-v0.md#candidate-context-by-decision-stage)
 proposes complete captured alternatives with discoverable decision facts and
@@ -72,7 +92,7 @@ change receipt replay validation or declare a model-input/token saving.
 Unmarked or mixed ownership keeps the original full progressive read in
 `agent_channel.required_reads`. Malformed markers, non-generated content inside
 a marked region, unavailable files and invalid UTF-8 fail closed. Unknown
-narrative is never classified by headings or clipped to a size budget. For default-off and signed-envelope callers, read all
+narrative is never classified by headings or clipped to a size budget. For explicit-off and signed-envelope callers, read all
 delivered context and remaining reads before dependent work; changed sources need
 a fresh guard. Enabled scoped acceptance does not replace original Goal intent.
 
@@ -154,6 +174,175 @@ input-byte coverage, a new baseline, renewed authority or proof of freshness or
 model retention. These separate boundaries prevent transport loss from becoming
 either a repeated full-input loop or permission to act on missing requirements.
 No token savings or accepted outcome gains follow from instruction delivery alone.
+
+Reader commands emitted by native quota, saved-context projection, bounded
+settlement results and a running `context-read` keep the explicit CLI selection,
+or the current Python interpreter when no CLI was specified. This covers initial
+navigation, complete reads, continuations and rejected-selection recovery.
+Capture bytes, digests, cursors and authority are unchanged; native full/delta
+byte comparisons include this reader command metadata. Existing in-process
+reference constructors keep their default command route.
+
+An enabled native **full or delta** reference for a recognized decision can include
+`first_read_command`, reading its current full capture without an older baseline.
+It batches current admission/stop facts, the current action, the selected task,
+whole Goal/Todo narrative, source availability/revisions and read routes. Detailed
+history and optional authoring recipes remain expandable from the same capture.
+Current narrative sources and their provenance precede other sources, including
+large scoped preferences; both retain their complete selected values.
+The preference source's complete `current` view also stays in the initial read:
+corrections, retirement/expiry and empty replacements retain their provenance,
+revision and advisory authority. This captured pre-work view does not replace the
+preference owner's fresh exact-scope read before a later preference-dependent
+external action, and neither delivery nor a preference grants authority.
+The existing bounded `unfinished_delegations` projection and `read_complete`
+flag also remain visible. Adoption or a queued return does not establish
+completion. Pending peer results, counts, omitted items and unavailable
+observations retain their source semantics. Full request bodies stay on demand and must be
+read before assessing, executing or returning a request; the initial view does
+not consume a result or grant authority.
+It also exposes existing outcome material addresses and the current settlement
+plan's obligations, including unknown step fields. Only attachments explicitly
+marked `required=false` defer their guidance/templates; their routes stay visible
+and the complete captured attachment must be read before use. Unknown plan
+versions remain whole. Initial pages do not repeat pointers already present in
+their content; the selection digest still prevents a full-input receipt.
+Its `context-read --initial-read` uses the same exact-address selector. New private
+selection references pin the resolved addresses and complete selection digest;
+continuations use the existing explicit reader instead of rerunning initial
+navigation. A later navigation change cannot replace the saved selection.
+Historical recipe-only references and explicit-file initial cursors still reject
+a changed selection digest; recover through the same original full-capture
+reference, without another admission or rewriting the saved descriptor. These
+legacy readers still require reconciliation of their unfinished original Turns
+before retirement; this slice retains their decoder and full-capture recovery.
+Initial navigation can replace fully
+selected children with their complete captured parent to avoid repeating addresses.
+An unselected child, including optional or unknown material, prevents that merge.
+An array also stays separate when merging would restore an earlier element order
+and undo the owner's reading priority; ancestors cannot erase that boundary.
+The selected facts and obligations stay identical. Explicit selectors and index
+entries keep their original addresses. The option is read-only and exclusive with explicit
+selectors or discovery; unknown schemas use generic discovery.
+Pinned explicit references replay their recorded address order after the same
+canonical address validation. Older descriptors may contain caller-ordered
+addresses but a digest of canonical output: only after a digest mismatch, the
+reader tries that original canonical planner once over the same verified source
+and address set. Only exact matching bytes are returned. This may add one
+read-only planner call per legacy page; it adds no model-input receipt or state
+write. Historical recipe-only references and raw initial cursors keep their
+strict profile-change refusal and full-capture recovery.
+The existing internal `context_select` request accepts the validated boolean
+`preserve_selection_order` for this rendering step. Public explicit selectors
+and diagnostics are unchanged; the stored descriptor shape and CLI options are
+unchanged.
+Initial selections retain the typed owner's priority rather than alphabetical
+pointer order. Current controls, required sources and settlement obligations
+precede the complete unread-material index. A coalesced parent keeps
+its first selected child's position; explicit selectors retain canonical order.
+This reorders the same selected facts without reducing the total body or
+guaranteeing that all requirements fit one page. Earlier initial-selection
+digests still reject a changed profile; recover from the original full capture.
+The concrete first read replaces the broad scalar preview and root index when it
+fits; unknown schemas or a tight reference budget keep generic discovery. A warm
+delta's existing `command` still reads its wire delta; its initial read and
+recovery read current facts directly. Disabled native delivery is unchanged.
+This is a starting selection, not all required sources: read applicable criteria,
+evidence and the complete operation/settlement contract before depending on them.
+The original SHA-bound full recovery remains available; a selected page's EOF
+does not prove complete source delivery, model retention or fresh authority.
+
+When the existing acceptance owner supplies complete `outcome_context`
+navigation matching this capture's Goal, Agent, selected Todo, outcome revision
+and provider revision, the initial read expands its suggested outcomes in full
+as present in the required view, including cross-Agent dependencies and unknown
+outcome fields. Other outcomes retain their existing addresses; this is reading
+guidance, not proof of independence or permission to skip applicable criteria.
+Incomplete, mismatched, ambiguous or unavailable navigation keeps the existing
+index/detail route. Folded supporting material still has its original read
+obligations. The generic reader needs no Session Hook for this selection;
+activation defaults, saved files, Delta and full-read receipts are unchanged.
+
+中文：已启用原生传输的 full 或 delta 引用可给出 `first_read_command`，直接读取本次
+完整捕获，无须先读旧基线。首读合并当前准入、停止条件、动作、任务和完整 Goal/Todo
+正文，以及来源状态、版本与读取入口；正文来源及其 provenance 先于其他来源，
+包括较大的 scoped preferences，双方完整选中值均保留。历史和可选格式说明仍在
+同一捕获中按需展开。它是起始选读，不代表已读全部必要来源；依赖具体验收、证据或
+执行/结算契约前仍须完整读取。
+偏好来源的完整 `current` 视图也直接呈现：纠偏、退役/过期和空视图替换均保留
+原来源、版本及 advisory 权限边界。本次捕获的工作前视图不能替代偏好 owner 要求的
+后续偏好相关外部动作前精确作用域新读；偏好及其交付均不授予权限。
+未知 schema 和过小引用预算保留既有路线；warm delta 的 `command` 仍读取原 wire delta，
+首读和恢复入口直接读取当前事实。
+关闭原生传输的输出不变；完整恢复和原 SHA 校验均保留。只读的 `--initial-read` 不与
+显式选读或索引混用。新私有选读引用固定已解析路径和完整选读摘要，续页复用显式
+reader，不重新运行首读导航；后续导航改变不能替换原选读。历史仅保存导航配方的引用
+及显式文件首读游标在选读摘要变化时仍拒绝，沿同一完整原 capture 引用恢复，不重新
+准入或改写旧描述文件。退役这些 legacy reader 前仍须对账原未完成 Turn；本切片
+保留历史解码与完整捕获恢复。
+原生 quota、已保存上下文投影、有界结算结果和实际运行的 `context-read` 生成读取
+命令时，保留显式指定的 CLI；未指定 CLI 则使用当前 Python 解释器。首读导航、
+完整读取、续页及选读拒绝恢复均沿用该程序。捕获正文、摘要、游标和权限不变，原生
+full/delta 字节比较计入这些 reader 命令元数据；既有进程内引用构造器保留默认路由。
+首读可把已经完整选中的同级内容合并为其完整父节点，减少地址重复；任何未选中的
+可选或未知内容都会阻止合并；若数组合并会恢复原元素顺序、覆盖 owner 的读取优先级，
+该数组及其祖先也不合并。选中事实和义务不变。显式选读和索引仍保留原地址。
+固定显式引用在既有规范地址校验后，按记录的地址顺序重放。旧描述符若保存调用方顺序
+却绑定规范排序正文的摘要，仅在摘要不匹配后，对同一已验证来源及相同地址集合重试
+一次原规范 planner；只返回摘要完全匹配的字节。此兼容路径每个旧分页最多增加一次
+只读 planner 调用，不写状态或证明模型输入覆盖。历史 recipe-only 引用和原始首读
+游标仍在 profile 变化时严格拒绝，并保留完整捕获恢复。既有内部 `context_select`
+请求为重放接受严格 boolean 的 `preserve_selection_order`；公开显式选读及错误诊断
+不变，reader 描述符字段结构和 CLI 选项不变。
+首读按 TypeScript owner 的优先顺序呈现，不再按指针字母序重排；当前控制条件、必读
+来源和结算义务先于完整的未读材料索引。合并父节点保留首个已选子节点的位置，
+显式选读仍按既有规范排序。这只调整相同事实的顺序，不缩减总正文，也不保证全部
+要求能放入一页。旧首读选读摘要遇到 profile 变化仍拒绝混读，可从原完整捕获恢复。
+首读也给出现有验收材料地址和当前结算义务。仅明确 `required=false` 的附件延后完整
+说明与模板，使用前须读原附件；未知计划保留全文。首读分页不重复正文中的指针，
+选读摘要仍阻止将它记作完整输入。
+已有的有界 `unfinished_delegations` 投影和 `read_complete` 标记也直接呈现；采纳和
+回传入队不等于完成。待对端结果、计数、遗漏和不可用观测保留原来源语义。
+完整请求按需读取，评估、执行或回传前仍须读其全文；首读不消费结果，也不授予权限。
+
+既有 acceptance owner 给出的完整 `outcome_context` 导航，与当前 capture 的 Goal、
+Agent、所选 Todo、成果版本及 provider revision 一致时，首读完整展开其建议成果在
+必读视图中的正文，包括跨 Agent 依赖和未知成果字段；其他成果仍保留原地址。这是读取
+建议，不证明相互独立，也不允许省略适用要求。导航不完整、错配、歧义或不可用时保留
+原索引/详情路线；折叠的支持材料仍遵守原读取义务。此选读使用无需 Session Hook 的
+通用 reader，不改变启用默认值、落盘文件、Delta 或完整读取回执。
+
+For supporting fields folded by the existing native Progressive owner,
+`context_details.unread_context_index` contains the current complete
+`projection.json` source path/digest and exact `pointers`. The initial reader
+shows that index; a file-backed warm delta repeats it in full even when its
+pointers are unchanged. Each pointer uses the ordinary `context-read`
+`--capture-file`, `--capture-sha256` and `--select` route, independently of any
+previous packet, retained model input or patch chain. These addresses belong to
+the complete source, not the derived `required-context.json` recovery view.
+
+`coverage_confirmed=false` conservatively reports no trusted model-visible
+coverage witness. A previous select, reader EOF or file receipt does not clear
+an entry or create `confirmed_read_sections`/`consumed_pointers` state.
+`read_before_dependent_work` preserves the original obligation to read material
+when the decision or verification needs it; it is not an automatic full-read or
+execution gate. Updated/reordered material binds to its current addresses;
+removed material does not retain a predecessor route. The actual index and
+guidance count toward the existing byte guard, including fallback to the
+complete file when folding is not smaller. In-view deduplication alone adds no
+index. This bounded native slice changes no activation defaults or off path;
+cross-host rollout and trusted coverage observation remain C1/C2 work.
+
+中文：现有原生 Progressive owner 折叠的支持字段，在
+`context_details.unread_context_index` 中列出当前完整 `projection.json` 的路径、
+摘要和精确 `pointers`。首读呈现该索引；文件 warm delta 即使指针未变也完整重发。
+各指针通过普通 `context-read --capture-file ... --capture-sha256 ... --select ...`
+独立读取，不依赖旧包、模型保留或补丁链；它们属于完整源，不属于派生 required view。
+`coverage_confirmed=false` 表示没有可信模型可见覆盖见证，选读、EOF或文件回执不会
+清除条目，也不新建已读账本。`read_before_dependent_work` 保留原先按决策/验证需要
+读取的义务，不成为自动全读或执行门。变化/重排绑定当前地址，移除材料不沿用前序入口。
+索引和指导计入原字节守卫，不更小时回退完整文件；仅视图内去重不新增索引。本原生切片
+不改启用默认值或 off 路径，跨宿主推广和可信覆盖观察仍属 C1/C2 未完成工作。
 
 Checkpoint Host preflight uses the hidden `--defer-context-presentation` option
 with an explicitly enabled native JSON `should-run` capture. It collects the
@@ -327,7 +516,7 @@ statements, source quotes and source references. Each read still supplies the
 current revision, membership, keys, lifecycle state, expiry, operation lineage
 and unknown fields literally; an empty view replaces earlier preferences.
 The existing scope-less preference hook uses the validated capture's exact
-Goal/Agent binding, without adding fields to ordinary/default-off producer output
+Goal/Agent binding, without adding fields to ordinary/disabled producer output
 or parsing its read command. Explore retains its explicit scoped hook identity.
 Unknown, failed, incompatible or ambiguous hook views stay complete. A changed
 scope or lost baseline still selects full delivery; reuse never makes a retired
@@ -371,7 +560,7 @@ the reconstructed context must still match its complete digest. Cold delivery,
 session invalidation and authority remain unchanged. This saves transport only;
 it does not establish model retention, billed-token savings or useful outcomes.
 
-These are presentation rules within the existing default-off option, not a new
+These are presentation rules within the existing native option, not a new
 configuration or admission policy. A missing continuity basis, a changed epoch, a damaged
 patch or an incompatible reader automatically recovers the same original full
 capture. Recovery never reruns the guard, asks the owner, spends quota or grants
@@ -385,26 +574,45 @@ the existing Turn or its recovery files.
 
 ### Machine default
 
-**Settings → This machine → Capabilities → Differential context → Codex** uses the
-existing revision-locked preview, apply and readback operations in one switch action.
-Switching off uses the same transaction. A saved preference does not certify native
-host setup or actual delta use; the settings view states this explicitly. Its
-`context_delivery` machine namespace accepts
-`{"schema_version":"context_delivery_machine_defaults_v0","mode":"off"}` or
-the same object with `"mode":"on"`. The CLI exposes that same owner through
-`machine-config preview/apply --namespace context_delivery --config-json FILE`;
-apply requires the exact preview revision. Removing the namespace restores off.
-Sibling settings and Goal records are preserved. The application row selects Codex
-within this capability; the existing `mode` remains that Codex preference, with no
-additional global switch or host configuration authority. Read-only editors cannot
-save it. The UI does not alter other hosts or initialize the current native session.
+**Settings → This machine → Capabilities → Progressive context** exposes progressive
+reads (`mode`) and cross-Turn reuse (`delta_delivery`). It uses the same
+revision-locked preview, apply, readback, disable and rollback owner. Read-only
+editors cannot save; sibling settings and Goal records remain unchanged. No choice
+installs hooks, trusts a host or proves actual delivery or model retention.
 
-An explicit `--context-delivery on|off` wins; otherwise each invocation reads the
-machine default, with off when absent. The existing worker environment's explicit
-`LOOPX_CONTEXT_DELIVERY=off` also overrides inheritance; environment on alone does
-not enable delivery. Benchmark trials keep their existing `context_delivery=on`
-opt-in. Workers propagate the resolved trial choice, including default off, to
-both preflight and solver subprocesses without changing the caller's settings.
+The existing `context_delivery_machine_defaults_v0` namespace accepts
+`{"schema_version":"context_delivery_machine_defaults_v0","mode":"on","delta_delivery":"auto"}`.
+`mode` and `antigravity_mode` keep their `on|off` values; omitted `delta_delivery`
+defaults to `auto` and also accepts `off`. Old saved rows remain readable.
+`machine-config preview/apply --namespace context_delivery --config-json FILE`
+requires the original preview revision. Removing the namespace restores progressive
+reads, supported-host Delta AUTO and Antigravity manager history reads. Save the
+relevant off setting to keep it disabled. Manager history is delivered automatically. A trusted-owner native manager can read nonempty delivery history from a private snapshot using its permitted shell. Current facts stay inline. Existing explicit legacy `antigravity_mode=off` preferences remain effective.
+
+The CLI facade `--context-delivery auto` (also the omitted default) presents
+current requirements before expandable material across hosts. Stateless CLI,
+other declared hosts and recovery do not need native setup. A plain read-only
+`should-run` stays read-only: capture files do not create a Turn, receipt, session,
+journal or execution lease. `--delta-delivery off` independently disables Delta
+while retaining progressive reads. Delta AUTO only uses supported declared
+continuity hosts. Explicit `--context-delivery off`, a saved off or an inherited
+`LOOPX_CONTEXT_DELIVERY=off` keeps the original complete inline path. Environment
+on alone supplies no host, retention or execution proof. Private capture failure
+retains the complete current input rather than using an older capture.
+New benchmark heartbeat trials default to `context_delivery=on`; pass `off` to
+disable. Other benchmark modes remain off. Workers pin the resolved trial choice
+in preflight and solver subprocesses; existing saved/frozen trials must not be
+rewritten or reused to qualify the new default.
+
+If a supported declared Codex caller has not initialized native continuity yet
+(including a missing native session id),
+the guard still delivers its complete current capture through the file reader.
+It does not create a substitute session, journal, epoch or retained baseline;
+progressive selections remain available from that same current source. Native
+reuse starts only through the existing session/lifecycle contract. Missing
+session identity does not excuse unsafe context directories: their private-file
+checks still fail, preserving the original decision and receipt for recovery
+without another admission. Explicit off retains ordinary inline delivery.
 
 Machine consumers that parse `should_run`, selected work or settlement identities
 must explicitly request raw output on internal `quota should-run` calls using
@@ -412,7 +620,8 @@ must explicitly request raw output on internal `quota should-run` calls using
 and retain the exact registry, Goal, Agent and Turn. Enabled native output is a
 presentation/capture envelope, not a raw authority decision; a missing
 `should_run` in that envelope is not a denial. MCP settlement and Claude status
-readers use the existing `LOOPX_CONTEXT_DELIVERY=off` subprocess override, which
+readers, external scheduler workers and scheduler-hint readers use the existing
+`LOOPX_CONTEXT_DELIVERY=off` subprocess override, which
 also preserves compatibility with older CLI parsers. This does not change the
 machine preference or disable differential context for the interactive Agent.
 
@@ -420,16 +629,15 @@ machine preference or disable differential context for the interactive Agent.
 调用中通过 `--context-delivery off` 或子进程 `LOOPX_CONTEXT_DELIVERY=off`
 显式请求原始输出，并保留原 registry、Goal、Agent 和 Turn。
 开启差分后的原生输出是展示／快照封装；封装没有 `should_run` 不表示准入拒绝。
-MCP 结算和 Claude 状态读取在子进程内设置已有的 `LOOPX_CONTEXT_DELIVERY=off`，
+MCP 结算、Claude 状态读取、外部调度 worker 和调度提示读取在子进程内设置已有的 `LOOPX_CONTEXT_DELIVERY=off`，
 兼容旧版 CLI 解析器；不修改机器开关，也不关闭交互
 Agent 的差分上下文。
 
-On accepts the declared native scenarios: Codex App heartbeat (`--codex-app` or its equivalent complete scheduler
+Legacy explicit on with Delta AUTO accepts the declared native scenarios: Codex App heartbeat (`--codex-app` or its equivalent complete scheduler
 declaration), Codex App SSH Goal (`--runtime-profile codex_app_ssh_goal`), and the existing Codex benchmark heartbeat worker (`generic_cli`
 plus its explicit heartbeat worker environment). Missing, contradictory or
-unsupported Codex declarations return an error before admission. This machine
-preference is scoped to Codex: other explicitly resolved hosts keep full delivery.
-An explicit `--context-delivery on` on those hosts still errors. Declarations select
+unsupported Codex declarations still return an error before admission. Other hosts
+use the auto facade for stateless progressive reads. Declarations select
 an adapter; they do not authenticate a host or prove retained input.
 Native continuity currently requires POSIX; other platforms reject on explicitly.
 
@@ -455,6 +663,43 @@ The reference stays below 7900 serialized bytes (or the explicit smaller output
 ceiling); if metadata cannot fit, recovery retains the current capture. Reader
 pages remain independently bounded. A complete raw tool log is not proof that
 the Host retained the same bytes in model history.
+
+Each progressive `context_details.source_path` names this Turn's complete immutable
+`projection.json`, including when a warm wire omits unchanged material. The current
+`unread_context_index` preserves unobserved or changed supporting pointers and
+conservative partially read source blocks. It is navigation, not a full-read gate;
+select the facts required for the current decision from that current source.
+
+The private native journal records `consumed_pointers` and `confirmed_read_sections`
+only after byte-verified, contiguous complete delivery of a selected view, or the
+complete native input's actually included sections. Digests remain in the journal;
+they are not repeated in model-facing index rows. A list, partial page, EOF without
+earlier coverage, failed/damaged output, subagent hook or unrelated capture cannot
+acknowledge a section. Selected reads never establish a full retained-input baseline.
+Changed content remains unread; compaction or a different Goal/Agent/scope retires
+the old epoch's observations. Stateless hosts make no such observation claim and
+keep the complete current source available. These observations do not establish
+model comprehension, later retention, execution authority or billed-token savings.
+
+After the shared TypeScript codec accepts a delta, the native output adapter
+compares its final reference plus a complete explicit-file read against the
+same current full capture. The comparison includes compact JSON framing,
+UTF-8 escaping, first-page guidance, continuation commands and the active page
+budgets, while respecting the reader's existing whole-capture size limit.
+A tie, a cheaper full delivery or an unreadable delta under that budget
+uses the existing full capture when it is readable. Only the chosen view is
+registered; a full fallback keeps the same target and recovery digest and
+starts with zero delta ancestry. No additional projection or admission is run.
+This is a serialized-output-byte rule for one complete delivery, not a
+requirement to read everything or a prediction of token billing. Selective
+reads, baseline discovery, later recovery and model-retained history remain
+separate costs and decisions.
+
+File references carry the original path, digest and budgeted reader command;
+the outer view supplies navigation. The first bounded full-file page supplies
+the complete paging and truncation-recovery instructions, including when read
+directly by capture/hash in a fresh shell. Selected pages keep their scoped
+read instructions. Historical unbounded page responses retain their wire shape.
 
 The native codec's `captured_file` basis verifies the previous full file and
 compares exact versions, including unchanged control fields. It does not depend
@@ -584,6 +829,9 @@ all-Goal adoption, actual solver costs or outcome benefit.
 
 ## 中文
 
+任务示例、受支持设置、恢复与验收方案见[上下文交付指南](../guides/context-delivery.zh-CN.md)。
+当前交付语义仍由本 reference 定义。
+
 本页规定当前交付行为。[统一契约提案](../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md)
 拟让所有入口复用 full/delta/detail/recovery 流程。controller 编写的工作说明必须
 保留完整原始要求与可访问证据；实验性模型 token 目标不允许截断，也不替代来源读取义务。
@@ -669,7 +917,7 @@ context delivery 时，未标记或混合归属仅在内部桥接传路径与修
 安装后重新生成旧展开式 heartbeat 提示；此 PR 不热更新 runtime/automation，
 也不证明模型已采用或获得质量收益。回滚需恢复旧版本并重新生成提示。
 
-既有默认关闭的原生 context delivery 由同一 TypeScript codec 处理普通 quota 与
+既有原生 context delivery 由同一 TypeScript codec 处理普通 quota 与
 TurnEnvelope。在基线连续性成立的口径内，两入口仍逐轮发送 `planning_horizon.core_goal` 的
 原始目标、来源和可用性，包括目标改变或缺失。完整 `acceptance_contract` 与已登记
 规划树按精确复用、子树变化或全量交付；累计验收树不等于原始目标句。未知 horizon
@@ -708,26 +956,48 @@ quota 能力候选沿用同一精确 codec 复用已登记 Todo 的正文、标�
 
 ### 机器级默认
 
-在**设置 → 本机设置 → 能力中心 → 差分上下文 → Codex**选择关闭或开启，沿用现有
-精确修订预览、应用和读回，由一次开关操作完成；关闭也使用同一事务。
-设置页明确区分已保存偏好与尚未验证的原生初始化、实际差分使用。机器 namespace 为 `context_delivery`，配置为
-`{"schema_version":"context_delivery_machine_defaults_v0","mode":"off"}`；开启时
-把 `mode` 改为 `on`。CLI 的 `machine-config preview/apply --namespace context_delivery
---config-json FILE` 使用同一 owner；应用须带原预览修订。移除此 namespace 恢复关闭，
-不改写其他配置和 Goal 记录。应用行选择的是此能力下的 Codex；既有 `mode` 仍表示
-该 Codex 偏好，不新增总开关或宿主配置 authority。只读编辑器不能保存；界面不会
-改变其他应用或初始化当前原生会话。
+在**设置 → 本机设置 → 能力中心 → 渐进上下文**分别设置渐进读取（`mode`）、独立的跨轮差分
+（`delta_delivery`），沿用现有精确修订的预览、
+应用、读回、关闭和回滚 owner。只读编辑器不能保存；不改写其他配置和 Goal，不安装／信任 hook，
+保存偏好不证明原生初始化、实际投递或模型保留。
 
-显式 `--context-delivery on|off` 优先；省略时每次读取机器设置，未配置则关闭。
-已有 worker 环境的 `LOOPX_CONTEXT_DELIVERY=off` 也覆盖继承；环境 on 本身不启用投递。
-benchmark trial 保留既有 `context_delivery=on` 启用方式。worker 将本次运行已解析的选择
-（含默认关闭）传给预检和 solver 子进程，不改写调用方原设置。
-开启接受以下原生声明：Codex App 心跳（`--codex-app` 或等价完整调度声明）、
+既有 `context_delivery_machine_defaults_v0` namespace 接受
+`{"schema_version":"context_delivery_machine_defaults_v0","mode":"on","delta_delivery":"auto"}`。
+`mode` 与 `antigravity_mode` 保留 `on|off`；可选的 `delta_delivery` 默认为 `auto`，也可为 `off`；旧配置继续可读。
+CLI 的 `machine-config preview/apply --namespace context_delivery --config-json FILE` 仍需原预览修订。
+移除 namespace 恢复渐进读取、支持宿主的 Delta AUTO 与 Antigravity 管家历史读取；要保持关闭应保存对应 off。
+管家自动选择交付历史的读取方式。有权限读取私有快照的原生管家可按需读取已有历史，当前目标与待办仍直接可见。既有显式 `antigravity_mode=off` 偏好继续生效。
+
+CLI 的 `--context-delivery auto`（省略时也使用此门面）跨宿主先呈现当前要求，再按需展开材料。
+普通 CLI、其他已声明宿主及恢复读取不要求原生初始化；只读 `should-run` 仍不创建 Turn、回执、会话、journal 或执行 lease。
+`--delta-delivery off` 可独立关闭跨轮差分而保留渐进读取；Delta AUTO 只使用支持连续性的已声明宿主。
+显式 `--context-delivery off`、已保存的关闭及继承的 `LOOPX_CONTEXT_DELIVERY=off` 保留原完整内联路径。
+环境 on 不证明宿主、保留或执行权限。私有捕获失败时保留本次完整输入，不借用旧捕获。
+新 benchmark heartbeat trial 默认 `context_delivery=on`，指定 `off` 可关闭；其他跑法仍关闭。
+worker 把本次运行已解析的选择固定传给预检和 solver 子进程，不改写调用方原设置，
+不修改或复用旧的在途／冻结 trial 来宣称新默认合格。
+兼容的显式 on 与 Delta AUTO 接受以下原生声明：Codex App 心跳（`--codex-app` 或等价完整调度声明）、
 Codex App SSH Goal（`--runtime-profile codex_app_ssh_goal`），以及现有 Codex benchmark 心跳 worker（`generic_cli` 与其显式心跳环境）。缺失、冲突、
-不支持的 Codex 声明在准入前报错。机器偏好仅作用于 Codex；其他已明确解析的宿主
-继续完整投递，对这些宿主显式指定 `--context-delivery on` 仍报错。声明只选择 adapter，
+不支持的 Codex 声明仍在准入前报错；其他宿主通过 auto 门面使用无状态渐进读取。声明只选择 adapter，
 不证明宿主身份或上下文保留。
 当前原生连续性依赖 POSIX；其他平台显式拒绝开启。
+
+每轮 `context_details.source_path` 都指向当轮完整且不可变的 `projection.json`，暖差分也可通过
+该文件选读未变化但此前未读的内容。`unread_context_index` 保留尚未观测到完整读取或已经变化的
+支持材料指针，以及保守标记的部分未读来源块；它是导航，不是要求读完整包的 gate。
+仅在当前决策依赖相关事实前选读必要部分。
+
+私有原生 journal 的 `consumed_pointers` 与 `confirmed_read_sections` 只记录经过字节核对、
+连续完整交付的选读视图，或完整原生输入中实际包含的部分；摘要留在 journal，不反复展示给模型。
+目录、部分页、仅 EOF、失败／篡改输出、子 Agent hook、无关捕获都不构成读取确认；选读不建立全量
+模型保留基线。内容变化继续标为未读；压缩、Goal／Agent／scope 变化使旧 epoch 观测失效。
+无状态宿主不声称观测确认，完整当前来源始终可达；这些记录不证明理解、后续保留、执行权限或计费下降。
+
+受支持的 Codex 声明尚未完成原生连续性初始化时（包括尚未提供会话 id），
+guard 仍通过文件 reader 交付本次完整捕获，
+可以从同一当前来源渐进选读；不会制造替代会话、journal、epoch 或已保留基线。
+原生复用仍须由既有会话与生命周期契约建立。缺少会话标识不豁免私有目录检查：
+不安全目录仍失败，保留原决策与回执用于恢复，不重新准入。显式关闭仍完整内联交付。
 
 机器继承与显式开启的入口共用已解析 machine runtime 下的私有 `context-delivery` 目录，并按原生
 会话隔离 journal。缺失末级目录以 `0700` 创建；不跟随末级符号链接、不修改不安全目录
@@ -747,6 +1017,19 @@ SSH Goal 使用 `--runtime-profile codex_app_ssh_goal` 生成 context-config 和
 `--list` 或 `--select <pointer>`，差分投递时也直接读取当前完整捕获。
 元数据仍放不下时保留当前捕获恢复入口。读取页另受输出预算约束。
 原始工具日志完整，不证明宿主保留给模型的字节也完整。
+
+共享 TypeScript codec 接受差分后，原生输出适配层比较两种交付的最终引用与一次
+显式按文件通读的总字节数：候选差分，以及同一当前完整捕获。比较包含紧凑 JSON
+封装、UTF-8 转义、首屏读取说明、续读命令及当前分页预算，并遵守 reader 既有的
+完整捕获大小上限。全量更小、两者相等，
+或差分在该预算下无法读取而全量可读时，复用已有完整捕获。只登记最终选中的视图；
+全量回退保留相同 target 和恢复摘要，并将差分 ancestry 归零，不增加投影或准入。
+这条规则只比较一次完整交付的序列化输出字节，不要求通读，也不预测计费 token。
+选读、基线发现、后续恢复及模型历史保留仍是独立的成本与决策。
+
+文件引用保留原始路径、摘要和遵循预算的读取命令；外层视图提供导航。首个有界全文
+分页返回完整的分页与截断恢复说明，直接在新 shell 中按 capture/hash 读取也一样。
+选读页仍提供其作用域内的读取说明；历史无界分页响应保留原有 wire 结构。
 
 原生 `captured_file` 基线来自校验后的前一完整文件，可差分复用所有未变字段，包括
 控制字段；不依赖通读、EOF、模型 ACK 或保留输入声明。Goal、Agent、会话、surface、
@@ -815,6 +1098,30 @@ journal，防止短暂 IO 故障恢复后复活旧基线。不可变 capture 与
 
 ### Selected capture details / 按需读取捕获详情
 
+Enabled native navigation uses `quota context-read --reference-file <file>`.
+The immutable, private reader document keeps the full capture digest; selected
+continuations also keep the exact selection and its full digest there. The CLI
+checks both on every page, including after a later Turn or a changed reader
+profile. Its short filename is only a locator, never a truncated integrity check,
+permission or freshness claim. Missing, malformed, public or symlinked reader
+documents and capture/selection digest mismatches fail closed without admission. Selection reads may publish a derived
+private reader document beside the capture; they do not write Goal state.
+Compact selected pages use `context_capture_selection_page_v1`, with a reader
+reference and byte cursors instead of repeated hashes or pointer vectors. They
+are never full-input observations. Explicit file/hash readers and full-page
+observation receipts keep their existing schema and complete digest fields.
+The navigation document also retains the complete machine navigation metadata.
+Very small output budgets may keep the existing explicit hash reference when
+the compact navigation cannot fit; no navigation or source is truncated.
+
+已启用的原生导航通过 `--reference-file` 读取不可变私有引用；完整 capture 摘要、
+选读路径与 selection 摘要保存在本地，CLI 每页校验，跨 Turn 或 reader profile
+改变也不会混读。短文件名只负责定位，不替代完整校验，也不代表权限或新鲜度。
+引用缺失、格式错误、公开可读、为符号链接或摘要不符时拒绝读取，不重新 admission。选读可在
+捕获旁生成派生私有引用，不修改 Goal 状态。精简选读页返回引用及字节游标，使用
+独立 schema，不能作为完整输入证明；原显式文件/摘要接口及完整页证明保持兼容。
+导航引用同时保存完整机器元数据；极小输出预算保留原显式摘要引用，不截断正文或导航。
+
 `quota context-read --select /path --select /another/path` reads an explicit
 batch of RFC 6901 JSON pointers from the original digest-bound capture. Supply
 the existing `--capture-file` and `--capture-sha256` reference, or start through
@@ -856,11 +1163,33 @@ known pointer does not require another index round trip. Batch within the combin
 output budget, avoid overlapping parent/child selections, and inspect a missing
 pointer's parent before retrying the rejected batch. These are caller guidelines;
 selection validation, required reads and authority checks remain unchanged.
+When it fits the existing native-reference output ceiling, `field_index` supplies
+the complete top-level index of the current recovery capture. Its pointers,
+types, byte sizes and member counts match `context-read --list`; it contains no
+field bodies and never proves they were read. Select those pointers through
+`recovery.command`; a delta's `command` still addresses its patch. Oversized
+indexes are omitted whole, leaving `index_command` and full recovery available.
 Selection errors identify the original `--select` argument and, for a failed
 lookup, its token position (both 1-based). Sorting and duplicate elimination do
 not renumber arguments. Inspect the resolved prefix before that token in the
 same capture; malformed pointers need syntax repair first. Diagnostics never
 echo the pointer or task values, and no part of a rejected batch is delivered.
+
+Reader failures preserve the runtime's `error_kind` and `diagnostic_code` so
+programs need not parse `reason`. Selector rejections use `request_rejected`
+with `context_selection_invalid_pointer`, `context_selection_invalid_index`
+or `context_selection_missing_pointer`. Repair the pointer syntax or inspect
+the known parent in the same capture, then retry the corrected batch. Missing
+members and invalid array indexes also return `recovery_command`: it lists the
+nearest verified container from the caller's original pointer, using the same
+capture digest and page budgets. If traversal reached a scalar, it lists that
+scalar's containing object/array instead. This command repeats only the supplied
+address prefix, never source values, and starts a new index at offset zero;
+it is not continuation of the failed selection or proof of reading its body. Other
+runtime failures retain their own classification; startup failures retain
+their diagnostic code. These failures do not require restoring a healthy
+capture. Missing or damaged capture files still fail closed through the
+original file/digest checks. Reading again never reruns admission.
 
 The `context_capture_index_v1` view shares the digest-bound pagination contract.
 An expanded index includes its `list_depth`; `next_command` preserves the depth,
@@ -896,6 +1225,10 @@ pointer 从原始摘要绑定的 capture 批量读取详情。提供已有 `--ca
 发现多层字段。深度默认为 1，可选 1–8；需要更深时选择新的父节点继续。这只限制
 单次遍历深度，不限制 capture 容量或可读正文。优先展开相关子树，省略路径才从根开始。
 生成的读取指引会提示上述选择，不把查目录变成前置步骤，也不改变工作前的必读要求。
+在原生引用的现有输出上限允许时，`field_index` 直接提供当前 recovery capture 的完整
+顶层目录，其 pointer、类型、字节数和成员数与 `context-read --list` 一致。目录不含
+正文，也不证明已阅读；通过 `recovery.command` 选读这些路径，delta 的 `command`
+仍指向补丁。过大目录整体省略，保留 `index_command` 与完整恢复路径。
 普通 capture 回复、原生持久配置与压缩后恢复携带同一份选择指引。恢复命令直接指向
 `--select`，已知路径无须多查一轮目录。按合计输出预算分批，避免同时选择父节点和
 子节点；路径缺失时先查其父节点，再重试被拒绝的批次。这些是调用建议，不改变
@@ -905,12 +1238,67 @@ pointer 从原始摘要绑定的 capture 批量读取详情。提供已有 `--ca
 路径前缀；语法错误需先修正 pointer。错误信息不回显路径或任务正文，被拒绝的
 批次不会返回部分内容。
 
+读取失败保留 runtime 的 `error_kind` 与 `diagnostic_code`，程序无需解析 `reason`。
+选择错误使用 `request_rejected`，原因码分别为 `context_selection_invalid_pointer`、
+`context_selection_invalid_index` 或 `context_selection_missing_pointer`。
+修正路径语法或在同一 capture 中检查已知父节点，再重试修正后的批次。字段缺失和
+数组索引错误还返回 `recovery_command`：用同一 capture 摘要与分页预算列出原始
+输入路径中最近的已验证容器；若已走到标量，则列出包含它的对象或数组。命令仅重复
+调用方提供的路径前缀，不包含源正文，并从偏移零开始新目录；它不是失败选择的续读，
+也不证明读过正文。其他 runtime
+故障保留自身分类；启动故障保留原诊断码。这些故障不要求恢复健康的 capture。
+文件缺失或损坏仍由原文件/摘要检查拒绝，重新读取不会重新准入。
+
 `context_capture_index_v1` 沿用双摘要分页；展开的目录包含 `list_depth`，
 `next_command` 保留深度、路径和两个摘要。更改深度会拒绝旧视图的续读，目录 cursor
 也不能用作正文 cursor。遇到输出截断或缺页，用足够的输出预算恢复同一 capture
 的受影响范围，保留原 Turn/操作身份，不重新准入。列出字段不表示读过其正文。
 包括根选择在内的目录/详情 EOF 不证明全量模型保留；原生文件比较与此独立。
 模型可直接查当前完整文件，也可查基线和差分，无须先通读。
+
+### Bounded settlement results / 有界结算结果
+
+Generated Turn-bound JSON `quota spend-slot` commands include
+`--max-page-output-bytes 64000`. This output option does not enable Context
+Delivery or create a native continuity baseline. Small results remain complete;
+when a result exceeds the budget, its `before` / `after` snapshots move to a
+private immutable JSON capture. The other fields, including the actual append
+outcome, workspace refusal and settlement receipts, remain visible. Use
+`result_details.command` with `--select` for needed diagnostic facts; the reader
+keeps the same output budget and verifies the full capture digest on every page.
+If the remaining controls also exceed the limit, the returned command selects
+all of them: read those pages completely before acting. No control text is cut.
+
+Omitting the option preserves the existing full-result API. A nonpositive
+budget is rejected before execution. Platforms without qualified POSIX private
+capture validation reject this option before settlement; remove only the output
+option to use the same Turn's full-result API. Reader references also fail closed
+there; mode bits are not a substitute for Windows ACL verification.
+A capture failure after evaluation keeps every original control field (including
+`ok`, refusal reason, identity and receipts), omits only `before` / `after`, and
+adds `result_delivery_error`; the process exits nonzero. This fallback prioritizes
+complete controls over the display budget. A refused operation need not have a
+spend receipt. Repair capture privacy or read the same operation without the
+output option; a delivery failure does not prove that the effect failed to commit.
+Never rerun admission or change the original Turn/effect identity to recover
+output. This transport change alone does not prove model retention or savings.
+
+生成的 Turn 绑定 JSON `quota spend-slot` 命令携带
+`--max-page-output-bytes 64000`。此输出选项不启用 Context Delivery，也不建立原生
+连续性基线。小结果保持完整；超出预算时，将 `before` / `after` 快照存入私有、
+不可变的完整 JSON，其他字段仍直接返回，包括实际追加结果、工作目录拒绝和结算
+回执。按需在 `result_details.command` 后添加 `--select`；读取器保留相同输出预算，
+每页校验完整摘要。如果其余控制信息也超限，返回命令会选择全部控制字段，必须
+完整读完这些页再行动，不截断控制正文。
+
+省略选项保留原有完整结果 API；非正预算在执行前拒绝。缺少已验证 POSIX 私有捕获
+校验的平台在结算前拒绝此选项；仅移除输出选项即可使用同一 Turn 的完整结果 API。
+reader reference 在该平台也安全拒绝，不能用 mode bits 代替 Windows ACL 校验。
+求值后捕获失败时保留全部原始控制字段（包括 `ok`、拒绝原因、身份和回执），只省略
+`before`／`after`，追加 `result_delivery_error` 并非零退出。此故障兜底优先保全控制
+信息，不保证展示预算；被拒绝的操作不一定存在 spend receipt。修复捕获权限或以
+原身份读取无输出预算的结果，不能据投递失败认定效果未提交。恢复不重新准入或
+更换原 Turn／effect 身份。此传输变化本身不证明模型保留或成本收益。
 
 ### Saved context cache / 已保存上下文缓存
 
@@ -934,6 +1322,13 @@ Oversized or missing tool output is recovered from the affected range of this
 same capture, never by another admission. Off responses retain their original
 contract. Reader/output sizing alone proves neither model retention nor savings.
 
+Republishing a reader reference through a normal parent-path alias reuses the
+existing immutable descriptor when the resolved parent, exact leaf name, full
+digest and all other metadata agree. The stored descriptor is never rewritten.
+Different leaf names, including hardlinks, remain distinct; capture and descriptor
+leaf symlinks are still rejected by the reader. This compatibility does not
+establish retention or authorize another admission.
+
 `quota context-project` 开启上下文投递后，不再要求另外手工准备缓存目录。
 省略 `--decision-output-root` 时复用原生会话的私有上下文目录；显式指定的新目录
 在已存在的父目录下以 `0700` 创建。已有目录仍须属于当前用户、权限私有且不是
@@ -946,3 +1341,8 @@ contract. Reader/output sizing alone proves neither model retention nor savings.
 上限 64000 字节；Markdown 保留 4096 字节正文默认值。显式上限和 UTF-8 字节 cursor
 语义不变。工具输出过大或缺失时，只恢复同一捕获的受影响范围，不重新准入。
 关闭态保持原有契约。页大小与输出预算本身不证明模型保留或成本收益。
+
+通过正常父路径别名再次发布读取引用时，只有解析后的父目录、精确末级文件名、完整
+摘要及其余元数据均一致，才复用已有不可变描述文件；不重写其内容。不同末级文件名
+仍是不同引用，即使它们是硬链接；读取器仍拒绝 capture 或描述文件的末级符号链接。
+此兼容不证明模型保留，也不授权再次准入。

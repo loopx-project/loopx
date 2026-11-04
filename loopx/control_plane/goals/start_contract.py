@@ -120,6 +120,7 @@ def build_goal_start_contract(
                 "cursor-agent": "agent-driven cursor-agent loop; every turn enters through quota should-run",
                 "zcode": "agent-driven ZCode loop; turns enter through quota should-run",
                 "agy": "agy native /goal loop with schedule wakes; quota entry advisory",
+                "antigravity-app": "Antigravity App native schedule timer closed loop + sidecar.json heartbeat",
                 "kiro-cli": "Kiro CLI native /goal loop; quota entry advisory",
                 "deepseek-harness-native": "DeepSeek Harness same-session plugin driver; every turn enters through quota should-run",
                 "ark-managed-agent": "one-shot Goal",

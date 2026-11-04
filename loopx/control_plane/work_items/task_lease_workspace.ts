@@ -120,17 +120,20 @@ export async function observeLeaseWorktree(path: string, overlaps: (path: string
   while (pending.length > 0) {
     const parent = pending.pop()!;
     for await (const entry of await opendir(resolve(root, parent))) {
-      const relative = parent ? `${parent}/${entry.name}` : entry.name;
-      if (!overlaps(relative) && !overlaps(`${relative}/**`)) continue;
-      const full = resolve(root, relative);
+      const scopePath = parent ? `${parent}/${entry.name}` : entry.name;
+      if (!overlaps(scopePath) && !overlaps(`${scopePath}/**`)) continue;
+      const full = resolve(root, scopePath);
       try {
         const info = await lstat(full);
         if (info.isSymbolicLink()) {
           await requireInternalFileLink(root, full, overlaps);
-        } else if (!(await realpath(full)).startsWith(`${root}/`)) {
-          throw new LeaseWorktreeObservationError("worktree scope contains a redirected path");
+        } else {
+          const location = relative(root, await realpath(full));
+          if (!location || location === ".." || location.startsWith(`..${sep}`) || isAbsolute(location)) {
+            throw new LeaseWorktreeObservationError("worktree scope contains a redirected path");
+          }
         }
-        if (info.isDirectory()) pending.push(relative);
+        if (info.isDirectory()) pending.push(scopePath);
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }

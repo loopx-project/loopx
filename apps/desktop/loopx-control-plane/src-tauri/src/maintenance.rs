@@ -27,6 +27,7 @@ pub struct Maintenance {
     pending: Mutex<Option<(String, Update)>>,
     last_failure: Mutex<Value>,
     runtime_retry: Mutex<RuntimeRetry>,
+    service_retry: Mutex<ServiceRetry>,
     install_journal_discarded: AtomicBool,
     environment_cache: Mutex<Option<(Instant, Value)>>,
     startup_started: std::sync::OnceLock<Instant>,
@@ -53,6 +54,26 @@ struct RuntimeRetry {
     last_attempt: Option<Instant>,
 }
 
+#[derive(Default)]
+struct ServiceRetry {
+    failures: u32,
+    next_attempt: Option<Instant>,
+}
+
+impl ServiceRetry {
+    fn failed(&mut self, now: Instant) {
+        let delay = Duration::from_secs((2_u64 << self.failures.min(5)).min(60));
+        self.failures = self.failures.saturating_add(1);
+        self.next_attempt = Some(now + delay);
+    }
+
+    fn remaining(&self, now: Instant) -> Duration {
+        self.next_attempt
+            .map(|next| next.saturating_duration_since(now))
+            .unwrap_or_default()
+    }
+}
+
 impl RuntimeRetry {
     fn admit(&mut self, now: Instant) -> bool {
         if self.attempts >= 3
@@ -72,7 +93,17 @@ impl Maintenance {
         if self.incomplete_app_installation.load(Ordering::Acquire) {
             json!({"phase":"error", "details":{"code":"app_install_incomplete"}})
         } else {
-            self.snapshot.lock().unwrap().clone()
+            let mut snapshot = self.snapshot.lock().unwrap().clone();
+            if snapshot["phase"] == "service_error"
+                && crate::services::runtime_alignment_error(
+                    snapshot["details"]["code"].as_str().unwrap_or(""),
+                )
+            {
+                let retry = self.service_retry.lock().unwrap();
+                snapshot["details"]["retry_after_ms"] =
+                    json!(retry.remaining(Instant::now()).as_millis() as u64);
+            }
+            snapshot
         }
     }
 
@@ -396,6 +427,14 @@ impl Maintenance {
         &self,
         start: impl FnOnce() -> Result<T, String>,
     ) -> Result<Option<T>, String> {
+        self.reconcile_services_with_clock(Instant::now, start)
+    }
+
+    fn reconcile_services_with_clock<T>(
+        &self,
+        now: impl Fn() -> Instant,
+        start: impl FnOnce() -> Result<T, String>,
+    ) -> Result<Option<T>, String> {
         if self.busy.load(Ordering::Acquire)
             || self.incomplete_app_installation.load(Ordering::Acquire)
             || self.manual_failure_pending.load(Ordering::Acquire)
@@ -419,8 +458,21 @@ impl Maintenance {
         if matches!(phase.as_str(), "available" | "restart_required") {
             return Ok(None);
         }
+        // A failed alignment owes automatic recovery, not a user click. Bound
+        // repeated attempts without removing the Core's route/Chat fences.
+        if phase == "service_error" {
+            let retry = self.service_retry.lock().unwrap();
+            if !retry.remaining(now()).is_zero() {
+                return Ok(None);
+            }
+            if retry.next_attempt.is_some() {
+                drop(retry);
+                self.publish("connecting", json!({}));
+            }
+        }
         match start() {
             Ok(services) => {
+                *self.service_retry.lock().unwrap() = ServiceRetry::default();
                 self.publish("ready", json!({}));
                 Ok(Some(services))
             }
@@ -436,9 +488,25 @@ impl Maintenance {
                         "chat_work_pending" => "chat_work_pending",
                         "chat_state_unverified" => "chat_state_unverified",
                         "chat_service_unverified" => "chat_service_unverified",
+                        "service_runtime_alignment_unavailable" => {
+                            "service_runtime_alignment_unavailable"
+                        }
+                        "service_runtime_alignment_failed" => "service_runtime_alignment_failed",
+                        "service_runtime_route_unverified" => "service_runtime_route_unverified",
+                        "service_runtime_rollback_failed" => "service_runtime_rollback_failed",
                         _ => "service_start_failed",
                     };
-                    self.publish("service_error", json!({"code":code}));
+                    let mut details = json!({"code":code});
+                    if crate::services::runtime_alignment_error(code) {
+                        let failed_at = now();
+                        let mut retry = self.service_retry.lock().unwrap();
+                        retry.failed(failed_at);
+                        details["retry_after_ms"] =
+                            json!(retry.remaining(failed_at).as_millis() as u64);
+                    } else {
+                        *self.service_retry.lock().unwrap() = ServiceRetry::default();
+                    }
+                    self.publish("service_error", details);
                 }
                 Err(error)
             }
@@ -657,6 +725,19 @@ pub async fn desktop_update(
     action: String,
     channel: String,
 ) -> Result<Value, String> {
+    if action == "reconnect" {
+        let state = app.state::<Maintenance>();
+        let _guard = state.acquire()?;
+        let _supervision = state.supervision.lock().await;
+        allow_action(
+            state.snapshot.lock().unwrap()["phase"]
+                .as_str()
+                .unwrap_or(""),
+            &action,
+        )?;
+        *state.service_retry.lock().unwrap() = ServiceRetry::default();
+        return Ok(state.publish("connecting", json!({})));
+    }
     if cfg!(dev) || !app_update_platform_supported() {
         return Err("platform_update_not_supported".into());
     }
@@ -2533,6 +2614,80 @@ mod tests {
                 !runtime_state_publishes_own_phase(relabelled),
                 "{relabelled}"
             );
+        }
+    }
+
+    #[test]
+    fn failed_alignment_recovers_automatically_after_backoff() {
+        for code in [
+            "service_runtime_alignment_unavailable",
+            "service_runtime_route_unverified",
+            "service_runtime_alignment_failed",
+            "service_runtime_rollback_failed",
+        ] {
+            let state = Maintenance::default();
+            let clock = std::cell::Cell::new(Instant::now());
+            for delay in [2, 4, 8, 16, 32, 60, 60] {
+                assert_eq!(
+                    state.reconcile_services_with_clock::<()>(|| clock.get(), || Err(code.into())),
+                    Err(code.into())
+                );
+                assert_eq!(
+                    state.snapshot.lock().unwrap()["details"]["retry_after_ms"],
+                    delay * 1000
+                );
+                clock.set(clock.get() + Duration::from_secs(delay) - Duration::from_millis(1));
+                assert!(state
+                    .reconcile_services_with_clock::<()>(
+                        || clock.get(),
+                        || panic!("cooldown must not touch services")
+                    )
+                    .unwrap()
+                    .is_none());
+                clock.set(clock.get() + Duration::from_millis(1));
+            }
+            // No reconnect, reload or user action between failure and success.
+            assert_eq!(
+                state
+                    .reconcile_services_with_clock(|| clock.get(), || Ok(42))
+                    .unwrap(),
+                Some(42)
+            );
+            assert_eq!(state.startup_snapshot()["phase"], "ready");
+            assert!(state.service_retry.lock().unwrap().next_attempt.is_none());
+        }
+    }
+
+    #[test]
+    fn recovery_cooldown_starts_after_attempt_and_keeps_update_gates() {
+        let state = Maintenance::default();
+        let clock = std::cell::Cell::new(Instant::now());
+        assert!(state
+            .reconcile_services_with_clock::<()>(
+                || clock.get(),
+                || {
+                    clock.set(clock.get() + Duration::from_secs(70));
+                    Err("service_runtime_alignment_failed".into())
+                }
+            )
+            .is_err());
+        assert!(state
+            .reconcile_services_with_clock::<()>(
+                || clock.get(),
+                || panic!("no immediate retry after slow IO")
+            )
+            .unwrap()
+            .is_none());
+        clock.set(clock.get() + Duration::from_secs(2));
+        for phase in ["available", "restart_required"] {
+            state.publish(phase, json!({}));
+            assert!(state
+                .reconcile_services_with_clock::<()>(
+                    || clock.get(),
+                    || panic!("automatic recovery must preserve update admission")
+                )
+                .unwrap()
+                .is_none());
         }
     }
 

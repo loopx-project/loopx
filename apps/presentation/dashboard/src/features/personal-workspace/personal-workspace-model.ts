@@ -399,6 +399,7 @@ export type WorkspaceMessage = {
   activity?: string[];
   steps?: TurnStep[];
   collaboration?: CollaborationReadback;
+  collaborations?: CollaborationReadback[];
   agentLabel?: string;
   attachments?: WorkspaceImageAttachment[];
   id: string;
@@ -546,7 +547,7 @@ export type WorkspaceDrawerSelection =
   | { item: WorkspaceRun; kind: "run" }
   | { item: WorkspaceOutput; kind: "output" }
   | { item: WorkspaceActionPreview; kind: "proposal" }
-  | { goalId?: string; kind: "settings"; scope?: "machine" | "goal"; tab?: "appearance" | "capabilities" | "language" | "lark" | "machine" | "provider" | "steward" | "conversation" | "cadence" | "ownership" }
+  | { goalId?: string; kind: "settings"; scope?: "machine" | "goal"; tab?: "appearance" | "capabilities" | "language" | "lark" | "machine" | "provider" | "steward" | "conversation" | "cadence" | "ownership" | "background" }
   | {
       item: WorkspaceSchedule;
       kind: "schedule";

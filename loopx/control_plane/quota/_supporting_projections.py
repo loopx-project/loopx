@@ -1,7 +1,8 @@
 """Supporting diagnostics shared by active and settled quota packets."""
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
+
 
 from ..agents.agent_scope import _action_scope_tokens_from_text
 from ..runtime.decision_freshness import decision_freshness_warning as _decision_freshness_warning
@@ -13,8 +14,8 @@ from .recent_runs import goal_latest_runs as _goal_latest_runs
 def _recent_reward_lessons(status_payload: dict[str, Any], *, goal_id: str) -> list[dict[str, Any]]:
     lessons: list[dict[str, Any]] = []
     for run in _goal_latest_runs(status_payload, goal_id=goal_id):
-        reward = run.get("human_reward") if isinstance(run.get("human_reward"), dict) else {}
-        lesson = reward.get("lesson") if isinstance(reward.get("lesson"), dict) else {}
+        reward = cast(dict[str, Any], run.get("human_reward")) if isinstance(run.get("human_reward"), dict) else {}
+        lesson = cast(dict[str, Any], reward.get("lesson")) if isinstance(reward.get("lesson"), dict) else {}
         if not lesson:
             continue
         lessons.append(
@@ -24,8 +25,8 @@ def _recent_reward_lessons(status_payload: dict[str, Any], *, goal_id: str) -> l
                 "reward": reward.get("reward"),
                 "kind": lesson.get("kind"),
                 "summary": lesson.get("summary"),
-                "avoid": lesson.get("avoid") if isinstance(lesson.get("avoid"), list) else [],
-                "prefer": lesson.get("prefer") if isinstance(lesson.get("prefer"), list) else [],
+                "avoid": cast(list[Any], lesson.get("avoid")) if isinstance(lesson.get("avoid"), list) else [],
+                "prefer": cast(list[Any], lesson.get("prefer")) if isinstance(lesson.get("prefer"), list) else [],
             }
         )
     return lessons
@@ -86,7 +87,7 @@ def _attach_truthy_fields(payload: dict[str, Any], **fields: Any) -> None:
 
 
 def _dict_field(payload: dict[str, Any], key: str) -> dict[str, Any] | None:
-    return payload.get(key) if isinstance(payload.get(key), dict) else None
+    return cast(dict[str, Any], payload.get(key)) if isinstance(payload.get(key), dict) else None
 
 
 def _attach_quota_supporting_projections(

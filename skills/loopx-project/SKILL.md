@@ -154,9 +154,9 @@ record IDs go directly to batched reads; discover only missing locations. Reuse
 the same captured response while applicable, and size independent read batches
 against their combined output budget. Keep dependent operations and mutations
 ordered; refresh authority after relevant state changes. For missing paths,
-truncation or uncertain effects, follow
-[targeted diagnostics](../loopx-self-repair/references/targeted-diagnostics.md),
-not a repeated directory/status/full-packet preflight.
+truncation or uncertain effects, load `loopx-self-repair`, then follow its
+`references/targeted-diagnostics.md` instead of repeating a
+directory/status/full-packet preflight.
 
 For first-time or recovered recurring hosts, read
 [heartbeat hosts](references/heartbeat-hosts.md) and install the returned stable

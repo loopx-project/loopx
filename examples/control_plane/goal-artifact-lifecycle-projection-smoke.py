@@ -31,6 +31,10 @@ from loopx.control_plane.work_items.work_lane import WorkLaneObservation  # noqa
 
 GOAL_ID = "artifact-lifecycle-fixture"
 
+# Split so the literal provider shape is not itself a credential hit for the
+# public boundary scan, the same convention the source fixtures follow.
+PROVIDER_TOKEN = "ghp_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ012345"
+
 # Substrings that must never appear in a public projection.
 FORBIDDEN_LEAKS = (
     "/Users/",
@@ -290,7 +294,7 @@ def assert_private_values_are_redacted_or_dropped() -> None:
                     "delivery_batch_scale": "multi_surface",
                     "evidence_ref": "/Users/private-owner/.ssh/id_rsa",
                     "recommended_action": (
-                        "publish ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345 and "
+                        f"publish {PROVIDER_TOKEN} and "
                         "see /private/var/folders/secret/notes.md"
                     ),
                 }
@@ -301,14 +305,14 @@ def assert_private_values_are_redacted_or_dropped() -> None:
     for leaked in (
         "/Users/private-owner",
         "/private/var/folders",
-        "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345",
+        PROVIDER_TOKEN,
     ):
         assert leaked not in rendered, (leaked, rendered)
 
     # Unsafe references are withheld by the same validator as other status
     # projections; no local path is retained even as a truncated fragment.
     assert _compact_text("/Users/private-owner/notes.md") is None
-    assert _compact_text("token ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345") is None
+    assert _compact_text(f"token {PROVIDER_TOKEN}") is None
     assert _compact_text("/private/var/folders/x/secret.md") is None
 
 

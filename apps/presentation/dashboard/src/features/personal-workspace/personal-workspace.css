@@ -1707,6 +1707,10 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
   --pw-caution: #f5a623;
 }
 
+@media (max-width: 560px) {
+  .personal-settings-sidebar { grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); }
+  .personal-settings-mobile-category > span { display: none; }
+}
 .personal-workspace-shell[data-pw-theme="loopx"] .personal-workspace-sidebar,
 .personal-settings-page[data-pw-theme="loopx"] .personal-settings-sidebar { background: #ffffff; }
 .personal-workspace-shell[data-pw-theme="loopx"] .personal-channel-header { background: rgb(250 250 250 / 94%); box-shadow: none; }

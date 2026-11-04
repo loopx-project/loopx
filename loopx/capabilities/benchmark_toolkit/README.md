@@ -508,6 +508,37 @@ The private trajectory records this exact request/result shape:
 }
 ```
 
+Some isolated task containers reach their runner-owned task service through a
+container-host alias rather than an IP loopback address. That alias is external by
+default. A runner may classify only its exact task-service origin as loopback-scoped
+by adding a qualification-time authorization:
+
+```json
+{
+  "schema_version": "benchmark_integrity_policy_v0",
+  "policy_id": "offline-task-service",
+  "network_access": "loopback_only",
+  "task_service_access": {
+    "schema_version": "benchmark_task_service_access_v0",
+    "authorization_id": "fixture-task-service-v1",
+    "authorization_sha256": "<sha256-of-immutable-runner-authorization>",
+    "authority": "runner",
+    "purpose": "benchmark_task_service",
+    "origins": ["http://host.docker.internal:35103"]
+  }
+}
+```
+
+Origins must use HTTP or HTTPS, one of the exact container-host aliases, and an
+explicit port. The runner derives them from its trusted task-service launch record;
+agent text cannot grant access. Wrong ports, lookalike hosts, userinfo, malformed
+origins, undeclared aliases, and any mixed external URL remain external-network
+violations. Authorized requests contribute to the existing loopback evidence count.
+The separate task-service receipt records only authorization identifiers, counts and
+an origin-set digest; it never copies raw origins. Like task-environment access, this
+qualification-time runner permission is excluded from the frozen evaluation-policy
+digest.
+
 The default protocol remains blind: the verifier starts after the agent and official
 feedback is hidden. A benchmark that intentionally returns periodic evaluation during
 solving must preregister an `evaluation_protocol` in the integrity policy with
@@ -1104,6 +1135,19 @@ loopx benchmark experiment-board-upsert \
   --execute \
   --format json
 ```
+
+Upsert now returns the complete normalized affected `row` and `write` receipt
+by default, for both preview and execution. Check `write.dry_run` and
+`write.write_performed` before treating a preview as a saved update. The receipt
+retains metrics, countability, protocol identity and total ledger `row_count`;
+it does not imply a matched comparison or replace whole-study inspection.
+Consumers of the previous board-shaped response can add `--include-board`.
+`--benchmark-id` and `--study-id` filter that optional board projection; they do
+not constrain the write or hide the affected row in the default receipt.
+For a later comparison, call `experiment-board-show` with the same Goal/project
+route and relevant benchmark/study filters. Reuse a current board already read
+when it answers the decision; avoid rebuilding and returning it after every
+single-row update. Validation and invalid-transition rejection still apply.
 
 The default ledger is locked, atomically updated, and keyed by benchmark, study,
 case, and run identity. A compact row carries arm role, exact and comparison

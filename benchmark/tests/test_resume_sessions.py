@@ -122,6 +122,8 @@ def resume_env(tmp_path, monkeypatch):
     skills.mkdir()
     env.update(
         LOOPX_EXECUTION_MODE="heartbeat",
+        # These legacy resume fixtures pin their original transport treatment.
+        LOOPX_CONTEXT_DELIVERY="off",
         LOOPX_ITERATION_CONTEXT="resume",
         LOOPX_RUNTIME_ROOT=str(tmp_path / "runtime"),
         LOOPX_REGISTRY=str(tmp_path / "registry.json"),

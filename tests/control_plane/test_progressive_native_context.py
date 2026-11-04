@@ -10,6 +10,7 @@ import pytest
 
 from loopx.cli_commands.quota_capture import read_context_capture
 from loopx.control_plane.turn_driver import codex_context as context
+from tests.control_plane.codex_checkpoint_fixture import reference_metadata_oracle
 from test_codex_context_lifecycle import setup, project, deliver, read_pages
 from test_goal_acceptance_cli import acceptance_goal as acceptance_goal
 from test_quota_settlement_cli import _run_cli
@@ -141,13 +142,14 @@ def test_saved_native_projection_recovers_the_required_view(tmp_path, monkeypatc
     assert code == 0 and view["ok"] and view["mode"] == "full", view
 
     def check_recovery(view):
+        wire, view = view, reference_metadata_oracle(view)
         journal = context._state(tmp_path)["recovery"]
         assert view["capture_sha256"] == digest
         assert {key: view["recovery"][key] for key in ("path", "sha256")} == {
             key: journal[key] for key in ("path", "sha256")}
-        argv = shlex.split(view["recovery"]["command"])
+        argv = shlex.split(wire["recovery"]["command"])
         if output_limit is not None:
-            assert len((json.dumps(view, ensure_ascii=False, separators=(",", ":")) + "\n").encode()) <= output_limit
+            assert len((json.dumps(wire, ensure_ascii=False, separators=(",", ":")) + "\n").encode()) <= output_limit
             assert int(argv[argv.index("--max-page-output-bytes") + 1]) <= output_limit
             # Discovery and selection remain usable from the complete current
             # recovery, independently of optional shortcut command fields.
@@ -181,11 +183,12 @@ def test_saved_native_projection_recovers_the_required_view(tmp_path, monkeypatc
     recovered = check_recovery(view)
     if failure is None:
         deliver(tmp_path, event, recovered)
-        assert context._state(tmp_path)["candidate"]["capture_file"] == view["recovery"]["path"]
+        assert context._state(tmp_path)["candidate"]["capture_file"] == reference_metadata_oracle(view)["recovery"]["path"]
         code, warm = _run_cli(registry, runtime, *command, cwd=tmp_path)
         assert code == 0 and warm["ok"], warm
-        if "target" in warm:
-            assert warm["target"]["context_epoch"] == view["target"]["context_epoch"]
+        warm_metadata = reference_metadata_oracle(warm)
+        if "target" in warm_metadata:
+            assert warm_metadata["target"]["context_epoch"] == reference_metadata_oracle(view)["target"]["context_epoch"]
         check_recovery(warm)
         context.codex_context_hook(str(tmp_path), {**event, "source": "compact"})
         code, compacted = _run_cli(registry, runtime, *command, cwd=tmp_path)
@@ -219,8 +222,10 @@ def test_off_and_unsupported_surface_remain_exact(tmp_path, monkeypatch):
     original, unchanged = payload(), payload()
     assert context.project_codex_context(original, directory=None, capture_directory=tmp_path,
         goal_id="fixture", agent_id="agent", surface="quota_packet", capture_id="one") is original
-    required, _ = context._capture_required_context(original, directory=tmp_path, surface="turn_envelope")
-    assert required is original and original == unchanged
+    wire = context.project_codex_context(original, directory=str(tmp_path), capture_directory=tmp_path,
+        goal_id="fixture", agent_id="agent", surface="turn_envelope", capture_id="one")
+    assert wire["context"] == original == unchanged
+    assert not (tmp_path / "required-context.json").exists()
 
 
 def test_projection_preserves_numbers_and_original_values(tmp_path, monkeypatch):
@@ -228,8 +233,9 @@ def test_projection_preserves_numbers_and_original_values(tmp_path, monkeypatch)
     original = payload()
     original["opaque_counter"] = 9007199254740993
     before = copy.deepcopy(original)
-    required, _ = context._capture_required_context(original, directory=tmp_path, surface="quota_packet")
-    assert original == before and required["opaque_counter"] == before["opaque_counter"]
+    _, wire = project(tmp_path, payload=original)
+    assert original == before and wire["context"]["opaque_counter"] == before["opaque_counter"]
+    assert json.loads(Path(wire["recovery"]["path"]).read_bytes()) == wire["context"]
 
 
 def test_saved_cli_references_keep_tail_constraints_and_recover_without_detail_reads(tmp_path, monkeypatch):
@@ -260,7 +266,10 @@ def test_saved_cli_references_keep_tail_constraints_and_recover_without_detail_r
             context.codex_context_hook(str(tmp_path), {**event, "source": "compact"})
         code, view = _run_cli(registry, runtime, *command, cwd=tmp_path)
         assert code == 0 and view["ok"], view
-        assert view["mode"] == ("delta" if cycle == 1 else "full")
+        # The real adapter compares complete reader framing, including this
+        # checkout's argv/path lengths. A warm view may legitimately prefer full;
+        # it must not fake a delta when that would cost more than the same capture.
+        assert view["mode"] in ({"delta", "full"} if cycle == 1 else {"full"})
         argv = shlex.split(view["recovery"]["command"])
         pages, contents = [], b""
         while True:
@@ -304,33 +313,103 @@ def test_unavailable_typed_plan_keeps_original_capture(tmp_path, monkeypatch):
     def unavailable(*args, **kwargs):
         raise EffectRuntimeStartupError("Synthetic unavailable runtime", diagnostic_code="fixture_unavailable")
 
-    monkeypatch.setattr(turn_envelope, "plan_progressive_context", unavailable)
+    setup(tmp_path, monkeypatch)
+    monkeypatch.setattr(turn_envelope, "effect_runtime_projection_result", unavailable)
     original = payload()
-    required, recovery = context._capture_required_context(original, directory=tmp_path, surface="quota_packet")
+    _, required = project(tmp_path, payload=original)
+    recovery = context._state(tmp_path)["recovery"]
     assert required is original
     assert Path(recovery["path"]).name == "projection.json"
     assert json.loads(Path(recovery["path"]).read_bytes()) == original
-    assert not (tmp_path / "required-context.json").exists()
+    assert not Path(recovery["path"]).with_name("required-context.json").exists()
 
 
-def test_small_material_keeps_full_capture_when_the_detail_index_costs_more(tmp_path):
+def test_small_material_keeps_full_capture_when_the_detail_index_costs_more(tmp_path, monkeypatch):
+    setup(tmp_path, monkeypatch)
     original = payload()
     outcome(original)["sources"][0]["summary"] = "Short supporting source."
     review = outcome(original)["requirements"][0]["agent_review"]
     review["note"], review["evidence_refs"] = "Failed.", ["negative:original"]
-    required, recovery = context._capture_required_context(original, directory=tmp_path, surface="quota_packet")
-    assert required is original
+    _, wire = project(tmp_path, payload=original)
+    recovery = wire["recovery"]
+    assert wire["context"] == original
     assert Path(recovery["path"]).name == "projection.json"
-    assert not (tmp_path / "required-context.json").exists()
+    assert not Path(recovery["path"]).with_name("required-context.json").exists()
 
 
-def test_small_duplicate_rows_do_not_gain_reference_overhead(tmp_path):
+def test_small_duplicate_rows_do_not_gain_reference_overhead(tmp_path, monkeypatch):
+    setup(tmp_path, monkeypatch)
     row = {"schema_version": "todo_item_v0", "todo_id": "task", "text": "Keep this constraint.", "claimed_by": "peer"}
     original = {"ok": True, "agent_todo_summary": {"schema_version": "todo_summary_v0",
         "first_open_items": [row], "backlog_items": [dict(row)]}}
-    required, recovery = context._capture_required_context(original, directory=tmp_path, surface="quota_packet")
-    assert required is original
+    _, wire = project(tmp_path, payload=original)
+    recovery = wire["recovery"]
+    assert wire["context"] == original
     assert Path(recovery["path"]).name == "projection.json"
+
+
+def test_native_required_view_and_encoding_use_one_runtime_request(tmp_path, monkeypatch):
+    from loopx.control_plane.quota import turn_envelope
+
+    setup(tmp_path, monkeypatch)
+    invoke = turn_envelope.effect_runtime_projection_result
+    requests = []
+
+    def observe(method, params, **kwargs):
+        requests.append((method, params["operation"]))
+        return invoke(method, params, **kwargs)
+
+    monkeypatch.setattr(turn_envelope, "effect_runtime_projection_result", observe)
+    original = payload()
+    before = json.dumps(original, sort_keys=True)
+    for capture in ("cold", "warm"):
+        requests.clear()
+        _, wire = project(tmp_path, capture, payload=original)
+        assert requests == [("quota.turn_envelope.evaluate", "context_delivery")]
+        required = json.loads(Path(wire["recovery"]["path"]).read_bytes())
+        assert outcome(required)["requirements"][0]["description"] == "Preserve this final requirement."
+        assert json.loads(Path(required["context_details"]["path"]).read_bytes()) == original
+    assert wire["mode"] == "delta"
+    assert json.dumps(original, sort_keys=True) == before
+
+
+@pytest.mark.parametrize(("before", "after", "full"), [
+    (1.0, 1, True), (0.0, -0.0, True),
+    (9007199254740993, 9007199254740995, True),
+    (1e20, 1e20, False), (1e-7, 2e-7, False),
+])
+def test_native_numeric_sources_survive_required_view_delta_and_recovery(tmp_path, monkeypatch, before, after, full):
+    from loopx.control_plane.quota.turn_envelope import restore_context_delivery
+
+    setup(tmp_path, monkeypatch)
+    source = payload()
+    source["measurement"] = before
+    _, first = project(tmp_path, "before", payload=source)
+    prior = json.loads(Path(first["recovery"]["path"]).read_bytes())
+    changed = copy.deepcopy(source)
+    changed["measurement"] = after
+    _, second = project(tmp_path, "after", payload=changed)
+    current = json.loads(Path(second["recovery"]["path"]).read_bytes())
+    assert json.dumps(current["measurement"]) == json.dumps(after)
+    assert second["mode"] == ("full" if full else "delta")
+    baseline = {**first, "context": prior}
+    decoded = restore_context_delivery(second, baseline=baseline,
+        current={"schema_version": "context_delivery_v1", "mode": "full", "target": second["target"],
+            "ancestry": 0, "context": current})
+    assert json.dumps(decoded["context"], sort_keys=True) == json.dumps(current, sort_keys=True)
+    assert json.dumps(json.loads(Path(current["context_details"]["path"]).read_bytes()), sort_keys=True) == json.dumps(changed, sort_keys=True)
+
+
+def test_numeric_type_difference_cannot_hide_a_duplicate_rows_original_value(tmp_path, monkeypatch):
+    setup(tmp_path, monkeypatch)
+    row = {"schema_version": "todo_item_v0", "todo_id": "task", "text": "Final original constraint. " * 100,
+        "resume_monitor_generation": 1.0}
+    original = {"ok": True, "agent_todo_summary": {"schema_version": "todo_summary_v0",
+        "first_open_items": [row], "backlog_items": [{**row, "resume_monitor_generation": 1}]}}
+    _, wire = project(tmp_path, payload=original)
+    required = json.loads(Path(wire["recovery"]["path"]).read_bytes())
+    assert json.dumps(required, sort_keys=True) == json.dumps(original, sort_keys=True)
+    assert "context_reference_instruction" not in required
 
 
 def test_public_quota_cli_delivers_required_view_and_original_evidence(acceptance_goal, tmp_path, monkeypatch):

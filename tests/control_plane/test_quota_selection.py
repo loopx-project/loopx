@@ -144,7 +144,7 @@ def test_large_history_completes_public_quota_through_vision_wait(tmp_path, monk
 
 
 @pytest.mark.parametrize("gate_scope", [False, True])
-def test_large_quota_history_uses_snapshot_without_losing_scope(
+def test_large_quota_history_retains_complete_scope(
     monkeypatch, gate_scope,
 ):
     from loopx.control_plane import effect_runtime
@@ -192,10 +192,9 @@ def test_large_quota_history_uses_snapshot_without_losing_scope(
         filter_user_gate_blocks_agent=gate_scope,
     )
 
-    # Unique historical payloads cannot be reduced below the inline wire limit
-    # without dropping facts. Use the existing digest-verified local snapshot
-    # transport rather than raising or truncating.
-    assert observed_sizes and max(observed_sizes) > effect_runtime.MAX_REQUEST_BYTES
+    # Retain the original over-2-MiB history and its scoped tail. A larger wire
+    # may carry it inline; either route must preserve the same facts.
+    assert observed_sizes and max(observed_sizes) > 2 * 1024 * 1024
     assert [row["todo_id"] for row in result["gate_open_items"]] == [
         "todo_tail_gate"
     ]

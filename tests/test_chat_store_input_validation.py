@@ -52,6 +52,44 @@ def _dedup_store(tmp_path: Path) -> tuple[ChatSessionStore, str]:
     return store, session_id
 
 
+@pytest.mark.parametrize("fault", [None, "changed-turn", "failed", "wrong-invocation", "immutable"])
+def test_completed_native_retention_is_fenced_and_private(tmp_path: Path, fault: str | None) -> None:
+    store, sid = _dedup_store(tmp_path)
+    turn, _ = store.create_turn(sid, client_turn_id="original-input", message="Original visible request")
+    tid = turn["turn_id"]
+    store.update_turn(sid, tid, status="completed", upstream_turn_id="invocation-one",
+        response={"message": "Original visible answer"})
+    original = store.load_turn(sid, tid)
+    result = {"thread_id": "thread-one", "upstream_turn_id": "invocation-one",
+        "steps": [{"text": "PRIVATE_NATIVE_COMPLETION_SENTINEL"}]}
+    if fault == "changed-turn":
+        store.update_turn(sid, tid, response={"message": "A changed result"})
+    elif fault == "failed":
+        store.update_turn(sid, tid, status="failed")
+        original = store.load_turn(sid, tid)
+    elif fault == "wrong-invocation":
+        result["upstream_turn_id"] = "foreign-invocation"
+    before = store._turn_path(sid, tid).read_bytes()
+    if fault in {"changed-turn", "failed", "wrong-invocation"}:
+        with pytest.raises(ValueError):
+            store.retain_native_result(sid, tid, result, completed_turn=original)
+        assert not store.native_result(sid, tid)
+    else:
+        store.retain_native_result(sid, tid, result, completed_turn=original)
+        path = store._session_dir(sid) / "native-results" / f"{tid}.json"
+        stamp = path.stat().st_mtime_ns
+        assert path.stat().st_mode & 0o777 == 0o600
+        assert path.parent.stat().st_mode & 0o777 == 0o700
+        store.retain_native_result(sid, tid, result, completed_turn=original)
+        assert path.stat().st_mtime_ns == stamp
+        if fault == "immutable":
+            with pytest.raises(ValueError, match="immutable"):
+                store.retain_native_result(sid, tid, {**result, "steps": []}, completed_turn=original)
+        assert store.native_result(sid, tid) == result
+    assert store._turn_path(sid, tid).read_bytes() == before
+    assert "PRIVATE_NATIVE_COMPLETION_SENTINEL" not in json.dumps(store.messages(sid))
+
+
 def test_history_cursor_rejects_other_session_and_rewritten_prefix(tmp_path: Path) -> None:
     store, sid = _dedup_store(tmp_path)
     for i in range(5):

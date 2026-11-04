@@ -305,6 +305,15 @@ jobs:
       - name: Type-check kernel contracts
         run: python -m mypy
 
+      # Preserve the kernel gate above, including its import traversal. This
+      # additive boundary checks the adapters strictly and analyzes legacy
+      # imports for types without claiming their implementations are qualified.
+      - name: Type-check Todo CLI adapters
+        run: >-
+          python -m mypy --no-incremental --follow-imports=silent
+          loopx/cli_commands/todo_event.py
+          loopx/control_plane/todos/markdown.py
+
       - name: Qualify agent-facing CLI output
         env:
           # Compare the tested revision to its event base, even after main moves
@@ -890,6 +899,14 @@ jobs:
           python -m pytest -q
           tests/canary/test_repository_root.py::test_plan_renders_repository_paths_in_canonical_posix_form
 
+      - name: Qualify native Windows quota settlement Turn rendering
+        # The settlement plan renders the Turn reference for the host shell, so
+        # only a native Windows host can check that the generated command
+        # forwards $LOOPX_TURN instead of the POSIX-only ${LOOPX_TURN:?}.
+        run: >-
+          python -m pytest -q
+          tests/control_plane/test_quota_settlement.py::test_codex_app_windows_settlement_command_substitutes_powershell_turn
+
       - name: Qualify TypeScript shard paths on native Windows
         run: python -m pytest -q tests/test_python_ci_workflow.py::test_typescript_shards_select_every_test_file_exactly_once
 
@@ -934,12 +951,21 @@ jobs:
           tests/test_file_lock_cross_process.py
           tests/test_host_thread_activity.py
           tests/control_plane/test_effect_runtime_integration.py
+          tests/control_plane/test_turn_instance_arg.py
           tests/control_plane/test_shadow_observation_retirement.py
           tests/test_python_install_owner_platform.py
           tests/test_self_update_runtime_activation.py
           tests/test_self_update_download.py
           tests/test_windows_atomic_writes.py
           tests/test_windows_install.py
+
+      - name: Qualify private IO on native Windows
+        run: >-
+          python -m pytest -q --basetemp .t-private-io
+          tests/control_plane/test_windows_snapshot_privacy.py
+          tests/test_file_lock_windows_atomic.py
+          tests/control_plane/test_document_io.py::test_ordinary_windows_long_path_publish_preserves_bytes_and_create_only
+          tests/control_plane/test_todo_completion_validation.py::test_private_validation_store_is_owner_only_and_detects_tampering
 
       - name: Check Windows collaboration lock sidecars
         run: python -m pytest -q --basetemp .t tests/test_collaboration_sidecar_scan.py
@@ -1025,6 +1051,7 @@ jobs:
           tests/control_plane_ts/quota_void_commit.test.ts
           tests/control_plane_ts/shadow_entry_delivery.test.ts
           tests/control_plane_ts/sqlite_backup.test.ts
+          tests/control_plane_ts/task_lease_workspace.test.ts
 
       - name: Install the frontend dependencies for a source rebuild
         working-directory: apps/presentation/dashboard

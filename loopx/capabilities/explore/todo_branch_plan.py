@@ -433,7 +433,7 @@ def build_explore_todo_branch_plan(
     dependency_rejections: list[dict[str, Any]] = []
     dependency_events: list[dict[str, Any]] = []
     while True:
-        selected = []
+        selected: list[dict[str, Any]] = []
         selection_rejections: list[dict[str, Any]] = []
         selected_scopes: list[tuple[str, list[str]]] = []
         selected_by_resource_lane: dict[str, int] = {}

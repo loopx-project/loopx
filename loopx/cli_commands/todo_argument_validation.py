@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import shlex
 from collections.abc import Iterable
 from pathlib import Path
 
+from ..command_invocation import loopx_cli_argv
 from ..control_plane.todos.contract import TODO_CONTINUATION_POLICY_VALUES
 
 TODO_OPTION_FIELDS = (
@@ -80,6 +82,8 @@ TODO_OPTION_FIELDS = (
     ("--agent-id", "agent_id"),
     ("--limit", "todo_limit"),
     ("--thin", "todo_thin"),
+    ("--summary", "todo_summary"),
+    ("--include-archived", "include_archived"),
     ("--state-file", "state_file"),
     ("--execute", "execute"),
     ("--provider-revision", "provider_revision"),
@@ -142,7 +146,7 @@ _TODO_OPTION_FLAGS = {field: flag for flag, field in TODO_OPTION_FIELDS}
 # Read/claim subsets share validation and help. Update help reuses the mutable
 # field owner; other lifecycle commands retain full help until centralized.
 TODO_ACTION_FIELDS = {
-    "list": frozenset({"role", "todo_id", "status", "agent_id", "todo_limit", "todo_thin", "state_file", "project", "dry_run"}),
+    "list": frozenset({"role", "todo_id", "status", "agent_id", "todo_limit", "todo_thin", "todo_summary", "include_archived", "state_file", "project", "dry_run"}),
     "receipt": frozenset({"operation_id"}),
     "result-read": frozenset({"todo_id"}),
     "plan": frozenset({"text", "agent_id", "project"}),
@@ -306,8 +310,8 @@ def validate_todo_list_options(args: argparse.Namespace) -> None:
         args,
         TODO_ACTION_FIELDS["list"],
         "todo list only accepts --goal-id, optional --role, --status, --todo-id, "
-        "--agent-id, --limit, --thin, --project, --state-file, --dry-run, and "
-        "--format; "
+        "--agent-id, --limit, --thin, --summary, --include-archived, --project, "
+        "--state-file, --dry-run, and --format; "
         "unsupported: ",
     )
 
@@ -378,7 +382,8 @@ class TodoClaimArgumentError(ValueError):
         ]
         if args.task_lease_expected_version is not None and not args.task_lease_idempotency_key:
             missing.append("--task-lease-idempotency-key")
-        cli_args = ["--registry", str(registry_path), "--format", "json"]
+        route = loopx_cli_argv()
+        cli_args = [*route[1:], "--registry", str(registry_path), "--format", "json"]
         if runtime_root_arg is not None:
             cli_args.extend(["--runtime-root", runtime_root_arg])
         cli_args.extend(["todo", "claim", "--goal-id", args.goal_id])
@@ -392,7 +397,7 @@ class TodoClaimArgumentError(ValueError):
         if args.dry_run:
             cli_args.append("--dry-run")
         return {
-            "command": "loopx todo claim",
+            "command": shlex.join([*route, "todo", "claim"]),
             "cli_args": cli_args,
             "requires_flags": missing,
             "remove_flags": unsupported_todo_options(args, allowed_fields=_TODO_CLAIM_FIELDS),
@@ -693,6 +698,13 @@ def validate_shared_todo_options(args: argparse.Namespace) -> None:
         )
     if args.todo_thin and args.todo_command != "list":
         raise ValueError("--thin is supported only by todo list")
+    if getattr(args, "todo_summary", False):
+        if args.todo_command != "list":
+            raise ValueError("--summary is supported only by todo list")
+        if args.todo_thin:
+            raise ValueError("todo list accepts either --summary or --thin")
+        if args.todo_id:
+            raise ValueError("Exact Todo reads return full requirements; remove --summary or omit --todo-id for a queue overview")
 
 
 def validate_capability_gap_options(args: argparse.Namespace) -> None:

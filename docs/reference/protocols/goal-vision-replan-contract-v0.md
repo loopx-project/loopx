@@ -38,6 +38,23 @@ no TurnEnvelope opt-in is needed. Quota and writeback resolve the same live
 configuration. See [Goal review cadence](../../quota-allocation.md#goal-review-cadence)
 for configuration precedence, rollback and independent review triggers.
 
+Evidence-conditioned Stride is the capability default when no Goal or saved
+machine configuration overrides it. Explicit `off`, legacy saved cadence-only
+configuration and historical decisions keep their original meaning. Clear the
+cadence/strategy override to inherit the current default, or explicitly select
+`off` for rollback; this does not rewrite prior evidence or frozen workers.
+
+Stride sizes the next coherent Todo/delivery or interpretable experiment, route
+change and validation scope through the existing Todo and Vision owners. Apply
+an evidence-supported `grow` plan to actual Todo scope and acceptance, retain
+unfinished useful work, and record verified Todo IDs in `todo_delta`. Subsequent
+normal admission, execution and evidence-linked review qualify adoption; prose
+and a new Todo alone do not. `verify` resolves a decision-relevant uncertainty
+and need not shrink work. All actions preserve the configured review count,
+stall triggers, dependencies, authority and per-Turn settlement. There are no
+fixed grow/verify cadence multipliers. See the
+[strategy boundary](../../architecture/rfcs/hierarchical-agent-stride-control-v0.md#76-research-scope-and-evidence-conditioned-control).
+
 ## Replan ACK freshness
 
 An accepted ACK with a legal vision outcome covers gaps at or before its
@@ -161,6 +178,29 @@ Required write-path behavior:
 3. Store verbose rationale as evidence and reference it by id.
 4. Keep the latest bounded packet visible in status/quota so agents can reason
    without reading private scratchpads or chat history.
+
+Prepare reports independent text and list-budget violations together. For
+budget-only failures, the first error keeps its code, message and compact suggestion; optional typed
+request-error `details` carry further numeric diagnostics through the runtime
+without expanding its 240-character primary message. Details are bounded to 128
+entries of 240 characters; overflow is explicit. Vision's fixed field/list
+limits fit this carrier. Oversized lists reject before inspecting their contents;
+their partial usage is never reported as a complete aggregate. Correct the
+authored packet deliberately and retry: diagnostics neither rewrite it nor grant
+write/settlement authority. Structural/privacy failures encountered during
+normalization still reject directly before writes, even when earlier budget
+findings were collected. Other path-delta consumers retain fail-fast behavior.
+Same-field enum decoding follows that field's budget check: an oversized
+`advancement_policy` keeps its budget error; a short invalid value keeps its
+enum rejection.
+
+Prepare 一次报告可独立发现的文本与列表预算问题；首条错误的 code、正文和建议兼容保留，
+后续数值诊断通过 typed request-error 的可选 `details` 传递。主消息仍限 240 字符；
+明细最多 128 条、每条 240 字符，超出时明确标识。Vision 的固定字段／列表范围可完整容纳。
+超数量列表仍先拒绝数量，不扫描内容，也不把部分用量当作整包总量。调用者应审阅并主动
+修正原包；诊断不改写意图、不授予写入或结算权限。归一化中遇到结构错误或私有内容仍
+直接在写入前拒绝，即使之前已经收集到预算问题；其他 path-delta 调用者保留首错即返。
+同字段先查预算再解码枚举：超长 `advancement_policy` 保留预算错误，短非法值保留枚举拒绝。
 
 The normal lightweight CLI write boundary is `loopx refresh-state` with inline
 vision patch fields:
@@ -422,8 +462,10 @@ is required before typed progress, a successor, blocker or terminal outcome can
 settle the obligation. Enabled fresh-path decisions also retain their existing
 structured-decision validation. The [structured contract](#structured-stride-control)
 owns those field, reference and review requirements; the shared planning
-guidance does not replace or add to them. `off` remains the default, including
-legacy configurations, and unknown versions fail before mutation. No new
+guidance does not replace or add to them. The inherited capability default is
+`evidence_conditioned_v1`; explicit `off` and saved legacy cadence-only
+configurations retain their meaning, as described in [Default review cadence](#default-review-cadence).
+Unknown versions fail before mutation. No new
 permission, scheduler or automatic route actuator is introduced here.
 
 The [captured reader](turn-envelope-v0.md#captured-replan-reads--捕获后的重规划读取)
@@ -468,7 +510,9 @@ Todo 顺序和 Agent 暂定筛选规则可调整；到期复核可以继续、�
 fresh-path 决定仍受既有结构校验约束。这些是机器执行的字段、引用与复核要求，
 不能一概称为建议文字，也不是本段新增的门禁。
 
-默认仍为 `off`，旧配置兼容，未知版本在写入前拒绝。捕获后的 reader 在开关两种
+继承能力配置时默认启用 `evidence_conditioned_v1`；显式 `off` 和已保存的旧版仅周期
+配置保留原语义，详见[默认复盘周期](#default-review-cadence)。未知版本在写入前拒绝。
+捕获后的 reader 在开关两种
 情况下都先交付复盘事实、再交付写回格式；它改善信息交付，不是首次引入证据驱动
 重规划。关闭 Stride 时观察到的读取／结算改善不能归为 Stride 收益。权限、调度器与
 自动路线执行权不变；投递与隔离验证不证明实际决策采用、有用成果或可比完整成本。
@@ -896,14 +940,57 @@ receipts retain their checkpoint semantics:
 }
 ```
 
-CLI in-flight settlement omits the material-closeout Vision authoring schema.
-Use the projected continuation command and its original boundary/identity flags;
-this does not waive validation, writeback or debit rules. Material CLI closeout
-and MCP `complete_task` retain their evidence-linked Vision authoring contract.
+Ordinary CLI Todo settlement includes the existing Vision authoring schema even
+when its default boundary is in-flight. The durable-writeback step also exposes
+`semantic_closeout_command_template`: the same admitted Goal, Todo and Turn,
+with `--delivery-boundary semantic_closeout --agent-vision-json <file>` selected.
+It is an alternative for that step, not another plan, claim, debit or admission.
+Material CLI closeout and MCP `complete_task` retain their existing evidence gates.
 
-CLI 进行中结算不附带实质收尾的 Vision 编写结构。沿用投影命令及原边界、身份
-参数，仍须验证、写回与原 debit；实质 CLI 收尾和 MCP `complete_task` 保留
-证据关联的 Vision 编写契约。
+Choose `command_template` for ordinary in-flight progress without new decision
+evidence; use `semantic_closeout_command_template` for new evidence from this
+admitted work, a route change or Todo completion. Bind the evaluated artifact/input
+and actual decision in fresh Vision/path_delta, including `continue`/`no_change`
+when retaining the route. Keep the original Goal/Todo/Turn, follow the remaining
+writeback/spend steps and yield for freshly guarded Host continuation; an unfinished
+Todo stays open. Prior-feedback readback, bookkeeping and deterministic rechecks
+without new information are context, not progress: advance the task first.
+Unchanged polls alone need no checkpoint. This is Agent guidance, not automatic
+tool-text classification, a Stride trigger or proof of adoption/benefit.
+
+An open Todo with controller-declared completion validation can use this
+semantic checkpoint for `outcome_progress` with a fresh, open Vision and an
+evidence-linked `continue` or `no_change` path. The shared settlement owner
+qualifies the admitted writeback and its exact receipted spend through the same
+rule. This closes only the original Turn: the Todo remains open and its final
+completion validator remains pending. Primary-outcome, closed-Vision and
+terminal declarations retain that validator gate.
+
+For explicitly continuing/optimization objectives, candidate usability alone is not completion:
+before stop/no_followup, weigh acceptance gaps, plausible headroom and feasible next work's
+full marginal cost against accepted stops in an evidence-linked path_delta.
+Continue/replan useful authorized work; preserve Stop, budget/permission limits
+and genuine waits. Neither submission nor unused budget alone establishes completion
+or requires invented work, pivots or successors.
+
+普通 CLI Todo 的默认 in-flight 结算也提供 Vision 编写结构。无新决策证据的普通
+推进选 `command_template`；本次准入工作产生或取得新证据、改变路线或完成 Todo，
+选 `semantic_closeout_command_template`，以 fresh Vision/path_delta 关联评估产物、
+输入版本和实际决策，保留路线也可用 `continue` / `no_change`。沿用原 Goal、Todo、
+Turn，按原计划继续写回和扣额，再由宿主以新 guard 接续；未完成 Todo 保持 open，
+不另建 plan、认领、扣额或准入。旧反馈读回、记账、无新信息的确定性重验只是上下文，
+应先用于推进任务；未变化轮询不要求新 checkpoint。它是 Agent 指导，不自动分类
+工具文本、不触发 Stride，也不证明模型采用或收益。
+
+持续优化目标不能仅因候选可用就完成：停止前在 path_delta 中用证据对照剩余验收、
+改进空间、可行后续工作的完整边际成本和原停止条件；继续或重规划有用且获授权的工作，
+保留 Stop、预算/权限限制与真实等待。提交或剩余额度均不证明完成，也不要求制造工作、
+换路或后继 Todo。
+
+声明完成验证器的开放 Todo，可以用 fresh、open 的 Vision 和有证据关联的
+`continue` / `no_change` 路径记录 `outcome_progress`；准入写回与精确回执的扣额
+复用同一 TS 资格规则。它只结算原 Turn，不完成 Todo，也不满足最终完成验证器。
+primary outcome、已闭合 Vision 与终态声明仍须通过原完成验证门。
 
 One explicit exception exists for in-flight delivery. When quota admits an
 open advancement Todo for normal delivery, its settlement guidance may add the
@@ -933,7 +1020,7 @@ decision merely because the scheduler woke up. Agents must start from
 projected boundary and identity flags; reconstructing a generic
 `semantic_closeout` command discards that continuity contract.
 
-If the work actually replanned or completed the Todo, explicitly choose
+If this admitted work obtains new decision evidence, actually replans or completes the Todo, explicitly choose
 `semantic_closeout` and provide its required vision checkpoint. Do not simply
 remove the replan ACK to make a real replan pass as in-flight work. Conversely,
 ordinary within-Todo progress must not add `--autonomous-replan-recorded`.
@@ -1007,7 +1094,7 @@ configured, the current agent vision, and the local source binding. A replan
 obligation covers the full Todo frontier. Archived dependencies remain inputs.
 Large local bases use digest-checked private files across the Python/TypeScript
 runtime boundary, including the response; the CLI still returns the complete
-basis. The 2 MiB default RPC guard remains for other effects. File size is
+basis. Other effects retain the shared [8 MiB RPC guard](../canonical-snapshot-pagination.md#shared-rpc-byte-budget). File size is
 bounded and an unverifiable response after a possible commit is ambiguous,
 so the caller reads the exact receipt before retrying any mutation. Neither
 transport nor a future paged presentation may silently omit a basis component.
@@ -1086,6 +1173,12 @@ in its durable-writeback step, the replan contract uses a same-response
 Different schemas remain separate, and progress-only replan does not acquire a
 Vision requirement. TurnEnvelope preserves the ordinary plan's guidance.
 
+`checkpoint_context_not_missing` is an inapplicable recovery, not a request to
+repeat that read. Its `reread_required` is false. Preserve the committed writeback
+and quota receipt; inspect later authorized work through the normal guard with
+a fresh Turn identity. A stale, missing or replaced read receipt still requires
+the original scoped reread. Neither rejection grants execution or completion.
+
 Shared `todo plan` and guided-start authoring steps also provide a routed exact
 readback command for each authored or reused Todo id. Inventory text is a bounded
 excerpt. Verify `todo_detail_projection.source_complete=true`, compare `.todo.text`
@@ -1102,6 +1195,11 @@ calls, but lower model cost or better outcomes still require live measurement.
 Turn 写回后的恢复。规划与接续指引提供逐条精确读回命令，用完整 `.todo.text` 核对
 需求和当前状态，不能拿列表摘要判断正文丢失。读取不授予执行权限；准入、租约、
 恢复和单次记账规则保持不变。包体增量与模型效率、效果收益须分别测量。
+
+`checkpoint_context_not_missing` 表示这条恢复路径不适用，`reread_required=false`，
+不应重复同一读取。保留已提交写回与记账回执；后续获授权的工作通过正常 guard 和新
+Turn 身份检查。陈旧、缺失或被替换的读取回执仍须按原范围重读。拒绝不授予执行或
+完成权限。
 
 A satisfied checkpoint is protocol-complete, but a material closeout also has
 to qualify its relationship to the final outcome. A patched checkpoint must

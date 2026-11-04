@@ -64,6 +64,8 @@ def _surface_install_command(agent_type: str, cli_bin: str, project: str) -> str
         return f"{host_command(cli_bin)} slash-commands --install --surface zcode"
     if agent_type == "agy":
         return f"{host_command(cli_bin)} slash-commands --install --surface agy"
+    if agent_type == "antigravity-app":
+        return f"{host_command(cli_bin)} slash-commands --install --surface antigravity-app"
     if agent_type == "kiro-cli":
         return f"{host_command(cli_bin)} slash-commands --install --surface kiro-cli"
     if agent_type == "pi":
@@ -297,6 +299,7 @@ def _bootstrap_pack_command(
         "cursor-agent": "cursor-agent",
         "zcode": "zcode",
         "agy": "agy",
+        "antigravity-app": "antigravity-app",
         "kiro-cli": "kiro-cli",
         "deepseek-harness": "deepseek-harness",
         "deepseek-harness-native": "deepseek-harness-native",
@@ -373,6 +376,15 @@ def _start_instruction(agent_type: str) -> str:
             "wake Prompt; recurring via MaxIterations) when quota allows more "
             "work."
         )
+    if agent_type == "antigravity-app":
+        return (
+            "Invoke the LoopX skill from `~/.gemini/config/skills` via `/loopx <task>`; "
+            "after todo writeback, start every turn with `quota should-run`, suspend "
+            "directly via the native `schedule(DurationSeconds=..., Prompt=...)` tool "
+            "when `waiting_external` or CI checks are pending (instead of polling), "
+            "and optionally configure `~/.gemini/config/sidecar.json` for background "
+            "periodic heartbeats."
+        )
     if agent_type == "kiro-cli":
         return (
             f"Run `/loopx <task>` (the LoopX skill installed in "
@@ -441,10 +453,9 @@ def build_agent_onboarding_packet(
         {},
     )
     from .capabilities.machine_configuration.builtins import (
-        build_builtin_machine_configuration_registry,
+        read_builtin_goal_machine_configuration,
         project_goal_with_builtin_machine_configuration,
     )
-    from .capabilities.machine_configuration.store import read_machine_configuration
     from .paths import resolve_runtime_root
 
     runtime_root = resolve_runtime_root(
@@ -453,10 +464,7 @@ def build_agent_onboarding_packet(
     )
     goal = project_goal_with_builtin_machine_configuration(
         goal,
-        read_machine_configuration(
-            runtime_root,
-            registry=build_builtin_machine_configuration_registry(),
-        ),
+        read_builtin_goal_machine_configuration(runtime_root),
     )
     active_project_skill_ids = (
         [CHANGE_QUALITY_SKILL_ID]

@@ -23,7 +23,7 @@ def has_explicit_context_read_source(args: argparse.Namespace) -> bool:
     """
     return getattr(args, "quota_command", None) == "context-read" and any(
         getattr(args, key, None) for key in (
-            "capture_file", "capture_sha256", "codex_context_dir", "codex_context_root"
+            "capture_file", "capture_sha256", "reference_file", "codex_context_dir", "codex_context_root"
         )
     )
 
@@ -93,24 +93,55 @@ def apply_context_machine_options(
         return
     from ..paths import effective_runtime_root
     runtime_root = effective_runtime_root(registry_path, runtime_root_arg)
+    using_default = False
+    value: dict[str, Any] = {}
     if explicit is None:
         from ..capabilities.machine_configuration.builtins import build_builtin_machine_configuration_registry
         from ..capabilities.machine_configuration.store import read_machine_configuration
 
-        configuration = read_machine_configuration(runtime_root, registry=build_builtin_machine_configuration_registry())
+        machine_registry = build_builtin_machine_configuration_registry()
+        configuration = read_machine_configuration(
+            runtime_root, registry=machine_registry, namespace_ids=("context_delivery",),
+        )
         value = (configuration or {}).get("namespaces", {}).get("context_delivery")
-        if value is None or value["mode"] == "off":
+        using_default = value is None
+        if using_default:
+            value = machine_registry.resolve("context_delivery").public_descriptor()["configuration_template"]
+        if value["mode"] == "off":
             return
+    # Presentation is host-neutral. Only Delta needs declared lifecycle
+    # continuity. A read-only query must not manufacture an admitted Turn.
+    args.context_delivery = explicit or "auto"
+    if getattr(args, "delta_delivery", None) is None:
+        args.delta_delivery = value.get("delta_delivery", "auto")
+    if ((command == "should-run" and not (getattr(args, "turn_instance_id", None)
+            or bool(getattr(args, "begin_turn", False)))) or os.name != "posix") and explicit != "on":
+        args.delta_delivery = "off"
     # Recovery does not activate a run mode or create a missing session.
     if command != "context-read":
-        args.context_delivery = "on"
-        if not context_delivery_for_arguments(args, codex_machine_preference=explicit is None)["enabled"]:
-            args.context_delivery = "off"
-            return
-        if command == "should-run" and args.format != "json":
+        try:
+            enabled = context_delivery_for_arguments(args, codex_machine_preference=explicit is None)["enabled"]
+        except ValueError:
+            if not using_default:
+                raise
+            # An absent preference enables only the supported native hosts.
+            # Ordinary CLI and unknown declarations retain their original path;
+            # explicit on still rejects an unsupported or conflicting host.
+            enabled = False
+        if command == "should-run" and args.format != "json" and enabled:
             raise ValueError("native Codex context delivery needs JSON and a capture destination")
     if explicit is None:
         args._context_delivery_machine_runtime = str(runtime_root.expanduser().resolve())
+    if command == "should-run" and args.format == "json":
+        args._progressive_context_runtime = str(runtime_root.expanduser().resolve())
+    if command != "context-read" and not enabled:
+        return  # Stateless presentation needs neither a journal nor native setup.
+    if (heartbeat and explicit != "on" and any(getattr(args, field, False) for field in ("brief", "compact", "full"))
+            and not any(getattr(args, field, None) for field in ("codex_context_dir", "codex_context_root",
+                "decision_output_dir", "decision_output_root", "decision_handoff_socket"))):
+        # Rendering an expanded prompt does not start native transport. Its
+        # generated guard retains AUTO and resolves paths when actually run.
+        return
     # An off/on round trip can miss lifecycle events. Store replacement
     # invalidates reuse even when its content hash returns to the old value.
     # This metadata only narrows reuse; it is not retention or work authority.

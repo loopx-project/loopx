@@ -22,7 +22,7 @@ from loopx.control_plane.goals.goal_vision_policy import DEFAULT_PLANNING_HORIZO
 
 from .codex_offline import MODEL_CATALOG_REMOTE, CodexOffline, stage_portable_python
 from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution, turn_envelope_receipt
-from .layout import _ROOT, _SRC, _CONTROL, _CODEX_HOME
+from .layout import _ROOT, _SRC, _CONTROL, _CODEX_HOME, _REGISTRY, _LOOPX_RUNTIME
 
 
 _PYTHON = f"{_ROOT}/python"
@@ -32,8 +32,6 @@ _PROFILE_HOME = f"{_PROFILE}/home"
 _SHARED_CODEX_HOME = f"{_PROFILE}/codex-home"
 _SHARED_SKILLS = f"{_SHARED_CODEX_HOME}/skills"
 _CLI = f"{_PROFILE}/bin/loopx"
-_REGISTRY = f"{_CONTROL}/registry.json"
-_LOOPX_RUNTIME = f"{_ROOT}/state/runtime"
 _SCHEDULER_STATE = f"{_CONTROL}/scheduler-state.json"
 _TASK_DOC = f"{_CONTROL}/task.md"
 _BASH_ENV = f"{_CONTROL}/bash-env"
@@ -74,7 +72,8 @@ class BenchmarkCodex(CodexOffline):
         task_entry=None,
         planning_timeout_sec=None,
         turn_envelope=False,
-        context_delivery="off",
+        context_delivery=None,
+        provider_request_admission=False,
         native_goal_continue=False,
         task_objective=None,
         execution_observation=None,
@@ -101,6 +100,11 @@ class BenchmarkCodex(CodexOffline):
             turn_envelope,
             context_delivery,
         )
+        if type(provider_request_admission) is not bool:
+            raise ValueError("provider_request_admission must be a boolean opt-in")
+        if provider_request_admission and self.execution.mode != "heartbeat":
+            raise ValueError("provider_request_admission requires heartbeat execution")
+        self.provider_request_admission = provider_request_admission
         if planning_timeout_sec is not None:
             raise ValueError(
                 "Remove planning_timeout_sec; planning shares scheduler_timeout_sec with execution"
@@ -173,6 +177,13 @@ class BenchmarkCodex(CodexOffline):
             raise ValueError("Task objective must be a non-empty string")
         self.task_objective = task_objective
         super().__init__(*args, **kwargs)
+        if self.provider_request_admission:
+            if not (self._get_env("OPENAI_BASE_URL") or "").strip() or not (
+                self._get_env("OPENAI_API_KEY") or ""
+            ).strip():
+                raise ValueError("provider_request_admission requires a custom provider URL and API key")
+            if (self._get_env("CODEX_WIRE_API") or "responses") != "responses":
+                raise ValueError("provider_request_admission requires the Responses wire API")
 
     def _turn_envelope_receipt(self) -> dict:
         return {**turn_envelope_receipt(explicit=self.execution.turn_envelope),
@@ -369,6 +380,7 @@ class BenchmarkCodex(CodexOffline):
                if self.execution_observation is not None else {}),
             **self._turn_envelope_receipt(),
             **self._planning_receipt(),
+            **({"provider_request_admission": "on"} if self.provider_request_admission else {}),
             "home_scope": "trial",
             "loopx_usage_ping_enabled": False,
             "login_shell_node_path": _BASH_ENV,
@@ -530,6 +542,11 @@ class BenchmarkCodex(CodexOffline):
         if self.execution.task_entry == "seeded-todo":
             await self._seed_phase(environment, cwd=cwd)
 
+        await self._verify_phase_configuration(environment, cwd=cwd)
+
+    async def _verify_phase_configuration(self, environment: BaseEnvironment, *, cwd: str) -> None:
+        """Read the treatment without reconfiguring a restored Goal or its queue."""
+        key, _, expected = self._replan_configuration()
         cadence = await self._loopx(
             environment, ["configure-goal", "--goal-id", self.goal_id], cwd=cwd,
         )
@@ -620,7 +637,8 @@ class BenchmarkCodex(CodexOffline):
                 **({"LOOPX_CHECKPOINT_REQUEST": self.checkpoint_request_path}
                    if self.checkpoint_request_path is not None else {}),
                 **({"LOOPX_TURN_ENVELOPE": "1"} if self.execution.turn_envelope else {}),
-                **({"LOOPX_CONTEXT_DELIVERY": "on"} if self.execution.context_delivery != "off" else {}),
+                "LOOPX_CONTEXT_DELIVERY": self.execution.context_delivery,
+                **({"LOOPX_PROVIDER_REQUEST_ADMISSION": "on"} if self.provider_request_admission else {}),
                 **({"LOOPX_NATIVE_GOAL_CONTINUE": "1"} if self.native_goal_continue else {}),
                 "LOOPX_ITERATION_CONTEXT": self.execution.context,
                 "LOOPX_CODEX_SANDBOX": self.execution.sandbox,
@@ -750,6 +768,7 @@ class BenchmarkCodex(CodexOffline):
             "task_entry": self.execution.task_entry,
             **self._turn_envelope_receipt(),
             **self._planning_receipt(),
+            **({"provider_request_admission": "on"} if self.provider_request_admission else {}),
             "home_scope": "trial",
             **self._replan_receipt(),
             "benchmark_phase": self._phase_number,

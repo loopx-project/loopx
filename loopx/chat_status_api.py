@@ -10,8 +10,8 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from .chat import redact_local_paths
-from .chat_goal_subagent_api import goal_subagent_configuration_enabled
-from .chat_workspace_directory import workspace_goal_directory
+from .chat.goal_subagent_api import goal_subagent_configuration_enabled
+from .chat.workspace_directory import workspace_goal_directory
 from .codex_app_thread_activity import (
     codex_delivery_expectations,
     codex_thread_observers,

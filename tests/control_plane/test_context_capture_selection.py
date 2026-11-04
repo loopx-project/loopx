@@ -3,11 +3,15 @@ import argparse
 import hashlib
 import json
 import shlex
+from pathlib import Path
 
 import pytest
 
-from tests.control_plane.codex_checkpoint_fixture import NativeContextReader, last_context_page
+from tests.control_plane.codex_checkpoint_fixture import (
+    NativeContextReader, last_context_page, native_process_continuation,
+)
 from loopx.cli_commands.quota_capture import read_context_capture
+from loopx.control_plane.effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
 from loopx.control_plane.turn_driver.decision_capture import capture_page_range
 from test_quota_settlement_cli import _run_cli
 
@@ -45,22 +49,104 @@ def fixture_capture(tmp_path):
     return path, raw, original
 
 
+@pytest.mark.parametrize("code_mode", [False, True])
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_native_process_continuation_uses_only_the_latest_tool_result(code_mode, wrapped):
+    # Literal native output from a slow command; completion must not be
+    # inferred from an earlier page, an EOF, or the command's mere dispatch.
+    output = "Wall time: 10.0832 seconds\nProcess running with session ID 92241\nOutput:\n"
+    if wrapped:
+        output = [{"type": "input_text", "text": json.dumps({"output": output})}]
+    request = {"input": [{"type": "function_call_output", "output": output}]}
+    call = native_process_continuation(request, "fixture", code_mode=code_mode)
+    assert call and call["name"] == ("exec" if code_mode else "write_stdin")
+    if code_mode:
+        assert "tools.write_stdin" in call["input"] and '"session_id": 92241' in call["input"]
+    else:
+        assert json.loads(call["arguments"])["session_id"] == 92241
+    request["input"].append({"type": "function_call_output", "output": "Process exited with code 0"})
+    assert native_process_continuation(request, "complete", code_mode=code_mode) is None
+
+
 def args(path, raw):
     return argparse.Namespace(**dict(capture_file=str(path), capture_sha256=hashlib.sha256(raw).hexdigest(),
         offset=0, page_bytes=256, max_page_output_bytes=2000, format="json", select=["/rows/0"]))
 
 
-def test_native_reference_reader_uses_real_pages_before_recording_delivery(tmp_path):
+def test_native_reference_reuses_the_exact_index_before_selecting_details(tmp_path):
+    from loopx.cli import build_parser
+    from loopx.cli_commands.quota_capture import native_context_capture_view
+
+    original = {"requirements": {"text": "Preserve acceptance and stop conditions. " * 100},
+        "a/b~": [None, True, 9007199254740993], "nullable": None}
+    reference = native_context_capture_view(original, tmp_path)
+    parser = build_parser()
+    indexed = read_context_capture(parser.parse_args(shlex.split(reference["index_command"])[1:]))
+    assert indexed["ok"] and indexed["eof"]
+    assert reference["field_index"] == json.loads(indexed["content"])["selections"][0]["fields"]
+    assert [item["pointer"] for item in reference["field_index"]] == ["/requirements", "/a~1b~0", "/nullable"]
+    assert "Preserve acceptance" not in json.dumps(reference)
+    assert "content" not in reference and "eof" not in reference
+    assert capture_page_range(reference, raw=b"", digest=reference["sha256"]) is None
+    # The inline index replaces only discovery, never the content read.
+    selected = read_context_capture(parser.parse_args(shlex.split(reference["recovery"]["command"])[1:]
+        + ["--select", "/a~1b~0"]))
+    assert selected["ok"]
+    assert json.loads(selected["content"])["selections"][0]["value"] == original["a/b~"]
+
+
+def test_large_inline_index_is_omitted_whole_without_displacing_navigation(tmp_path):
+    from loopx.cli_commands.quota_capture import native_context_capture_view
+
+    original = {"field-" + str(index): {"preserve": index} for index in range(300)}
+    reference = native_context_capture_view(original, tmp_path)
+    assert "field_index" not in reference
+    assert "recovery" in reference and "index_command" in reference and "select_command" in reference
+    assert len(json.dumps(reference, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 7900
+    assert json.loads(Path(reference["recovery"]["path"]).read_text()) == original
+
+
+def test_unavailable_optional_index_keeps_file_only_recovery(tmp_path, monkeypatch):
+    from loopx.cli import build_parser
+    from loopx.cli_commands.quota_capture import native_context_capture_view
+    from loopx.control_plane.effect_runtime import EffectRuntimeStartupError
+    from loopx.control_plane.quota import turn_envelope
+
+    def unavailable(*args, **kwargs):
+        raise EffectRuntimeStartupError("Synthetic typed runtime unavailable", diagnostic_code="fixture_unavailable")
+
+    monkeypatch.setattr(turn_envelope, "_turn_envelope_result", unavailable)
+    original = {"requirements": "Keep every requirement and stop condition."}
+    reference = native_context_capture_view(original, tmp_path)
+    assert reference["ok"] and "field_index" not in reference
+    page = read_context_capture(build_parser().parse_args(shlex.split(reference["recovery"]["command"])[1:]))
+    assert page["ok"] and json.loads(page["content"]) == original
+
+
+@pytest.mark.parametrize("compact_reference", [False, True])
+def test_native_reference_reader_uses_real_pages_before_recording_delivery(tmp_path, compact_reference):
     path, raw, _ = fixture_capture(tmp_path)
     options = args(path, raw)
     options.select = None
     reference = {"ok": True, "mode": "full", "path": str(path),
         "sha256": options.capture_sha256, "command": "read saved capture",
-        "target": {"capture_id": "synthetic-source"}, "recovery": {"path": str(path)}}
+        "target": {"capture_id": "synthetic-source"},
+        "total_bytes": len(raw), "instruction": "Read the current saved input.",
+        "recovery": {"path": str(path), "sha256": options.capture_sha256}}
+    if compact_reference:
+        from loopx.cli_commands.quota_capture import model_context_reference
+
+        reference = model_context_reference(reference)
+        assert "sha256" not in reference and "target" not in reference
     request = {"input": [{"type": "function_call_output", "output": json.dumps(reference)}]}
     reader = NativeContextReader()
     reader.begin("admit current Turn", "source")
     reader.follow(request)
+    assert not reader.deliveries and not reader.retained
+    request["input"].append({"type": "function_call_output", "output": "Process running with session ID 92241\n"})
+    call = reader.follow(request)
+    assert call["name"] == "write_stdin" and json.loads(call["arguments"])["session_id"] == 92241
+    assert not reader.deliveries and not reader.retained
     page_count = 0
     while True:
         page = read_context_capture(options)
@@ -276,3 +362,133 @@ def test_cli_missing_batch_pointer_identifies_original_argument_without_source_l
     assert f"--select argument 3, token {token}" in result["reason"]
     assert pointer not in result["reason"] and "stop if unavailable" not in json.dumps(result)
     assert path.read_bytes() == raw and not registry.exists() and not runtime.exists()
+
+
+def test_cli_repairs_missing_selection_using_typed_error_and_same_capture(tmp_path):
+    path, raw, original = fixture_capture(tmp_path)
+    registry, runtime = tmp_path / "absent.json", tmp_path / "absent-runtime"
+    command = ["quota", "context-read", "--capture-file", str(path),
+        "--capture-sha256", hashlib.sha256(raw).hexdigest()]
+    code, failure = _run_cli(registry, runtime, *command,
+        "--select", "/large", "--select", "/rows/0/missing", cwd=tmp_path)
+    assert code != 0 and failure["ok"] is False and "content" not in failure
+    assert failure["error_kind"] == "request_rejected"
+    assert failure["diagnostic_code"] == "context_selection_missing_pointer"
+    assert "--list" in failure["recovery"] and "Restore" not in failure["recovery"]
+    # Branch on the typed cause, not wording in reason; discover and retry
+    # against the original capture without another guard or admission.
+    code, index = _run_cli(registry, runtime, *shlex.split(failure["recovery_command"])[3:], cwd=tmp_path)
+    assert code == 0 and index["ok"] and index["eof"], index
+    fields = json.loads(index["content"])["selections"][0]["fields"]
+    pointer = next(field["pointer"] for field in fields if field["pointer"] == "/rows/0/tail")
+    code, selected = _run_cli(registry, runtime, *command, "--select", pointer, cwd=tmp_path)
+    assert code == 0 and selected["ok"] and selected["eof"], selected
+    assert json.loads(selected["content"])["selections"] == [
+        {"pointer": pointer, "value": original["rows"][0]["tail"]}]
+    assert capture_page_range(selected, raw=raw, digest=selected["sha256"]) is None
+    assert path.read_bytes() == raw and not registry.exists() and not runtime.exists()
+
+
+@pytest.mark.parametrize("kind,code", [
+    ("request_rejected", "request_too_large"),
+    ("io_transient", "io_busy"),
+    ("io_permanent", "io_permission_denied"),
+    ("internal_failure", "unexpected_handler_error"),
+])
+def test_reader_preserves_runtime_diagnostics_without_parsing_reason(tmp_path, monkeypatch, kind, code):
+    from loopx.control_plane.quota import turn_envelope
+
+    path, raw, _ = fixture_capture(tmp_path)
+
+    def fail(*_args, **_kwargs):
+        raise EffectRuntimeRemoteError("same opaque reason", error_kind=kind, diagnostic_code=code)
+
+    monkeypatch.setattr(turn_envelope, "_turn_envelope_result", fail)
+    result = read_context_capture(args(path, raw))
+    assert result["ok"] is False and "content" not in result and "next_command" not in result
+    assert result["error_kind"] == kind and result["diagnostic_code"] == code
+    assert result["reason"] == "same opaque reason"
+    assert "Restore" not in result["recovery"]
+    assert ("--list" in result["recovery"]) is (kind == "request_rejected")
+    assert path.read_bytes() == raw
+
+
+def test_runtime_startup_failure_does_not_request_capture_restoration(tmp_path, monkeypatch):
+    from loopx.control_plane.quota import turn_envelope
+
+    path, raw, _ = fixture_capture(tmp_path)
+
+    def fail(*_args, **_kwargs):
+        raise EffectRuntimeStartupError("runtime unavailable", diagnostic_code="runtime_startup_timeout")
+
+    monkeypatch.setattr(turn_envelope, "_turn_envelope_result", fail)
+    result = read_context_capture(args(path, raw))
+    assert result["ok"] is False and "content" not in result
+    assert result["diagnostic_code"] == "runtime_startup_timeout"
+    assert "runtime" in result["recovery"] and "Restore" not in result["recovery"]
+    assert path.read_bytes() == raw
+
+
+@pytest.mark.parametrize("damage", ["missing", "digest", "json"])
+def test_capture_failure_cannot_be_repaired_as_a_selector_error(tmp_path, monkeypatch, damage):
+    from loopx.control_plane.quota import turn_envelope
+
+    path, raw, _ = fixture_capture(tmp_path)
+    request = args(path, raw)
+    if damage == "missing":
+        path.unlink()
+    elif damage == "digest":
+        path.write_bytes(b"{}")
+    else:
+        path.write_bytes(b"{broken")
+        request.capture_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("invalid captures must not reach selection")
+
+    monkeypatch.setattr(turn_envelope, "_turn_envelope_result", unexpected)
+    result = read_context_capture(request)
+    assert result["ok"] is False and "content" not in result and "next_command" not in result
+    assert "diagnostic_code" not in result and "error_kind" not in result
+    assert "Restore the original digest-bound capture" in result["recovery"]
+
+
+@pytest.mark.parametrize("reference", [False, True])
+@pytest.mark.parametrize("mode", ["normal", "replan"])
+@pytest.mark.parametrize("pointer,parent", [
+    ("/interaction_contract/cli_channel/settlement_plan/absent", "/interaction_contract/cli_channel"),
+    ("/sources/4/content", "/sources"),
+    ("/a~1b/~0/child", "/a~1b"),
+    ("/missing/child", ""),
+])
+def test_cli_recovery_command_uses_current_capture_and_nearest_container(tmp_path, mode, pointer, parent, reference):
+    original = {"interaction_contract": {"cli_channel": {"settlement_plan": None} if mode == "normal"
+        else {"settlement_read_ref": "opaque-reference"}}, "sources": [], "a/b": {"~": False},
+        "unrelated": "private-value" * 1000}
+    path = tmp_path / "capture with ' quote.json"
+    raw = json.dumps(original).encode()
+    path.write_bytes(raw)
+    registry, runtime = tmp_path / "absent.json", tmp_path / "absent-runtime"
+    command = ["quota", "context-read", "--capture-file", str(path),
+        "--capture-sha256", hashlib.sha256(raw).hexdigest(), "--select", "/unrelated", "--select", pointer]
+    if reference:
+        from loopx.control_plane.turn_driver.decision_capture import write_context_read_reference
+        reader = write_context_read_reference(path, hashlib.sha256(raw).hexdigest())
+        command = ["quota", "context-read", "--reference-file", str(reader),
+            "--select", "/unrelated", "--select", pointer]
+    code, failure = _run_cli(registry, runtime, *command, cwd=tmp_path)
+    assert code != 0 and not failure["ok"] and "content" not in failure
+    assert "private-value" not in json.dumps(failure)
+    recovery = shlex.split(failure["recovery_command"])
+    assert recovery[recovery.index("--select") + 1] == parent
+    assert "--list" in recovery and recovery[recovery.index("--offset") + 1] == "0"
+    code, index = _run_cli(registry, runtime, *recovery[3:], cwd=tmp_path)
+    assert code == 0 and index["ok"] and index["eof"]
+    assert json.loads(index["content"])["selections"][0]["pointer"] == parent
+    assert "private-value" not in index["content"]
+    assert capture_page_range(index, raw=raw, digest=index["sha256"]) is None
+    path.write_bytes(raw + b" ")
+    code, changed = _run_cli(registry, runtime, *recovery[3:], cwd=tmp_path)
+    assert code != 0 and not changed["ok"] and "content" not in changed
+    assert "recovery_command" not in changed
+    assert not registry.exists() and not runtime.exists()

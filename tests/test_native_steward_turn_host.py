@@ -59,7 +59,7 @@ def managed_fixture(steward, tmp_path, monkeypatch, provider="file", *, validato
 def test_registered_agents_have_distinct_durable_sessions_without_adopting_legacy_history(steward, tmp_path, monkeypatch, provider):
     service, first, actor, _, _, capture = managed_fixture(steward, tmp_path, monkeypatch, provider)
     store, runtime, *_ = steward
-    from loopx.chat_session_open import open_chat_session
+    from loopx.chat.session_open import open_chat_session
     from loopx.agent_registry import load_goal_from_registry
     cli(runtime, "configure-goal", "--goal-id", actor["goal_id"], "--registered-agent", actor["agent_id"],
         "--registered-agent", "peer", "--execute")
@@ -585,7 +585,7 @@ def test_new_native_user_gate_wins_immediately_before_app_server_dispatch(stewar
 def test_inventory_replacement_during_context_read_never_forks_the_original_native_thread(steward, tmp_path, monkeypatch):
     sid, actor, _ = prepare(steward, "file", tmp_path, monkeypatch)
     store, runtime, _, _, binding, capture, _ = steward
-    import loopx.chat_coordination as coordination
+    import loopx.chat.coordination as coordination
     prepare_context = coordination.prepare_turn_context
 
     def changed(*args, **kwargs):

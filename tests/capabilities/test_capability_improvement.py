@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from loopx.capabilities.goal_capability_organization.goal_configuration import configuration_summary
-from loopx.chat_goal_configuration_api import (
+from loopx.chat.goal_configuration_api import (
     CHAT_GOAL_CONFIGURATION_PREVIEW_PATH, GoalConfigurationRequestMixin,
 )
 from loopx.configure_goal import configure_goal

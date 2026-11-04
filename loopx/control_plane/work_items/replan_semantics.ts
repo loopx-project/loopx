@@ -5,6 +5,8 @@ import { optionalNonEmptyString, requireJsonObject, requireNonEmptyString } from
 import { visionAuthoringContract } from "../goals/vision_checkpoint.ts";
 import { parseTodoTimestampMicros } from "../runtime_timestamp.ts";
 import { TODO_COMPLETION_RECOVERIES } from "../todos/completion_state.ts";
+import { id as todoId, readResume, taskClass } from "../todos/read_codec.ts";
+import { indexInferredSuccessors } from "../todos/succession.ts";
 import {normalizeStrideDecision, normalizeStrideStrategy, STRIDE_DECISION_SCHEMA, strideControlContract, strideReviewMismatch} from "./stride_policy.ts";
 import { projectProgressDelta } from "./progress_delta.ts";
 
@@ -30,6 +32,10 @@ const VISION_TRIGGERS = new Set([
   "vision_successor_required", "required_agent_vision_missing",
 ]);
 const ACCEPTANCE_HOLD_TRIGGERS = new Set(["goal_acceptance_stale", "goal_acceptance_unbound"]);
+// These review kinds carry no evidence window, capability or lifecycle duty.
+// A vision gap dominates the ordinary outcome gap's discharge policy, so the
+// same scalar receipt can retain a mixed review after its work links change.
+const SCALAR_REVIEW_KINDS = new Set(["goal_outcome_uncovered", "vision_acceptance_gap"]);
 const EXTERNAL_REVIEW_TRIGGERS = new Set(["external_progress_review_drift"]);
 export const FRESH_PATH_DISPOSITIONS = new Set(["continue", "no_change", "replan"]);
 const PROGRESS_CLI_ARGS = "--progress-result-class <advanced|blocked|exploration_exhausted|no_followup> --progress-surface-id <surface-id> --progress-hypothesis-id <hypothesis-id> --progress-probe-kind <probe-kind> --progress-evidence-id <evidence-id>";
@@ -134,6 +140,21 @@ function lifecycleSource(request: JsonObject): JsonObject {
   // second is possible; the exact obligation digest must still prove identity.
   // Older terminal rows were already absent from the admitted frontier.
   const admissionSecond = admitted / 1_000_000n * 1_000_000n;
+  // The admitted summary also closes a gap through inferred resume/unblock
+  // edges. Reuse the succession owner's index, with its active-generation
+  // identity rule, so a row which already had a successor cannot re-enter the
+  // reconstructed source and break the admitted obligation digest.
+  const generations = new Map<string, JsonObject>();
+  for (const item of request.items.map(object)) {
+    const key = todoId(item.todo_id);
+    if (key && ((item.archive_state ?? "active") === "active" || !generations.has(key))) generations.set(key, item);
+  }
+  const inferred = indexInferredSuccessors([...generations.values()].map(item => {
+    const resume = readResume(item.resume_when) ?? "";
+    return {id: todoId(item.todo_id), advancement: taskClass(item) === "advancement_task",
+      unblocks: todoId(item.unblocks_todo_id),
+      resumes: resume.startsWith("todo_done:") ? todoId(resume.slice(10)) : null};
+  }));
   const items = request.items.map(object).filter(item => {
     const completed = typeof item.completed_at === "string" ? parseTodoTimestampMicros(item.completed_at) : null;
     const updated = typeof item.updated_at === "string" ? parseTodoTimestampMicros(item.updated_at) : null;
@@ -142,6 +163,7 @@ function lifecycleSource(request: JsonObject): JsonObject {
       item.claimed_by === agent && item.last_actor_agent_id === agent &&
       completed !== null && completed <= admitted &&
       strings(item.successor_todo_ids).length === 0 && !item.superseded_by &&
+      !inferred.get(todoId(item.todo_id) ?? "")?.length &&
       // Either canonical closeout path can finish after this review was
       // admitted. The exact trigger/identity checks below still own reentry.
       (item.no_followup !== true || (TODO_COMPLETION_RECOVERIES.some(recovery => recovery === item.completion_recovery) &&
@@ -268,13 +290,13 @@ function preserveReceiptBoundObligation(request: JsonObject): JsonObject {
   // writeback. The exact receipt retains its typed kind, never raw task prose
   // or an old decision context. Other duties keep their canonical owners.
   const review = object(request.receipt_review);
-  if (request.guard_scoped && review.kind === "goal_outcome_uncovered" &&
+  if (request.guard_scoped && SCALAR_REVIEW_KINDS.has(String(review.kind)) &&
       typeof review.stop_condition === "string" && review.stop_condition.trim() && review.stop_condition.length <= 240 &&
       typeof request.agent_id === "string" && request.agent_id.trim()) {
     return {obligation: {schema_version: "autonomous_replan_obligation_v0",
       required: true, obligation_id: selected, agent_id: request.agent_id,
       stop_condition: review.stop_condition,
-      triggers: [{kind: "goal_outcome_uncovered"}], selection_binding: "heartbeat_receipt"}};
+      triggers: [{kind: review.kind}], selection_binding: "heartbeat_receipt"}};
   }
   throw new EffectRuntimeRequestError(
     "heartbeat receipt settlement identity conflicts with the current autonomous replan obligation",
@@ -427,21 +449,22 @@ export function projectReplanSemantics(value: unknown): JsonObject {
   if (request.operation === "receipt_review_source") {
     const kinds = triggerKinds(obligation);
     const triggers = Array.isArray(obligation.triggers) ? obligation.triggers : [];
-    // Only this plain frontier review has a complete scalar receipt source.
-    // Mixed, restricted, lifecycle and capability obligations must not lose
-    // their source-specific evidence or discharge rules through this route.
+    // Plain vision/outcome reviews share a scalar receipt source. Other mixed,
+    // restricted, lifecycle and capability obligations must retain their
+    // source-specific evidence and discharge rules through their own owners.
     return {review_source: obligation.schema_version === "autonomous_replan_obligation_v0" &&
       obligation.required === true && kinds.length > 0 &&
       obligation.trigger_count === triggers.length &&
       typeof request.agent_id === "string" && request.agent_id.trim() &&
       obligation.agent_id === request.agent_id &&
-      kinds.every(kind => kind === "goal_outcome_uncovered") &&
+      kinds.every(kind => SCALAR_REVIEW_KINDS.has(kind)) &&
       obligation.resolution_mode == null && obligation.capability_guard == null &&
       strings(obligation.satisfying_semantic_outcomes).length === 0 &&
       obligation.progress_baseline == null && obligation.progress_window == null &&
       triggers.every(trigger => object(trigger).progress_baseline == null && object(trigger).progress_window == null) &&
       typeof obligation.stop_condition === "string" && obligation.stop_condition.trim() && obligation.stop_condition.length <= 240
-      ? {kind: "goal_outcome_uncovered", stop_condition: obligation.stop_condition} : null};
+      ? {kind: kinds.includes("vision_acceptance_gap") ? "vision_acceptance_gap" : "goal_outcome_uncovered",
+        stop_condition: obligation.stop_condition} : null};
   }
   if (request.operation === "transition_eligibility") {
     return {allowed: !requiresStrideDecision(obligation, request.stride_strategy)};

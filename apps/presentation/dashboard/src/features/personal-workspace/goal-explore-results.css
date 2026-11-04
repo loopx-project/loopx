@@ -17,6 +17,7 @@
 .goal-explore-results .goal-team-result-reader { overflow-wrap: anywhere; }
 .goal-explore-results .goal-team-result-reader > h4 { font-size: var(--text-lead); line-height: var(--leading-lead); font-weight: 600; margin: 0 0 12px; }
 .explore-reader-status { color: var(--pw-muted); font-size: var(--text-caption); }
+.explore-measurement-warning { margin-block: 16px; font-size: var(--text-body); line-height: var(--leading-body); }
 .goal-explore-results .goal-team-result-reader p, .goal-explore-results .goal-team-result-reader li { font-size: var(--text-lead); line-height: var(--leading-prose); color: var(--pw-text); }
 .explore-finding-prose, .explore-finding-raw { max-width: 72ch; }
 .explore-finding-prose section { margin: 24px 0; }

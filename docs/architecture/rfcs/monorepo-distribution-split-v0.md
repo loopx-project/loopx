@@ -736,6 +736,90 @@ Approval needs a reviewed decision, not implementation progress or silence.
   by the guard, and covering it would be a runtime change with its own
   acceptance, not a documentation change.
 
+### 2026-11-03 — Selected host-mode discovery loading
+
+- **Baseline:** `6a6a8590e`. Earlier selected routes for `performance-diagnosis`
+  and `goal-acceptance` are already on this baseline; the Section 4 audit above
+  remains historical, not the current implementation inventory.
+- **Delta:** `host-mode-plan` uses its existing registrar and handler through
+  `cli_runtime`, without loading the full CLI or Chat graph on valid requests.
+  Rejected syntax retains the full-parser diagnostic path. The host selector,
+  preview commands, readiness and authority rules do not move or change.
+- **M1 integration:** [#7878](https://github.com/loopx-project/loopx/pull/7878)
+  is merged at `ffe84a693`: 17 internal-only Chat owners are under `loopx/chat/`,
+  with the top-level count and budget both 128 (145 before this move group).
+  This is a structural delta, not a performance or full-M1 qualification.
+- **Evidence:** `tests/test_cli_entrypoint.py` checks owner-only help, JSON and
+  Markdown parity, unavailable-host previews, invalid requests and zero process,
+  network or file-write activation. A separately installed wheel exercises help,
+  ready/unavailable previews and rejection without Node or a live registry.
+  Local paired fresh-process measurements use 20 samples per revision/workload,
+  one discarded warm-up and alternating order, with telemetry off and warm file
+  caches. On macOS arm64/Python 3.13.5, the help/preview LoopX closure falls
+  from 1,149 to 57 modules; byte-identical output is retained. Timing/RSS belong
+  to the PR's scoped evidence, not a portable threshold or task-outcome claim.
+- **Remaining:** this extends R0-style loading qualification to discovery;
+  it does not complete R0's full V10 census, M1 public-import migration, split
+  packaging or R1 managed minimal. D1–D7 remain open. No new preset or default.
+
+### 2026-11-03 — M1 public status compatibility characterization
+
+- **Boundary:** `ChatStatusRequestMixin` and `goal_read_runtime_root` still live
+  in `loopx.chat_status_api`. The Chat HTTP handler and Todo detail are active
+  consumers. This is a characterization prerequisite, not a relocated owner.
+- **Compatibility evidence:** `tests/test_chat_status_public_compatibility.py`
+  protects historical imports in three fresh-process import orders, historical
+  pickle lookups, reload with already-imported references, and live registry,
+  collector and host-observation patch points through the real HTTP handler.
+  Discovery tolerates a missing registry, not unreadable or invalid metadata.
+  A copied-export facade mutation fails the source-bound Todo-consumer patch
+  oracle: re-exported functions alone do not preserve legacy module globals.
+- **Next reviewed slice:** move the complete status owner under `loopx/chat/`
+  with an identity-compatible public bridge and documented I3 deprecation.
+  Retarget both the exact loader path and `_discovery_registry` exception in
+  `tests/architecture/test_source_session_registry_denial.py` together, retaining
+  metadata-only discovery and executable source-session refusal. The present
+  slice leaves that owner and oracle unchanged; do not split ownership or relax
+  the denial oracle just to make a partial move pass.
+- **Remaining:** status relocation and its installed-wheel integration are not
+  delivered by characterization. I3 retains at least one minor release; D3's
+  exact expiry remains a release-owner decision. M1 is open. No module-count,
+  loading-performance, split-package or R1 managed-Turn benefit is claimed.
+
+### 2026-11-04 — Capability discovery selected loading
+
+- **Baseline:** `79b781865`. `capability list` / `show` and command help now
+  reuse the existing capability registrar and catalog handler without loading
+  the full CLI or Chat. `inspect`, `bind` and `invoke` execution, the explicit
+  full-CLI handler patch point, registry routing and canonical rejected-request
+  diagnostics retain their existing paths. The local discovery set reuses CLI
+  vocabulary; it creates no capability, provider, protocol or authority owner.
+- **Evidence:** `tests/test_cli_entrypoint.py` covers output/help parity,
+  declared-but-absent and real installed-disabled providers, hidden helpers,
+  missing/invalid manifests and no process/network/write activation. The five
+  loading oracles fail on the baseline and pass on the candidate. All 23 focused
+  cases also pass against an independently installed wheel outside the checkout
+  with Node absent; this does not upgrade an existing host. Eight additional
+  immutable base/candidate rejection pairs preserve output and exit status.
+- **Measured closure:** three fresh-process help/list/show workloads use 20
+  samples per revision, one discarded warm-up and alternating order on macOS
+  arm64/Python 3.13.5. Both source snapshots have warm filesystem caches and no
+  bytecode; Node and telemetry are absent. The real `main()` path loads 362
+  LoopX modules instead of 1,149, with 832 read-open observations instead of
+  2,494. Output bytes are identical; observed writes, process starts, network
+  connections and thread starts are zero. Timing and RSS evidence includes
+  equal instrumentation and interpreter startup; it is scoped PR evidence,
+  not a portable D6 threshold or installed-host/task-benefit claim.
+- **Validation holds:** the broader source selection has 320 passing cases and
+  one failing `test_settlement_plan_import_does_not_load_native_capture_io`.
+  The immutable baseline fails identically. Configured mypy likewise reports
+  the same 789 errors in 126 files on both revisions. Neither failure is waived
+  or relabeled as a pass; focused parity does not certify all required checks.
+- **Remaining:** this extends R0-style discovery qualification, independently
+  of the public-status proposal #8011. It does not close full R0/V10, M1, split
+  installation, R1 managed minimal or D1–D7. No preset, frontend operation,
+  permission or persisted state changes; protected execution keeps its owner.
+
 ## Appendix B: Decision log
 
 | Date | Decision | Owner / approval | Alternatives | Normative sections changed |

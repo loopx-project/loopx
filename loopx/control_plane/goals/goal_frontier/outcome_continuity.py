@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any
 
 from ...agents.agent_scope import agent_scope_item_claimed_by
 from ...work_items.autonomous_replan_ack import accepted_blocked_replan_history_indexes
@@ -121,50 +122,60 @@ def latest_outcome_vision_checkpoint_from_status_payload(
         goal_id=goal_id,
         agent_id=agent_id,
     ):
-        checkpoint = run.get("vision_checkpoint")
-        if not isinstance(checkpoint, dict):
-            continue
-        checkpoint_agent_id = str(
-            checkpoint.get("agent_id") or run.get("agent_id") or ""
-        ).strip()
-        if agent_id and checkpoint_agent_id != agent_id:
-            continue
-        if not agent_id and checkpoint_agent_id:
-            continue
-        trigger_kinds = {
-            str(trigger.get("kind") or "").strip()
-            for trigger in (checkpoint.get("triggers") or [])
-            if isinstance(trigger, dict)
-            and str(trigger.get("kind") or "").strip()
-        }
-        if "material_delivery_outcome" not in trigger_kinds:
-            continue
-        result: dict[str, Any] = {
-            "schema_version": checkpoint.get("schema_version"),
-            "goal_id": goal_id,
-            "agent_id": checkpoint_agent_id or agent_id,
-            "required": checkpoint.get("required") is True,
-            "satisfied": checkpoint.get("satisfied") is True,
-            "decision": checkpoint.get("decision"),
-            "triggers": checkpoint.get("triggers")
-            if isinstance(checkpoint.get("triggers"), list)
-            else [],
+        checkpoint = outcome_vision_checkpoint_from_run(run, goal_id=goal_id, agent_id=agent_id)
+        if checkpoint is not None:
+            return checkpoint
+    return None
+
+
+def outcome_vision_checkpoint_from_run(
+    run: dict[str, Any], *, goal_id: str, agent_id: str | None,
+) -> dict[str, Any] | None:
+    """Project the same checkpoint facts for immediate and historical readback."""
+
+    checkpoint = run.get("vision_checkpoint")
+    if not isinstance(checkpoint, dict):
+        return None
+    checkpoint_agent_id = str(
+        checkpoint.get("agent_id") or run.get("agent_id") or ""
+    ).strip()
+    if agent_id and checkpoint_agent_id != agent_id:
+        return None
+    if not agent_id and checkpoint_agent_id:
+        return None
+    trigger_kinds = {
+        str(trigger.get("kind") or "").strip()
+        for trigger in (checkpoint.get("triggers") or [])
+        if isinstance(trigger, dict)
+        and str(trigger.get("kind") or "").strip()
+    }
+    if "material_delivery_outcome" not in trigger_kinds:
+        return None
+    result: dict[str, Any] = {
+        "schema_version": checkpoint.get("schema_version"),
+        "goal_id": goal_id,
+        "agent_id": checkpoint_agent_id or agent_id,
+        "required": checkpoint.get("required") is True,
+        "satisfied": checkpoint.get("satisfied") is True,
+        "decision": checkpoint.get("decision"),
+        "triggers": cast(list[Any], checkpoint.get("triggers"))
+        if isinstance(checkpoint.get("triggers"), list)
+        else [],
+        "generated_at": run.get("generated_at"),
+    }
+    continuity_basis = checkpoint.get("continuity_basis")
+    if isinstance(continuity_basis, dict):
+        result["continuity_basis"] = dict(continuity_basis)
+    run_vision = run.get("agent_vision")
+    if isinstance(run_vision, dict):
+        result["qualification_agent_vision"] = {
+            "agent_id": run_vision.get("agent_id") or checkpoint_agent_id,
+            "state": run_vision.get("state"),
+            "vision_patch": _dict_field(run_vision, "vision_patch"),
+            "path_delta": _dict_field(run_vision, "path_delta"),
             "generated_at": run.get("generated_at"),
         }
-        continuity_basis = checkpoint.get("continuity_basis")
-        if isinstance(continuity_basis, dict):
-            result["continuity_basis"] = dict(continuity_basis)
-        run_vision = run.get("agent_vision")
-        if isinstance(run_vision, dict):
-            result["qualification_agent_vision"] = {
-                "agent_id": run_vision.get("agent_id") or checkpoint_agent_id,
-                "state": run_vision.get("state"),
-                "vision_patch": _dict_field(run_vision, "vision_patch"),
-                "path_delta": _dict_field(run_vision, "path_delta"),
-                "generated_at": run.get("generated_at"),
-            }
-        return result
-    return None
+    return result
 
 
 def acceptance_gaps_from_vision_checkpoint(
@@ -382,7 +393,7 @@ def acceptance_gaps_from_todo_completion_checkpoint(
 
     vision_present = isinstance(agent_vision, dict)
     if vision_present and goal_vision_state_is_closed(
-        str(agent_vision.get("state") or "")
+        str(cast(dict[str, Any], agent_vision).get("state") or "")
     ):
         return []
     if not agent_id:
@@ -438,12 +449,12 @@ def acceptance_gaps_from_todo_completion_checkpoint(
     if len(uncheckpointed_items) < threshold:
         return []
 
-    patch = _dict_field(agent_vision, "vision_patch") if vision_present else {}
+    patch = _dict_field(cast(dict[str, Any], agent_vision), "vision_patch") if vision_present else {}
     return [
         {
             "kind": VISION_OUTCOME_CHECKPOINT_REQUIRED_TRIGGER,
             "source": "recent_completed_advancement_todo",
-            "agent_id": agent_id or agent_vision.get("agent_id"),
+            "agent_id": agent_id or cast(dict[str, Any], agent_vision).get("agent_id"),
             "replan_trigger_summary": (
                 "a completed advancement Todo chain has no later final-outcome "
                 "checkpoint"

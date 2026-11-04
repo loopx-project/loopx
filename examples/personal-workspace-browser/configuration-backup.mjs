@@ -199,7 +199,47 @@ export const configurationBackupScenario = {
       await english.getByText(backend.source_position.provider_revision, {exact: true}).waitFor();
       await english.getByRole("status").scrollIntoViewIfNeeded();
       await page.screenshot({path: resolve(outputDir, "state-recovery-english.png"), animations: "disabled"});
-      return {coverageEntries: context.coverageEntries, errors: context.errors, backend, verified: `Packaged configuration recovery and full archive inspection; real ${backend.source_provider} head/history after original-source loss, no Goal registration, keyboard, corrupt-input recovery, immutable history reload and narrow viewport`};
+      // Reuse this real disposable settings backend for the default/opt-out
+      // journey; no live machine preferences or Goal execution are touched.
+      await page.route("**/api/chat/machine-configuration**", async route => {
+        const response = await fetchWorkspaceBackend(route, `http://127.0.0.1:${port}`);
+        await route.fulfill({response});
+      });
+      async function openContextSettings() {
+        await page.reload();
+        const settings = page.getByRole("button", {name: "Settings", exact: true});
+        if (await settings.count()) await settings.click();
+        await page.locator(".personal-settings-tabs").getByRole("button", {name: /Capabilit/}).click();
+        await page.getByRole("button", {name: /Progressive context/}).click();
+        return page.getByRole("switch", {name: "Read context progressively", exact: true});
+      }
+      let contextSwitch = await openContextSettings();
+      await page.screenshot({path: resolve(outputDir, "context-default-on-desktop.png"), animations: "disabled"});
+      assert.equal(await contextSwitch.isChecked(), true, "Unconfigured Codex must show its effective on default");
+      assert.equal(await page.locator(".personal-capability-detail [role=switch]").count(), 2);
+      await page.setViewportSize({width: 390, height: 844});
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);
+      await contextSwitch.scrollIntoViewIfNeeded();
+      await page.screenshot({path: resolve(outputDir, "context-default-on-mobile.png"), animations: "disabled"});
+      await page.setViewportSize({width: 1512, height: 982});
+      await contextSwitch.click();
+      await page.getByText("Progressive reads preference saved.", {exact: true}).waitFor();
+      const storedSettings = () => readFile(join(root, "runtime/machine/configuration.json"), "utf8").then(JSON.parse);
+      assert.equal((await storedSettings()).namespaces.context_delivery.mode, "off");
+      contextSwitch = await openContextSettings();
+      assert.equal(await contextSwitch.isChecked(), false, "A saved off must survive reload and the new on default");
+      const applyRoute = "**/api/chat/machine-configuration/apply";
+      await page.route(applyRoute, route => route.fulfill({status: 503, contentType: "application/json", body: JSON.stringify({ok: false, error: "Fixture unavailable"})}));
+      await contextSwitch.click();
+      await page.locator(".personal-capability-detail").getByRole("alert").waitFor();
+      assert.equal((await storedSettings()).namespaces.context_delivery.mode, "off", "Failed apply must preserve saved off");
+      await page.unroute(applyRoute);
+      await contextSwitch.click();
+      await page.getByText("Progressive reads preference saved.", {exact: true}).waitFor();
+      const afterSettings = await storedSettings();
+      assert.equal(afterSettings.namespaces.context_delivery.mode, "on");
+      assert.equal(afterSettings.namespaces.goal_storage.new_goal_provider, "sqlite", "The opt-out/on transaction must preserve sibling settings");
+      return {coverageEntries: context.coverageEntries, errors: context.errors, backend, verified: `Actual settings backend: Codex default on, saved off/reload, failed apply and explicit on; Packaged configuration recovery and full archive inspection; real ${backend.source_provider} head/history after original-source loss, no Goal registration, keyboard, corrupt-input recovery, immutable history reload and narrow viewport`};
     } finally {
       try {await context?.close();} finally {
         if (!closed) {

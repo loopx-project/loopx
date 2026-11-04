@@ -18,7 +18,7 @@ from loopx.capabilities.explore.result_log import (
     explore_result_log_path,
 )
 from loopx.configure_goal import configure_goal
-from loopx.chat_goal_configuration_api import _goal_capability_options
+from loopx.chat.goal_configuration_api import _goal_capability_options
 from loopx.control_plane.effect_runtime import (
     effect_runtime_result,
     EffectRuntimeRejected,
@@ -30,7 +30,7 @@ from loopx.explore_graph import compact_explore_graph_policy
 from loopx.todos import add_goal_todo
 
 
-def registry(tmp_path, *, graph=False, planning=False):
+def registry(tmp_path, *, graph=False, planning=False, provider="file"):
     path = tmp_path / "registry.json"
     (tmp_path / "goal.md").write_text("# Goal\n\n## Agent Todos\n")
     path.write_text(
@@ -49,7 +49,7 @@ def registry(tmp_path, *, graph=False, planning=False):
                             "registered_agents": ["worker"],
                             "storage_target": {
                                 "schema_version": "loopx_new_goal_storage_target_v1",
-                                "provider": "file",
+                                "provider": provider,
                                 "handoff_mode": "soft_claim",
                             },
                         },

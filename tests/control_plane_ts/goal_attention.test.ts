@@ -1,3 +1,4 @@
+import {planOwnerAttention} from "../../loopx/control_plane/presentation/owner_attention.ts";
 import assert from "node:assert/strict";
 import {test} from "node:test";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
@@ -151,4 +152,20 @@ test("preview retains unknown source status and omitted work without claiming a 
   const result = boundGoalAttention({goals: [{goal_id: "alpha", attention}], preview: true});
   assert.deepEqual(result.goals[0].attention, {...attention, details_omitted: true});
   assert.throws(() => boundGoalAttention({goals: [], preview: "true"}));
+});
+
+test("pending answers retain live owner work whose proactive notice is baseline suppressed or held", () => {
+  const empty = {schema_version: "lark_owner_attention_v0", revision: 0, enabled: true,
+    initialized: false, subjects: [], outbox: []};
+  const initial = planOwnerAttention({state: empty, source_complete: true,
+    goals: [{goal_id: "alpha", todos: [gate]}]});
+  assert.deepEqual(initial.outbox, [], "first enable suppresses historical notices");
+  const discovered = planOwnerAttention({state: initial, source_complete: true,
+    goals: [{goal_id: "alpha", todos: [gate, {...gate, todo_id: "todo_second"}]}]});
+  const held = planOwnerAttention({state: discovered, goals: [], scope_goal_ids: ["alpha"],
+    unavailable_goal_ids: ["alpha"], source_complete: false});
+  assert.equal((held.outbox as JsonObject[])[0].source_current, false);
+  const result = projectGoalAttention({goal_id: "alpha", todos: [gate, {...gate, todo_id: "todo_second"}], blockers: []});
+  assert.deepEqual(result.items.map(item => item.todo_id), ["todo_gate", "todo_second"]);
+  assert.ok(result.items.every(item => item.owner_must_act === true));
 });

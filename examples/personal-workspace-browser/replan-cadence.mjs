@@ -83,7 +83,7 @@ export const replanCadenceScenario = {
       const count = page.getByLabel("两次复核间的数量", { exact: true });
       const strategy = page.getByLabel(/^步幅策略/);
       await waitForInputValue(count, "6");
-      if (await strategy.inputValue() !== "off") throw new Error("Stride must default off");
+      if (await strategy.inputValue() !== "evidence_conditioned_v1") throw new Error("Stride must default to evidence_conditioned_v1");
       if (await unit.inputValue() !== "effective_turns") throw new Error("Product default is not settled work Turns");
       const horizonGoal = page.getByLabel(/^在规划视野中显示 Goal/);
       const advanced = page.getByText("高级设置", {exact: true});
@@ -302,7 +302,7 @@ export const replanCadenceScenario = {
       if (inherited.source !== "capability_default" || inherited.configuration.count_unit !== "effective_turns" || inherited.configuration.count !== 6) throw new Error("Removing device policy did not restore product default");
       await reopenGoalCadence();
       await waitForInputValue(englishCount, "6");
-      if (await englishUnit.inputValue() !== "effective_turns" || await englishStrategy.inputValue() !== "off") throw new Error("Goal editor did not restore product defaults");
+      if (await englishUnit.inputValue() !== "effective_turns" || await englishStrategy.inputValue() !== "evidence_conditioned_v1") throw new Error("Goal editor did not restore product defaults");
       await englishCount.fill("5");
       await page.getByRole("button", { name: "Preview changes", exact: true }).click();
       const failedReadback = holdGoalReadback();

@@ -24,6 +24,9 @@ for (const initialGoalId of [undefined, "", "unknown-goal"]) {
 const machine = render({scope: "machine", initialTab: "language"});
 assert.doesNotMatch(machine, /Target Goal|Task ownership|Automation cadence/);
 assert.match(machine, /This device/);
+assert.match(machine, /Background services/);
+assert.deepEqual(readSettingsRoute(new URL("http://localhost/chat/?settings_scope=machine&settings_tab=background")),
+  {kind: "settings", scope: "machine", tab: "background"});
 assert.deepEqual(readSettingsRoute(new URL("http://localhost/chat/?settings_scope=goal&settings_goal=shared-goal&settings_tab=ownership")),
   {kind: "settings", scope: "goal", goalId: "shared-goal", tab: "ownership"});
 assert.deepEqual(readSettingsRoute(new URL("http://localhost/chat/?goalId=background&settings_scope=goal")),

@@ -1,5 +1,6 @@
 /** Read-only decision dependency rules over one complete source snapshot.
  * A consistent dependency is not approval, a lease, or a mutation receipt. */
+import {stripPythonWhitespace} from "../coordination/python_whitespace.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireJsonObject, optionalNonEmptyString, requireBoolean, requireInteger} from "../runtime_decode.ts";
@@ -240,8 +241,94 @@ export function evaluateDecisionScope(value: unknown): JsonObject {
       result = rows(request.gates).map(gate => items.map(item => todoGateRelation(gate, item)));
       break;
     }
-    case "relation": result = todoGateRelation(requireJsonObject(request.gate, "gate"), requireJsonObject(request.item, "item")); break;
     default: throw new EffectRuntimeRequestError("unsupported decision scope operation");
   }
   return {schema_version: "todo_decision_scope_result_v0", result};
+}
+
+/** One complete readiness projection; normal_delivery_allowed is a read signal,
+ * never execution permission. Persisted-field codecs remain at the host edge. */
+export function projectGlobalTodoReadiness(value: unknown): JsonObject {
+  const request = requireJsonObject(value, "global readiness request");
+  if (request.schema_version !== "global_todo_readiness_request_v0") {
+    throw new TypeError("global readiness request schema mismatch");
+  }
+  const payload = requireJsonObject(request.payload, "payload");
+  const decoded = requireJsonObject(request.decoded, "decoded");
+  const gates = rows(request.gates);
+  const candidates: JsonObject[] = [], warnings: JsonObject[] = [];
+  const records = new Map<string, {
+    item: JsonObject; facts: JsonObject; sources: Set<string>; statuses: Set<string>;
+  }>();
+  const add = (source: string, value: unknown, path: string): void => {
+    if (!object(value)) return;
+    const facts = requireJsonObject(decoded[path], `decoded ${path}`);
+    const todoId = readinessCodecText(facts, "identity_text");
+    if (!todoId) {
+      warnings.push({reason_code: "todo_identity_missing",
+        detail: `Structured todo candidate from ${source} has no todo_id.`});
+      return;
+    }
+    let record = records.get(todoId);
+    if (!record) {
+      record = {item: {...value}, facts: {...facts}, sources: new Set(), statuses: new Set()};
+      records.set(todoId, record);
+    }
+    record.sources.add(source);
+    const status = readinessCodecText(facts, "status_text").toLowerCase();
+    if (status) record.statuses.add(status);
+    for (const [key, field] of Object.entries(value)) {
+      if (readinessMissing(record.item[key]) && !readinessMissing(field)) {
+        record.item[key] = field;
+        if (Object.hasOwn(facts, key)) record.facts[key] = facts[key];
+      }
+    }
+  };
+  add("selected_todo", payload.selected_todo, "/selected_todo");
+  add("agent_lane_next_action", payload.agent_lane_next_action, "/agent_lane_next_action");
+  for (const containerKey of ["agent_todo_summary", "agent_scope_frontier"]) {
+    const container = object(payload[containerKey]) ? payload[containerKey] : {};
+    for (const key of ["first_open_items", "first_executable_items", "items", "open_items", "deferred_items",
+      "deferred_resume_candidates", "blocker_items", "resume_blocked_items"]) {
+      const values = container[key];
+      if (Array.isArray(values)) values.forEach((item, index) =>
+        add(`${containerKey}.${key}`, item, `/${containerKey}/${key}/${index}`));
+    }
+  }
+  const selected = object(payload.selected_todo)
+    ? readinessCodecText(requireJsonObject(decoded["/selected_todo"], "selected codec"), "identity_text") : "";
+  for (const [todoId, record] of records) {
+    const sources = [...record.sources];
+    const blocked = sources.some(source =>
+      ["blocker_items", "resume_blocked_items"].includes(source.split(".").at(-1)!)) ||
+      gates.some(gate => {
+        const relation = todoGateRelation(gate, record.facts);
+        return readinessCodecText(gate, "target_text") === todoId ||
+          relation?.state === "gate_targets_todo" || relation?.state === "gate_covers_action";
+      }) || record.statuses.has("blocked");
+    const deferred = sources.some(source => source.endsWith(".deferred_resume_candidates")) ||
+      (record.statuses.has("deferred") && record.item.resume_ready === true);
+    const runnable = todoId === selected && payload.normal_delivery_allowed === true;
+    if (!blocked && !deferred && !runnable) continue;
+    if (Number(blocked) + Number(deferred) + Number(runnable) > 1) warnings.push({
+      reason_code: "conflicting_readiness_projection", todo_id: todoId,
+      detail: "Multiple structured readiness signals were projected.",
+    });
+    candidates.push({item: record.item, readiness: blocked ? "blocked" : deferred ? "deferred_ready" : "runnable"});
+  }
+  return {schema_version: "global_todo_readiness_v0", candidates, warnings};
+}
+
+// Python's merge sentinel is equality with (None, "", []), not truthiness:
+// false, zero and an empty object must survive the first-source merge.
+function readinessMissing(value: unknown): boolean {
+  return value == null || value === "" || (Array.isArray(value) && !value.length);
+}
+
+// Preserve legacy scalar spelling (including Python booleans and floats) at
+// the codec edge; traversal, whitespace normalization and decisions stay here.
+function readinessCodecText(facts: JsonObject, key: string): string {
+  const value = facts[key];
+  if (typeof value !== "string") throw new TypeError(`global readiness codec ${key} must be a string`);
+  return stripPythonWhitespace(value);
 }

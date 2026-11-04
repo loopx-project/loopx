@@ -16,7 +16,7 @@ import { atomicWriteJson, withFileMutationLock } from "../effect_runtime_io.ts";
 import { parseTodoTimestampMicros } from "../runtime_timestamp.ts";
 import { decideCollaborationLifecycle } from "./goal_instance_lifecycle.ts";
 import { resolveConversationScope } from "./conversation_scope.ts";
-import { planCollaborationResult, collaborationResultDeliveryReady } from "./result_publication.ts";
+import { planCollaborationResult, collaborationResultDeliveryReady, collaborationResultText } from "./result_publication.ts";
 
 export const MANAGER_RETURN_DELIVERY_ATTEMPT_SCHEMA =
   "manager_return_delivery_attempt_v0";
@@ -142,6 +142,7 @@ interface ReturnCommand {
   key: string;
   path: string;
   now: string;
+  nowMicros: bigint;
   exact: boolean;
   facts: JsonObject;
 }
@@ -150,6 +151,13 @@ function returnAddress(value: unknown): {request_id: string; result_key: string}
   const row = requireJsonObject(value, "return candidate");
   return {request_id: matchingString(row.request_id, "request_id", BARE_SHA256_PATTERN),
     result_key: matchingString(row.result_key, "result_key", RESULT_KEY)};
+}
+
+function returnClockMicros(value: unknown): bigint {
+  const instant = typeof value === "string" && value.length <= 64
+    ? parseTodoTimestampMicros(value) : null;
+  if (instant === null) throw new EffectRuntimeRequestError("invalid return clock");
+  return instant;
 }
 
 function returnCommand(value: unknown): ReturnCommand {
@@ -161,10 +169,10 @@ function returnCommand(value: unknown): ReturnCommand {
   if (!isAbsolute(root)) throw new EffectRuntimeRequestError("return runtime root must be absolute");
   const {request_id: id, result_key: key} = returnAddress(request);
   const now = requireNonEmptyString(request.now, "now");
-  if (now.length > 64 || parseTodoTimestampMicros(now) === null) throw new EffectRuntimeRequestError("invalid return clock");
+  const nowMicros = returnClockMicros(now);
   requireStringLiteral(request.phase, ["prepare", "attempt", "settle"], "return delivery phase");
   const folder = join(root, ".local", "manager-context");
-  return { request, folder, key, now,
+  return { request, folder, key, now, nowMicros,
     path: join(folder, "replies", id, `${key}.delivery.json`),
     exact: requireBoolean(request.exact, "exact"),
     facts: requireJsonObject(request.facts, "return source facts") };
@@ -207,12 +215,12 @@ function unavailableRecord(error: unknown): boolean {
 function pendingDelivery(command: ReturnCommand, state: JsonObject): boolean {
   if (TERMINAL.has(String(state.status))) return false;
   if (!command.exact || state.status !== "admitted") {
-    if (state.retry_at && command.now < String(state.retry_at)) return false;
+    if (state.retry_at && command.nowMicros < returnClockMicros(state.retry_at)) return false;
   }
   const admission = state.admission;
   return !(command.exact && admission && typeof admission === "object"
     && (admission as JsonObject).expires_at
-    && command.now < String((admission as JsonObject).expires_at));
+    && command.nowMicros < returnClockMicros((admission as JsonObject).expires_at));
 }
 
 function deliveryState(value: unknown): JsonObject {
@@ -251,7 +259,7 @@ async function scanReturns(request: JsonObject): Promise<JsonObject> {
 }
 
 function shiftedClock(now: string, seconds: number): string {
-  // Preserve Python's offset/fraction representation, used by existing lexical retry fences.
+  // Preserve Python's offset/fraction representation; eligibility compares instants.
   const match = /^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(\.\d+)?(Z|[+-]\d\d:\d\d(?::\d\d(?:\.\d+)?)?)?$/.exec(now);
   if (!match) throw new EffectRuntimeRequestError("invalid return clock representation");
   return new Date(Date.parse(`${match[1]}Z`) + seconds * 1000).toISOString().slice(0, 19)
@@ -286,7 +294,9 @@ function admitReturnLifetime(command: ReturnCommand, operation: string): void {
     initial_delivery: facts.initial_delivery,
   });
   if (decision.kind === "reject" || decision.kind === "omit") {
-    throw new EffectRuntimeRequestError("return Goal lifetime admission rejected");
+    throw new EffectRuntimeRequestError("return Goal lifetime admission rejected",
+      decision.kind === "reject" && decision.code === "initial_delivery_unproved"
+        ? "initial_delivery_receipt_unavailable" : "invalid_request");
   }
 }
 
@@ -330,6 +340,7 @@ async function inspectReturnPublication(command: ReturnCommand): Promise<{ reply
   catch { /* The shared historical-revision decoder rejects unavailable assessment evidence. */ }
   const inspected = planCollaborationResult({ request: entry, phase: reply.phase, text: reply.text,
     decision: reply.decision, update_id: reply.update_id, attachments: reply.attachments,
+    remaining_work: reply.remaining_work,
     request_revision: reply.request_revision, legacy_assessment: legacy, results });
   if ((reply.result_key ?? reply.phase) !== command.key || entry.request_id !== command.request.request_id) {
     throw new EffectRuntimeRequestError("return reply identity mismatch");
@@ -379,7 +390,6 @@ function returnAuthorityBlocker(command: ReturnCommand): string | null {
 }
 
 async function prepareReturn(command: ReturnCommand, state: JsonObject): Promise<JsonObject> {
-  if (!pendingDelivery(command, state)) return returnResponse();
   if (command.facts.error) return sourceFailure(command, state);
   let source: Awaited<ReturnType<typeof inspectReturnPublication>>;
   try {
@@ -389,6 +399,9 @@ async function prepareReturn(command: ReturnCommand, state: JsonObject): Promise
     if (requireJsonObject(command.facts.route, "source route").kind === "peer") return returnResponse();
     admitReturnLifetime(command, "original_return_admit");
   } catch (error) {
+    if (error instanceof EffectRuntimeRequestError && error.code === "initial_delivery_receipt_unavailable") {
+      return sourceFailure(command, state, error.code);
+    }
     if (error instanceof EffectRuntimeRequestError || error instanceof SyntaxError
         || (error as NodeJS.ErrnoException).code) return sourceFailure(command, state);
     throw error;
@@ -423,7 +436,7 @@ async function prepareReturn(command: ReturnCommand, state: JsonObject): Promise
   const verify = priorStatus === "verification_required" || command.exact && state.attempt != null;
   const prefix = command.exact ? (reply.phase === "conclusion" ? "处理结论" : "处理进展")
     : (reply.phase === "conclusion" ? "协作回复" : "协作进展");
-  const text = `${prefix} · ${reply.agent_id} · 委托 ${String(reply.request_id).slice(0, 8)}\n\n${reply.text}`;
+  const text = `${prefix} · ${reply.agent_id} · 委托 ${String(reply.request_id).slice(0, 8)}\n\n${collaborationResultText(reply)}`;
 
   return returnResponse({ action: privateConversation ? "private" : verify ? "verify" : "send",
     text, message_id: returnMessageId(command), attempt: verify ? savedAttempt(state.attempt) : null, attachments: reply.attachments ?? [],
@@ -529,7 +542,10 @@ export async function transactManagerReturnDelivery(value: unknown): Promise<Jso
   const command = returnCommand(value);
   return withFileMutationLock(command.path, async () => {
     let state: JsonObject;
-    try { state = deliveryState(await readReturnRecord(command.path, {})); }
+    try {
+      state = deliveryState(await readReturnRecord(command.path, {}));
+      if (command.request.phase === "prepare" && !pendingDelivery(command, state)) return returnResponse();
+    }
     catch (error) {
       if (command.request.phase === "prepare" && unavailableRecord(error)) return returnResponse();
       throw error;

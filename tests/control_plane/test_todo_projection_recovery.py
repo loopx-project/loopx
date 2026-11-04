@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from loopx.chat_manager_details import read_manager_goal_details
+from loopx.chat.manager_details import read_manager_goal_details
 from canonical_authority_fixture import (
     initialize_canonical_authority, isolate_sqlite_runtime, promoted_create_fixture,
 )
