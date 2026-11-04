@@ -26,8 +26,8 @@ export const agentModelSelectionScenario = {
         await page.route("**/api/chat/agent-model-options", route => { discoveryCount += 1; return route.fulfill({ json: {
           ok: true, schema_version: "loopx_chat_agent_model_options_v1", agent_id: "codex", supported: true,
           model: { id: "engine", label: "Model", selected: "safe", options: [
-            { value: "safe", label: "Safe", reasoning_efforts: ["low", "high"] },
-            { value: "vendor/model  fast", label: "Fast", reasoning_efforts: ["low", "high"] },
+            { value: "safe", label: "Safe", reasoning_efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
+            { value: "vendor/model  fast", label: "Fast", reasoning_efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
           ] },
         } }); });
         await page.route("**/api/chat/sessions", async route => {
@@ -212,6 +212,37 @@ export const agentModelSelectionScenario = {
       assert.ok((await readback.boundingBox()).height < 30, "speed and reasoning do not wrap into a vertical column");
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
       await page.keyboard.press("Escape");
+      const longDraft = "中文与 English 的长草稿保留。\n".repeat(6);
+      const checkMenuSpace = async selector => {
+        const bounds = await page.locator(selector).boundingBox();
+        const frame = await page.locator(".personal-channel-composer").boundingBox();
+        assert.ok(bounds && frame && bounds.y >= 8 && bounds.y + bounds.height <= frame.y,
+          "A growing draft leaves the complete menu above the input and inside the visible viewport");
+      };
+      await page.setViewportSize({width: 390, height: 568});
+      await draft.fill(longDraft);
+      await openSettings();
+      const effortControl = page.getByRole("combobox", {name: "选择思考深度"});
+      await effortControl.click();
+      await checkMenuSpace(".personal-chat-model-panel");
+      await page.keyboard.press("End");
+      const lastChoice = page.getByRole("option", {name: "ultra", exact: true});
+      await lastChoice.waitFor();
+      assert.ok(await lastChoice.evaluate(node => {
+        const bounds = node.getBoundingClientRect();
+        return bounds.top >= 0 && bounds.bottom <= innerHeight;
+      }), "Keyboard scrolling keeps the last native effort choice reachable");
+      await page.keyboard.press("Escape");
+      assert.equal(await effortControl.evaluate(node => node === document.activeElement), true);
+      assert.equal(await menu.evaluate(node => node.open), true, "Escape first closes the nested choices");
+      await page.setViewportSize({width: 390, height: 480});
+      await checkMenuSpace(".personal-chat-model-panel");
+      await page.keyboard.press("Escape");
+      await actionTrigger.click();
+      await checkMenuSpace(".personal-composer-actions-panel");
+      await page.keyboard.press("Escape");
+      assert.equal(await draft.inputValue(), longDraft, "Menu resize and dismissal retain the complete draft");
+      await page.setViewportSize({width: 390, height: 844});
       await draft.fill("保存失败也不能丢掉草稿。");
       await openSettings();
       failSave = true;
