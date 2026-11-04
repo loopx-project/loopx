@@ -128,7 +128,10 @@ def test_selected_acceptance_read_keeps_global_requirements_and_exact_binding(
         todo_id=selected, context_agent_id="agent-a", include_work_details=False)
     assert observed == navigation
     assert {key: value for key, value in observed.items() if key != "outcome_context"} == exact
-    assert any(row.get("source") == "goal_state" for row in channel["required_reads"])
+    goal_source = next(row["content"] for row in channel["work_context"]["sources"]
+        if row.get("source") == "goal_state")
+    assert goal_source["full_source"] is True and goal_source["text"] == state.read_text()
+    assert not any(row.get("source") == "goal_state" for row in channel["required_reads"])
     # The normal guard's complete captured basis is the envelope input; no
     # second guard may substitute a different observation for the host.
     from loopx.control_plane.quota.turn_envelope import build_turn_envelope
@@ -175,11 +178,12 @@ def test_selected_acceptance_read_keeps_global_requirements_and_exact_binding(
         with contextlib.redirect_stdout(output):
             code = main(["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
                 "quota", "should-run", "--goal-id", goal, "--agent-id", "agent-a", ])
-        failed = json.loads(output.getvalue())["interaction_contract"]["agent_channel"]
+        failed = read_cli_policy_payload(output.getvalue(), returncode=code)["interaction_contract"]["agent_channel"]
         assert code == 0 and failed["delivery_allowed"] is False
         assert failed["work_context"]["complete"] is False
         assert any(row.get("source") == "goal_acceptance" for row in failed["required_reads"])
-    recovered = cli("quota", "should-run", "--goal-id", goal, "--agent-id", "agent-a", )
+    recovered = read_cli_policy_payload(json.dumps(cli(
+        "quota", "should-run", "--goal-id", goal, "--agent-id", "agent-a")), returncode=0)
     assert recovered["interaction_contract"]["agent_channel"]["work_context"]["complete"] is True
 
 
