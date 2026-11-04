@@ -160,12 +160,16 @@ def _restart_app(
     app: Path, request_id: str, channel: str, timeout_seconds: int
 ) -> None:
     # AppleScript receives the path as an argv value, never interpolated code.
-    # A normal quit lets Desktop save navigation and stop its owned services.
+    # Quit is asynchronous. Keep the bounded wait in the same normal App
+    # lifecycle so a replacement cannot lose its request to the old instance.
     subprocess.run(
         [
             "/usr/bin/osascript",
             "-e",
-            "on run argv\n if application (item 1 of argv) is running then\n tell application (item 1 of argv) to quit\n end if\nend run",
+            "on run argv\n if application (item 1 of argv) is running then\n"
+            " tell application (item 1 of argv) to quit\n"
+            " repeat while application (item 1 of argv) is running\n"
+            " delay 0.1\n end repeat\n end if\nend run",
             str(app),
         ],
         check=True,
