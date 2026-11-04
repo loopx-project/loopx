@@ -515,25 +515,38 @@ def context_index_fields(payload: dict[str, Any], children: list[dict[str, Any]]
     return fields
 
 
-def context_selection_transport(payload: dict[str, Any]) -> dict[str, Any]:
-    """Keep address structure without retransmitting unused scalar prose.
+def context_selection_transport(payload: dict[str, Any], *, select: list[str] | None = None) -> dict[str, Any]:
+    """Keep only source structure needed by an explicit address batch.
 
     The TS owner validates pointers; selected values still come from the fully
     digest-checked original. Initial navigation and discovery need real scalar
-    values and do not use this adapter. JSON null takes four bytes, so replacing
-    only strings longer than two characters cannot increase request bytes.
+    values and do not use this adapter. Match literal escaped source addresses,
+    without decoding caller pointers or deciding whether they are valid. Keep
+    array lengths and container kinds so missing-address diagnostics retain
+    their original nearest parent. Invalid batches still reach the TS owner.
     Iteration preserves the original JSON reader's supported nesting depth.
     """
+    prefixes = None
+    if isinstance(select, list) and all(isinstance(pointer, str) for pointer in select):
+        prefixes = {""}
+        for pointer in select:
+            parts = pointer.split("/")
+            prefixes.update("/".join(parts[:end]) for end in range(1, len(parts) + 1))
     result: dict[str, Any] = {}
-    pending: list[tuple[Any, Any]] = [(payload, result)]
+    pending: list[tuple[Any, Any, str]] = [(payload, result, "")]
     while pending:
-        source, target = pending.pop()
+        source, target, parent = pending.pop()
         for key, value in source.items() if isinstance(source, dict) else enumerate(source):
+            pointer = parent + "/" + str(key).replace("~", "~0").replace("/", "~1")
+            if prefixes is not None and pointer not in prefixes:
+                continue
             if isinstance(value, (dict, list)):
                 child: Any = {} if isinstance(value, dict) else [None] * len(value)
                 target[key] = child
-                pending.append((value, child))
+                pending.append((value, child, pointer))
             else:
+                # Null and scalar values have identical address behavior.
+                # Retain short spellings to avoid growing tiny requests.
                 target[key] = None if isinstance(value, str) and len(value) > 2 else value
     return result
 
@@ -562,7 +575,7 @@ def context_selection_view(payload: dict[str, Any], *, select: list[str] | None,
     """Replay the TS selector and verify the original digest-pinned view."""
     from ..quota.turn_envelope import _turn_envelope_result
 
-    context = payload if initial_read or list_fields else context_selection_transport(payload)
+    context = payload if initial_read or list_fields else context_selection_transport(payload, select=select)
     selection = {"initial_read": True} if initial_read else {"select": select}
     depth = {"list_depth": list_depth} if list_depth is not None else {}
     order = {"preserve_selection_order": True} if preserve_selection_order else {}

@@ -95,6 +95,7 @@ def settle_refreshed_turn(
             runtime_root, registry_path=registry_path, goal_ref=goal_ref,
             goal_id=goal_id, agent_id=agent_id, todo_id=todo_id,
             replan_obligation_id=replan_obligation_id, turn_instance_id=turn_instance_id,
+            include_record_bodies=False,
         )
     except Exception as exc:
         payload["ok"] = False

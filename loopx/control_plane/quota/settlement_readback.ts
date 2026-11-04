@@ -109,6 +109,7 @@ interface ReadbackRequest {
   allow_unbound_binding: boolean;
   resolve_original_binding: boolean;
   borrow_source_admission: boolean;
+  include_record_bodies: boolean;
   refresh_retry: RefreshRetryRequest | null;
   heartbeat_reentry_guard: JsonObject | null;
   owner: QuotaAccountingOwner;
@@ -220,6 +221,9 @@ function decodeRequest(
       typeof request.resolve_original_binding !== "boolean") {
     throw new EffectRuntimeRequestError("resolve_original_binding must be a boolean");
   }
+  if (request.include_record_bodies !== undefined && typeof request.include_record_bodies !== "boolean") {
+    throw new EffectRuntimeRequestError("include_record_bodies must be a boolean");
+  }
   if (request.resolve_original_binding === true && request.infer_turn_instance_id) {
     throw new EffectRuntimeRequestError("original binding requires an explicit Turn identity");
   }
@@ -278,6 +282,7 @@ function decodeRequest(
     allow_unbound_binding: request.allow_unbound_binding,
     resolve_original_binding: request.resolve_original_binding === true,
     borrow_source_admission: request.borrow_source_admission === true,
+    include_record_bodies: request.include_record_bodies !== false,
     refresh_retry: decodeRefreshRetry(request.refresh_retry),
     heartbeat_reentry_guard: request.heartbeat_reentry_guard == null ? null
       : requireJsonObject(request.heartbeat_reentry_guard, "heartbeat_reentry_guard"),
@@ -1335,6 +1340,12 @@ function readQuotaSettlementFromRequest(
     ? {...refreshDecision, decision: "reject", reason: "committed_writeback_payload_conflict"}
     : refreshDecision;
 
+  const progress = settlementProgress(identityResult, writeback, spend, writebackRun, spendRun,
+    receiptDetails.quota_spend_source ?? spendRun?.source, noSpendKind);
+  // The combined caller consumes controls and receipts after verification.
+  // Keep original bodies by default and throughout any pending recovery;
+  // requesting this projection cannot make an unsettled Turn settled.
+  const includeRecords = request.include_record_bodies || progress.state !== "settled";
   return {
     schema_version: QUOTA_SETTLEMENT_READBACK_RESULT_SCHEMA,
     found: true,
@@ -1345,21 +1356,20 @@ function readQuotaSettlementFromRequest(
     settlement: bundle(settled),
     terminal_closeout: bundle(terminalCloseout),
     terminal_settlement: bundle(terminalSettlement),
-    progress: settlementProgress(identityResult, writeback, spend, writebackRun, spendRun,
-      receiptDetails.quota_spend_source ?? spendRun?.source, noSpendKind),
+    progress,
     workspace_causality: workspaceCausality,
     semantic_replan_guard: semanticReplanGuard,
-    writeback_run: writebackRun,
+    writeback_run: includeRecords ? writebackRun : null,
     refresh_recovery: recovery,
     external_delivery: request.refresh_retry === null ? null : refreshExternalDelivery(
       request.refresh_retry.external_delivery ?? null, identity, events,
       recovery?.decision !== "reject" && recovery?.decision !== "repair_receipt",
     ),
-    spend_run: spendRun,
-    heartbeat_receipt: heartbeatReceipt,
-    writeback_event: writebackEvent,
-    spend_event: spendEvent,
-    completion_event: completionEvent,
+    spend_run: includeRecords ? spendRun : null,
+    heartbeat_receipt: includeRecords ? heartbeatReceipt : null,
+    writeback_event: includeRecords ? writebackEvent : null,
+    spend_event: includeRecords ? spendEvent : null,
+    completion_event: includeRecords ? completionEvent : null,
     monitor_phase: monitorPhase,
     replay_phase: replayPhase,
     successor_replan_pending: replayPhase === "open" &&
