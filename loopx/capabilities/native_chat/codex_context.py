@@ -134,6 +134,11 @@ def shared_chatgpt_transport(host_config: Mapping[str, Any], native_config: Mapp
     }}
 
 
+def verify_conversation_provider(session, requested: str, observed: Mapping[str, Any]) -> None:
+    if requested and observed.get("modelProvider") != requested:
+        raise session._runtime_error("Codex did not apply the requested conversation provider.")
+
+
 def disable_mcp_servers(config: Mapping[str, Any], host_config: Mapping[str, Any]) -> dict[str, Any]:
     """Disable private native tool sources, including project/managed layers.
 

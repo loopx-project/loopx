@@ -132,6 +132,39 @@ An invalid or unreadable slot is not skipped to manufacture a unique match.
 This reconciliation never rewrites credentials or configuration, and does not
 prove that an already running client has reloaded its login.
 
+Version 0.15.0 separates a consumer's API role from its model choice. Working
+Agents and Codex App retain subscription-first ordering: `api_fallback` permits
+API only after every allowed subscription has fresh measured exhaustion.
+Unknown allowance never authorizes paid fallback. The account settings also
+offer `steward_api_role`: `primary` prefers the existing API key pool for the
+steward, `fallback` follows subscription fallback, and `disabled` excludes API
+from the steward. An absent field preserves the prior fallback configuration.
+Steward API primary does not require enabling subscription automation.
+
+The steward uses a separate authenticated loopback route and a process-only
+token excluded from shell tool environments. Upstream keys stay in the same private
+key owner. Thread configuration selects this model transport without rewriting
+the desktop login or copying credentials/history into project stores. Explicit
+native provider overrides and independently authenticated project stores retain
+their chosen transport. Changes apply between Turns; they authorize neither
+redispatch nor replay of an interrupted request. A model-list check is not proof
+of inference allowance. Known quota/authentication/permission/rate-limit
+rejections may try another key before output; unknown network effects or an
+already started stream never replay. API primary unavailability allows the
+existing endpoint pool to consider its subscription route; it does not move a
+worker to API. The API role is local vocabulary owned by this optional account
+provider, not a new Core execution authority or Goal state.
+
+In **Settings → Model Provider configuration**, keep the working-Agent checkbox
+for subscription exhaustion. Use **Steward API use → Prefer API** for an
+independent API primary; **Disabled** revokes it, including after the last key
+is removed. The saved selector reads back the choice. These canonical guide
+illustrations use synthetic accounts / 当前操作指南使用合成账号数据：
+
+![Independent account priorities, desktop / 独立账号优先级，桌面](docs/assets/account-workload-primary-desktop.png)
+
+![Independent account priorities, narrow / 独立账号优先级，窄屏](docs/assets/account-workload-primary-narrow.png)
+
 ## Prerequisites and activation
 
 Install in the same Python environment as LoopX, then restart its App/Chat service:

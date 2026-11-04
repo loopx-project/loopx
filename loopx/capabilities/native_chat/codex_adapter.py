@@ -321,6 +321,8 @@ class CodexAppServerAdapter:
         reasoning_effort: str | None = None,
         service_tier: str | None = None,
         dynamic_tools: list[dict[str, Any]] | None = None,
+        account_runtime_root: Path | None = None,
+        account_consumer: str = "worker",
     ) -> "CodexAppServerAdapter":
         history_items = []
         # Migration restores the full visible conversation in native history.
@@ -358,6 +360,8 @@ class CodexAppServerAdapter:
                     reasoning_effort=reasoning_effort,
                     host_config={"service_tier": service_tier} if service_tier else None,
                     dynamic_tools=dynamic_tools,
+                    account_runtime_root=account_runtime_root,
+                    account_consumer=account_consumer,
                 )
                 if not resume_thread_id:
                     try:
