@@ -76,11 +76,19 @@ def test_native_journal_projects_one_host_execution_request(tmp_path, monkeypatc
         "turn_instance_id": "turn-fixture",
         "source_sha256": wire["recovery"]["sha256"],
     }
+    child_event = {**event, "hook_event_name": "PostToolUse", "agent_id": "child"}
+    assert context.native_execution_preparation_request(str(tmp_path), child_event) is None
     receipt = {
         "event": "host_execution_prepared",
         "todo_id": "todo_fixture",
         "turn_instance_id": "turn-fixture",
     }
+    state_before_child = (tmp_path / "session.json").read_bytes()
+    context.record_native_execution_preparation(
+        str(tmp_path), child_event,
+        source_sha256=request["source_sha256"], receipt=receipt,
+    )
+    assert (tmp_path / "session.json").read_bytes() == state_before_child
     context.record_native_execution_preparation(
         str(tmp_path), event,
         source_sha256=request["source_sha256"], receipt=receipt,

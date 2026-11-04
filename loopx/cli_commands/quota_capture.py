@@ -1111,7 +1111,7 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
         from ..control_plane.effect_runtime import MAX_REQUEST_BYTES
         from ..control_plane.turn_driver.codex_context import (
             CONTEXT_LIFECYCLE_HOOKS, codex_context_directory, codex_context_hook,
-            native_execution_preparation_request,
+            native_context_event_eligible, native_execution_preparation_request,
             record_native_execution_preparation,
         )
         from ..control_plane.turn_driver.codex_execution_preparation import (
@@ -1127,7 +1127,8 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
                 return 0
             raw = sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)
             event = json.loads(raw) if len(raw) <= MAX_REQUEST_BYTES else None
-            if (isinstance(event, dict) and isinstance(event.get("session_id"), str) and event["session_id"]
+            if (isinstance(event, dict) and native_context_event_eligible(event)
+                    and isinstance(event.get("session_id"), str) and event["session_id"]
                     and event.get("hook_event_name") in CONTEXT_LIFECYCLE_HOOKS):
                 directory = codex_context_directory(directory=args.codex_context_dir,
                     root=getattr(args, "codex_context_root", None), session=event.get("session_id"), create=True)

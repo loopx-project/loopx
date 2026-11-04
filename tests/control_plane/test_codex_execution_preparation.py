@@ -18,12 +18,14 @@ TODO = "todo_example"
 AGENT = "agent-a"
 
 
-def _packet(*, turn: str | None = "turn-example") -> dict[str, object]:
+def _packet(tmp_path: Path, *, turn: str | None = "turn-example") -> dict[str, object]:
+    registry = (tmp_path / "loopx-project-a" / ".loopx" / "registry.json").resolve()
+    runtime_root = (tmp_path / "loopx-runtime-a").resolve()
     return {
         "ok": True,
         "goal_id": GOAL,
-        "registry": "/tmp/loopx-project-a/.loopx/registry.json",
-        "runtime_root": "/tmp/loopx-runtime-a",
+        "registry": str(registry),
+        "runtime_root": str(runtime_root),
         "should_run": True,
         "selected_todo": {"todo_id": TODO, "claimed_by": AGENT},
         "execution_preparation": {
@@ -53,8 +55,9 @@ def _completed(payload: dict[str, object], *, code: int = 0) -> subprocess.Compl
     )
 
 
-def test_compact_request_accepts_only_exact_host_action() -> None:
-    request = compact_execution_preparation_request(_packet())
+def test_compact_request_accepts_only_exact_host_action(tmp_path: Path) -> None:
+    packet = _packet(tmp_path)
+    request = compact_execution_preparation_request(packet)
     assert request == {
         "goal_id": GOAL,
         "agent_id": AGENT,
@@ -65,18 +68,18 @@ def test_compact_request_accepts_only_exact_host_action() -> None:
             "--agent-id", AGENT, "--claimed-by", AGENT,
         ],
         "authority_route": {
-            "registry_path": "/tmp/loopx-project-a/.loopx/registry.json",
-            "runtime_root": "/tmp/loopx-runtime-a",
+            "registry_path": str((tmp_path / "loopx-project-a" / ".loopx" / "registry.json").resolve()),
+            "runtime_root": str((tmp_path / "loopx-runtime-a").resolve()),
         },
     }
 
-    malformed = _packet()
+    malformed = _packet(tmp_path)
     malformed["execution_preparation"]["claim"]["cli_args"][-1] = "agent-b"
     assert compact_execution_preparation_request(malformed) is None
 
 
 def test_executor_claims_then_proves_same_turn_ready(tmp_path: Path) -> None:
-    request = compact_execution_preparation_request(_packet())
+    request = compact_execution_preparation_request(_packet(tmp_path))
     assert request is not None
     calls: list[list[str]] = []
 
@@ -112,9 +115,9 @@ def test_executor_claims_then_proves_same_turn_ready(tmp_path: Path) -> None:
     assert len(calls) == 2
     for call in calls:
         assert call[call.index("--registry") + 1] == (
-            "/tmp/loopx-project-a/.loopx/registry.json"
+            str((tmp_path / "loopx-project-a" / ".loopx" / "registry.json").resolve())
         )
-        assert call[call.index("--runtime-root") + 1] == "/tmp/loopx-runtime-a"
+        assert call[call.index("--runtime-root") + 1] == str((tmp_path / "loopx-runtime-a").resolve())
     assert calls[0][-len(request["claim_args"]):] == request["claim_args"]
     assert calls[1][-4:] == ["--todo-id", TODO, "--turn-instance-id", "turn-example"]
     context = codex_execution_preparation_context(receipt)
@@ -122,7 +125,7 @@ def test_executor_claims_then_proves_same_turn_ready(tmp_path: Path) -> None:
 
 
 def test_executor_rejects_changed_todo_or_turn(tmp_path: Path) -> None:
-    request = compact_execution_preparation_request(_packet())
+    request = compact_execution_preparation_request(_packet(tmp_path))
     assert request is not None
 
     def runner(command, *, cwd, timeout):

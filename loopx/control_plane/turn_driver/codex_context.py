@@ -39,6 +39,12 @@ class NativeContextSessionUnavailable(ValueError):
     """No native identity for a session journal; explicit file reads still work."""
 
 
+def native_context_event_eligible(event: Mapping[str, Any]) -> bool:
+    """Reject subagent hooks before parent-session context or lease effects."""
+    agent_id = event.get("agent_id")
+    return not (isinstance(agent_id, str) and agent_id)
+
+
 def context_delivery_for_arguments(args: Any, *, codex_machine_preference: bool = False) -> dict[str, Any]:
     """One declaration adapter for explicit CLI and inherited machine opt-ins."""
     fields = {key: getattr(args, key, None) for key in ("host_surface", "scheduler_owner", "execution_mode")}
@@ -321,7 +327,7 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
     name, session = event.get("hook_event_name"), event.get("session_id")
     if not isinstance(session, str) or not session:
         return {}
-    if isinstance(event.get("agent_id"), str) and event["agent_id"]:
+    if not native_context_event_eligible(event):
         return {}  # no parent recovery reference may escape to a subagent
     pages = _context_pages(event.get("tool_response")) if name == "PostToolUse" else []
     if name == "PostToolUse" and not pages:
@@ -376,7 +382,8 @@ def native_execution_preparation_request(
 ) -> dict[str, Any] | None:
     """Read one compact Host action from this exact native session journal."""
 
-    if directory is None or event.get("hook_event_name") not in {"SessionStart", "PostToolUse"}:
+    if (directory is None or not native_context_event_eligible(event)
+            or event.get("hook_event_name") not in {"SessionStart", "PostToolUse"}):
         return None
     session, cwd = event.get("session_id"), event.get("cwd")
     if not isinstance(session, str) or not session or not isinstance(cwd, str) or not cwd:
@@ -415,7 +422,8 @@ def record_native_execution_preparation(
 ) -> None:
     """Record a ready receipt only while its source/session is still current."""
 
-    if directory is None or receipt.get("event") != "host_execution_prepared":
+    if (directory is None or not native_context_event_eligible(event)
+            or receipt.get("event") != "host_execution_prepared"):
         return
     with _locked(directory) as root:
         state = _state(root)

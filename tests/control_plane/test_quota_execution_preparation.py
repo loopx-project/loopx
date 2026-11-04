@@ -325,6 +325,34 @@ def test_codex_lifecycle_hook_uses_captured_authority_from_another_project(
     post_tool = {**event, "hook_event_name": "PostToolUse", "tool_response": "{}"}
     environment = dict(os.environ)
     environment["PYTHONPATH"] = str(Path(__file__).resolve().parents[2])
+
+    # A subagent may share its parent's native session and cwd, but it must not
+    # execute or receive the parent's claim action.
+    child = subprocess.run(
+        command,
+        input=json.dumps({**post_tool, "agent_id": "child-agent"}),
+        cwd=foreign_workspace,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert child.returncode == 0, child.stderr
+    assert json.loads(child.stdout) == {}
+    child_guard_code, child_guard = run_json_cli_result(
+        "quota", "should-run",
+        "--runtime-profile", "codex_app_ssh_goal",
+        "--context-delivery", "off",
+        "--goal-id", GOAL,
+        "--agent-id", AGENT,
+        "--turn-instance-id", turn,
+        "--todo-id", TODO,
+        registry_path=tmp_path / "registry.json",
+        runtime_root=tmp_path / "runtime",
+    )
+    assert child_guard_code == 0
+    assert child_guard["execution_preparation"]["state"] == "claim_required"
+
     prepared = subprocess.run(
         command,
         input=json.dumps(post_tool),
