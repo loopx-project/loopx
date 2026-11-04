@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
+
 
 from .control_plane.work_items.delivery_batch_scale import DeliveryBatchScale, normalize_delivery_batch_scale
 from .control_plane.work_items.delivery_outcome import (
@@ -84,7 +85,7 @@ def _recent_runs(
 ) -> list[dict[str, Any]]:
     readiness = handoff_readiness if isinstance(handoff_readiness, dict) else {}
     compact_runs = (
-        readiness.get("post_handoff_recent_runs")
+        cast(list[Any], readiness.get("post_handoff_recent_runs"))
         if isinstance(readiness.get("post_handoff_recent_runs"), list)
         else []
     )
@@ -208,7 +209,7 @@ def reconcile_long_task_cadence_hint(
 
     contract = interaction_contract if isinstance(interaction_contract, dict) else {}
     agent_channel = (
-        contract.get("agent_channel")
+        cast(dict[str, Any], contract.get("agent_channel"))
         if isinstance(contract.get("agent_channel"), dict)
         else {}
     )

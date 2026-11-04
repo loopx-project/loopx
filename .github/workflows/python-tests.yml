@@ -959,6 +959,14 @@ jobs:
           tests/test_windows_atomic_writes.py
           tests/test_windows_install.py
 
+      - name: Qualify private IO on native Windows
+        run: >-
+          python -m pytest -q --basetemp .t-private-io
+          tests/control_plane/test_windows_snapshot_privacy.py
+          tests/test_file_lock_windows_atomic.py
+          tests/control_plane/test_document_io.py::test_ordinary_windows_long_path_publish_preserves_bytes_and_create_only
+          tests/control_plane/test_todo_completion_validation.py::test_private_validation_store_is_owner_only_and_detects_tampering
+
       - name: Check Windows collaboration lock sidecars
         run: python -m pytest -q --basetemp .t tests/test_collaboration_sidecar_scan.py
 

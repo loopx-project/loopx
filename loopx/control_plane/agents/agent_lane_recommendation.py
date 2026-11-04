@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 from collections.abc import Callable
-from typing import Any
 
 from ..effect_program import ReceiptBoundMonitorPhase
 from ..progress_scope import AGENT_LANE_PROGRESS_SCOPE
@@ -254,7 +255,7 @@ def scope_status_item_to_agent_lane(
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any] | None]:
     scoped_item = dict(item)
     project_asset = (
-        dict(scoped_item.get("project_asset"))
+        dict(cast(dict[str, Any], scoped_item.get("project_asset")))
         if isinstance(scoped_item.get("project_asset"), dict)
         else {}
     )
@@ -379,7 +380,7 @@ def _first_executable_todo_text(agent_todo_summary: dict[str, Any] | None) -> st
     if not isinstance(agent_todo_summary, dict):
         return None
     items = (
-        agent_todo_summary.get("first_executable_items")
+        cast(list[Any], agent_todo_summary.get("first_executable_items"))
         if isinstance(agent_todo_summary.get("first_executable_items"), list)
         else []
     )
@@ -418,10 +419,10 @@ def selected_recommended_action_from_work_lane(
     ) or work_lane_contract_is_operator_inbox_material_review_due(
         work_lane_contract
     ):
-        return work_lane_contract.get("action") or raw_action
+        return cast(dict[str, Any], work_lane_contract).get("action") or raw_action
     if work_lane_contract_is_due_monitor_attempt(work_lane_contract):
         due_items = (
-            work_lane_contract.get("monitor_due_items")
+            cast(list[Any], work_lane_contract.get("monitor_due_items"))
             if isinstance(work_lane_contract.get("monitor_due_items"), list)
             else []
         )
@@ -437,7 +438,7 @@ def selected_recommended_action_from_work_lane(
         and work_lane_contract.get("lane") == "advancement_task"
         and "open_agent_todo"
         in (
-            work_lane_contract.get("reason_codes")
+            cast(list[Any], work_lane_contract.get("reason_codes"))
             if isinstance(work_lane_contract.get("reason_codes"), list)
             else []
         )
@@ -462,7 +463,7 @@ def build_agent_lane_next_action(
     if not agent_id or not isinstance(agent_todo_summary, dict):
         return None
     agent_profile = (
-        agent_identity.get("agent_profile")
+        cast(dict[str, Any], agent_identity.get("agent_profile"))
         if isinstance(agent_identity.get("agent_profile"), dict)
         else None
     )
@@ -520,7 +521,7 @@ def build_agent_lane_next_action(
         candidate_sources.append(
             (
                 "agent_todo_summary.active_next_action_executable_items",
-                agent_todo_summary.get("active_next_action_executable_items")
+                cast(list[Any], agent_todo_summary.get("active_next_action_executable_items"))
                 if isinstance(
                     agent_todo_summary.get("active_next_action_executable_items"), list
                 )
@@ -530,7 +531,7 @@ def build_agent_lane_next_action(
         candidate_sources.append(
             (
                 "agent_todo_summary.first_executable_items",
-                agent_todo_summary.get("first_executable_items")
+                cast(list[Any], agent_todo_summary.get("first_executable_items"))
                 if isinstance(
                     agent_todo_summary.get("first_executable_items"), list
                 )
@@ -540,7 +541,7 @@ def build_agent_lane_next_action(
         candidate_sources.append(
             (
                 "agent_todo_summary.executable_backlog_items",
-                agent_todo_summary.get("executable_backlog_items")
+                cast(list[Any], agent_todo_summary.get("executable_backlog_items"))
                 if isinstance(
                     agent_todo_summary.get("executable_backlog_items"), list
                 )
@@ -556,7 +557,7 @@ def build_agent_lane_next_action(
         else None
     )
     active_next_action_items = (
-        agent_todo_summary.get("active_next_action_executable_items")
+        cast(list[Any], agent_todo_summary.get("active_next_action_executable_items"))
         if isinstance(agent_todo_summary.get("active_next_action_executable_items"), list)
         else []
     )

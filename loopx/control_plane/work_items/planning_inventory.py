@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from typing import Any, Sequence
+
 from collections.abc import Mapping
-from typing import Any
 
 from ..todos.contract import (
     TODO_TASK_CLASS_ADVANCEMENT,
@@ -21,7 +22,8 @@ TODO_PLANNING_INVENTORY_REQUEST_SCHEMA_VERSION = (
 )
 
 
-def compact_planning_candidates(values: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+def compact_planning_candidates(values: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    texts: list[str | None]
     sources, texts = [], []
     for value in values:
         todo_id = normalize_todo_id(value.get("todo_id"))

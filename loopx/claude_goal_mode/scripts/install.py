@@ -19,6 +19,8 @@ cleanup suggestion instead.
 """
 from __future__ import annotations
 
+from typing import Any
+
 import argparse
 import json
 import os
@@ -40,7 +42,7 @@ if str(REPO_ROOT) not in sys.path:
 from loopx.file_lock import write_json_atomic  # noqa: E402
 
 
-def _p(*parts) -> str:
+def _p(*parts: str) -> str:
     return str(PLUGIN_ROOT.joinpath(*parts)).replace("\\", "/")
 
 
@@ -167,7 +169,7 @@ def _python_cmd() -> str:
     return sys.executable
 
 
-def deep_merge(base: dict, add: dict) -> dict:
+def deep_merge(base: dict[str, Any], add: dict[str, Any]) -> dict[str, Any]:
     for k, v in add.items():
         if isinstance(v, dict) and isinstance(base.get(k), dict):
             deep_merge(base[k], v)
@@ -180,7 +182,7 @@ def deep_merge(base: dict, add: dict) -> dict:
 
 # ---- optional hardening (only with --harden) --------------------------------
 
-def hardening_block() -> dict:
+def hardening_block() -> dict[str, Any]:
     """The OPTIONAL per-tool gate + statusline. Not installed unless --harden."""
     powershell = _uses_powershell()
     py = _shell_command(_python_cmd(), powershell=powershell)
@@ -213,7 +215,7 @@ MCP_PROBE = "import mcp.server.fastmcp"
 MCP_REQUIREMENT = "mcp<2"
 
 
-def _has_mcp(py) -> bool:
+def _has_mcp(py: str | Path) -> bool:
     try:
         return subprocess.run([str(py), "-c", MCP_PROBE], capture_output=True).returncode == 0
     except (FileNotFoundError, OSError):
@@ -359,7 +361,7 @@ def command_md() -> str:
     )
 
 
-def install_command(dry: bool, cmd_dir: Path):
+def install_command(dry: bool, cmd_dir: Path) -> None:
     path = cmd_dir / "loopx.md"
     print(f"[command] /loopx -> {path}")
     if dry:
@@ -375,7 +377,7 @@ class HardenSettingsUnreadable(RuntimeError):
     """`--harden` refuses to rewrite a settings file it cannot read as JSON."""
 
 
-def add_hardening(dry: bool, settings_path: Path):
+def add_hardening(dry: bool, settings_path: Path) -> None:
     """Deep-merge the optional hook + statusline into settings_path, preserving
     existing config. NEVER deletes permission rules.
 
@@ -415,7 +417,7 @@ def add_hardening(dry: bool, settings_path: Path):
         write_json_atomic(settings_path.resolve(), merged, preserve_mode=True)
 
 
-def warn_legacy_perms(settings_path: Path):
+def warn_legacy_perms(settings_path: Path) -> None:
     """Detect a legacy loopx credential-deny and SUGGEST manual cleanup. Never mutate."""
     try:
         cur = json.loads(settings_path.read_text(encoding="utf-8"))
@@ -429,7 +431,7 @@ def warn_legacy_perms(settings_path: Path):
               "To drop them, edit that file's `permissions.deny` by hand.")
 
 
-def main():
+def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--scope", choices=["user", "project"], required=True,
                     help="user = ~/.claude (all projects); project = THIS project's .claude (preferred)")

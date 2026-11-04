@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from ..work_items.replan_history_codec import (
-    REPLAN_HISTORY_NEUTRAL_CLASSIFICATIONS as AUTONOMOUS_RUN_HISTORY_NEUTRAL_CLASSIFICATIONS,
+    REPLAN_HISTORY_NEUTRAL_CLASSIFICATIONS as _NEUTRAL_CLASSIFICATIONS,
 )
 
 from ..runtime.public_safety import public_safe_compact_text
@@ -22,6 +22,8 @@ from ..work_items.autonomous_replan_obligation import (
     build_autonomous_replan_obligation as _build_autonomous_replan_obligation,
     run_history_monitor_wait_already_acknowledged as _run_history_monitor_wait_already_acknowledged,
 )
+
+AUTONOMOUS_RUN_HISTORY_NEUTRAL_CLASSIFICATIONS = _NEUTRAL_CLASSIFICATIONS
 
 
 DEAD_MONITOR_REPEAT_THRESHOLD = 6

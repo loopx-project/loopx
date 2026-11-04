@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
+
 
 from ..goals.goal_vision_policy import COMPLETED_TODO_CHAIN_REPLAN_THRESHOLD
 from ..runtime.time import now_utc
@@ -452,7 +453,7 @@ def select_quota_todo_summary(
     filter_user_gate_blocks_agent: bool = False,
     available_capabilities: Any = None,
 ) -> dict[str, Any] | None:
-    sources = (
+    sources: tuple[tuple[Callable[..., dict[str, Any] | None], Any], ...] = (
         (summarize_user_todos_for_quota, canonical_value),
         (summarize_project_asset_todos_for_quota, project_asset_value),
     )
