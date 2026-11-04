@@ -27,8 +27,14 @@ Long-running work is assigned to an exact worker with a durable return route.
 The initial receipt does not end the exchange: the worker evaluates or executes
 within its current authority and returns an audience-ready decision/result to
 the original conversation automatically. Acknowledgement or adoption does not
-remove the request from the receiver's hook; a committed conclusion does. The
-Chat runtime then owns transport recovery, separately from work completion.
+remove the request from the receiver's hook. An explicit remainder on the
+latest conclusion retains the original request; a queued return retains its
+delivery obligation. The scoped manager handoff reader reuses the native Inbox
+agenda and exposes `inbox_state` and `remaining_work` alongside transport
+receipts. An older delivered conclusion cannot resolve a newer remainder or
+pending reply. Unavailable receipts remain unknown. These are receipt facts,
+not independent acceptance that the original question was answered. The Chat
+runtime owns transport recovery, separately from work completion.
 
 An ordinary private project request interrupted by a host restart after tool
 work is not safe to replay. The original worker can reserve one separately
