@@ -782,7 +782,7 @@ export function createEffectRuntimeHandlers(
     ["work_item.interaction_reads.project", lazyHandler(() => import("./quota/turn_envelope.ts"), ({projectInteractionReadsAndGuidance}) => projectInteractionReadsAndGuidance)],
     ["work_item.blocked_wait_observation.project", lazyHandler(() => import("./work_items/interaction_contract.ts"), ({projectBlockedSuccessorWaitObservation}) => projectBlockedSuccessorWaitObservation)],
     ["work_item.context.plan", lazyHandler(() => import("./work_items/interaction_contract.ts"), ({planInteractionWorkContext}) => planInteractionWorkContext)],
-    ["work_item.context.project", lazyHandler(() => import("./work_items/interaction_contract.ts"), ({projectInteractionWorkContext}) => projectInteractionWorkContext)],
+    ["work_item.context.project", lazyHandler(() => import("./work_items/interaction_contract.ts"), ({readAndProjectInteractionWorkContext}) => readAndProjectInteractionWorkContext)],
     ["work_item.replan_settlement.project", lazyHandler(() => import("./work_items/replan_settlement.ts"), ({projectReplanSettlementContract}) => projectReplanSettlementContract)],
     ["work_item.replan_semantics.project", lazyHandler(() => import("./work_items/replan_semantics.ts"), ({projectReplanWriteback}) => projectReplanWriteback)],
     ["work_item.replan_context.project", lazyHandler(() => import("./work_items/replan_context.ts"), ({projectReplanContext}) => projectReplanContext)],
