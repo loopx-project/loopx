@@ -142,11 +142,11 @@ export const researchDisplayLanguageScenario = {
         assert.deepEqual(await judgments.locator('.research-assessment-verdict').allTextContents(),
           ['证据不足', '证据不足', '证据不足', '未建立', '有依据', '有依据', '有依据', '有依据']);
         const firstJudgment = judgments.locator('.research-assessment').first();
-        await firstJudgment.locator(':scope > summary').focus(); await page.keyboard.press('Enter');
-        await page.waitForFunction(element => element.open, await firstJudgment.elementHandle());
+        await firstJudgment.locator(':scope > summary').press('Enter');
+        await page.waitForFunction(() => document.querySelectorAll('.research-effect-evidence .research-assessment')[0]?.open);
         const peerJudgment = judgments.locator('.research-assessment').nth(1);
         await peerJudgment.locator(':scope > summary').click();
-        await page.waitForFunction(element => element.open, await peerJudgment.elementHandle());
+        await page.waitForFunction(() => document.querySelectorAll('.research-effect-evidence .research-assessment')[1]?.open);
         assert.equal(await judgments.locator('.research-assessment[open]').count(), 2, "Independent row expansion is preserved");
         assert.equal(await judgments.locator('.research-assessment-question:visible').count(), 0, "Opening several rationales never repeats the shared question");
         assert.equal(await firstJudgment.locator('.research-assessment-reason').innerText(), capture.analyses.at(-1).outputs.zh.assessments[0].reason);
