@@ -531,6 +531,7 @@ type PersonalHomeModel = {
   workers?: WorkspaceWorker[];
 };
 type PersonalManagerMessage = {
+  queued?: boolean;
   replyContext?: ChatVisibleMessage["reply_context"];
   goalDraft?: GoalDraft | null;
   sourceMessageId?: string;
@@ -2408,7 +2409,7 @@ function PersonalGoalHome({
         })(),
         onDelta: (delta: string) => {
           streamedText += delta;
-          updateConversationMessage(targetContextId, streamingMessageId, { text: streamedText });
+          updateConversationMessage(targetContextId, streamingMessageId, { text: streamedText, queued: false });
         },
         onActivity: (label: string, step: TurnStep | null) => {
           setMessagesByContext((messages) => ({
@@ -2432,14 +2433,14 @@ function PersonalGoalHome({
             if (phase === "turn.queued") {
               updateConversationMessage(targetContextId, streamingMessageId, {
                 pending: false, preparing: false, endedAt: undefined,
-                text: locale === "zh-CN" ? "已排队，等待当前回合结束。" : "Queued for the next turn.", activity: [],
+                text: "", queued: true, activity: [],
               });
               return;
             }
             // Queued is a durable receipt, not observed execution. Only the
             // original worker's start/stream may take the active controls.
             if (phase === "turn.started") {
-              updateConversationMessage(targetContextId, streamingMessageId, { pending: true, startedAt: Date.now(), endedAt: undefined, text: "" });
+              updateConversationMessage(targetContextId, streamingMessageId, { queued: false, pending: true, startedAt: Date.now(), endedAt: undefined, text: "" });
               const previousActive = activeTurnIds.current.get(targetContextId);
               // Replaying an acknowledged queued Turn can include a historical
               // start. Its original Session, not that replay, owns live controls.
@@ -2485,11 +2486,12 @@ function PersonalGoalHome({
       }
       const response = streamed.response;
       updateConversationMessage(targetContextId, streamingMessageId, {
+        queued: Boolean(streamed.steeredIntoTurnId),
         goalDraft: response.goal_draft,
         lines: response.gate ? [response.gate.summary, response.gate.next_action].filter(Boolean).slice(0, 2) : [],
         pending: false,
-        text: visibleAgentMessage(response.message || streamedText.trim())
-          || `${answerIdentityLabel(targetContextId, selectedRoute.label)} 已完成分析。`,
+        text: streamed.steeredIntoTurnId ? "" : (visibleAgentMessage(response.message || streamedText.trim())
+          || `${answerIdentityLabel(targetContextId, selectedRoute.label)} 已完成分析。`),
       });
       // The completed transcript is the immutable answer owner. Resolve its
       // stored identity before offering a link; a failed read never hides the
@@ -2543,6 +2545,7 @@ function PersonalGoalHome({
         || (error instanceof ChatApiError && error.payload.error_code === "turn_interrupted");
       if (userInterrupted) {
         const interruptedMessage = {
+          queued: false,
           agentLabel: answerIdentityLabel(targetContextId, selectedRoute.label),
           lines: [],
           pending: false,
@@ -2617,6 +2620,7 @@ function PersonalGoalHome({
       // an unacknowledged dispatch after that boundary remains uncertain.
       const preparationFailed = preparationControllers.current.get(targetContextId) === preparationController;
       const failureMessage = {
+        queued: false,
         agentLabel: answerIdentityLabel(targetContextId, selectedRoute.label),
         lines: gateSummary ? [gateSummary] : [],
         pending: false,
@@ -2905,6 +2909,7 @@ function PersonalGoalHome({
           attachments: message.attachments,
         id: String(message.id),
         pending: message.pending,
+        queued: message.queued,
         preparing: message.preparing,
         startedAt: message.startedAt,
         updatedAt: message.updatedAt,

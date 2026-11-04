@@ -393,6 +393,8 @@ export type WorkspaceActionPreview = {
 };
 
 export type WorkspaceMessage = {
+  /** A native queue receipt, not an assistant answer or active execution. */
+  queued?: boolean;
   replyContext?: ChatReplyContext;
   createdAt?: string;
   goalDraft?: GoalDraft | null;

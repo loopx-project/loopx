@@ -965,6 +965,44 @@ export async function fetchChatSession(sessionId: string, signal?: AbortSignal) 
   return requestJson<ChatSessionSnapshot>(`/api/chat/sessions/${encodeURIComponent(sessionId)}`, { signal });
 }
 
+const chatQueueSchema = z.object({
+  ok: z.literal(true), schema_version: z.literal("loopx_chat_store_v1"), session_id: z.string().min(1),
+  turns: z.array(z.object({
+    turn_id: z.string().min(1), created_at: z.string(), origin: z.string().nullable(),
+    preview: z.string(), character_count: z.number().int().nonnegative(),
+    attachment_count: z.number().int().nonnegative(),
+    steering: z.object({
+      schema_version: z.literal("loopx_chat_queue_steering_v1"),
+      client_ingress_id: z.string().min(1), operation_id: z.string().min(1),
+      target_turn_id: z.string().min(1), status: z.enum(["pending", "delivered", "failed"]),
+      error_code: z.string().optional(),
+    }).nullable(),
+  })),
+});
+export type ChatQueuedTurn = z.infer<typeof chatQueueSchema>["turns"][number];
+
+/** Bounded metadata from the existing persistent queue, never a local queue. */
+export async function fetchChatQueue(sessionId: string, signal?: AbortSignal) {
+  const result = chatQueueSchema.safeParse(await requestJson<unknown>(
+    `/api/chat/sessions/${encodeURIComponent(sessionId)}/queue`, {signal}));
+  if (!result.success || result.data.session_id !== sessionId
+    || new Set(result.data.turns.map(row => row.turn_id)).size !== result.data.turns.length) {
+    throw new Error("The original Session queue could not be verified.");
+  }
+  return result.data.turns;
+}
+
+export async function steerQueuedChatTurn(sessionId: string, queuedId: string, targetId: string, ingressId: string) {
+  const value = await requestJson<Record<string, unknown>>(
+    `/api/chat/sessions/${encodeURIComponent(sessionId)}/queue/${encodeURIComponent(queuedId)}/steer`,
+    {method: "POST", body: JSON.stringify({target_turn_id: targetId, client_ingress_id: ingressId}),
+      signal: AbortSignal.timeout(15_000)});
+  if (value.ok !== true || value.session_id !== sessionId || value.queued_turn_id !== queuedId
+    || value.turn_id !== targetId || value.client_ingress_id !== ingressId || value.status !== "delivered") {
+    throw new Error("Queue steering acknowledgement does not match the original request");
+  }
+}
+
 const chatMessagePageSchema = z.object({
   schema_version: z.literal("loopx_chat_message_page_v1"),
   offset: z.number().int().nonnegative(), total: z.number().int().nonnegative(),
@@ -1574,6 +1612,7 @@ async function receiveChatTurnStreaming(
   } = {},
 ) {
   let finalResponse: unknown = null;
+  let steeredIntoTurnId: string | undefined;
   const outcome: {
     failure: Record<string, unknown> | null;
     interrupted: Record<string, unknown> | null;
@@ -1591,7 +1630,10 @@ async function receiveChatTurnStreaming(
           if (label) options.onActivity?.(label, parseTurnStep(event.payload.step));
         }
         if (event.kind === "turn.completed") {
-          finalResponse = event.payload.response;
+          if (typeof event.payload.steered_into_turn_id === "string" && event.payload.steered_into_turn_id) {
+            steeredIntoTurnId = event.payload.steered_into_turn_id;
+            finalResponse = {schema_version: "loopx_chat_agent_response_v0", message: "", proposals: [], gate: null};
+          } else finalResponse = event.payload.response;
         }
         if (event.kind === "turn.failed") {
           outcome.failure = event.payload;
@@ -1632,6 +1674,7 @@ async function receiveChatTurnStreaming(
     response: agentResponseSchema.parse(finalResponse),
     sessionId,
     turnId,
+    steeredIntoTurnId,
   };
 }
 
@@ -1642,7 +1685,7 @@ async function receiveChatTurnStreaming(
 export async function readCompletedChatTurn(sessionId: string, turnId: string, signal: AbortSignal): Promise<AgentResponse | null> {
   let completed: AgentResponse | null = null;
   await streamChatTurn(`/api/chat/sessions/${sessionId}/turns/${turnId}/events`, (event) => {
-    if (event.kind === "turn.completed") completed = agentResponseSchema.parse(event.payload.response);
+    if (event.kind === "turn.completed" && !event.payload.steered_into_turn_id) completed = agentResponseSchema.parse(event.payload.response);
   }, signal);
   return completed;
 }
