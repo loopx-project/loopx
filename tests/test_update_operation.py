@@ -103,6 +103,96 @@ def test_active_worker_is_reattached_and_status_never_starts_an_install(tmp_path
     assert operations.read_operation()["status"] == "failed"
 
 
+@pytest.fixture(params=[True, False], ids=["success", "failure"])
+def worker_operation(tmp_path, monkeypatch, request):
+    monkeypatch.setenv("LOOPX_UPDATE_STATE_DIR", str(tmp_path / "state"))
+    # The real worker sets these variables directly; restore them after the test.
+    for name in ("LOOPX_UPDATE_OPERATION_ID", "LOOPX_UPDATE_STATUS_PATH", "LOOPX_UPDATE_WORKER"):
+        monkeypatch.setenv(name, "")
+    operation_id = "d" * 32
+    folder = operations.operation_root() / operation_id
+    folder.mkdir()
+    argv = ["--format", "json", "update", "apply"]
+    operations.atomic_json(folder / "request.json", {"argv": argv, "installation_key": "test"})
+    operations.atomic_json(folder / "status.json", {"operation_id": operation_id,
+        "status": "running", "stage": "activate", "pid": os.getpid(), "updated_at": time.time()})
+    payload = {"ok": request.param, "changes_applied": request.param,
+        "message": "installation completed" if request.param else "activation failed"}
+
+    def run_cli(actual_argv):
+        assert actual_argv == argv
+        print(json.dumps(payload))
+        return 0 if payload["ok"] else 1
+
+    monkeypatch.setattr("loopx.cli.main", run_cli)
+    return operation_id, folder, payload
+
+
+def test_worker_never_publishes_completion_without_result(worker_operation, monkeypatch):
+    operation_id, folder, payload = worker_operation
+    terminal = "succeeded" if payload["ok"] else "failed"
+    atomic_json = operations.atomic_json
+    observations = []
+
+    def check_boundary():
+        state = operations.read_operation(operation_id)
+        observations.append(state["status"])
+        if state["status"] in {"succeeded", "failed"}:
+            assert state["status"] == terminal
+            assert state["result"] == payload
+            assert operations.observe(operation_id) == dict(payload,
+                operation_id=operation_id, operation_status=terminal)
+        else:
+            assert state["status"] == "running"
+
+    def write_and_observe(path, value):
+        check_boundary()
+        atomic_json(path, value)
+        check_boundary()
+
+    monkeypatch.setattr(operations, "atomic_json", write_and_observe)
+    assert operations.worker(operation_id) == (0 if payload["ok"] else 1)
+    assert observations == ["running", terminal, terminal, terminal]
+    progress = json.loads((folder / "status.json").read_text())
+    assert progress["status"] == terminal
+    assert progress["stage"] == "activate"
+
+
+def test_worker_result_survives_final_progress_write_failure(worker_operation, monkeypatch):
+    operation_id, folder, payload = worker_operation
+    atomic_json = operations.atomic_json
+
+    def fail_progress(path, value):
+        if path.name == "status.json":
+            assert operations.read_operation(operation_id)["result"] == payload
+            raise OSError("progress unavailable")
+        atomic_json(path, value)
+
+    monkeypatch.setattr(operations, "atomic_json", fail_progress)
+    assert operations.worker(operation_id) == (0 if payload["ok"] else 1)
+    assert json.loads((folder / "status.json").read_text())["status"] == "running"
+    assert operations.observe(operation_id) == dict(payload, operation_id=operation_id,
+        operation_status="succeeded" if payload["ok"] else "failed")
+
+
+def test_worker_result_write_failure_cannot_advertise_completion(worker_operation, monkeypatch):
+    operation_id, folder, _payload = worker_operation
+    writes = []
+
+    def fail_result(path, value):
+        writes.append(path.name)
+        assert path.name == "result.json"
+        raise OSError("result unavailable")
+
+    monkeypatch.setattr(operations, "atomic_json", fail_result)
+    with pytest.raises(OSError, match="result unavailable"):
+        operations.worker(operation_id)
+    assert writes == ["result.json"]
+    assert not (folder / "result.json").exists()
+    assert json.loads((folder / "status.json").read_text())["status"] == "running"
+    assert operations.read_operation(operation_id)["status"] == "running"
+
+
 def test_real_detached_worker_finishes_after_its_observer_exits(tmp_path):
     env = dict(os.environ, LOOPX_UPDATE_STATE_DIR=str(tmp_path / "state"),
         LOOPX_BIN_DIR=str(tmp_path / "bin"), LOOPX_USAGE_PING="0")
