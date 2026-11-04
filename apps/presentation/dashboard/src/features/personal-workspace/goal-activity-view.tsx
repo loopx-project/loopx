@@ -110,14 +110,3 @@ export function GoalIdentityMark({ goal, size = "md" }: { goal: GoalActivitySubj
     </span>
   );
 }
-
-export function GoalActivityChip({ goal }: { goal: GoalActivitySubject }) {
-  const activity = useGoalActivity(goal);
-  return (
-    <span className={`personal-goal-activity-chip is-${activity.tone}${activity.live ? " is-live" : ""}`} title={activity.text}>
-      <span aria-hidden="true" className="personal-goal-activity-dot" />
-      {activity.windowBadge ? <span className={`personal-goal-window-badge is-${activity.windowBadge.state}`}>{activity.windowBadge.text}</span> : null}
-      <span>{activity.text}</span>
-    </span>
-  );
-}

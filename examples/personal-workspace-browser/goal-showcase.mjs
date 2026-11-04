@@ -8,7 +8,7 @@ import { installShowcaseWorkspace, openShowcaseGoal } from "./showcase-workspace
 // workspace: one hero, a folded composer, exact observed counts with a short swap transition, reduced motion, and a region failure that
 // stays announced without becoming a banner.
 
-const workValue = (page) => page.getByTestId("goal-vitals").locator(".goal-vital").nth(1).locator(".goal-vital-value").innerText();
+const workValue = (page) => page.getByTestId("goal-vitals").locator(".goal-stagebar-work").innerText();
 const progressIsReadable = page => page.locator(".goal-overview-progress > span").first().evaluate(node => {
   const rect = node.getBoundingClientRect();
   return rect.height <= parseFloat(getComputedStyle(node).lineHeight) + 1 && node.scrollWidth <= node.clientWidth;
@@ -32,7 +32,7 @@ export const goalShowcaseScenario = {
       assert.match(await page.locator(".goal-overview-progress").innerText(), /2\/4/);
       assert.ok(await progressIsReadable(page), "The short criterion count fits on one line, rather than being squeezed by its meter");
       assert.equal(await page.locator(".goal-criteria-meter i").count(), 4, "The meter has one segment per criterion");
-      assert.equal(await page.locator(".goal-vital-dot.is-live").count(), 1, "A host-recorded open turn is the one live glyph");
+      assert.equal(await page.locator(".personal-goal-list .personal-goal-mark.is-live").count(), 1, "A host-recorded open turn is the one live glyph");
       assert.equal(await workValue(page), "23/28");
 
       assert.equal(await overview.getByRole("heading", { level: 2, name: "概览" }).count(), 0, "The tab already names the view; the body does not repeat it");
@@ -56,7 +56,7 @@ export const goalShowcaseScenario = {
         const values = [];
         const started = performance.now();
         const read = () => {
-          const value = document.querySelectorAll('[data-testid="goal-vitals"] .goal-vital')[1]?.querySelector(".goal-vital-value")?.textContent ?? "";
+          const value = document.querySelector('[data-testid="goal-vitals"] .goal-stagebar-work')?.textContent ?? "";
           values.push(value);
           if (performance.now() - started < 2_500 && value !== "24/29") requestAnimationFrame(read);
           else accept(values);
@@ -72,26 +72,30 @@ export const goalShowcaseScenario = {
       assert.equal(await declaredObjective.innerText(), "Move legacy billing exports onto the ledger service.",
         "Progress refresh does not replace the Goal's recorded objective");
       await page.waitForTimeout(700);
-      const cost = await page.getByTestId("goal-vitals").locator(".goal-vital").nth(4).locator(".goal-vital-value").innerText();
+      const usageGroup = page.getByTestId("goal-vitals").locator(".goal-stagebar-usage");
+      const costItem = usageGroup.locator(".goal-stagebar-usage-item").nth(0);
+      const cost = await costItem.locator(".goal-stagebar-usage-value").innerText();
       assert.equal(cost, "$25.40", "Cost displays the exact observation");
 
       // Usage changes window without briefly retaining a value from the old window.
       state.usageWindow = "24h";
       await page.getByRole("button", { name: /^(刷新状态|Refresh status)$/ }).click();
-      const costCell = page.getByTestId("goal-vitals").locator(".goal-vital").nth(4);
-      await costCell.locator(".goal-vital-value").filter({hasText: "$6.20"}).waitFor();
-      assert.match(await costCell.innerText(), /24/);
+      await costItem.locator(".goal-stagebar-usage-value").filter({hasText: "$6.20"}).waitFor();
+      assert.match(await usageGroup.getAttribute("title"), /近 24 小时 \$6\.20/, "The 24h window is named, not implied");
       state.usageWindow = "unknown";
       await page.getByRole("button", { name: /^(刷新状态|Refresh status)$/ }).click();
-      await costCell.locator(".goal-vital-value").filter({hasText: "未采集"}).waitFor();
-      assert.doesNotMatch(await costCell.innerText(), /\$0|\$6|\$25/, "Unknown usage retains no measured cost");
+      await costItem.locator(".goal-stagebar-usage-value.is-unmeasured").filter({hasText: "未采集"}).waitFor();
+      assert.match(await usageGroup.getAttribute("title"), /未采集/, "An unmeasured window says so in its title");
+      assert.doesNotMatch(await costItem.innerText(), /\$0|\$6|\$25/, "Unknown usage retains no measured cost");
       state.usageWindow = "7d";
       await page.getByRole("button", { name: /^(刷新状态|Refresh status)$/ }).click();
-      await costCell.locator(".goal-vital-value").filter({hasText: "$25.40"}).waitFor();
+      await costItem.locator(".goal-stagebar-usage-value").filter({hasText: "$25.40"}).waitFor();
 
       await page.emulateMedia({ reducedMotion: "reduce" });
-      const liveAnimation = await page.locator(".goal-vital-dot.is-live").evaluate((node) => getComputedStyle(node, "::after").animationName);
-      assert.equal(liveAnimation, "none", "Reduced motion stops the live arc; the ring and core still mark it live");
+      const liveMark = page.locator(".personal-goal-list .personal-goal-mark.is-live");
+      const liveAnimation = await liveMark.evaluate((node) => getComputedStyle(node, "::before").animationName);
+      assert.equal(liveAnimation, "none", "Reduced motion stops the live arc; the ring still marks it live");
+      assert.equal(await liveMark.count(), 1, "The live mark stays identifiable without motion");
       await page.emulateMedia({ reducedMotion: null });
 
       const refreshDelivery = page.locator(".delivery-review-toolbar").getByRole("button", {name: "刷新快照", exact: true});

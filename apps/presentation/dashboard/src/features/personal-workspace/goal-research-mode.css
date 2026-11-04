@@ -6,3 +6,10 @@
 .goal-research-mode-error { flex-basis: 100%; display: flex; align-items: center; gap: 8px; color: var(--pw-red); font-size: var(--text-body); max-width: 440px; }
 .goal-research-mode-error button { min-height: 44px; flex-shrink: 0; text-decoration: underline; }
 @media (max-width: 720px) { .goal-research-mode { padding-bottom: 8px; } }
+
+
+
+/* The research control gets its own row under the Goal tabs. */
+.personal-goal-subnav { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 0 0 6px; }
+.personal-goal-subnav .goal-research-mode { flex-wrap: wrap; max-width: none; }
+.personal-goal-subnav .goal-research-mode-error { max-width: none; }

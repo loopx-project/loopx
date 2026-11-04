@@ -518,6 +518,15 @@ export const projectMapSchema = z.object({
   files_checked: z.number().optional().nullable(),
 });
 
+/** Closed outcome vocabularies a run writer already validates. They are the only
+ * facts that may say a run advanced or failed; `classification` stays a free
+ * display string. Owners: loopx/control_plane/work_items/delivery_outcome.py
+ * (DeliveryOutcome) and loopx/control_plane/work_items/progress_result.py
+ * (ProgressResultClass). Both are exposed on every compact run record by
+ * loopx/control_plane/runtime/run_compaction.py:96,99-100. */
+export const deliveryOutcomeSchema = z.enum(["surface_only", "outcome_gap", "outcome_progress", "primary_goal_outcome"]);
+export const progressResultClassSchema = z.enum(["advanced", "unchanged", "blocked", "exploration_exhausted", "no_followup"]);
+
 export const runRecordSchema = z.object({
   generated_at: z.string(),
   goal_id: z.string(),
@@ -536,6 +545,11 @@ export const runRecordSchema = z.object({
   operator_gate_resume_contract: operatorGateResumeContractSchema.optional().nullable(),
   controller_readiness: controllerReadinessSchema.optional().nullable(),
   project_map: projectMapSchema.optional().nullable(),
+  /** An unrecognized token degrades to `null` (unknown), never to a guess. */
+  delivery_outcome: deliveryOutcomeSchema.optional().nullable().catch(null),
+  progress_observation: z.object({
+    result_class: progressResultClassSchema.optional().nullable().catch(null),
+  }).optional().nullable().catch(null),
 });
 
 export const runGoalSchema = z.object({

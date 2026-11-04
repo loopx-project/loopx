@@ -16,6 +16,11 @@ import { fetchWorkspaceBackend, openWorkspacePage } from "./scenario-context.mjs
 // notifies once with the gate's text; clicking opens that real item.
 
 const gateText = "Approve the restated FY2023 operating cash flow";
+// The sidebar bell replaced the settings block; it is found the way a person
+// finds it, by the Chinese accessible name of t("settings.attentionNotifications").
+const bellName = "桌面通知";
+const bellHintTitle = "仅在本页面在此浏览器中保持打开时生效。进展和运行不会提醒，只提醒新出现的、等你决定的事项。开启后页面每 30 秒重新读取一次工作区。"; // t("settings.attentionNotificationsHint")
+const bellSelector = `button[aria-label="${bellName}"]`;
 
 export const attentionNotificationsLiveScenario = {
   id: "attention-notifications-live",
@@ -52,14 +57,15 @@ export const attentionNotificationsLiveScenario = {
         });
       } });
       const { page } = session;
-      await page.getByRole("button", { name: "设置", exact: true }).click();
-      await page.locator(".personal-settings-tabs").getByRole("button", { name: "外观", exact: true }).click();
-      const settings = page.getByTestId("attention-notification-settings");
-      await settings.waitFor({ state: "visible" });
+      const bell = page.getByRole("button", { name: bellName, exact: true });
+      await bell.waitFor({ state: "visible", timeout: 15_000 });
+      assert.equal(await bell.getAttribute("aria-pressed"), "false", "The bell starts off");
       await page.clock.install();
-      await settings.getByRole("checkbox").click();
-      await page.waitForFunction(() => document.querySelector('[data-testid="attention-notification-permission"]')?.textContent?.includes("已允许"));
-      await page.getByRole("button", { name: "返回工作区", exact: true }).click();
+      await bell.click();
+      await page.waitForFunction(({ selector }) => document.querySelector(selector)?.getAttribute("aria-pressed") === "true", { selector: bellSelector });
+      assert.match((await bell.getAttribute("class")) ?? "", /\bis-on\b/, "The bell reads as on");
+      assert.equal(await bell.getAttribute("title"), bellHintTitle, "The on bell explains what it does");
+      assert.equal(await bell.locator(".personal-notification-dot").count(), 1, "The on bell shows its dot");
       assert.equal((await page.evaluate(() => window.__loopxNotifications.length)), 0);
 
       // An optional user action raised in the real Todo owner is listed but is

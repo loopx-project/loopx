@@ -112,6 +112,9 @@ export function GoalTeamResults({sessionId, zh, refreshKey, catalogOnly = false}
   const rows = pages.flatMap(readableRows);
   const observationGeneration = generation.current;
   const lastPage = pages.at(-1);
+  // Only this owner knows the catalog is empty and final; a page that still has
+  // a next cursor keeps its catalog so the "find more" control stays reachable.
+  const catalogEmpty = !busy && pages.length > 0 && !rows.length && !lastPage?.has_more;
   const adoptions = selection?.result.adoptions ?? [];
   const currentAdoptions = adoptions.filter(row => row.state === "current").length;
   const unavailableAdoptions = adoptions.length - currentAdoptions;
@@ -124,7 +127,7 @@ export function GoalTeamResults({sessionId, zh, refreshKey, catalogOnly = false}
         : selection?.result.dependencies?.length
           ? (zh ? "此结果关联来源版本 · 查看依据" : "This result references source versions · inspect evidence")
           : (zh ? "尚无采用记录 · 查看验收与版本依据" : "No adoption recorded · inspect acceptance and versions");
-  return <section ref={focus.root} tabIndex={-1} className={`goal-team-results${catalogOnly ? " is-catalog" : ""}`} aria-label={zh ? "团队成果" : "Team results"} aria-busy={busy}>
+  return <section ref={focus.root} tabIndex={-1} className={`goal-team-results${catalogOnly ? " is-catalog" : ""}`} aria-label={zh ? "团队成果" : "Team results"} aria-busy={busy} data-result-empty={catalogEmpty ? "" : undefined}>
     <header><h3>{zh ? "团队成果" : "Team results"}</h3>
       <button type="button" disabled={busy} onClick={() => void list()}><RefreshCw size={14} aria-hidden="true"/>{zh ? "刷新成果" : "Refresh results"}</button></header>
     {busy ? <p role="status">{zh ? "正在核验产物…" : "Verifying artifacts…"}</p> : null}

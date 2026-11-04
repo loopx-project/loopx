@@ -4,6 +4,7 @@ import {
   createRootRoute,
   createRoute,
   createRouter,
+  useNavigate,
 } from "@tanstack/react-router";
 import { z } from "zod";
 
@@ -121,15 +122,34 @@ export const rootRoute = createRootRoute({
   </main>,
 });
 
+type DashboardNavigate = ReturnType<typeof dashboardRoute.useNavigate>;
+
+function DashboardRouteContent({ search, navigate }: { search: z.infer<typeof searchSchema>; navigate: DashboardNavigate }) {
+  return search.reportSessionId && search.reportMessageId
+    ? <Suspense fallback={<RouteLoading />}><AnswerReportPage sessionId={search.reportSessionId} messageId={search.reportMessageId} statusUrl={search.statusUrl}/></Suspense>
+    : <DashboardPage search={search} navigate={navigate}/>;
+}
+
 export const dashboardRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
   validateSearch: (search) => searchSchema.parse(search),
   component: () => {
     const search = dashboardRoute.useSearch();
-    return search.reportSessionId && search.reportMessageId
-      ? <Suspense fallback={<RouteLoading />}><AnswerReportPage sessionId={search.reportSessionId} messageId={search.reportMessageId} statusUrl={search.statusUrl}/></Suspense>
-      : <DashboardPage/>;
+    const navigate = dashboardRoute.useNavigate();
+    return <DashboardRouteContent search={search} navigate={navigate}/>;
+  },
+});
+
+export const localDashboardDesignRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/design/local-dashboard",
+  validateSearch: (search) => searchSchema.parse(search),
+  component: () => {
+    const search = localDashboardDesignRoute.useSearch();
+    // Both routes share searchSchema; generic navigation preserves the active design path.
+    const navigate = useNavigate() as DashboardNavigate;
+    return <DashboardRouteContent search={search} navigate={navigate}/>;
   },
 });
 
@@ -168,6 +188,7 @@ export const benchmarkStudyRoute = createRoute({
 
 const routeTree = rootRoute.addChildren([
   dashboardRoute,
+  localDashboardDesignRoute,
   frontstageRoute,
   deprecatedFrontstageOpsRoute,
   frontstageDeveloperRoute,
