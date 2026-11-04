@@ -112,7 +112,7 @@ def test_same_turn_progress_or_completion_and_replay_without_extra_guard(
     plan = guard["interaction_contract"]["cli_channel"]["settlement_plan"]
     validation, writeback = plan["ordered_steps"][:2]
     assert validation["command_condition"] == "todo_deliverable_complete"
-    assert "semantic_closeout" in validation["precondition"]
+    assert " --delivery-boundary semantic_closeout " in writeback["semantic_closeout_command_template"]
     vision_args = []
     if finish_todo:
         rc, complete = _run_generated_cli(validation["command_template"].replace(
