@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import {evaluateQuotaSchedulingWriteScopesOverlap} from "../../loopx/control_plane/work_items/task_lease_acquire_decision.ts";
+
 import {
   createEffectRuntimeHandlers,
   dispatchEffectRuntimeMethod,
@@ -97,14 +99,10 @@ test("scheduling write-scope overlap folds case and keeps subtree containment", 
     ["src/a.ts", "src/a.ts/b", true],
   ];
   for (const [left, right, overlap] of rows) {
-    const scheduling = await dispatchEffectRuntimeMethod(
-      handlers,
-      "quota.task_orchestration.write_scope_overlap",
-      { left: [left], right: [right] },
-    ) as Record<string, unknown>;
+    const scheduling = evaluateQuotaSchedulingWriteScopesOverlap({left: [left], right: [right]});
     assert.equal(scheduling.overlap, overlap, `scheduling ${left} vs ${right}`);
   }
-  // The scheduling entry point stays wider than the canonical lease rule.
+  // The in-process scheduling owner stays wider than the canonical lease rule.
   const canonical = await dispatchEffectRuntimeMethod(
     handlers,
     "task_lease.write_scopes.overlap",

@@ -745,6 +745,8 @@ class CodexChatAgentSession:
         dynamic_tools: list[dict[str, Any]] | None = None,
         host_config: dict[str, Any] | None = None,
         launch_guard: Callable[[], AbstractContextManager[None]] | None = None,
+        account_runtime_root: Path | None = None,
+        account_consumer: str = "worker",
         _compatibility_catalog_path: Path | None = None,
     ) -> "CodexChatAgentSession":
         resolved = shutil.which(codex_bin)
@@ -850,6 +852,15 @@ class CodexChatAgentSession:
             runtime_env.get("LOOPX_CHAT_CODEX_MODEL_PROVIDER", "").strip()
             if not execution_mode else ""
         )
+        account_base_config = host_config
+        from .capabilities.native_chat.codex_auth import prepare_api_transport, authenticate_isolated
+        api_transport = prepare_api_transport(account_runtime_root, base_home,
+            isolated_home=runtime_home if permissions_profile else None,
+            eligible=not execution_mode and not provider_override and not (host_config or {}).get("model_provider"),
+            consumer=account_consumer, model=model)
+        if api_transport is not None:
+            runtime_env[api_transport.env_key] = api_transport.token
+            host_config, provider_override = api_transport.configuration(host_config or {}), api_transport.provider
         command = [resolved, "app-server"]
         if permissions_profile:
             # Keep this native store independent even when the account's
@@ -939,19 +950,7 @@ class CodexChatAgentSession:
             )
             session._notify("initialized", {})
             if permissions_profile:
-                from .capabilities.native_chat.codex_auth import for_isolated_process
-                try:
-                    session._host_model_auth = for_isolated_process(base_home, runtime_home, resolved)
-                    if session._host_model_auth is not None:
-                        credentials = session._host_model_auth.read()
-                        login = session._request("account/login/start", {
-                            "type": "chatgptAuthTokens", **credentials}, request_id=4)
-                        if login.get("type") != "chatgptAuthTokens":
-                            raise ValueError("unexpected native model authentication mode")
-                except Exception:
-                    raise session._runtime_error(
-                        "Trusted-host Codex model authentication is unavailable. "
-                        "Restore the host account and retry this same Session.") from None
+                session._host_model_auth = authenticate_isolated(session, base_home, runtime_home, resolved, api_transport=api_transport)
             read_project_defaults = project_context is not None and bool(resume_thread_id) and (
                 model is None or reasoning_effort is None
             )
@@ -961,7 +960,7 @@ class CodexChatAgentSession:
             # copying auth, restarting clients or replacing the original thread.
             follow_native_provider = bool(resume_thread_id and not execution_mode
                 and (not permissions_profile or metadata_review_context is not None) and not provider_override)
-            read_native_config = read_project_defaults or bool(permissions_profile) or owner_git_write or follow_native_provider
+            read_native_config = read_project_defaults or bool(permissions_profile) or owner_git_write or follow_native_provider or api_transport is not None
             if read_native_config:
                 # Resume otherwise inherits the old thread's model/effort, even
                 # when the owner's effective workspace configuration has changed.
@@ -974,6 +973,8 @@ class CodexChatAgentSession:
                 effective = config_result.get("config", {})
                 if not isinstance(effective, dict):
                     raise session._runtime_error("Codex returned an invalid project configuration.")
+                if api_transport is not None:
+                    host_config = api_transport.configuration(host_config or {}, effective)
                 if owner_git_write:
                     # Preserve the native workspace policy (including network
                     # and temporary-directory settings). A separate named
@@ -1061,10 +1062,7 @@ class CodexChatAgentSession:
                 },
                 request_id=2,
             )
-            if provider_override and thread_result.get("modelProvider") != provider_override:
-                raise session._runtime_error(
-                    "Codex did not apply the requested conversation provider."
-                )
+            codex_context.verify_conversation_provider(session, provider_override, thread_result)
             if model and thread_result.get("model") not in {None, model}:
                 raise CodexChatAgentError(
                     "Codex did not apply the requested conversation model.",
@@ -1151,8 +1149,10 @@ class CodexChatAgentSession:
                     model=model,
                     reasoning_effort=reasoning_effort,
                     dynamic_tools=dynamic_tools,
-                    host_config=host_config,
+                    host_config=account_base_config if api_transport is not None else host_config,
                     launch_guard=launch_guard,
+                    account_runtime_root=account_runtime_root,
+                    account_consumer=account_consumer,
                     _compatibility_catalog_path=catalog_path,
                 )
         except Exception:

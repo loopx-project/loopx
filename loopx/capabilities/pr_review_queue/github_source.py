@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any, Callable, cast
+
 import json
 import os
 import re
@@ -9,7 +11,6 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Callable
 
 from .selection_execution import normalize_fresh_audit_exact_heads
 
@@ -84,6 +85,7 @@ def _recover_git_pr_files(
     if any(not isinstance(oid, str) or not re.fullmatch(r"[0-9a-f]{40}", oid)
            for oid in (head, base)):
         return None
+    head, base = cast(str, head), cast(str, base)
     try:
         remote = _read_git(["remote", "get-url", "origin"], cwd=cwd).decode().strip()
         match = re.fullmatch(
@@ -176,11 +178,11 @@ def _fetch_complete_pr_files(
         current = run_gh_json(["pr", "view", number, "--json", ",".join(version_fields),
                                "--repo", repository], cwd=cwd)
         return isinstance(current, dict) and all(
-            current.get(key) == snapshot.get(key) for key in version_fields
+            current.get(key) == cast(dict[str, Any], snapshot).get(key) for key in version_fields
         )
 
     try:
-        if recover and (any(type(snapshot.get(key)) is not int or snapshot[key] < 0
+        if recover and (any(type(cast(dict[str, Any], snapshot).get(key)) is not int or cast(dict[str, Any], snapshot)[key] < 0
                             for key in version_fields[2:]) or not same_snapshot()):
             return None
         payload = run_gh_json(
@@ -214,7 +216,7 @@ def _fetch_complete_pr_files(
         if not recover or not files or len(files) > expected_count:
             return None
         recovered = _recover_git_pr_files(
-            repository=repository, snapshot=snapshot, observed=observed, cwd=cwd,
+            repository=repository, snapshot=cast(dict[str, Any], snapshot), observed=observed, cwd=cwd,
         )
         return recovered if recovered is not None and same_snapshot() else None
     except Exception:
@@ -260,7 +262,7 @@ def _attach_review_provenance(row: dict[str, Any], details: dict[str, Any], *,
                         for key in ("state", "commit_id", "html_url"))):
                 raise ValueError("review provenance readback is malformed")
             normalized.append({"id": review.get("id"), "url": review.get("html_url"),
-                "author": {"login": user.get("login"), "is_bot": {"User": False, "Bot": True}.get(user.get("type"))},
+                "author": {"login": user.get("login"), "is_bot": {"User": False, "Bot": True}.get(cast(str, user.get("type")))},
                 "authorAssociation": review.get("author_association"), "state": review.get("state"),
                 "submittedAt": review.get("submitted_at"), "commit": {"oid": review.get("commit_id")},
                 "body": review.get("body")})

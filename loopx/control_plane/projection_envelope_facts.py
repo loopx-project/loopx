@@ -7,8 +7,9 @@ completeness. The adapter exits when the projection itself migrates.
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 from collections.abc import Mapping, Sequence
-from typing import Any
 
 from .effect_runtime import effect_runtime_result
 from .runtime.time import now_utc_iso
@@ -50,7 +51,7 @@ def seal_projection_envelope(
     coverage: Mapping[str, Any],
     upstream: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
-    return effect_runtime_result(
+    return cast(dict[str, Any], effect_runtime_result(
         "projection.envelope.seal",
         {
             "schema_version": SEAL_REQUEST_SCHEMA_VERSION,
@@ -60,7 +61,7 @@ def seal_projection_envelope(
             "coverage": dict(coverage),
             "upstream": [dict(row) for row in upstream],
         },
-    )
+    ))
 
 
 def serve_projection_envelope(
@@ -68,20 +69,20 @@ def serve_projection_envelope(
 ) -> dict[str, Any]:
     """Re-serve a stored envelope; staleness is recomputed, observed_at kept."""
 
-    return effect_runtime_result(
+    return cast(dict[str, Any], effect_runtime_result(
         "projection.envelope.seal",
         {
             "schema_version": SERVE_REQUEST_SCHEMA_VERSION,
             "envelope": dict(envelope),
             "served_at": served_at or now_utc_iso(),
         },
-    )
+    ))
 
 
 def render_projection_envelope_markdown(envelope: Any) -> list[str]:
     if not isinstance(envelope, Mapping):
         return [f"- projection: {ALERT_MARKER} no projection envelope; freshness and coverage unknown"]
-    coverage = envelope.get("coverage") if isinstance(envelope.get("coverage"), Mapping) else {}
+    coverage = cast(Mapping[str, Any], envelope.get("coverage")) if isinstance(envelope.get("coverage"), Mapping) else {}
     sources = [row for row in envelope.get("sources") or [] if isinstance(row, Mapping)]
     absent_optional = sum(
         1 for row in sources if row.get("required") is False and row.get("read_status") != "read"

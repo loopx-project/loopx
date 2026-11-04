@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import time
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -958,32 +959,40 @@ def manager_session_quota_route(controller: Any, session: Mapping[str, Any]) -> 
         return None
     native = session if session.get("agent_id") == "antigravity" else next((row for row in
         reversed(session.get("upstream_context_history") or []) if row.get("agent_id") == "antigravity"), None)
-    if native is None:
-        return None
     try:
         from .capabilities.native_chat.antigravity_adapter import AntigravityAdapter, ANTIGRAVITY_DEFAULT_MODEL
         from loopx_codex_provider_routing.native import NativeAccounts
-        capacity = AntigravityAdapter.metadata_review_capacity(
-            cascade_id=str(native.get("upstream_thread_id") or native.get("thread_id")),
-            model_id=str(native.get("agent_model_id") or ANTIGRAVITY_DEFAULT_MODEL))
-        route = NativeAccounts(controller.coordination_runtime_root).steward_route(
-            codex_home=controller.codex_home, primary="antigravity",
+        environment = dict(operator_credential_resolution(controller)["environ"])
+        codex_environment = {key: value for key, value in environment.items()
+            if key not in (MANAGER_MODEL_ENV_VAR, MANAGER_REASONING_EFFORT_ENV_VAR)}
+        accounts = NativeAccounts(controller.coordination_runtime_root)
+        route_inputs = dict(codex_home=controller.codex_home, primary="antigravity",
             pool=_manager_eligible_endpoints(defaults), current=str(session["agent_id"]),
-            primary_capacity=capacity, blocked_primary=session.get("manager_quota_block"))
+            blocked_primary=session.get("manager_quota_block"))
+        if callable(getattr(accounts, "model_transport", None)):
+            route_inputs["model"] = manager_model_resolution(codex_environment, endpoint="codex", machine_defaults=defaults)[0]
+        capacity = None
+        # Explicit API primary does not depend on an unrelated subscription
+        # transport being up. The same owner holds when that role is absent.
+        route = accounts.steward_route(**route_inputs, primary_capacity=None)
+        if route.get("endpoint") is None and native:
+            capacity = AntigravityAdapter.metadata_review_capacity(
+                cascade_id=str(native.get("upstream_thread_id") or native.get("thread_id")),
+                model_id=str(native.get("agent_model_id") or ANTIGRAVITY_DEFAULT_MODEL))
+            route = accounts.steward_route(**route_inputs, primary_capacity=capacity)
         endpoint = route.get("endpoint")
         if endpoint is None:
             return None
         capabilities = controller.capabilities()
         if not any(row.get("agent_id") == endpoint and row.get("available") is True for row in capabilities):
             return None
-        environment = dict(operator_credential_resolution(controller)["environ"])
         if endpoint != "antigravity":
             environment.pop("LOOPX_MANAGER_MODEL", None)
             environment.pop("LOOPX_MANAGER_REASONING_EFFORT", None)
         allocation = manager_executor_allocation(controller, machine_defaults=defaults, environ=environment,
             endpoint_capabilities=[{**row, "available": row.get("agent_id") == endpoint} for row in capabilities])
         return {"allocation": allocation, "blocked_primary": route.get("blocked_primary"),
-                "observed_at": capacity["observed_at"]}
+                "observed_at": capacity["observed_at"] if capacity else time.time()}
     except Exception as exc:
         import logging
         logging.getLogger(__name__).warning("Steward quota observation held (%s)", type(exc).__name__)

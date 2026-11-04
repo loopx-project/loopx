@@ -59,7 +59,7 @@ def _write_botmux_binding(path: Path) -> None:
 
 
 def _write_native_isolation(path: Path) -> None:
-    native_codex_isolation._atomic_write_text(path, "prompt = \"ready\"\n")
+    native_codex_isolation._atomic_write_text(path, 'prompt = "ready"\n')
 
 
 @pytest.mark.parametrize(
@@ -122,3 +122,63 @@ def test_atomic_writers_skip_unsupported_windows_directory_fsync(
     content = target.read_text(encoding="utf-8")
     actual = json.loads(content) if isinstance(expected, dict) else content
     assert actual == expected
+
+
+def _long_private_target(tmp_path: Path, *, parent_length: int) -> Path:
+    parent = tmp_path
+    while len(str(parent)) < parent_length:
+        remaining = parent_length - len(str(parent)) - 1
+        assert remaining > 0
+        component_length = min(40, remaining)
+        if remaining == 41:
+            component_length = 39
+        parent /= "p" * component_length
+    assert len(str(parent)) == parent_length
+    return parent / ("a" * 64 + ".json")
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Native Windows extended-path IO")
+@pytest.mark.parametrize("parent_length", [180, 280], ids=["long-temp", "long-target"])
+def test_lark_private_json_long_paths(tmp_path: Path, parent_length: int) -> None:
+    from loopx.control_plane.runtime.file_paths import windows_extended_path
+
+    target = _long_private_target(tmp_path, parent_length=parent_length)
+    assert len(str(target)) + 14 > 260
+    if parent_length == 180:
+        assert len(str(target)) < 260
+    else:
+        assert len(str(target)) > 260
+    address = windows_extended_path(target)
+    private_json.write_private_json_atomic(target, {"status": "初次", "count": 1})
+    assert json.loads(address.read_text(encoding="utf-8")) == {
+        "status": "初次",
+        "count": 1,
+    }
+    private_json.write_private_json_atomic(target, {"status": "更新", "count": 2})
+    assert json.loads(address.read_text(encoding="utf-8")) == {
+        "status": "更新",
+        "count": 2,
+    }
+    assert not list(address.parent.glob("*.tmp"))
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Native Windows extended-path IO")
+def test_lark_private_json_long_path_interrupted_replace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from loopx.control_plane.runtime.file_paths import windows_extended_path
+
+    target = _long_private_target(tmp_path, parent_length=180)
+    address = windows_extended_path(target)
+    address.parent.mkdir(parents=True, exist_ok=True)
+    address.write_text('{"status": "original"}\n', encoding="utf-8")
+    before = address.read_bytes()
+
+    def interrupted_replace(*args: object) -> None:
+        raise OSError("interrupted replacement")
+
+    monkeypatch.setattr(file_lock.os, "replace", interrupted_replace)
+    with pytest.raises(OSError, match="interrupted replacement"):
+        private_json.write_private_json_atomic(target, {"status": "replacement"})
+    assert address.read_bytes() == before
+    assert not list(address.parent.glob("*.tmp"))

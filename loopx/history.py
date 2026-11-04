@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 import hashlib
 import json
 from contextlib import nullcontext
@@ -8,7 +10,6 @@ from dataclasses import dataclass
 from heapq import merge
 from itertools import chain, islice
 from pathlib import Path
-from typing import Any
 
 from .file_lock import exclusive_run_index_lock
 from .control_plane.presentation.goal_metadata import goal_parent_fields
@@ -30,7 +31,7 @@ from .control_plane.quota.ledger_readback import (
 )
 from .control_plane.projects.registry_codec import (
     decode_registry_snapshot as decode_registry_snapshot,
-    load_registry,
+    load_registry as load_registry,
 )
 from .control_plane.runtime.run_artifacts import (
     next_run_artifact_paths,
@@ -494,9 +495,9 @@ def collect_history(
             )
         )
 
-        adapter = meta.get("adapter") if isinstance(meta.get("adapter"), dict) else {}
+        adapter = cast(dict[str, Any], meta.get("adapter")) if isinstance(meta.get("adapter"), dict) else {}
         quota = goal_quota_with_spend_ledger(meta, goal_runs) if registry_member else None
-        goal_record = {
+        goal_record: dict[str, Any] = {
             "id": current_goal_id,
             **goal_parent_fields(meta),
             "activation_state": activation_state.value,
@@ -516,12 +517,12 @@ def collect_history(
             "legacy_runtime_goal": not registry_member,
             "adapter_kind": adapter.get("kind"),
             "adapter_status": adapter.get("status"),
-            "coordination": meta.get("coordination") if isinstance(meta.get("coordination"), dict) else None,
+            "coordination": cast(dict[str, Any], meta.get("coordination")) if isinstance(meta.get("coordination"), dict) else None,
             "explore_graph": compact_explore_graph_policy(meta.get("explore_graph"), (meta.get("spawn_policy") or {}).get("explore_harness")) if meta.get("explore_graph") is not None or (meta.get("spawn_policy") or {}).get("explore_harness") else None,
-            "spawn_policy": meta.get("spawn_policy") if isinstance(meta.get("spawn_policy"), dict) else None,
+            "spawn_policy": cast(dict[str, Any], meta.get("spawn_policy")) if isinstance(meta.get("spawn_policy"), dict) else None,
             "execution_profile": compact_execution_profile(meta.get("execution_profile")) if registry_member else None,
             "control_plane": compact_control_plane_policy(meta.get("control_plane")) if registry_member else None,
-            "guards": meta.get("guards") if isinstance(meta.get("guards"), list) else [],
+            "guards": cast(list[Any], meta.get("guards")) if isinstance(meta.get("guards"), list) else [],
             "next_probe": meta.get("next_probe") if registry_member else None,
             "authority_registry": goal_authority_registry_summary(meta) if registry_member else None,
             "quota": quota,

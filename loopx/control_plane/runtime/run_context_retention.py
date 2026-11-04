@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 from collections.abc import Callable, Iterator
-from typing import Any
 
 from ..work_items.delivery_outcome import (
     MATERIAL_DELIVERY_OUTCOMES,
@@ -89,12 +90,12 @@ RunCompactor = Callable[[dict[str, Any]], dict[str, Any]]
 
 def _agent_id_for_run(run: dict[str, Any]) -> str:
     checkpoint = (
-        run.get("vision_checkpoint")
+        cast(dict[str, Any], run.get("vision_checkpoint"))
         if isinstance(run.get("vision_checkpoint"), dict)
         else {}
     )
     vision = (
-        run.get("agent_vision") if isinstance(run.get("agent_vision"), dict) else {}
+        cast(dict[str, Any], run.get("agent_vision")) if isinstance(run.get("agent_vision"), dict) else {}
     )
     return str(
         run.get("agent_id")

@@ -218,6 +218,86 @@ def _history_page_brief():
         "inputs": [], "acceptance": ["Return the original conclusion"], "return_requirement": "Return here"}
 
 
+@pytest.mark.parametrize("fault", [None, "stop", "edited-source", "revoked", "unknown-native", "other-stale"])
+def test_original_worker_recovers_disconnected_user_only_interruption(steward, monkeypatch, fault):  # noqa: F811
+    from datetime import datetime, timedelta, timezone
+    from pathlib import Path
+    from loopx.capabilities.native_chat import external_conversations
+
+    store, runtime, provider, transport, binding, capture, _ = steward
+    Path(runtime.codex_home).mkdir(parents=True, exist_ok=True)
+    fake = Path(runtime.codex_bin)
+    marker = fake.with_name("interrupted-native-input.json")
+    source = fake.read_text()
+    source = source.replace('turn_count = 0', f'turn_count = 1 if __import__("os").path.exists({str(marker)!r}) else 0')
+    begin = '        if "typed terminal failure" in json.dumps(request.get("params") or {}):'
+    assert begin in source
+    source = source.replace(begin,
+        begin[:-1] + f' and not __import__("os").path.exists({str(marker)!r}):\n'
+        f'            open({str(marker)!r}, "w").write(json.dumps({{"turn_id": active_turn}}))\n'
+        '            raise SystemExit(0)')
+    branch = '    elif method == "thread/turns/list":'
+    assert branch in source
+    source = source.replace(branch,
+        f'    elif method == "thread/turns/list" and __import__("os").path.exists({str(marker)!r}):\n'
+        f'        result = {{"data": [{{"id": json.load(open({str(marker)!r}))["turn_id"], "status": "interrupted"}}]}}\n'
+        '    elif method == "thread/items/list":\n'
+        '        result = {"data": [{"turnId": request["params"]["turnId"], "item": {"id": "user", "type": "userMessage"}}]}\n'
+        + branch)
+    fake.write_text(source)
+    event = provider.event("steward-app", "lost-server", "typed terminal failure")
+    transport.admit("steward-app", event)
+    ref = identity_ref(binding["provider_ref"], event["message_id"])
+    row = transport.core.read_request(ref)
+    failed = runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)
+    assert failed["error_code"] == "host_gate" and failed["delta_count"] == 0
+    deadline = time.monotonic() + 2
+    while store.load_session(row["session_id"])["status"] != "stale":
+        assert time.monotonic() < deadline
+        time.sleep(.01)
+    assert store.load_session(row["session_id"])["last_error_code"] == "transport_disconnected"
+    failed_bytes = store._turn_path(row["session_id"], row["turn_id"]).read_bytes()
+    assert transport.reconcile() == 1  # Keep the original failure notice.
+    clock = datetime.now(timezone.utc) + timedelta(seconds=61)
+    class AfterBackoff(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return clock
+    monkeypatch.setattr(external_conversations, "datetime", AfterBackoff)
+    if fault == "stop":
+        transport.admit("steward-app", provider.event("steward-app", "later-stop", "/stop"))
+    elif fault == "edited-source":
+        provider.messages[event["message_id"]]["content"] = "Changed original source"
+    elif fault == "revoked":
+        transport.bindings.disconnect(binding["binding_id"], expected_revision=transport.bindings.read()["revision"])
+    elif fault == "unknown-native":
+        fake.write_text(fake.read_text().replace('"type": "userMessage"', '"type": "unknownItem"'))
+    elif fault == "other-stale":
+        store.update_session(row["session_id"], last_error_code="unverified")
+    before = [json.loads(line) for line in capture.read_text().splitlines()]
+    transport._context_recovery_probe_at.clear()
+    transport.reconcile()
+    current = transport.core.read_request(ref)
+    if fault is None:
+        assert current["turn_id"] != row["turn_id"] and current["session_id"] == row["session_id"]
+        completed = runtime.wait_for_turn(session_id=row["session_id"], turn_id=current["turn_id"], timeout_sec=10)
+        assert completed["status"] == "completed"
+        assert completed["client_turn_id"].endswith("-routing-1")
+        assert current["context_recovery"]["native_observation"]["interrupted_before_execution"] is True
+        transport.reconcile()
+        assert transport.core.read_request(ref)["delivery_verified"] is True
+        after = capture.read_bytes()
+        transport.reconcile()
+        assert capture.read_bytes() == after  # No second model dispatch after verified return.
+    else:
+        assert current["turn_id"] == row["turn_id"] and not current.get("context_recovery")
+    after = [json.loads(line) for line in capture.read_text().splitlines()]
+    def count(calls):
+        return sum(p.get("method") == "turn/start" for p in calls)
+    assert count(after) == count(before) + (fault is None)
+    assert store._turn_path(row["session_id"], row["turn_id"]).read_bytes() == failed_bytes
+
+
 @pytest.mark.parametrize("change", ["status", "new-input", "source-read-input", "unrelated-source", "revoked", "unknown-native", "unchanged"])
 def test_slow_failed_request_probe_does_not_hold_the_source_route(steward, monkeypatch, change):  # noqa: F811
     import threading

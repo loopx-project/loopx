@@ -327,8 +327,21 @@ export function initialContextReadPointers(context: JsonObject, decisionFields: 
       }
     });
   } else include(...planPath); // Unknown plan versions keep their complete obligations.
-  // Keep the complete unread index reachable after current controls, required
-  // sources and settlement obligations; its size must not displace them first.
-  include("context_details", "unread_context_index");
+  const details = object(context.context_details), unread = object(details?.unread_context_index);
+  const source = object(unread?.source);
+  // The current supporting-address inventory can dwarf the required facts.
+  // Keep its original source, unknown coverage and read-before-work obligation
+  // inline; the complete pointer list remains at this same captured address.
+  // Unknown/future layouts stay whole rather than hiding a new obligation.
+  if (unread && Object.keys(unread).length === 4 && unread.coverage_confirmed === false
+      && unread.read_before_dependent_work === true && Array.isArray(unread.pointers)
+      && unread.pointers.every(pointer => typeof pointer === "string")
+      && typeof source?.path === "string" && typeof source.sha256 === "string"
+      && typeof details?.instruction === "string" && details.instruction.length > 0) {
+    for (const field of ["source", "coverage_confirmed", "read_before_dependent_work"])
+      include("context_details", "unread_context_index", field);
+    include("context_details", "instruction");
+    include("context_details", "command_template");
+  } else include("context_details", "unread_context_index");
   return pointers;
 }

@@ -525,7 +525,8 @@ def _fork_native_checkpoint(env: dict[str, str], unit: Path, expected_sha256: st
 def admit_native_checkpoint_session(env: dict[str, str], unit: Path, expected_sha256: str,
                                     config_path: Path, *, sandbox: str, timeout: float,
                                     destination_config: Path | None = None,
-                                    provider_base_url: str | None = None) -> dict[str, Any]:
+                                    provider_base_url: str | None = None,
+                                    restore_loopx_state: bool = False) -> dict[str, Any]:
     """Explicit controller admission of a verified fork into a destination Goal.
 
     Existing native fork, Goal lifetime and session owners retain their rules.
@@ -546,6 +547,8 @@ def admit_native_checkpoint_session(env: dict[str, str], unit: Path, expected_sh
 
     if not math.isfinite(timeout) or timeout <= 0:
         raise ValueError("checkpoint session admission timeout must be finite and positive")
+    if type(restore_loopx_state) is not bool:
+        raise ValueError("full LoopX state restoration requires an explicit boolean")
     if provider_base_url is not None and provider_base_url != env.get("OPENAI_BASE_URL"):
         raise ValueError("checkpoint provider transport differs from the current launch")
     deadline = time.monotonic() + timeout
@@ -587,15 +590,32 @@ def admit_native_checkpoint_session(env: dict[str, str], unit: Path, expected_sh
     source = metadata.get("loopx_state", {})
     lineage = {"goal_id": env["LOOPX_GOAL_ID"], "agent_id": env["LOOPX_AGENT_ID"]}
     if (not source.get("goal_id") or not source.get("agent_id") or
-            any(source[key] == lineage[key] for key in lineage)):
-        raise ValueError("checkpoint session admission requires distinct destination Goal and Agent identities")
+            (not all(source[key] == lineage[key] for key in lineage) if restore_loopx_state else
+             any(source[key] == lineage[key] for key in lineage))):
+        raise ValueError("full LoopX restoration requires the captured Goal and Agent identities" if restore_loopx_state else
+                         "checkpoint session admission requires distinct destination Goal and Agent identities")
     registry = Path(env["LOOPX_REGISTRY"])
     # Use the current governed Goal path. The lifecycle-only source-session
     # profile cannot run governed Turns and is rejected by the registry owner.
     goal = load_goal_from_registry(registry, lineage["goal_id"])
     require_registered_agent_id(registry_path=registry, goal_id=lineage["goal_id"], agent_id=lineage["agent_id"])
-    if select_codex_cli_session(Path(env["LOOPX_RUNTIME_ROOT"]), lineage=lineage,
-                               session_scope="agent") is not None:
+    existing = select_codex_cli_session(Path(env["LOOPX_RUNTIME_ROOT"]), lineage=lineage, session_scope="agent")
+    expected_binding = None
+    if restore_loopx_state and (existing is None or existing.get("checkpoint_artifact_sha256") != expected_sha256):
+        from loopx.hosts.research_checkpoint import verify_restored_loopx_state
+        from loopx.control_plane.turn_driver.codex_sessions import _session_path
+
+        runtime_source = verify_restored_loopx_state(env, unit, metadata,
+            deadline=time.time() + max(.1, deadline - time.monotonic()))
+        path = _session_path(Path(env["LOOPX_RUNTIME_ROOT"]), lineage, "agent")
+        sealed = runtime_source / path.relative_to(Path(env["LOOPX_RUNTIME_ROOT"]))
+        if sealed.resolve(strict=True) != sealed:
+            raise ValueError("captured LoopX session binding is redirected")
+        expected_binding = json.loads(sealed.read_bytes())
+        if (existing != expected_binding or existing.get("session_id") != metadata["native_session"]["session_id"]
+                or existing.get("session_profile_digest") != source_profile):
+            raise ValueError("restored LoopX session differs from its sealed source binding")
+    if existing is not None and expected_binding is None:
         # The original session binding is also the admission receipt. Only a
         # source-bound committed admission can recover a lost controller reply;
         # an unrelated binding or a partial native fork is never replaced.
@@ -639,7 +659,10 @@ def admit_native_checkpoint_session(env: dict[str, str], unit: Path, expected_sh
         **({"destination_config": destination_config} if destination_config is not None else {}),
         **({"provider_base_url": provider_base_url} if provider_base_url is not None else {}))
     receipt: dict[str, Any] = {}
-    wake = CodexAgentSession(env, context="resume", sandbox=sandbox, receipt=receipt)
+    wake = CodexAgentSession(env, context="fresh" if expected_binding is not None else "resume",
+                             sandbox=sandbox, receipt=receipt)
+    if expected_binding is not None and expected_binding.get("goal_ref") != wake.goal_ref:
+        raise ValueError("restored Goal lifetime differs from its captured session")
     # Hold the existing registry owner's fence through the session write. This
     # does not mint a lease, task or work admission from historical state.
     with project_registry_transaction(registry, operation="checkpoint_session_binding", agent_id=lineage["agent_id"]):
@@ -651,6 +674,7 @@ def admit_native_checkpoint_session(env: dict[str, str], unit: Path, expected_sh
         # settings above. Bind the explicitly verified destination profile;
         # ordinary session resumes still require an exact profile match.
         wake._bind_verified_fork(result["session_id"], target_profile, expected_sha256, str(unit),
+            **({"expected_binding": expected_binding} if expected_binding is not None else {}),
             **({"model_transition": transition} if transition is not None else {}))
     return {**result, **({"model_transition": transition} if transition is not None else {}),
             "destination_goal_ref": wake.goal_ref, "destination_agent_id": lineage["agent_id"],

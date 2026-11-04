@@ -81,7 +81,9 @@ def test_reader_rejects_budget_too_small_for_reader_program_metadata(
     raw = (json.dumps({"requirements": body}, ensure_ascii=False) + "\n").encode()
     capture.write_bytes(raw)
     digest = hashlib.sha256(raw).hexdigest()
-    limit = 1600
+    # 1600 bytes can carry a small valid page, depending on command/path length.
+    # This budget fits a rejection but not mandatory first-page metadata.
+    limit = 512
     response = subprocess.run(
         [sys.executable, "-m", "loopx.entrypoint", "--format", "json", "quota",
          "context-read", "--capture-file", str(capture),

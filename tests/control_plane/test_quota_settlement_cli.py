@@ -5523,11 +5523,23 @@ def test_due_successor_replan_replays_until_the_same_task_is_reopened(
     assert _spend_run_count(runtime) == 0
 
 
+@pytest.mark.parametrize("scoped_gate,pending_selection", [
+    (False, False), (False, True), (True, False),
+])
 def test_pending_selection_preserves_workspace_repair_then_reenters_same_turn(
-    tmp_path: Path,
+    tmp_path: Path, scoped_gate: bool, pending_selection: bool,
 ) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_selectable_alternative(project)
+    if scoped_gate:
+        state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+        state.write_text(state.read_text() + (
+            "\n## User Todo\n\n- [ ] [P0] Approve unrelated publication.\n"
+            "  <!-- loopx:todo todo_id=todo_publication_gate status=open "
+            f"task_class=user_gate blocks_agent={AGENT_ID} "
+            "decision_scope=write_scope:action:release "
+            "unblocks_todo_id=todo_publication -->\n"
+        ))
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
     registry["goals"][0]["coordination"]["registered_agents"].append(
         "codex-settlement-peer"
@@ -5567,12 +5579,12 @@ def test_pending_selection_preserves_workspace_repair_then_reenters_same_turn(
     )
 
     _initialize_fixture_authority(project, runtime)
-    first_rc, first = _run_cli(
-        registry_path,
-        runtime,
-        *guard_args,
-        cwd=project,
-    )
+    if pending_selection:
+        first_rc, first = _run_cli(
+            registry_path, runtime, *guard_args, cwd=project,
+        )
+        assert first_rc == 0, first
+        assert "settlement_identity" not in first["heartbeat_receipt"]
     repair_rc, repair = _run_cli(
         registry_path,
         runtime,
@@ -5582,8 +5594,6 @@ def test_pending_selection_preserves_workspace_repair_then_reenters_same_turn(
         cwd=project,
     )
 
-    assert first_rc == 0, first
-    assert "settlement_identity" not in first["heartbeat_receipt"]
     assert repair_rc == 0, repair
     assert repair.get("error_code") != "heartbeat_receipt_identity_conflict"
     assert repair["effective_action"] == "agent_workspace_repair"
@@ -5595,7 +5605,12 @@ def test_pending_selection_preserves_workspace_repair_then_reenters_same_turn(
         "create or switch to an independent worktree/branch, then rerun quota "
         "guard before file edits"
     )
-    assert repair["heartbeat_receipt"]["status"] == "upgraded"
+    assert repair["heartbeat_receipt"]["status"] == (
+        "upgraded" if pending_selection else "committed"
+    )
+    assert repair["interaction_contract"]["agent_channel"]["delivery_allowed"] is False
+    assert repair["normal_delivery_allowed"] is False
+    assert repair["interaction_contract"]["cli_channel"]["spend_allowed_now"] is False
     assert repair["heartbeat_receipt"]["settlement_identity"]["todo_id"] == (
         ALTERNATIVE_TODO_ID
     )
@@ -5616,8 +5631,14 @@ def test_pending_selection_preserves_workspace_repair_then_reenters_same_turn(
     )
 
     assert resumed_rc == 0, resumed
-    assert resumed["effective_action"] == "normal_run"
-    assert resumed["normal_delivery_allowed"] is True
+    assert resumed["effective_action"] == (
+        "operator_gate_notify" if scoped_gate else "normal_run"
+    )
+    assert resumed["normal_delivery_allowed"] is (not scoped_gate)
+    assert resumed["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
+    if scoped_gate:
+        assert resumed["scoped_user_gate_fallback"]["selected_executable"]["todo_id"] == ALTERNATIVE_TODO_ID
+        assert resumed["requires_user_action"] is True
     assert resumed["workspace_repair_allowed"] is False
     assert resumed["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
     assert resumed["selected_todo"]["selection_binding"] == "heartbeat_receipt"
@@ -5627,12 +5648,12 @@ def test_pending_selection_preserves_workspace_repair_then_reenters_same_turn(
     assert resumed["heartbeat_receipt"]["status"] == "upgraded"
     assert resumed["heartbeat_receipt"]["settlement_identity"] == repair["heartbeat_receipt"]["settlement_identity"]
     assert resumed["heartbeat_receipt"]["event_id"] != repair["heartbeat_receipt"]["event_id"]
-    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 3
+    assert _heartbeat_receipt_count(runtime, turn_instance_id) == (3 if pending_selection else 2)
     replay_rc, replay = _run_cli(registry_path, runtime, *guard_args,
         "--todo-id", ALTERNATIVE_TODO_ID, cwd=linked_worktree)
     assert replay_rc == 0 and replay["heartbeat_receipt"]["status"] == "replayed", replay
     assert replay["heartbeat_receipt"]["event_id"] == resumed["heartbeat_receipt"]["event_id"]
-    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 3
+    assert _heartbeat_receipt_count(runtime, turn_instance_id) == (3 if pending_selection else 2)
 
 
 def test_boundary_projection_repair_keeps_same_turn_alternative_selectable(
@@ -7307,8 +7328,9 @@ def test_runtime_capability_reentry_preserves_receipt_bound_autonomous_replan(
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("stride", [False, True])
+@pytest.mark.parametrize("vision_gap", [False, True])
 def test_replan_reentry_after_outcome_work_refinement_keeps_original_turn(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, stride: bool,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, stride: bool, vision_gap: bool,
 ) -> None:
     """Refreshing cumulative requirements must not rebind an admitted review."""
     if provider == "sqlite":
@@ -7348,11 +7370,36 @@ def test_replan_reentry_after_outcome_work_refinement_keeps_original_turn(
         "declare-outcome")
     call("todo", "complete", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
         "--todo-id", TODO_ID, "--no-follow-up", "--evidence", "artifact:initial-delivery")
+    if vision_gap:
+        from loopx.control_plane.goals.goal_vision import (
+            compact_goal_vision_packet, normalize_goal_vision_packet,
+        )
+
+        # Two independently owned gaps coexist before admission. Linking work
+        # removes only the outcome gap, not the owed evidence-based review.
+        index = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
+        index.parent.mkdir(parents=True, exist_ok=True)
+        source_json, source_md = index.parent / "source.json", index.parent / "source.md"
+        source_json.write_text('{"fixture":"independent-vision-gap"}\n')
+        source_md.write_text("# Independently review the original artifact\n")
+        vision = compact_goal_vision_packet(normalize_goal_vision_packet({
+            "goal_id": GOAL_ID, "agent_id": AGENT_ID, "state": "vision_patch_proposed",
+            "vision_patch": {"acceptance_summary": "Recovery evidence remains unproven.",
+                "replan_trigger_summary": "Review the artifact before selecting further work.",
+                "advancement_policy": "repeat_until_closed"},
+        }, goal_id=GOAL_ID, agent_id=AGENT_ID))
+        with index.open("a") as stream:
+            stream.write(json.dumps({"classification": "validated_progress", "agent_id": AGENT_ID,
+                "generated_at": (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(),
+                "agent_vision": vision, "json_path": str(source_json), "markdown_path": str(source_md)}) + "\n")
     turn = "turn-replan-outcome-refinement"
     guard_args = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
         "--agent-id", AGENT_ID, "--turn-instance-id", turn)
     first = call(*guard_args)
     assert first["decision"] == "autonomous_replan_required", first
+    if vision_gap:
+        assert {row["kind"] for row in first["autonomous_replan_obligation"]["triggers"]} == {
+            "vision_acceptance_gap", "goal_outcome_uncovered"}
     identity = first["heartbeat_receipt"]["settlement_identity"]
     assert identity["binding_kind"] == "autonomous_replan"
     receipt = _heartbeat_receipt_events(runtime, turn)[0]
@@ -7372,7 +7419,8 @@ def test_replan_reentry_after_outcome_work_refinement_keeps_original_turn(
         if row.get("source") == "goal_acceptance")
     assert acceptance["goal_acceptance_contract"]["outcome_requirements"] == expected
     assert _heartbeat_receipt_count(runtime, turn) == 1
-    assert receipt["details"]["semantic_replan_review_kind"] == "goal_outcome_uncovered"
+    assert receipt["details"]["semantic_replan_review_kind"] == (
+        "vision_acceptance_gap" if vision_gap else "goal_outcome_uncovered")
     assert receipt["details"]["semantic_replan_review_stop_condition"] == first["autonomous_replan_obligation"]["stop_condition"]
     assert replay["autonomous_replan_obligation"]["stop_condition"] == first["autonomous_replan_obligation"]["stop_condition"]
     assert "semantic_replan_obligation" not in receipt["details"]
@@ -7427,7 +7475,9 @@ def test_replan_reentry_after_outcome_work_refinement_keeps_original_turn(
     empty = call("refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
         "--replan-obligation-id", identity["replan_obligation_id"], "--turn-instance-id", turn,
         "--classification", "bounded_replan_progress", "--delivery-batch-scale", "single_surface",
-        "--delivery-outcome", "outcome_progress", "--agent-vision-json", str(decision),
+        "--delivery-outcome", "outcome_progress",
+        *(("--vision-unchanged-reason", "The original artifact remains unproven.") if vision_gap
+          else ("--agent-vision-json", str(decision))),
         "--no-global-sync", "--suppress-external-sinks", expected_code=1)
     assert empty["appended"] is False
     assert _spend_run_count(runtime) == 0

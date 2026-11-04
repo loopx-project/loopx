@@ -14,8 +14,7 @@ from .control_plane.quota.error_codes import (
     QuotaIdentityPreconditionError,
 )
 from .control_plane.runtime.time import now_utc_iso
-from .control_plane.todos.decision_scope import todo_gate_relations
-from .control_plane.todos.user_gate import open_user_gate_todo_items
+from .control_plane.todos.decision_scope import project_global_todo_readiness
 from .presentation.markdown import as_dict, as_list
 from .presentation.public_safety import public_safe_boundary, redact_public_text
 from .quota import build_quota_should_run
@@ -31,19 +30,7 @@ SOURCE_SURFACES = [
     "active-state todo projections",
     "compact run-history projection consumed by status",
 ]
-_CANDIDATE_LIST_KEYS = (
-    "first_open_items",
-    "first_executable_items",
-    "items",
-    "open_items",
-    "deferred_items",
-    "deferred_resume_candidates",
-    "blocker_items",
-    "resume_blocked_items",
-)
-_BLOCKER_SOURCE_KEYS = {"blocker_items", "resume_blocked_items"}
 _READINESS_DISPLAY_RANK = {"runnable": 0, "deferred_ready": 1, "blocked": 2}
-_READINESS_SAFETY_RANK = {"blocked": 0, "deferred_ready": 1, "runnable": 2}
 
 
 def _redact_text(value: object, *, limit: int = 260) -> str:
@@ -308,107 +295,6 @@ def _quota_matches_agent(payload: dict[str, Any], *, agent_id: str | None) -> bo
     return str(identity.get("agent_id") or "").strip() == agent_id
 
 
-def _candidate_sources(payload: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
-    sources: list[tuple[str, dict[str, Any]]] = []
-
-    def add(source: str, value: object) -> None:
-        if isinstance(value, dict):
-            sources.append((source, value))
-
-    add("selected_todo", payload.get("selected_todo"))
-    add("agent_lane_next_action", payload.get("agent_lane_next_action"))
-    for container_key in ("agent_todo_summary", "agent_scope_frontier"):
-        container = as_dict(payload.get(container_key))
-        for list_key in _CANDIDATE_LIST_KEYS:
-            for item in as_list(container.get(list_key)):
-                add(f"{container_key}.{list_key}", item)
-    return sources
-
-
-def _candidate_records(
-    payload: dict[str, Any],
-    *,
-    goal_id: str,
-    warnings: list[dict[str, Any]],
-) -> dict[str, dict[str, Any]]:
-    records: dict[str, dict[str, Any]] = {}
-    for source, item in _candidate_sources(payload):
-        todo_id = str(item.get("todo_id") or "").strip()
-        if not todo_id:
-            warnings.append(
-                _warning(
-                    "todo_identity_missing",
-                    goal_id=goal_id,
-                    detail=f"Structured todo candidate from {source} has no todo_id.",
-                )
-            )
-            continue
-        record = records.setdefault(
-            todo_id,
-            {"item": dict(item), "sources": set(), "statuses": set()},
-        )
-        record_sources = record["sources"]
-        if isinstance(record_sources, set):
-            record_sources.add(source)
-        status = str(item.get("status") or "").strip().lower()
-        record_statuses = record["statuses"]
-        if status and isinstance(record_statuses, set):
-            record_statuses.add(status)
-        merged = as_dict(record.get("item"))
-        for key, value in item.items():
-            if merged.get(key) in (None, "", []) and value not in (None, "", []):
-                merged[key] = value
-    return records
-
-
-def _verified_blocked_ids(
-    payload: dict[str, Any],
-    records: dict[str, dict[str, Any]],
-) -> set[str]:
-    blocked_ids: set[str] = set()
-    for todo_id, record in records.items():
-        sources = record.get("sources")
-        if isinstance(sources, set) and any(
-            source.rsplit(".", 1)[-1] in _BLOCKER_SOURCE_KEYS
-            for source in sources
-        ):
-            blocked_ids.add(todo_id)
-
-    user_summary = as_dict(payload.get("user_todo_summary"))
-    gates = open_user_gate_todo_items(user_summary)
-    relations = todo_gate_relations(gates, [as_dict(record.get("item")) for record in records.values()])
-    for gate, gate_relations in zip(gates, relations, strict=True):
-        exact_todo_id = str(gate.get("unblocks_todo_id") or "").strip()
-        if exact_todo_id in records:
-            blocked_ids.add(exact_todo_id)
-        for todo_id, relation in zip(records, gate_relations, strict=True):
-            if relation and relation.get("state") in {
-                "gate_targets_todo",
-                "gate_covers_action",
-            }:
-                blocked_ids.add(todo_id)
-    return blocked_ids
-
-
-def _deferred_ready_ids(records: dict[str, dict[str, Any]]) -> set[str]:
-    ready_ids: set[str] = set()
-    for todo_id, record in records.items():
-        item = as_dict(record.get("item"))
-        statuses = record.get("statuses")
-        sources = record.get("sources")
-        structured_candidate = isinstance(sources, set) and any(
-            source.endswith(".deferred_resume_candidates") for source in sources
-        )
-        explicitly_ready = (
-            isinstance(statuses, set)
-            and "deferred" in statuses
-            and item.get("resume_ready") is True
-        )
-        if structured_candidate or explicitly_ready:
-            ready_ids.add(todo_id)
-    return ready_ids
-
-
 def _work_kind(item: dict[str, Any]) -> str:
     action_kind = str(item.get("action_kind") or "").strip().lower()
     tokens = {token for token in action_kind.split("_") if token}
@@ -443,47 +329,20 @@ def _classify_goal_todos(
     goal_id: str,
     warnings: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    records = _candidate_records(payload, goal_id=goal_id, warnings=warnings)
-    blocked_ids = _verified_blocked_ids(payload, records)
-    deferred_ready_ids = _deferred_ready_ids(records)
-    selected_todo_id = str(
-        as_dict(payload.get("selected_todo")).get("todo_id") or ""
-    ).strip()
-    normal_delivery_allowed = payload.get("normal_delivery_allowed") is True
-    todos: list[dict[str, Any]] = []
-
-    for todo_id, record in records.items():
-        statuses = record.get("statuses")
-        signals: set[str] = set()
-        if todo_id in blocked_ids or (
-            isinstance(statuses, set) and "blocked" in statuses
-        ):
-            signals.add("blocked")
-        if todo_id in deferred_ready_ids:
-            signals.add("deferred_ready")
-        if todo_id == selected_todo_id and normal_delivery_allowed:
-            signals.add("runnable")
-        if not signals:
-            continue
-        if len(signals) > 1:
-            warnings.append(
-                _warning(
-                    "conflicting_readiness_projection",
-                    goal_id=goal_id,
-                    todo_id=todo_id,
-                    detail="Multiple structured readiness signals were projected.",
-                )
-            )
-        readiness = min(signals, key=_READINESS_SAFETY_RANK.__getitem__)
-        todos.append(
-            _normalize_todo(
-                as_dict(record.get("item")),
-                goal_id=goal_id,
-                readiness=readiness,
-                recommended_action=payload.get("recommended_action"),
-            )
+    projection = project_global_todo_readiness(payload)
+    warnings.extend(
+        _warning(goal_id=goal_id, **warning)
+        for warning in projection["warnings"]
+    )
+    return [
+        _normalize_todo(
+            candidate["item"],
+            goal_id=goal_id,
+            readiness=candidate["readiness"],
+            recommended_action=payload.get("recommended_action"),
         )
-    return todos
+        for candidate in projection["candidates"]
+    ]
 
 
 def _priority_rank(value: object) -> int:
@@ -524,8 +383,8 @@ def _deduplicate_todos(
                     detail="Duplicate todo rows projected different readiness states.",
                 )
             )
-            if _READINESS_SAFETY_RANK.get(incoming_readiness, 3) < (
-                _READINESS_SAFETY_RANK.get(existing_readiness, 3)
+            if _READINESS_DISPLAY_RANK.get(incoming_readiness, -1) > (
+                _READINESS_DISPLAY_RANK.get(existing_readiness, -1)
             ):
                 deduplicated[key] = todo
         if todo.get("work_kind") == "review":

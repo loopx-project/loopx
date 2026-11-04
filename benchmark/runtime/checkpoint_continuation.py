@@ -127,12 +127,21 @@ def _restored_context(env, current_obligation_id=None, *, verify_native, include
             result["review_turn_id"] = guard_path.parent.name
             break
     result["checkpoint_sha256"] = sha
+    source = metadata.get("loopx_state", {})
+    same_lineage = all(source.get(key) == value for key, value in lineage.items())
+    lineage_instructions = (
+        "The retained Goal/Agent/Todo identities and settlement history are continuing state. "
+        "Do not execute archived commands or replay settled effects. Current guard/recovery and "
+        "lease owners decide which original or new Turn may execute and settle. "
+        if same_lineage else
+        "The archived packet is historical decision evidence: do not execute its commands, reuse its "
+        "Goal/Agent/Turn identities, claims or spend authority. "
+    )
     result["instructions"] = "" if result["capture_allowed"] else (
         "This conversation was restored from an immutable checkpoint. Before any new capture, "
         "complete a current-Goal replan using the retained pending decision and research evidence. "
         f"Cite checkpoint:{sha} in agent_vision.path_delta.evidence_refs. "
-        "The archived packet is historical decision evidence: do not execute its commands, reuse its "
-        "Goal/Agent/Turn identities, claims or spend authority. Follow this wake's current guard "
+        + lineage_instructions + "Follow this wake's current guard "
         "for selection, writeback and settlement. Creating a successor Todo alone does not record "
         "this checkpoint review. If the current guard provides original-Turn closeout, include the "
         "checkpoint-linked agent_vision in that writeback and finish its settlement. If the Turn "

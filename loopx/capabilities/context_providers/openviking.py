@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any, TypedDict, cast
+
 import json
 import os
 import re
@@ -8,7 +10,6 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from ...control_plane.runtime.public_safety import public_safe_compact_text
 from .base import (
@@ -30,6 +31,13 @@ DEFAULT_MINIMUM_VERSION = "0.4.9"
 OPENVIKING_IDENTITY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$")
 PEER_SCOPE_MINIMUM_VERSION = "0.4.18"
 PEER_SCOPE_MINIMUM_SERVER_VERSION = "0.4.19"
+
+class _ScopeMetadata(TypedDict):
+    visibility: str
+    target_scope_kind: str
+    write_strategy: str
+    actor_binding_verified: bool
+
 
 CommandRunner = Callable[..., subprocess.CompletedProcess[str]]
 
@@ -133,7 +141,7 @@ def classify_openviking_scope(scope_ref: str) -> OpenVikingScope:
     )
 
 
-def _compact(value: Any, *, limit: int) -> str:
+def _compact(value: Any, *, limit: int) -> str | None:
     return public_safe_compact_text(value, limit=limit)
 
 
@@ -157,11 +165,11 @@ def _extract_json(text: str) -> Any:
     raise ValueError("provider output did not contain JSON")
 
 
-def _version_tuple(value: str) -> tuple[int, int, int]:
+def _version_tuple(value: Any) -> tuple[int, int, int]:
     match = re.search(r"(\d+)\.(\d+)\.(\d+)", value)
     if not match:
         raise ValueError("provider version is not semantic")
-    return tuple(int(part) for part in match.groups())
+    return cast(tuple[int, int, int], tuple(int(part) for part in match.groups()))
 
 
 def _mapping_candidates(value: Any) -> list[Mapping[str, Any]]:
@@ -292,7 +300,7 @@ class OpenVikingContextProvider:
         return scope
 
     @staticmethod
-    def _scope_metadata(scopes: Sequence[OpenVikingScope]) -> dict[str, object]:
+    def _scope_metadata(scopes: Sequence[OpenVikingScope]) -> _ScopeMetadata:
         visibilities = {scope.visibility for scope in scopes}
         kinds = {scope.scope_kind for scope in scopes}
         strategies = {scope.write_strategy for scope in scopes}
@@ -410,10 +418,10 @@ class OpenVikingContextProvider:
     def retrieve(
         self,
         *,
-        namespace: str,
+        namespace: str | None,
         scope_ref: str,
-        query: str,
-        query_summary: str,
+        query: str | None,
+        query_summary: str | None,
         max_results: int,
         timeout_seconds: float,
         observed_at: str,
@@ -745,7 +753,7 @@ class OpenVikingContextProvider:
     def sync(
         self,
         *,
-        namespace: str,
+        namespace: str | None,
         resources: Sequence[tuple[str, str]],
         timeout_seconds: float,
         observed_at: str,

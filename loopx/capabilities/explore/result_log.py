@@ -238,7 +238,7 @@ def _choice(value: Any, *, choices: set[str], default: str, field: str) -> str:
 def build_explore_node_event(
     *,
     goal_id: str,
-    title: str,
+    title: object,
     node_id: str | None = None,
     node_kind: str | None = None,
     status: str | None = None,
@@ -297,9 +297,9 @@ def build_explore_node_event(
 def build_explore_edge_event(
     *,
     goal_id: str,
-    from_node: str,
-    to_node: str,
-    edge_type: str,
+    from_node: object,
+    to_node: object,
+    edge_type: object,
     summary: str | None = None,
     confidence: float | None = None,
     agent_id: str | None = None,
@@ -338,7 +338,7 @@ def build_explore_edge_event(
 def build_explore_finding_event(
     *,
     goal_id: str,
-    title: str,
+    title: object,
     finding_id: str | None = None,
     node_id: str | None = None,
     status: str | None = None,
@@ -410,7 +410,7 @@ def _base_event(
     *,
     goal_id: str,
     event_kind: str,
-    title: str,
+    title: object,
     summary: str | None,
     agent_id: str | None,
     run_id: str | None,
@@ -477,7 +477,7 @@ def validate_explore_result_event(
         raise ValueError("explore result event must declare the public-safe boundary")
 
     summary = _persisted_text(payload.get("summary"), field="summary")
-    common = {
+    common: dict[str, Any] = {
         "goal_id": goal_id,
         "summary": None,
         "agent_id": payload.get("agent_id"),
@@ -786,7 +786,7 @@ def load_explore_result_events_strict(
     return events
 
 
-def explore_history_rows(events, *, goal_id=None):
+def explore_history_rows(events: Sequence[Mapping[str, Any]], *, goal_id: str | None = None) -> list[dict[str, Any]]:
     """Shared read projection: preserve history without exposing arbitrary payloads."""
     if goal_id is not None:
         events = [validate_explore_result_event(event, expected_goal_id=goal_id) for event in events]
@@ -959,7 +959,7 @@ def _build_tree(
 
     def branch(node_id: str, *, depth: int, seen: frozenset[str]) -> dict[str, Any]:
         node = node_by_id[node_id]
-        view = {
+        view: dict[str, Any] = {
             "node_id": node_id,
             "title": str(node.get("title") or ""),
             "status": str(node.get("status") or NODE_STATUS_OPEN),
