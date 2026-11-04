@@ -75,9 +75,10 @@ export const researchRouteReadingScenario = {
       if (collectCoverage) await page.coverage.startJSCoverage({resetOnNavigation: false});
       const url = new URL("/chat/?goalId=synthetic-route-reading&view=research&statusUrl=%2Fstatus.json", owner.base).href;
       let state = "deep", analysisWrites = 0, releaseLoading;
+      let loadingRead = Promise.resolve();
       await page.route("**/api/chat/research-analysis?*", async route => {
         if (route.request().method() !== "GET") {analysisWrites++; return route.abort();}
-        if (state === "loading") await new Promise(resolve => {releaseLoading = resolve;});
+        if (state === "loading") await loadingRead;
         const language = new URL(route.request().url()).searchParams.get("output_language");
         const snapshot = analysisReadback();
         snapshot.pack.config = {...snapshot.pack.config, output_language: language};
@@ -98,6 +99,8 @@ export const researchRouteReadingScenario = {
         await page.goto(url, {waitUntil: "domcontentloaded"});
         await page.evaluate(locale => localStorage.setItem("loopx-pw-locale", locale), language);
         for (state of ["loading", "deep", "view", "reuse", "continue", "running", "unavailable"]) {
+          // One release covers this read and its subsequent original fallback.
+          if (state === "loading") loadingRead = new Promise(resolve => {releaseLoading = resolve;});
           await page.reload({waitUntil: "domcontentloaded"});
           await caption.first().waitFor();
           assert.equal(await page.locator("html").getAttribute("lang"), language);
