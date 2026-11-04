@@ -446,6 +446,20 @@ export function listLocalBoundSessions(params: JsonObject): JsonObject {
  * command; Core binds its exact target before IO. Replays retain that target.
  */
 export function planBoundConversationRequest(params: JsonObject): JsonObject {
+  if (params.pending_observations !== undefined) {
+    const observations = params.pending_observations;
+    if (Object.keys(params).length !== 1 || !Array.isArray(observations) || observations.length > 64) {
+      throw new EffectRuntimeRequestError("select at most 64 read-only pending observations");
+    }
+    return {pending_flags: observations.map(value => {
+      const item = requireJsonObject(value, "pending observation input");
+      if (Object.keys(item).some(key => !["request", "current_session", "pending_observation"].includes(key))
+          || item.pending_observation === undefined) {
+        throw new EffectRuntimeRequestError("pending batches cannot admit or recover work");
+      }
+      return planBoundConversationRequest(item).pending;
+    })};
+  }
   const row = requireJsonObject(params.request, "external request");
   const request = ref(row.request_ref, "external request identity");
   const command = row.command;

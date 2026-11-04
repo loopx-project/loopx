@@ -1131,6 +1131,33 @@ test("local input cannot impersonate a group participant or inherit its workspac
     project_context: selected.context, origin: "web"}).kind, "unavailable");
 });
 
+test("pending batches preserve individual decisions and cannot enter execution or recovery", () => {
+  const request = {request_ref: "f".repeat(24), command: null, status: "accepted",
+    session_id: "original", turn_id: "failed"};
+  const turn = {session_id: "original", turn_id: "failed", status: "failed", error_code: "usage_limit_exceeded"};
+  const packet = {request, current_session: {session_id: "original", status: "ready"},
+    pending_observation: {turn, stop_observed: false}};
+  const observations = [packet,
+    {...packet, current_session: null},
+    {...packet, current_session: {...packet.current_session, status: "closed"}},
+    {...packet, pending_observation: {turn, stop_observed: true}},
+    ...[null, {...turn, error_code: "policy"}, {...turn, turn_id: "foreign"},
+      {...turn, status: "completed", response: {message: "Partial", proposals: [], gate: null,
+        protected_action: null, unfinished_work: {remaining: "Retained work", dependency: "offline", effects_settled: true}}}]
+      .map(value => ({...packet, pending_observation: {turn: value, stop_observed: false}}))];
+  const before = structuredClone(observations);
+  assert.deepEqual(planBoundConversationRequest({pending_observations: observations}),
+    {pending_flags: observations.map(item => planBoundConversationRequest(item).pending)});
+  assert.deepEqual(observations, before);
+  assert.deepEqual(planBoundConversationRequest({pending_observations: []}), {pending_flags: []});
+  for (const value of [null, {}, Array(65).fill(packet), [packet, {...packet, request: {}}],
+    [packet, {request, current_session: packet.current_session}],
+    [packet, {...packet, context_recovery: {}}], [{pending_observations: []}]]) {
+    assert.throws(() => planBoundConversationRequest({pending_observations: value}));
+  }
+  assert.throws(() => planBoundConversationRequest({pending_observations: [packet], request}));
+});
+
 test("quota backlog projection retires explicit lifecycle stops, not unavailable recovery", () => {
   const original = {request_ref: "f".repeat(24), command: null, status: "accepted",
     session_id: "original", turn_id: "failed"};
