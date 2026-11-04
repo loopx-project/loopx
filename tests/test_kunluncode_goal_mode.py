@@ -1409,6 +1409,54 @@ def test_native_goal_pro_commits_only_after_verified_terminal_state(
     assert "Implement and verify the native Goal Pro adapter" not in journal
 
 
+def test_native_goal_prepares_released_execution_before_model_launch(
+    tmp_path: Path,
+) -> None:
+    todo = _native_todo(claimed=True)
+
+    class PreparationControl(_FakeControlPlane):
+        def should_run(self) -> dict[str, object]:
+            self.calls.append("should_run")
+            ready = any(call.startswith("claim:") for call in self.calls)
+            return {
+                "ok": True,
+                "should_run": True,
+                "selected_todo": self.todo,
+                "normal_delivery_allowed": ready,
+                "execution_preparation": {
+                    "schema_version": "execution_preparation_v0",
+                    "state": "ready" if ready else "claim_required",
+                    "delivery_allowed": ready,
+                },
+            }
+
+    control = PreparationControl(todo)
+    clients: list[_FakeAppServer] = []
+
+    def factory(command: list[str], **kwargs) -> _FakeAppServer:
+        client = _FakeAppServer(command, **kwargs)
+        clients.append(client)
+        return client
+
+    result = run_native_goal(
+        tmp_path,
+        _native_context(tmp_path),
+        mode="goal-pro",
+        permission_mode="auto",
+        max_duration_secs=60,
+        controller_timeout_secs=120,
+        kunluncode_bin="/usr/bin/kunluncode",
+        control_plane=control,
+        client_factory=factory,
+    )
+
+    assert result["status"] == "committed"
+    assert control.calls[:3] == [
+        "should_run", "claim:todo-native-1", "should_run",
+    ]
+    assert clients and clients[0].calls[0] == "initialize"
+
+
 def test_source_native_goal_rejects_alias_only_runtime_state(
     tmp_path: Path,
 ) -> None:

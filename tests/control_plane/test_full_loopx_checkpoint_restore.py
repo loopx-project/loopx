@@ -23,7 +23,12 @@ from loopx.hosts.research_checkpoint import _loopx_state_components, research_co
 
 
 @pytest.fixture
-def retained_point(tmp_path, monkeypatch, capsys, request):
+def release_source_lease():
+    return False
+
+
+@pytest.fixture
+def retained_point(tmp_path, monkeypatch, capsys, request, release_source_lease):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     workspace, runtime, registry = tmp_path / "workspace", tmp_path / "runtime", tmp_path / "control/registry.json"
     workspace.mkdir()
@@ -102,6 +107,9 @@ def retained_point(tmp_path, monkeypatch, capsys, request):
     settled = read_heartbeat_settlement(runtime, goal_id="research", agent_id="researcher", todo_id=todo,
         turn_instance_id="source-work", registry_path=registry)
     assert settled.progress["state"] == "settled"
+    if release_source_lease:
+        cli("task-lease", "release", "--goal-id", "research", "--todo-id", todo, "--owner", "researcher",
+            "--idempotency-key", lease["idempotency_key"], "--expected-version", str(lease["version"]))
     metadata = {"worker_file_snapshot": {"components": [{"id": "workspace", "source_path": str(workspace)}]},
                 "session": {"session_id": source_session, "session_profile_digest": wake.digest}}
     if real_host:
@@ -178,6 +186,27 @@ def test_full_restore_preserves_canonical_work_and_requires_exact_binding_cas(re
     assert guard["selected_todo"]["todo_id"] == c["todo"]
     assert guard["interaction_contract"]["agent_channel"]["must_attempt"] is True
     assert len(c["calls"]) == (1 if c["real_host"] else 0)
+
+
+@pytest.mark.parametrize("release_source_lease", [True])
+@pytest.mark.parametrize("retained_point", [("file", False), ("sqlite", False)], indirect=True)
+def test_restored_released_lease_requires_claim_for_same_work(retained_point):
+    c = retained_point
+    _empty_receiver(c)
+    warm.restore_worker(c["declaration"], c["workspace"])
+    cli = c["cli"]
+    binding = ("--goal-id", "research", "--agent-id", "researcher", "--todo-id", c["todo"],
+               "--turn-instance-id", "resumed-work")
+    args = ("quota", "should-run", *binding, "--runtime-profile", "generic_cli", "--context-delivery", "off")
+    pending = cli(*args)
+    assert pending["execution_preparation"]["reason_code"] == "task_lease_released"
+    assert pending["normal_delivery_allowed"] is False
+    assert cli(*pending["execution_preparation"]["claim"]["cli_args"])["ok"]
+    ready = cli(*args)
+    assert ready["execution_preparation"]["state"] == "ready" and ready["normal_delivery_allowed"]
+    assert ready["selected_todo"]["todo_id"] == c["todo"]
+    assert ready["heartbeat_receipt"]["turn_instance_id"] == "resumed-work"
+    assert len(cli("todo", "list", "--goal-id", "research")["todos"]) == 2
 
 
 def test_full_restore_cannot_replace_a_binding_changed_during_native_fork(retained_point, monkeypatch):

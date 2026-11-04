@@ -5,6 +5,7 @@ from typing import Any, cast
 from ..goals.acceptance_readback import configured_checks
 from ..quota.blocked_transition_notice import blocked_priority_fallback_owner_reason
 from ..quota.effective_action import EffectiveAction
+from ..quota.execution_preparation import attach_interaction_execution_preparation
 from ..effect_runtime import effect_runtime_result
 import json
 import shlex
@@ -1501,6 +1502,9 @@ def _attach_interaction_required_reads(
 def _attach_interaction_post_writeback_actions(
     contract: dict[str, Any], payload: dict[str, Any]
 ) -> None:
+    preparation = payload.get("execution_preparation")
+    if isinstance(preparation, Mapping) and preparation.get("state") != "ready":
+        return
     goal_boundary = (
         cast(Mapping[str, Any], payload.get("goal_boundary"))
         if isinstance(payload.get("goal_boundary"), Mapping)
@@ -1714,6 +1718,7 @@ def _build_interaction_contract_projection(
             registry_path=registry_path,
         ),
     }
+    attach_interaction_execution_preparation(contract, payload)
     response_plan = _build_interaction_response_plan(
         user_channel=user_channel,
         agent_channel=agent_channel,

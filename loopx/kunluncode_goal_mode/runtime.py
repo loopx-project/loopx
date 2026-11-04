@@ -649,6 +649,36 @@ def run_native_goal(
                 "LoopX allowed a KunlunCode turn without selecting an agent todo"
             )
         todo_id = str(todo.get("todo_id") or "")
+        preparation = (
+            decision.get("execution_preparation")
+            if isinstance(decision.get("execution_preparation"), Mapping)
+            else {}
+        )
+        if preparation.get("state") == "claim_required":
+            # The Host performs the projected atomic claim before any model
+            # work.  A fresh guard must observe the resulting lease; the
+            # preview itself never grants execution authority.
+            goal_admission.require_current()
+            control.claim(todo_id)
+            decision = control.should_run()
+            if decision.get("should_run") is not True:
+                raise KunlunNativeGoalRuntimeError(
+                    "LoopX did not admit execution after automatic task preparation"
+                )
+            todo = decision.get("selected_todo")
+            preparation = (
+                decision.get("execution_preparation")
+                if isinstance(decision.get("execution_preparation"), Mapping)
+                else {}
+            )
+            if (
+                not isinstance(todo, Mapping)
+                or str(todo.get("todo_id") or "") != todo_id
+                or preparation.get("state") != "ready"
+            ):
+                raise KunlunNativeGoalRuntimeError(
+                    "LoopX automatic task preparation did not preserve the selected Todo and current lease"
+                )
         claimed_by = str(todo.get("claimed_by") or "")
         agent_id = str(context.get("agent_id") or "")
         if claimed_by and claimed_by != agent_id:

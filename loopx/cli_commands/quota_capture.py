@@ -8,6 +8,7 @@ import os
 import shlex
 import socket
 import stat
+import subprocess
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
@@ -1141,23 +1142,65 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
         from ..control_plane.effect_runtime import MAX_REQUEST_BYTES
         from ..control_plane.turn_driver.codex_context import (
             CONTEXT_LIFECYCLE_HOOKS, codex_context_directory, codex_context_hook,
+            native_context_event_eligible, native_execution_preparation_request,
+            record_native_execution_preparation,
+        )
+        from ..control_plane.turn_driver.codex_execution_preparation import (
+            codex_execution_preparation_context,
+            execute_codex_execution_preparation,
         )
 
-        # Native transport only: no registry discovery, guard or quota effects.
+        # Context transport remains read-only.  An exact typed Host preparation
+        # request may additionally execute its ordinary claim and fresh guard.
         try:
             if not activation["enabled"]:
                 print("{}")
                 return 0
             raw = sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)
             event = json.loads(raw) if len(raw) <= MAX_REQUEST_BYTES else None
-            if (isinstance(event, dict) and isinstance(event.get("session_id"), str) and event["session_id"]
+            if (isinstance(event, dict) and native_context_event_eligible(event)
+                    and isinstance(event.get("session_id"), str) and event["session_id"]
                     and event.get("hook_event_name") in CONTEXT_LIFECYCLE_HOOKS):
                 directory = codex_context_directory(directory=args.codex_context_dir,
                     root=getattr(args, "codex_context_root", None), session=event.get("session_id"), create=True)
                 payload = codex_context_hook(directory, event)
+                try:
+                    request = native_execution_preparation_request(directory, event)
+                    if request is not None:
+                        workspace = Path(event.get("cwd") or "")
+                        if workspace.is_absolute() and workspace.resolve() == Path.cwd().resolve():
+                            receipt = execute_codex_execution_preparation(
+                                request,
+                                cwd=workspace.resolve(),
+                                scenario=activation["scenario"],
+                            )
+                            record_native_execution_preparation(
+                                directory,
+                                event,
+                                source_sha256=request["source_sha256"],
+                                receipt=receipt,
+                            )
+                            existing = payload.get("hookSpecificOutput")
+                            existing_context = (
+                                str(existing.get("additionalContext") or "")
+                                if isinstance(existing, dict)
+                                else ""
+                            )
+                            payload["hookSpecificOutput"] = {
+                                "hookEventName": event["hook_event_name"],
+                                "additionalContext": " ".join(filter(None, [
+                                    existing_context,
+                                    codex_execution_preparation_context(receipt),
+                                ])),
+                            }
+                except (OSError, RuntimeError, subprocess.SubprocessError, ValueError, TypeError, RecursionError):
+                    # Preserve the original explicit action and any context
+                    # recovery output when Host-side preparation cannot prove
+                    # its postcondition.
+                    pass
             else:
                 payload = {}
-        except (OSError, ValueError, TypeError, RecursionError):
+        except (OSError, RuntimeError, subprocess.SubprocessError, ValueError, TypeError, RecursionError):
             payload = {}
         print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
         return 0
