@@ -30,7 +30,7 @@ def native_quota_result(payload, args, *, capture_directory: Path,
                         decision_identity, captured_payload, reader_argv, capture_id: str,
                         progressive_enabled: bool):
     """IO presentation of the immutable decision, without another guard."""
-    from .quota_capture import model_context_reference, native_context_capture_view
+    from .quota_capture import model_context_reference, native_context_capture_view, context_capture_read_command
     from ..control_plane.turn_driver.codex_context import (
         NativeContextSessionUnavailable, codex_context_directory, prepare_codex_context,
     )
@@ -46,7 +46,10 @@ def native_quota_result(payload, args, *, capture_directory: Path,
         surface="complete_turn" if captured_payload.get("schema_version") == "loopx_turn_envelope_v1" else (
             "turn_envelope" if getattr(args, "turn_envelope", False) else "quota_packet"),
         capture_id=capture_id, continuity_generation=getattr(args, "_context_delivery_generation", None),
-        progressive_enabled=progressive_enabled)
+        progressive_enabled=progressive_enabled, captured_recovery={
+            "path": str(capture_directory / "decision.json"), "sha256": capture_id,
+            "command": context_capture_read_command(capture_directory / "decision.json", capture_id),
+        } if directory is not None else None)
     payload = prepared.delivery
     recovery = payload.get("recovery")
     payload = native_context_capture_view(payload, capture_directory, context_directory=directory,
