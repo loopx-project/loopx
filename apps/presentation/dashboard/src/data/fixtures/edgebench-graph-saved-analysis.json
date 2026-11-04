@@ -11,8 +11,8 @@
       "Six purposively selected native-feedback episodes; population and causal effect remain unknown.",
       "Complete saved analysis responses, including original judgments, costs and language-specific cache misses, are unchanged.",
       "No Explore events were recorded in this selected analysis Goal. Empty history is not a reconstructed solver history.",
-      "Only the included native-report-4 citation range is portable; uncaptured citations are explicitly unavailable.",
-      "No authority store, execution state, raw session transcript, model process or solver is restored by this display fixture."
+      "No authority store, execution state, raw session transcript, model process or solver is restored by this display fixture.",
+      "The included native-report-4 range, baseline/retained/final inventory rows and terminal retention range are portable. Other citations remain explicitly unavailable."
     ]
   },
   "analysis_readbacks": {
@@ -3036,6 +3036,54 @@
         "first_line": 8,
         "last_line": 15,
         "text": "  \"pass_rate\": 1.0,\n  \"score\": 0.8359291793199752,\n  \"score_0_100\": 83.59291793199752,\n  \"timed_out\": false,\n  \"runtime_seconds\": 63.152724742889404,\n  \"test_details\": [],\n  \"valid\": true,\n  \"summary\": \"valid=true final_score=0.835929 overall_score=0.865158 macro_f1=0.850742 micro_f1=0.851681 balanced_accuracy=0.852224 one_minus_ece=0.989116 avg_time=18.698s checks=4/4\",",
+        "applicability": "current"
+      }
+    },
+    {
+      "request_path": "/api/chat/research-analysis/citation?goal_id=edgebench-official-graph-analysis-20261011-04&pack_id=020a5c5ee69d6795192a5544255219b8f91e1d0e272fe6db355e99d226903db1&analysis_key=34f5c3e46e75c1a937b33c98ae27109af0865621a30792a0be1651fac24a23f2&source_id=released-native-inventory&first_line=16&last_line=16",
+      "response_sha256": "0651057126c012fae6e801246f944307c3f89fc62e2b436a5743f34e96135dcb",
+      "response": {
+        "source_id": "released-native-inventory",
+        "artifact": "product-goal-sources/official/graph/native-observations.jsonl",
+        "first_line": 16,
+        "last_line": 16,
+        "text": "{\"submission_index\":16,\"result_id\":\"6e610c29e0ae\",\"candidate_ref\":\"agent-16\",\"valid\":true,\"value\":0.849544264387785,\"submitted_at\":\"2026-10-12T03:59:48.720Z\",\"observed_at\":\"2026-10-12T04:01:22.153Z\",\"observed_at_meaning\":\"first captured completed native-submit command containing this exact submission id and score; not inferred feedback-release time\",\"report_artifact\":\"native-runs/runs/graph-official-native3600-integration-20261011-04/graph_node_classification/submissions/agent-16/report.json\",\"report_sha256\":\"1b6bf435d3ffee98cd9da360ba16842a432f24a236bb921c3048f2027da9d1d4\",\"observation_artifact\":\"native-runs/runs/graph-official-native3600-integration-20261011-04/graph_node_classification/collected/native-sessions/sessions/2026/10/11/rollout-2026-10-11T12-28-48-01a12aef-d388-7233-ac51-5462f173f3e2.jsonl\",\"observation_artifact_sha256\":\"0d23d4a7aec8d84732c9c797ee236e4201b693d725522e21f3a09f2f93cc14f1\",\"observation_line\":10043}",
+        "applicability": "current"
+      }
+    },
+    {
+      "request_path": "/api/chat/research-analysis/citation?goal_id=edgebench-official-graph-analysis-20261011-04&pack_id=020a5c5ee69d6795192a5544255219b8f91e1d0e272fe6db355e99d226903db1&analysis_key=34f5c3e46e75c1a937b33c98ae27109af0865621a30792a0be1651fac24a23f2&source_id=released-native-inventory&first_line=18&last_line=18",
+      "response_sha256": "060ad2fc74e415851e23e49fa54cffc22d133cb31e857bf3c021e3c9d62e398b",
+      "response": {
+        "source_id": "released-native-inventory",
+        "artifact": "product-goal-sources/official/graph/native-observations.jsonl",
+        "first_line": 18,
+        "last_line": 18,
+        "text": "{\"submission_index\":18,\"result_id\":\"ba86adc7653e\",\"candidate_ref\":\"agent-18\",\"valid\":true,\"value\":0.8485288027628158,\"submitted_at\":\"2026-10-12T06:00:45.288Z\",\"observed_at\":\"2026-10-12T06:02:40.679Z\",\"observed_at_meaning\":\"first captured completed native-submit command containing this exact submission id and score; not inferred feedback-release time\",\"report_artifact\":\"native-runs/runs/graph-official-native3600-integration-20261011-04/graph_node_classification/submissions/agent-18/report.json\",\"report_sha256\":\"3de7073f0959ad2ce0e089782cdb23760fad92db6ab6af9024363b352e8c629c\",\"observation_artifact\":\"native-runs/runs/graph-official-native3600-integration-20261011-04/graph_node_classification/collected/native-sessions/sessions/2026/10/11/rollout-2026-10-11T12-28-48-01a12aef-d388-7233-ac51-5462f173f3e2.jsonl\",\"observation_artifact_sha256\":\"0d23d4a7aec8d84732c9c797ee236e4201b693d725522e21f3a09f2f93cc14f1\",\"observation_line\":11739}",
+        "applicability": "current"
+      }
+    },
+    {
+      "request_path": "/api/chat/research-analysis/citation?goal_id=edgebench-official-graph-analysis-20261011-04&pack_id=020a5c5ee69d6795192a5544255219b8f91e1d0e272fe6db355e99d226903db1&analysis_key=34f5c3e46e75c1a937b33c98ae27109af0865621a30792a0be1651fac24a23f2&source_id=released-native-inventory&first_line=2&last_line=2",
+      "response_sha256": "714dc46c200e0eddaf4795e3deea6b193ced07a328bf615a03fcd557e56dca79",
+      "response": {
+        "source_id": "released-native-inventory",
+        "artifact": "product-goal-sources/official/graph/native-observations.jsonl",
+        "first_line": 2,
+        "last_line": 2,
+        "text": "{\"submission_index\":2,\"result_id\":\"e00dc3959c91\",\"candidate_ref\":\"agent-2\",\"valid\":true,\"value\":0.8172464473565724,\"submitted_at\":\"2026-10-11T13:37:19.792Z\",\"observed_at\":\"2026-10-11T13:39:12.474Z\",\"observed_at_meaning\":\"first captured completed native-submit command containing this exact submission id and score; not inferred feedback-release time\",\"report_artifact\":\"native-runs/runs/graph-official-native3600-integration-20261011-04/graph_node_classification/submissions/agent-2/report.json\",\"report_sha256\":\"b67702eaf09c908143cf59372697d041838f08bbcfdc13b151c0736ba33de94b\",\"observation_artifact\":\"native-runs/runs/graph-official-native3600-integration-20261011-04/graph_node_classification/collected/native-sessions/sessions/2026/10/11/rollout-2026-10-11T12-28-48-01a12aef-d388-7233-ac51-5462f173f3e2.jsonl\",\"observation_artifact_sha256\":\"0d23d4a7aec8d84732c9c797ee236e4201b693d725522e21f3a09f2f93cc14f1\",\"observation_line\":722}",
+        "applicability": "current"
+      }
+    },
+    {
+      "request_path": "/api/chat/research-analysis/citation?goal_id=edgebench-official-graph-analysis-20261011-04&pack_id=020a5c5ee69d6795192a5544255219b8f91e1d0e272fe6db355e99d226903db1&analysis_key=34f5c3e46e75c1a937b33c98ae27109af0865621a30792a0be1651fac24a23f2&source_id=original-terminal-result&first_line=7&last_line=9",
+      "response_sha256": "374d13e98fb31a93785d1f7a6a571ee4d28fb68eb328387f6eb2a05881f3ce32",
+      "response": {
+        "source_id": "original-terminal-result",
+        "artifact": "native-runs/runs/graph-official-native3600-integration-20261011-04/graph_node_classification/final_result.json",
+        "first_line": 7,
+        "last_line": 9,
+        "text": "  \"best_pass_rate\": 1.0,\n  \"best_round\": \"agent-16\",\n  \"total_rounds\": 18,",
         "applicability": "current"
       }
     }

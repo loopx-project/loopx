@@ -108,12 +108,12 @@ export function episodeQuestionGroups<T extends {episode_id: string}>(result: Tr
 
 // Keep headline values readable without rounding a nonzero measurement to zero.
 // Full native precision remains available in the existing evidence/details.
-function formatNativeMeasurement(value: number, zh: boolean, signed = false) {
+function formatNativeMeasurement(value: number, zh: boolean, signed = false, significantDigits = 4) {
   const magnitude = Math.abs(value);
   const scientific = magnitude > 0 && (magnitude < 0.0001 || magnitude >= 1_000_000);
   return new Intl.NumberFormat(zh ? "zh-CN" : "en", {
     maximumFractionDigits: 4,
-    ...(scientific ? {notation: "scientific", maximumSignificantDigits: 4} : {}),
+    ...(scientific ? {notation: "scientific", maximumSignificantDigits: significantDigits} : {}),
     signDisplay: signed ? "exceptZero" : "auto",
   }).format(value === 0 ? 0 : value);
 }
@@ -147,13 +147,22 @@ function NativeResults({native, zh, onCitation}: {native: ResearchProgressPack["
   if (!native || !outcomes) return <ContextHelp label={zh ? "原生测量未采集" : "Native measurements not captured"} icon={CircleHelp}><p className="research-native-empty">{zh ? "原生测量 · 未采集" : "Native measurements · not captured"}</p></ContextHelp>;
   const historical = native.applicability === "historical";
   const points = [["best_valid", "窗口内最佳有效值", "Best valid in capture"], ["initial", "首次提交", "Initial submission"], ["final_valid", "最后有效提交", "Final valid submission"], ["retained", "原生保留结果", "Native retained result"]] as const;
+  // The real Ad capture has distinct best/final values that both round to
+  // 4.965E10. Keep the compact notation, increasing precision only until the
+  // distinct scientific measurements remain distinguishable (up to double precision).
+  const scientificValues = [...new Set(points.flatMap(([key]) => {
+    const point = outcomes[key], magnitude = Math.abs(point?.value ?? 0);
+    return point && magnitude > 0 && (magnitude < 0.0001 || magnitude >= 1_000_000) ? [point.value] : [];
+  }))];
+  let significantDigits = 4;
+  while (significantDigits < 17 && new Set(scientificValues.map(point => formatNativeMeasurement(point, zh, false, significantDigits))).size < scientificValues.length) significantDigits++;
   const period = new Intl.DateTimeFormat(zh ? "zh-CN" : "en", {timeZone: "UTC", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false,
     ...(new Date(outcomes.start).getUTCFullYear() !== new Date(outcomes.end).getUTCFullYear() ? {year: "numeric"} : {})});
   const value = ([key, cn, en]: typeof points[number]) => {
     const point = outcomes[key];
     return <div key={key} className={key === "best_valid" ? "research-native-best" : undefined} data-native-point={key}><dt>{zh ? cn : en}</dt><dd>{point ?
       <button type="button" onClick={event => onCitation(point.citation, event.currentTarget)} aria-label={`${zh ? cn : en}: ${String(point.value)} ${outcomes.metric.unit} · ${zh ? "查看原始证据" : "Read original evidence"}`}>
-        <strong>{formatNativeMeasurement(point.value, zh)}</strong>{key === "best_valid" ? <span className="research-native-unit">{outcomes.metric.unit}</span> : null}<FileText size={14} aria-hidden/>
+        <strong>{formatNativeMeasurement(point.value, zh, false, significantDigits)}</strong>{key === "best_valid" ? <span className="research-native-unit">{outcomes.metric.unit}</span> : null}<FileText size={14} aria-hidden/>
       </button> : <span className="research-native-unknown">{zh ? "未知" : "Unknown"}{key === "best_valid" ? <span className="research-native-unit"> · {outcomes.metric.unit}</span> : null}</span>}</dd></div>;
   };
   return <section className="research-native-results" aria-label={zh ? "原生测量" : "Native measurements"}>
