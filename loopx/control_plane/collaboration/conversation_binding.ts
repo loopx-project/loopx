@@ -446,6 +446,20 @@ export function listLocalBoundSessions(params: JsonObject): JsonObject {
  * command; Core binds its exact target before IO. Replays retain that target.
  */
 export function planBoundConversationRequest(params: JsonObject): JsonObject {
+  if (params.pending_observations !== undefined) {
+    const observations = params.pending_observations;
+    if (Object.keys(params).length !== 1 || !Array.isArray(observations) || observations.length > 64) {
+      throw new EffectRuntimeRequestError("select at most 64 read-only pending observations");
+    }
+    return {pending_flags: observations.map(value => {
+      const item = requireJsonObject(value, "pending observation input");
+      if (Object.keys(item).some(key => !["request", "current_session", "pending_observation"].includes(key))
+          || item.pending_observation === undefined) {
+        throw new EffectRuntimeRequestError("pending batches cannot admit or recover work");
+      }
+      return planBoundConversationRequest(item).pending;
+    })};
+  }
   const row = requireJsonObject(params.request, "external request");
   const request = ref(row.request_ref, "external request identity");
   const command = row.command;
@@ -509,7 +523,7 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
       && (expandedResult || metadataOwed || unfinished || turn?.status === "failed"
         && ["usage_limit_exceeded", "response_timeout", "upstream_transport_failure",
           "antigravity_rpc_error", "antigravity_transport_error", "antigravity_step_error",
-          "manager_authorization_unavailable"].includes(String(turn.error_code)))
+          "manager_authorization_unavailable", "runtime_error", "server_restarted"].includes(String(turn.error_code)))
       && !(current?.session_id === row.session_id && current?.status === "closed")
       && observation.stop_observed !== true};
   }
@@ -687,6 +701,16 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
     const created = Date.parse(String(proof.input_created_at));
     const start = Date.parse(String(failed.started_at)), end = Date.parse(String(failed.completed_at));
     const response = proof.response == null ? null : requireJsonObject(proof.response, "native result response");
+    // Returning an already generated historical answer is not replay. Bind its
+    // exact original input and closed native segment; later ordinary questions
+    // must not strand that answer. Legacy unanchored results stay latest-only.
+    const anchoredHistorical = anchor !== null && anchor.thread_id === current.upstream_thread_id
+      && Number.isSafeInteger(anchor.start_step_index) && Number(anchor.start_step_index) >= 0
+      && typeof anchor.input_sha256 === "string" && BARE_SHA256_PATTERN.test(anchor.input_sha256)
+      && proof.start_step_index === anchor.start_step_index && proof.input_sha256 === anchor.input_sha256
+      && proof.latest_input_verified === false && Number.isSafeInteger(proof.end_step_index)
+      && Number(proof.end_step_index) > Number(proof.start_step_index) + 1
+      && Number(proof.end_step_index) < Number(proof.total_steps);
     return {...candidate, recovery_eligible: recovery.source_verified === true
       && proof.thread_id === current.upstream_thread_id && proof.request_ref === row.request_ref
       && typeof proof.execution_id === "string" && proof.execution_id.length > 0
@@ -697,7 +721,7 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
             && Number(proof.end_step_index) > Number(proof.start_step_index) + 1
             && Number(proof.end_step_index) < Number(proof.total_steps))
           && response !== null && extendsOriginalText(originalResponse!, response)
-        : proof.latest_input_verified === true)
+        : proof.latest_input_verified === true || anchoredHistorical)
       && proof.normal_terminal_verified === true
       && Number.isFinite(created) && created >= start && created <= end
       && Number.isSafeInteger(proof.start_step_index) && Number(proof.start_step_index) >= 0

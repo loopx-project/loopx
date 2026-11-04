@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import time
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -991,7 +992,7 @@ def manager_session_quota_route(controller: Any, session: Mapping[str, Any]) -> 
         allocation = manager_executor_allocation(controller, machine_defaults=defaults, environ=environment,
             endpoint_capabilities=[{**row, "available": row.get("agent_id") == endpoint} for row in capabilities])
         return {"allocation": allocation, "blocked_primary": route.get("blocked_primary"),
-                "observed_at": capacity["observed_at"] if capacity else None}
+                "observed_at": capacity["observed_at"] if capacity else time.time()}
     except Exception as exc:
         import logging
         logging.getLogger(__name__).warning("Steward quota observation held (%s)", type(exc).__name__)

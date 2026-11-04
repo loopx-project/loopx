@@ -276,6 +276,7 @@ export function createEffectRuntimeHandlers(
     ["todo.succession.project", lazyHandler(() => import("./todos/succession.ts"), ({projectTodoSuccession}) => projectTodoSuccession)],
     ["todo.work_counts.project", lazyHandler(() => import("./todos/summary_lanes.ts"), ({projectLegacyTodoWorkCounts}) => projectLegacyTodoWorkCounts)],
     ["projection.envelope.seal", lazyHandler(() => import("./projection_envelope.ts"), ({sealProjectionEnvelope}) => sealProjectionEnvelope)],
+    ["todo.global_readiness.project", lazyHandler(() => import("./todos/decision_scope.ts"), ({projectGlobalTodoReadiness}) => projectGlobalTodoReadiness)],
     ["todo.decision_scope.evaluate", lazyHandler(() => import("./todos/decision_scope.ts"), ({evaluateDecisionScope}) => evaluateDecisionScope)],
     ["todo.user_completion.plan", lazyHandler(() => import("./todos/user_completion.ts"), ({evaluateUserCompletion}) => evaluateUserCompletion)],
     ["agent.capability_gate.evaluate", lazyHandler(() => import("./agents/capability_gate.ts"), ({evaluateCapabilityGate}) => evaluateCapabilityGate)],

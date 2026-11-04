@@ -82,6 +82,36 @@ def conversation(monkeypatch, tmp_path):
     return root, store, runtime, session, starts
 
 
+def test_api_primary_route_has_fresh_observation_without_reading_argon_quota(conversation, monkeypatch):
+    import sys
+    import time
+    from types import ModuleType, SimpleNamespace
+    import loopx.chat_manager as manager
+    from loopx.capabilities.native_chat.antigravity_adapter import AntigravityAdapter
+
+    root, _, runtime, _, _ = conversation
+    configure(root, model="gemini-4-argon-high", effort="high", endpoint="antigravity", policy="flexible")
+    calls = []
+    module = ModuleType("loopx_codex_provider_routing.native")
+
+    def route(**inputs):
+        calls.append(inputs)
+        return {"endpoint": "codex", "blocked_primary": None}
+
+    module.NativeAccounts = lambda _: SimpleNamespace(steward_route=route, model_transport=lambda **_: None)
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    monkeypatch.setattr(manager, "operator_credential_resolution", lambda _: {"environ": {}})
+    monkeypatch.setattr(AntigravityAdapter, "metadata_review_capacity",
+        lambda **_: pytest.fail("API primary must not wait for an unrelated native quota read"))
+    before = time.time()
+    result = manager.manager_session_quota_route(runtime, {"agent_id": "antigravity", "upstream_thread_id": "original"})
+    after = time.time()
+    assert result["allocation"]["executor_endpoint"] == "codex"
+    assert before <= result["observed_at"] <= after
+    assert len(calls) == 1 and calls[0]["primary_capacity"] is None
+    runtime.close()
+
+
 def test_idle_conversation_adopts_model_preserving_context_and_authority(conversation):
     root, store, runtime, session, starts = conversation
     store.append_message(session["session_id"], role="user", text="Keep using public sources.")

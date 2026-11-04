@@ -11,7 +11,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from loopx.control_plane.todos.decision_scope import todo_gate_relation  # noqa: E402
+from loopx.control_plane.todos.decision_scope import todo_gate_relations  # noqa: E402
 from loopx.control_plane.scheduler.execution_context import (  # noqa: E402
     GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT,
     scheduler_execution_context_for_runtime_profile,
@@ -967,7 +967,7 @@ def assert_conflicting_exact_and_decision_scope_requires_projection_repair() -> 
             }
         ],
     }
-    relation = todo_gate_relation(gate, agent_item)
+    relation = todo_gate_relations([gate], [agent_item])[0][0]
     assert relation["source"] == "unblocks_todo_id+decision_scope", relation
     assert relation["state"] == "projection_repair_required", relation
     assert relation["reason"] == (
