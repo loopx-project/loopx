@@ -44,7 +44,7 @@ def parse_checkpoint_request(raw: bytes) -> dict[str, Any]:
     """Validate the same explicit declaration before staging and before capture."""
     request = json.loads(raw)
     if (not isinstance(request, dict) or
-            set(request) - {"destination", "components", "point_metadata", "native_session", "evaluation_opportunity", "loopx_state", "trigger", "controller_handoff"} or
+            set(request) - {"destination", "components", "point_metadata", "native_session", "evaluation_opportunity", "loopx_state", "trigger", "controller_handoff", "settled_work_capture_once"} or
             not {"destination", "components", "point_metadata"}.issubset(request)):
         raise ValueError("checkpoint request requires destination, components and point_metadata")
     if "native_session" in request and type(request["native_session"]) is not bool:
@@ -65,6 +65,18 @@ def parse_checkpoint_request(raw: bytes) -> dict[str, Any]:
         raise ValueError("checkpoint requires explicit components")
     if not isinstance(request["point_metadata"], dict):
         raise ValueError("checkpoint point_metadata must be an object")
+    handoff = request.get("settled_work_capture_once")
+    if "settled_work_capture_once" in request:
+        if (request.get("trigger") != "fresh_replan" or not isinstance(handoff, dict)
+                or set(handoff) != {"destination", "purpose"}
+                or not isinstance(handoff["purpose"], str) or not handoff["purpose"].strip()):
+            raise ValueError("settled-work handoff requires fresh_replan plus destination and explicit purpose")
+        root = normalize_checkpoint_request_path(request["destination"])
+        target = normalize_checkpoint_request_path(handoff["destination"])
+        if PurePosixPath(target).parent != PurePosixPath(root):
+            raise ValueError("settled-work handoff must be a direct child of this trial's checkpoint root")
+        if "settled_work_handoff" in request["point_metadata"]:
+            raise ValueError("settled-work handoff metadata must not replace an operator field")
     return request
 
 
@@ -139,6 +151,10 @@ def _write_checkpoint_attempt(path: Path, value: dict[str, str]) -> bool:
     return True
 
 
+def _completed_attempt_path(destination: Path) -> Path:
+    return destination.parent / ".completed-attempts" / (hashlib.sha256(destination.name.encode()).hexdigest() + ".json")
+
+
 def _mark_completed_capture_attempt(destination: Path, effect_id: str, request_sha256: str,
                                     wake_root: Path, turn_id: str) -> bool:
     """Use the original wake witness when the artifact-side index was unavailable.
@@ -174,7 +190,7 @@ def _mark_completed_capture_attempt(destination: Path, effect_id: str, request_s
     attempts.mkdir(parents=True, exist_ok=True, mode=0o700)
     if attempts.resolve() != attempts:
         raise ValueError("completed capture attempt directory must be physical")
-    marker = attempts / (hashlib.sha256(destination.name.encode()).hexdigest() + ".json")
+    marker = _completed_attempt_path(destination)
     return _write_checkpoint_attempt(marker, value)
 
 
@@ -196,6 +212,9 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
         request, raw = {}, None
     if declaration_error is None and request.get("trigger") != "fresh_replan":
         return body
+    if declaration_error is None and request.get("settled_work_capture_once") is not None:
+        receipt["checkpoint_handoff"] = {"pending": True, "turn_id": receipt["turn_id"],
+            "request_sha256": hashlib.sha256(raw).hexdigest()}
     if receipt.get("mode") != "heartbeat" or receipt.get("stage") != "execute":
         raise ValueError("fresh_replan checkpoint trigger requires a heartbeat execute wake")
     started = time.monotonic()
@@ -320,6 +339,40 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
     return preloaded_body
 
 
+def _capture_declared_settled_handoff(env: dict[str, str], receipt: dict[str, Any]) -> None:
+    """One explicit handoff, not a periodic capture or a substitute replan point."""
+    pending = receipt.get("checkpoint_handoff")
+    if not isinstance(pending, dict) or pending.get("pending") is not True:
+        return
+    if not receipt.get("ok") or receipt.get("stage") != "execute" or receipt.get("budget_exhausted"):
+        return  # No eligible completed boundary; keep the request unconsumed.
+    result = {"captured": False, "research_point_qualified": False, "phase": "after_settled_work"}
+    try:
+        request, raw = read_checkpoint_request(env["LOOPX_CHECKPOINT_REQUEST"])
+        if (pending.get("turn_id") != receipt.get("turn_id")
+                or pending.get("request_sha256") != hashlib.sha256(raw).hexdigest()):
+            raise ValueError("settled-work handoff request or original Turn changed")
+        handoff = request["settled_work_capture_once"]
+        if _completed_attempt_path(Path(handoff["destination"])).exists():
+            result["reason"] = "destination_already_attempted_no_replay"
+            receipt["checkpoint_handoff"] = {"pending": False, **result}
+            return  # A witness of an attempt is not proof of a qualified point.
+        from .checkpoint_continuation import restored_capture_gate
+        gate = restored_capture_gate(env, full_history=not request.get("native_session", False))
+        if not gate["capture_allowed"]:
+            result["reason"] = gate["reason"]
+        else:
+            effective = {k: v for k, v in request.items() if k not in {"trigger", "settled_work_capture_once"}}
+            effective.update(destination=handoff["destination"], point_metadata={**request["point_metadata"],
+                "settled_work_handoff": {"purpose": handoff["purpose"]}})
+            completed = {k: v for k, v in receipt.items() if k not in {"checkpoint", "checkpoint_handoff"}}
+            capture_after_wake(env, completed, supplied_request=(effective, raw), restore_gate=gate)
+            result.update(completed["checkpoint"])
+    except Exception as error:
+        result.update(reason="capture_failed", error_kind=type(error).__name__, error=str(error)[:500])
+    receipt["checkpoint_handoff"] = {"pending": False, **result}
+
+
 def capture_after_wake(env: dict[str, str], receipt: dict[str, Any], *,
                        supplied_request: tuple[dict[str, Any], bytes] | None = None,
                        pending_guard: Path | None = None,
@@ -327,6 +380,8 @@ def capture_after_wake(env: dict[str, str], receipt: dict[str, Any], *,
     request_path = env.get("LOOPX_CHECKPOINT_REQUEST")
     if not request_path:
         return  # Feature-off path performs no additional read or write.
+    if supplied_request is None:
+        _capture_declared_settled_handoff(env, receipt)
     if supplied_request is None and (receipt.get("checkpoint") or {}).get("phase") == "before_replan":
         return  # The after-wake hook cannot replace the pre-decision point.
     receipt["checkpoint"] = {"captured": False, "research_point_qualified": False}
@@ -387,7 +442,7 @@ def capture_after_wake(env: dict[str, str], receipt: dict[str, Any], *,
         if identity is None:
             raise ValueError("checkpoint settlement identity is unavailable")
         request_sha256 = hashlib.sha256(raw).hexdigest()
-        if request.get("controller_handoff") and supplied_request is None:
+        if pending_guard is None and (request.get("controller_handoff") or supplied_request is not None):
             if not _mark_completed_capture_attempt(destination, identity.effect_id, request_sha256,
                     Path(env["LOOPX_WAKE_LOG_DIR"]), receipt["turn_id"]):
                 receipt["checkpoint"]["reason"] = "destination_already_attempted_no_replay"
