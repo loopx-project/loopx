@@ -134,18 +134,20 @@ def test_damaged_or_forged_selected_delivery_never_acknowledges_a_section(tmp_pa
     assert supporting in native._state(tmp_path)["consumed_pointers"]
 
 
-def test_selected_read_observation_preserves_exact_source_number_identity(tmp_path, monkeypatch):
+@pytest.mark.parametrize("address", ["/numbers", "/numbers/0", "/object/0"])
+def test_selected_read_observation_preserves_exact_source_number_identity(tmp_path, monkeypatch, address):
     event = setup(tmp_path, monkeypatch)
     source = payload()
     source["numbers"] = [1.0, -0.0, 2**60 + 1]
+    source["object"] = {"0": 1.0}
     _, first = project(tmp_path, payload=source)
-    deliver(tmp_path, event, selected_pages(first["context"]["context_details"], "/numbers"))
-    observed = native._state(tmp_path)["consumed_pointers"]["/numbers"]
+    deliver(tmp_path, event, selected_pages(first["context"]["context_details"], address))
+    observed = native._state(tmp_path)["consumed_pointers"][address]
     changed = deepcopy(source)
-    changed["numbers"][0] = 1
+    changed["numbers"][0] = changed["object"]["0"] = 1
     _, second = project(tmp_path, "second", payload=changed)
-    deliver(tmp_path, event, selected_pages(second["context"]["context_details"], "/numbers"))
-    assert native._state(tmp_path)["consumed_pointers"]["/numbers"] != observed
+    deliver(tmp_path, event, selected_pages(second["context"]["context_details"], address))
+    assert native._state(tmp_path)["consumed_pointers"][address] != observed
 
 
 def test_default_progressive_does_not_admit_conflicting_host_declarations(acceptance_goal):
