@@ -105,6 +105,7 @@ def _run(
     )
     code, packet = run_json_cli_result(
         "quota", "should-run", "--goal-id", GOAL, "--agent-id", AGENT,
+        "--context-delivery", "off",
         *guard_args,
         registry_path=registry, runtime_root=runtime,
     )
@@ -163,6 +164,7 @@ def test_projected_claim_prepares_the_same_todo_for_a_fresh_guard(
 
     guard_code, after = run_json_cli_result(
         "quota", "should-run", "--goal-id", GOAL, "--agent-id", AGENT,
+        "--context-delivery", "off",
         registry_path=tmp_path / "registry.json",
         runtime_root=tmp_path / "runtime",
     )
@@ -184,8 +186,6 @@ def test_projected_claim_prepares_the_same_receipt_bound_turn(
         [],
         "--runtime-profile",
         "codex_app_ssh_goal",
-        "--context-delivery",
-        "off",
         "--begin-turn",
         todos=[_todo(), {**_todo(), "todo_id": "todo_other_candidate", "index": 2}]
         if multiple_candidates else None,
@@ -299,7 +299,6 @@ def test_codex_lifecycle_hook_uses_captured_authority_from_another_project(
         provider,
         [] if lease_state == "missing" else [_lease(expired=True)],
         "--runtime-profile", "codex_app_ssh_goal",
-        "--context-delivery", "off",
         "--begin-turn",
     )
     turn = before["heartbeat_receipt"]["turn_instance_id"]
