@@ -172,6 +172,7 @@ def test_prepared_initial_read_keeps_exact_body_without_retransmitting_unused_pr
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     tmp_path.chmod(0o700)
     decision["unselected_evidence"] = "Historical evidence remains available. " * 10000
+    decision["unselected_structure"] = {f"unread_branch_{index}": {"detail": index} for index in range(500)}
     decision["selected_todo"]["future_number"] = 10**45 + 17
     view = native_context_capture_view(decision, tmp_path)
     raw = Path(view["recovery"]["path"]).read_bytes()
@@ -197,6 +198,7 @@ def test_prepared_initial_read_keeps_exact_body_without_retransmitting_unused_pr
     assert len(observed) == 1
     if opaque:
         assert b"Historical evidence remains available." not in observed[0]
+        assert b"unread_branch_" not in observed[0], "Explicit replay needs only the selected address structure"
         assert len(observed[0]) < len(raw) // 2
     else:
         assert b"Historical evidence remains available." in observed[0]

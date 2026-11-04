@@ -85,10 +85,10 @@ def test_inline_user_context_preserves_full_scoped_gates_without_granting_delive
 
     def guard(*extra, expected_exit=0):
         code, packet = run_json_cli_result("quota", "should-run", "--goal-id", "requirements-goal",
-            "--agent-id", "agent-a",  *extra,
+            "--agent-id", "agent-a", "--context-delivery", "off", *extra,
             registry_path=registry, runtime_root=runtime)
         assert code == expected_exit, json.dumps(packet, indent=2)
-        return packet
+        return _read_current_quota_source(packet)
 
     if provider == "legacy":
         refused = guard(expected_exit=1)
@@ -204,9 +204,10 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
     def guard(*extra: str) -> dict:
         code, packet = run_json_cli_result("--cli-bin", str(cli_bin),
             "quota", "should-run", "--goal-id", "requirements-goal",
-            "--agent-id", "agent-a",  *extra,
+            "--agent-id", "agent-a", "--context-delivery", "off", *extra,
             registry_path=registry, runtime_root=runtime)
         assert code == 0, json.dumps(packet, indent=2)
+        packet = _read_current_quota_source(packet)
         assert packet["should_run"] is True, packet.get("reason")
         # The harness adds transport metadata outside the signed CLI stdout.
         packet.pop("_returncode", None)
@@ -224,7 +225,7 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
     assert "work_context" in body
     script = re.search(r"```sh\n(.*?)\n```", body, re.S).group(1)
     assert "--turn-envelope" not in script
-    assert "--context-delivery on" in script and "--decision-output-root" in script
+    assert "--context-delivery on" not in script and "--decision-output-root" in script
     env = {
         **os.environ,
         "LOOPX_REGISTRY": str(registry),
@@ -448,6 +449,7 @@ def test_selected_todo_body_change_between_selection_and_readback_blocks_deliver
     )
     assert code == 0, json.dumps(packet, indent=2)
     assert changed
+    packet = _read_current_quota_source(packet)
     assert packet["selected_todo"]["todo_id"] == "todo_selected_work"
     selected_revision = projected_request["selected_todo"]["content_revision"]
     assert selected_revision
@@ -519,6 +521,7 @@ def test_short_selected_todo_deduplicates_body_but_keeps_canonical_note(
         "--agent-id", "agent-a",  "--turn-envelope",
         registry_path=registry, runtime_root=runtime)
     assert code == 0 and turn["ok"], turn
+    turn = _read_current_quota_source(turn)
     turn_context = turn["interaction_contract"]["agent_channel"]["work_context"]
     assert turn_context["complete"] is True
     assert turn_context["selected_todo_ref"] == "selected_todo"

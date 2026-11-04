@@ -64,6 +64,16 @@ def test_native_caller_owns_writeback_spend_and_returns_recoverable_receipt(tmp_
             "validation", "durable_writeback", "quota_spend"}
         assert "settlement_owed" not in receipt
         assert _spend_run_count(runtime) == 1
+        from loopx.control_plane.quota.settlement import read_heartbeat_settlement
+
+        scope = dict(goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID, turn_instance_id=TURN_ID)
+        complete = read_heartbeat_settlement(runtime, registry_path=registry, **scope)
+        controls = read_heartbeat_settlement(runtime, registry_path=registry, include_record_bodies=False, **scope)
+        assert complete.writeback_run and complete.spend_run and complete.heartbeat_receipt
+        assert controls.writeback_run is None and controls.spend_run is None and controls.heartbeat_receipt is None
+        assert controls.progress == complete.progress == receipt["settlement_progress"]
+        assert controls.settlement == complete.settlement
+        assert controls.identity == complete.identity
         details = receipt["result_details"]
         readback = subprocess.run(shlex.split(details["command"]), cwd=project,
             capture_output=True, text=True, check=False)

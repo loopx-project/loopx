@@ -580,6 +580,16 @@ test("settlement progress requires both effects and exact receipts", async t => 
         schema_version: "quota_settlement_progress_v0", state: entry.state,
         next_step: entry.next, quota_spend_source: "heartbeat",
       });
+      assert.deepEqual(await readQuotaSettlement(request(root, {include_record_bodies: true})), result);
+      const controls = await readQuotaSettlement(request(root, {include_record_bodies: false}));
+      const expected = {...result};
+      if (entry.state === "settled") {
+        assert.ok(result.writeback_run && result.spend_run && result.heartbeat_receipt);
+        for (const field of ["writeback_run", "spend_run", "heartbeat_receipt",
+          "writeback_event", "spend_event", "completion_event"]) expected[field] = null;
+      }
+      assert.deepEqual(controls, expected, "Pending recovery and all controls/receipts retain complete parity");
+      await assert.rejects(readQuotaSettlement(request(root, {include_record_bodies: "false"})), /must be a boolean/);
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 });

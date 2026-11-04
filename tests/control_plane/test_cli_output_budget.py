@@ -334,7 +334,12 @@ def _read_current_quota_source(payload: dict) -> dict:
     command = payload["recovery"]["command"]
     observed = bytearray()
     while True:
-        argv = shlex.split(command)[1:]
+        words = shlex.split(command)
+        # Source checkout routes may start with `python -m loopx.entrypoint`.
+        # Reuse the command's actual global options, not an executable count.
+        start = min(index for index, word in enumerate(words)
+            if word in {"--format", "--registry", "--runtime-root"})
+        argv = words[start:]
         assert argv[argv.index("quota") + 1] == "context-read"
         code, text = _invoke_cli(argv)
         assert code == 0, text
