@@ -1471,6 +1471,46 @@ control-plane typecheck 通过。最终安装 wheel 与 premerge 的读回随提
 扩大后的 source 结算运行有 274 passed、4 failed、1 项平台 skip。四项 File／SQLite
 失败在 main `886f2cdff4b2` 原样复现：回执绑定任务转 deferred 后返回 `quota_skip`，
 未保留原 closeout recovery；到期 successor-replan 的重放也丢失动作。正向 guard
-落盘的 `should_run`／`delivery_allowed` 事实互相矛盾。此 admission／recovery 一致性
-缺口仍是原 C1 的明确 hold；更小记录投影不在这些失败路径上执行。不改预期、不放宽
-回执规则，也不把这些失败改写为通过。
+中的 `should_run`／`delivery_allowed` 事实曾被初步解释为互相矛盾。下文修正该诊断，
+保留原失败运行。更小记录投影不在这些失败路径上执行；不放宽回执规则来换取通过。
+
+### 执行准备与原 Turn 恢复
+
+普通 guard 可以要求领取任务，同时禁止业务交付。此时 `should_run=true` 与
+`delivery_allowed=false` 一致：已有领取后置条件要求在同一 Turn 重新进入，并明确
+取得 `execution_preparation.state=ready`。此前两个 File／SQLite 测试在产出 artifact
+前遗漏了这一步。现在测试遵循已有调用契约，并核验同一结算身份下从负向到正向的
+追加式 guard lineage；既不改写原负向事件，也不放宽 native result admission。
+
+另外两个失败暴露了产品缺陷：selected-Todo IO adapter 对 canonical obligation 已经
+禁止交付的规划操作，仍应用普通执行准备。任务为 deferred 时，到期 successor replan
+因此被压制，重放也丢失原动作。adapter 现在先消费 TypeScript interaction owner
+使用的同一明确 `delivery_allowed=false` 事实，再决定是否读取执行租约。规划仍不
+授予普通交付或扣额；省略该事实时保留全部原执行准备检查。普通领取、冲突、回执身份
+及 once-only 恢复仍由原 owner 管理，不新增决策 owner、协议字段、权限、cadence
+顺序变更或 RPC。
+
+使用同一套修正后的测试 harness，冻结的修复前产品源码通过两个普通交付用例，
+仍失败于两个规划用例；候选四项全部通过，完整执行准备矩阵共 30 项通过。原四失败
+cohort 保留为历史证据，调用者顺序修复与产品路由修复分别记账。这只闭合已复现的
+规划路径缺陷，不代表完整 C1 验收或整体效率成立。
+
+
+未修改的原 quota 任务也再次与同一 main 源码对照，File／SQLite 的冷读、温态与恢复
+条件各重复三次。36 个条件均保留同一独验产物及含重放的一次扣额；252 次父进程／
+记账 child 来源观察无污染，产品源摘要不变。温态 RPC 仍为 332 → 290，wire 在
+File 增 0.165%、SQLite 增 0.073%；排除准备后的当前步骤 stdout 分别增 9.5% 和
+6.2%，已观测 Python 读写合计增 4.1% 和 3.8%。主指标“同次完整 capture 到所选正文”
+候选为 84.1%／85.5%，main 为 89.2%／87.8%；候选冷读／恢复仍选完整正文。这是
+独立 cohort，不能与前一 cohort 相减作因果归因。规划路径正确性未解决普通温态路径
+的成本取舍；provider 原生 IO、latency／CPU、模型／缓存／生成输出、账单及自然长程
+效果仍未测量。
+
+扩大后的 source 结算套件现有 278 项通过，另跳过一项原生 Windows PowerShell 用例。
+新建的隔离安装 wheel 通过 246 项，覆盖四个修正后的 CLI 用例、普通／native 执行
+准备、结算、组合收尾及 runtime 集成；原生 Windows PowerShell 与 Linux thread-group
+exit 两项不适用于当前 Host。1,897 个比较的打包源码文件与本次源码一致，包括修改的
+adapter；227 个已完成进程及 102,420 次 Core 模块观察无来源污染。突然退出不在退出时
+审计的观察范围内。原隔离 guard 保留；这不代表活动 runtime 的安装或晋升。局部改动
+复用共享 IO adapter，另造 contract projection 或 lifecycle wrapper 会增加顺序风险，
+没有必要调用者。

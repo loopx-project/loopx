@@ -1971,7 +1971,63 @@ expanded source settlement run has 274 passes, four failures and one platform
 skip. Both File and SQLite failures reproduce unchanged on main `886f2cdff4b2`:
 a receipt-bound task becoming deferred returns `quota_skip` instead of its
 original closeout recovery, and due successor-replan replay loses its action.
-The positive guard records conflicting `should_run`/`delivery_allowed` facts.
-This admission/recovery consistency gap remains an explicit original-C1 hold;
-the smaller record projection is not used on those failing paths. No altered
-expectation or relaxed receipt rule is used to turn those failures into passes.
+The initial report interpreted the guard's `should_run`/`delivery_allowed` facts
+as conflicting. The follow-up below corrects that diagnosis while preserving
+the failed run. The smaller record projection is not used on those failing paths;
+no relaxed receipt rule is used to turn them into passes.
+
+### Preparation and original-Turn recovery
+
+An ordinary guard may require a claim while forbidding business delivery.
+`should_run=true` and `delivery_allowed=false` are consistent in that state:
+the existing claim postcondition requires same-Turn reentry and an explicit
+`execution_preparation.state=ready`. Two earlier File/SQLite tests omitted that
+step before producing their artifact. They now follow the existing caller
+contract and verify append-only negative-to-positive guard lineage under the
+same settlement identity. Neither the earlier negative event nor native result
+admission is weakened or rewritten.
+
+The other two failures expose a product bug. The selected-Todo IO adapter applied
+ordinary execution preparation to a planning operation whose canonical
+obligation already forbade delivery. A deferred task then suppressed the due
+successor replan and lost its original action on replay. The adapter now consumes
+that same explicit `delivery_allowed=false` fact used by the TypeScript
+interaction owner before reading execution leases. Planning still permits no
+ordinary delivery or debit. Omitted facts retain all existing preparation checks;
+ordinary claims, conflicts, receipt identity and once-only recovery keep their
+existing owners. No new decision owner, protocol field, permission, cadence
+ordering or RPC is introduced.
+
+With the same corrected test harness, frozen pre-repair product source passes
+the two ordinary-delivery cases and fails both planning cases. The candidate
+passes all four and the complete 30-case execution-preparation matrix. The
+original four-failure cohort remains historical evidence; fixing caller ordering
+and fixing product routing are distinct results. This closes the demonstrated
+planning-route defect, not whole-C1 acceptance or overall efficiency.
+
+
+The unchanged original quota task is also repeated against the same main source
+for three repetitions of each File/SQLite cold, warm and recovery condition.
+All 36 conditions preserve the independent artifact and one debit with replay;
+252 parent/accounting-child source observations are clean and product hashes
+remain unchanged. Warm RPCs are still 332 to 290. Wire bytes rise 0.165% on File
+and 0.073% on SQLite; current-step stdout excluding preparation rises 9.5% and
+6.2%, and observed Python read-plus-write bytes rise 4.1% and 3.8%. The primary
+same-capture full-to-body reductions are 84.1% / 85.5% on the candidate versus
+89.2% / 87.8% on main. Candidate cold/recovery still select the complete body.
+This is a separate cohort, not a causal subtraction from the preceding cohort.
+Planning-route correctness does not resolve the ordinary warm-path cost tradeoff.
+Native provider IO, latency/CPU, model/cache/generated output, invoices and
+natural long-horizon effectiveness remain unmeasured.
+
+The expanded source settlement suite now passes 278 tests with one native
+Windows PowerShell skip. A fresh isolated installed wheel passes 246 tests,
+including the four corrected CLI cases, ordinary/native preparation, settlement,
+combined closeout and runtime integration. Its Windows PowerShell and Linux
+thread-group exit cases are skipped on this host. All 1,897 compared packaged
+source files match, including the changed adapter; 227 completed processes and
+102,420 Core-module observations show no source-origin violations. Abrupt exits
+remain outside the exit-time audit. The original isolation guards are retained;
+this does not install or promote the candidate on the active runtime. The shared
+IO adapter is the bounded change; another contract projection or lifecycle
+wrapper would add ordering risk without a required caller.
