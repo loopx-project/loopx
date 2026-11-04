@@ -805,6 +805,14 @@ the shared [authoring example](../../reference/protocols/goal-vision-replan-cont
 carries a complete evidence-linked continuation. Real CLI write/read negatives
 qualify that guidance seam; avoided model retries and sustained cost remain open.
 
+Vision prepare now collects independent numeric budget failures in its existing
+TypeScript owner. Optional bounded request-error details cross the shared runtime
+transport; Python renders them without duplicating validation. Limits, original
+packet contents, first-error compatibility and pre-write refusal remain intact.
+File/SQLite CLI rejection, corrected-packet readback and fixed-caller base/head
+comparison qualify this recovery seam separately from model adoption, billing,
+installed behavior and sustained long-horizon benefit.
+
 ### Delivery semantics: correctness before migration
 
 The replan obligation outcome policy now lives in
