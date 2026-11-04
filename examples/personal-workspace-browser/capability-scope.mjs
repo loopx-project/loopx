@@ -3,6 +3,52 @@ import assert from "node:assert/strict";
 import { outputDir } from "./fixture.mjs";
 import { openWorkspacePage } from "./scenario-context.mjs";
 
+// Independent ordering oracle: input order is deliberately unrelated to tier or
+// name order. Exercise both actual settings consumers, not the sort helper.
+async function verifyFilteredCatalogOrder(page) {
+  const snapshots = await page.evaluate(async () => ({
+    machine: await (await fetch('/api/chat/machine-configuration')).json(),
+    goal: await (await fetch('/api/chat/goal-configuration?goal_id=product-release')).json(),
+  }));
+  const template = snapshots.goal.capability_catalog.capabilities.find(item => item.capability_id === 'periodic_report');
+  const capability = (id, title, availability, writable = true) => ({...template,
+    capability_id: id, display_name: title, description: '', available_scopes: ['machine', 'goal'], machine_namespace: id,
+    availability, configuration_editor: {...template.configuration_editor, fields: [],
+      editable: writable, supported_scopes: ['machine', 'goal'], writable_scopes: writable ? ['machine', 'goal'] : []},
+  });
+  const capabilities = [
+    capability('order_retired', 'Order Retired', 'retired', false),
+    capability('order_zulu', 'Order Zulu', 'supported_opt_in'),
+    capability('order_experiment', 'Order Experiment', 'experimental_opt_in'),
+    capability('order_readonly', 'Order Read only', 'supported_opt_in', false),
+    capability('unrelated', 'Unrelated', 'supported_explicit_override'),
+    capability('order_alpha', 'Order Alpha', 'supported_opt_in'),
+    capability('order_priority', 'Order Priority', 'supported_explicit_override'),
+  ];
+  for (const [scope, snapshot] of Object.entries(snapshots)) {
+    await page.route(`**/api/chat/${scope}-configuration*`, async route => {
+      if (route.request().method() !== 'GET') return route.fallback();
+      await route.fulfill({json: {...snapshot, capability_catalog: {...snapshot.capability_catalog, capabilities}}});
+    });
+  }
+  await page.reload({waitUntil: 'networkidle'});
+  const expected = ['Order Priority', 'Unrelated', 'Order Alpha', 'Order Zulu', 'Order Read only', 'Order Experiment', 'Order Retired'];
+  for (const scope of ['Goal', 'Machine']) {
+    if (scope === 'Machine') await page.getByRole('radio', {name: 'This device', exact: true}).check();
+    const catalog = page.getByRole('navigation', {name: `${scope} capability catalog`, exact: true});
+    const labels = () => catalog.locator('button strong').allTextContents();
+    const search = page.getByRole('searchbox', {name: 'Search capabilities', exact: true});
+    await catalog.getByRole('button', {name: /^Order Priority/}).waitFor();
+    assert.deepEqual(await labels(), expected, `${scope}: priority overrides precede actionable, read-only, experimental and retired entries; peers sort by name`);
+    await search.fill('order');
+    assert.deepEqual(await labels(), expected.filter(label => label !== 'Unrelated'), `${scope}: filtering preserves tier and name order`);
+    await search.fill('order zulu');
+    assert.deepEqual(await labels(), ['Order Zulu'], `${scope}: every term must match`);
+    await search.press('Escape');
+    assert.deepEqual(await labels(), expected, `${scope}: clearing restores complete presentation order`);
+  }
+}
+
 export const capabilityScopeScenario = {
   id: "capability-scope",
   async run({ browser, collectCoverage, url }) {
@@ -240,6 +286,7 @@ export const capabilityScopeScenario = {
       await page.getByRole('button', {name: 'Clear capability search', exact: true}).press('Enter');
       assert.equal(await englishSearch.inputValue(), '');
       assert(await englishSearch.evaluate(element => element === document.activeElement));
+      await verifyFilteredCatalogOrder(page);
       if (context.errors.some(error => !/503/.test(error))) throw new Error(context.errors.join(" | "));
       return { coverageEntries: await context.close(), note: "One capability destination; explicit device/Goal scope; fresh target reads; no cross-scope drafts or writes; Goal entry preserved; desktop/mobile verified." };
     } catch (error) {

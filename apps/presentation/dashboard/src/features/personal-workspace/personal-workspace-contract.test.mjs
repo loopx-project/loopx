@@ -483,7 +483,7 @@ assert.match(capabilityWorkbench, /localizeCapability\(rawCapability, locale\)/,
 assert.match(capabilityWorkbench, /capability\.capability_id === "multi_subagent"\) return 3/, "Immature child-agent capacity stays behind mature supported capabilities");
 assert.match(capabilityWorkbench, /availability\?\.includes\("experimental"\)/, "Experimental capabilities share a stable late presentation tier");
 assert.match(capabilityWorkbench, /configuration_editor\.writable_scopes\.length === 0/, "Provider-bound read-only capabilities follow directly actionable settings");
-assert.match(capabilityWorkbench, /orderCapabilitiesForPresentation\(capabilities, locale\)/, "Machine and Goal catalogs use one presentation-order policy");
+assert.match(capabilityWorkbench, /orderCapabilitiesForPresentation\(visible, locale\)/, "Machine and Goal search results use the shared presentation-order policy");
 for (const capabilityId of [
   "change_quality_qualification",
   "coordination_runtime_shadow",
