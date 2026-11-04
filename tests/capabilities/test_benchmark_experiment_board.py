@@ -964,8 +964,56 @@ def test_cli_compact_upsert_rejects_invalid_transition_without_writing(tmp_path:
         "--project", str(tmp_path), "--row-json", str(row_path), "--execute", "--format", "json",
     ], check=False)
     assert result.returncode != 0
-    assert "invalid benchmark experiment board input" in result.stderr
+    assert "benchmark run status cannot move from completed to running" in result.stderr
     assert ledger.read_bytes() == before
+
+
+@pytest.mark.parametrize("execute", [False, True])
+def test_cli_identifies_missing_guardrails_and_allows_correction(
+    tmp_path: Path, execute: bool,
+) -> None:
+    ledger = default_benchmark_experiment_board_path(project=tmp_path, goal_id="fixture-goal")
+    row_path = tmp_path / "row.json"
+    row = _baseline()
+    del row["metrics"]["reward"]
+    row_path.write_text(json.dumps(row), encoding="utf-8")
+    command = ["benchmark", "experiment-board-upsert", "--goal-id", "fixture-goal",
+               "--project", str(tmp_path), "--row-json", str(row_path), "--format", "json"]
+    if execute:
+        command.append("--execute")
+
+    rejected = run_source_cli(command, check=False)
+    assert rejected.returncode == 2
+    assert "official result is missing declared guardrail metrics" in rejected.stderr
+    assert not ledger.exists()
+
+    row_path.write_text(json.dumps(_baseline()), encoding="utf-8")
+    corrected = json.loads(run_source_cli(command).stdout)
+    assert corrected["row"]["metrics"]["reward"]["value"] == 0
+    assert corrected["write"]["write_performed"] is execute
+    assert ledger.exists() is execute
+
+
+@pytest.mark.parametrize("failure", ["missing_file", "invalid_json", "unknown_field", "non_object"])
+def test_cli_keeps_untrusted_input_errors_generic(tmp_path: Path, failure: str) -> None:
+    private_text = "private-input-marker"
+    row_path = tmp_path / (private_text + ".json")
+    if failure == "invalid_json":
+        row_path.write_text('{"' + private_text + '":', encoding="utf-8")
+    elif failure == "unknown_field":
+        row_path.write_text(json.dumps(_baseline(**{private_text: "secret"})), encoding="utf-8")
+    elif failure == "non_object":
+        row_path.write_text(json.dumps([private_text]), encoding="utf-8")
+    ledger = default_benchmark_experiment_board_path(project=tmp_path, goal_id="fixture-goal")
+    result = run_source_cli([
+        "benchmark", "experiment-board-upsert", "--goal-id", "fixture-goal",
+        "--project", str(tmp_path), "--row-json", str(row_path), "--execute", "--format", "json",
+    ], check=False)
+    assert result.returncode == 2
+    assert "invalid benchmark experiment board input" in result.stderr
+    assert private_text not in result.stderr
+    assert str(tmp_path) not in result.stderr
+    assert not ledger.exists()
 
 
 def test_cli_show_projects_factorial_contrast_from_explicit_contract(
