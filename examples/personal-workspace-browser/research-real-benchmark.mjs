@@ -73,15 +73,20 @@ async function readSavedGraphAnalysis(browser, collectCoverage) {
   }
 }
 
-// Core whole-page reference: unmodified display state from two real terminal
-// runs. Synthetic scenarios remain separate boundary/race/overflow tests.
+// Core whole-page references: complete original display state from three tasks.
+// Synthetic scenarios remain separate boundary/race/overflow tests.
 export const researchRealBenchmarkScenario = {
   id: "research-real-benchmark",
   async run({browser, collectCoverage}) {
     const coverageEntries = [];
     const observations = [];
-    for (const arm of ["on", "off"]) {
-      const path = resolve(repoRoot, `apps/presentation/dashboard/src/data/fixtures/edgebench-grid-context-${arm}-20261103-history.json`);
+    for (const [arm, fixture] of [
+      ["grid-on", "edgebench-grid-context-on-20261103-history.json"],
+      ["grid-off", "edgebench-grid-context-off-20261103-history.json"],
+      ["ad", "edgebench-ad-20261023-history.json"],
+      ["schema", "edgebench-schema-20261025-history.json"],
+    ]) {
+      const path = resolve(repoRoot, "apps/presentation/dashboard/src/data/fixtures", fixture);
       const capture = JSON.parse(await readFile(path, "utf8"));
       const owner = await startHistoryOwner(path);
       let page;
@@ -89,7 +94,7 @@ export const researchRealBenchmarkScenario = {
         page = await browser.newPage({viewport: {width: 1440, height: 900}});
         if (collectCoverage) await page.coverage.startJSCoverage({resetOnNavigation: false});
         await page.addInitScript(() => localStorage.setItem("loopx-pw-locale", "en"));
-        await page.goto(`${owner.base}/chat/?goalId=benchmark-goal&view=research`);
+        await page.goto(`${owner.base}/chat/?goalId=${capture.goal_id}&view=research`);
         const history = page.locator(".research-history");
         await page.waitForFunction(() => document.querySelector(".research-history")?.getAttribute("aria-busy") === "false");
         assert.match(await history.locator(".research-history-coverage").innerText(), new RegExp(`${capture.events.length} / ${capture.events.length}`));
@@ -99,17 +104,21 @@ export const researchRealBenchmarkScenario = {
         await absentDecisions.locator(":scope > summary").click();
         assert.match(await absentDecisions.innerText(), /No explicit decision recorded/);
         await absentDecisions.locator(":scope > summary").click();
-        await page.screenshot({path: resolve(outputDir, `research-real-grid-${arm}-desktop.png`), animations: "disabled"});
+        await page.screenshot({path: resolve(outputDir, `research-real-${arm}-desktop.png`), animations: "disabled"});
 
         await history.getByRole("button", {name: "Search research records", exact: true}).click();
         const records = history.locator(".research-record-search");
         const search = records.getByRole("searchbox", {name: "Search research records"});
-        assert.equal(await records.locator(".research-record-entry").count(), capture.events.length);
+        assert.equal(await records.locator(".research-record-entry").count(), Math.min(50, capture.events.length));
+        while (await records.getByRole("button", {name: /Show more records/}).count()) {
+          await records.getByRole("button", {name: /Show more records/}).click();
+        }
+        assert.equal(await records.locator(".research-record-entry").count(), capture.events.length, "Later real records stay reachable across display pages");
         const received = page.waitForEvent("download");
         await records.getByRole("button", {name: "Download matches (JSON)", exact: true}).click();
         const download = await received;
         const exported = JSON.parse(await readFile(await download.path(), "utf8"));
-        assert.equal(exported.goal_id, "benchmark-goal");
+        assert.equal(exported.goal_id, capture.goal_id);
         assert.deepEqual(exported.coverage, {loaded_records: capture.events.length, exported_records: capture.events.length, history_complete: true, refresh_failed: false});
         assert.deepEqual(exported.records.map(event => event.event_id), capture.events.map(event => event.event_id), "The full append order survives export");
         for (const [index, original] of capture.events.entries()) {
@@ -122,9 +131,10 @@ export const researchRealBenchmarkScenario = {
 
         // A source-authored 'confirmed' record can report no gain. Never infer
         // positive benefit from that label or rewrite the original conclusion.
-        const chosen = arm === "on"
+        const chosen = arm === "grid-on"
           ? capture.events.find(event => event.summary.includes("no measured gain from either tested family"))
-          : capture.events.at(-1);
+          : arm === "ad" ? capture.events.find(event => event.summary.includes("Not adopted. This is a scoped negative result"))
+          : capture.events.findLast(event => event.event_kind === "finding");
         assert(chosen);
         await search.fill(chosen.event_id);
         const entry = records.locator(".research-record-entry");
@@ -135,13 +145,36 @@ export const researchRealBenchmarkScenario = {
           await entry.scrollIntoViewIfNeeded();
           assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
           assert.equal(await entry.locator(":scope > summary > strong").innerText(), chosen.title);
-          await page.screenshot({path: resolve(outputDir, `research-real-grid-${arm}-record-${width}.png`), animations: "disabled"});
+          await page.screenshot({path: resolve(outputDir, `research-real-${arm}-record-${width}.png`), animations: "disabled"});
         }
-        if (arm === "on") assert.match(await entry.locator(".research-finding-sections").first().innerText(), /no measured gain/);
+        if (arm === "grid-on") assert.match(await entry.locator(".research-finding-sections").first().innerText(), /no measured gain/);
+        if (arm === "ad") assert.match(await entry.innerText(), /Not adopted/);
         const original = entry.locator(":scope > details").filter({has: page.locator("summary", {hasText: "Full original text"})});
         await original.locator(":scope > summary").click();
         assert.equal(await original.locator(":scope > p").first().innerText(), chosen.summary, "Long negative/unknown evidence is readable without abbreviation");
         await original.locator(":scope > summary").click();
+        if (arm === "ad") {
+          const first = capture.events[0];
+          const versions = capture.events.filter(event => event.result_id === first.result_id);
+          assert.equal(versions.length, 39, "The real repeated question has 39 original updates");
+          await search.fill(first.event_id);
+          await entry.locator(":scope > summary").click();
+          const comparison = entry.locator(".research-record-comparison");
+          await comparison.locator(":scope > summary").click();
+          await comparison.getByRole("combobox", {name: "Compare with"}).selectOption(versions.at(-1).event_id);
+          await comparison.getByRole("checkbox", {name: "Include unchanged fields"}).check();
+          for (const width of [1440, 390]) {
+            await page.setViewportSize({width, height: 900});
+            await comparison.scrollIntoViewIfNeeded();
+            await page.screenshot({path: resolve(outputDir, `research-real-ad-versions-${width}.png`), animations: "disabled"});
+            assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "Real long version labels fit the reader");
+          }
+          await comparison.getByRole("checkbox", {name: "Include unchanged fields"}).press("Escape");
+          assert.equal(await comparison.evaluate(element => element.open), false);
+          await entry.locator(":scope > summary").evaluate(element => new Promise(resolve => {
+            requestAnimationFrame(() => resolve(element === document.activeElement));
+          })).then(focused => assert.equal(focused, true));
+        }
         await search.fill("");
         await history.getByRole("button", {name: "Refresh history", exact: true}).click();
         await page.waitForFunction(() => document.querySelector(".research-history")?.getAttribute("aria-busy") === "false");

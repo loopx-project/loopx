@@ -2,8 +2,8 @@
 
 The default read-only preview uses the complete saved Explore log from the
 3 November Grid Turing Robot context-on run. The `research-real-benchmark`
-browser scenario reads both context arms independently through the real HTTP
-history owner. It verifies complete original text and append order, download
+browser scenario reads both context arms, the Ad and Schema histories below,
+and the saved Graph analysis through the real HTTP history owner. It verifies complete original text and append order, download
 readback, source preservation, no writes, and desktop/390px reading. These are
 the core populated-page references; synthetic fixtures cover boundaries such
 as races, artificial paging pressure and missing fields.
@@ -45,6 +45,34 @@ for the core reading journey. The Python history suite independently freezes the
 original JSONL digests and sizes. The two source byte totals are 80,992 and
 20,575; their exact original serialization can be reconstructed as described
 below. No model or solver is called by this scenario.
+
+The same core scenario now includes two record-rich histories from different
+tasks, with all **349 original events** retained:
+
+| Source | Records | Node / finding records | Recording interval (UTC) | Original JSONL SHA-256 |
+| --- | ---: | ---: | --- | --- |
+| [Ad placement](../../apps/presentation/dashboard/src/data/fixtures/edgebench-ad-20261023-history.json) | 255 | 65 / 190 | 22 October 17:31:31–23 October 07:35:25 | `23a55562f8ad9b808a5633c479451b78b13ad5370a35190d04fab407e3824a72` |
+| [Schemathesis](../../apps/presentation/dashboard/src/data/fixtures/edgebench-schema-20261025-history.json) | 94 | 47 / 47 | 23 October 17:50:32–25 October 15:39:04 | `5473191a1f23537a48f38ba82d0dd8ba8ed5ad7daffd944f28910e7d6e19e0ab` |
+
+Selection combines recency with the reading problem. The inspected 26 October
+Ad and Schema captures contain only two and four events. These richer captures
+exercise real pagination, long evidence and updates: one Ad question has **39
+recorded versions**; its 65 node events describe three distinct questions. A
+confirmed finding rejects a variant after a negative local comparison. The
+reader must preserve that original conclusion and make every version reachable.
+The Schema capture retains inherited records and originating Agent/run identities
+across three UTC dates; that recording span does not measure the destination
+solver's active time or invent a parent/child relationship.
+
+Neither history records explicit edges or parent links. Ad remains
+`runner_invalid`; Schema remains `cancelled`; both are score-uncountable. No
+events were sampled, rewritten or redacted. The original byte sizes are 396,701
+and 271,025. The core journey reads all display pages, exports every original
+record, compares the first and last of the 39 Ad versions and returns keyboard
+focus to the selected record at desktop/390px widths. Pass either fixture to
+the same preview's `--fixture` option; their original Goal IDs stay intact.
+These display captures do not include their complete session trajectories or
+qualify installed App adoption, paid analysis or a scientific comparison.
 
 ## Earlier research checkpoints
 
