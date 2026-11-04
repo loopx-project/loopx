@@ -1,6 +1,93 @@
-# Three real research checkpoints
+# Real benchmark reference fixtures
 
-The default research-history preview uses three actual EdgeBench checkpoints
+The default read-only preview uses the complete saved Explore log from the
+3 November Grid Turing Robot context-on run. The `research-real-benchmark`
+browser scenario reads both context arms independently through the real HTTP
+history owner. It verifies complete original text and append order, download
+readback, source preservation, no writes, and desktop/390px reading. These are
+the core populated-page references; synthetic fixtures cover boundaries such
+as races, artificial paging pressure and missing fields.
+
+| Source | Records | Node / finding records | Recorded interval (UTC) | Original JSONL SHA-256 |
+| --- | ---: | ---: | --- | --- |
+| [Grid context on](../../apps/presentation/dashboard/src/data/fixtures/edgebench-grid-context-on-20261103-history.json) | 33 | 8 / 25 | 2026-11-03 06:02:35–15:06:44 | `292f493ee5d88e0f99546776ee2a46958e19517ceae192c10288276f270f404d` |
+| [Grid context off](../../apps/presentation/dashboard/src/data/fixtures/edgebench-grid-context-off-20261103-history.json) | 11 | 2 / 9 | 2026-11-03 06:04:18–14:55:52 | `d91047d06aa7ef43249bc79e70d8ba53d37a88240c124dcd17a75034ea524375` |
+
+All saved Explore events are included, without sampling, rewriting or redaction.
+No credentials or private absolute paths were found in the selected display
+state. Native authority/credential stores, session transcripts, evaluator
+internals and task workspaces are excluded. Each fixture carries its original
+run identity and limitations. Both runs retain `runner_invalid`, diagnostic
+scope and `score_countable=false`; displaying their observations does not
+qualify a causal comparison. Recording intervals are not active solver time.
+
+The records expose real reading pressure: long repeated questions, multiple
+measurement scopes, null execution observations, rejected local variants and an
+unresolved timeout. All findings happen to carry the source's `confirmed`
+label; one reports **no measured gain** and another preserves an unknown native
+outcome. The frontend must preserve that distinction rather than infer benefit
+from a status label. Neither log records explicit relationship edges or parents.
+Missing structured decisions now take an on-demand disclosure rather than an
+empty first-screen section. Opening a record reuses the existing observation,
+interpretation and measurement reader, with complete original wording on demand;
+the same layout applies without a generated display analysis. Exported records
+remain original data.
+
+Run `uv run --extra test python examples/personal-workspace-browser/research-history-backend.py`
+after building the Chat bundle to open the default source. Pass `--fixture` with
+the context-off file to inspect it separately. Both sources genuinely use
+`benchmark-goal` in separate runtimes: do not rename or merge them into invented
+Goals. This reader materializes display events in disposable scaffolding; it
+does not restore execution state or observe an installed/live worker.
+
+Run `LOOPX_PERSONAL_WORKSPACE_PACKAGED=1 LOOPX_PERSONAL_WORKSPACE_SCENARIO=research-real-benchmark node examples/personal-workspace-browser-smoke.mjs`
+for the core reading journey. The Python history suite independently freezes the
+original JSONL digests and sizes. The two source byte totals are 80,992 and
+20,575; their exact original serialization can be reconstructed as described
+below. No model or solver is called by this scenario.
+
+## Earlier research checkpoints
+
+### Saved analysis reference
+
+The core scenario also opens the [actual Graph saved analysis](../../apps/presentation/dashboard/src/data/fixtures/edgebench-graph-saved-analysis.json)
+from the 11–12 October native run in Chinese and English. Its six purposively
+selected episodes preserve all 36 model judgments, complete explanations,
+negative/unknown verdicts and original pack/run/revision identities. This older
+case supplements the recent Grid logs; it is not another recent complete history.
+The analysis headline preserves the mixed result: five recorded utility tests
+and one unknown, without turning a test into a positive benefit.
+
+| Judgment | Yes / no / unknown |
+| --- | --- |
+| Goal alignment | 4 / 0 / 2 |
+| Utility tested | 5 / 0 / 1 |
+| Discrimination | 0 / 2 / 4 |
+| Information gain | 6 / 0 / 0 |
+| Evidence adoption | 2 / 0 / 4 |
+| Avoidable repetition | 0 / 3 / 3 |
+
+The recorded analysis used **447.0 seconds, 53,768 input and 19,278 output
+tokens**. These are analysis costs; solver token usage and money remain unknown.
+The invalid first submission remains missing rather than zero, and the native
+best/retained result remains distinct from the final submitted candidate.
+
+This fixture freezes the real HTTP readbacks, including the Chinese/English
+cache misses and the saved unspecified-language original. The packaged frontend
+must recover that original without inventing a translation, changing its usage
+or invoking a model. The preview replays captured GET responses; it does **not**
+import the original analysis store or qualify the live execution backend. The
+existing synthetic process fixture separately protects that owner boundary.
+Tests pin the original HTTP byte digests and read all 36 explanations in both
+interfaces at desktop/390px widths.
+
+Only one public-safe native-result citation range is bundled. Other cited ranges
+return an explicit unavailable response; no transcript or failure stack is
+substituted. The selected Goal has no Explore log: its empty history is preserved.
+Pass `--fixture apps/presentation/dashboard/src/data/fixtures/edgebench-graph-saved-analysis.json`
+to the same read-only preview to inspect this case. All mutation verbs are denied.
+
+The broader `research-history` regression explicitly loads three actual EdgeBench checkpoints
 sealed on 15 October 2026 and **restored by subsequent experiments**. It replaces
 the older Squirrel example. The Explore records retain their original text,
 timestamps, IDs, references, append order and scoped findings.
@@ -88,7 +175,7 @@ can only display relationships actually supplied by the native source.
 
 ## Ordinary reading journey
 
-Open the preview to read the complete Portfolio recording interval. Switch
+Open the older three-fixture scenario to read the complete Portfolio recording interval. Switch
 between the three Goals in the existing sidebar. One date or point selection
 opens all corresponding original records, versions, scoped negative evidence
 and references. Refresh and browser Back/Forward preserve context. Reading
