@@ -72,7 +72,11 @@ def test_native_caller_owns_writeback_spend_and_returns_recoverable_receipt(tmp_
         assert complete.writeback_run and complete.spend_run and complete.heartbeat_receipt
         assert controls.writeback_run is None and controls.spend_run is None and controls.heartbeat_receipt is None
         assert controls.progress == complete.progress == receipt["settlement_progress"]
-        assert controls.settlement == complete.settlement
+        for field in ("writeback", "spend", "delivery", "settlement"):
+            original_result, projected_result = getattr(complete, field), getattr(controls, field)
+            assert original_result.value and projected_result.value is None
+            assert projected_result.receipts == original_result.receipts
+            assert projected_result.failure == original_result.failure
         assert controls.identity == complete.identity
         details = receipt["result_details"]
         readback = subprocess.run(shlex.split(details["command"]), cwd=project,

@@ -587,6 +587,11 @@ test("settlement progress requires both effects and exact receipts", async t => 
         assert.ok(result.writeback_run && result.spend_run && result.heartbeat_receipt);
         for (const field of ["writeback_run", "spend_run", "heartbeat_receipt",
           "writeback_event", "spend_event", "completion_event"]) expected[field] = null;
+        for (const field of ["writeback", "spend", "delivery", "settlement"]) {
+          const original = result[field] as {result: {value: unknown}};
+          assert.ok(original.result.value, "Complete reads retain their original Run body");
+          expected[field] = {...original, result: {...original.result, value: null}};
+        }
       }
       assert.deepEqual(controls, expected, "Pending recovery and all controls/receipts retain complete parity");
       await assert.rejects(readQuotaSettlement(request(root, {include_record_bodies: "false"})), /must be a boolean/);
