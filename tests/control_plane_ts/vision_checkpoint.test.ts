@@ -364,6 +364,29 @@ test("prepare reports complete total usage beside field overages and keeps struc
   }
 });
 
+test("prepare keeps an over-budget enum's own budget error before enum decoding", () => {
+  const packet = {vision_patch: {advancement_policy: "x".repeat(41)}};
+  assert.throws(() => buildVisionCheckpoint(prepareRequest({agent_vision_packet: packet})), (error: unknown) => {
+    assert.equal((error as {code: string}).code, "vision_budget_exceeded");
+    assert.equal((error as Error).message, 'vision_budget_exceeded: advancement_policy uses 41 chars; limit is 32; suggested compact value: "' + "x".repeat(29) + '..."');
+    return true;
+  });
+  assert.throws(() => buildVisionCheckpoint(prepareRequest({agent_vision_packet: {advancement_policy: "invalid"}})), (error: unknown) => {
+    assert.equal((error as {code: string}).code, "invalid_request");
+    return true;
+  });
+  const valid = buildVisionCheckpoint(prepareRequest({agent_vision_packet: {advancement_policy: "as_needed"}}));
+  assert.deepEqual((valid.agent_vision as Record<string, unknown>).vision_patch, {advancement_policy: "as_needed"});
+  // A collected enum budget failure must not defer unrelated shape/privacy checks.
+  for (const path_delta of [{outcome: "invalid"}, {outcome: "continue", prior_assumption: "Retain the route.",
+    observed_reality: "Read /Users/owner/private.txt", retained: ["Keep acceptance."]}]) {
+    assert.throws(() => buildVisionCheckpoint(prepareRequest({agent_vision_packet: {...packet, path_delta}})), (error: unknown) => {
+      assert.equal((error as {code: string}).code, "invalid_request");
+      return true;
+    });
+  }
+});
+
 test("prepare rejects incomplete and over-wide path deltas", () => {
   assert.throws(
     () => buildVisionCheckpoint(prepareRequest({

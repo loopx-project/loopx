@@ -223,6 +223,23 @@ def test_runtime_budget_rejection_preserves_first_error_and_additional_details()
     assert json.dumps(packet, sort_keys=True) == original
 
 
+@pytest.mark.parametrize("value", ["x" * 41, "invalid"])
+def test_runtime_enum_budget_keeps_legacy_python_exception_type(value) -> None:
+    with pytest.raises(ValueError) as error:
+        vision_checkpoint.prepare_vision_refresh(
+            {"vision_patch": {"advancement_policy": value}},
+            goal_id="goal-main", agent_id="codex-main", existing_agent_vision=None,
+            merge_patch=False, require_path_delta_for_durable_change=False,
+        )
+    if len(value) > 32:
+        assert type(error.value) is vision_checkpoint.GoalVisionBudgetError
+        assert (error.value.field, error.value.used, error.value.limit) == ("advancement_policy", 41, 32)
+        assert error.value.suggestion == "x" * 29 + "..."
+    else:
+        assert type(error.value) is ValueError
+        assert "must be one of" in str(error.value)
+
+
 @pytest.mark.parametrize(
     "malformed",
     [

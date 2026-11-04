@@ -190,6 +190,9 @@ authored packet deliberately and retry: diagnostics neither rewrite it nor grant
 write/settlement authority. Structural/privacy failures encountered during
 normalization still reject directly before writes, even when earlier budget
 findings were collected. Other path-delta consumers retain fail-fast behavior.
+Same-field enum decoding follows that field's budget check: an oversized
+`advancement_policy` keeps its budget error; a short invalid value keeps its
+enum rejection.
 
 Prepare 一次报告可独立发现的文本与列表预算问题；首条错误的 code、正文和建议兼容保留，
 后续数值诊断通过 typed request-error 的可选 `details` 传递。主消息仍限 240 字符；
@@ -197,6 +200,7 @@ Prepare 一次报告可独立发现的文本与列表预算问题；首条错误
 超数量列表仍先拒绝数量，不扫描内容，也不把部分用量当作整包总量。调用者应审阅并主动
 修正原包；诊断不改写意图、不授予写入或结算权限。归一化中遇到结构错误或私有内容仍
 直接在写入前拒绝，即使之前已经收集到预算问题；其他 path-delta 调用者保留首错即返。
+同字段先查预算再解码枚举：超长 `advancement_policy` 保留预算错误，短非法值保留枚举拒绝。
 
 The normal lightweight CLI write boundary is `loopx refresh-state` with inline
 vision patch fields:
