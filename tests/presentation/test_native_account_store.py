@@ -419,6 +419,29 @@ class AccountTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             apps.account_preflight(self.home, self.spec)
 
+    def test_direct_api_key_can_open_without_joining_the_native_vault(self):
+        self.current()
+        direct = accounts.encoded({'auth_mode': 'apikey',
+                                   'OPENAI_API_KEY': 'sk-proj-' + 'synthetic-project-key' * 2})
+        accounts.atomic(self.manager.auth, direct)
+        apps.account_preflight(self.home, self.spec)
+        self.assertFalse(self.manager.status()['current_login_matches'])
+        with self.assertRaises(ValueError):
+            self.manager.switch('a')
+        self.assertEqual(self.manager.auth.read_bytes(), direct)
+
+    def test_non_object_auth_retains_the_native_preflight_error(self):
+        self.current()
+        selected = self.manager.active.read_bytes()
+        for value in ([], None, True, 1, 'synthetic-invalid-cache'):
+            with self.subTest(value=value):
+                raw = accounts.encoded(value)
+                accounts.atomic(self.manager.auth, raw)
+                with self.assertRaisesRegex(ValueError, 'Invalid native account cache'):
+                    apps.account_preflight(self.home, self.spec)
+                self.assertEqual(self.manager.auth.read_bytes(), raw)
+                self.assertEqual(self.manager.active.read_bytes(), selected)
+
     def test_active_owner_refusal_has_no_vault_side_effects(self):
         self.idle.side_effect = ValueError('synthetic running process')
         with self.assertRaises(ValueError):

@@ -75,6 +75,20 @@ def auth_kind(raw):
     return 'api' if obj.get('auth_mode') == 'apikey' else 'subscription'
 
 
+def external_api_auth(raw):
+    """Direct API-key login owned by Codex, not by the managed relay vault."""
+    try:
+        obj = json.loads(raw)
+        if not isinstance(obj, dict):
+            return False
+        key = obj.get('OPENAI_API_KEY')
+        return (obj.get('auth_mode') == 'apikey' and isinstance(key, str)
+                and bool(key) and not key.startswith('sk-loopx-relay-')
+                and not any(c.isspace() for c in key) and not obj.get('tokens'))
+    except (TypeError, ValueError):
+        return False
+
+
 def checked(path):
     path = Path(path)
     if any(p.is_symlink() for p in (path, *path.parents)):
@@ -413,7 +427,10 @@ class Accounts:
         state = self.state()
         matches = None
         if state and self.auth.exists():
-            matches = identity(read_private(self.auth)) == state['identity']
+            try:
+                matches = identity(read_private(self.auth)) == state['identity']
+            except ValueError:
+                matches = False
         return {'slots': names, 'slot_kinds': kinds, 'active_slot': state['slot'] if state else None,
                 'current_login_matches': matches, 'recovery_required': self.pending.exists(),
                 'home': str(self.spec['home']), 'frontend': str(self.spec['frontend']),
