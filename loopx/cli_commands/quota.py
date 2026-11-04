@@ -15,7 +15,7 @@ from .quota_presentation import (
 from .quota_capture import (
     bind_capture_selection_transport, budgeted_settlement_result, capture_decision, handoff_decision,
     handle_native_context_command, handle_replan_view, prepare_quota_capture, native_context_capture_view,
-    native_context_activation, model_context_reference,
+    native_context_activation, model_context_reference, progressive_context_capture_view,
 )
 from ..control_plane.turn_driver.decision_capture import (
     project_captured_context,
@@ -23,6 +23,7 @@ from ..control_plane.turn_driver.decision_capture import (
 from ..usage_goal import observe_quota_result
 
 from ..control_plane.coordination.local_authority import CanonicalAuthorityRequired
+from ..control_plane.effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
 from ..control_plane.quota.effect_program import SettlementIdentity
 from ..control_plane.quota.error_codes import (
     CloseoutQueryUnavailableError,
@@ -360,12 +361,14 @@ def _emit_quota_result(
         print_payload(view, args.format, _quota_renderer(args, failure=payload.get("ok") is not True))
         return 0 if payload.get("ok") is True else 1
     try:
-        context_delivery_enabled = native_context_activation(args)["enabled"]
+        activation = native_context_activation(args)
+        context_delivery_enabled = activation["enabled"]
     except QuotaCommandValidationError:
         if payload.get("ok") is True:
             raise
         # Preserve the original validation error when activation itself failed.
         context_delivery_enabled = False
+        activation = {"progressive_enabled": False}
     bind_capture_selection_transport(payload, args)
     delivery_request = None
     decision_identity = ("", "")
@@ -426,6 +429,18 @@ def _emit_quota_result(
             request=delivery_request[0], capture_id=delivery_request[1],
             goal_id=decision_identity[0], agent_id=decision_identity[1],
             surface="turn_envelope" if getattr(args, "turn_envelope", False) else "quota_packet")
+    if (not deferred_context and args.format == "json" and succeeded and args.quota_command == "should-run"
+            and activation["progressive_enabled"] and not native_context and delivery_request is None):
+        try:
+            payload = progressive_context_capture_view(payload, args,
+                runtime_root=context.runtime_root if context is not None else Path(args._progressive_context_runtime),
+                directory=capture_directory,
+                surface="turn_envelope" if getattr(args, "turn_envelope", False) else "quota_packet",
+                reader_argv=reader_argv)
+        except (QuotaDecisionTransportError, OSError, ValueError, EffectRuntimeRemoteError, EffectRuntimeStartupError):
+            # Stateless optional presentation has no stale native selector.
+            # Retain this complete decided input/receipt when capture fails.
+            pass
     if (not deferred_context and args.format == "json" and succeeded and capture_directory
             and native_context):
         import hashlib
@@ -446,7 +461,8 @@ def _emit_quota_result(
             payload = project_codex_context(payload, directory=directory,
                 capture_directory=capture_directory, goal_id=decision_identity[0], agent_id=decision_identity[1],
                 surface="turn_envelope" if getattr(args, "turn_envelope", False) else "quota_packet",
-                capture_id=capture_id, continuity_generation=getattr(args, "_context_delivery_generation", None))
+                capture_id=capture_id, continuity_generation=getattr(args, "_context_delivery_generation", None),
+                progressive_enabled=activation["progressive_enabled"])
             recovery = payload.get("recovery")
             # Without a prepared native projection, the view adapter publishes
             # this complete CLI view and its reader commands as current recovery.
@@ -614,7 +630,7 @@ def handle_quota_command(
                 status_payload,
                 goal_id=args.goal_id,
                 agent_id=args.agent_id,
-                inline_goal_source=native_context_activation(args)["enabled"],
+                inline_goal_source=native_context_activation(args)["progressive_enabled"],
                 available_capabilities=args.available_capabilities,
                 include_scheduler_detail="scheduler" in detail_sections,
                 include_agent_todo_detail=(
@@ -644,7 +660,7 @@ def handle_quota_command(
                 interaction_projection_hooks=interaction_projection_hooks,
                 turn_start_hook_dispatch=turn_start_hook_dispatch,
                 context_navigation=(
-                    native_context_activation(args)["enabled"]
+                    native_context_activation(args)["progressive_enabled"]
                     and not bool(getattr(args, "turn_envelope", False))
                 ),
                 goal_ref=goal_ref,

@@ -517,6 +517,7 @@ def _native_context_read_bytes(reference: dict[str, Any], raw: bytes, *,
 
 def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
                                 context_directory: str | None = None,
+                                captured_recovery: dict[str, Any] | None = None,
                                 metadata: dict[str, Any] | None = None,
                                 max_page_output_bytes: int | None = None,
                                 reader_argv: list[str] | None = None) -> dict[str, Any]:
@@ -537,13 +538,13 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
     typed = projected.get("schema_version") == "context_delivery_v1"
     mode = projected["mode"] if typed else "full"
     ancestry = projected.get("ancestry", 0)
-    publish_wire = not (typed and mode == "full")
+    publish_wire = captured_recovery is None and not (typed and mode == "full")
     wire = directory / "delivery.json"
     raw = _native_output_bytes(projected) if publish_wire else b""
     reference = ({"path": str(wire), "sha256": hashlib.sha256(raw).hexdigest()}
-        if publish_wire else projected["recovery"])
-    current = (projected.get("recovery") if typed else None) or reference
-    current_raw = Path(current["path"]).read_bytes() if typed else raw
+        if publish_wire else captured_recovery or projected["recovery"])
+    current = captured_recovery or (projected.get("recovery") if typed else None) or reference
+    current_raw = Path(current["path"]).read_bytes() if typed or captured_recovery is not None else raw
     current_document = json.loads(current_raw)
     if not publish_wire:
         raw = current_raw
@@ -608,6 +609,33 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
     return result
 
 
+def progressive_context_capture_view(payload: dict[str, Any], args: argparse.Namespace, *,
+                                     runtime_root: Path, directory: Path | None,
+                                     surface: str = "quota_packet",
+                                     reader_argv: list[str] | None = None) -> dict[str, Any]:
+    """Same-capture presentation for every caller, without a native journal.
+
+    A plain read-only should-run remains read-only. Private transport files do
+    not admit work, mint a Turn or stand in for observed model consumption.
+    """
+    from .context_machine import _private_transport_root
+    from ..control_plane.turn_driver.decision_capture import capture_progressive_context
+
+    if directory is None:
+        root = Path(_private_transport_root(runtime_root))
+        directory = Path(tempfile.mkdtemp(prefix="context-", dir=root))
+    bind_capture_selection_transport(payload, args, capture_root=directory.parent)
+    required, reference = capture_progressive_context(payload, directory=directory, surface=surface)
+    view = native_context_capture_view(required, directory, captured_recovery=reference,
+        metadata={"context_delivery": native_context_activation(args),
+            **({"capture_sha256": args.capture_sha256} if getattr(args, "capture_sha256", None) else {})},
+        max_page_output_bytes=getattr(args, "max_page_output_bytes", None), reader_argv=reader_argv)
+    readable = model_context_reference(view, reader_argv=reader_argv)
+    # Small results need no extra navigation. The complete original and required
+    # captures remain available; never shrink by dropping current obligations.
+    return readable if len(_native_output_bytes(readable)) < len(_native_output_bytes(required)) else required
+
+
 def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
     """Present an immutable already-decided quota capture, without authority IO.
 
@@ -646,6 +674,15 @@ def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
     target = None
     native_prepared = False
     native_view = None
+    if not activation["enabled"] and activation["progressive_enabled"]:
+        # Recovery is presentation of this exact saved decision, including its
+        # original Turn. It does not need a supported host or a native session.
+        try:
+            return progressive_context_capture_view(payload, args,
+                runtime_root=Path(getattr(args, "_context_delivery_machine_runtime", path.parent)),
+                directory=None, reader_argv=reader_argv)
+        except (QuotaDecisionTransportError, OSError, ValueError, EffectRuntimeRemoteError, EffectRuntimeStartupError):
+            pass  # The complete original reference remains the fallback below.
     try:
         from ..control_plane.turn_driver.codex_context import codex_context_directory, project_codex_context
 
@@ -685,7 +722,8 @@ def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
         projected = project_codex_context(payload, directory=directory, capture_directory=cache,
             goal_id=args.goal_id, agent_id=args.agent_id, surface="quota_packet",
             capture_id=hashlib.sha256(raw).hexdigest(),
-            continuity_generation=getattr(args, "_context_delivery_generation", None))
+            continuity_generation=getattr(args, "_context_delivery_generation", None),
+            progressive_enabled=activation["progressive_enabled"])
         native_prepared = True
         if projected.get("schema_version") == "context_delivery_v1":
             # Native publication owns the complete required view. Keep its
@@ -931,6 +969,8 @@ def bind_capture_selection_transport(payload: dict[str, Any], args: argparse.Nam
         options["--decision-handoff-socket"] = args.decision_handoff_socket
     if getattr(args, "context_delivery", "off") != "off":
         options["--context-delivery"] = args.context_delivery
+    if getattr(args, "delta_delivery", None) is not None:
+        options["--delta-delivery"] = args.delta_delivery
     if getattr(args, "codex_context_dir", None):
         options["--codex-context-dir"] = args.codex_context_dir
     if getattr(args, "codex_context_root", None):

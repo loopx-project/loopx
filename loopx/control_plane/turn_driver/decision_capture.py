@@ -370,6 +370,27 @@ def capture_context_projection(payload: dict[str, Any], *, directory: Path,
     }
 
 
+def capture_progressive_context(payload: dict[str, Any], *, directory: Path,
+                                surface: str = "quota_packet") -> tuple[dict[str, Any], dict[str, Any]]:
+    """Publish the complete current source before optional stateless presentation.
+
+    The typed owner applies the shrink guard. This neither creates a native
+    journal nor requires/adopts an execution Turn. All recovery is same-capture.
+    """
+    from ..quota.turn_envelope import prepare_progressive_context
+
+    source = capture_context_projection(payload, directory=directory)
+    transaction = prepare_progressive_context(payload, surface=surface, source_reference={
+        **{key: source[key] for key in ("path", "sha256")},
+        "source_path": source["path"],
+        "command_template": source["command"] + " --select '<pointer>'",
+    })
+    if not transaction["projected"]:
+        return payload, source
+    required = transaction["context"]
+    return required, capture_context_projection(required, directory=directory, filename="required-context.json")
+
+
 def project_captured_context(
     payload: dict[str, Any], *, directory: Path | None, request: dict[str, Any] | None,
     goal_id: str, agent_id: str, surface: str, capture_id: str,

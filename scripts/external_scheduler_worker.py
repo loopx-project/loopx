@@ -207,6 +207,7 @@ def run_quota_should_run(
         stdin=b"",
         timeout_seconds=max(0.01, timeout_seconds),
         output_limit_bytes=PROCESS_OUTPUT_LIMIT_BYTES,
+        env={**os.environ, "LOOPX_CONTEXT_DELIVERY": "off"},
     )
     if completed.failure_kind is not None:
         raise RuntimeError(f"quota should-run failed: {completed.failure_kind}")
