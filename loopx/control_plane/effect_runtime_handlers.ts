@@ -429,7 +429,7 @@ export function createEffectRuntimeHandlers(
       lazyHandler(() => import("./coordination/legacy_writer_fence.ts"), ({checkLegacyCoordinationWriteAllowed}) => checkLegacyCoordinationWriteAllowed),
     ],
     ["task_lease.write_scopes.overlap", lazyHandler(() => import("./work_items/task_lease_acquire_decision.ts"), ({evaluateTaskLeaseWriteScopesOverlap}) => evaluateTaskLeaseWriteScopesOverlap)],
-    ["quota.task_orchestration.write_scope_overlap", lazyHandler(() => import("./work_items/task_lease_acquire_decision.ts"), ({evaluateQuotaSchedulingWriteScopesOverlap}) => evaluateQuotaSchedulingWriteScopesOverlap)],
+    ["quota.task_orchestration.admit", lazyHandler(() => import("./quota/adaptive_children.ts"), ({admitAdaptiveChildren}) => admitAdaptiveChildren)],
     ["quota.monitor_poll.commit", lazyHandler(() => import("./quota/monitor_poll_commit.ts"), ({evaluateQuotaMonitorPollCommit}) => evaluateQuotaMonitorPollCommit)],
     ["presentation.global_risks.project", lazyHandler(() => import("./presentation/global_risk_read.ts"), ({projectGlobalRisks}) => projectGlobalRisks)],
     ["presentation.decision_notice.project", lazyHandler(() => import("./presentation/decision_notice.ts"), ({projectDecisionNotice}) => projectDecisionNotice)],
@@ -628,6 +628,7 @@ export function createEffectRuntimeHandlers(
     ["collaboration.delegation.result_use_limits", lazyHandler(() => import("./collaboration/delegation_result_use.ts"), ({delegationResultUseLimits}) => delegationResultUseLimits)],
     ["collaboration.delegation.result_use", lazyHandler(() => import("./collaboration/delegation_result_use.ts"), ({qualifyDelegationResultUse}) => qualifyDelegationResultUse)],
     ["progress_review.evidence_scope", lazyHandler(() => import("./work_items/progress_review_evidence.ts"), ({progressReviewEvidenceScope}) => progressReviewEvidenceScope)],
+    ["progress_review.context.qualify", lazyHandler(() => import("./work_items/progress_review_evidence.ts"), ({qualifyProgressReviewContext}) => qualifyProgressReviewContext)],
     ["progress_review.criterion_basis", lazyHandler(() => import("./work_items/progress_review_evidence.ts"), ({progressReviewCriterionBasis}) => progressReviewCriterionBasis)],
     ["collaboration.delegation.adoption", lazyHandler(() => import("./collaboration/delegation.ts"), ({recordDelegationAdoption}) => recordDelegationAdoption)],
     [

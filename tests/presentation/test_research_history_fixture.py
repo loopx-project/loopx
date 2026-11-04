@@ -72,7 +72,10 @@ def test_synthetic_provider_uses_selected_python_with_real_arguments_pipes_and_e
     assert json.loads(result.stdout) == [arguments, "Synthetic input", str(tmp_path), sys.executable]
 
 
-@pytest.mark.parametrize("fixture_name", ["research-synthesis-readback.json", "edgebench-graph-saved-analysis.json"])
+@pytest.mark.parametrize("fixture_name", [
+    "research-synthesis-readback.json", "edgebench-graph-saved-analysis.json",
+    "edgebench-portfolio-native-results.json", "edgebench-ad-native-results.json",
+])
 def test_captured_analysis_fixture_serves_real_saved_results_without_source_mutation(tmp_path, monkeypatch, fixture_name):
     fixture = ROOT / "apps/presentation/dashboard/src/data/fixtures" / fixture_name
     capture = json.loads(fixture.read_bytes())
@@ -98,23 +101,50 @@ def test_captured_analysis_fixture_serves_real_saved_results_without_source_muta
                 if "analysis_readbacks" in capture:
                     # Pinned original HTTP bytes, not a self-updating digest.
                     expected = {
-                        "original": "0e4bb4b931784abe1faf8cba49922aeb36f6c96f9e1730fdc77d82e7ebd3da2f",
-                        "zh": "cb8fdf1a61915f06168816c82367e9d037bdf49424028cd2793dfe61364def64",
-                        "en": "d76b579672d87f8b071d871ecfd5797b986f295b8dc93bc967471c0e1aab0b2b",
-                    }
+                        "edgebench-graph-saved-analysis.json": {
+                            "original": "0e4bb4b931784abe1faf8cba49922aeb36f6c96f9e1730fdc77d82e7ebd3da2f",
+                            "zh": "cb8fdf1a61915f06168816c82367e9d037bdf49424028cd2793dfe61364def64",
+                            "en": "d76b579672d87f8b071d871ecfd5797b986f295b8dc93bc967471c0e1aab0b2b",
+                        },
+                        "edgebench-portfolio-native-results.json": {
+                            "original": "b33ebfcc7c233f8cf87b70e23b3bc76e34d5b91b8fcf11393e532afa9597b717",
+                            "zh": "cf7eb84be2cc7b349c3118c278a6957e84796033f7bedd207a2d5802206a45d5",
+                            "en": "ef0f5b90e9204839bccde669f8cbf321795c8e285d12ea87ecdd71cc9b02ba5a",
+                        },
+                        "edgebench-ad-native-results.json": {
+                            "original": "56670c1183da44d227be9d15088698baca8bfe800a9bc87ac0e715f072f58c69",
+                            "zh": "08d1f35b52f9b58a867e104591a55f885e9c1076a510b9ca92d3e022785e9b6f",
+                            "en": "d145136ee17d870ffbbcf89e45516b74302f71883fd82be92462f62faad263e7",
+                        },
+                    }[fixture_name]
                     for language, record in capture["analysis_readbacks"].items():
                         with urlopen(base + record["request_path"], timeout=10) as response:
                             raw = response.read()
                         assert hashlib.sha256(raw).hexdigest() == expected[language] == record["response_sha256"]
                     view = capture["analysis_readbacks"]["original"]["response"]["pack"]
-                    assert view["episode_count"] == 6 and len(view["result"]["assessments"]) == 36
-                    assert {row["verdict"] for row in view["result"]["assessments"]} == {"yes", "no", "unknown"}
-                    assert view["job"]["usage"]["input_tokens"] == 53768
-                    assert view["job"]["usage"]["output_tokens"] == 19278
-                    assert view["native_outcomes"]["projection"]["initial"] is None
+                    assert view["episode_count"] == 6
+                    native = view["native_outcomes"]["projection"]
+                    if fixture_name == "edgebench-graph-saved-analysis.json":
+                        assert len(view["result"]["assessments"]) == 36
+                        assert {row["verdict"] for row in view["result"]["assessments"]} == {"yes", "no", "unknown"}
+                        assert view["job"]["usage"]["input_tokens"] == 53768
+                        assert view["job"]["usage"]["output_tokens"] == 19278
+                        assert native["initial"] is None
+                        assert native["retained"]["candidate_ref"] == "agent-16"
+                        assert native["final_valid"]["candidate_ref"] == "agent-18"
+                        assert native["retained_improvement"]["baseline"]["candidate_ref"] == "agent-2"
+                        assert native["retained_improvement"]["value"] == 0.032297817031212595
+                    else:
+                        assert view["job"] is None and view["result"] is None
+                        assert native["retained"] is None and "retained_improvement" not in native
+                        initial, best, final = ((0, 10.86, 10.86) if "portfolio" in fixture_name
+                                                else (49550815819, 49653326363, 49650446168))
+                        assert native["initial"]["value"] == initial
+                        assert native["best_valid"]["value"] == best
+                        assert native["final_valid"]["value"] == final
                     assert "solver_usage" not in view and not events
-                    citation = capture["analysis_citations"][0]
-                    assert read(citation["request_path"]) == citation["response"]
+                    for citation in capture["analysis_citations"]:
+                        assert read(citation["request_path"]) == citation["response"]
                     for query in [
                         {"output_language": "fr"}, {"pack_id": "wrong-pack"},
                     ]:
@@ -122,7 +152,7 @@ def test_captured_analysis_fixture_serves_real_saved_results_without_source_muta
                             read("/api/chat/research-analysis?" + urlencode({"goal_id": capture["goal_id"], **query}))
                         assert rejected.value.code == 404
                     with pytest.raises(HTTPError) as rejected:
-                        read(citation["request_path"].replace("native-report-4", "uncaptured-source"))
+                        read(citation["request_path"].replace(citation["response"]["source_id"], "uncaptured-source"))
                     assert rejected.value.code == 404
                     # No analysis artifacts, provider output or job state are synthesized.
                     assert not list(self.runtime_root.parent.glob("analysis-*"))

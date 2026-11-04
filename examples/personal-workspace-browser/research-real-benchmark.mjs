@@ -4,6 +4,100 @@ import {resolve} from "node:path";
 import {outputDir, repoRoot} from "./fixture.mjs";
 import {startHistoryOwner} from "./research-history.mjs";
 
+async function readNativeResults(page, history, capture, language) {
+  const pack = capture.analysis_readbacks.original.response.pack;
+  const native = pack.native_outcomes.projection;
+  const progress = history.locator(".research-progress");
+  await progress.locator(".research-native-results").waitFor();
+  if (pack.scope.case_id === "ad_placement_optimization") {
+    const best = await progress.locator('[data-native-point="best_valid"] strong').innerText();
+    const final = await progress.locator('[data-native-point="final_valid"] strong').innerText();
+    assert.notEqual(best, final, "The real best and final results must remain distinguishable before opening evidence");
+  }
+  for (const key of ["initial", "best_valid", "retained", "final_valid"]) {
+    const row = progress.locator(`[data-native-point="${key}"]`);
+    const point = native[key];
+    if (!point) {
+      assert.match(await row.innerText(), language === "zh" ? /未知/ : /Unknown/);
+      assert.equal(await row.getByRole("button").count(), 0, "Missing retention is not a zero-valued result");
+      continue;
+    }
+    if (point.value === 0) assert.equal(await row.locator("strong").innerText(), "0");
+    await row.getByRole("button").click();
+    const source = history.locator(".analysis-source");
+    await source.locator("pre").waitFor();
+    const citation = capture.analysis_citations.find(item => {
+      const query = new URL(item.request_path, "http://fixture").searchParams;
+      return query.get("source_id") === point.citation.source_id
+        && query.get("first_line") === String(point.citation.first_line)
+        && query.get("last_line") === String(point.citation.last_line);
+    });
+    assert(citation, "Each native value has its captured original citation");
+    assert.equal(await source.locator("pre").innerText(), citation.response.text);
+    assert.equal(JSON.parse(citation.response.text).value, point.value);
+    await source.getByRole("button", {name: language === "zh" ? "关闭原文" : "Close source", exact: true}).click();
+  }
+  const retained = progress.locator(".research-retained-improvement");
+  if (native.retained_improvement) {
+    assert.equal(native.retained.candidate_ref, "agent-16");
+    assert.equal(native.final_valid.candidate_ref, "agent-18");
+    assert.equal(native.retained_improvement.baseline.candidate_ref, "agent-2");
+    assert.match(await retained.locator("[data-retained-improvement]").innerText(), /\+0\.0323/);
+    await retained.locator(":scope > details > summary").click();
+    await retained.getByRole("button", {name: language === "zh" ? "查看原文" : "Read original evidence", exact: true}).click();
+    const source = history.locator(".analysis-source");
+    await source.locator("pre").waitFor();
+    assert.match(await source.locator("pre").innerText(), /"best_round": "agent-16"/);
+    await source.getByRole("button", {name: language === "zh" ? "关闭原文" : "Close source", exact: true}).click();
+  } else {
+    assert.equal(await retained.count(), 0, "A best/final result cannot supply missing adoption evidence");
+  }
+  await progress.locator(".research-progress-basis > summary").click();
+  const cost = progress.locator(".research-analysis-cost");
+  if (!pack.job) {
+    assert.equal(pack.result, null);
+    assert.match(await cost.innerText(), language === "zh" ? /未采集/ : /Not captured/);
+    assert.equal(await cost.locator(".research-analysis-values").count(), 0);
+    assert.equal(await history.locator("[data-analysis-judgment]").count(), 0);
+  }
+  await progress.locator(".research-progress-basis > summary").click();
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({width, height: 900});
+    await progress.scrollIntoViewIfNeeded();
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+    const name = pack.scope.case_id.split("_")[0];
+    await page.screenshot({path: resolve(outputDir, `research-real-native-${name}-${language}-${width}.png`), animations: "disabled"});
+  }
+  await page.setViewportSize({width: 1440, height: 900});
+}
+
+async function readUnanalyzedNativeResults(browser, collectCoverage) {
+  const coverageEntries = [];
+  for (const name of ["portfolio", "ad"]) {
+    const path = resolve(repoRoot, `apps/presentation/dashboard/src/data/fixtures/edgebench-${name}-native-results.json`);
+    const capture = JSON.parse(await readFile(path, "utf8"));
+    const owner = await startHistoryOwner(path);
+    let page;
+    try {
+      page = await browser.newPage({viewport: {width: 1440, height: 900}});
+      if (collectCoverage) await page.coverage.startJSCoverage({resetOnNavigation: false});
+      for (const language of ["zh", "en"]) {
+        await page.addInitScript(value => localStorage.setItem("loopx-pw-locale", value), language);
+        await page.goto(`${owner.base}/chat/?goalId=${capture.goal_id}&view=research`);
+        await readNativeResults(page, page.locator(".research-history"), capture, language);
+      }
+      const readback = await (await page.request.get(`${owner.base}/fixture/readback`)).json();
+      assert.equal(readback.source_unchanged, true);
+      assert.equal(readback.mutation_attempts, 0);
+      if (collectCoverage) coverageEntries.push(...await page.coverage.stopJSCoverage());
+    } finally {
+      if (page) await page.close();
+      await owner.close();
+    }
+  }
+  return coverageEntries;
+}
+
 async function readSavedGraphAnalysis(browser, collectCoverage) {
   const path = resolve(repoRoot, "apps/presentation/dashboard/src/data/fixtures/edgebench-graph-saved-analysis.json");
   const capture = JSON.parse(await readFile(path, "utf8"));
@@ -18,6 +112,7 @@ async function readSavedGraphAnalysis(browser, collectCoverage) {
       await page.addInitScript(value => localStorage.setItem("loopx-pw-locale", value), language);
       await page.goto(`${owner.base}/chat/?goalId=${capture.goal_id}&view=research`);
       const history = page.locator(".research-history");
+      await readNativeResults(page, history, capture, language);
       await history.getByRole("button", {name: language === "zh" ? "查看分析" : "View analysis", exact: true}).click();
       const analysis = history.locator(".research-analysis[role=region]");
       await analysis.locator(".analysis-episode").first().waitFor();
@@ -36,6 +131,15 @@ async function readSavedGraphAnalysis(browser, collectCoverage) {
           assert(text.includes(assessment.reason), `${episode.id}/${assessment.metric}: complete original reasoning remains readable`);
         }
       }
+      const missingEpisode = analysis.locator('[data-analysis-episode="native-feedback-1"]');
+      await missingEpisode.locator(":scope > summary").click();
+      for (const summary of await missingEpisode.locator(".analysis-judgments > details:not([open]) > summary").all()) await summary.click();
+      await missingEpisode.getByRole("button", {name: /native-report-1/}).first().click();
+      const unavailable = history.locator(".analysis-source");
+      await unavailable.locator(".analysis-error").waitFor();
+      assert.match(await unavailable.locator(".analysis-error").innerText(), /not captured/);
+      assert.equal(await unavailable.locator("pre").count(), 0, "Uncaptured citations do not substitute unrelated evidence");
+      await unavailable.getByRole("button", {name: language === "zh" ? "关闭原文" : "Close source", exact: true}).click();
       const citation = capture.analysis_citations[0].response;
       const cited = saved.result.assessments.find(row => row.citations.some(c => c.source_id === citation.source_id
         && c.first_line === citation.first_line && c.last_line === citation.last_line));
@@ -73,12 +177,13 @@ async function readSavedGraphAnalysis(browser, collectCoverage) {
   }
 }
 
-// Core whole-page references: complete original display state from three tasks.
+// Core whole-page references: original history and independently scoped native outcomes.
 // Synthetic scenarios remain separate boundary/race/overflow tests.
 export const researchRealBenchmarkScenario = {
   id: "research-real-benchmark",
   async run({browser, collectCoverage}) {
     const coverageEntries = [];
+    coverageEntries.push(...await readUnanalyzedNativeResults(browser, collectCoverage));
     const observations = [];
     for (const [arm, fixture] of [
       ["grid-on", "edgebench-grid-context-on-20261103-history.json"],

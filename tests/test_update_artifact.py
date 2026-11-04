@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tarfile
 import threading
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -112,6 +113,37 @@ def test_pinned_runtime_metadata_is_revision_addressed_within_the_channel_releas
     monkeypatch.setattr(update, "read_json", metadata)
     assert update.resolve_artifact("example/loopx", "a" * 40)["source_revision"] == "a" * 40
     assert requests == ["https://github.com/example/loopx/releases/download/runtime-main/loopx-runtime-" + "a" * 40 + ".json"]
+
+
+@pytest.mark.parametrize("relation", ["ahead", "behind", "diverged"])
+def test_direction_uses_relation_without_downloading_first_page_patches(monkeypatch, relation):
+    # GitHub includes all changed files on page one only. A later one-commit
+    # page still carries the comparison status, including an empty page.
+    first = json.dumps({"status": relation, "files": [{"patch": "x" * update.MAX_MANIFEST}]}).encode()
+    later = json.dumps({"status": relation, "commits": []}).encode()
+    read_json = update.read_json
+    with server(first) as (first_url, first_state), server(later) as (later_url, later_state):
+        def metadata(url):
+            query = parse_qs(urlsplit(url).query)
+            return read_json(later_url if query.get("page") == ["2"] and query.get("per_page") == ["1"] else first_url)
+        monkeypatch.setattr(update, "read_json", metadata)
+        assert update.target_direction("example/loopx", "a" * 40, "b" * 40) == relation
+        assert not first_state["requests"]
+        assert len(later_state["requests"]) == 1
+
+
+def test_direction_preserves_unknown_and_identical_without_relaxing_metadata_limit(monkeypatch):
+    with server(b"x" * (update.MAX_MANIFEST + 1)) as (url, _state):
+        with pytest.raises(ValueError, match="metadata unavailable"):
+            update.read_json(url)
+    def unavailable(_url):
+        raise ValueError("unavailable")
+    monkeypatch.setattr(update, "read_json", unavailable)
+    assert update.target_direction("example/loopx", "a" * 40, "b" * 40) == "unknown"
+    assert update.target_direction("example/loopx", None, "b" * 40) == "unknown"
+    assert update.target_direction("example/loopx", "a" * 40, "a" * 40) == "identical"
+    monkeypatch.setattr(update, "read_json", lambda _url: {"status": "unrecognized"})
+    assert update.target_direction("example/loopx", "a" * 40, "b" * 40) == "unknown"
 
 
 @pytest.mark.parametrize("ignore_range,new_etag,wrong_range", [(False, False, False), (True, False, False), (False, True, False), (False, False, True)])
