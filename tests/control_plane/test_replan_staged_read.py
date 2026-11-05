@@ -366,6 +366,57 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
         restart_effect_runtime(wait_for_exit=True)
 
 
+@pytest.mark.parametrize("mode", ["off", "on"])
+def test_review_routes_to_selection_before_the_bound_writer(tmp_path, monkeypatch, mode):
+    tmp_path = tmp_path.resolve()
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    fixture = make_progress_cli_fixture(tmp_path, "sqlite", "advanced")
+    captures, native = tmp_path / "captures", tmp_path / "native"
+    captures.mkdir(mode=0o700)
+    native.mkdir(mode=0o700)
+    pinned_cli = str(Path(sys.executable).with_name("loopx"))
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", "on")
+
+    def invoke(argv):
+        return subprocess.run(argv, cwd=fixture["project"], capture_output=True, text=True, timeout=60)
+
+    try:
+        entry = call_progress_cli(fixture, "--cli-bin", pinned_cli, "quota", "should-run",
+            "--codex-app", "--goal-id", GOAL, "--agent-id", AGENT, "--turn-instance-id", TURN,
+            "--context-delivery", mode, "--delta-delivery", "auto" if mode == "on" else "off",
+            "--decision-output-root", str(captures),
+            "--codex-context-dir", str(native), *(["--defer-context-presentation"] if mode == "on" else []))
+        review_argv = shlex.split(entry["replan_action_packet"]["review"])
+        review = json.loads(invoke(review_argv).stdout)
+        assert review["next"]["selection_required"] is True and "writeback" not in review["next"]
+        selection = entry
+        for key in review["next"]["selection_command_ref"].removeprefix("$.").split("."):
+            selection = selection[key]
+        selected = shlex.split(selection["route_prefix"]) + shlex.split(selection["command_args_template"])
+        selected[selected.index("{todo_id}")] = TODO
+        result = invoke(selected)
+        assert result.returncode == 0, result.stdout
+        view = json.loads(result.stdout)
+        if mode == "on":
+            assert view["schema_version"] == "context_capture_navigation_v1"
+        else:
+            assert view["selected_todo"]["todo_id"] == TODO
+            assert view["decision"] == "autonomous_replan_required"
+
+        # Follow the new observation. A recommendation on the initial capture
+        # can already name the same Todo without owning this settlement.
+        decisions = (json.loads(path.read_bytes()) for path in captures.glob("*/decision.json"))
+        bound = next(item for item in decisions if item["interaction_contract"]["cli_channel"].get("settlement_plan"))
+        bound_packet = _turn_envelope_result("replan_cli_view", payload=bound)["replan_action_packet"]
+        bound_review = json.loads(invoke(shlex.split(bound_packet["review"])).stdout)
+        assert bound_review["source_hash"] != review["source_hash"]
+        writer = json.loads(invoke(shlex.split(bound_review["next"]["writeback"])).stdout)
+        identity = writer["writeback"]["settlement_plan"]["identity"]
+        assert (identity["todo_id"], identity["turn_instance_id"]) == (TODO, TURN)
+    finally:
+        restart_effect_runtime(wait_for_exit=True)
+
+
 def test_review_retains_scoped_dependencies_and_unknown_outcomes():
     source = _quota_payload()
     source["replan_read_path"] = "/synthetic/decision.json"

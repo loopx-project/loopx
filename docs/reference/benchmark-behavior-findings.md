@@ -77,6 +77,47 @@ do not infer permission for outcome statistics from permission to share effort.
 The local provider performs no network upload. Remote publication requires an
 independently authorized provider and an explicit content review.
 
+## Compare a local proxy with released scores
+
+For one run, compare the proxy with a simple control that always picks the
+later submission. A search that improves over time can give both rules a high
+agreement count. The offline [analysis script](../../benchmark/proxy_order.py)
+compares the two rules on exactly the same pairs.
+
+Run `python -m benchmark.proxy_order proxy.json native.json` from the checkout.
+Both files have a common `cohort` string, their own metric `direction`
+(`minimize` or `maximize`) and a `rows` array. For example:
+
+```json
+{"cohort":"example","direction":"minimize","rows":[
+  {"source_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","observed_at":10,"score":2},
+  {"source_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","observed_at":20,"score":1}]}
+```
+
+In the native file, use the accepted source digest, `accepted_at` on the
+same clock, and the released score (`null` until a valid score is available).
+Select one case, protocol, scoring version, budget and fixed local panel first.
+Hash the same candidate content on both sides and include every accepted
+candidate in the window, even when its local score is missing. For repeat
+measurements choose a rule before inspecting the scores. The script rejects
+duplicate source rows. A matching cohort name records the analyst's selection;
+the analyst must verify comparable inputs, source digests and timestamps.
+
+The output distinguishes missing coverage, native ties, abstentions, agreements
+and reversals. Each local result must precede acceptance of its own candidate.
+Pairs share candidates and the solver may already have learned from older
+feedback. Counts describe the selected sequence. They give neither independent
+trials nor a population accuracy estimate. Close scores can change order under
+timing noise. Check same-source repeats where available and keep the ordering
+provisional when uncertainty is unknown. To test a prospective choice, freeze
+the alternatives and the choice before their respective outcomes are known.
+If only one alternative has a label, absolute error can still be measured
+but the ranking between alternatives remains unknown.
+
+Use the coverage and counts in a redacted behavior finding when authorized;
+retain the study selection, uncertainty and counterexamples alongside the
+measurements. This analysis reads caller-supplied local files only.
+
 ## 中文说明
 
 行为发现用于分享局部 pattern 与案例解释；无需先上传完整实验数据。它复用

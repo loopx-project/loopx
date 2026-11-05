@@ -1145,6 +1145,12 @@ identity-less and delivery-blocked until the agent explicitly chooses.
 The compact envelope does not truncate those executable commands into unusable
 strings. It carries non-exhaustive `writeback.suggested_todo_ids` plus
 `selection_command_ref`; the full decision remains the authority for exact argv.
+When a captured heartbeat replan still requires a choice, the review's
+`next.selection_command_ref` points into the current guard's CLI channel. Use
+that selection command with the chosen eligible Todo. It carries the caller's
+context delivery settings into the same Turn. Read the writeback format from
+the newly bound capture. A replan already bound to a Todo or a standalone
+replan obligation goes directly from review to its captured writeback reader.
 
 Packet-bearing historical decisions and `contract_capsule.protocol_action_packet`
 witnesses are unsupported under [the retirement contract](protocol-action-packet-decision-v0.md).

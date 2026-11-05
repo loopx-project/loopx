@@ -352,6 +352,7 @@ def test_real_host_reads_original_capture_after_source_change(
         retry = [*replay, "--resume-turn-key", request["turn_key"], "--retry-failed-turn", "--execute"]
         received_before = (workspace / "received.txt").read_bytes()
         if hasattr(os, "mkfifo"):
+            journal_before_fifo = journal_path.read_bytes()
             path.unlink()
             os.mkfifo(path, 0o600)
             # Bound the real recovery process: opening a pipe in blocking mode
@@ -361,7 +362,7 @@ def test_real_host_reads_original_capture_after_source_change(
             )
             assert rejected_pipe.returncode == 1
             assert "regular file" in json.loads(rejected_pipe.stdout)["error"]
-            assert journal_path.read_bytes() == original_journal
+            assert journal_path.read_bytes() == journal_before_fifo
             assert (workspace / "received.txt").read_bytes() == received_before
             assert f._quota_spend_count(runtime) == 0
             path.unlink()
