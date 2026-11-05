@@ -13,12 +13,13 @@ import {
   optionalNonEmptyString,
   jsonObject,
 } from "../runtime_decode.ts";
+import { parseTodoTimestampMicros } from "../runtime_timestamp.ts";
 import { EffectiveAction } from "../quota/effective_action.generated.ts";
 import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 
 import type { JsonObject } from "../effect_program.ts";
 import { AGENT_SCOPE_FRONTIER_ACTIONS, AgentScopeFrontierAction } from "../agents/agent_scope_frontier.generated.ts";
-import { pendingAutomaticResumeCondition } from "../goals/vision_wait_coverage.ts";
+import { pendingAutomaticResumeCondition } from "../todos/automatic_resume.ts";
 import {compactTodoContextSource} from "../quota/context_delivery.ts";
 import {compactPythonWhitespace} from "../coordination/python_whitespace.ts";
 
@@ -34,22 +35,24 @@ function exactBlockedSuccessorWait(request: JsonObject, monitorWait = false): Js
 }
 
 /** Share the resume owner's source proof; a Turn binding retains supervision. */
-function pendingAutomaticSuccessor(request: JsonObject, wait: JsonObject): JsonObject | null {
+function pendingAutomaticSuccessor(request: JsonObject, wait: JsonObject | null): JsonObject | null {
   const receipt = jsonObject(request.heartbeat_receipt);
   const unbound = request.heartbeat_receipt == null || (!!receipt &&
     ["committed", "replayed"].includes(String(receipt.status)) &&
     !("settlement_identity" in receipt) && !("pending_action_selection" in receipt));
+  if (!unbound || typeof request.agent_id !== "string" || !request.agent_id) return null;
+  if (!wait) {
+    const scoped = jsonObject(request.scope_wait_todo);
+    return scoped ? pendingAutomaticResumeCondition(scoped, request.agent_id) : null;
+  }
   const count = wait.waiting_todo_count;
   const complete = typeof count === "number" && Number.isSafeInteger(count) && count > 0 &&
     (wait.pending_resume_count === undefined ? count === 1 : wait.pending_resume_count === count);
-  if (unbound && typeof request.agent_id === "string" && !!request.agent_id &&
-      wait.agent_id === request.agent_id && complete) {
-    return pendingAutomaticResumeCondition({todo_id: wait.selected_todo_id,
-      status: wait.selected_todo_status, claimed_by: wait.selected_todo_claimed_by,
-      resume_when: wait.resume_when, resume_monitor_generation: wait.resume_monitor_generation,
-      resume_condition: wait.resume_condition}, request.agent_id);
-  }
-  return null;
+  if (!complete || wait.agent_id !== request.agent_id) return null;
+  return pendingAutomaticResumeCondition({todo_id: wait.selected_todo_id,
+    status: wait.selected_todo_status, claimed_by: wait.selected_todo_claimed_by,
+    resume_when: wait.resume_when, resume_monitor_generation: wait.resume_monitor_generation,
+    resume_condition: wait.resume_condition}, request.agent_id);
 }
 
 /** A proven pending automatic successor needs only fresh source rechecks.
@@ -604,13 +607,13 @@ export function projectSchedulerArbitration(value: unknown): JsonObject {
     disposition === "monitor_wait" && request.effective_action === EffectiveAction.MONITOR_QUIET_SKIP;
   const condition = !errors.length && waiting &&
     !facts.must_attempt && !facts.user_required && facts.quiet_noop_allowed &&
-    !facts.spend_allowed_now && !facts.spend_after_validation && wait
+    !facts.spend_allowed_now && !facts.spend_after_validation
     ? pendingAutomaticSuccessor(request, wait) : null;
   // The resume-condition owner has verified both timestamps and a future target.
   // This private duration bounds host rechecks; it grants no execution/spend.
-  const scheduled = disposition === "agent_scope_wait" && condition?.kind === "resume_at" ? {scheduled_recheck_after_seconds: Math.ceil(
-    (Date.parse(String(condition.scheduled_for)) - Date.parse(String(condition.evaluated_at))) / 1000,
-  )} : {};
+  const scheduled = condition?.kind === "resume_at" ? {scheduled_recheck_after_seconds: Math.ceil(Number(
+    parseTodoTimestampMicros(String(condition.scheduled_for))! - parseTodoTimestampMicros(String(condition.evaluated_at))!
+  ) / 1_000_000)} : {};
   const dependency = condition && ["todo_done", "monitor_changed"].includes(String(condition.kind))
     ? {pending_dependency_wait: true} : {};
   return {mode, errors: [...new Set(errors)],
