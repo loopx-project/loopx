@@ -851,6 +851,7 @@ def capture_decision(directory: Path | None, payload: dict[str, object]) -> None
 def budgeted_settlement_result(
     payload: dict[str, object], *, runtime_root: Path, output_bytes: int,
     reader_argv: list[str] | None = None,
+    supporting_fields: tuple[str, ...] | None = None,
 ) -> dict[str, object]:
     """Present one evaluated result with its complete immutable diagnostic.
 
@@ -864,7 +865,7 @@ def budgeted_settlement_result(
         # Match the JSON CLI serializer, including print's newline.
         return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= output_bytes
 
-    if fits(payload):
+    if supporting_fields is None and fits(payload):
         return payload
     try:
         uid = private_capture_uid()
@@ -876,20 +877,21 @@ def budgeted_settlement_result(
             raise ValueError("result capture requires a private physical directory owned by this user")
         directory = Path(tempfile.mkdtemp(prefix="settlement-", dir=root))
         saved = directory / "result.json"
-        write_decision_capture(saved, payload)
-        raw = saved.read_bytes()
-        if len(raw) > MAX_REQUEST_BYTES:
+        digest = write_decision_capture(saved, payload)
+        if saved.stat().st_size > MAX_REQUEST_BYTES:
             raise ValueError(f"complete result exceeds the existing reader limit: {saved}")
-        digest = hashlib.sha256(raw).hexdigest()
         reference = write_context_read_reference(saved, digest)
         details = {"reference_file": str(reference),
             "command": context_capture_read_command(saved, digest, reference_file=reference,
                 page_bytes=min(NATIVE_CONTEXT_PAGE_BYTES, output_bytes),
                 max_page_output_bytes=output_bytes, reader_argv=reader_argv)}
-        deferred = [key for key in ("before", "after") if key in payload]
+        deferred = [key for key in (supporting_fields if supporting_fields is not None else ("before", "after")) if key in payload]
         view = {key: value for key, value in payload.items() if key not in deferred}
         view["result_details"] = {**details, "deferred_fields": deferred}
         view["instruction"] = (
+            "The exact Turn is settled. Supporting snapshots are complete in result_details; read only needed details. "
+            "Keep every returned warning and unresolved control. No additional spend or admission is required for this result."
+        ) if supporting_fields is not None else (
             "The operation was already evaluated. before/after are complete in the immutable result; "
             "read only needed details with context-read --select. Preserve the original Turn and effect "
             "identity during recovery; do not repeat admission or infer authority from this presentation."
@@ -905,7 +907,8 @@ def budgeted_settlement_result(
                 max_page_output_bytes=output_bytes, reader_argv=reader_argv),
             "instruction": "Read the complete selected result controls before acting. The operation was "
                 "already evaluated; preserve its original Turn/effect identity. No execution authority "
-                "or context baseline is granted. before/after remain available in the same immutable result."}
+                "or context baseline is granted. " + ("Supporting snapshots remain available in the same immutable result."
+                    if supporting_fields is not None else "before/after remain available in the same immutable result.")}
         if fits(view):
             return view
         raise ValueError(f"result reader metadata exceeds the output budget; complete result: {saved}")

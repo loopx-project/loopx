@@ -46,16 +46,21 @@ def private_capture_uid() -> int:
 
 def write_decision_capture(
     path: Path, payload: Mapping[str, Any], *, publish: Callable[[str, Path], None] = os.link,
-) -> None:
-    """Publish complete private JSON once; never replace an earlier observation."""
+) -> str:
+    """Publish complete private JSON once and return its exact byte digest.
+
+    Digest the bytes we publish, rather than reopening the file solely to hash
+    it. Independent readers still verify the original bytes on every read.
+    """
+    raw = (json.dumps(dict(payload), ensure_ascii=False, separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8")
     descriptor, temporary = tempfile.mkstemp(prefix=".decision-", dir=path.parent)
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            json.dump(dict(payload), stream, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
-            stream.write("\n")
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(raw)
             stream.flush()
             os.fsync(stream.fileno())
         publish(temporary, path)
+        return hashlib.sha256(raw).hexdigest()
     finally:
         Path(temporary).unlink(missing_ok=True)
 
