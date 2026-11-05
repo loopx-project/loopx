@@ -126,6 +126,14 @@ print(json.dumps({'port':s.server_port,'ids':ids}),flush=True); s.serve_forever(
       } catch (error) {
         throw new Error(`${error.message}; drawer=${await drawer.innerText()}; errors=${context.errors.join(" | ")}`);
       }
+      if (operation === "complete") {
+        await page.getByRole("button", {name: "查看更新后的 Goal", exact: true}).waitFor();
+        const feedback = page.locator(".personal-action-feedback");
+        await feedback.waitFor();
+        await page.screenshot({path: resolve(outputDir, `user-action-completed-${registerDefault}.png`), animations: "disabled"});
+        assert.equal(await feedback.locator(":scope > span").innerText(), "已标记完成",
+          "Completion confirms the record change without repeating its task or claiming external execution");
+      }
       await page.getByRole("button", { name: "查看更新后的 Goal" }).click();
       assert.equal((await read(actionId)).status, "done");
       assert.equal((await read(targetId)).status, operation === "complete" ? "open" : "blocked");
