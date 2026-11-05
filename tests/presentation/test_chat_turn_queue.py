@@ -1,10 +1,21 @@
 """Ordinary browser queue intent through real HTTP, store and native stdio."""
 
 import json
+import time
 
 import pytest
 
 from test_chat_ordinary_project import ordinary  # noqa: F401
+
+
+def wait_for_active_turn(store, session_id, turn_id):
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        turn = store.load_turn(session_id, turn_id)
+        if turn and turn.get("status") == "running" and turn.get("upstream_turn_id"):
+            return turn
+        time.sleep(0.02)
+    raise AssertionError(f"Turn did not reach its native active state: {turn}")
 
 
 def held_queue(project_fixture, text="Check the second source.", attachments=None):
@@ -13,6 +24,7 @@ def held_queue(project_fixture, text="Check the second source.", attachments=Non
         "project_ref": contexts.available()[0]["project_ref"]})[1]["session_id"]
     first = request(f"/api/chat/sessions/{sid}/turns", {
         "message": "wait for steer", "client_turn_id": "held"})[1]
+    wait_for_active_turn(store, sid, first["turn_id"])
     body = {"message": text, "client_turn_id": "pending", "delivery": "queue"}
     if attachments:
         body["attachments"] = attachments

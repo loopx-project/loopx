@@ -109,11 +109,16 @@ export const attachedHostFollowUpScenario = {
         const typography = await expandedMessage.evaluate(element => {
           const style = getComputedStyle(element);
           const root = getComputedStyle(document.documentElement);
+          const rootFontSize = parseFloat(root.fontSize);
+          const tokenPixels = value => {
+            const token = value.trim(), size = parseFloat(token);
+            return token.endsWith("rem") ? size * rootFontSize : size;
+          };
           return {
             fontSize: parseFloat(style.fontSize),
             lineHeight: parseFloat(style.lineHeight),
-            bodySize: parseFloat(root.getPropertyValue("--text-body")),
-            bodyLineHeight: parseFloat(root.getPropertyValue("--leading-body")),
+            bodySize: tokenPixels(root.getPropertyValue("--text-body")),
+            bodyLineHeight: tokenPixels(root.getPropertyValue("--leading-body")),
           };
         });
         if (typography.fontSize !== typography.bodySize || typography.lineHeight !== typography.bodyLineHeight) {
