@@ -126,6 +126,11 @@ def test_captured_point_continues_with_fresh_authority(
         assert code == 0, output
         return read_cli_policy_payload(output, returncode=code)
 
+    def receiver_guard(*args):
+        # The receiver checks machine fields. run_native_work presents this
+        # same decision through the configured model transport afterwards.
+        return cli("quota", "should-run", "--context-delivery", "off", *args)
+
     cli(
         "bootstrap",
         "--project",
@@ -305,7 +310,7 @@ def test_captured_point_continues_with_fresh_authority(
         "--turn-instance-id",
         turn,
     ]
-    guard = cli("quota", "should-run", "--runtime-profile", "generic_cli", *binding)
+    guard = receiver_guard("--runtime-profile", "generic_cli", *binding)
     assert guard["interaction_contract"]["agent_channel"]["delivery_allowed"]
     external_path = os.environ.get("LOOPX_JOINT_RECEIVER_NATIVE")
     external = json.loads(Path(external_path).read_bytes()) if external_path else None
@@ -664,9 +669,7 @@ else:
                 hook = CheckpointWake(env, dict(pending_receipt))
                 assert not hook._first_replan({"capture": True, "obligation_id": "replan-new-destination"})
             assert not (wakes.parent / "checkpoints").exists()
-            reviewed = cli(
-                "quota",
-                "should-run",
+            reviewed = receiver_guard(
                 "--goal-id",
                 goal,
                 "--agent-id",
@@ -683,9 +686,7 @@ else:
             assert any(
                 t["kind"] == "periodic_review_due" for t in obligation["triggers"]
             ), obligation
-            reviewed = cli(
-                "quota",
-                "should-run",
+            reviewed = receiver_guard(
                 "--goal-id",
                 goal,
                 "--agent-id",
@@ -866,9 +867,7 @@ else:
                 next_turn,
             ]
 
-            next_guard = cli(
-                "quota",
-                "should-run",
+            next_guard = receiver_guard(
                 *next_binding,
                 "--runtime-profile",
                 "generic_cli",
@@ -983,17 +982,13 @@ print('Current grow adopted: two complete candidates 9 and 10 validated; origina
                 "--execute",
             )
             if not external:
-                final = cli(
-                    "quota",
-                    "should-run",
+                final = receiver_guard(
                     "--goal-id",
                     goal,
                     "--agent-id",
                     agent,
                     # Readback is a scheduler observation, not another work
                     # Turn whose unperformed closeout could block recapture.
-                    "--context-delivery",
-                    "off",
                     "--runtime-profile",
                     "generic_cli",
                     "--available-capability",

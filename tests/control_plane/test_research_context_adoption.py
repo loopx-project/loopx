@@ -284,14 +284,14 @@ def _ordinary_review_and_work(run, workspace, tmp_path, todo, digest, monkeypatc
             'observed_reality': 'The current ordinary Goal reads the inherited rejected candidate.',
             'retained': ['Candidate 3 is rejected; keep candidate 7.'], 'evidence_refs': ['checkpoint:' + digest]}}
     initial = run('quota', 'should-run', *actor, '--todo-id', todo, '--turn-instance-id', 'ordinary-preparation',
-        '--runtime-profile', 'generic_cli', '--available-capability', 'shell')
+        '--runtime-profile', 'generic_cli', '--context-delivery', 'off', '--available-capability', 'shell')
     assert initial['interaction_contract']['agent_channel']['delivery_allowed']
     settle('ordinary-preparation', vision)
     review = run('quota', 'should-run', *actor, '--turn-instance-id', 'ordinary-review',
-        '--runtime-profile', 'generic_cli', '--available-capability', 'shell')
+        '--runtime-profile', 'generic_cli', '--context-delivery', 'off', '--available-capability', 'shell')
     assert review['interaction_contract']['mode'] == 'autonomous_replan'
     review = run('quota', 'should-run', *actor, '--todo-id', todo, '--turn-instance-id', 'ordinary-review',
-        '--runtime-profile', 'generic_cli', '--available-capability', 'shell')
+        '--runtime-profile', 'generic_cli', '--context-delivery', 'off', '--available-capability', 'shell')
     control = review['replan_action_packet']['stride_control']
     assert any(row['finding_id'] == 'negative-3' for row in control['explore_basis']['finding_refs'])
     decision = json.loads(json.dumps(control['minimal_example']))
@@ -322,7 +322,7 @@ def _ordinary_review_and_work(run, workspace, tmp_path, todo, digest, monkeypatc
     assert actual_decision['explore_review']['considered_refs'] == ['negative-3']
     # The accepted decision is read from canonical history, not the submitted JSON.
     following = run('quota', 'should-run', *actor, '--todo-id', todo, '--turn-instance-id', 'ordinary-experiment',
-        '--runtime-profile', 'generic_cli', '--available-capability', 'shell')
+        '--runtime-profile', 'generic_cli', '--context-delivery', 'off', '--available-capability', 'shell')
     assert following['interaction_contract']['agent_channel']['delivery_allowed']
     # Source history and operational observations are never used as current work.
     result_path = workspace / 'complete-experiment.json'

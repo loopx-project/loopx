@@ -47,6 +47,86 @@ def test_app_restart_keeps_an_explicit_terminal_runtime_pin(monkeypatch):
     assert "--loopx-upgrade-channel=main" in launch_command
 
 
+@pytest.mark.parametrize("timeout", [10, 1])
+def test_app_restart_waits_for_native_quit_without_launching_on_timeout(tmp_path, monkeypatch, timeout):
+    """Opt-in AppKit fixture: a real asynchronous Quit, no LoopX service."""
+    import signal
+    import subprocess
+    import sys
+    import time
+    import uuid
+
+    if sys.platform != "darwin" or os.environ.get("LOOPX_TEST_NATIVE_APP_RESTART") != "1":
+        pytest.skip("requires an explicitly selected macOS native AppKit fixture")
+    app = tmp_path / "RestartFixture.app"
+    binary = app / "Contents/MacOS/fixture"
+    binary.parent.mkdir(parents=True)
+    ready = tmp_path / "ready"
+    source = tmp_path / "fixture.swift"
+    source.write_text('''import AppKit
+final class Delegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        try! String(ProcessInfo.processInfo.processIdentifier).write(toFile: READY, atomically: true, encoding: .utf8)
+    }
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+}
+let app = NSApplication.shared
+let delegate = Delegate()
+app.delegate = delegate
+app.setActivationPolicy(.prohibited)
+app.run()
+'''.replace("READY", json.dumps(str(ready))))
+    (app / "Contents/Info.plist").write_bytes(plistlib.dumps({
+        "CFBundleIdentifier": "io.loopx.restart-fixture." + uuid.uuid4().hex,
+        "CFBundleExecutable": "fixture", "CFBundlePackageType": "APPL"}))
+    subprocess.run(["xcrun", "swiftc", str(source), "-o", str(binary), "-framework", "AppKit"],
+                   check=True, capture_output=True, timeout=60)
+    subprocess.run(["/usr/bin/open", "-n", "-a", str(app)], check=True, capture_output=True, timeout=10)
+    pid = None
+    try:
+        deadline = time.monotonic() + 10
+        while not ready.exists():
+            assert time.monotonic() < deadline, "owned fixture never started"
+            time.sleep(.02)
+        pid = int(ready.read_text())
+
+        def alive():
+            try:
+                os.kill(pid, 0)
+                return True
+            except ProcessLookupError:
+                return False
+
+        original_run, launches = subprocess.run, []
+
+        def run(argv, **kwargs):
+            if argv[:2] == ["/usr/bin/open", "-n"]:
+                assert not alive(), "replacement launched while the original native App still owns the instance"
+                launches.append(argv)
+                return subprocess.CompletedProcess(argv, 0)
+            return original_run(argv, **kwargs)
+
+        monkeypatch.setattr("loopx.cli_commands.support_control_upgrade.subprocess.run", run)
+        if timeout == 1:
+            with pytest.raises(subprocess.TimeoutExpired):
+                _restart_app(app, "a" * 32, "main", timeout)
+            assert not launches
+        else:
+            _restart_app(app, "a" * 32, "main", timeout)
+            assert len(launches) == 1 and not alive()
+    finally:
+        if pid is not None:
+            try:
+                os.kill(pid, signal.SIGTERM)  # Only this owned, isolated fixture.
+            except ProcessLookupError:
+                pass
+
+
 def test_upgrade_never_restarts_the_app_while_service_activation_is_deferred():
     payload = {"ok": False, "changes_applied": True,
                "execution": {"install_returncode": 0, "doctor_returncode": 0, "activation_pending": True},

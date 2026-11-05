@@ -5,6 +5,7 @@ import { ContextHelp } from "./context-help";
 import { chatModelControls } from "./chat-model-controls";
 import { useWorkspaceI18n } from "./i18n";
 import { WorkspaceSelect } from "./workspace-select";
+import { useComposerMenuSpace } from "./use-composer-menu-space";
 
 /** Reported models stay visible; missing observations belong in the settings disclosure. */
 export function ChatModelMenu({ agentId, goalId, ordinary, model = "", effort, readback, onModel, onEffort, onOpenDefaults }: {
@@ -15,6 +16,7 @@ export function ChatModelMenu({ agentId, goalId, ordinary, model = "", effort, r
   const { locale } = useWorkspaceI18n();
   const zh = locale === "zh-CN";
   const root = useRef<HTMLDetailsElement>(null);
+  useComposerMenuSpace(root);
   const [open, setOpen] = useState(false);
   const [discovery, setDiscovery] = useState<AgentModelDiscovery | null>(null);
   const [loading, setLoading] = useState(false);

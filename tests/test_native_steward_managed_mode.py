@@ -25,6 +25,23 @@ def original(steward):
     return row["session_id"], transport.managed_steward
 
 
+def retain_codex_fallback(store, runtime, sid):
+    """Seed trusted allocation metadata only in disposable native/HTTP fixtures."""
+    from loopx.chat_manager import manager_executor_allocation
+
+    session = store.load_session(sid)
+    assert session["agent_id"] == session["executor_endpoint_id"] == "codex"
+    allocation = session.get("manager_executor_allocation") or manager_executor_allocation(runtime, environ={})
+    store.update_session(sid, manager_executor_allocation={**allocation,
+        "selection_policy": "flexible", "configured_endpoint": "antigravity",
+        "executor_endpoint": "codex", "eligible_endpoints": ["antigravity", "codex"],
+        "allocation_reason": "flexible_availability_fallback"},
+        upstream_context_history=[*(session.get("upstream_context_history") or []),
+            {"agent_id": "antigravity", "thread_id": "original-native-thread",
+                "manager_context_version": None, "agent_model_id": "gemini-4-argon-high"}])
+    return allocation
+
+
 def storage(runtime, provider):
     args = {"runtime_root": runtime.coordination_runtime_root,
         "registry": build_builtin_machine_configuration_registry(),
@@ -287,6 +304,20 @@ def test_http_preparation_requires_current_preview_and_reads_original_binding(st
         selected = next(row for row in current["bindings"] if row["binding_id"] == binding["binding_id"])
         selected["executor_endpoint_id"] = "antigravity"
         transport.bindings.path.write_text(json.dumps(current))
+        # Core may already have retained this same Session on its qualified
+        # Codex fallback. Neither the UI nor native consent chooses a new host.
+        allocation = retain_codex_fallback(store, runtime, sid)
+        fallback = next(row for row in request(base)[1]["connections"]
+            if row["binding_id"] == binding["binding_id"])["managed_steward"]
+        assert fallback.pop("execution_available") is True
+        assert "execution_error_code" not in fallback and fallback == expected
+        assert request(route, {"binding_id": binding["binding_id"]})[0] == 200
+        assert request(report_route, report_setting)[0] == 200
+        assert request(monitor_route, {**setting, "operation": "enable"})[0] == 200
+        assert journal_path.read_bytes() == journal
+        assert store.messages(sid) == before_history and capture.read_bytes() == before_calls
+        # A historical thread alone cannot qualify an unallocated executor.
+        store.update_session(sid, manager_executor_allocation=allocation)
         original_binding, registry = transport.bindings.path.read_bytes(), runtime.registry_path.read_bytes()
         row = next(row for row in request(base)[1]["connections"] if row["binding_id"] == binding["binding_id"])
         state = row["managed_steward"]

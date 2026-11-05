@@ -434,7 +434,8 @@ class AntigravityAdapter:
                     return None
                 kind = step.get("type")
                 payload = {"CORTEX_STEP_TYPE_USER_INPUT": "userInput", "CORTEX_STEP_TYPE_PLANNER_RESPONSE": "plannerResponse",
-                    "CORTEX_STEP_TYPE_RUN_COMMAND": "runCommand", "CORTEX_STEP_TYPE_ERROR_MESSAGE": "errorMessage"}.get(kind)
+                    "CORTEX_STEP_TYPE_RUN_COMMAND": "runCommand", "CORTEX_STEP_TYPE_VIEW_FILE": "viewFile",
+                    "CORTEX_STEP_TYPE_ERROR_MESSAGE": "errorMessage"}.get(kind)
                 if payload is None or set(step) - {"type", "status", "metadata", payload}:
                     return None
                 if kind == "CORTEX_STEP_TYPE_RUN_COMMAND":
@@ -443,6 +444,18 @@ class AntigravityAdapter:
                         return None
                     results.append({key: command[key] for key in ("commandLine", "cwd", "exitCode", "combinedOutput")
                                     if key in command})
+                elif kind == "CORTEX_STEP_TYPE_VIEW_FILE":
+                    # The original provider's visible file result is evidence,
+                    # never a request to open that URI or repeat an operation.
+                    view = step["viewFile"]
+                    uri, content = view.get("absolutePathUri"), view.get("content")
+                    if not isinstance(uri, str) or not isinstance(content, str):
+                        return None
+                    parsed = urlsplit(uri)
+                    if (parsed.scheme != "file" or parsed.netloc or not parsed.path.startswith("/")
+                            or parsed.query or parsed.fragment):
+                        return None
+                    results.append({"file_uri": uri, "content": content})
                 elif kind == "CORTEX_STEP_TYPE_PLANNER_RESPONSE":
                     if (step.get("plannerResponse") or {}).get("response") or (step.get("plannerResponse") or {}).get("modifiedResponse"):
                         return None  # A visible answer requires the existing result adoption owner.

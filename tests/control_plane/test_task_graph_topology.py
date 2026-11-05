@@ -99,19 +99,16 @@ def test_real_status_reader_uses_provider_snapshot_without_repair_writes(tmp_pat
         records = [canonical_todo_read_record(structured_todo_item(item, role=role,
                    source_section=item.get("source_section")))
                    for role, rows in groups.items() for item in rows]
+        parent = next(record for record in records if record["todo_id"] == "todo_parent")
+        parent["handoff_note"] = {
+            "from_agent": " Builder\tTeam ", "to_agent": " Reviewer\u00a0Team ", "status": "done",
+        }
         initialize_canonical_authority(runtime, goal["id"],
             build_todo_runtime_shadow_projection(goal_id=goal["id"], todos=records),
             state_path=state, provider=provider)
         if display == "missing":
             state.unlink()
     before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=goal["id"])
-    fields = active_state_todo_fields(goal, runtime_root=runtime)
-    result = build_task_graph_projection({"goal_id": goal["id"], **fields}, goal=goal)
-    assert ("todo_root", "todo_monitor", "depends_on") in edges_by_todo(result)
-    assert ("todo_root", "todo_parent", "continues") in edges_by_todo(result)
-    assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=goal["id"]) == before
-    assert (state.read_text() if state.exists() else None) == (None if display == "missing" else source)
-
     registry = tmp_path / "registry.json"
     registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": [goal]}))
     process = subprocess.run([sys.executable, "-m", "loopx.cli", "--registry", str(registry),
@@ -121,6 +118,25 @@ def test_real_status_reader_uses_provider_snapshot_without_repair_writes(tmp_pat
     assert "graph-goal" in process.stdout
     assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=goal["id"]) == before
     assert (state.read_text() if state.exists() else None) == (None if display == "missing" else source)
+
+    for output_format in ("json", "markdown"):
+        process = subprocess.run([
+            sys.executable, "-m", "loopx.cli", "--registry", str(registry),
+            "--format", output_format, "status", "--goal-id", goal["id"], "--include-task-graph",
+        ], capture_output=True, text=True, timeout=60)
+        assert process.returncode == 0, (process.stdout, process.stderr)
+        if output_format == "json":
+            assert "Handoff from builder-team to reviewer-team" in process.stdout
+        assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=goal["id"]) == before
+        assert (state.read_text() if state.exists() else None) == (None if display == "missing" else source)
+
+    fields = active_state_todo_fields(goal, runtime_root=runtime)
+    result = build_task_graph_projection({"goal_id": goal["id"], **fields}, goal=goal)
+    assert ("todo_root", "todo_monitor", "depends_on") in edges_by_todo(result)
+    assert ("todo_root", "todo_parent", "continues") in edges_by_todo(result)
+    assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=goal["id"]) == before
+    assert (state.read_text() if state.exists() else None) == (None if display == "missing" else source)
+
 
 
 def goal_map(rows, total=None):
