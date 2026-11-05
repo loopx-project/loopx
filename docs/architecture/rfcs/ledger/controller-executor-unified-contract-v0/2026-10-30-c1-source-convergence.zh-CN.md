@@ -426,6 +426,51 @@ soft-claim 36 条件 cohort 分开，不混合比较分母。
 真实模型输入/缓存/生成输出、费用、自然采用和长程净收益仍未资格化。旧正负 cohort、
 冻结预算及原成果要求保留其版本；源码/打包结果不等于 merge readiness 或完整 C1 验收。
 
+### 可执行必读义务与原生 runner 的体积归因
+
+当前完整来源在既有 interaction owner 旁通过 `assertInteractionRequiredReads` 校验
+显式可执行的必读义务。声明 command 或 ordering 的读取必须保留非空、无 NUL 的命令；
+显式顺序必须是已注册的 `before_work`。纯文字义务、未知支持元数据、带引号的中文路径
+以及历史省略的 ordering 保持原样。合法未读义务仍待执行；这项校验不补造已读确认，
+也不增加全部材料先读完的通用门。
+
+| 改变的边界 | 实际 owner／调用方变化 |
+| --- | --- |
+| 可执行读取语义 | 一个 TypeScript interaction validator，由既有完整来源 validator 调用一次；quota、managed preview、planning 与 Host 沿原调用进入，不增加 Python 规则或 RPC。 |
+| 不支持的直接完整来源 | Python 运输保留显式 `contract_binding`，包括未知版本，交 typed planning reader 拒绝，不尝试旧 adapter。 |
+| 验证调用方 | 将过期 CLI 故障注入从已删除的 envelope builder 移到实际完整 composition；保留显式历史版本负例。采用真实 canonical hard-lease inventory 和实际产物工作区，代替伪造准入或偶然的 Git checkout 发现。 |
+
+在未改的 `f1614358ac13` 上，新增八个 File/SQLite quota／managed 拒绝用例失败，八个
+既有合法／未知动作对照通过。共同规则无需修改两个调用方即可到达两入口。首版实现
+误拒一个合法纯文字义务，由原有完整原文测试发现；修正实现而不删除该断言。另一组
+真实 Turn CLI 在 Host 启动或扣额前验证未知版本／codec 和摘要正确但顺序不支持的
+读取。这是一项有界语义规则变更，不代表独立评审或模型遵从。Registry hook 准入及
+原版本 reader 保留各自 owner；新增注册顺序仍须该协议自身的评审。
+
+最终七个完整 Python 模块在源码及实际隔离 wheel 均 185 项通过；1,897 个打包来源
+文件逐字匹配，325 个完成进程及 103,582 次 Core 来源观察无 checkout 污染，突然
+退出不在退出审计范围。五个相关 TypeScript 模块 111 项通过，完整 control-plane
+类型检查和变更文件 Ruff 通过。之前源码 178 过／7 败及 wheel 168 过／17 败均保留。
+修正保留原断言：六处过期 constructor 注入改为实际 composition；frontier fixture
+使用 canonical authority；wheel 明确复制测试 helper，写回指定真实产物工作区。
+仓库 worker 脚本仍是显式测试调用方；来源审计资格针对打包 Core，不代表独立 scheduler
+已经安装。正常重建 bundle 后打包，没有安装候选。
+
+之前 20,533 字符的 premerge 失败，现在于不可变 main `bd79adc64968` 与候选
+`f1614358ac13` 上取得匹配的原生 runner 反例。固定同一父目录，直接输出为 20,333，
+原生 runner 为 20,501：隔离目录在八处 fixture 根引用中各增加 21 字符，共 168。
+原 premerge 布局再增加四字符目录，两版本均为 20,533。只替换所属 fixture 根和
+观测时间后，payload 事实一致。实测仍以原 20,500 上限运行全部原断言，没有缩短路径
+或输出；这项字符预算诊断与完整 capture 到 BODY 的 UTF-8 主指标分开。
+
+[既有 fixture 预算提案](https://github.com/loopx-project/loopx/pull/8069) 负责该独立问题。
+这里不校准、不 skip、不豁免；原失败仍失败。前述完整成本 cohort 保持各自精确版本，
+不改称新增校验后的实测。CPU、模型用量、自然采用和长程净收益仍未知。
+
+旧 constructor 的树内调用仍是显式 composition 与 model-behavior 验证 fixture。
+原版本 journal／recovery reader 仍需核清已接纳工作和支持窗口；不为增加退役数量而
+删除。本切片不退役这些 reader，也不关闭整体 C1 验收。
+
 ## 较早的集成证据
 
 集成保留 main 已抽取的 quota-presentation owner 与稀疏原生 journal 运输。

@@ -550,6 +550,71 @@ and long-horizon net benefit remain unqualified. All earlier positive/negative
 cohorts, frozen budgets and original outcome requirements retain their versions;
 this source/package result is neither merge readiness nor complete C1 acceptance.
 
+### Executable required reads and native-runner attribution
+
+A current complete source now validates explicitly executable required reads in
+`assertInteractionRequiredReads`, beside the existing interaction owner. A read
+that declares a command or ordering must retain a non-empty, NUL-free command;
+its explicit ordering must be the registered `before_work`. Prose-only
+obligations, unknown supporting metadata, quoted Unicode commands and an omitted
+historical ordering remain unchanged. A valid unread obligation stays pending:
+this check neither acknowledges reading nor creates a blanket material-read gate.
+
+| Changed boundary | Actual owner / caller change |
+| --- | --- |
+| Executable read semantics | One TypeScript interaction validator; one call from the existing complete-source validator. Quota, managed preview, planning and Host consumers retain their existing calls. No Python rule or extra RPC is added. |
+| Unsupported direct complete source | The Python transport preserves an explicit `contract_binding`, including an unsupported version, for the typed planning reader instead of trying the legacy adapter. |
+| Qualification callers | Move stale CLI fault injection from the removed envelope builder to actual complete composition; preserve explicit historical version negatives. Use real canonical hard-lease inventory and the actual artifact workspace instead of mocked admission or incidental Git checkout discovery. |
+
+On unchanged `f1614358ac13`, the eight new File/SQLite quota/managed refusal
+cases fail while eight existing valid/unknown-action controls pass. The shared
+rule reaches both entries without changing either caller. A first implementation
+also rejects a legitimate prose-only obligation; its original full-text test
+exposes that mistake, and the implementation is corrected without removing that
+assertion. A separate real Turn CLI case checks unsupported version/codec and a
+correctly hashed unsupported read order before Host launch or debit. This is a
+bounded semantic-rule change, not independent review or proof of model compliance.
+Registry hook admission and recorded-version readers retain their distinct owners;
+a new registered ordering would still require that protocol's own review.
+
+The final seven complete Python modules pass 185 cases on both source and the
+actual isolated wheel; the wheel has 1,897 byte-matching packaged source files,
+325 completed-process and 103,582 Core-module origin observations with no
+checkout contamination. Abrupt process exits are outside that exit audit.
+The five relevant TypeScript modules pass 111 cases, and full control-plane
+typechecking and changed-file Ruff pass. The earlier broad 178-pass/7-failure
+source and 168-pass/17-failure wheel runs remain recorded. Corrections preserve
+the original assertions: actual composition injection replaces six stale
+constructor hooks; the frontier fixture uses canonical authority; wheel helpers
+are copied explicitly, and writeback names the real artifact workspace.
+Repository worker scripts remain explicit test callers; the origin audit qualifies
+packaged Core, not a separately installed scheduler. The ordinary bundle is
+rebuilt before packaging; no candidate is installed.
+
+The earlier 20,533-character premerge failure now has a matched native-runner
+counterexample on both immutable main `bd79adc64968` and candidate
+`f1614358ac13`. With one parent root, direct output is 20,333 characters and the
+native runner is 20,501: its isolation component adds 21 characters to eight
+fixture-root occurrences (168 total). The original premerge layout adds another
+four-character directory, producing 20,533 on both revisions. After substituting
+only the owned fixture root and observation timestamps, payload facts agree.
+Every original assertion runs against the original 20,500 ceiling; neither paths
+nor output are shortened for those measurements. This character-budget diagnosis
+is separate from the UTF-8 complete-capture-to-BODY metric.
+
+[The existing fixture-calibration proposal](https://github.com/loopx-project/loopx/pull/8069)
+owns that separate budget question. No calibration, skip or waiver is included
+here; the failed premerge observation remains a failure. The preceding matched
+cost cohorts keep their exact measured revisions and are not relabeled as a
+measurement of this added validation. CPU, model usage, natural adoption and
+long-horizon net benefit remain unknown.
+
+The legacy constructor's remaining in-tree calls are the explicit composition
+and model-behavior qualification fixtures. Original-version journal/recovery
+readers still need their supported work/window reconciliation; none is removed
+just to make a retirement count. This slice neither retires those readers nor
+closes the complete C1 acceptance.
+
 ## Earlier integration evidence
 
 The integration preserves main's extracted quota-presentation owner and sparse

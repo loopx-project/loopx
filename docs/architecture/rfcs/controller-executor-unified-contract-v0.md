@@ -121,6 +121,17 @@ intentionally have no LoopX Core and must remain uncontaminated controls.
 
 ### C1 source audit: shared owners and the remaining split
 
+The current complete-source validator also delegates executable required-read
+checks to the existing interaction owner. Explicit command/order coordinates
+cannot disappear or introduce an unsupported execution order; prose-only and
+valid pending obligations remain intact. The same rule reaches quota, managed
+preview and actual Turn/Host planning without caller-specific decisions. An
+explicit direct complete carrier reaches its typed reader even when its version
+is unsupported. The [paired checkpoint](ledger/controller-executor-unified-contract-v0/2026-10-30-c1-source-convergence.md#executable-required-reads-and-native-runner-attribution)
+records counterexamples, compatibility, maintenance scope and the native-runner
+budget attribution. It does not waive the remaining budget gate, retire recorded
+readers or establish installed/model/outcome benefit.
+
 Bound native execution preparation retains the ordinary managed claim reference
 and captures its same-Turn ready decision before CLI compaction. The Host hands
 that source to the existing saved-capture presentation/reader owner, rather than

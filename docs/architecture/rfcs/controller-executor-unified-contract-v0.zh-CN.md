@@ -96,6 +96,14 @@
 
 ### C1 源码核对：已有共享 owner 与剩余分叉
 
+当前完整来源 validator 也将可执行必读校验交给既有 interaction owner。显式
+command／ordering 不得消失或引入不支持的执行顺序；纯文字和合法待执行义务保持
+完整。同一规则无需调用方各加判断即可到达 quota、managed preview 和真实 Turn／Host
+planning；直接完整 carrier 即使版本不支持，也交 typed reader 处理。
+[配对检查点](ledger/controller-executor-unified-contract-v0/2026-10-30-c1-source-convergence.zh-CN.md#可执行必读义务与原生-runner-的体积归因)
+记录反例、兼容、维护范围及原生 runner 体积归因；不豁免未过体积门，不退役已有 reader，
+也不证明安装、模型或成果收益。
+
 绑定 Turn 的原生执行准备保留普通 managed claim 原引用，并在 CLI 压缩前捕获同一
 Turn 的 ready 决策。Host 将该原件交给既有 saved-capture 展示/reader owner，不丢弃
 它再要求模型重算 guard 才能取得当前契约。发布前须核对 Goal、Agent、Todo 和 Turn。
