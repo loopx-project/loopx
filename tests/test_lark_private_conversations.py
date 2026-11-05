@@ -4484,6 +4484,78 @@ def test_private_setup_companion_verifies_each_app_and_redacts_subjects(ordinary
         runtime.close()
 
 
+def test_http_authorization_read_does_not_wait_for_bot_health_or_delivery_history(ordinary, monkeypatch):  # noqa: F811
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+
+    store, runtime, _, transport = connect(ordinary)
+    bindings = transport.bindings
+    original = bindings.read()
+    sessions = store.list_sessions()
+
+    def blocked(*_args, **_kwargs):
+        raise AssertionError("Authorization reads must not observe unrelated bot work")
+
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.chat_store, server.runtime_controller = store, runtime
+    server.verbose = False
+    server.lark_private_conversations = transport
+    server.lark_goal_topic_runtime = SimpleNamespace(health_snapshot=blocked, close=lambda: None)
+    monkeypatch.setattr(transport, "health", blocked)
+    monkeypatch.setattr(bindings, "agent_candidates", blocked)
+    monkeypatch.setattr(bindings, "goal_scope_ids", blocked)
+    monkeypatch.setattr(bindings, "stop_recoveries", blocked)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def read(query="?view=authorization"):
+        connection = http.client.HTTPConnection(*server.server_address, timeout=5)
+        try:
+            connection.request("GET", "/api/chat/lark/private-conversations" + query)
+            response = connection.getresponse()
+            return response.status, json.loads(response.read())
+        finally:
+            connection.close()
+
+    try:
+        status, snapshot = read()
+        assert status == 200 and snapshot["ok"]
+        assert snapshot["revision"] == original["revision"]
+        assert {row["binding_id"] for row in snapshot["connections"]} == {row["binding_id"] for row in original["bindings"]}
+        for actual, saved in zip(snapshot["connections"], original["bindings"], strict=True):
+            assert actual["app_ref"] == saved["transport_ref"]
+            assert all(actual[key] == saved[key] for key in ("binding_id", "context_kind", "project_ref", "grant", "executor_endpoint_id"))
+            assert actual["context_available"] is True
+            assert not {"pending_count", "listener_status", "operator_ref", "provider_ref", "workspace_path"} & actual.keys()
+        for invalid in ("?view=", "?view=unknown", "?view=authorization&view=authorization"):
+            assert read(invalid)[0] == 400
+        with monkeypatch.context() as unavailable:
+            unavailable.setattr(runtime.project_contexts, "available", lambda: [])
+            assert all(not row["context_available"] for row in read()[1]["connections"])
+
+        # A real revocation disappears immediately, without caching old grants.
+        removed = original["bindings"][0]["binding_id"]
+        bindings.disconnect(removed, expected_revision=original["revision"])
+        assert removed not in {row["binding_id"] for row in read()[1]["connections"]}
+        current_read = bindings.read
+        count = 0
+
+        def changed_during_read():
+            nonlocal count
+            count += 1
+            result = current_read()
+            if count > 1:
+                result = {**result, "revision": result["revision"] + 1}
+            return result
+
+        monkeypatch.setattr(bindings, "read", changed_during_read)
+        assert read()[0] == 409
+        assert store.list_sessions() == sessions
+    finally:
+        server.shutdown()
+        server.server_close()
+        runtime.close()
+
+
 def test_rendered_cli_text_is_preserved_and_source_type_must_agree(ordinary):  # noqa: F811
     store, runtime, provider, transport = connect(ordinary)
     try:
