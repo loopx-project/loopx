@@ -986,3 +986,23 @@ def test_fractional_observations_keep_complete_codec_cost_proportional(tmp_path,
     # Allow payload growth plus 25% structural headroom over the matched
     # safe-integer workload; count complete requests and results, not deltas alone.
     assert totals[1] / totals[0] <= 1.25 * source_sizes[1] / source_sizes[0]
+
+
+def test_file_delta_requires_a_different_source_even_for_identical_content():
+    from loopx.control_plane.quota.turn_envelope import prepare_context_delivery, restore_context_delivery
+
+    scope = dict(goal_id="g", agent_id="a", session_id="s", context_epoch="e")
+    body = {"requirement": "Identical content can belong to two independent captures. " * 1200}
+    def capture(identity, base=None):
+        return prepare_context_delivery(body, scope=scope, capture_id=identity, baseline=base,
+            continuity={"basis": "captured_file", "target": base["target"], "capture_bytes_verified": True}
+            if base else None)
+    old, current = capture("a"), capture("b")
+    warm = capture("b", old)
+    assert warm["mode"] == "delta"
+    assert capture("b", current)["mode"] == "full"
+    # Old producers could emit the same valid empty change tree referencing
+    # the target itself. The receiver has an independent, pinned current file.
+    legacy = {**warm, "base": current["target"]}
+    recovered = restore_context_delivery(legacy, baseline=current, current=current)
+    assert recovered["mode"] == "full" and recovered["context"] == body

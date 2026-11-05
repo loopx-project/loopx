@@ -938,3 +938,48 @@ def test_saved_projection_default_off_ignores_available_native_cache(tmp_path, m
     result = project_saved_context_capture(args)
     assert result["ok"] and result["mode"] == "full" and result["path"] == str(path)
     assert not root.exists() and path.read_bytes() == raw
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Native session continuity uses a private POSIX journal")
+def test_retry_lost_navigation_uses_original_predecessor(tmp_path, monkeypatch):
+    from loopx.control_plane.turn_driver.codex_context import codex_context_hook
+
+    journal = tmp_path / "native"
+    journal.mkdir(mode=0o700)
+    monkeypatch.setenv("CODEX_THREAD_ID", "retry-session")
+    event = {"hook_event_name": "SessionStart", "source": "startup",
+             "session_id": "retry-session", "cwd": str(tmp_path)}
+    codex_context_hook(str(journal), event)
+    registry, runtime = tmp_path / "absent-registry", tmp_path / "absent-runtime"
+
+    def present(turn):
+        body = {"ok": True, "goal_id": "g", "agent_identity": {"agent_id": "a"},
+                "heartbeat_receipt": {"turn_instance_id": turn},
+                "requirement": "Preserve this independently recoverable requirement. " * 1900}
+        path = tmp_path / (turn + ".json")
+        if not path.exists():
+            path.write_text(json.dumps(body))
+        rc, view = _run_cli(registry, runtime, "quota", "context-project", "--capture-file", str(path),
+            "--capture-sha256", hashlib.sha256(path.read_bytes()).hexdigest(), "--goal-id", "g",
+            "--agent-id", "a", "--turn-instance-id", turn, "--context-delivery", "on",
+            "--codex-app", "--codex-context-dir", str(journal), cwd=tmp_path)
+        assert rc == 0, view
+        return machine_reference_oracle(view)
+
+    cold = present("cold")
+    assert cold["mode"] == present("cold")["mode"] == "full"
+    # No model read or PostToolUse receipt: the caller may have lost the notification.
+    warm = present("warm")
+    retry = present("warm")
+    for view in (warm, retry):
+        assert view["mode"] == "delta"
+        wire = json.loads(Path(view["path"]).read_bytes())
+        assert wire["base"] == cold["target"] and wire["target"] != wire["base"]
+        assert json.loads(Path(view["recovery"]["path"]).read_bytes())["heartbeat_receipt"] == {"turn_instance_id": "warm"}
+    # Loss of the actual predecessor or a new epoch must recover this source independently.
+    Path(warm["baseline_reference"]["path"]).unlink()
+    assert present("warm")["mode"] == "full"
+    codex_context_hook(str(journal), {**event, "hook_event_name": "PreCompact"})
+    codex_context_hook(str(journal), {**event, "source": "compact"})
+    assert present("warm")["mode"] == "full"
+    assert not registry.exists() and not runtime.exists()
