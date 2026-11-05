@@ -16,7 +16,7 @@ from .quota_presentation import (
 from .quota_capture import (
     bind_capture_selection_transport, capture_decision, handoff_decision,
     handle_native_context_command, handle_replan_view, prepare_quota_capture,
-    native_context_activation, progressive_context_or_current,
+    native_context_activation, progressive_context_or_current, quota_context_surface,
 )
 from ..control_plane.turn_driver.decision_capture import (
     project_captured_context,
@@ -424,7 +424,7 @@ def _emit_quota_result(
         payload = project_captured_context(payload, directory=capture_directory,
             request=delivery_request[0], capture_id=delivery_request[1],
             goal_id=decision_identity[0], agent_id=decision_identity[1],
-            surface="complete_turn" if captured_payload.get("schema_version") == "loopx_turn_envelope_v1" else ("turn_envelope" if getattr(args, "turn_envelope", False) else "quota_packet"))
+            surface=quota_context_surface(captured_payload, args))
     if (not deferred_context and args.format == "json" and succeeded and args.quota_command == "should-run"
             and activation["progressive_enabled"] and not native_context and delivery_request is None):
         payload = progressive_context_or_current(payload, args,

@@ -31,6 +31,13 @@ from ..control_plane.turn_driver.native_context_profile import (
 )
 
 
+def quota_context_surface(payload: dict[str, Any], args: argparse.Namespace) -> str:
+    """Select the presentation owner from the captured decision, independent of continuity."""
+    if payload.get("schema_version") == "loopx_turn_envelope_v1":
+        return "complete_turn"
+    return "turn_envelope" if getattr(args, "turn_envelope", False) else "quota_packet"
+
+
 def native_context_activation(args: argparse.Namespace) -> dict[str, Any]:
     from ..control_plane.turn_driver.codex_context import context_delivery_for_arguments
 
@@ -598,8 +605,7 @@ def progressive_context_or_current(payload: dict[str, Any], args: argparse.Names
     """Optional stateless IO falls back to this complete decided input/receipt."""
     try:
         return progressive_context_capture_view(payload, args, runtime_root=runtime_root,
-            directory=directory, surface="complete_turn" if payload.get("schema_version") == "loopx_turn_envelope_v1" else (
-                "turn_envelope" if getattr(args, "turn_envelope", False) else "quota_packet"),
+            directory=directory,
             reader_argv=reader_argv)
     except (QuotaDecisionTransportError, OSError, ValueError, EffectRuntimeRemoteError, EffectRuntimeStartupError):
         return payload
@@ -607,7 +613,6 @@ def progressive_context_or_current(payload: dict[str, Any], args: argparse.Names
 
 def progressive_context_capture_view(payload: dict[str, Any], args: argparse.Namespace, *,
                                      runtime_root: Path, directory: Path | None,
-                                     surface: str = "quota_packet",
                                      reader_argv: list[str] | None = None) -> dict[str, Any]:
     """Same-capture presentation for every caller, without a native journal.
 
@@ -621,7 +626,7 @@ def progressive_context_capture_view(payload: dict[str, Any], args: argparse.Nam
         root = Path(_private_transport_root(runtime_root))
         directory = Path(tempfile.mkdtemp(prefix="context-", dir=root))
     transport = _capture_selection_transport_template(payload, args, capture_root=directory.parent)
-    required, reference = capture_progressive_context(payload, directory=directory, surface=surface,
+    required, reference = capture_progressive_context(payload, directory=directory, surface=quota_context_surface(payload, args),
         selection_command_args_template=transport)
     view = native_context_capture_view(required, directory, captured_recovery=reference,
         metadata={"context_delivery": native_context_activation(args),
@@ -678,6 +683,13 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
             return progressive_context_capture_view(payload, args,
                 runtime_root=Path(getattr(args, "_context_delivery_machine_runtime", path.parent)),
                 directory=None, reader_argv=reader_argv)
+        except EffectRuntimeRejected as exc:
+            # A valid file digest does not validate the decision inside it. The
+            # source owner rejected this signed Turn; expose recovery only.
+            if quota_context_surface(payload, args) == "complete_turn":
+                failure = QuotaDecisionTransportError(str(exc))
+                return {"ok": False, "error_code": failure.error_code, "reason": str(failure),
+                    "capture_sha256": args.capture_sha256, "recovery": full_reference}
         except (QuotaDecisionTransportError, OSError, ValueError, EffectRuntimeRemoteError, EffectRuntimeStartupError):
             pass  # The complete original reference remains the fallback below.
     try:
@@ -718,7 +730,7 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
         transport = _capture_selection_transport_template(payload, args, capture_root=root)
         prepared = prepare_codex_context(payload, directory=directory, capture_directory=cache,
             goal_id=args.goal_id, agent_id=args.agent_id,
-            surface="complete_turn" if payload.get("schema_version") == "loopx_turn_envelope_v1" else "quota_packet",
+            surface=quota_context_surface(payload, args),
             capture_id=hashlib.sha256(raw).hexdigest(),
             continuity_generation=getattr(args, "_context_delivery_generation", None),
             progressive_enabled=activation["progressive_enabled"], selection_command_args_template=transport,
