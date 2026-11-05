@@ -1,5 +1,6 @@
 """A staged review follows exactly the acceptance reference emitted by the quota writer."""
 from copy import deepcopy
+import hashlib
 import json
 import shlex
 import subprocess
@@ -61,7 +62,6 @@ def test_staged_review_rejects_invalid_capture_reference(tmp_path, fault):
     # A signature over these exact contents isolates the read from any hash failure.
     # The build path may also reject invalid planning facts, so use native JSON's
     # number rendering when independently computing the synthetic source hash.
-    import hashlib
     data = json.dumps(source, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
     canonical = subprocess.check_output(["node", "-p", "JSON.stringify(JSON.parse(require('fs').readFileSync(0,'utf8')))"],
                                         input=data).rstrip(b"\n")
@@ -71,3 +71,24 @@ def test_staged_review_rejects_invalid_capture_reference(tmp_path, fault):
                        "--decision-file", str(capture), "--source-hash", digest, "--replan-stage", "review"])
     assert code != 0 and "Goal acceptance reference" in error["reason"], error
     assert capture.read_bytes() == data
+
+def test_acceptance_sharing_keeps_unrelated_facts_outside_the_projection_request(monkeypatch):
+    from loopx.control_plane.quota import turn_envelope
+
+    source = packet(with_context=False)
+    extra = {"negative_evidence": "Retain the full original observation. " * 128,
+             "exact_integer": 2**60 + 1}
+    source["future_observation"] = deepcopy(extra)
+    calls = []
+    evaluate = turn_envelope.effect_runtime_projection_result
+
+    def observe(method, params, **kwargs):
+        if params["operation"] == "reference_context":
+            calls.append(params["payload"])
+        return evaluate(method, params, **kwargs)
+
+    monkeypatch.setattr(turn_envelope, "effect_runtime_projection_result", observe)
+    result = compact_quota_should_run_cli_payload(source)
+    assert len(calls) == 1 and "future_observation" not in calls[0]
+    assert result["future_observation"] == source["future_observation"] == extra
+    assert result["agent_todo_summary"]["goal_acceptance_contract_ref"] == "$.planning_horizon.core_goal.acceptance_contract"

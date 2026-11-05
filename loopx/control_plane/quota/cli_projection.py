@@ -497,21 +497,40 @@ def _reference_context(
     contract = payload.get("interaction_contract")
     agent = contract.get("agent_channel") if isinstance(contract, dict) else None
     context = agent.get("work_context") if isinstance(agent, dict) else None
-    # A lone carrier cannot be shared or relocated. Keep simple guards local.
-    if goal_acceptance:
-        goal_acceptance = sum(isinstance(value, dict) for value in (
-            context, payload.get("planning_horizon"), payload.get("autonomous_replan_obligation"),
-            payload.get("agent_todo_summary"),
-        )) >= 2
-    # Task/Explore sharing needs a source carrier; acceptance may use other root
-    # owners. Leave semantic matching and reference validation in TypeScript.
-    if diagnostics is None and not goal_acceptance and (
-        not (task_title or explore_guidance) or not isinstance(context, dict) or not context.get("sources")
-    ):
-        return payload
+    sources = context.get("sources") if isinstance(context, dict) else None
+    needs_context = bool(sources) and (task_title or explore_guidance)
+    if not needs_context and (diagnostics is None or (
+        diagnostics.get("agent_detail") is True and diagnostics.get("user_detail") is True
+    )):
+        if not goal_acceptance:
+            return payload
+        # A reference can only be created or relocated when two literal owners
+        # are present. Check structural presence here, leave equality, schema
+        # and the choice of owner to TypeScript.
+        def contains_contract(value: Any, *path: str) -> bool:
+            for key in path:
+                value = value.get(key) if isinstance(value, dict) else None
+            return isinstance(value, dict) and bool(value)
+
+        carriers = (
+            any(contains_contract(row, "content", "goal_acceptance_contract") for row in sources)
+            if isinstance(sources, list) else False,
+            contains_contract(payload, "planning_horizon", "core_goal", "acceptance_contract"),
+            contains_contract(payload, "autonomous_replan_obligation", "replan_context", "core_goal", "acceptance_contract"),
+            contains_contract(payload, "agent_todo_summary", "goal_acceptance_contract"),
+        )
+        if sum(carriers) < 2:
+            return payload
     from .turn_envelope import _turn_envelope_result
 
-    result = _turn_envelope_result("reference_context", payload=payload,
+    # The typed projection reads and edits these roots. Untouched capture
+    # facts stay local. Apply the returned paths against the original payload.
+    source = {key: payload[key] for key in (
+        "mode", "groups", "next_automatic_turn", "agent_todo_summary", "user_todo_summary",
+        "todo_summary_projection", "planning_horizon", "autonomous_replan_obligation",
+        "interaction_contract", "agent_lane_next_action", "selected_todo",
+    ) if key in payload}
+    result = _turn_envelope_result("reference_context", payload=source,
         task_title=task_title, explore_guidance=explore_guidance,
         goal_acceptance=goal_acceptance, **({"diagnostics": diagnostics} if diagnostics is not None else {}))
     return _apply_context_projection_changes(payload, result)
