@@ -180,6 +180,8 @@ def _future_producer_contract(contract):
     ("boolean", "must_attempt"),
     ("notification", "notify"),
     ("contradiction", "quiet"),
+    ("read_command", "required read command"),
+    ("read_order", "required read ordering"),
 ])
 def test_complete_readers_reject_invalid_interaction_with_valid_integrity(mutation, error):
     from loopx.control_plane.quota.turn_envelope import build_turn_envelope
@@ -193,8 +195,15 @@ def test_complete_readers_reject_invalid_interaction_with_valid_integrity(mutati
         interaction["agent_channel"]["must_attempt"] = "true"
     elif mutation == "notification":
         interaction["user_channel"]["notify"] = "FUTURE_NOTIFY"
-    else:
+    elif mutation == "contradiction":
         interaction["agent_channel"]["quiet_noop_allowed"] = True
+    else:
+        read = {"command": "cat -- 'required material.md'", "ordering": "before_work"}
+        if mutation == "read_command":
+            read.pop("command")
+        else:
+            read["ordering"] = "after_spend"
+        interaction["agent_channel"]["required_reads"] = [read]
     # Obtain a valid current contract, then emulate a producer with different
     # required semantics and correct integrity hashes. Every reader must refuse.
     contract = compose_turn_decision(_quota_payload())
@@ -211,6 +220,29 @@ def test_complete_readers_reject_invalid_interaction_with_valid_integrity(mutati
         with pytest.raises(RuntimeError, match=error):
             read()
     assert source == before
+
+
+def test_current_required_reads_preserve_pending_commands_and_historical_decoding():
+    from loopx.control_plane.quota.turn_envelope import build_turn_envelope
+    from tests.control_plane.test_replan_host_context_projection import _quota_payload
+
+    source = _quota_payload()
+    command = "cat -- 'original material / 原文.md'"
+    agent = source["interaction_contract"]["agent_channel"]
+    # No fabricated read receipt: a valid unread obligation remains pending,
+    # including a historical read that omitted its ordering coordinate.
+    agent["required_reads"] = [{"command": command, "reason": "Read before dependent work."}]
+    before = copy.deepcopy(source)
+    contract = compose_turn_decision(source)
+    assert contract["interaction_contract"]["agent_channel"]["required_reads"] == agent["required_reads"]
+    assert source == before
+    # Explicit old-version decoding is retained. It cannot make the same
+    # unsupported instruction a valid new complete source by fallback.
+    agent["required_reads"][0]["ordering"] = "after_spend"
+    historical = build_turn_envelope(source)
+    assert historical["required_reads"][0]["ordering"] == "after_spend"
+    with pytest.raises(RuntimeError, match="required read ordering"):
+        compose_turn_decision(source)
 
 
 def test_complete_source_rejects_tampering_and_binding_substitution():

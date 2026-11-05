@@ -514,7 +514,9 @@ def build_loopx_turn_plan(
         scheduler_owner=scheduler_owner,
     )
     supplied = dict(turn_envelope)
-    source_only_input = supplied.get("schema_version") == "loopx_turn_envelope_v1"
+    # Preserve an explicitly supplied complete carrier even when its version
+    # is unsupported. The typed reader must reject it, not try a legacy route.
+    source_only_input = supplied.get("schema_version") == "loopx_turn_envelope_v1" or "contract_binding" in supplied
     if source_only_input and work_contract is not _ABSENT_WORK_CONTRACT:
         raise ValueError("complete planning input must supply its source once")
     if source_only_input:

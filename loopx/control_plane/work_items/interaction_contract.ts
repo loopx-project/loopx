@@ -736,6 +736,28 @@ function readArgument(value: unknown, label: string): string | null {
   return text;
 }
 
+/** Current executable obligations must not disappear during projection.
+ * Historical readers keep their original permissive codec; this validates
+ * the complete-source boundary without treating a pending read as fulfilled.
+ */
+export function assertInteractionRequiredReads(value: unknown): void {
+  if (value === undefined) return;
+  if (!Array.isArray(value)) throw new EffectRuntimeRequestError("required reads must be an array");
+  for (const raw of value) {
+    const read = requireJsonObject(raw, "required read");
+    // Complete sources also carry prose-only obligations. Keep their original
+    // instructions; only explicit executable coordinates require a command.
+    if (!Object.hasOwn(read, "command") && !Object.hasOwn(read, "ordering")) continue;
+    requireNonEmptyString(read.command, "required read command");
+    readArgument(read.command, "required read command");
+    // Reuse the existing pre-work ordering. An omitted historical coordinate
+    // remains compatible; a new explicit execution order is not optional data.
+    if (read.ordering !== undefined) {
+      requireStringLiteral(read.ordering, ["before_work"], "required read ordering");
+    }
+  }
+}
+
 function shellQuote(value: string): string {
   return /^[A-Za-z0-9_./:-]+$/.test(value) ? value : `'${value.replaceAll("'", `'"'"'`)}'`;
 }

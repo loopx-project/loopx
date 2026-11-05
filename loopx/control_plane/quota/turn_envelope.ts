@@ -25,7 +25,7 @@ import { projectTurnStartUnavailableContext } from "../capability_hooks.ts";
 import { jsonObject, requireBoolean, requireJsonObject, requireNonEmptyString, requireStringLiteral,
   sourceNumberTokens } from "../runtime_decode.ts";
 import { projectPendingCapabilityIntent } from "../work_items/pending_capability_intent.ts";
-import { assertGoalContextDelivered, capturedTodoTextSha256, decodeInteractionContract, projectInteractionRequiredReads, selectedWorkTodo, selectedWorkTodoId, USER_CHANNEL_NOTIFICATION_POLICIES } from "../work_items/interaction_contract.ts";
+import { assertGoalContextDelivered, assertInteractionRequiredReads, capturedTodoTextSha256, decodeInteractionContract, projectInteractionRequiredReads, selectedWorkTodo, selectedWorkTodoId, USER_CHANNEL_NOTIFICATION_POLICIES } from "../work_items/interaction_contract.ts";
 import { measureTurnEnvelope, TURN_ENVELOPE_SECTION_TARGETS } from "./turn_envelope_budget.ts";
 export { TURN_ENVELOPE_BUDGET_BYTES } from "./turn_envelope_budget.ts";
 
@@ -1580,7 +1580,8 @@ function requireCompleteDecisionSource(source: JsonObject): void {
   assertSupportedQuotaPacket(source);
   // Validate executable semantics with their owner, retaining the original
   // object (including optional facts) rather than its normalized decode.
-  decodeInteractionContract(source.interaction_contract);
+  const interaction = decodeInteractionContract(source.interaction_contract);
+  assertInteractionRequiredReads(interaction.agent_channel.required_reads);
   replanAuthoringContract(source);
   requireVisionAuditReferences(source);
   requireCurrentTaskTitleReference(source);

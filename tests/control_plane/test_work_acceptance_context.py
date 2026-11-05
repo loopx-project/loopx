@@ -274,7 +274,8 @@ def test_captured_acceptance_does_not_replace_current_work_admission(acceptance_
         "--turn-instance-id", "original-delivery")
     cli("refresh-state", *identity, "--classification", "validated_progress",
         "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
-        "--delivery-boundary", "in_flight_continuation", "--no-global-sync", "--suppress-external-sinks")
+        "--delivery-boundary", "in_flight_continuation", "--delivery-workspace-path", str(project),
+        "--no-global-sync", "--suppress-external-sinks")
     for appended in (True, False):
         spent = cli("quota", "spend-slot", *identity, "--slots", "1", "--source", "heartbeat", "--execute")
         assert spent["appended"] is appended
