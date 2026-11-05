@@ -846,6 +846,7 @@ class BenchmarkCodex(CodexOffline):
             command = worker_command(
                 env, python=f"{_PYTHON}/bin/python3", source=_SRC,
                 state_file=_SCHEDULER_STATE, host_timeout=host_timeout,
+                resume_budget_stop=self._phase_number > 1,
             )
             phase_log = f"/logs/agent/worker-phase-{self._phase_number:03d}.log"
             shell = (

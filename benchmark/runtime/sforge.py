@@ -481,7 +481,8 @@ class SForgeWorker(CodexAgent):
         if self.warm_start is not None:
             env["LOOPX_WARM_START"] = f"{_CONTROL}/warm-start.json"
         command = worker_command(env, python=f"{_PYTHON}/bin/python3", source=_SRC,
-                                 state_file=_SCHEDULER_STATE, host_timeout=self.turn_timeout)
+                                 state_file=_SCHEDULER_STATE, host_timeout=self.turn_timeout,
+                                 resume_budget_stop=self.warm_start is not None)
         if self.task_entry == "loopx-planned" and self.warm_start is None:
             env["LOOPX_PLANNING_RESULT"] = "/opt/loopx-benchmark/control/planning-phase-001.json"
             command = [f"{_PYTHON}/bin/python3", "-m", "benchmark.runtime.sforge_entry", *command]

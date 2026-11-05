@@ -365,6 +365,15 @@ heartbeat/turn scheduler path, that receipt exits the wake with code 75 and the
 configured shell worker stops normally. It does not re-admit empty wakes, mark
 the task complete or spend quota. Direct plain/native-Goal calls retain exit 0
 for normal budget exhaustion.
+
+An explicitly continued Harbor phase or SForge warm restore may select a new
+shell transport record after that budget stop. The retained worker receipt must
+prove the stop happened before native dispatch. The original stop record and IO
+witness remain intact; the finite phase deadline names the successor record, so
+retries in that same phase retain its failures. Missing proof, interrupted native
+work, provider failures and other stops keep the original recovery path. This
+does not reopen a terminal LoopX decision or change Goal/Agent, Todos, native
+conversation, scoring history or checkpoint frequency.
 The deadline uses the task environment's clock, including remote Harbor backends.
 
 To compare entry policies, hold the execution mode, session policy, model,
