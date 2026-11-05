@@ -422,12 +422,7 @@ def _reference_context(
     agent = contract.get("agent_channel") if isinstance(contract, dict) else None
     context = agent.get("work_context") if isinstance(agent, dict) else None
     sources = context.get("sources") if isinstance(context, dict) else None
-    needs_context = bool(sources) and (task_title or explore_guidance)
-    if not vision_audit and not needs_context and (diagnostics is None or (
-        diagnostics.get("agent_detail") is True and diagnostics.get("user_detail") is True
-    )):
-        if not goal_acceptance:
-            return payload
+    if goal_acceptance:
         # A reference can only be created or relocated when two literal owners
         # are present. Check structural presence here, leave equality, schema
         # and the choice of owner to TypeScript.
@@ -443,17 +438,22 @@ def _reference_context(
             contains_contract(payload, "autonomous_replan_obligation", "replan_context", "core_goal", "acceptance_contract"),
             contains_contract(payload, "agent_todo_summary", "goal_acceptance_contract"),
         )
-        if sum(carriers) < 2:
-            return payload
+        goal_acceptance = sum(carriers) >= 2
+    if not (vision_audit or goal_acceptance or (sources and (task_title or explore_guidance))) and (
+        diagnostics is None or (diagnostics.get("agent_detail") is True and diagnostics.get("user_detail") is True)
+    ):
+        return payload
     from .turn_envelope import _turn_envelope_result
 
     # The typed projection reads and edits these roots. Untouched capture
     # facts stay local. Apply the returned paths against the original payload.
     source = {key: payload[key] for key in (
         "mode", "groups", "next_automatic_turn", "agent_todo_summary", "user_todo_summary",
-        "todo_summary_projection", "planning_horizon", "autonomous_replan_obligation",
+        "todo_summary_projection",
         "interaction_contract", "agent_lane_next_action", "selected_todo",
     ) if key in payload}
+    if goal_acceptance:
+        source.update({key: payload[key] for key in ("planning_horizon", "autonomous_replan_obligation") if key in payload})
     if isinstance(context, dict) and isinstance(context.get("sources"), list):
         # Edits address rows by their original index. An unrelated source has
         # no fields read by this projection; its complete body stays local.
