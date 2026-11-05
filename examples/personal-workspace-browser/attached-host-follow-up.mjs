@@ -196,8 +196,9 @@ export const attachedHostFollowUpScenario = {
       await recovery.getByRole("alert").filter({hasText: "队列修改的恢复信息不可读"}).waitFor();
       await page.evaluate(() => {
         Object.defineProperty(window, "localStorage", window.__queueStorageDescriptor);
-        window.dispatchEvent(new Event("storage"));
       });
+      await recovery.getByRole("button", {name: "重试读取恢复信息", exact: true}).click();
+      await recovery.getByRole("alert").waitFor({state: "hidden"});
       await page.reload();
       await recovery.waitFor({timeout: 15_000});
       await recovery.locator("summary").first().click();

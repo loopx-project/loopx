@@ -66,6 +66,7 @@ export function RetainedQueueInputs({sessionId, turns, onChange}: {sessionId: st
     {inputs.length ? <details><summary>{zh ? "保留的修改" : "Retained changes"} · {inputs.length}</summary>
       {inputs.map(input => <RetainedInput key={input.turnId} sessionId={sessionId} input={input}
         onChange={() => {setAttempt(value => value + 1); onChange();}}/>)}</details> : null}
-    {recovery.failed ? <p role="alert">{zh ? "队列修改的恢复信息不可读。" : "Queue change recovery is unreadable."}</p> : null}
+    {recovery.failed ? <p role="alert">{zh ? "队列修改的恢复信息不可读。" : "Queue change recovery is unreadable."}
+      <button type="button" onClick={() => setAttempt(value => value + 1)}>{zh ? "重试读取恢复信息" : "Retry recovery read"}</button></p> : null}
   </section>;
 }
