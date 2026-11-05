@@ -49,12 +49,42 @@ async function verifyManagedTurnObservers({page, origin, sessions, panel, choose
     await page.reload({waitUntil: "domcontentloaded"});
     await chooser.selectOption(`managed:${sessionId}`);
     await panel.getByText("Review the release checklist before the next handoff.", {exact: true}).waitFor();
-    const accepted = page.waitForResponse(response => response.request().method() === "POST"
-      && response.url() === `${origin}/api/chat/sessions/${sessionId}/turns`);
-    await composer.fill("Review the remaining release steps; wait for interrupt.");
-    await page.waitForFunction(() => !document.querySelector('button[aria-label="发送"]')?.disabled);
-    await composer.press("Enter");
-    const ownTurn = (await (await accepted).json()).turn_id;
+    const admissionPath = `/api/chat/sessions/${sessionId}/turns`;
+    let releaseAdmission, admitted;
+    const heldAdmission = new Promise(resolve => {releaseAdmission = resolve;});
+    const admissionReady = new Promise(resolve => {admitted = resolve;});
+    const admissionMatch = url => url.origin === origin && url.pathname === admissionPath;
+    const holdAdmission = async route => {
+      if (route.request().method() !== "POST") {await route.fallback(); return;}
+      const response = await route.fetch();
+      admitted((await response.json()).turn_id);
+      await heldAdmission;
+      await route.fulfill({response});
+    };
+    await page.route(admissionMatch, holdAdmission);
+    let ownTurn, admissionTimeout;
+    try {
+      const accepted = page.waitForResponse(response => response.request().method() === "POST"
+        && response.url() === origin + admissionPath);
+      await composer.fill("Review the remaining release steps; wait for interrupt.");
+      await page.waitForFunction(() => !document.querySelector('button[aria-label="发送"]')?.disabled);
+      await composer.press("Enter");
+      ownTurn = await Promise.race([admissionReady, new Promise((_, reject) => {
+        admissionTimeout = setTimeout(() => reject(new Error("The original admission did not reach its owning backend")), 12_000);
+      })]);
+      clearTimeout(admissionTimeout);
+      // History can discover this active native Turn before the original ACK.
+      // Its composer already owns observation: recovery must not add a stream.
+      await afterHistoryPoll(ownTurn);
+      assert.equal(requests.length, 0, "An original admission in flight must not acquire a recovery observer");
+      assert.equal(await pending.count(), 1, "The original pending reply survives active history discovery");
+      releaseAdmission();
+      assert.equal((await (await accepted).json()).turn_id, ownTurn);
+    } finally {
+      clearTimeout(admissionTimeout);
+      releaseAdmission();
+      await page.unroute(admissionMatch, holdAdmission);
+    }
     await afterHistoryPoll(ownTurn);
     await page.screenshot({path: resolve(outputDir, "managed-observer-desktop.png")});
     await page.setViewportSize({width: 390, height: 844});
@@ -149,13 +179,57 @@ export const managedAgentSessionsScenario = {
         await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
         assert.equal(await panel.getByText("Original managed question 1", {exact: true}).count(), 0);
         assert.equal(await composer.inputValue(), "Retained draft for second Session");
-        await composer.fill("Owner correction only to second Session");
-        await page.waitForFunction(() => !document.querySelector('button[aria-label="发送"]')?.disabled);
-        await composer.press("Enter");
-        await panel.getByText("Runtime response.", {exact: true}).waitFor().catch(async error => {
-          console.log(JSON.stringify({diagnostic: await control("inspect"), body: await page.locator("body").innerText(), ui: await composer.evaluate(node => ({value: node.value, disabled: node.disabled, readOnly: node.readOnly, form: node.closest("form")?.outerHTML.slice(-1000)})), errors: context.errors, stderr: fixture.stderr}));
+        // The owning backend may finish and publish history before its original
+        // admission response reaches the composer. Hold that real response,
+        // rather than forging a second message or loosening the reply selector.
+        let releaseAdmission, releaseSnapshots;
+        const admissionHeld = new Promise(resolve => {releaseAdmission = resolve;});
+        const snapshotsHeld = new Promise(resolve => {releaseSnapshots = resolve;});
+        let holdSnapshots = false;
+        const sessionPath = "/api/chat/sessions/" + sessions[1];
+        const snapshotMatch = url => url.origin === origin && url.pathname === sessionPath;
+        const admissionMatch = url => url.origin === origin && url.pathname === sessionPath + "/turns";
+        const holdSnapshot = async route => {
+          const response = await route.fetch();
+          if (holdSnapshots) await snapshotsHeld;
+          await route.fulfill({response});
+        };
+        const holdAdmission = async route => {
+          if (route.request().method() !== "POST") {await route.fallback(); return;}
+          const response = await route.fetch();
+          await admissionHeld;
+          await route.fulfill({response});
+        };
+        await page.route(snapshotMatch, holdSnapshot);
+        await page.route(admissionMatch, holdAdmission);
+        try {
+          await composer.fill("Owner correction only to second Session");
+          await page.waitForFunction(() => !document.querySelector('button[aria-label="发送"]')?.disabled);
+          await composer.press("Enter");
+          await panel.getByText("Runtime response.", {exact: true}).waitFor({timeout: 12_000});
+          const streamResponse = page.waitForResponse(response => new URL(response.url()).origin === origin
+            && new URL(response.url()).pathname.startsWith(sessionPath + "/turns/")
+            && new URL(response.url()).pathname.endsWith("/events"), {timeout: 12_000});
+          // Keep the canonical-identity follow-up read outstanding while the
+          // original stream completes. Both legal orderings must show one reply.
+          holdSnapshots = true;
+          releaseAdmission();
+          assert.equal((await streamResponse).status(), 200);
+          await panel.locator(".personal-message-pending").waitFor({state: "hidden"});
+          await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+          await panel.getByText("Runtime response.", {exact: true}).waitFor();
+          assert.equal(await panel.getByText("Runtime response.", {exact: true}).count(), 1,
+            "History before the original admission ACK must not duplicate the same native reply");
+          assert.equal(await panel.locator(".personal-message").count(), (await control("inspect")).messages[sessions[1]].length,
+            "The settled UI contains exactly the owning Session's saved messages");
+        } catch (error) {
+          console.log(JSON.stringify({diagnostic: await control("inspect"), body: await page.locator("body").innerText(), errors: context.errors}));
           throw error;
-        });
+        } finally {
+          releaseAdmission(); releaseSnapshots();
+          await page.unroute(admissionMatch, holdAdmission);
+          await page.unroute(snapshotMatch, holdSnapshot);
+        }
         const accepted = await control("inspect");
         assert.equal(accepted.sessions, 4, "Continuing uses the original Session, without replacements");
         assert.ok(!accepted.messages[sessions[0]].some(row => row.text === "Owner correction only to second Session"));

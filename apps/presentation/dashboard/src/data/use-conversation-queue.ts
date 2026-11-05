@@ -36,6 +36,6 @@ export function useConversationQueue({sessionId, scope, active, refreshKey}: {
     return () => { controller.abort(); clearTimeout(timer); };
   }, [key, sessionId, active, refreshKey, attempt]);
   const current = sessionId && state?.key === key ? state : null;
-  return {turns: current?.turns ?? [], activeTurnId: current?.activeTurnId ?? null, error: current?.error ?? null,
+  return {turns: current?.turns ?? [], activeTurnId: current?.activeTurnId ?? null, error: current?.error ?? null, readReady: Boolean(current && !current.error),
     retry: () => setAttempt(value => value + 1)};
 }

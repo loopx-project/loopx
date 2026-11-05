@@ -975,6 +975,16 @@ path, and canary route rather than as a user-facing release baseline.
   snapshots. Read the [versioned upgrade guide](https://github.com/loopx-project/loopx/blob/v2.1.1/docs/product/releases/v2.1.1.md)
   before replacing an existing installation.
 
+- `v2.2.0` release at commit
+  `2c3524857e8a3dd553335b79444333786f492c43`:
+  the [published release](https://github.com/loopx-project/loopx/releases/tag/v2.2.0)
+  (2026-11-01) and the public `stable` ref point at the same commit. The
+  [versioned release note](https://github.com/loopx-project/loopx/blob/v2.2.0/docs/product/releases/v2.2.0.md)
+  records the canonical-authority upgrade boundary, the context-delivery
+  default and the readback path. Read it before replacing an existing
+  installation; artifact and native-host claims remain those stated by that
+  release note.
+
 When a new public release is promoted, add it here only after the matching tag,
 release note, stable ref, update path, and focused release canary agree.
 

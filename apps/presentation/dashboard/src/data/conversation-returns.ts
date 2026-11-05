@@ -112,10 +112,15 @@ export function reconcileConversationHistory<T extends ConversationMessage>(
   }
   // A history read can arrive before admission hydrates the optimistic row.
   // Deduplicate only established Session/message identities, never body text.
+  // A live row owns the stream callbacks and controls even when the history
+  // row appeared first. Keep that row when both acquire the same identity.
+  const pendingIdentities = new Set(updated.filter(message => message.pending && message.sourceSessionId && message.sourceMessageId)
+    .map(message => JSON.stringify([message.sourceSessionId, message.sourceMessageId])));
   const identities = new Set<string>();
   const unique = updated.filter((message) => {
     if (!message.sourceSessionId || !message.sourceMessageId) return true;
     const key = JSON.stringify([message.sourceSessionId, message.sourceMessageId]);
+    if (pendingIdentities.has(key) && !message.pending) return false;
     if (identities.has(key)) return false;
     identities.add(key);
     return true;

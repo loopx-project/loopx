@@ -121,6 +121,11 @@ class _RequestRuntimeRevision:
         self._revision: _RuntimeRevision | None = None
         self._scope_count = 1
         self._closed = False
+        # The Todo context handler is a pure lens over supplied records. Share
+        # its exact results only inside this already revision-pinned request;
+        # authority reads, clocks, mutation and settlement never enter here.
+        self._todo_context: dict[bytes, bytes] = {}
+        self._todo_context_bytes = 0
 
     def try_join(self) -> bool:
         with self._lock:
@@ -143,6 +148,20 @@ class _RequestRuntimeRevision:
             if self._scope_count == 0:
                 self._closed = True
                 self._revision = None
+                self._todo_context.clear()
+                self._todo_context_bytes = 0
+
+    def todo_context_result(self, key: bytes) -> bytes | None:
+        with self._lock:
+            return None if self._closed else self._todo_context.get(key)
+
+    def remember_todo_context(self, key: bytes, result: bytes) -> None:
+        with self._lock:
+            size = len(key) + len(result)
+            if (not self._closed and key not in self._todo_context
+                    and self._todo_context_bytes + size <= MAX_REQUEST_BYTES):
+                self._todo_context[key] = result
+                self._todo_context_bytes += size
 
 
 _REQUEST_RUNTIME_REVISION: ContextVar[_RequestRuntimeRevision | None] = (
@@ -1581,13 +1600,36 @@ def effect_runtime_result(
     retry_safe: bool = True,
     large_local_snapshot: bool = False,
 ) -> Any:
-    return effect_runtime_request(
+    state = _REQUEST_RUNTIME_REVISION.get() if method == "todo.context.page" else None
+    key = None
+    if state is not None:
+        # Preserve JSON order and scalar types, including bool/int, signed zero
+        # and exact integers. Do not infer equality from a digest or Todo id.
+        try:
+            key = json.dumps([params, timeout, retry_safe, large_local_snapshot],
+                             ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
+        except (TypeError, ValueError, OverflowError, UnicodeError, RecursionError):
+            pass  # Invalid/non-JSON input still reaches the original validator.
+        if key is not None:
+            prior = state.todo_context_result(key)
+            if prior is not None:
+                return json.loads(prior)  # A caller cannot mutate another view.
+    result = effect_runtime_request(
         method,
         params,
         timeout=timeout,
         retry_safe=retry_safe,
         large_local_snapshot=large_local_snapshot,
     ).get("result")
+    if state is not None and key is not None and isinstance(result, dict):
+        try:
+            encoded = json.dumps(result, ensure_ascii=False, allow_nan=False,
+                                 separators=(",", ":")).encode("utf-8")
+        except (TypeError, ValueError, OverflowError, UnicodeError, RecursionError):
+            pass
+        else:
+            state.remember_todo_context(key, encoded)
+    return result
 
 
 def effect_runtime_projection_result(method: str, params: Mapping[str, Any]) -> Any:

@@ -142,6 +142,31 @@ assert.equal(observedBoth[0].text, "Ask both");
 assert.deepEqual(conversationPendingReturnSessions(observedBoth), []);
 assert.equal(reconcileConversationReturns(observedBoth, "original", [{message_id: "multi"}], createReply), observedBoth);
 
+// History can be displayed before the original admission ACK supplies the
+// live row's identity. Its stream callback target must survive that handoff.
+const historyFirst = {sourceSessionId: "current", sourceMessageId: "agent-message", sourceTurnId: "same-turn",
+  role: "assistant", text: "Stored answer", marker: "history"};
+const lateBoundStream = {sourceSessionId: "current", sourceTurnId: "same-turn", role: "assistant",
+  text: "Live fragment", pending: true, marker: "stream", activity: ["Running"]};
+const admittedAfterRead = reconcileConversationHistory([historyFirst, lateBoundStream], [storedRoles[1]], createHistory);
+assert.equal(admittedAfterRead.length, 1, "One canonical reply remains when history arrived first");
+assert.equal(admittedAfterRead[0].marker, "stream", "The original stream callback target and controls survive");
+assert.equal(admittedAfterRead[0].sourceMessageId, "agent-message");
+assert.equal(admittedAfterRead[0].pending, true);
+assert.equal(admittedAfterRead[0].text, "Live fragment", "Readback does not overwrite streaming text");
+assert.deepEqual(admittedAfterRead[0].activity, ["Running"]);
+assert.equal(reconcileConversationHistory(admittedAfterRead, [storedRoles[1]], createHistory), admittedAfterRead);
+const separateReplies = [historyFirst, lateBoundStream,
+  {...historyFirst, sourceSessionId: "foreign", marker: "foreign"},
+  {...historyFirst, sourceMessageId: "another-answer", sourceTurnId: "another-turn", marker: "another-turn"},
+  {...historyFirst, sourceMessageId: "followup", marker: "followup"}];
+const separateSources = [storedRoles[1], {...storedRoles[1], message_id: "followup", origin: "manager_followup"},
+  {...storedRoles[1], message_id: "another-answer", turn_id: "another-turn"}];
+const distinct = reconcileConversationHistory(separateReplies, separateSources, createHistory);
+assert.deepEqual(distinct.map(row => row.marker), ["stream", "foreign", "another-turn", "followup"],
+  "Equal text, other Sessions/Turns and separate follow-up identities remain distinct");
+console.log("conversation-returns: history-before-admission preserves the live identity and distinct replies");
+
 // A revised brief keeps its return obligation despite a delivered old conclusion.
 const revised = [{sourceSessionId: "original", collaborations: [
   {request_id: "a", request_revision: 2, returns: [{phase: "conclusion", status: "delivered", request_revision: 1}]},

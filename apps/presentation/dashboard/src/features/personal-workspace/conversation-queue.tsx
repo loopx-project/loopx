@@ -5,6 +5,8 @@ import { ChatApiError, chatQueueInputRequestSchema, fetchQueuedChatInput, mutate
 import { composerKeyAction } from "./composer-keyboard";
 import { DocumentAttachment, isTextDocument } from "./document-attachment";
 import { ContextHelp } from "./context-help";
+import { queueInputKeys, readQueueInputRecovery, retireQueueInputRequest } from "./queue-input-recovery";
+import { RetainedQueueInputs } from "./retained-queue-inputs";
 import { useWorkspaceI18n } from "./i18n";
 import "./conversation-queue.css";
 
@@ -18,16 +20,11 @@ function QueuedMessage({sessionId, turn, index, targetTurnId, onChange, onInputC
   const [failed, setFailed] = useState(false);
   const lock = useRef(false);
   const [busy, setBusy] = useState(false), [actionError, setActionError] = useState("");
-  const recoveryKey = `loopx.queue-input:${JSON.stringify([sessionId, turn.turn_id])}`;
-  const draftKey = `${recoveryKey}:draft`;
+  const {request: recoveryKey, draft: draftKey} = queueInputKeys(sessionId, turn.turn_id);
   const [recovery] = useState(() => {
     try {
       if (typeof window === "undefined") return {request: null, editor: null, failed: false};
-      const raw = localStorage.getItem(recoveryKey);
-      const saved = localStorage.getItem(draftKey);
-      const editor = saved ? JSON.parse(saved) as {message: string; revision: number} : null;
-      if (editor && (typeof editor.message !== "string" || !Number.isSafeInteger(editor.revision) || editor.revision < 0)) throw new Error("Invalid edit recovery");
-      return {request: raw ? chatQueueInputRequestSchema.parse(JSON.parse(raw)) : null, editor, failed: false};
+      return {...readQueueInputRecovery(localStorage, sessionId, turn.turn_id), failed: false};
     } catch {return {request: null, editor: null, failed: true};}
   });
   const [pending, setPending] = useState<ChatQueueInputRequest | null>(recovery.request);
@@ -61,8 +58,7 @@ function QueuedMessage({sessionId, turn, index, targetTurnId, onChange, onInputC
       setPending(request);
       await mutateQueuedChatTurn(sessionId, turn.turn_id, request);
       setPending(null); setEditing(false); setDraft(null); setMessage(null); setEditRevision(null);
-      localStorage.removeItem(recoveryKey);
-      localStorage.removeItem(draftKey);
+      retireQueueInputRequest(localStorage, sessionId, turn.turn_id, request, true);
     } catch (cause) {
       const code = cause instanceof ChatApiError ? cause.payload.error_code : "";
       const rejected = cause instanceof ChatApiError && (cause.payload.http_status === 400 || cause.payload.http_status === 404 ||
@@ -70,7 +66,7 @@ function QueuedMessage({sessionId, turn, index, targetTurnId, onChange, onInputC
           "queue_mutation_source_unavailable", "queue_steering_in_progress", "queue_mutation_in_progress", "session_closed"].includes(String(code)));
       if (rejected) {
         setPending(null);
-        try {localStorage.removeItem(recoveryKey);} catch { /* Preserve the draft if storage is unavailable. */ }
+        try {retireQueueInputRequest(localStorage, sessionId, turn.turn_id, request, false);} catch { /* Preserve the draft if storage is unavailable. */ }
       }
       setActionError(!retained
         ? (zh ? "恢复信息无法保存，修改尚未提交。请保留文本后重试。" : "Recovery could not be saved. The change was not submitted; retain the text and retry.")
@@ -177,18 +173,19 @@ function QueuedMessage({sessionId, turn, index, targetTurnId, onChange, onInputC
   </li>;
 }
 
-export function ConversationQueue({sessionId, turns, error, onRetry, targetTurnId, onInputChanged = onRetry}: {
-  sessionId: string; turns: ChatQueuedTurn[]; error: Error | null; onRetry: () => void; targetTurnId?: string; onInputChanged?: () => void;
+export function ConversationQueue({sessionId, turns, error, readReady, onRetry, targetTurnId, onInputChanged = onRetry}: {
+  sessionId: string; turns: ChatQueuedTurn[]; error: Error | null; readReady: boolean; onRetry: () => void; targetTurnId?: string; onInputChanged?: () => void;
 }) {
   const { locale } = useWorkspaceI18n();
   const zh = locale === "zh-CN";
-  if (!turns.length && !error) return null;
-  return <section className="personal-conversation-queue" aria-label={zh ? "待处理消息" : "Queued messages"}>
+  return <>{turns.length || error ? <section className="personal-conversation-queue" aria-label={zh ? "待处理消息" : "Queued messages"}>
     <header><span>{zh ? "待处理" : "Queued"}{error ? "" : ` · ${turns.length}`}</span>
       {error ? <><span role="alert">{zh ? "读取失败" : "Read failed"}</span><button type="button" onClick={onRetry}
         aria-label={zh ? "重试读取待处理消息" : "Retry queued messages"}><RefreshCw size={14}/></button>
         <ContextHelp label={zh ? "队列读取失败原因" : "Queue read error"}><p>{error.message}</p></ContextHelp></> : null}</header>
     <ol>{turns.map((turn, index) => <QueuedMessage key={`${sessionId}:${turn.turn_id}`} sessionId={sessionId} turn={turn} index={index}
       targetTurnId={targetTurnId} onChange={onRetry} onInputChanged={onInputChanged}/>)}</ol>
-  </section>;
+  </section> : null}
+    {readReady && !error ? <RetainedQueueInputs key={sessionId} sessionId={sessionId} turns={turns} onChange={onInputChanged}/> : null}
+  </>;
 }

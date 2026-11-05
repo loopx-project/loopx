@@ -28,7 +28,6 @@ from .install_contract import (
 from .paths import configured_runtime_route, default_runtime_route, global_registry_path
 from .python_install_owner import (
     PythonInstallOwner,
-    interpreter_invocation,
     python_distribution_upgrade_command,
     resolve_python_install_owner,
 )
@@ -1223,9 +1222,16 @@ def collect_doctor(
             if canonical_agent_type
             and agent_type_uses_host_managed_skills(canonical_agent_type)
             else (
-                "Run `loopx workflow-skills --install`, then "
-                "`loopx slash-commands --install`, and rerun doctor. Upgrade this "
-                f"installation with `{interpreter_invocation(sys.executable)} -m pip install --upgrade loopx`."
+                (
+                    f"Upgrade this installation with:\n\n```\n{install_freshness['upgrade_command']}\n```"
+                    if install_freshness["upgrade_command"]
+                    else (
+                        "Run `loopx workflow-skills --install`, then "
+                        "`loopx slash-commands --install`, and rerun doctor. "
+                        "Use the original package manager "
+                        f"({python_distribution.get('installer') or 'unknown installer'}) to upgrade this installation."
+                    )
+                )
                 if python_distribution.get("available")
                 else (
                     f"Run `{local_install_command(repo_root, skip_skills=externally_managed_skills)}` "
