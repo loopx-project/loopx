@@ -23,10 +23,11 @@ INTERFACE_BUDGET_CHARS = {
     # The same generic CLI + 320-char scope with explicit runtime also needs
     # 5,715 chars; retain those routes instead of shortening the instructions.
     "brief": 5_800,
-    # Full runtime capability flags plus an explicit CLI route and 320-char
-    # scope emit 4,851 normalized chars with unchanged guidance. Keep that
-    # supported combination; this is not a transport or execution limit.
-    "thin": 4_900,
+    # Default native context routes bring the complete capability/CLI-route
+    # fixture with a 320-char scope from 4,851 to 4,999 normalized chars.
+    # Retain the full instructions and 101 chars of presentation headroom;
+    # the unchanged oversized-route case still exceeds this allowance.
+    "thin": 5_100,
     "visible_goal": 4_000,
 }
 NATIVE_GOAL_HOST_MAX_CHARS = INTERFACE_BUDGET_CHARS["visible_goal"]
