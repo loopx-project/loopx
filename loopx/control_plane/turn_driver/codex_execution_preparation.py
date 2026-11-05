@@ -6,6 +6,7 @@ the same Todo (and Turn when present) is ready before returning a Host receipt.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
@@ -124,6 +125,7 @@ def execute_codex_execution_preparation(
     *,
     cwd: Path,
     scenario: str,
+    capture_directory: Path | None = None,
     timeout: float = 8,
     runner: CommandRunner | None = None,
 ) -> dict[str, Any]:
@@ -173,7 +175,7 @@ def execute_codex_execution_preparation(
     ):
         raise ValueError("Codex execution preparation requires a physical workspace")
     invoke = runner or _default_runner
-    _run_json(
+    claimed = _run_json(
         expected_claim,
         registry_path=registry_path,
         runtime_root=runtime_root,
@@ -190,6 +192,7 @@ def execute_codex_execution_preparation(
         "--context-delivery", "off",
         "--todo-id", todo_id,
         *(["--turn-instance-id", turn_instance_id] if turn_instance_id else []),
+        *(["--decision-output-dir", str(capture_directory)] if capture_directory is not None else []),
     ]
     after = _run_json(
         guard,
@@ -199,6 +202,13 @@ def execute_codex_execution_preparation(
         timeout=timeout / 2,
         runner=invoke,
     )
+    if capture_directory is not None:
+        from .decision_capture import read_context_capture_file
+
+        source = capture_directory / "decision.json"
+        _, _, after = read_context_capture_file(
+            str(source), hashlib.sha256(source.read_bytes()).hexdigest(), private=True,
+        )
     preparation = after.get("execution_preparation")
     selected = after.get("selected_todo")
     receipt = after.get("heartbeat_receipt")
@@ -207,12 +217,16 @@ def execute_codex_execution_preparation(
         and receipt.get("turn_instance_id") == turn_instance_id
     )
     ready = (
-        after.get("should_run") is True
+        after.get("ok") is True
+        and after.get("goal_id") == goal_id
+        and after.get("should_run") is True
         and after.get("normal_delivery_allowed") is True
         and isinstance(selected, Mapping)
         and selected.get("todo_id") == todo_id
         and isinstance(preparation, Mapping)
         and preparation.get("state") == "ready"
+        and preparation.get("todo_id") == todo_id
+        and preparation.get("agent_id") == agent_id
         and preparation.get("delivery_allowed") is True
         and same_turn
     )
@@ -220,7 +234,7 @@ def execute_codex_execution_preparation(
         raise RuntimeError(
             "LoopX Host claim completed without a same-Todo ready postcondition"
         )
-    return {
+    receipt = {
         "event": "host_execution_prepared",
         "goal_id": goal_id,
         "agent_id": agent_id,
@@ -229,6 +243,12 @@ def execute_codex_execution_preparation(
         "execution_preparation": dict(preparation),
         "normal_delivery_allowed": True,
     }
+    claim_reference = claimed.get("claim_operation_id")
+    if isinstance(claim_reference, str) and claim_reference:
+        receipt["claim_operation_id"] = claim_reference
+    # The Host already paid for the captured complete decision. Its caller
+    # presents that source through the normal reader instead of admitting again.
+    return receipt
 
 
 def codex_execution_preparation_context(receipt: Mapping[str, Any]) -> str:
@@ -239,6 +259,11 @@ def codex_execution_preparation_context(receipt: Mapping[str, Any]) -> str:
         "rechecked the same Todo/Turn before this model step. Treat the earlier "
         "claim_required state as superseded by this ready receipt; do not repeat "
         "its claim or guard solely for that lease state. Current gates and later "
-        "settlement checks still apply. Receipt: "
+        "settlement checks still apply. "
+        + ("Read the ready context in this receipt for current work and settlement, "
+           "replacing the earlier pre-claim view. Retain its original claim reference "
+           "for managed progress or completion. A saved context is not proof of "
+           "model consumption. " if "context" in receipt else "")
+        + "Receipt: "
         + json.dumps(dict(receipt), ensure_ascii=False, separators=(",", ":"))
     )

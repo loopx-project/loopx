@@ -112,27 +112,32 @@ def test_same_turn_progress_or_completion_and_replay_without_extra_guard(
     plan = guard["interaction_contract"]["cli_channel"]["settlement_plan"]
     validation, writeback = plan["ordered_steps"][:2]
     assert validation["command_condition"] == "todo_deliverable_complete"
-    assert "semantic_closeout" in validation["precondition"]
-    vision_args = []
+    assert " --delivery-boundary semantic_closeout " in writeback["semantic_closeout_command_template"]
     if finish_todo:
         rc, complete = _run_generated_cli(validation["command_template"].replace(
             "<validated evidence>", "Independent validation of the original deliverable."), registry_path=registry)
         assert rc == 0, complete
-        vision = tmp_path / "vision.json"
-        vision.write_text(json.dumps({
-            "goal_id": GOAL_ID, "agent_id": AGENT_ID, "state": "vision_patch_proposed",
-            "vision_patch": {"acceptance_summary": "Original scoped validation completed; wider Goal remains open."},
-            "path_delta": {"outcome": "continue", "prior_assumption": "The scoped deliverable needed validation.",
-                           "observed_reality": "The original deliverable passed independent validation.",
-                           "retained": ["Original requirements"], "evidence_refs": ["evidence:validation"]},
-        }))
-        vision_args = ["--agent-vision-json", str(vision)]
-    command = writeback["command_template"]
+    vision = tmp_path / "vision.json"
+    vision.write_text(json.dumps({
+        "schema_version": "goal_vision_replan_contract_v0",
+        "goal_id": GOAL_ID, "agent_id": AGENT_ID, "state": "vision_patch_proposed",
+        "vision_patch": {"acceptance_summary": (
+            "Original scoped validation completed; wider Goal remains open." if finish_todo else
+            "Verified progress advances the original task; its remaining acceptance stays open.")},
+        "path_delta": {"outcome": "continue", "prior_assumption": "The scoped deliverable needed validation.",
+                       "observed_reality": (
+                           "The original deliverable passed independent validation." if finish_todo else
+                           "A bounded verified outcome advances work without completing the deliverable."),
+                       "retained": ["Original requirements"], "evidence_refs": ["evidence:validation"]},
+    }))
+    command = writeback["semantic_closeout_command_template"]
     for key, value in {"<validated_progress>": "verified_slice", "<scale>": "implementation",
-                       "<outcome>": "outcome_progress", "<boundary>": "semantic_closeout" if finish_todo else "in_flight_continuation"}.items():
+                       "<outcome>": "outcome_progress", "<file>": shlex.quote(str(vision))}.items():
         command = command.replace(key, value)
+    words = shlex.split(command)
+    assert words[words.index("--delivery-boundary") + 1] == "semantic_closeout"
     command += " " + shlex.join(["--settle-turn", "--no-global-sync", "--suppress-external-sinks",
-        "--delivery-workspace-path", str(project), *vision_args])
+        "--delivery-workspace-path", str(project)])
     # A hostile ambient executable must not select another checkout/accounting owner.
     trap = tmp_path / "bin"
     trap.mkdir()
@@ -144,8 +149,19 @@ def test_same_turn_progress_or_completion_and_replay_without_extra_guard(
         assert rc == 0, json.dumps(result, ensure_ascii=False)
         assert result["settlement_progress"]["state"] == "settled"
         assert result["settlement_identity"] == plan["identity"]
+        receipts = result["settlement_result"]["receipts"]
+        assert [row["step_kind"] for row in receipts] == ["validation", "durable_writeback", "quota_spend"], replay
+        assert all(row["status"] == "committed" and row["effect_id"] == plan["identity"]["effect_id"]
+                   for row in receipts)
         assert _spend_run_count(runtime) == 1
         assert result.get("idempotent_replay", False) is replay
+    ordinary_args = shlex.split(command)
+    ordinary_args.remove("--settle-turn")
+    rc, ordinary = _run_generated_cli(shlex.join(ordinary_args), registry_path=registry)
+    assert rc == 0 and ordinary["settlement_progress"]["state"] == "settled", ordinary
+    assert [row["step_kind"] for row in ordinary["settlement_result"]["receipts"]] == [
+        "validation", "durable_writeback"]
+    assert _spend_run_count(runtime) == 1
     rc, todo = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID, "--todo-id", TODO_ID)
     assert rc == 0 and todo["todo"]["status"] == ("done" if finish_todo else "open")
     events = runtime / "goals" / GOAL_ID / "rollout-events.jsonl"

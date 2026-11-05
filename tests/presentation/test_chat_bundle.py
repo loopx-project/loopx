@@ -256,6 +256,8 @@ def test_release_predecessor_is_stable_older_and_checksum_verified(
         }
 
     releases = [
+        [release(f"runtime-main-{index:040x}", prerelease=True) for index in range(100)],
+        [release(f"runtime-main-{index:040x}", prerelease=True) for index in range(100, 200)],
         [
             release("v1.0.4"),
             release("v1.0.5"),

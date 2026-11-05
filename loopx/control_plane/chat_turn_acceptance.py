@@ -170,6 +170,41 @@ def _required_string(payload: dict[str, Any], field: str) -> str:
     return value
 
 
+def queued_chat_turn_ids(
+    turns: list[dict[str, Any]], active_turn_id: str | None, *,
+    include_reserved: bool = False, capacity_at: str | None = None,
+) -> list[str]:
+    """Project storage observations to the typed queue/Turn owner."""
+    return effect_runtime_result("chat.queue.select", {
+        "active_turn_id": active_turn_id, "include_reserved": include_reserved,
+        "capacity_at": capacity_at,
+        "turns": [{"turn_id": t["turn_id"], "status": t["status"],
+                   "expires_at": t.get("expires_at"), "reservation": t.get("_queue_steering")} for t in turns],
+    })["turn_ids"]
+
+
+def plan_queued_chat_steering(
+    session: dict[str, Any], turn: dict[str, Any], active: dict[str, Any] | None,
+    receipt: dict[str, Any] | None, *, ingress_id: str, operation_id: str, target: str, phase: str,
+) -> dict[str, Any]:
+    return effect_runtime_result("chat.queue.steer", {
+        "phase": phase,
+        "request": {"client_ingress_id": ingress_id, "operation_id": operation_id, "target_turn_id": target},
+        "session": {"status": session.get("status"), "active_turn_id": session.get("active_turn_id")},
+        "active_status": (active or {}).get("status"),
+        "turn": {"turn_id": turn["turn_id"], "status": turn["status"],
+                 "origin": turn.get("origin"), "loopx_execution": turn.get("loopx_execution", False),
+                 "has_collaboration_request": turn.get("collaboration_request") is not None,
+                 "has_external_agent_target": turn.get("external_agent_target") is not None,
+                 "attachment_count": len(turn.get("attachments") or []),
+                 "reservation": turn.get("_queue_steering")},
+        "receipt": ({key: receipt.get(key) for key in (
+            "status", "mode", "expected_turn_id", "active_turn_id", "error_code",
+        )} if receipt is not None else None),
+        "receipt_message_matches": receipt is not None and receipt.get("message") == turn.get("message"),
+    })
+
+
 def _required_bool(payload: dict[str, Any], field: str) -> bool:
     value = payload.get(field)
     if not isinstance(value, bool):

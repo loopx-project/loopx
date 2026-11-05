@@ -121,6 +121,18 @@ intentionally have no LoopX Core and must remain uncontaminated controls.
 
 ### C1 source audit: shared owners and the remaining split
 
+Bound native execution preparation retains the ordinary managed claim reference
+and captures its same-Turn ready decision before CLI compaction. The Host hands
+that source to the existing saved-capture presentation/reader owner, rather than
+discarding it and making the model evaluate another guard to obtain its current
+contract. Goal, Agent, Todo and Turn must match before publication. Required
+material reads, including an explicit complete Goal read, remain required; a
+ready receipt or saved file does not fulfill them. Optional presentation failure
+retains the original digest-bound recovery. Explicit off is inert, and an
+unbound request keeps its original readiness route without inventing a Turn.
+This is a bounded Host handoff repair, not C1 cutover, installed adoption or
+qualification of model cost and long-horizon benefit.
+
 The source already shares more than the output names suggest. `_emit_quota_result`
 captures the complete decision **before** `_project_quota_cli_payload` chooses
 ordinary CLI compaction or `buildTurnEnvelope`. The latter delegates to the

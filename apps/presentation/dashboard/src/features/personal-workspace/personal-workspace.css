@@ -2222,7 +2222,7 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-composer-runtime .personal-chat-model-menu > summary > span { display: flex; align-items: baseline; gap: 6px; }
 .personal-composer-runtime .personal-chat-model-menu > summary small { flex: none; }
 .personal-composer-runtime .personal-chat-model-menu > summary .personal-model-current { font-size: var(--text-caption); }
-.personal-composer-runtime .personal-chat-model-panel { top: auto; bottom: calc(100% + 12px); }
+.personal-composer-runtime .personal-chat-model-panel { top: auto; bottom: calc(100% + 12px); max-height: min(480px, 70dvh, var(--composer-menu-space, 70dvh)); }
 .personal-composer-runtime .personal-chat-model-panel .personal-select-listbox { bottom: auto; }
 .personal-model-next-heading { display: flex; align-items: center; gap: 6px; }
 .personal-model-options { display: grid; gap: 8px; min-width: 0; margin: 0; padding: 0; border: 0; }
@@ -2233,7 +2233,7 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-composer-actions > summary::-webkit-details-marker { display: none; }
 .personal-composer-actions > summary:hover, .personal-composer-runtime .personal-select-trigger:hover, .personal-composer-runtime .personal-chat-model-menu > summary:hover { background: var(--pw-line); color: var(--pw-text); }
 .personal-composer-actions > summary:focus-visible { outline: 2px solid var(--pw-blue); outline-offset: 2px; }
-.personal-composer-actions-panel { position: absolute; z-index: 50; bottom: calc(100% + 10px); left: 0; display: grid; gap: 8px; width: min(300px, calc(100vw - 44px)); max-height: min(420px, 65vh); overflow: auto; padding: 8px; border: 1px solid var(--pw-line); border-radius: 8px; background: var(--pw-card); box-shadow: 0 8px 24px rgb(0 0 0 / 9%); }
+.personal-composer-actions-panel { position: absolute; z-index: 50; bottom: calc(100% + 10px); left: 0; display: grid; gap: 8px; width: min(300px, calc(100vw - 44px)); max-height: min(420px, 65dvh, var(--composer-menu-space, 65dvh)); overflow: auto; padding: 8px; border: 1px solid var(--pw-line); border-radius: 8px; background: var(--pw-card); box-shadow: 0 8px 24px rgb(0 0 0 / 9%); }
 .personal-composer-actions:not([open]) > .personal-composer-actions-panel { display: none; }
 .personal-composer-actions-panel button { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 8px; border: 0; border-radius: 4px; background: transparent; color: var(--pw-text); font: inherit; text-align: left; cursor: pointer; }
 .personal-composer-actions-panel button:hover { background: var(--pw-line); }
@@ -2243,6 +2243,8 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-composer-toolbar .goal-loopx-message-mode { margin: 0; min-width: 0; }
 .personal-composer-toolbar .goal-loopx-message-mode select { max-width: 140px; min-height: 36px; border: 0; background: transparent; color: var(--pw-text); }
 .personal-composer-toolbar > .personal-composer-send { flex: none; margin-left: auto; }
+.personal-composer-stop { display: grid; place-items: center; flex: none; width: 36px; height: 36px; padding: 0; border: 1px solid var(--pw-line-strong); border-radius: 10px; background: #fff; color: var(--pw-text); cursor: pointer; }
+.personal-composer-stop:focus-visible { outline: 2px solid var(--pw-blue); outline-offset: 2px; }
 @media (max-width: 760px) {
   .personal-composer-runtime .personal-chat-model-menu { position: static; max-width: min(140px, 36vw); }
   .personal-composer-runtime .personal-chat-model-panel { left: 0; right: 0; width: auto; bottom: calc(100% + 8px); }

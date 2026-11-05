@@ -72,8 +72,8 @@ class ChatIngressStore:
     def runtime_activation_lock(self):
         return chat_runtime_activation_lock(self.root.parent)
 
-    def queued_turns(self, session_id: str) -> list[dict[str, Any]]:
-        from .chat_store import _read_json, CHAT_TURN_SCHEMA_VERSION
+    def queued_turns(self, session_id: str, *, strict: bool = False, include_reserved: bool = False, capacity_at: str | None = None) -> list[dict[str, Any]]:
+        from .chat_store import _read_json, CHAT_TURN_SCHEMA_VERSION, TERMINAL_TURN_STATES
 
         session = self.load_session(session_id)
         if session is None:
@@ -84,20 +84,86 @@ class ChatIngressStore:
         for path in turns_dir.glob("*.json") if turns_dir.is_dir() else []:
             if path.name.endswith(".events.json"):
                 continue
-            payload = _read_json(path)
+            if strict:
+                try:
+                    payload = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, ValueError) as exc:
+                    raise OSError("Queued Turn state is unreadable") from exc
+                if (not isinstance(payload, dict)
+                        or payload.get("schema_version") != CHAT_TURN_SCHEMA_VERSION
+                        or payload.get("session_id") != session_id
+                        or payload.get("turn_id") != path.stem
+                        or not isinstance(payload.get("status"), str)
+                        or payload.get("status") not in TERMINAL_TURN_STATES | {
+                            "queued", "starting", "running", "completing", "interrupting",
+                        }):
+                    raise OSError("Queued Turn state is invalid")
+            else:
+                payload = _read_json(path)
             if (
                 payload.get("schema_version") == CHAT_TURN_SCHEMA_VERSION
                 and payload.get("status") == "queued"
                 and str(payload.get("turn_id") or "") != active_turn_id
             ):
                 rows.append(payload)
+        from .control_plane.chat_turn_acceptance import queued_chat_turn_ids
+        selected = set(queued_chat_turn_ids(rows, active_turn_id, include_reserved=include_reserved, capacity_at=capacity_at))
         return sorted(
-            rows,
+            [row for row in rows if row["turn_id"] in selected],
             key=lambda item: (
                 str(item.get("created_at") or ""),
                 str(item.get("turn_id") or ""),
             ),
         )
+
+    def queue_steering_lock(self, session_id: str, turn_id: str):
+        """Use the same Session→Turn fences as automatic queue consumption."""
+        from contextlib import ExitStack
+        stack = ExitStack()
+        try:
+            stack.enter_context(self._session_lock(session_id))
+            stack.enter_context(exclusive_file_lock(self._session_path(session_id),
+                agent_id="loopx-chat", operation="steer_session_queue_turn"))
+            stack.enter_context(exclusive_file_lock(self._turn_path(session_id, turn_id),
+                agent_id="loopx-chat", operation="steer_queued_chat_turn"))
+            return stack
+        except BaseException:
+            stack.close()
+            raise
+
+    def steering_receipt(self, session_id: str, ingress_id: str):
+        """A corrupt receipt cannot be treated as absence and resent."""
+        from .chat_store import CHAT_INGRESS_SCHEMA_VERSION
+        path = self._ingress_path(session_id, ingress_id)
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return None
+        if (not isinstance(value, dict) or value.get("schema_version") != CHAT_INGRESS_SCHEMA_VERSION
+                or value.get("session_id") != session_id or value.get("client_ingress_id") != ingress_id):
+            raise OSError("Steering receipt is unreadable")
+        return value
+
+    def write_queue_steering(self, session_id: str, turn: dict[str, Any], plan: dict[str, Any]):
+        """Persist the typed plan while the caller holds both queue fences."""
+        from .chat_store import _atomic_write_json, utc_now
+        if plan["action"] not in {"dispatch", "complete", "release"}:
+            return turn
+        turn = {**turn, "_queue_steering": plan["reservation"]}
+        if plan["action"] == "complete":
+            # Keep the existing SSE response envelope for older readers. The
+            # adoption marker distinguishes this receipt from a model answer;
+            # no assistant transcript row or invented answer is published.
+            response = {"schema_version": "loopx_chat_agent_response_v0", "message": "",
+                        "proposals": [], "protected_action": None, "gate": None}
+            turn.update(status="completed", completed_at=turn.get("completed_at") or utc_now(), response=response)
+        _atomic_write_json(self._turn_path(session_id, turn["turn_id"]), turn, preserve_mode=True)
+        if plan["action"] == "complete":
+            payload = {"steered_into_turn_id": plan["reservation"]["target_turn_id"], "response": turn["response"]}
+            if not any(e.get("kind") == "turn.completed" and e.get("payload") == payload
+                       for e in self.events_after(session_id, turn["turn_id"], None)):
+                self.append_event(session_id, turn["turn_id"], kind="turn.completed", payload=payload)
+        return turn
 
     def complete_recovered_terminalization(
         self, session_id: str, turn_id: str,
@@ -158,7 +224,7 @@ class ChatIngressStore:
         source revalidation and Stop remain independent bounds.
         """
 
-        from .chat_store import _opaque_id, _instant, _atomic_write_json, utc_now, CHAT_TURN_SCHEMA_VERSION
+        from .chat_store import _opaque_id, _atomic_write_json, utc_now, CHAT_TURN_SCHEMA_VERSION
 
         client_id = _opaque_id(client_turn_id, field="client_turn_id")
         from .chat_attachments import normalize_chat_attachments, validate_chat_turn_envelope
@@ -195,11 +261,7 @@ class ChatIngressStore:
                 if session is None or session.get("status") == "closed":
                     raise KeyError("chat session was not found")
                 now = datetime.now(timezone.utc)
-                queued = [
-                    turn
-                    for turn in self.queued_turns(session_id)
-                    if (_instant(turn.get("expires_at")) or now + timedelta(seconds=1)) > now
-                ]
+                queued = self.queued_turns(session_id, include_reserved=True, capacity_at=now.isoformat())
                 if len(queued) >= SESSION_QUEUE_MAX_PENDING:
                     raise RuntimeError("session_queue_full")
                 turn_id = uuid.uuid4().hex

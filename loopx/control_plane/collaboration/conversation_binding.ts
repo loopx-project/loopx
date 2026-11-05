@@ -639,6 +639,12 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
       || (Array.isArray(row.context_recovery_history) && row.context_recovery_history.some(value =>
         requireJsonObject(value, "prior preparation recovery").preparation_attempt != null))) return no;
   if (current.agent_id === "antigravity") {
+    if (failed.error_code === "runtime_error") {
+      // Parsing/presentation can fail after native work. This route admits
+      // only a restricted review of independently read original evidence;
+      // it never retries the failed business Turn or adopts an unverified final.
+      return planInterruptedStewardAnswer(recovery, row, current, failed, version);
+    }
     if (failed.error_code === "antigravity_step_error") {
       const quota = planNativeQuotaRecovery(recovery, row, current, failed, version);
       const observed = recovery.native_observation as JsonObject | null | undefined;
@@ -1083,6 +1089,9 @@ function planUnfinishedWork(recovery: JsonObject, row: JsonObject, current: Json
 function interruptedVisibleResult(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const result = value as JsonObject;
+  if (Object.keys(result).join(",") === "visible_response") {
+    return typeof result.visible_response === "string" && result.visible_response.trim().length > 0;
+  }
   if (Object.keys(result).sort().join(",") === "content,file_uri") {
     if (typeof result.file_uri !== "string" || typeof result.content !== "string") return false;
     try {

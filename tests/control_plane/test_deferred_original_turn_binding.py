@@ -1,10 +1,10 @@
 """A compact candidate view cannot replace an admitted Turn's identity."""
 import copy
-import json
 from pathlib import Path
 
 import pytest
 
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 from tests.control_plane.test_quota_settlement_cli import (
     AGENT_ID,
     GOAL_ID,
@@ -84,7 +84,7 @@ def test_deferred_replay_keeps_original_binding_during_replan(
     capsys.readouterr()
     rc = main(["--format", "json", "--registry", str(registry),
         "--runtime-root", str(runtime), *guard, ])
-    replay = json.loads(capsys.readouterr().out)
+    replay = read_cli_policy_payload(capsys.readouterr().out, returncode=rc)
     assert rc == 0, replay
     assert replay["heartbeat_receipt"]["settlement_identity"] == identity
     channel = replay["interaction_contract"]["cli_channel"]

@@ -9,6 +9,7 @@ from typing import Any
 
 from ..capabilities.benchmark_toolkit import (
     BENCHMARK_EXPERIMENT_BOARD_ROW_SCHEMA_VERSION,
+    BenchmarkExperimentBoardValidationError,
     benchmark_experiment_board_row_key,
     build_benchmark_experiment_board,
     default_benchmark_experiment_board_path,
@@ -274,6 +275,8 @@ def handle_benchmark_experiment_board_command(
         payload["path_recorded"] = False
         if write is not None:
             payload["write"] = write
+    except BenchmarkExperimentBoardValidationError as exc:
+        args.benchmark_experiment_board_parser.error(str(exc))
     except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
         args.benchmark_experiment_board_parser.error(
             "invalid benchmark experiment board input"

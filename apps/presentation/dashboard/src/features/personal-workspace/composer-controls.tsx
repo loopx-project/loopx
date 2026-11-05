@@ -5,6 +5,7 @@ import type { WorkspaceAgentOption } from "./personal-workspace-model";
 import { ChatModelMenu } from "./chat-model-menu";
 import { useWorkspaceI18n } from "./i18n";
 import { WorkspaceSelect } from "./workspace-select";
+import { useComposerMenuSpace } from "./use-composer-menu-space";
 
 /** Existing send controls keep their Session/configuration owners. */
 export function ComposerRuntimeControls({ agents, agentId, goalId, original, model, effort, readback, onAgent, onModel, onEffort, onDefaults }: {
@@ -34,6 +35,7 @@ export function ComposerRuntimeControls({ agents, agentId, goalId, original, mod
 export function ComposerActions({ children }: { children: ReactNode }) {
   const { locale } = useWorkspaceI18n();
   const root = useRef<HTMLDetailsElement>(null);
+  useComposerMenuSpace(root);
   useEffect(() => {
     const close = (event: PointerEvent | KeyboardEvent) => {
       if (!root.current?.open) return;

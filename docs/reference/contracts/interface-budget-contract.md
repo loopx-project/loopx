@@ -10,7 +10,7 @@ and size/count budgets.
 | --- | --- | --- | --- | --- | --- | --- |
 | `heartbeat_prompt_json` | heartbeat automation | wake and route one bounded turn | `quota should-run`, `status`, or `review-packet --handoff-only` | `json_chars <= 5400` plus `interface_budget.within_budget=true` | `nested_keys <= 40` | `top_level_keys <= 30` |
 | `review_packet_handoff_only_json` | project-agent handoff | forward the smallest sufficient task packet | full `review-packet` or run-history artifact | `json_chars <= 3000` plus `handoff_interface_budget.within_budget=true` | `nested_keys <= 40` | `top_level_keys <= 18` |
-| `quota_should_run_json` | quota guard | decide whether the selected goal may spend compute | `status`, `history`, or active state | `json_chars <= 20500` | `nested_keys <= 575` | `top_level_keys <= 55` |
+| `quota_should_run_json` | quota guard | decide whether the selected goal may spend compute | `status`, `history`, or active state | `json_chars <= 21000` | `nested_keys <= 575` | `top_level_keys <= 55` |
 | `dashboard_status_json` | operator dashboard | render first-screen operator state | `history`, run artifacts, or project-local adapter output | `json_chars <= 25000` | `nested_keys <= 350` | `top_level_keys <= 27` |
 
 These four budgets measure compact machine payloads. For
@@ -65,6 +65,25 @@ execution authority or change to frozen experiment or promotion criteria.
 分别改为 575 键与 25,000 字符，余量为 11 键、685 字符。quota 原 54 个顶层键
 已占满旧限、没有 cadence 余量，改为 55 后保留一个键。quota 字符、status 键数、
 夹具数量、采样深度和语义断言不变；不授予执行权限，也不改变冻结的实验或 promotion 标准。
+
+The standard premerge runner adds an isolation directory around this fixture.
+On base `6a92640346051b79d08fb369354180b613c8fa46` and the budget-only candidate,
+quota measures 20,341 characters directly and 20,509 through the native runner,
+with 565 nested and 54 top-level keys. Eight complete fixture-root references
+each gain the runner's 21-character directory component, accounting for all 168
+additional characters. Preserve the original 20,500-ceiling
+failure. Calibrate only this character regression allowance to 21,000, leaving
+491 characters in the runner; keep the 575/55 structure limits and complete
+source paths. The same quota payload with an oversized reason remains rejected.
+No production payload, execution budget, host hard limit or frozen qualification
+result changes; this is not a compaction or efficiency claim.
+
+标准 premerge 的隔离目录会增长同一夹具的完整路径。上述 base 与仅改预算的候选均为
+直接运行 20,341 字符、原生 runner 20,509 字符，565 个嵌套键及 54 个顶层键；
+8 处完整夹具路径各增加 21 字符，解释全部 168 字符差异。
+保留原 20,500 超限失败，仅将字符回归余量调至 21,000，给 runner 留 491 字符；
+575/55 结构限制、完整来源路径及超长 reason 拒绝继续。生产负载、执行预算、宿主
+硬边界和冻结资格结果均不变，不据此声称压缩或效率提升。
 
 The successful thin heartbeat projection contains only `schema_version`,
 `ok`, `goal_id`, optional `agent_id`, `task_body`, and the compact
@@ -810,3 +829,34 @@ characters once. Missing clauses, unrelated surfaces and later new→new growth
 retain ordinary gates. This is cost attribution, not admission logic or proof of
 semantic equivalence. The PR's clause review and current-path validation remain
 necessary; deleting an obligation cannot earn this allowance.
+
+### Thin native context route allowance
+
+The complete real-CLI workload (320-character scope, five capabilities and an
+explicit CLI route) now emits 4,999 normalized body characters on macOS with the
+default native context routes. The earlier route qualification measured 4,851; the
+current 4,900 ceiling therefore marks a supported combination over budget. Retain the
+complete commands and instructions and raise only the thin presentation
+allowance to 5,100, leaving 101 characters of headroom. The unchanged negative
+case adds 48 characters to the CLI route, repeated four times, and still fails
+with an overflow at 5,191. The original 4,900 failure remains historical evidence.
+
+Matched base/head rendering on one frozen fixture preserves every body byte in
+ordinary thin, explicit context-off, captured TurnEnvelope, brief, compact and
+full modes. The supported thin body remains 5,347 actual characters / 5,351
+UTF-8 bytes; this does not reduce model input or establish token, latency or
+cost savings. The separate 400-character captured-envelope and 640-character
+Reward Memory allowances remain fixed. The no-memory captured-envelope ceiling
+therefore becomes 5,500. Other mode limits, JSON/output/key/line guards,
+execution quotas, host hard limits and frozen qualification thresholds stay
+unchanged; already-over-budget brief/compact/full workloads remain failures.
+
+完整真实 CLI 负载（320 字符 scope、五项能力及显式 CLI 路径）在 macOS 默认原生上下文
+路由下为 4,999 个归一化正文字符；此前路径资格化为 4,851，现有 4,900
+展示上限因此将受支持组合标为超限。保留完整命令和指令，仅将 thin 展示预算调至 5,100，
+余量 101 字符。原负例仍将 CLI 路径增加 48 字符、重复四次，在 5,191 时报告超限；
+原 4,900 上限失败保留。单一冻结夹具的 base/head 各模式正文逐字节相同，受支持
+thin 仍为实际 5,347 字符／5,351 UTF-8 字节，不据此宣称输入、token、延迟或费用
+下降。可选 envelope 的 400 和 Reward Memory 的 640 字符余量不变；无 memory 的
+envelope 上限随 thin 基础预算变为 5,500。其余模式、JSON／输出／键数／行数、执行
+额度、宿主硬限制及冻结门槛不变；已超限的 brief／compact／full 场景仍保持失败。

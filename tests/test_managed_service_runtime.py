@@ -165,6 +165,49 @@ def test_recovery_rejects_a_journal_with_changed_role_or_data_route(managed):
     assert path.read_bytes() == original and journal.exists()
 
 
+def test_recovery_reads_a_utf8_journal_under_a_locale_codec(tmp_path):
+    journal = tmp_path / "handoff.json"
+    journal.write_text(
+        json.dumps(
+            {
+                "schema_version": "loopx_managed_runtime_handoff_v1",
+                "note": "继续授权的工作",
+                "services": {},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    script = '''
+import sys
+from pathlib import Path
+from loopx.hosts.managed_service_runtime import _recover_alignment
+
+try:
+    _recover_alignment(Path(sys.argv[1]))
+except ValueError as exc:
+    raise SystemExit(0 if str(exc) == "service_runtime_route_unverified" else 1)
+raise SystemExit(2)
+'''
+    environment = {
+        **os.environ,
+        "PYTHONIOENCODING": "gbk",
+        "PYTHONUTF8": "0",
+        "PYTHONCOERCECLOCALE": "0",
+        "LC_ALL": "C",
+        "LANG": "C",
+    }
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(journal)],
+        cwd=Path(__file__).resolve().parents[1],
+        env=environment,
+        capture_output=True,
+        timeout=10,
+    )
+
+    assert result.returncode == 0, result.stderr.decode("utf-8", "replace")
+
+
 def test_failed_second_bootstrap_restores_original_loaded_pair(managed):
     _, agents, target, loaded, calls, fail = managed
     before = {p: p.read_bytes() for p in agents.glob("*.plist")}

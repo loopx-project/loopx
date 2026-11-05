@@ -48,12 +48,14 @@ export function ChannelTimeline({
   historyPhase = "ready",
   onReadMessage,
   onRetryHistory,
+  queuedTurnKeys,
 }: {
   emptyState?: { title: string; description: string };
   messageFocus?: {sessionId: string; messageId: string};
   historyPhase?: ConversationHistoryStatus["phase"];
   onReadMessage?: () => void;
   onRetryHistory?: () => void;
+  queuedTurnKeys?: ReadonlySet<string>;
   readOnly?: boolean;
   items: WorkspaceTimelineItem[];
   onCancelPreparation?: () => void;
@@ -67,7 +69,15 @@ export function ChannelTimeline({
   onAdjustTurn?: (turnId: string) => void;
 }) {
   const { locale, t } = useWorkspaceI18n();
-  const orderedItems = conversationOrder(items);
+  const orderedItems = conversationOrder(items.filter(item => {
+    if (item.kind !== "message") return true;
+    if (item.message.queued) return false;
+    const queued = item.message.role === "user" && queuedTurnKeys?.has(
+      JSON.stringify([item.message.sourceSessionId, item.message.sourceTurnId]));
+    const focused = messageFocus?.sessionId === item.message.sourceSessionId
+      && messageFocus?.messageId === item.message.sourceMessageId;
+    return !queued || focused;
+  }));
   const messageKey = (message: Extract<WorkspaceTimelineItem, {kind: "message"}>["message"]) =>
     JSON.stringify([message.sourceSessionId, message.sourceMessageId]);
   const [historical, setHistorical] = useState<Set<string> | null>(null);
@@ -135,7 +145,7 @@ export function ChannelTimeline({
     item.kind === "run" && ["queued", "running", "completed"].includes(item.run.status));
   const scheduleItems = items.filter((item): item is Extract<WorkspaceTimelineItem, { kind: "schedule" }> => item.kind === "schedule");
   const backgroundIds = new Set([...routineRuns, ...scheduleItems].map(item => item.id));
-  const primaryItems = items.filter(item => item.kind !== "proposal" && !backgroundIds.has(item.id));
+  const primaryItems = orderedItems.filter(item => item.kind !== "proposal" && !backgroundIds.has(item.id));
   const pausedScheduleCount = scheduleItems.filter(item => item.schedule.status === "paused").length;
   const enabledScheduleCount = scheduleItems.length - pausedScheduleCount;
   const workingCount = routineRuns.filter(item => item.run.status === "running" && Boolean(item.run.sessionId) && Boolean(item.run.canInterrupt)).length;

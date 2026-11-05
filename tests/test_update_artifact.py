@@ -103,7 +103,7 @@ def test_redirects_cannot_weaken_source_tls():
         assert "require HTTPS" in str(caught.value.__cause__)
 
 
-def test_pinned_runtime_metadata_is_revision_addressed_within_the_channel_release(monkeypatch):
+def test_pinned_runtime_metadata_is_revision_addressed_in_its_own_release(monkeypatch):
     body = b"runtime"
     descriptor = manifest(body, "https://publisher.invalid/runtime.tar.gz")
     requests = []
@@ -112,7 +112,74 @@ def test_pinned_runtime_metadata_is_revision_addressed_within_the_channel_releas
         return descriptor
     monkeypatch.setattr(update, "read_json", metadata)
     assert update.resolve_artifact("example/loopx", "a" * 40)["source_revision"] == "a" * 40
-    assert requests == ["https://github.com/example/loopx/releases/download/runtime-main/loopx-runtime-" + "a" * 40 + ".json"]
+    assert requests == ["https://github.com/example/loopx/releases/download/runtime-main-" + "a" * 40 + "/loopx-runtime-" + "a" * 40 + ".json"]
+
+
+@pytest.mark.parametrize("status", [404, 403, 429, 500])
+def test_pinned_metadata_falls_back_only_when_the_new_address_is_missing(monkeypatch, status):
+    from urllib.error import HTTPError
+    descriptor = manifest(b"runtime", "https://publisher.invalid/runtime.tar.gz")
+    calls = []
+    def metadata(url):
+        calls.append(url)
+        if len(calls) == 1:
+            try:
+                raise HTTPError(url, status, "synthetic response", None, None)
+            except HTTPError as cause:
+                raise ValueError("Update metadata unavailable") from cause
+        return descriptor
+    monkeypatch.setattr(update, "read_json", metadata)
+    if status == 404:
+        assert update.resolve_artifact("example/loopx", "a" * 40) == descriptor
+        assert calls[1] == "https://github.com/example/loopx/releases/download/runtime-main/loopx-runtime-" + "a" * 40 + ".json"
+    else:
+        with pytest.raises(ValueError, match="metadata unavailable"):
+            update.resolve_artifact("example/loopx", "a" * 40)
+        assert len(calls) == 1
+
+
+def test_legacy_fallback_still_rejects_another_revision(monkeypatch):
+    from urllib.error import HTTPError
+    calls = []
+    def metadata(url):
+        calls.append(url)
+        if len(calls) == 1:
+            raise ValueError("missing") from HTTPError(url, 404, "missing", None, None)
+        return {**manifest(b"runtime", "https://publisher.invalid/runtime.tar.gz"), "source_revision": "b" * 40}
+    monkeypatch.setattr(update, "read_json", metadata)
+    with pytest.raises(ValueError, match="another revision"):
+        update.resolve_artifact("example/loopx", "a" * 40)
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("failure", ["invalid", "revision", "transport"])
+def test_pinned_metadata_does_not_fallback_from_invalid_or_unverified_sources(monkeypatch, failure):
+    descriptor = manifest(b"runtime", "https://publisher.invalid/runtime.tar.gz")
+    calls = []
+    def metadata(url):
+        calls.append(url)
+        if failure == "transport":
+            raise ValueError("Update metadata unavailable") from OSError("synthetic TLS failure")
+        if failure == "invalid":
+            return {}
+        return {**descriptor, "source_revision": "b" * 40}
+    monkeypatch.setattr(update, "read_json", metadata)
+    with pytest.raises(ValueError):
+        update.resolve_artifact("example/loopx", "a" * 40)
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("ref,channel,suffix", [
+    ("main", "main", "download/runtime-main/loopx-runtime.json"),
+    ("stable", "stable", "latest/download/loopx-runtime.json"),
+    ("v1.2.3", "stable", "download/v1.2.3/loopx-runtime.json"),
+])
+def test_channel_and_product_release_addresses_remain_unchanged(monkeypatch, ref, channel, suffix):
+    descriptor = {**manifest(b"runtime", "https://publisher.invalid/runtime.tar.gz"), "channel": channel}
+    calls = []
+    monkeypatch.setattr(update, "read_json", lambda url: calls.append(url) or descriptor)
+    assert update.resolve_artifact("example/loopx", ref) == descriptor
+    assert calls == ["https://github.com/example/loopx/releases/" + suffix]
 
 
 @pytest.mark.parametrize("relation", ["ahead", "behind", "diverged"])

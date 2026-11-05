@@ -104,6 +104,12 @@ case supplements the recent Grid logs; it is not another recent complete history
 The analysis headline preserves the mixed result: five recorded utility tests
 and one unknown, without turning a test into a positive benefit.
 
+The same real saved-analysis reader checks keyboard focus with the opening
+click's animation callbacks held. Enter still opens the focused judgment and
+Escape returns to its metric, in both languages at desktop and 390px widths.
+Region focus is established when React commits the detail; a delayed frame
+cannot take focus away from a reader already navigating its rows.
+
 | Judgment | Yes / no / unknown |
 | --- | --- |
 | Goal alignment | 4 / 0 / 2 |
@@ -176,6 +182,13 @@ request identities. Other cited ranges return an explicit unavailable response;
 no transcript or failure stack is substituted. These analysis Goals have no
 Explore logs: their empty histories are preserved, separately from the recent
 real-history cases above.
+
+When saved analysis or native measurements exist without an Explore log, the
+missing-history status stays inline above the results. Goals without saved
+results retain their empty-history entry. Expand the retained-improvement value
+for the full baseline, retained candidate and citations; the compact summary does
+not change those source records.
+
 The same fixture also freezes the original registered feedback snapshot, whose
 native retention is unknown. Select it through **Evaluation scope / 评估范围**:
 the best valid value remains `0.849544264387785` and the last valid candidate

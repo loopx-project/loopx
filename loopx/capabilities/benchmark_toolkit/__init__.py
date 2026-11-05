@@ -47,6 +47,7 @@ from .container_binding import (
     select_exact_docker_container,
 )
 from .experiment_board import (
+    BenchmarkExperimentBoardValidationError,
     BENCHMARK_EXPERIMENT_BOARD_LEDGER_FILENAME,
     BENCHMARK_EXPERIMENT_BOARD_ROW_SCHEMA_VERSION,
     BENCHMARK_EXPERIMENT_BOARD_SCHEMA_VERSION,
@@ -252,6 +253,7 @@ from .token_capacity import (
 )
 
 __all__ = [
+    "BenchmarkExperimentBoardValidationError",
     "ATIF_SCHEMA_VERSION",
     "BENCHMARK_ADAPTIVE_CONCURRENCY_DECISION_SCHEMA_VERSION",
     "BENCHMARK_ADAPTIVE_CONCURRENCY_POLICY_SCHEMA_VERSION",

@@ -1,0 +1,18 @@
+.personal-conversation-queue { min-width: 0; margin: 0 0 8px; font-size: var(--text-caption); color: var(--pw-text); }
+.personal-conversation-queue header { display: flex; align-items: center; gap: 8px; margin: 0 8px 4px; color: var(--pw-muted); }
+.personal-conversation-queue ol { max-height: min(28dvh, 220px); overflow: auto; overscroll-behavior: contain; list-style: none; padding: 0; margin: 0; border: 1px solid var(--pw-line-strong); border-radius: 12px; background: #fff; }
+.personal-conversation-queue li + li { border-top: 1px solid var(--pw-line-strong); }
+.personal-queue-row { display: flex; align-items: start; gap: 8px; padding: 8px 10px; }
+.personal-queue-row details { min-width: 0; flex: 1; }
+.personal-queue-row summary { cursor: pointer; }
+.personal-queue-row summary > span { display: -webkit-inline-box; max-width: calc(100% - 16px); vertical-align: top; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; white-space: pre-wrap; }
+.personal-queue-row summary small { display: block; margin: 4px 0 0 16px; color: var(--pw-muted); }
+.personal-conversation-queue button { display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-height: 32px; padding: 4px 6px; border: 0; border-radius: 6px; color: var(--pw-muted); background: transparent; cursor: pointer; }
+.personal-conversation-queue button:hover { background: var(--pw-blue-soft); color: var(--pw-blue-ink); }
+.personal-conversation-queue button:disabled { opacity: .45; cursor: default; }
+.personal-conversation-queue button:focus-visible, .personal-queue-row summary:focus-visible { outline: 2px solid var(--pw-blue); outline-offset: 2px; }
+.personal-queue-steer { flex-shrink: 0; }
+.personal-queue-message { margin: 8px 0 0; font-size: var(--text-body); line-height: var(--leading-body); }
+.personal-queue-message p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.personal-queue-message img { display: block; max-width: 100%; max-height: 120px; object-fit: contain; }
+.personal-queue-feedback { margin: 0; padding: 0 10px 8px; color: var(--pw-muted); overflow-wrap: anywhere; }

@@ -80,6 +80,7 @@ from .quota_reward_memory import (
     reward_memory_candidate_details,
     stage_reward_memory_outcome_candidate,
 )
+from ..control_plane.quota.cli_projection import compact_refresh_state_cli_payload
 
 
 def register_refresh_state_command(
@@ -812,7 +813,13 @@ def handle_refresh_state_command(
                 raise RuntimeError(
                     "exact settlement readback unexpectedly returned not-found"
                 )
-            settlement_result = settlement_readback.delivery
+            # A combined retry may already be settled, with no owed child to
+            # dispatch. Retain its complete receipts from the same typed read.
+            settlement_result = (
+                settlement_readback.settlement
+                if getattr(args, "settle_turn", False) and settlement_readback.spend.failure is None
+                else settlement_readback.delivery
+            )
             attach_settlement_progress(
                 payload, settlement_readback, registry_path=registry_path, runtime_root=runtime_root,
                 goal_ref=goal_ref,
@@ -871,7 +878,7 @@ def handle_refresh_state_command(
             )
         if not material_refresh_ready:
             _settle_requested_refresh(payload, args, registry_path, goal_ref)
-            print_payload(payload, fmt, render_state_refresh_markdown)
+            print_payload(compact_refresh_state_cli_payload(payload) if fmt == "json" else payload, fmt, render_state_refresh_markdown)
             return 0 if payload.get("ok") else 1
         if payload.get("explore_result") is not None:
             from ..capabilities.explore.result_writeback import deliver_result_attachment
@@ -961,7 +968,7 @@ def handle_refresh_state_command(
             ),
         )
     _settle_requested_refresh(payload, args, registry_path, goal_ref)
-    print_payload(payload, fmt, render_state_refresh_markdown)
+    print_payload(compact_refresh_state_cli_payload(payload) if fmt == "json" else payload, fmt, render_state_refresh_markdown)
     return 0 if payload.get("ok") else 1
 
 

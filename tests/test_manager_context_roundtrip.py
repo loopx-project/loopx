@@ -286,6 +286,7 @@ def test_handoff_reader_retains_partial_scope_after_delivery_and_later_results(f
         return page["rows"][0]
 
     remaining = {"summary": "Measure the original revision sequence", "resume_when": "The original evidence is available"}
+
     def sender(*_):
         return {"ok": True, "reply_verified": True}
 
