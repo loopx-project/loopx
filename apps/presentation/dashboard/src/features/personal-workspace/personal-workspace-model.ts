@@ -393,6 +393,7 @@ export type WorkspaceActionPreview = {
 };
 
 export type WorkspaceMessage = {
+  queueInputCancelled?: true;
   /** A native queue receipt, not an assistant answer or active execution. */
   queued?: boolean;
   replyContext?: ChatReplyContext;

@@ -1,6 +1,8 @@
 import type { ChatVisibleMessage } from "./chat";
 
 type ConversationMessage = {
+  queueInputRevision?: number;
+  queueInputCancelled?: true;
   sourceSessionId?: string;
   sourceMessageId?: string;
   sourceTurnId?: string;
@@ -74,14 +76,21 @@ export function reconcileConversationReturns<T extends ConversationMessage>(
     const replyContext = source.reply_context ?? row.replyContext;
     // Only the exact canonical user body can switch to its source-backed view.
     // A background read never replaces a live answer or a different draft.
-    const text = row.role === "user" && source.reply_context && row.text === source.text
+    const inputChanged = row.role === "user" && source.role === "user"
+      && (!row.sourceTurnId || source.turn_id === row.sourceTurnId) && typeof source.queue_input_revision === "number"
+      && source.queue_input_revision > (row.queueInputRevision ?? 0);
+    const queueInputRevision = inputChanged ? source.queue_input_revision : row.queueInputRevision;
+    const queueInputCancelled = inputChanged ? source.queue_input_cancelled : row.queueInputCancelled;
+    const text = inputChanged ? source.text : row.role === "user" && source.reply_context && row.text === source.text
       ? source.reply_context.source_text : row.text;
     if (row.sourceMessageId === source.message_id && JSON.stringify(row.returnDelivery) === JSON.stringify(returnDelivery)
       && JSON.stringify(row.collaboration) === JSON.stringify(collaboration)
       && JSON.stringify(row.collaborations) === JSON.stringify(collaborations) && row.sourceCreatedAt === sourceCreatedAt
-      && JSON.stringify(row.replyContext) === JSON.stringify(replyContext) && row.text === text) return row;
+      && JSON.stringify(row.replyContext) === JSON.stringify(replyContext) && row.text === text
+      && row.queueInputRevision === queueInputRevision && row.queueInputCancelled === queueInputCancelled) return row;
     changed = true;
-    return { ...row, sourceMessageId: source.message_id, sourceCreatedAt, returnDelivery, collaboration, collaborations, replyContext, text };
+    return { ...row, sourceMessageId: source.message_id, sourceCreatedAt, returnDelivery, collaboration, collaborations, replyContext, text,
+      queueInputRevision, queueInputCancelled };
   });
   for (const message of messages) {
     if (message.origin !== "manager_followup" || seen.has(message.message_id)) continue;

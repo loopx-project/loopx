@@ -2,6 +2,20 @@ import assert from "node:assert/strict";
 import { conversationReturnSessions, conversationPendingReturnSessions, reconcileConversationHistory, reconcileConversationReturns } from "./conversation-returns.ts";
 
 const collaboration = { returns: [] };
+const queuedInput = [{sourceSessionId: "queued-session", sourceMessageId: "input", sourceTurnId: "queued-turn",
+  role: "user", text: "Original input"}];
+const editedInput = {message_id: "input", turn_id: "queued-turn", role: "user", text: "Corrected input", queue_input_revision: 1};
+const corrected = reconcileConversationReturns(queuedInput, "queued-session", [editedInput], () => assert.fail("no duplicate input"));
+assert.equal(corrected[0].text, "Corrected input");
+assert.equal(reconcileConversationReturns(queuedInput, "queued-session", [{...editedInput, role: "agent"}], () => assert.fail()), queuedInput);
+assert.equal(reconcileConversationReturns(queuedInput, "queued-session", [{...editedInput, turn_id: "other-turn"}], () => assert.fail()), queuedInput);
+const cancelledInput = {...editedInput, queue_input_revision: 2, queue_input_cancelled: true};
+const cancelled = reconcileConversationReturns(corrected, "queued-session", [cancelledInput], () => assert.fail("no duplicate input"));
+assert.equal(cancelled[0].queueInputCancelled, true);
+assert.equal(reconcileConversationReturns(cancelled, "queued-session", [editedInput], () => assert.fail()), cancelled, "stale reads cannot revert cancellation");
+assert.equal(reconcileConversationReturns(queuedInput, "other-session", [cancelledInput], () => assert.fail()), queuedInput);
+const liveAnswer = [{...queuedInput[0], role: "assistant", pending: true, text: "Live answer"}];
+assert.equal(reconcileConversationReturns(liveAnswer, "queued-session", [{...cancelledInput, role: "agent"}], () => assert.fail())[0].text, "Live answer");
 const original = [
   { sourceSessionId: "old", sourceMessageId: "brief", collaboration, text: "Original brief" },
   { sourceSessionId: "current", sourceMessageId: "brief", text: "New conversation" },
