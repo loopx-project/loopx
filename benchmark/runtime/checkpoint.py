@@ -194,7 +194,8 @@ def _mark_completed_capture_attempt(destination: Path, effect_id: str, request_s
     return _write_checkpoint_attempt(marker, value)
 
 
-def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: str) -> str:
+def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: str, *,
+                          guide_in_host: bool = False) -> str:
     """Preload the original guard once, then capture before invoking the model.
 
     The typed owner selects only an admitted replan identity. The prior wake's
@@ -267,7 +268,7 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
                 os.fchmod(stream.fileno(), 0o600)
                 stream.write(view_bytes)
         reading = preflight_context_instruction(env, source_path,
-            hashlib.sha256(view_bytes).hexdigest(), receipt["turn_id"])
+            hashlib.sha256(view_bytes).hexdigest(), receipt["turn_id"], guide_in_host=guide_in_host)
     else:
         view_path = guard_path.with_name("checkpoint-start-view.json")
         view_path.write_text(guard_run.stdout, encoding="utf-8")

@@ -8,10 +8,14 @@ import shlex
 import subprocess
 import sys
 
+import pytest
+
+from loopx.control_plane.turn_driver.decision_capture import CONTEXT_CAPTURE_NAVIGATION_GUIDANCE
 from benchmark.runtime.context_delivery import preflight_context_instruction
 
 
-def test_projection_failure_keeps_original_capture_selectively_readable(tmp_path, monkeypatch):
+@pytest.mark.parametrize("guide_in_host", [False, True], ids=["standalone", "prepared-host"])
+def test_projection_failure_keeps_original_capture_selectively_readable(tmp_path, monkeypatch, guide_in_host):
     capture = tmp_path / "captured decision.json"
     source = {
         "ok": True,
@@ -56,8 +60,9 @@ def test_projection_failure_keeps_original_capture_selectively_readable(tmp_path
         },
         capture,
         digest,
-        "synthetic-turn",
+        "synthetic-turn", guide_in_host=guide_in_host,
     )
+    assert (CONTEXT_CAPTURE_NAVIGATION_GUIDANCE in instruction) == (not guide_in_host)
     commands = [
         shlex.split(command)
         for command in re.findall(r"```sh\n(.*?)\n```", instruction, re.S)
@@ -78,7 +83,7 @@ def test_projection_failure_keeps_original_capture_selectively_readable(tmp_path
     assert refused_payload["ok"] is False
     assert refused_payload["error_code"] == "quota_decision_transport_failed"
     assert "--list" in shlex.split(refused_payload["recovery"]["command"])
-    assert "Choose the sections needed for the current decision" in refused_payload["instruction"]
+    assert CONTEXT_CAPTURE_NAVIGATION_GUIDANCE.strip() in refused_payload["instruction"]
     assert "do not drain unrelated optional material" in refused_payload["instruction"]
     assert "Follow next_command through eof" not in refused_payload["instruction"]
 

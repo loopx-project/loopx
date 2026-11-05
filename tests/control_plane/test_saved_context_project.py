@@ -653,7 +653,15 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
             elif phase in ("cold", "warm"):
                 if benchmark:
                     from loopx.control_plane.turn_driver.decision_capture import CONTEXT_CAPTURE_NAVIGATION_GUIDANCE
-                    assert CONTEXT_CAPTURE_NAVIGATION_GUIDANCE in _input_text(request)
+                    guide = CONTEXT_CAPTURE_NAVIGATION_GUIDANCE.strip()
+                    developer_text = [request.get("instructions") or ""]
+                    developer_text.extend(part.get("text", "") for item in request["input"]
+                        if item.get("role") == "developer" for part in item.get("content", []))
+                    assert any(guide in text for text in developer_text)
+                    wake_prompt = next(part["text"] for item in reversed(request["input"])
+                        if item.get("role") == "user" for part in item.get("content", [])
+                        if " quota context-project " in part.get("text", ""))
+                    assert guide not in wake_prompt
                     command = [line for line in _input_text(request).splitlines() if " quota context-project " in line][-1]
                     argv = shlex.split(command)
                     actual_turn = argv[argv.index("--turn-instance-id") + 1]
