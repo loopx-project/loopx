@@ -13,7 +13,8 @@ from tests.control_plane.codex_checkpoint_fixture import reference_metadata_orac
 
 
 @pytest.mark.parametrize("failure", [None, "digest", "goal", "agent", "turn", "symlink", "object"])
-def test_saved_projection_checks_original_before_any_publication(tmp_path, failure):
+@pytest.mark.parametrize("setting", ["auto", "off"])
+def test_saved_projection_checks_original_before_any_publication(tmp_path, failure, setting):
     original = {"ok": True, "goal_id": "saved-goal", "agent_identity": {"agent_id": "saved-agent"},
         "heartbeat_receipt": {"turn_instance_id": "saved-turn"}, "requirement": "保留完整要求🙂" * 100}
     path = tmp_path / "original.json"
@@ -27,23 +28,37 @@ def test_saved_projection_checks_original_before_any_publication(tmp_path, failu
         path.symlink_to(source)
     args = ["quota", "context-project", "--capture-file", str(path), "--capture-sha256", digest,
         "--goal-id", "saved-goal", "--agent-id", "saved-agent", "--turn-instance-id", "saved-turn",
-        "--context-delivery", "off"]
+        "--context-delivery", setting]
     for name in ("digest", "goal", "agent", "turn"):
         if failure == name:
             option = {"digest": "--capture-sha256", "goal": "--goal-id", "agent": "--agent-id", "turn": "--turn-instance-id"}[name]
             args[args.index(option) + 1] = "0" * 64 if name == "digest" else "foreign"
     registry, runtime = tmp_path / "absent-registry.json", tmp_path / "absent-runtime"
     code, result = _run_cli(registry, runtime, *args, cwd=tmp_path)
-    assert not registry.exists() and not runtime.exists()
+    assert not registry.exists()
+    if failure or setting == "off":
+        assert not runtime.exists()
+    else:
+        # Main's default Progressive presentation may create private transport;
+        # it may not create authority, evaluate a guard or debit the saved Turn.
+        if runtime.exists():
+            assert {item.name for item in runtime.iterdir()} <= {"context-delivery"}
     if failure:
         assert code != 0 and not result["ok"] and "command" not in result
     else:
-        assert code == 0 and result["ok"] and result["mode"] == "full"
-        assert result["path"] == str(path) and result["sha256"] == digest
-        assert result["recovery"]["path"] == str(path)
-        command = shlex.split(result["command"])
-        code, page = _run_cli(registry, runtime, *command[3:], cwd=tmp_path)
-        assert code == 0 and page["content"].encode() == path.read_bytes()[:page["next_offset"]]
+        assert code == 0 and result["ok"]
+        if setting == "off":
+            assert result["mode"] == "full"
+            assert result["path"] == str(path) and result["sha256"] == digest
+            assert result["recovery"]["path"] == str(path)
+            command = shlex.split(result["command"])
+            code, page = _run_cli(registry, runtime, *command[3:], cwd=tmp_path)
+            assert code == 0 and page["content"].encode() == path.read_bytes()[:page["next_offset"]]
+        else:
+            from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
+
+            assert read_cli_policy_payload(json.dumps(result), returncode=code) == original
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == digest
 
 
 @pytest.mark.parametrize("root_kind", ["unsafe", "symlink", "missing_parent"])
@@ -349,7 +364,7 @@ def test_saved_projection_recovery_failure_returns_typed_error_and_current_refer
             'Read the saved original decision/receipt; do not rerun admission.'
         )
 
-    monkeypatch.setattr(codex_context, "project_codex_context", refuse_recovery)
+    monkeypatch.setattr(codex_context, "prepare_codex_context", refuse_recovery)
     registry, runtime = tmp_path / "absent-registry.json", tmp_path / "absent-runtime"
     code = main(["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
         "quota", "context-project", "--capture-file", str(path), "--capture-sha256", digest,
@@ -942,7 +957,8 @@ def test_native_discovery_keeps_plugins_out_of_probe_without_changing_solver(tmp
     assert not list(home.rglob("*.pack")), "discovery must not clone a plugin catalog"
 
 
-def test_saved_projection_explicit_off_ignores_available_native_cache(tmp_path, monkeypatch):
+@pytest.mark.parametrize("setting", [None, "off"])
+def test_saved_projection_default_and_explicit_off_ignore_available_native_cache(tmp_path, monkeypatch, setting):
     from loopx.cli import build_parser
     from loopx.cli_commands.quota_capture import project_saved_context_capture
     from loopx.control_plane.turn_driver import codex_context
@@ -952,14 +968,20 @@ def test_saved_projection_explicit_off_ignores_available_native_cache(tmp_path, 
         "heartbeat_receipt": {"turn_instance_id": "t"}}).encode()
     path.write_bytes(raw)
     def unexpected(*args, **kwargs):
-        pytest.fail("explicit-off saved presentation must not inspect/create native state")
+        pytest.fail(f"{setting or 'default'} saved presentation must not inspect/create native state")
     monkeypatch.setattr(codex_context, "codex_context_directory", unexpected)
-    args = build_parser().parse_args(["quota", "context-project", "--capture-file", str(path),
+    argv = ["quota", "context-project", "--capture-file", str(path),
         "--capture-sha256", hashlib.sha256(raw).hexdigest(), "--goal-id", "g", "--agent-id", "a",
-        "--turn-instance-id", "t", "--context-delivery", "off",
-        "--codex-context-dir", str(root), "--decision-output-root", str(root)])
+        "--turn-instance-id", "t", "--codex-context-dir", str(root), "--decision-output-root", str(root)]
+    if setting is not None:
+        argv.extend(("--context-delivery", setting))
+    args = build_parser().parse_args(argv)
     result = project_saved_context_capture(args)
-    assert result["ok"] and result["mode"] == "full" and result["path"] == str(path)
+    assert result["ok"]
+    if setting == "off":
+        assert result["mode"] == "full" and result["path"] == str(path)
+    else:
+        assert result == json.loads(raw)
     assert not root.exists() and path.read_bytes() == raw
 
 

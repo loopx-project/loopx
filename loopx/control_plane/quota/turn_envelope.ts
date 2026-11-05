@@ -1517,13 +1517,16 @@ export function turnEnvelopeRoute(envelope: JsonObject, historicalText?: JsonObj
 /** Navigation over captured facts, never a summary or a source-read receipt. */
 // Quota field vocabulary stays with its decision owner; the RFC 6901 reader
 // receives addresses and remains independent of Goal/permission policy.
+const INITIAL_CONTEXT_DECISION_FIELDS = ["ok", "schema_version", "goal_id", "agent_id", "should_run", "effective_action",
+  "normal_delivery_allowed", "recovery_delivery_allowed", "self_repair_allowed", "capability_repair_allowed", "workspace_repair_allowed",
+  "safe_bypass_allowed", "safe_bypass_kind", "blocked_action_scope", "reason",
+  "execution_obligation", "goal_boundary", "heartbeat_receipt", "work_lane_contract", "selected_todo"];
+
+/** Navigation over captured facts, never a summary or a source-read receipt. */
 function capturedDecisionSelection(request: JsonObject): JsonObject {
   const initial = request.initial_read === true || request.list_fields === true
     && Array.isArray(request.select) && request.select.length === 1 && request.select[0] === "";
-  return capturedContextSelection(request, initial ? initialContextReadPointers(requireJsonObject(request.context, "captured context"), ["ok", "schema_version", "goal_id", "agent_id", "should_run", "effective_action",
-    "normal_delivery_allowed", "recovery_delivery_allowed", "self_repair_allowed", "capability_repair_allowed", "workspace_repair_allowed",
-    "safe_bypass_allowed", "safe_bypass_kind", "blocked_action_scope", "reason",
-    "execution_obligation", "goal_boundary", "heartbeat_receipt", "work_lane_contract", "selected_todo"]) : []);
+  return capturedContextSelection(request, initial ? initialContextReadPointers(requireJsonObject(request.context, "captured context"), INITIAL_CONTEXT_DECISION_FIELDS) : []);
 }
 
 export function evaluateTurnEnvelope(value: unknown): JsonObject {
@@ -1606,7 +1609,7 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
   if (operation === "progressive_context_delivery") return prepareProgressiveContext(request);
   if (operation === "context_delivery") return request.native_projection === undefined
     ? prepareContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS)
-    : prepareProgressiveContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS);
+    : prepareProgressiveContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS, INITIAL_CONTEXT_DECISION_FIELDS);
   if (operation === "native_context_lifecycle") return updateNativeContextLifecycle(request);
   if (operation === "context_recovery") return restoreContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS);
   if (operation === "bind_capture") return bindTurnDecisionCapture(request);
