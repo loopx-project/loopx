@@ -6,6 +6,8 @@ test("known quota rejection rotates a key; unknown effects and ordinary request 
   const input={now:1000,status:429,code:"insufficient_quota",retry_after:null,model:"selected-model"};
   assert.equal(apiOutcome(input).state,"quota_exhausted");
   assert.equal(apiOutcome(input).retry_next_key,true);
+  assert.deepEqual(apiOutcome({...input,code:"credit_balance_exhausted"}),{
+    state:"quota_exhausted",retry_next_key:true,blocked_until:1300,blocked_model:null});
   for(const status of [400,408,500,502,503]) assert.equal(apiOutcome({...input,status}).retry_next_key,false);
   assert.equal(apiOutcome({...input,status:200}).state,"accepted","HTTP success is not completed inference");
   assert.equal(apiOutcome({...input,code:"rate_limit_exceeded",retry_after:60}).blocked_until,1060);
@@ -17,7 +19,7 @@ test("cooldowns and model-scoped permission failures retain key order without ma
   assert.deepEqual(apiKeys({now:1100,model:"selected-model",keys}),["a","b","c"]);
 });
 test("only structured streamed quota failures update future key availability", () => {
-  for (const code of ["insufficient_quota", "organization_spend_limit_exceeded",
+  for (const code of ["insufficient_quota", "credit_balance_exhausted", "organization_spend_limit_exceeded",
     "project_spend_limit_exceeded", "organization_usage_limit_exceeded", "usage_limit_exceeded",
     "rate_limit_exceeded"]) {
     for (const event of [{type:"error",code},
