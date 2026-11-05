@@ -382,6 +382,12 @@ def _emit_quota_result(
         payload = _project_quota_cli_payload(payload, args, detail_sections)
     try:
         captured_digest = capture_decision(capture_directory, payload)
+        if getattr(args, "prepared_capture_reference", False) and payload.get("ok") is True:
+            assert captured_digest is not None  # Preflight requires an explicit capture directory.
+            from ..control_plane.turn_driver.codex_execution_preparation import prepared_capture_reference
+
+            print_payload(prepared_capture_reference(payload, captured_digest), args.format, _quota_renderer(args))
+            return 0
         if (payload.get("ok") is False and context_delivery_enabled and capture_directory
                 and args.format == "json" and not getattr(args, "defer_context_presentation", False)):
             print_payload(_export("captured_quota_failure_view")(payload, capture_directory=capture_directory,

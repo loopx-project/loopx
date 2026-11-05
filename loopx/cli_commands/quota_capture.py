@@ -786,6 +786,13 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
 
 def prepare_quota_capture(args: argparse.Namespace, directory: Path | None) -> Path | None:
     """Validate transport options before allocating a new guard capture."""
+    if getattr(args, "prepared_capture_reference", False) and (
+        args.quota_command != "should-run" or args.format != "json"
+        or not getattr(args, "decision_output_dir", None) or not getattr(args, "turn_instance_id", None)
+        or getattr(args, "decision_handoff_socket", None) or getattr(args, "turn_envelope", False)
+        or (native_context_activation(args)["enabled"] and not getattr(args, "defer_context_presentation", False))
+    ):
+        raise QuotaCommandValidationError("prepared capture reference requires an explicit Turn and raw JSON capture")
     if getattr(args, "defer_context_presentation", False) and (
         args.quota_command != "should-run" or args.format != "json"
         or not native_context_activation(args)["enabled"]

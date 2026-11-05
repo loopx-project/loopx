@@ -25,6 +25,21 @@ def request(path, **overrides):
          'turn_instance_id': TURN_ID}, **overrides))
 
 
+@pytest.mark.parametrize("overrides", [
+    {"turn_instance_id": None}, {"quota_command": "plan"}, {"format": "markdown"},
+    {"turn_envelope": True}, {"decision_handoff_socket": "/unused/socket"},
+    {"context_delivery": "on", "codex_app": True},
+])
+def test_prepared_reference_rejects_incompatible_delivery_before_guard(tmp_path, overrides):
+    from loopx.cli_commands.quota_capture import prepare_quota_capture
+
+    values = {"format": "json", "context_delivery": "off", **overrides}
+    args = request(tmp_path / "capture", prepared_capture_reference=True, **values)
+    with pytest.raises(QuotaCommandValidationError, match="prepared capture reference"):
+        prepare_quota_capture(args, None)
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_disabled_capture_does_not_touch_disk(tmp_path):
     assert prepare_decision_capture(request(None)) is None
     capture_decision(None, {'not_serializable': object()})

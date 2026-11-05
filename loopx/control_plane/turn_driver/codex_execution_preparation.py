@@ -6,7 +6,6 @@ the same Todo (and Turn when present) is ready before returning a Host receipt.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
@@ -97,7 +96,7 @@ def _run_json(
     cwd: Path,
     timeout: float,
     runner: CommandRunner,
-) -> tuple[dict[str, Any], str]:
+) -> dict[str, Any]:
     command = [
         *current_loopx_cli_argv(),
         "--registry", str(registry_path),
@@ -117,7 +116,21 @@ def _run_json(
     ):
         reason = payload.get("reason") if isinstance(payload, dict) else None
         raise RuntimeError(str(reason or completed.stderr or "LoopX Host preparation failed"))
-    return payload, completed.stdout
+    return payload
+
+
+def prepared_capture_reference(payload: Mapping[str, Any], digest: str) -> dict[str, Any]:
+    """Carry only the guard fields the Host uses to verify its claimed Turn."""
+    selected = payload.get("selected_todo")
+    heartbeat = payload.get("heartbeat_receipt")
+    return {
+        **{key: payload.get(key) for key in (
+            "ok", "goal_id", "should_run", "normal_delivery_allowed", "execution_preparation",
+        )},
+        "selected_todo": {"todo_id": selected.get("todo_id")} if isinstance(selected, Mapping) else None,
+        "heartbeat_receipt": {"turn_instance_id": heartbeat.get("turn_instance_id")} if isinstance(heartbeat, Mapping) else None,
+        "capture_sha256": digest,
+    }
 
 
 def execute_codex_execution_preparation(
@@ -178,7 +191,7 @@ def execute_codex_execution_preparation(
     invoke = runner or _default_runner
     if context_directory is not None and (capture_directory is None or not turn_instance_id):
         raise ValueError("Native execution preparation requires a bound captured Turn")
-    claimed, _ = _run_json(
+    claimed = _run_json(
         expected_claim,
         registry_path=registry_path,
         runtime_root=runtime_root,
@@ -197,9 +210,9 @@ def execute_codex_execution_preparation(
           ["--context-delivery", "off"]),
         "--todo-id", todo_id,
         *(["--turn-instance-id", turn_instance_id] if turn_instance_id else []),
-        *(["--decision-output-dir", str(capture_directory)] if capture_directory is not None else []),
+        *(["--decision-output-dir", str(capture_directory), "--prepared-capture-reference"] if capture_directory is not None else []),
     ]
-    after, guard_json = _run_json(
+    after = _run_json(
         guard,
         registry_path=registry_path,
         runtime_root=runtime_root,
@@ -242,10 +255,10 @@ def execute_codex_execution_preparation(
         "normal_delivery_allowed": True,
     }
     if capture_directory is not None:
-        # The current raw guard and its capture writer emit the same JSON line.
-        # Bind the digest to the child result that proved readiness. Rehashing
-        # the path later would bless a replacement between claim and display.
-        receipt["capture_sha256"] = hashlib.sha256(guard_json.encode("utf-8")).hexdigest()
+        digest = after.get("capture_sha256")
+        if not isinstance(digest, str) or len(digest) != 64:
+            raise ValueError("The guard did not return its published capture digest")
+        receipt["capture_sha256"] = digest
     claim_reference = claimed.get("claim_operation_id")
     if isinstance(claim_reference, str) and claim_reference:
         receipt["claim_operation_id"] = claim_reference

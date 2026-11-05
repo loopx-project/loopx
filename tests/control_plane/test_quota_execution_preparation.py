@@ -317,8 +317,9 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("replace_stage", ["guard", "record"])
 def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
-    tmp_path, monkeypatch, capsys, provider,
+    tmp_path, monkeypatch, capsys, provider, replace_stage,
 ):
     import hashlib
     import io
@@ -340,14 +341,30 @@ def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
     original.mkdir(mode=0o700)
     codex_context.project_codex_context(before, directory=str(native), capture_directory=original,
         goal_id=GOAL, agent_id=AGENT, surface="quota_packet", capture_id="claim-required")
+    from loopx.control_plane.turn_driver import codex_execution_preparation
     record = codex_context.record_native_execution_preparation
+    run = codex_execution_preparation._default_runner
     verified = {}
 
-    def replace_after_ready(*args, **kwargs):
-        record(*args, **kwargs)
+    def replace_capture():
         source, = native.glob("prepared-*/ready/decision.json")
         verified["path"], verified["bytes"] = source, source.read_bytes()
         source.write_bytes(verified["bytes"] + b" ")
+
+    def observe_guard(command, **kwargs):
+        result = run(command, **kwargs)
+        if "--prepared-capture-reference" in command:
+            verified["writer"] = json.loads(result.stdout)
+            if replace_stage == "guard":
+                replace_capture()
+        return result
+
+    monkeypatch.setattr(codex_execution_preparation, "_default_runner", observe_guard)
+
+    def replace_after_ready(*args, **kwargs):
+        record(*args, **kwargs)
+        if replace_stage == "record":
+            replace_capture()
 
     monkeypatch.setattr(codex_context, "record_native_execution_preparation", replace_after_ready)
     command = ["--registry", str(tmp_path / "registry.json"), "--runtime-root", str(tmp_path / "runtime"),
@@ -367,7 +384,13 @@ def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
     assert context["ok"] is False
     assert "digest mismatch" in context["reason"]
     recovery = shlex.split(context["recovery_command"])
-    assert recovery[recovery.index("--capture-sha256") + 1] == hashlib.sha256(verified["bytes"]).hexdigest()
+    digest = hashlib.sha256(verified["bytes"]).hexdigest()
+    writer = verified["writer"]
+    assert writer["capture_sha256"] == digest and writer["execution_preparation"] == receipt["execution_preparation"]
+    assert writer["selected_todo"] == {"todo_id": TODO}
+    assert writer["heartbeat_receipt"] == {"turn_instance_id": "prepared-turn"}
+    assert "interaction_contract" not in writer and "work_context" not in writer
+    assert recovery[recovery.index("--capture-sha256") + 1] == digest
     log = tmp_path / "runtime" / "goals" / GOAL / "rollout-event-log.jsonl"
     after_claim = log.read_bytes()
     assert hook() == {}
