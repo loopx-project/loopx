@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { resolveTestPython } from "../../../../scripts/test-python.mjs";
 import { acceptChatTurn, conversationContextKey, conversationContextOfKey, conversationSupportsStatusProjection, createChatSession,
-  discoverBoundChatSession, fetchChatHistory, fetchChatProjects, resolveBoundChatSession, resolveBoundConversation } from "../src/data/chat";
+  discoverBoundChatSession, fetchChatHistory, fetchChatProjects, fetchChatSessionHistory, resolveBoundChatSession, resolveBoundConversation } from "../src/data/chat";
 
 // Invariant: continuation and refreshed history retain the verified original
 // Session. An absent/ignored selector, changed source or closed Session cannot
@@ -78,6 +78,34 @@ try {
   await fetchChatHistory(options, history);
   assert.equal(calls.length, 1, "Quiet refresh verifies the source using only its compact index");
   assert.equal(calls[0].path, `/api/chat/sessions?conversation_binding_id=${bindingId}`);
+  const routedRead = globalThis.fetch;
+  if (!fallback) {
+    // Real HTTP responses beyond the old interactive deadline must still hydrate
+    // the complete original history. Source verification keeps its own deadline.
+    child.stdin.write("slow-history\n");
+    assert.equal((await next()).slow_history, true);
+    const slow = await fetchChatHistory(options);
+    assert.deepEqual(slow.messages, history.messages);
+    assert.deepEqual(slow.unavailableSessionIds, []);
+    // Delay only the post-history fresh source check, not initial discovery.
+    const beforeSlowSource = calls.length;
+    globalThis.fetch = async (input, init) => {
+      const response = await routedRead(input, init);
+      if (String(input).startsWith(`/api/chat/sessions/${sessionId}?`)) {
+        child.stdin.write("slow-history-source\n");
+        assert.equal((await next()).slow_history_source, true);
+      }
+      return response;
+    };
+    const sourceSlow = await fetchChatHistory(options);
+    assert.deepEqual(sourceSlow.messages, history.messages);
+    assert.deepEqual(sourceSlow.unavailableSessionIds, []);
+    assert.ok(calls.slice(beforeSlowSource).every(row => row.method === "GET"));
+    globalThis.fetch = routedRead;
+    child.stdin.write("slow-history-cancel\n");
+    assert.equal((await next()).slow_history, true);
+    await assert.rejects(() => fetchChatSessionHistory(original.session, AbortSignal.timeout(50)));
+  }
   let updated = history;
   if (!fallback) {
     child.stdin.write("source\n");

@@ -1011,6 +1011,11 @@ const chatMessagePageSchema = z.object({
   turn_id: z.string().min(1).optional(),
 });
 
+// A long original transcript can outlive the interactive request budget even
+// when each verified page succeeds. Apply the same bounded read deadline to
+// its pages and fresh source checks; caller cancellation still takes priority.
+const CHAT_HISTORY_READ_TIMEOUT_MS = 30_000;
+
 /** Hydrate one complete original prefix; partial pages never become a snapshot. */
 export async function fetchChatSessionHistory(session: ChatSessionSummary | string, signal?: AbortSignal, turnId?: string): Promise<ChatSessionSnapshot> {
   const sessionId = typeof session === "string" ? session : session.session_id;
@@ -1027,7 +1032,7 @@ export async function fetchChatSessionHistory(session: ChatSessionSummary | stri
     if (cursor !== null) query.set("message_cursor", cursor);
     const snapshot = await requestJson<ChatSessionSnapshot>(
       `/api/chat/sessions/${encodeURIComponent(sessionId)}?${query}`,
-      {signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(5000)]) : AbortSignal.timeout(5000)});
+      {signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS)]) : AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS)});
     signal?.throwIfAborted();
     const expected = expectedSession;
     const sameSource = snapshot.session?.session_id === sessionId && (!expected || (
@@ -1176,8 +1181,8 @@ export async function fetchChatHistory(options: {
 }, previous?: ChatHistory): Promise<ChatHistory> {
   // Source authorization must be re-read even when recovering an older snapshot.
   const exact = Boolean(options.bound || options.managed);
-  const listed = options.managed ? {sessions: [await resolveManagedChatSession(options.managed, AbortSignal.timeout(5000))]}
-    : (!options.bound ? previous : undefined) ?? await fetchChatSessions({ ...options, signal: AbortSignal.timeout(5000) });
+  const listed = options.managed ? {sessions: [await resolveManagedChatSession(options.managed, AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS))]}
+    : (!options.bound ? previous : undefined) ?? await fetchChatSessions({ ...options, signal: AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS) });
   const known = new Map(previous?.snapshots.map((snapshot) => [snapshot.session.session_id, snapshot]));
   // A failed historical read is not an empty transcript. Retrying only the
   // missing snapshots keeps this recovery read-only and bounds repeated work.
@@ -1202,8 +1207,8 @@ export async function fetchChatHistory(options: {
   // A long page sequence must not publish against a connection/Goal removed
   // while it was in flight. Reuse the original source owner, never a fallback.
   if (missing.length && results.some(result => result.status === "fulfilled")) {
-    if (options.bound) await resolveBoundChatSession(options.bound, AbortSignal.timeout(5000));
-    if (options.managed) await resolveManagedChatSession(options.managed, AbortSignal.timeout(5000));
+    if (options.bound) await resolveBoundChatSession(options.bound, AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS));
+    if (options.managed) await resolveManagedChatSession(options.managed, AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS));
   }
   for (const result of results) {
     if (result.status === "fulfilled") known.set(result.value.session.session_id, result.value);
