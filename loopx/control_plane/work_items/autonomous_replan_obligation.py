@@ -82,6 +82,7 @@ def project_todo_lifecycle_settlement_reentry(
     lifecycle_actor_args: str,
     scoped_cli_args: str,
     runtime_root: str | None = None,
+    quota_guard_action: str | None = None,
 ) -> dict[str, Any] | None:
     """Adapt a lifecycle obligation to the TS-owned reentry projection."""
 
@@ -106,6 +107,7 @@ def project_todo_lifecycle_settlement_reentry(
         triggers=triggers,
         lifecycle_actor_args=shlex.split(lifecycle_actor_args),
         quota_scoped_args=shlex.split(scoped_cli_args),
+        quota_guard_argv=shlex.split(quota_guard_action) if quota_guard_action else None,
     )
 
 
@@ -121,6 +123,7 @@ def build_autonomous_replan_cli_actions(
     lifecycle_actor_args: str = "",
     runtime_root: str | None = None,
     successor_closeout_guard: str | None = None,
+    quota_guard_action: str | None = None,
 ) -> list[str]:
     lifecycle_reentry = project_todo_lifecycle_settlement_reentry(
         payload,
@@ -128,6 +131,7 @@ def build_autonomous_replan_cli_actions(
         lifecycle_actor_args=lifecycle_actor_args,
         scoped_cli_args=scoped_cli_args,
         runtime_root=runtime_root,
+        quota_guard_action=quota_guard_action,
     )
     if lifecycle_reentry is not None:
         return list(lifecycle_reentry["next_cli_actions"])

@@ -26,6 +26,7 @@ def project_todo_lifecycle_settlement_reentry(
     triggers: list[dict[str, Any]],
     lifecycle_actor_args: list[str],
     quota_scoped_args: list[str],
+    quota_guard_argv: list[str] | None = None,
 ) -> dict[str, Any]:
     """Return TS-owned exact actions for a terminal Todo succession gap."""
 
@@ -39,6 +40,8 @@ def project_todo_lifecycle_settlement_reentry(
         }
         if runtime_root is not None:
             request["runtime_root"] = runtime_root
+        if quota_guard_argv is not None:
+            request["quota_guard_argv"] = quota_guard_argv
         result = effect_runtime_result(
             "work_item.replan_settlement.reentry",
             request,
