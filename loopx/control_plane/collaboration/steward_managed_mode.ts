@@ -9,7 +9,7 @@ import type { JsonObject } from "../runtime_decode.ts";
 import { requireJsonObject, requireNonEmptyString } from "../runtime_decode.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
-import {goalAgentConversationIdentity, resolveConversationScope} from "./conversation_scope.ts";
+import {boundConversationExecutorMatches, goalAgentConversationIdentity, resolveConversationScope} from "./conversation_scope.ts";
 import {readTurnSelectionRejection} from "../turn_driver/selection_rejection.ts";
 import {EffectiveAction} from "../quota/effective_action.generated.ts";
 import {turnPlanWorkSource} from "../quota/turn_envelope.ts";
@@ -416,6 +416,15 @@ export function normalizeStewardManagedActor(value: unknown): JsonObject {
     creation_operation_id: text(row.creation_operation_id, "managed Goal creation")};
 }
 
+/** Supported native host metadata, never authorization or a request to switch hosts. */
+export function observeStewardNativeExecutor(params: JsonObject): JsonObject {
+  const binding = requireJsonObject(params.binding, "steward binding");
+  const session = requireJsonObject(params.session, "original steward Session");
+  const supported = session.agent_id === "codex" && (binding.executor_endpoint_id === "codex"
+    || boundConversationExecutorMatches(binding, session));
+  return {execution_available: supported, ...(!supported ? {execution_error_code: "unsupported_executor"} : {})};
+}
+
 export function stewardManagedBasis(params: JsonObject, executing = false) {
   const binding = requireJsonObject(params.binding, "steward binding");
   const session = requireJsonObject(params.session, "original steward Session");
@@ -424,8 +433,8 @@ export function stewardManagedBasis(params: JsonObject, executing = false) {
   const id = text(binding.binding_id, "binding identity", /^[a-f0-9]{24}$/);
   const source = text(context.source_ref, "steward source", /^[a-f0-9]{24}$/);
   if (binding.context_kind !== "steward" || binding.grant !== "portfolio_read" || binding.enabled !== true
-      || binding.audience === "group" || binding.executor_endpoint_id !== "codex"
-      || session.goal_id !== "loopx-manager" || session.agent_id !== "codex"
+      || binding.audience === "group" || observeStewardNativeExecutor(params).execution_available !== true
+      || session.goal_id !== "loopx-manager"
       || session.session_mode === "attached_host" || session.status === "closed"
       || session.channel_id !== `manager.external.native.${id}.${source}`
       || !executing && (session.active_turn_id || params.queued_turn_count !== 0)) {

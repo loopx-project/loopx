@@ -162,6 +162,9 @@ class StewardManagedMode:
             cadence = monitor_cadence_delta(monitor.get("cadence")) if monitor else None
             from .steward_reports import StewardReports
             return {"available": True, "prepared": True,
+                    **(self.bindings._core("collaboration.steward.managed_mode.executor", {
+                        "binding": binding, "session": session})
+                       if binding["executor_endpoint_id"] != "codex" else {}),
                     "scheduling_enabled": bool(active and monitor and monitor.get("status") == "open"),
                     "goal_active": active, "report": StewardReports(self.controller).health(binding_id),
                     "monitor": ({"todo_id": monitor["todo_id"], "status": monitor["status"],
