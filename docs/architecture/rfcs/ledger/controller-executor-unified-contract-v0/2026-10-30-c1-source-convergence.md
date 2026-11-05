@@ -577,11 +577,12 @@ bounded semantic-rule change, not independent review or proof of model complianc
 Registry hook admission and recorded-version readers retain their distinct owners;
 a new registered ordering would still require that protocol's own review.
 
-The final seven complete Python modules pass 185 cases on both source and the
-actual isolated wheel; the wheel has 1,897 byte-matching packaged source files,
-325 completed-process and 103,582 Core-module origin observations with no
-checkout contamination. Abrupt process exits are outside that exit audit.
-The five relevant TypeScript modules pass 111 cases, and full control-plane
+After integrating main `92294e7245cb`, the final eight complete Python modules
+pass 196 cases on both source and the actual isolated wheel; the wheel has 1,897
+byte-matching packaged source files, 325 completed-process and 103,615 Core-module
+origin observations with no checkout contamination. Abrupt process exits are
+outside that exit audit. The six relevant TypeScript modules pass 121 cases,
+and full control-plane
 typechecking and changed-file Ruff pass. The earlier broad 178-pass/7-failure
 source and 168-pass/17-failure wheel runs remain recorded. Corrections preserve
 the original assertions: actual composition injection replaces six stale

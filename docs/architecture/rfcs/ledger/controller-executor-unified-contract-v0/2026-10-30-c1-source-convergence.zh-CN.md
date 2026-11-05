@@ -447,9 +447,10 @@ soft-claim 36 条件 cohort 分开，不混合比较分母。
 读取。这是一项有界语义规则变更，不代表独立评审或模型遵从。Registry hook 准入及
 原版本 reader 保留各自 owner；新增注册顺序仍须该协议自身的评审。
 
-最终七个完整 Python 模块在源码及实际隔离 wheel 均 185 项通过；1,897 个打包来源
-文件逐字匹配，325 个完成进程及 103,582 次 Core 来源观察无 checkout 污染，突然
-退出不在退出审计范围。五个相关 TypeScript 模块 111 项通过，完整 control-plane
+整合 main `92294e7245cb` 后，最终八个完整 Python 模块在源码及实际隔离 wheel 均
+196 项通过；1,897 个打包来源文件逐字匹配，325 个完成进程及 103,615 次 Core 来源
+观察无 checkout 污染，突然退出不在退出审计范围。六个相关 TypeScript 模块 121 项
+通过，完整 control-plane
 类型检查和变更文件 Ruff 通过。之前源码 178 过／7 败及 wheel 168 过／17 败均保留。
 修正保留原断言：六处过期 constructor 注入改为实际 composition；frontier fixture
 使用 canonical authority；wheel 明确复制测试 helper，写回指定真实产物工作区。
