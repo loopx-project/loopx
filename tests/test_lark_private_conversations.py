@@ -3179,6 +3179,81 @@ def test_http_group_setup_observes_membership_reads_back_selection_and_rejects_w
         runtime.close()
 
 
+def test_http_stop_recovery_reuses_source_revision_without_reusing_turn_state(ordinary, monkeypatch):  # noqa: F811
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+    from loopx.control_plane import effect_runtime
+
+    store, runtime, provider, transport = connect(ordinary)
+    binding = transport._binding("notes-app")
+    sessions = [store.create_session(goal_id="example-goal", agent_id="codex",
+        adapter_kind="codex_app_server", upstream_thread_id=f"idle-{index}") for index in range(8)]
+    sid = sessions[0]["session_id"]
+    revoked = "a" * 24
+    def queue(name, binding_id):
+        return store.create_queued_turn(sid, client_turn_id=name, message=name, origin="external",
+            external_agent_target={"context": {"binding_id": binding_id,
+                "project_ref": binding["project_ref"]}, "target": {"session_id": sid}})[0]
+    owed = queue("revoked-queued-work", revoked)
+    authorized = queue("authorized-queued-work", binding["binding_id"])
+    original_binding = transport.bindings.path.read_bytes()
+    original_turns = [store._turn_path(sid, turn["turn_id"]).read_bytes() for turn in [owed, authorized]]
+    native_before = ordinary[4].read_bytes() if ordinary[4].exists() else None
+    revision_reads = []
+    observed = threading.local()
+    fingerprint = effect_runtime._runtime_fingerprint
+    stop_recoveries = ChatConversationBindings.stop_recoveries
+
+    def counted_fingerprint():
+        if getattr(observed, "stop_recovery", False):
+            revision_reads.append(True)
+        return fingerprint()
+
+    def observed_stop_recoveries(self, current):
+        observed.stop_recovery = True
+        try:
+            return stop_recoveries(self, current)
+        finally:
+            observed.stop_recovery = False
+
+    monkeypatch.setattr(effect_runtime, "_runtime_fingerprint", counted_fingerprint)
+    monkeypatch.setattr(ChatConversationBindings, "stop_recoveries", observed_stop_recoveries)
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.chat_store, server.runtime_controller, server.verbose = store, runtime, False
+    server.lark_private_conversations = transport
+    server.lark_goal_topic_runtime = SimpleNamespace(health_snapshot=lambda: {}, close=lambda: None)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def snapshot():
+        revision_reads.clear()
+        connection = http.client.HTTPConnection(*server.server_address, timeout=15)
+        try:
+            connection.request("GET", "/api/chat/lark/private-conversations")
+            response = connection.getresponse()
+            assert response.status == 200
+            result = json.loads(response.read())
+            assert len(revision_reads) <= 1  # At most one source inventory, rather than one per Session.
+            return result
+        finally:
+            connection.close()
+
+    try:
+        assert snapshot()["stop_recoveries"] == [{"binding_id": revoked,
+            "project_ref": binding["project_ref"], "project_title": ordinary[-1].name, "pending_count": 1}]
+        assert [store._turn_path(sid, turn["turn_id"]).read_bytes() for turn in [owed, authorized]] == original_turns
+        store.update_turn(sid, owed["turn_id"], status="interrupted")
+        assert snapshot()["stop_recoveries"] == []  # A later read observes settlement immediately.
+        assert store.load_turn(sid, authorized["turn_id"])["status"] == "queued"
+        assert transport.bindings.path.read_bytes() == original_binding
+        assert (ordinary[4].read_bytes() if ordinary[4].exists() else None) == native_before
+        assert not provider.writes
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+        runtime.close()
+
+
 def test_http_listener_health_belongs_to_each_bound_transport(ordinary):  # noqa: F811
     from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
     from loopx.capabilities.native_chat.transports import ChatConversationTransports
