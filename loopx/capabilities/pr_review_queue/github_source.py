@@ -194,13 +194,15 @@ def _fetch_complete_pr_files(
         pages = payload if all(isinstance(page, list) for page in payload) else [payload]
         files: list[dict[str, Any]] = []
         observed: list[dict[str, Any]] = []
+        paths: set[str] = set()
         for page in pages:
             for item in page:
                 if not isinstance(item, dict):
                     return None
                 path = item.get("filename") or item.get("path")
-                if not isinstance(path, str) or not path:
+                if not isinstance(path, str) or not path or path in paths:
                     return None
+                paths.add(path)
                 if recover and any(type(item.get(key)) is not int for key in ("additions", "deletions")):
                     return None
                 additions = int(item.get("additions") or 0)
@@ -212,7 +214,9 @@ def _fetch_complete_pr_files(
                 observed.append(row | {"status": item.get("status"),
                                        "previous_filename": item.get("previous_filename")})
         if len(files) == expected_count:
-            return files if not recover or same_snapshot() else None
+            # REST pages are not pinned to the GraphQL detail's revision. Even
+            # an ordinary PR can change without changing its file count.
+            return files if snapshot is None or same_snapshot() else None
         if not recover or not files or len(files) > expected_count:
             return None
         recovered = _recover_git_pr_files(
