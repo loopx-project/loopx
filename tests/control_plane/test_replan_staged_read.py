@@ -17,6 +17,7 @@ from loopx.control_plane.quota.turn_envelope import (
     _turn_envelope_result, build_turn_envelope, quota_action_signature_document,
     turn_envelope_action_signature_document, prepare_context_delivery, restore_context_delivery,
 )
+from tests.control_plane.codex_checkpoint_fixture import reference_metadata_oracle
 from test_replan_host_context_projection import _quota_payload
 from test_replan_progress_native_cli import (
     AGENT, GOAL, TODO, TURN, call_progress_cli, make_progress_cli_fixture,
@@ -229,6 +230,10 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
         assert len(commands) == 1 and "--turn-envelope" not in commands[0]
         assert "--decision-output-root" in commands[0]
         source_path, view_path = wake / "checkpoint-start-guard.json", wake / "checkpoint-start-view.json"
+        if context_delivery:
+            argv = shlex.split(body.split("```sh\n", 1)[1].split("\n```", 1)[0])
+            view_path = Path(argv[argv.index("--capture-file") + 1])
+            assert view_path.parent != wake and view_path.is_relative_to(wake)
         source, view = json.loads(source_path.read_bytes()), json.loads(view_path.read_bytes())
         assert str(view_path) in body and str(source_path) not in body
         assert body.endswith("original heartbeat instructions")
@@ -256,7 +261,7 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
             assert projected.returncode == 0, projected.stdout
             presentation = json.loads(projected.stdout)
             assert presentation["ok"] and presentation["mode"] == "full"
-            assert presentation["recovery"]["path"] == str(view_path)
+            assert reference_metadata_oracle(presentation)["recovery"]["path"] == str(view_path)
         assert source["heartbeat_receipt"]["turn_instance_id"] == TURN
         assert source["heartbeat_receipt"] == view["heartbeat_receipt"]
         assert receipt["checkpoint"]["reason"] == "synthetic_no_native_capture"

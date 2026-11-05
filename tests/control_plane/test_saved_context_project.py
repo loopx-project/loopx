@@ -453,9 +453,15 @@ def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monk
     env.pop("CODEX_THREAD_ID", None)
     receipt = {"turn_id": turn, "mode": "heartbeat", "stage": "execute"}
     body = capture_before_replan(env, receipt, "Current work.")
-    source = wake / "checkpoint-start-view.json"
-    raw = source.read_bytes()
     original_guard = (wake / "checkpoint-start-guard.json").read_bytes()
+    if enabled:
+        command = shlex.split(body.split("```sh\n", 1)[1].split("\n```", 1)[0])
+        source = Path(command[command.index("--capture-file") + 1])
+        assert source.parent != wake and source.is_relative_to(wake)
+        assert command[command.index("--capture-sha256") + 1] == hashlib.sha256(source.read_bytes()).hexdigest()
+    else:
+        source = wake / "checkpoint-start-view.json"
+    raw = source.read_bytes()
     assert _heartbeat_receipt_count(runtime, turn) == 1 and _spend_run_count(runtime) == 0
     assert not list(native.iterdir())  # Host preflight must not publish before native SessionStart.
 
@@ -482,7 +488,6 @@ def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monk
             assert rc == 0, page
 
     if enabled:
-        command = shlex.split(body.split("```sh\n", 1)[1].split("\n```", 1)[0])
         command.extend(("--max-page-output-bytes", "32000"))
         rc, cold = _run_cli(registry, runtime, *command[command.index("quota"):], cwd=project)
         assert rc == 0 and cold["mode"] == "full", cold
