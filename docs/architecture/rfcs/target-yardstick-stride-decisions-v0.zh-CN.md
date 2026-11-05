@@ -8,7 +8,7 @@
 - **最近规范修订：** 2026-11-05
 - **实现基线：** `aa82591fb0a129f3ea9cc5e67343e742899c7ccd`
 - **相关契约：** [分层 Stride](hierarchical-agent-stride-control-v0.zh-CN.md)、[研究探索](research-exploration-control-plane-v0.zh-CN.md)、[研究测量](long-horizon-harness-benchmark-research-program-v0.zh-CN.md)、[Controller/Executor 组合](controller-executor-unified-contract-v0.zh-CN.md)
-- **语言镜像：** [English](target-yardstick-stride-decisions-v0.md)
+- **语义镜像（语言镜像）：** [English](target-yardstick-stride-decisions-v0.md)
 
 ## 文档地图与维护契约
 
