@@ -60,7 +60,7 @@ def _turn_envelope_result(
         tokens = source_number_tokens(params["payload"])
         if tokens:
             request["source_number_tokens"] = tokens
-    elif operation in {"context_delivery", "context_recovery", "progressive_context_delivery", "context_read_sections"}:
+    elif operation in {"context_delivery", "context_recovery", "progressive_context_delivery", "context_read_sections", "observed_first_read"}:
         tokens = source_number_tokens(params)
         if tokens:
             request["source_number_tokens"] = tokens

@@ -205,6 +205,26 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
                     or not isinstance(pinned_selection["sha256"], str)
                     or BARE_SHA256_PATTERN.fullmatch(pinned_selection["sha256"]) is None):
                 raise ValueError("reader selection reference is incomplete or unsupported")
+            if observation := reference.get("observed_read"):
+                from ..control_plane.turn_driver.native_first_read import observation_current
+
+                if not observation_current(observation, path, digest):
+                    if offset:
+                        return {"ok": False, "reason": "Observed first-read scope changed during paging.",
+                            "recovery_command": context_capture_read_command(path, digest, initial_read=True,
+                                page_bytes=size, max_page_output_bytes=output_limit, reader_argv=reader_argv)}
+                    # Restart in the ordinary complete view of this same capture.
+                    # Subsequent pages must pin that view even if the journal changes.
+                    pinned_selection, initial_read = None, True
+                    try:
+                        reference_file = write_context_read_reference(path, digest)
+                    except OSError:
+                        reference_file = None
+                elif offset == 0:
+                    presentation = {**(presentation or {}), "previously_delivered_fields": list(observation["fields"]),
+                        "field_recovery": "These unchanged fields still apply. If needed or uncertain, append --select "
+                            "and the field pointer to recovery.command for its complete current body."}
+        if pinned_selection is not None:
             selectors, initial_read = pinned_selection["select"], pinned_selection["initial_read"]
             list_fields, list_depth = pinned_selection["list_fields"], pinned_selection["list_depth"]
             selection_digest = pinned_selection["sha256"]
@@ -331,9 +351,10 @@ def model_context_reference(view: dict[str, Any], *, reader_argv: list[str] | No
         result["continuity_basis"] = view["continuity_basis"]
     if "first_read_command" in view:
         recovery = view["recovery"]
+        first_reference = view.get("first_read_reference")
         result["first_read_command"] = context_capture_read_command(Path(recovery["path"]), recovery["sha256"],
-            page_bytes=page_bytes, max_page_output_bytes=output_bytes, initial_read=True,
-            reference_file=Path(result["recovery"]["reference_file"]), reader_argv=reader_argv)
+            page_bytes=page_bytes, max_page_output_bytes=output_bytes, initial_read=not first_reference,
+            reference_file=Path(first_reference or result["recovery"]["reference_file"]), reader_argv=reader_argv)
     result["instruction"] += (" Append --select '<pointer>' or --list to recovery.command for current fields. "
         "Reader references keep complete digests locally; the CLI checks them on every page. "
         "A reference or digest grants no authority or freshness.")
@@ -456,6 +477,7 @@ def _native_context_read_bytes(reference: dict[str, Any], raw: bytes, *,
 
 
 def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
+                                progressive_enabled: bool = False,
                                 context_directory: str | None = None,
                                 hook_session: str | None = None,
                                 captured_recovery: dict[str, Any] | None = None,
@@ -545,8 +567,17 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
         write_decision_capture(wire, projected)
     from ..control_plane.turn_driver.codex_context import register_native_context_view
 
-    register_native_context_view(context_directory,
+    seen = register_native_context_view(context_directory,
         {**result, "ancestry": ancestry}, hook_session=hook_session)
+    if progressive_enabled and seen and initial_read_pointers and "first_read_command" in result:
+        from ..control_plane.turn_driver.native_first_read import observed_first_read_reference
+
+        first = observed_first_read_reference(context_directory, result["target"], current,
+            current_document, initial_read_pointers, seen, output_bytes)
+        if first is not None:
+            result["first_read_reference"] = str(first)
+            result["first_read_command"] = context_capture_read_command(Path(current["path"]), current["sha256"],
+                reference_file=first, page_bytes=page_bytes, max_page_output_bytes=output_bytes, reader_argv=reader_argv)
     return result
 
 
@@ -568,7 +599,7 @@ def project_native_quota_context(payload: dict[str, Any], args: argparse.Namespa
         capture_id=capture_id, continuity_generation=getattr(args, "_context_delivery_generation", None),
         progressive_enabled=progressive_enabled)
     recovery = payload.get("recovery")
-    view = native_context_capture_view(payload, capture_directory, context_directory=directory,
+    view = native_context_capture_view(payload, capture_directory, context_directory=directory, progressive_enabled=progressive_enabled,
         metadata={"capture_sha256": capture_id, **({"recovery": recovery} if recovery is not None else {})},
         max_page_output_bytes=getattr(args, "max_page_output_bytes", None), reader_argv=reader_argv)
     return model_context_reference(view, reader_argv=reader_argv)
@@ -710,6 +741,7 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
                 page_bytes=page_bytes, output_bytes=output_bytes, reader_argv=reader_argv)
             reference = dict(full_reference)
         native_view = native_context_capture_view(projected, cache, context_directory=directory, hook_session=hook_session,
+            progressive_enabled=activation["progressive_enabled"],
             metadata={"recovery": full_reference, "capture_sha256": args.capture_sha256,
                 "context_delivery": activation},
             max_page_output_bytes=getattr(args, "max_page_output_bytes", None), reader_argv=reader_argv)
