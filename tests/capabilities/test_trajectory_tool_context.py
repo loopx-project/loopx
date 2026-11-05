@@ -30,6 +30,25 @@ def test_literal_shell_and_exec_wrapper_are_parsed_without_execution(tmp_path):
     assert not marker.exists()
 
 
+@pytest.mark.parametrize('script', [
+    'text(await tools.exec_command({cmd: "loopx --format json quota context-read"}))',
+    'text((await tools.exec_command({\n cmd: "loopx --format json quota context-read", tty: false})).output);',
+])
+def test_direct_result_wrappers_preserve_one_literal_invocation(script):
+    assert _literal_exec_argv(script) == ['loopx', '--format', 'json', 'quota', 'context-read']
+
+
+@pytest.mark.parametrize('script', [
+    'text(await tools.exec_command({cmd: "loopx status"})); text(await tools.exec_command({cmd: "pytest"}));',
+    'text((await tools.exec_command({cmd: "loopx status"})).output + extra)',
+    'text(await tools.exec_command({cmd: "loopx status && pytest"}))',
+    'text((await tools.exec_command({...opts, cmd: "loopx status"})).output)',
+    'text(await tools.exec_command({cmd: `loopx ${command}`}))',
+])
+def test_direct_wrapper_rejects_mixed_or_dynamic_work(script):
+    assert _literal_exec_argv(script) is None
+
+
 def test_projection_uses_native_response_items_not_mirrors_or_model_prose():
     def item(payload):
         return {'type': 'response_item', 'payload': payload}
@@ -43,13 +62,13 @@ def test_projection_uses_native_response_items_not_mirrors_or_model_prose():
             item({'type': 'message', 'role': 'assistant', 'content': [{'text': 'loopx status'}]}),
             item({'type': 'custom_tool_call', 'call_id': 'js', 'name': 'exec',
                   'input': 'text(await tools.exec_command({cmd: "loopx status"}));'}),
-            item({'type': 'custom_tool_call_output', 'call_id': 'js', 'output': 'unassigned'})]
+            item({'type': 'custom_tool_call_output', 'call_id': 'js', 'output': 'saved'})]
     result = project_tool_context(rows)
     assert result[0]['argv'] == ['loopx', 'status']
     assert result[1]['bytes'] == 15
     assert result[1]['sha256'] == hashlib.sha256(output.encode()).hexdigest()
     assert result[2] == {'line': 4, 'kind': 'message', 'bytes': 6, 'unmeasured_parts': 1}
-    assert result[3]['argv'] is None
+    assert result[3]['argv'] == ['loopx', 'status']
     assert output not in json.dumps(result, ensure_ascii=False)
     assert len(result) == 5
 
