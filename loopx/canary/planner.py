@@ -310,7 +310,7 @@ CURRENT_REPO_PROFILES: tuple[dict[str, Any], ...] = (
             "loopx/control_plane/work_items/interaction_contract.py",
             "loopx/control_plane/todos/handoff_gate.py",
             "loopx/control_plane/work_items/execution_obligation.py",
-            "loopx/control_plane/work_items/goal_route_hint.py",
+            "loopx/control_plane/work_items/goal_route_hint.ts",
             "loopx/control_plane/work_items/delivery_history.py",
             "loopx/control_plane/work_items/delivery_history.ts",
             "loopx/control_plane/work_items/work_lane.py",

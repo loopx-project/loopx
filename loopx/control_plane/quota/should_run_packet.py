@@ -77,7 +77,6 @@ from ..quota.stall_repair import (
 )
 from ..quota.task_orchestration import (
     PEER_COORDINATION_BLOCKED_ACTION,
-    apply_task_route_hint_override,
     attach_task_orchestration_payload,
     task_orchestration_contract_is_actionable,
     task_orchestration_requires_material_change_stop,
@@ -118,6 +117,7 @@ from ..todos.write_hint import build_todo_write_hint
 from ..turn_driver.delivery_continuity import evaluate_delivery_route
 from ..work_items.action_portfolio import (
     build_quota_planning_packet,
+    capture_goal_route_context,
     qualify_action_selection_from_inventory,
 )
 from ..work_items.execution_obligation import build_execution_obligation
@@ -125,7 +125,6 @@ from ..work_items.action_selection_contract import (
     action_selection_context,
     apply_action_selection_recovery_projection,
 )
-from ..work_items.goal_route_hint import build_goal_route_hint
 from ..work_items.interaction_contract import (
     _build_interaction_contract_projection,
     unadmitted_action_selection,
@@ -803,7 +802,7 @@ class _QuotaDecisionRoute:
     active_state_next_action_text: str | None
     latest_run_recommended_action_text: str | None
     next_action_warning: dict[str, Any] | None
-    goal_route_hint: dict[str, Any] | None
+    goal_route_context: dict[str, Any] | None
     payload_work_lane_contract: dict[str, Any] | None
 
 
@@ -832,6 +831,7 @@ def _planning_projections(
     )
     return build_quota_planning_packet(
         projection_enabled=projection_enabled,
+        goal_route_context=route.goal_route_context,
         include_detail=include_detail,
         goal_id=prepared.safe_goal_id,
         selected=route.agent_lane_next_action,
@@ -961,7 +961,7 @@ def _resolve_quota_should_run_route(
                 item.get("latest_run_recommended_action")
                 or prepared.project_asset.get("latest_run_recommended_action"), limit=320,
             ),
-            next_action_warning=None, goal_route_hint=None,
+            next_action_warning=None, goal_route_context=None,
             payload_work_lane_contract=_payload_work_lane_contract(
                 prepared.work_lane_contract, effective_action=fields["effective_action"],
                 recovery_allowed=False, agent_scope_frontier=None,
@@ -1274,7 +1274,7 @@ def _resolve_quota_should_run_route(
         latest_run_recommended_action=latest_run_recommended_action_text,
         agent_lane_next_action=agent_lane_next_action,
     )
-    goal_route_hint = build_goal_route_hint(
+    goal_route_context = capture_goal_route_context(
         agent_identity=prepared.agent_identity,
         agent_todo_summary=prepared.agent_todo_summary,
         agent_lane_next_action=agent_lane_next_action,
@@ -1283,10 +1283,7 @@ def _resolve_quota_should_run_route(
         active_state_next_action=active_state_next_action_text,
         latest_run_recommended_action=latest_run_recommended_action_text,
         selected_recommended_action=selected_recommended_action,
-    )
-    goal_route_hint = apply_task_route_hint_override(
-        goal_route_hint,
-        run_decision.goal_route_hint_override,
+        goal_route_hint_override=run_decision.goal_route_hint_override,
     )
     payload_work_lane_contract = _payload_work_lane_contract(
         prepared.work_lane_contract,
@@ -1318,7 +1315,7 @@ def _resolve_quota_should_run_route(
         active_state_next_action_text=active_state_next_action_text,
         latest_run_recommended_action_text=latest_run_recommended_action_text,
         next_action_warning=next_action_warning,
-        goal_route_hint=goal_route_hint,
+        goal_route_context=goal_route_context,
         payload_work_lane_contract=payload_work_lane_contract,
     )
 
@@ -1529,7 +1526,6 @@ def _build_active_quota_payload(
     _attach_truthy_fields(
         payload,
         agent_lane_frontier_hint=route.agent_lane_frontier_hint,
-        goal_route_hint=route.goal_route_hint,
         agent_scope_frontier=route.agent_scope_frontier,
         workspace_guard=prepared.workspace_guard,
         automation_prompt_upgrade=prepared.automation_prompt_upgrade,

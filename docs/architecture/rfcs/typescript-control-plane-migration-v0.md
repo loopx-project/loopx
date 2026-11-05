@@ -1765,10 +1765,13 @@ The task-scoped `goal_route_hint` override now comes back in that same
 `quota.run_decision` response. Python projects the lane count from the existing
 task-orchestration source fact. TypeScript owns the ready-state check, route
 decision and coordination wording. Python's duplicate `task_goal_route_hint` decision is
-deleted, leaving only the bounded merge into the assembled hint. This adds no
-request, provider read or authority. Other Goal-route and primary-action
-builders remain separate migration work; this does not complete the quota read
-transaction or claim a performance gain.
+deleted. The complete Goal-route projection and override merge now move to the
+existing planning batch, with a route-only internal v1 request when planning
+views are absent. This can add a planning RPC on route-only paths; it adds no
+provider read or authority. Primary-action builders remain separate work. See
+the [Goal-route checkpoint](ledger/typescript-control-plane-migration-v0/2026-11-05-goal-route-planning-batch.md)
+for compatibility, qualification and cost gates; neither the complete quota
+read transaction nor a performance gain is claimed.
 
 **Long-history transport boundary.** Replan history still has one TS decision
 owner. Small requests retain the inline codec; larger complete fact snapshots

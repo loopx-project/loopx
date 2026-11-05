@@ -135,6 +135,8 @@ ACTION_PORTFOLIO_PROTOCOL_KEYS = (
     "selection_result_schema",
     "planning_packet_request_schema",
     "planning_packet_result_schema",
+    "planning_packet_request_v1_schema",
+    "planning_packet_result_v1_schema",
 )
 TODO_RESUME_PROTOCOL_KEYS = (
     "normalize_request_schema",

@@ -322,6 +322,7 @@ def test_scoped_fallback_cannot_execute_under_an_unadmitted_selection():
 
     assert payload["effective_action"] == "quota_skip"
     assert payload["state"] == "quota_action_selection_rejected"
+    assert "goal_route_hint" not in payload
     for flag in (
         "ok", "should_run", "actionable_by_codex", "safe_bypass_allowed",
         "spend_allowed_now", "spend_after_validation", "normal_delivery_allowed",

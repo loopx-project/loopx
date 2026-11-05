@@ -1263,9 +1263,12 @@ TS 生产者验证器通过共享 guard fixture 执行真实 TS 分类器，并�
 Task-scoped `goal_route_hint` override 现在由同一个
 `quota.run_decision` 响应返回。Python 从既有 task-orchestration source fact 投影
 lane 数。TypeScript 持有 ready 状态检查、route 判定和协调说明。Python 重复实现的
-`task_goal_route_hint` 判定已删除，只保留将有界补丁合并进已组装 hint 的步骤。
-本改动不增加请求、provider 读取或 authority。其他 Goal route 与 primary-action
-builder 仍是独立迁移工作；这不代表 quota read transaction 已完成，也不宣称性能提升。
+`task_goal_route_hint` 判定已删除。完整 Goal route 投影与 override 合并现迁入既有
+planning batch；没有 planning view 时使用 route-only 内部 v1 请求。这可能为
+route-only 路径增加一次 planning RPC，但不增加 provider 读取或 authority。
+primary-action builder 仍是独立工作。兼容性、资格及成本门见
+[Goal route 检查点](ledger/typescript-control-plane-migration-v0/2026-11-05-goal-route-planning-batch.zh-CN.md)；
+不宣称完整 quota read transaction 已完成或性能提升。
 
 **长历史传输边界。** Replan 历史仍由一个 TS owner 决策。小请求保留 inline
 codec；较大的完整事实快照通过私有临时文件和摘要绑定的引用传递。同一 reducer

@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from tests.control_plane.cli_output_fixture import read_cli_context_for_oracle
 
 from canonical_authority_fixture import isolate_sqlite_runtime
 from loopx.control_plane.testing.canary_harness import run_json_cli, run_json_cli_result
@@ -25,7 +26,9 @@ def test_closed_monitor_replays_original_no_spend_turn(
         target_key="public-target", next_due_at="2000-01-01T00:00:00Z")
 
     def call(*args):
-        return run_json_cli(*args, registry_path=registry, runtime_root=runtime)
+        wire = run_json_cli(*args, registry_path=registry, runtime_root=runtime)
+        captured, _reader_cost = read_cli_context_for_oracle(json.dumps(wire))
+        return json.loads(captured)
 
     turn = "closed-monitor-observation"
     guard = ["quota", "should-run", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
@@ -53,6 +56,7 @@ def test_closed_monitor_replays_original_no_spend_turn(
     for selector in ([], ["--todo-id", monitor["todo_id"]]):
         replay = call(*guard, *selector)
         assert replay["heartbeat_receipt"]["settlement_identity"] == identity
+        assert "goal_route_hint" not in replay
         assert replay["should_run"] is False
         assert replay["effective_action"] == "heartbeat_settled_skip"
         assert not replay["interaction_contract"]["agent_channel"]["must_attempt"]
