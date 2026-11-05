@@ -60,7 +60,7 @@ def _turn_envelope_result(
         tokens = source_number_tokens(params["payload"])
         if tokens:
             request["source_number_tokens"] = tokens
-    elif operation in {"context_delivery", "context_recovery", "progressive_context_delivery", "context_read_sections", "observed_first_read"}:
+    elif operation in {"context_delivery", "context_recovery", "progressive_context_delivery", "context_read_sections"}:
         tokens = source_number_tokens(params)
         if tokens:
             request["source_number_tokens"] = tokens
@@ -184,7 +184,7 @@ def prepare_context_delivery(
     retained: Mapping[str, Any] | None = None,
     continuity: Mapping[str, Any] | None = None,
     surface: str = "work_context", native_projection: Mapping[str, Any] | None = None,
-    consumed_pointers: Mapping[str, str] | None = None,
+    consumed_pointers: Mapping[str, str] | None = None, observe_first_read: bool = False,
 ) -> dict[str, Any]:
     """Prepare under the Host's explicit continuity basis, not a model assertion.
 
@@ -203,6 +203,8 @@ def prepare_context_delivery(
         source["native_projection"] = dict(native_projection)
     if consumed_pointers is not None:
         source["consumed_pointers"] = dict(consumed_pointers)
+        if consumed_pointers and observe_first_read:
+            source["observe_first_read"] = True
     result = _turn_envelope_result("context_delivery", **source, source_edits=True)
     return _apply_context_projection_changes(source, result)
 

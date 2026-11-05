@@ -578,10 +578,10 @@ def _native_context_request(state: dict[str, Any], scope: dict[str, Any]) -> dic
     return request
 
 
-def register_native_context_view(directory: str | None, view: dict[str, Any], *, hook_session: str | None = None) -> dict[str, str]:
+def register_native_context_view(directory: str | None, view: dict[str, Any], *, hook_session: str | None = None) -> dict | None:
     """Bind the existing pending delivery to its actual paged wire, under lock."""
     if directory is None or not isinstance(view.get("target"), dict):
-        return {}
+        return None
     with _locked(directory) as root:
         state = _state(root)
         pending = state.get("pending")
@@ -592,7 +592,7 @@ def register_native_context_view(directory: str | None, view: dict[str, Any], *,
             ancestry=view.get("ancestry", 0),
             read_sections=pending.get("full_read_sections", {}) if view.get("mode") == "full" else {})
         _save(root, state)
-        return state.get("consumed_pointers", {})
+        return pending.get("observed_first_read")
 
 
 def project_codex_context(payload: dict[str, Any], *, directory: str | None, capture_directory: Path,
@@ -675,7 +675,7 @@ def project_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                             "command_template": context_capture_read_command(Path(recovery["path"]), recovery["sha256"],
                                 page_bytes=page_bytes, max_page_output_bytes=output_bytes)
                                 + " --select '<supporting_material_pointer>/sources'",
-                        }, consumed_pointers=state.get("consumed_pointers"))
+                        }, consumed_pointers=state.get("consumed_pointers"), observe_first_read=progressive_enabled)
                 except (EffectRuntimeRemoteError, EffectRuntimeStartupError):
                     return payload
                 if transaction["projected"]:
@@ -692,6 +692,13 @@ def project_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                     state["pending"].update(target=result["target"], ancestry=result["ancestry"],
                         full_read_sections=transaction["read_sections"],
                         read_sections=transaction["read_sections"] if result["mode"] == "full" else {})
+                    if plan := transaction.get("observed_first_read"):
+                        from .native_first_read import observed_first_read_reference
+
+                        reference = observed_first_read_reference(directory, result["target"], recovery,
+                            transaction["context"], plan)
+                        if reference is not None:
+                            state["pending"]["observed_first_read"] = reference
                     _save(root, state)
                 return result
             except (OSError, ValueError, KeyError, TypeError, RecursionError):

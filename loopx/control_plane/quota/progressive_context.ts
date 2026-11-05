@@ -9,6 +9,7 @@ import {FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE} from "../
 import {quotaSummaryReferences, contextSourceIdentity, contextProjectionChanges,
   type ProjectionSourceValues} from "./diagnostic_projection.ts";
 import {encodeContextDelivery, fileNavigationPaths} from "./context_delivery.ts";
+import {capturedContextSelection} from "./context_selection.ts";
 import {createHash} from "node:crypto";
 
 type Path = (string | number)[];
@@ -29,10 +30,10 @@ export function contextReadSectionDigests(request: JsonObject, paths: Path[]): J
 
 /** Only previously delivered supplementary bodies may use a reference. Current
  * decisions, stops, selection, settlement and unknown source shapes stay inline. */
-export function observedFirstRead(request: JsonObject, selections: {pointer: string; path: Path}[]): JsonObject {
+function observedFirstRead(request: JsonObject, selections: {pointer: string; path: Path}[]): JsonObject | undefined {
   const context = requireJsonObject(request.context, "current first read");
   const seen = requireJsonObject(request.consumed_pointers, "observed sections");
-  if (typeof jsonObject(context.selected_todo)?.todo_id !== "string") return {selections, reused: {}};
+  if (typeof jsonObject(context.selected_todo)?.todo_id !== "string") return undefined;
   const sources = ["interaction_contract", "agent_channel", "work_context", "sources"];
   const identity = contextSourceIdentity(request, request.source_number_tokens);
   const reused: JsonObject = {};
@@ -55,7 +56,7 @@ export function observedFirstRead(request: JsonObject, selections: {pointer: str
     return (outcome ? ["id", "revision"] : ["ok", "revision", "instruction"]).filter(key =>
       Object.hasOwn(body, key)).map(key => ({pointer: address + "/" + key, path: [...path, key]}));
   });
-  return {selections: current, reused};
+  return Object.keys(reused).length ? {selections: current, reused} : undefined;
 }
 
 function inlineReadSections(request: JsonObject, required: JsonObject): JsonObject {
@@ -270,14 +271,21 @@ function nativeContextContinuity(codec: JsonObject): JsonObject {
 
 /** Plan and encode one native capture without sending its intermediate view
  * back through Python. Capture publication and native locking remain Host IO. */
-export function prepareProgressiveContextDelivery(request: JsonObject, legacyFields: readonly string[]): JsonObject {
+export function prepareProgressiveContextDelivery(request: JsonObject, legacyFields: readonly string[],
+    decisionFields: readonly string[]): JsonObject {
   const sourceValues: ProjectionSourceValues = new WeakMap();
   const required = requiredNativeContext(request, sourceValues);
   const codec = nativeContextContinuity({...request, context: required.context,
     ...(request.source_number_tokens === undefined ? {} : {source_number_tokens: required.tokens})});
   const delivery = encodeContextDelivery(codec, legacyFields, sourceValues, fileNavigationPaths(required.context));
+  const observe = request.observe_first_read === true && !!jsonObject(required.context.selected_todo)?.todo_id;
+  const pointers = observe ? initialContextReadPointers(required.context, decisionFields) : [];
+  const selections = pointers.length
+    ? capturedContextSelection({context: required.context, initial_read: true}, pointers).selections : undefined;
+  const observed = observe && selections ? observedFirstRead(codec, selections as {pointer: string; path: Path}[]) : undefined;
   const {operation: _operation, source_edits: _edits, source_number_tokens: _numbers, ...source} = request;
   return contextProjectionChanges(source, {context: required.context, delivery, projected: required.projected,
+    ...(observed ? {observed_first_read: observed} : {}),
     read_sections: inlineReadSections(request, required.context)}, sourceValues);
 }
 

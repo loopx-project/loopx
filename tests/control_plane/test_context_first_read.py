@@ -669,9 +669,9 @@ def test_warm_delta_initial_read_uses_current_action_without_the_old_base(tmp_pa
     assert not registry.exists() and not runtime.exists()
 
 
-@pytest.mark.parametrize("invalidate", ["compact", "partial", "task_switch", "off"])
+@pytest.mark.parametrize("invalidate", ["compact", "resume", "partial", "task_switch", "off"])
 def test_native_first_read_reuses_only_observed_current_fields(tmp_path, monkeypatch, navigated_decision, invalidate):
-    from test_codex_context_lifecycle import setup, project, deliver
+    from test_codex_context_lifecycle import setup, deliver
 
     event = setup(tmp_path, monkeypatch)
     source = navigated_decision["interaction_contract"]["agent_channel"]["work_context"]["sources"][0]
@@ -681,7 +681,11 @@ def test_native_first_read_reuses_only_observed_current_fields(tmp_path, monkeyp
         outcome["requirements"][0]["description"] *= 240
     prefix = "/interaction_contract/agent_channel/work_context/sources/0/content/goal_acceptance_contract/outcome_requirements/outcomes"
     def navigation(capture, enabled=True):
-        _, wire = project(tmp_path, capture, payload=navigated_decision)
+        directory = tmp_path / capture
+        directory.mkdir(mode=0o700)
+        wire = codex_context.project_codex_context(navigated_decision, directory=str(tmp_path),
+            capture_directory=directory, goal_id="fixture", agent_id="agent", surface="quota_packet",
+            capture_id=capture, progressive_enabled=enabled)
         view = native_context_capture_view(wire, tmp_path / capture, context_directory=str(tmp_path),
             progressive_enabled=enabled, max_page_output_bytes=6000)
         return model_context_reference(view)
@@ -702,6 +706,7 @@ def test_native_first_read_reuses_only_observed_current_fields(tmp_path, monkeyp
         return {row["pointer"]: row["value"] for row in json.loads(
             "".join(page["content"] for page in pages))["selections"]}
 
+    navigated_decision["goal_boundary"]["stop_condition"] = "Preserve every applicable stop. " * 220
     first = pages(navigation("first")["first_read_command"])
     assert len(first) > 1 and facts(first)[prefix + "/0"] == outcomes[0]
     deliver(tmp_path, event, first[1:] if invalidate == "partial" else first)
@@ -713,13 +718,21 @@ def test_native_first_read_reuses_only_observed_current_fields(tmp_path, monkeyp
     observed = facts(warm)
     assert observed[prefix + "/1"] == outcomes[1]
     assert observed["/goal_boundary"] == navigated_decision["goal_boundary"]
-    if invalidate != "compact":
+    if invalidate not in {"compact", "resume"}:
         assert observed[prefix + "/0"] == outcomes[0]
         assert "previously_delivered_fields" not in warm[0]
         return
     assert warm[0]["previously_delivered_fields"] == [prefix + "/0"]
     assert observed[prefix + "/0/id"] == outcomes[0]["id"] and prefix + "/0" not in observed
     assert facts(pages(second["recovery"]["command"] + " --select " + prefix + "/0"))[prefix + "/0"] == outcomes[0]
-    codex_context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": "PostCompact"})
+    lifecycle = {"hook_event_name": "PostCompact"} if invalidate == "compact" else {"source": "resume"}
+    codex_context.codex_context_hook(str(tmp_path), {**event, **lifecycle})
+    assert len(warm) > 1
+    stale = subprocess.run(shlex.split(warm[0]["next_command"]), capture_output=True, text=True)
+    assert stale.returncode != 0
+    rejection = json.loads(stale.stdout)
+    assert "content" not in rejection
+    restarted = pages(rejection["recovery_command"])
+    assert facts(restarted)[prefix + "/0"] == outcomes[0]
     recovered = pages(second["first_read_command"])
     assert facts(recovered)[prefix + "/0"] == outcomes[0]
