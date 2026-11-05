@@ -103,6 +103,8 @@ const SECRET_LIKE_SURFACES = [
   /\bxox[baprs]-[a-z0-9-]{10,}/iu,
   /\baiza[a-z0-9_-]{20,}/iu,
   /\b(?:sk|rk)_(?:live|test)_[a-z0-9]{12,}/iu,
+  /\bsk-(?:proj|svcacct|admin)-[a-z0-9_-]{20,}/iu,
+  /\bsk-ant-[a-z0-9_-]{20,}/iu,
   /\bnpm_[a-z0-9]{20,}/iu,
   /\bpypi-[a-z0-9_-]{20,}/iu,
   /\beyj[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}\b/iu,
