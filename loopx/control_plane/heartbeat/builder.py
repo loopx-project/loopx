@@ -180,7 +180,7 @@ def _heartbeat_prompt_commands(
     codex_context_root: str | None,
     context_delivery: str | None,
     turn_envelope: bool,
-    delta_delivery: str = "auto",
+    delta_delivery: str | None = None,
 ) -> dict[str, str | None]:
     quota_guard_command = render_quota_guard_command(
         goal_id,
@@ -293,7 +293,7 @@ def _heartbeat_prompt_commands(
             capture_arg += " --codex-context-root " + shlex.quote(codex_context_root)
     elif context_delivery is not None:
         capture_arg += " --context-delivery " + shlex.quote(context_delivery)
-    if delta_delivery != "auto":
+    if delta_delivery == "off" or (context_delivery == "off" and delta_delivery == "auto"):
         capture_arg += " --delta-delivery " + shlex.quote(delta_delivery)
     if capture_arg:
         display_arg = " --turn-envelope" if turn_envelope else ""
@@ -303,7 +303,7 @@ def _heartbeat_prompt_commands(
     return commands
 
 
-def _heartbeat_context_capture_activation(*, context_delivery: str | None, delta_delivery: str,
+def _heartbeat_context_capture_activation(*, context_delivery: str | None, delta_delivery: str | None,
         runtime_profile: str | None, scheduler_execution_context: Any, decision_output_root: Path | None,
         decision_handoff_socket: str | None, codex_context_dir: str | None,
         codex_context_root: str | None) -> tuple[dict[str, Any], str, str | None, str | None]:
@@ -354,7 +354,7 @@ def build_heartbeat_prompt(
     codex_context_dir: str | None = None,
     codex_context_root: str | None = None,
     context_delivery: str | None = None,
-    delta_delivery: str = "auto",
+    delta_delivery: str | None = None,
     turn_envelope: bool = False,
 ) -> dict[str, Any]:
     if not (full or compact or brief or thin):

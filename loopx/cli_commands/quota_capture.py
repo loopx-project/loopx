@@ -353,7 +353,7 @@ def model_context_reference(view: dict[str, Any], *, reader_argv: list[str] | No
 def _native_context_reference(projected: dict[str, Any], reference: dict[str, Any], *,
                               mode: str, current: dict[str, Any], current_document: dict[str, Any],
                               total_bytes: int, metadata: dict[str, Any] | None,
-                              field_index: list[dict[str, Any]] | None,
+                              progressive_enabled: bool, field_index: list[dict[str, Any]] | None,
                               initial_read_pointers: list[str] | None,
                               initial_read_reference: Path | None,
                               page_bytes: int, output_bytes: int,
@@ -385,7 +385,7 @@ def _native_context_reference(projected: dict[str, Any], reference: dict[str, An
     result["overview"] = {key: value for key, value in current_document.items()
         if value is None or isinstance(value, (str, bool, int, float))
         and len(json.dumps(value, ensure_ascii=False).encode("utf-8")) <= 240}
-    result["instruction"] = CONTEXT_CAPTURE_NAVIGATION_GUIDANCE
+    result["instruction"] = CONTEXT_CAPTURE_NAVIGATION_GUIDANCE if progressive_enabled else CONTEXT_CAPTURE_READ_GUIDANCE
     if mode != "full":
         result["instruction"] += (" command reads the delta; baseline_reference identifies its exact saved base when file-backed. "
             "recovery.command reads current facts directly without that baseline.")
@@ -470,7 +470,7 @@ def _native_context_read_bytes(reference: dict[str, Any], raw: bytes, *,
 
 def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
                                 context_directory: str | None = None,
-                                hook_session: str | None = None,
+                                progressive_enabled: bool = True, hook_session: str | None = None,
                                 captured_recovery: dict[str, Any] | None = None,
                                 metadata: dict[str, Any] | None = None,
                                 max_page_output_bytes: int | None = None,
@@ -516,41 +516,43 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
     field_index = None
     initial_read_pointers = None
     initial_read_reference = None
-    try:
-        if initial_read_plan is not None:
-            initial, plan = initial_read_plan["initial"], initial_read_plan["plan"]
-        else:
-            initial = True
-            try:
-                plan = _turn_envelope_result("context_select", context=current_document, initial_read=True)
-            except EffectRuntimeRejected:
-                # Historical callers retain generic discovery. Runtime/startup
-                # failures do not reenter the unavailable runtime.
-                initial = False
-                plan = _turn_envelope_result("context_select", context=current_document, select=[""], list_fields=True)
-        if initial:
-            selections = plan["selections"]
-            initial_read_pointers = [item["pointer"] for item in selections]
-            selected = _context_selection_bytes(current_document, selections, list_fields=False, list_depth=None)
-            try:
-                initial_read_reference = write_context_read_reference(Path(current["path"]), current["sha256"], selection={
-                    "select": initial_read_pointers, "initial_read": False, "list_fields": False, "list_depth": None,
-                    "sha256": hashlib.sha256(selected).hexdigest()})
-            except OSError:
-                # Read-only capture roots keep the existing initial recipe;
-                # metadata is optional and never a read/authority receipt.
-                pass
-        else:
-            field_index = _context_index_fields(current_document, plan["selections"][0]["children"])
-    except (EffectRuntimeRemoteError, EffectRuntimeStartupError):
-        # Optional discovery cannot invalidate the immutable file reference.
-        pass
+    if progressive_enabled:
+        try:
+            if initial_read_plan is not None:
+                initial, plan = initial_read_plan["initial"], initial_read_plan["plan"]
+            else:
+                initial = True
+                try:
+                    plan = _turn_envelope_result("context_select", context=current_document, initial_read=True)
+                except EffectRuntimeRejected:
+                    # Historical callers retain generic discovery. Runtime/startup
+                    # failures do not reenter the unavailable runtime.
+                    initial = False
+                    plan = _turn_envelope_result("context_select", context=current_document, select=[""], list_fields=True)
+            if initial:
+                selections = plan["selections"]
+                initial_read_pointers = [item["pointer"] for item in selections]
+                selected = _context_selection_bytes(current_document, selections, list_fields=False, list_depth=None)
+                try:
+                    initial_read_reference = write_context_read_reference(Path(current["path"]), current["sha256"], selection={
+                        "select": initial_read_pointers, "initial_read": False, "list_fields": False, "list_depth": None,
+                        "sha256": hashlib.sha256(selected).hexdigest()})
+                except OSError:
+                    # Read-only capture roots keep the existing initial recipe;
+                    # metadata is optional and never a read/authority receipt.
+                    pass
+            else:
+                field_index = _context_index_fields(current_document, plan["selections"][0]["children"])
+        except (EffectRuntimeRemoteError, EffectRuntimeStartupError):
+            # Optional discovery cannot invalidate the immutable file reference.
+            pass
 
     def view(kind: str, ref: dict[str, Any], body: bytes) -> dict[str, Any]:
         return _native_context_reference(projected, ref, mode=kind, current=current,
             current_document=current_document, total_bytes=len(body), metadata=metadata,
             field_index=field_index, initial_read_pointers=initial_read_pointers,
             initial_read_reference=initial_read_reference,
+            progressive_enabled=progressive_enabled,
             page_bytes=page_bytes, output_bytes=output_bytes, reader_argv=reader_argv)
 
     if typed and mode == "delta":
@@ -613,6 +615,7 @@ def project_native_quota_context(payload: dict[str, Any], args: argparse.Namespa
     recovery = prepared.delivery.get("recovery")
     view = native_context_capture_view(prepared.delivery, capture_directory, context_directory=directory,
         initial_read_plan=prepared.initial_read_plan,
+        progressive_enabled=progressive_enabled,
         metadata={"capture_sha256": capture_id, **({"recovery": recovery} if recovery is not None else {})},
         max_page_output_bytes=getattr(args, "max_page_output_bytes", None), reader_argv=reader_argv)
     return model_context_reference(view, reader_argv=reader_argv)
@@ -779,6 +782,7 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
             reference = dict(full_reference)
         native_view = native_context_capture_view(projected, cache, context_directory=directory, hook_session=hook_session,
             initial_read_plan=prepared.initial_read_plan,
+            progressive_enabled=activation["progressive_enabled"],
             metadata={"recovery": full_reference, "capture_sha256": args.capture_sha256,
                 "context_delivery": activation},
             max_page_output_bytes=getattr(args, "max_page_output_bytes", None), reader_argv=reader_argv)
@@ -1120,7 +1124,7 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
         "or enabled native should-run/context-project, or Turn-bound JSON spend-slot")
     if has_output_limit and args.quota_command != "context-read" and not settlement_output and (
         args.quota_command not in ("should-run", "context-project") or args.format != "json"
-        or getattr(args, "context_delivery", None) == "off"):
+        or (getattr(args, "context_delivery", None) == "off" and getattr(args, "delta_delivery", None) != "auto")):
         print_payload({"ok": False, "reason": budget_scope_error},
             args.format, lambda value: str(value["reason"]))
         return 1
@@ -1173,10 +1177,16 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
             if not directory:
                 raise ValueError("context-config requires codex-context-root or codex-context-dir")
             machine_runtime = getattr(args, "_context_delivery_machine_runtime", None)
-            cli_argv = loopx_cli_argv() + (["--runtime-root", machine_runtime] if machine_runtime else [])
+            cli_argv = loopx_cli_argv()
+            if registry_path is not None:
+                cli_argv += ["--registry", str(registry_path.expanduser().resolve())]
+            hook_runtime = machine_runtime or runtime_root_arg
+            if hook_runtime:
+                cli_argv += ["--runtime-root", str(Path(hook_runtime).expanduser().resolve())]
             config = codex_context_configuration(directory, goal_id=args.goal_id, agent_id=args.agent_id,
                 cli_argv=cli_argv, scenario=activation["scenario"], session_root=bool(getattr(args, "codex_context_root", None)),
-                inherit_machine=bool(machine_runtime))
+                inherit_machine=bool(machine_runtime), progressive_enabled=activation["progressive_enabled"])
+            explicit_options = "--context-delivery on" if activation["progressive_enabled"] else "--context-delivery off --delta-delivery auto"
             payload = {"ok": True, "context_delivery": activation, "native_config": config,
                 "activation": "Apply config_overrides, merge hooks and append developer_instructions to the existing native configuration; "
                     "review and trust only these exact hooks in Codex. "
@@ -1185,7 +1195,7 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
                     "with the resulting configuration after active work reaches its normal safe boundary. "
                     + ("Machine defaults are re-read on each invocation; generated hooks inherit the same machine runtime. "
                        "Omit per-command activation and location flags to retain that inheritance. " if machine_runtime else
-                       "Pass --context-delivery on with the same declared host mode, context location and a decision-output-root to heartbeat-prompt/should-run. ")
+                       f"Pass {explicit_options} with the same declared host mode, context location and a decision-output-root to heartbeat-prompt/should-run. ")
                     +
                     "Verified saved files support progressive reads and exact deltas without a full model read; compaction starts a new full baseline on the next work Turn. "
                     "The generated output profile uses 64000-byte continuations and a 20000-token native history limit; "

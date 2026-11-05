@@ -337,6 +337,33 @@ def test_small_material_keeps_full_capture_when_the_detail_index_costs_more(tmp_
     assert not Path(recovery["path"]).with_name("required-context.json").exists()
 
 
+def test_delta_only_retains_original_material_and_recovers_changes(tmp_path, monkeypatch):
+    from loopx.control_plane.quota.turn_envelope import restore_context_delivery
+
+    event = setup(tmp_path, monkeypatch)
+    previous = None
+    for turn, stop in enumerate(("Preserve scope.", "Stop now.")):
+        source = {**payload(), "stop": stop, "evidence": ["stable material " * 1000]}
+        capture = tmp_path / str(turn)
+        capture.mkdir(mode=0o700)
+        wire = context.project_codex_context(source, directory=str(tmp_path), capture_directory=capture,
+            goal_id="fixture", agent_id="agent", surface="quota_packet", capture_id=str(turn),
+            progressive_enabled=False)
+        assert json.loads(Path(wire["recovery"]["path"]).read_bytes()) == source
+        from loopx.cli_commands.quota_capture import native_context_capture_view
+        view = native_context_capture_view(wire, capture, context_directory=str(tmp_path), progressive_enabled=False)
+        assert "first_read_command" not in view and "Follow next_command through eof" in view["instruction"]
+        if previous is None:
+            assert wire["mode"] == "full" and wire["context"] == source
+            previous = wire
+            deliver(tmp_path, event, read_pages(tmp_path, wire))
+        else:
+            assert wire["mode"] == "delta"
+            restored = restore_context_delivery(wire, baseline=previous, current={
+                "schema_version": wire["schema_version"], "mode": "full", "target": wire["target"], "context": source})
+            assert restored["mode"] == "delta" and restored["context"] == source
+
+
 def test_small_duplicate_rows_do_not_gain_reference_overhead(tmp_path, monkeypatch):
     setup(tmp_path, monkeypatch)
     row = {"schema_version": "todo_item_v0", "todo_id": "task", "text": "Keep this constraint.", "claimed_by": "peer"}
