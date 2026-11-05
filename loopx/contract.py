@@ -319,6 +319,35 @@ LOCAL_PRIVATE_STATE_FILE_NAMES = {"ACTIVE_GOAL_STATE.md", "ACTIVE_GOAL_STATE.md.
 TERMINAL_TODO_STATUSES = {TODO_STATUS_DONE, TODO_STATUS_DEFERRED, "completed", "closed", "archived"}
 
 
+# A scan reads a checkout the operator may not control, so a Git that blocks on
+# a stale index lock, a network mount or an oversized index must not hold the
+# scan open. These queries are local reads that never fan out into helpers.
+GIT_PROBE_TIMEOUT_SECONDS = 5.0
+
+
+def _git_query_succeeds(*arguments: str) -> bool:
+    """Answer a Git ownership question, degrading when Git cannot answer.
+
+    A probe that runs out of budget is treated like one that exited non-zero:
+    ownership stays unknown, which keeps the caller's conservative answer
+    instead of raising out of a read-only scan.
+    """
+
+    try:
+        completed = subprocess.run(
+            ["git", *arguments],
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            check=False,
+            timeout=GIT_PROBE_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return completed.returncode == 0
+
+
 def _git_worktree_root(path: Path) -> Path | None:
     path = path.resolve()
     target = path if path.is_dir() else path.parent
@@ -330,8 +359,9 @@ def _git_worktree_root(path: Path) -> Path | None:
             errors="replace",
             capture_output=True,
             check=True,
+            timeout=GIT_PROBE_TIMEOUT_SECONDS,
         ).stdout.strip()
-    except (subprocess.CalledProcessError, FileNotFoundError):
+    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
         return None
     return Path(root).resolve()
 
@@ -345,27 +375,11 @@ def _git_probe(path: Path) -> dict[str, Any]:
         rel_path = str(path.relative_to(repo_root))
     except ValueError:
         rel_path = str(path)
-    tracked = (
-        subprocess.run(
-            ["git", "-C", str(repo_root), "ls-files", "--error-unmatch", "--", rel_path],
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            capture_output=True,
-            check=False,
-        ).returncode
-        == 0
+    tracked = _git_query_succeeds(
+        "-C", str(repo_root), "ls-files", "--error-unmatch", "--", rel_path
     )
-    ignored = (
-        subprocess.run(
-            ["git", "-C", str(repo_root), "check-ignore", "-q", "--", rel_path],
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            capture_output=True,
-            check=False,
-        ).returncode
-        == 0
+    ignored = _git_query_succeeds(
+        "-C", str(repo_root), "check-ignore", "-q", "--", rel_path
     )
     return {
         "inside_worktree": True,
@@ -952,14 +966,18 @@ def _tracked_scan_files(scan_root: Path) -> list[Path]:
     if not rel_root:
         rel_root = "."
 
-    tracked = subprocess.run(
-        ["git", "-C", str(repo_root), "ls-files", "-z", "--", rel_root],
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        capture_output=True,
-        check=False,
-    )
+    try:
+        tracked = subprocess.run(
+            ["git", "-C", str(repo_root), "ls-files", "-z", "--", rel_root],
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            check=False,
+            timeout=GIT_PROBE_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
     if tracked.returncode != 0:
         return []
 
