@@ -1621,7 +1621,7 @@ def effect_runtime_result(
         retry_safe=retry_safe,
         large_local_snapshot=large_local_snapshot,
     ).get("result")
-    if key is not None and isinstance(result, dict):
+    if state is not None and key is not None and isinstance(result, dict):
         try:
             encoded = json.dumps(result, ensure_ascii=False, allow_nan=False,
                                  separators=(",", ":")).encode("utf-8")
