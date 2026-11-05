@@ -209,11 +209,15 @@ def main() -> int:
         temp_root = Path(temp)
         base_root = temp_root / "base"
         probe_runner = temp_root / "cli_output_probe_runner.py"
+        probe_test = temp_root / "cli_output_probe_fixture.py"
         semantics_source = temp_root / "cli_output_semantics.py"
         fixture_root = temp_root / "public-fixture"
         base_receipt = temp_root / "base-receipt.json"
         candidate_receipt = temp_root / "candidate-receipt.json"
         shutil.copy2(PROBE_RUNNER, probe_runner)
+        # Freeze one caller workload for both arms. Each subprocess still
+        # imports its own pinned product through source_root/PYTHONPATH.
+        shutil.copy2(PROBE_TEST, probe_test)
         shutil.copy2(FIXTURE_SUPPORT, temp_root / FIXTURE_SUPPORT.name)
         shutil.copy2(SEMANTICS_SOURCE, semantics_source)
 
@@ -231,16 +235,10 @@ def main() -> int:
             cwd=REPO_ROOT,
         )
         try:
-            base_probe_test = base_root / PROBE_TEST.relative_to(REPO_ROOT)
-            if not base_probe_test.is_file():
-                raise RuntimeError(
-                    "base ref is missing the CLI output probe source: "
-                    f"{PROBE_TEST.relative_to(REPO_ROOT)}"
-                )
             _run_probe(
                 source_root=base_root,
                 probe_runner=probe_runner,
-                probe_test=base_probe_test,
+                probe_test=probe_test,
                 semantics_source=semantics_source,
                 fixture_root=fixture_root,
                 receipt_path=base_receipt,
@@ -262,7 +260,7 @@ def main() -> int:
             _run_probe(
                 source_root=REPO_ROOT,
                 probe_runner=probe_runner,
-                probe_test=PROBE_TEST,
+                probe_test=probe_test,
                 semantics_source=semantics_source,
                 fixture_root=fixture_root,
                 receipt_path=candidate_receipt,

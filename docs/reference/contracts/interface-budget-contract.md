@@ -452,6 +452,24 @@ three affected JSON surfaces; dense-to-dense changes retain ordinary limits.
 
 ### Canonical CLI fixture qualification
 
+The historical quota policy rows explicitly use `--context-delivery off`,
+including detail selectors and the TurnEnvelope variant. Their complete JSON
+and Markdown, semantic keys, growth checks and ceilings remain unchanged.
+Default progressive navigation is a different transport: the real File/SQLite
+test follows its digest-bound recovery through every byte, checks the complete
+policy and unchanged effect log, and rejects a modified capture. Navigation
+and all recovery-page bytes are measured separately; a small descriptor is
+neither a complete policy nor evidence of lower total model cost. Production
+defaults are unchanged. Both differential arms import their own pinned product
+with one frozen current caller fixture, so a fixture revision alone cannot
+appear as a product output change.
+
+历史 quota 策略行显式使用 `--context-delivery off`，详情和 TurnEnvelope 变体同样适用；
+完整正文、语义、增长和原预算保留。默认渐进导航另经真实 File/SQLite reader 完整补读、
+effect 日志不变与原捕获被改写后的拒绝验证。分别计量导航和全部补读字节，不将短导航
+冒充完整决策或模型成本收益；生产默认不变。两端各自导入已固定的产品版本，并共用
+同一份冻结的当前调用夹具，避免将夹具修订误计为产品输出变化。
+
 Ordinary CLI reads require canonical authority. Both differential arms explicitly
 back up and import the same complete synthetic source before measuring; fixture
 setup is outside the measured commands. On base `887d66551` and the read-retirement
