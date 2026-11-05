@@ -1673,7 +1673,8 @@ def test_quota_cli_codex_app_profile_is_explicit_and_applicable(
     context_delivery: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from loopx.cli import build_parser
+    import hashlib
+    from tests.control_plane.codex_checkpoint_fixture import reference_metadata_oracle
     from loopx.control_plane.turn_driver.codex_context import codex_context_hook
 
     monkeypatch.setenv("CODEX_THREAD_ID", "profile-fixture")
@@ -1717,20 +1718,19 @@ def test_quota_cli_codex_app_profile_is_explicit_and_applicable(
     assert len(admissions) == 1
     if context_delivery == "on":
         assert payload["mode"] == "full"
-        command, observed, digest = payload["recovery"]["command"], b"", None
+        command, observed = payload["recovery"]["command"], b""
+        recovery = reference_metadata_oracle(payload)["recovery"]
         while True:
-            arguments = shlex.split(command)[1:]
-            assert build_parser().parse_args(arguments).quota_command == "context-read"
-            code, page = invoke(arguments)
-            assert code == 0 and page["ok"], page
-            assert page["offset"] == len(observed)
-            digest = digest or page["sha256"]
-            assert page["sha256"] == digest
+            reader = subprocess.run(shlex.split(command), capture_output=True, text=True, timeout=60)
+            assert reader.returncode == 0, reader.stderr
+            page = json.loads(reader.stdout)
+            assert page["ok"] and page["offset"] == len(observed)
             observed += page["content"].encode("utf-8")
             if page["eof"]:
                 assert len(observed) == page["total_bytes"]
                 break
             command = page["next_command"]
+        assert hashlib.sha256(observed).hexdigest() == recovery["sha256"]
         payload = json.loads(observed)
         assert payload["heartbeat_receipt"]["turn_instance_id"] == "profile-turn"
     else:

@@ -2,7 +2,6 @@
 from copy import deepcopy
 from functools import partial
 import json
-from functools import partial
 
 import pytest
 
