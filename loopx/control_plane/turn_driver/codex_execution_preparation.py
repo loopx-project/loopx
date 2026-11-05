@@ -97,7 +97,7 @@ def _run_json(
     cwd: Path,
     timeout: float,
     runner: CommandRunner,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], str]:
     command = [
         *current_loopx_cli_argv(),
         "--registry", str(registry_path),
@@ -117,7 +117,7 @@ def _run_json(
     ):
         reason = payload.get("reason") if isinstance(payload, dict) else None
         raise RuntimeError(str(reason or completed.stderr or "LoopX Host preparation failed"))
-    return payload
+    return payload, completed.stdout
 
 
 def execute_codex_execution_preparation(
@@ -178,7 +178,7 @@ def execute_codex_execution_preparation(
     invoke = runner or _default_runner
     if context_directory is not None and (capture_directory is None or not turn_instance_id):
         raise ValueError("Native execution preparation requires a bound captured Turn")
-    claimed = _run_json(
+    claimed, _ = _run_json(
         expected_claim,
         registry_path=registry_path,
         runtime_root=runtime_root,
@@ -199,7 +199,7 @@ def execute_codex_execution_preparation(
         *(["--turn-instance-id", turn_instance_id] if turn_instance_id else []),
         *(["--decision-output-dir", str(capture_directory)] if capture_directory is not None else []),
     ]
-    after = _run_json(
+    after, guard_json = _run_json(
         guard,
         registry_path=registry_path,
         runtime_root=runtime_root,
@@ -207,13 +207,6 @@ def execute_codex_execution_preparation(
         timeout=timeout / 2,
         runner=invoke,
     )
-    if capture_directory is not None:
-        from .decision_capture import read_context_capture_file
-
-        source = capture_directory / "decision.json"
-        _, _, after = read_context_capture_file(
-            str(source), hashlib.sha256(source.read_bytes()).hexdigest(), private=True,
-        )
     preparation = after.get("execution_preparation")
     selected = after.get("selected_todo")
     receipt = after.get("heartbeat_receipt")
@@ -248,6 +241,11 @@ def execute_codex_execution_preparation(
         "execution_preparation": dict(preparation),
         "normal_delivery_allowed": True,
     }
+    if capture_directory is not None:
+        # The current raw guard and its capture writer emit the same JSON line.
+        # Bind the digest to the child result that proved readiness. Rehashing
+        # the path later would bless a replacement between claim and display.
+        receipt["capture_sha256"] = hashlib.sha256(guard_json.encode("utf-8")).hexdigest()
     claim_reference = claimed.get("claim_operation_id")
     if isinstance(claim_reference, str) and claim_reference:
         receipt["claim_operation_id"] = claim_reference
@@ -259,16 +257,24 @@ def execute_codex_execution_preparation(
 def codex_execution_preparation_context(receipt: Mapping[str, Any]) -> str:
     """Render the small Host receipt that supersedes an earlier stale guard."""
 
+    context = receipt.get("context")
+    guidance = ""
+    if isinstance(context, Mapping):
+        if context.get("ok") is False:
+            guidance = ("Ready context delivery failed. Restore the private original capture and use its "
+                        "recovery command before work. Retain the original claim reference. ")
+        else:
+            guidance = ("Read the ready context in this receipt for current work and settlement, "
+                        "replacing the earlier pre-claim view. Retain its original claim reference "
+                        "for managed progress or completion. A saved context is not proof of "
+                        "model consumption. ")
     return (
         "LoopX Host automatically restored the exact selected Todo lease and "
         "rechecked the same Todo/Turn before this model step. Treat the earlier "
         "claim_required state as superseded by this ready receipt; do not repeat "
         "its claim or guard solely for that lease state. Current gates and later "
         "settlement checks still apply. "
-        + ("Read the ready context in this receipt for current work and settlement, "
-           "replacing the earlier pre-claim view. Retain its original claim reference "
-           "for managed progress or completion. A saved context is not proof of "
-           "model consumption. " if "context" in receipt else "")
+        + guidance
         + "Receipt: "
         + json.dumps(dict(receipt), ensure_ascii=False, separators=(",", ":"))
     )

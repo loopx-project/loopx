@@ -648,7 +648,7 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
     reader_argv = current_loopx_cli_argv()
     try:
         activation = native_context_activation(args)
-        path, raw, payload = _read_capture(args.capture_file, args.capture_sha256)
+        path, raw, payload = _read_capture(args.capture_file, args.capture_sha256, private=hook_session is not None)
         identity = payload.get("agent_identity")
         receipt = payload.get("heartbeat_receipt")
         if (payload.get("ok") is not True or not isinstance(identity, dict) or not isinstance(receipt, dict)
@@ -1230,13 +1230,19 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
                                 # The existing saved-capture owner preserves a
                                 # pinned full recovery even if native projection
                                 # fails. It never rereads authority or admits work.
+                                digest = receipt.pop("capture_sha256")
                                 receipt["context"] = project_saved_context_capture(argparse.Namespace(**{
                                     **vars(args), "quota_command": "context-project",
                                     "capture_file": str(source),
-                                    "capture_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+                                    "capture_sha256": digest,
                                     "goal_id": request["goal_id"], "agent_id": request["agent_id"],
                                     "turn_instance_id": request["turn_instance_id"],
                                 }), hook_session=event["session_id"])
+                                if receipt["context"].get("ok") is False:
+                                    from ..command_invocation import current_loopx_cli_argv
+
+                                    receipt["context"]["recovery_command"] = context_capture_read_command(
+                                        source, digest, reader_argv=current_loopx_cli_argv())
                             existing = payload.get("hookSpecificOutput")
                             existing_context = (
                                 str(existing.get("additionalContext") or "")

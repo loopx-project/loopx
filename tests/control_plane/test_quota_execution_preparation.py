@@ -317,6 +317,68 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
+    tmp_path, monkeypatch, capsys, provider,
+):
+    import hashlib
+    import io
+    from loopx.cli import main
+    from loopx.control_plane.turn_driver import codex_context
+
+    tmp_path = tmp_path.resolve()
+    monkeypatch.chdir(tmp_path)
+    session = "bound-preparation"
+    monkeypatch.setenv("CODEX_THREAD_ID", session)
+    native = tmp_path / "native"
+    native.mkdir(mode=0o700)
+    event = {"session_id": session, "cwd": str(tmp_path), "hook_event_name": "SessionStart", "source": "startup"}
+    assert codex_context.codex_context_hook(str(native), event) == {}
+    before = _run(tmp_path, monkeypatch, provider, [], "--codex-app",
+        "--turn-instance-id", "prepared-turn", "--todo-id", TODO)
+    assert before["execution_preparation"]["state"] == "claim_required"
+    original = tmp_path / "preparation"
+    original.mkdir(mode=0o700)
+    codex_context.project_codex_context(before, directory=str(native), capture_directory=original,
+        goal_id=GOAL, agent_id=AGENT, surface="quota_packet", capture_id="claim-required")
+    record = codex_context.record_native_execution_preparation
+    verified = {}
+
+    def replace_after_ready(*args, **kwargs):
+        record(*args, **kwargs)
+        source, = native.glob("prepared-*/ready/decision.json")
+        verified["path"], verified["bytes"] = source, source.read_bytes()
+        source.write_bytes(verified["bytes"] + b" ")
+
+    monkeypatch.setattr(codex_context, "record_native_execution_preparation", replace_after_ready)
+    command = ["--registry", str(tmp_path / "registry.json"), "--runtime-root", str(tmp_path / "runtime"),
+               "--format", "json", "quota", "context-hook", "--codex-app", "--context-delivery", "on",
+               "--codex-context-dir", str(native)]
+    def hook():
+        data = json.dumps({**event, "hook_event_name": "PostToolUse"}).encode()
+        monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(data)))
+        capsys.readouterr()
+        assert main(command) == 0
+        return json.loads(capsys.readouterr().out)
+
+    result = hook()["hookSpecificOutput"]["additionalContext"]
+    receipt = json.loads(result.rsplit("Receipt: ", 1)[1])
+    assert receipt["claim_operation_id"].startswith("todo-claim:")
+    context = receipt["context"]
+    assert context["ok"] is False
+    assert "digest mismatch" in context["reason"]
+    recovery = shlex.split(context["recovery_command"])
+    assert recovery[recovery.index("--capture-sha256") + 1] == hashlib.sha256(verified["bytes"]).hexdigest()
+    log = tmp_path / "runtime" / "goals" / GOAL / "rollout-event-log.jsonl"
+    after_claim = log.read_bytes()
+    assert hook() == {}
+    verified["path"].write_bytes(verified["bytes"])
+    read = subprocess.run([*recovery, "--select", "/execution_preparation/state"], cwd=tmp_path,
+                          check=True, text=True, capture_output=True)
+    assert json.loads(json.loads(read.stdout)["content"])["selections"][0]["value"] == "ready"
+    assert log.read_bytes() == after_claim
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("multiple_candidates", [False, True])
 def test_projected_claim_prepares_the_same_receipt_bound_turn(
     tmp_path, monkeypatch, provider, multiple_candidates,
