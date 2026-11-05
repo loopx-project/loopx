@@ -11,6 +11,10 @@ from typing import Any
 
 import pytest
 
+from control_plane.quota_context_fixture import (
+    context_reading_transport,
+    latest_quota_payload,
+)
 from loopx.control_plane.quota.cli_projection import (
     compact_quota_should_run_cli_payload,
 )
@@ -42,7 +46,6 @@ from loopx.control_plane.testing.model_behavior_qualification import (
 )
 from loopx.control_plane.testing.model_tool_behavior import (
     ScriptedAssistantAction,
-    ScriptedDoubaoExecTransport,
     ScriptedExecToolAction,
 )
 from loopx.control_plane.testing.quota_fixtures import (
@@ -494,16 +497,7 @@ def run_actual_default_model_behavior_portfolio(
 
 
 def _latest_tool_payload(request: Mapping[str, Any]) -> dict[str, Any]:
-    for message in reversed(request["messages"]):
-        if message.get("role") != "tool":
-            continue
-        try:
-            payload = json.loads(message["content"])
-        except (json.JSONDecodeError, TypeError):
-            continue
-        if isinstance(payload, dict) and "interaction_contract" in payload:
-            return payload
-    raise AssertionError("scripted model did not receive a quota tool result")
+    return latest_quota_payload(request)
 
 
 def _selected_read_action(request: Mapping[str, Any]) -> ScriptedExecToolAction:
@@ -521,16 +515,6 @@ def _selected_read_action(request: Mapping[str, Any]) -> ScriptedExecToolAction:
     if match is None:
         raise AssertionError("quota-selected action does not identify a fixture target")
     return ScriptedExecToolAction(f"cat {shlex.quote(match.group(0))}")
-
-
-def _replan_frontier_read_action(
-    request: Mapping[str, Any],
-) -> ScriptedExecToolAction:
-    payload = _latest_tool_payload(request)
-    action = payload["replan_action_packet"]
-    assert "fresh_vision_path_outcome" in action["uncovered_frontier"]["required_any_of"]
-    assert "replan-frontier.json" in payload["active_state_next_action"]
-    return ScriptedExecToolAction("cat replan-frontier.json")
 
 
 def _capability_callsite_action(
@@ -617,7 +601,7 @@ def _real_tool_actors(root: Path) -> dict[str, Any]:
     def selected_todo_actor(run_id: str) -> Mapping[str, Any]:
         fixture_root = run_root("selected", run_id)
         fixture = _build_selected_fixture(fixture_root / "oracle")
-        transport = ScriptedDoubaoExecTransport(
+        transport = context_reading_transport(
             [
                 ScriptedExecToolAction(fixture.quota_guard_command),
                 _selected_read_action,
@@ -633,14 +617,13 @@ def _real_tool_actors(root: Path) -> dict[str, Any]:
 
     def replan_semantic_action_actor(run_id: str) -> Mapping[str, Any]:
         from tests.control_plane.test_required_vision_closeout_behavior import (
-            vision_patch_action, projected_refresh, projected_spend,
+            vision_patch_action, projected_refresh, projected_spend, _vision_transport,
         )
         fixture_root = run_root("replan", run_id)
         fixture = _build_replan_fixture(fixture_root / "oracle", required_vision=True)
-        transport = ScriptedDoubaoExecTransport(
+        transport = _vision_transport(
             [
                 ScriptedExecToolAction(fixture.quota_guard_command),
-                _replan_frontier_read_action,
                 ScriptedExecToolAction("cat fixture/permission-config.json"),
                 vision_patch_action, projected_refresh, projected_spend,
             ]
@@ -657,7 +640,7 @@ def _real_tool_actors(root: Path) -> dict[str, Any]:
     def scoped_gate_successor_actor(run_id: str) -> Mapping[str, Any]:
         fixture_root = run_root("scoped-gate", run_id)
         fixture = _build_scoped_gate_fixture(fixture_root / "oracle")
-        transport = ScriptedDoubaoExecTransport(
+        transport = context_reading_transport(
             [
                 ScriptedExecToolAction(fixture.quota_guard_command),
                 _selected_read_action,
@@ -675,7 +658,7 @@ def _real_tool_actors(root: Path) -> dict[str, Any]:
     def capability_monitor_repair_actor(run_id: str) -> Mapping[str, Any]:
         fixture_root = run_root("capability-repair", run_id)
         fixture = _build_capability_repair_fixture(fixture_root / "oracle")
-        transport = ScriptedDoubaoExecTransport(
+        transport = context_reading_transport(
             [
                 ScriptedExecToolAction(fixture.quota_guard_command),
                 _capability_callsite_action,
@@ -693,7 +676,7 @@ def _real_tool_actors(root: Path) -> dict[str, Any]:
     def terminal_settlement_actor(run_id: str) -> Mapping[str, Any]:
         fixture_root = run_root("terminal-settlement", run_id)
         fixture = _build_terminal_settlement_fixture(fixture_root / "oracle")
-        transport = ScriptedDoubaoExecTransport(
+        transport = context_reading_transport(
             [
                 ScriptedExecToolAction(fixture.quota_guard_command),
                 ScriptedExecToolAction("cat fixture/settlement-proof.json"),
