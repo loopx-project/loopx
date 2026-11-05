@@ -96,6 +96,7 @@ PRIVATE_REGISTRY_TEXT_RE = re.compile(
 
 
 _GIT_PROBE_TIMEOUT_SECONDS = 1.5
+_GIT_PROBE_DRAIN_SECONDS = 1.0
 
 
 def _definitely_outside_git_worktree(probe_dir: Path) -> bool:
@@ -106,6 +107,27 @@ def _definitely_outside_git_worktree(probe_dir: Path) -> bool:
     except OSError:
         return False
     return not any(os.path.lexists(parent / ".git") for parent in (current, *current.parents))
+
+
+def _release_probe_pipes(process: subprocess.Popen[str]) -> None:
+    """Drop a timed-out probe's pipes instead of draining them.
+
+    A descendant that opened its own session keeps the inherited write end, so
+    reading to EOF waits for a process this probe no longer owns. The deadline
+    already discards the output, so close the parent's ends and let the one
+    reaped leader decide how long the release may take.
+    """
+
+    for stream in (process.stdout, process.stderr):
+        try:
+            if stream is not None:
+                stream.close()
+        except (OSError, ValueError):  # pragma: no cover - already closed.
+            pass
+    try:
+        process.wait(timeout=_GIT_PROBE_DRAIN_SECONDS)
+    except subprocess.TimeoutExpired:  # pragma: no cover - the group kill already landed.
+        process.kill()
 
 
 def _registry_git_probe(path: Path) -> dict[str, Any]:
@@ -151,11 +173,7 @@ def _registry_git_probe(path: Path) -> dict[str, Any]:
                 terminate_process_tree(process, 0)
             except (OSError, RuntimeError, ValueError):
                 process.kill()
-            try:
-                process.communicate(timeout=1)
-            except subprocess.TimeoutExpired:  # pragma: no cover - kill is already sent.
-                process.kill()
-                process.communicate()
+            _release_probe_pipes(process)
             return None
         return subprocess.CompletedProcess(["git", *args], process.returncode, stdout, stderr)
 

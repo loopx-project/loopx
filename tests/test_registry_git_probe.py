@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import signal
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -154,3 +155,44 @@ def test_registry_git_probe_retires_the_process_tree_on_timeout(
         time.sleep(0.05)
     os.kill(pid, signal.SIGKILL)
     raise AssertionError("the probe timed out but left its grandchild running")
+
+
+@pytest.mark.skipif(os.name != "posix", reason="the probe's fake git is a POSIX script")
+def test_registry_git_probe_bounds_the_drain_when_a_descendant_keeps_the_pipe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A descendant in another session can hold stdout open past the deadline."""
+
+    probe = tmp_path / "project"
+    probe.mkdir()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    grandchild = tmp_path / "grandchild.pid"
+    fake_git = bin_dir / "git"
+    fake_git.write_text(
+        f"#!{sys.executable}\n"
+        "import subprocess, sys, time\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(12)'],\n"
+        "    start_new_session=True)\n"
+        f"open({str(grandchild)!r}, 'w', encoding='utf-8').write(str(child.pid))\n"
+        "time.sleep(12)\n",
+        encoding="utf-8",
+    )
+    fake_git.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("GIT_DIR", str(tmp_path / "fake.git"))
+
+    started = time.monotonic()
+    try:
+        observed = registry_module._registry_git_probe(probe / "registry.json")
+        elapsed = time.monotonic() - started
+    finally:
+        if grandchild.exists():
+            try:
+                os.kill(int(grandchild.read_text(encoding="utf-8").strip() or 0), signal.SIGKILL)
+            except (OSError, ValueError):
+                pass
+
+    assert observed["probe_status"] == "git_unavailable"
+    assert elapsed < 6, f"the probe waited {elapsed:.2f}s on a pipe it no longer owns"
