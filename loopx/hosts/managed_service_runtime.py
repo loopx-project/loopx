@@ -203,7 +203,7 @@ def align_managed_runtime(executable: str) -> dict:
 def _recover_alignment(journal: Path) -> None:
     if not journal.exists():
         return
-    saved = json.loads(journal.read_text())
+    saved = json.loads(journal.read_text(encoding="utf-8"))
     if not isinstance(saved, dict) or saved.get("schema_version") != "loopx_managed_runtime_handoff_v1":
         raise ValueError("service_runtime_route_unverified")
     entries = saved.get("services")
@@ -256,7 +256,7 @@ def _align_managed_runtime(executable: str, journal: Path) -> dict:
     environment = {k: v for k, v in os.environ.items()
         if k not in {"LOOPX_PYTHON", "PYTHONPATH", "LOOPX_RELEASE_ROOT"}}
     doctor = subprocess.run([str(target), "--format", "json", "doctor", "--installation-only"],
-        env=environment, capture_output=True, text=True, timeout=15)
+        env=environment, capture_output=True, text=True, encoding="utf-8", timeout=15)
     qualified = json.loads(doctor.stdout)
     if not isinstance(qualified, dict):
         raise ValueError("service_runtime_unverified")

@@ -17,6 +17,7 @@ import sys
 import time
 from typing import Any
 
+from ..entrypoint import pin_utf8_stdio
 from ..file_lock import exclusive_file_lock
 
 
@@ -66,6 +67,7 @@ def _admitted(args: argparse.Namespace) -> bool:
         _core_args(args, ["quota", "should-run"]),
         capture_output=True,
         text=True,
+        encoding="utf-8",
         timeout=10,
         check=True,
         env={key: value for key, value in os.environ.items() if key != "PYTHONPATH"},
@@ -94,7 +96,7 @@ def _state(args: argparse.Namespace):
     path = Path(args.state_dir).expanduser() / (key + ".json")
     path.parent.mkdir(parents=True, exist_ok=True)
     with exclusive_file_lock(path, timeout_seconds=2):
-        data = json.loads(path.read_text()) if path.exists() else {}
+        data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
         yield data
         temporary = path.with_suffix(".tmp")
         with temporary.open("w", encoding="utf-8") as stream:
@@ -200,6 +202,7 @@ def stop_hook(args: argparse.Namespace, event: dict[str, Any]) -> dict[str, Any]
 
 
 def main() -> int:
+    pin_utf8_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("operation", choices=("stop-hook",))
     parser.add_argument("--cli-bin", default="loopx")
