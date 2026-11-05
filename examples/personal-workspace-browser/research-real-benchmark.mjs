@@ -3,6 +3,7 @@ import {readFile} from "node:fs/promises";
 import {resolve} from "node:path";
 import {outputDir, repoRoot} from "./fixture.mjs";
 import {startHistoryOwner} from "./research-history.mjs";
+import {readRealUsage} from "../../apps/presentation/dashboard/smoke/research-usage-real.ts";
 
 async function readNativeResults(page, history, capture, language) {
   const pack = capture.analysis_readbacks.original.response.pack;
@@ -261,6 +262,7 @@ async function readSavedGraphAnalysis(browser, collectCoverage) {
 export const researchRealBenchmarkScenario = {
   id: "research-real-benchmark",
   async run({browser, collectCoverage}) {
+    await readRealUsage(browser, {repoRoot, outputDir, startOwner: startHistoryOwner});
     const coverageEntries = [];
     coverageEntries.push(...await readUnanalyzedNativeResults(browser, collectCoverage));
     const observations = [];
