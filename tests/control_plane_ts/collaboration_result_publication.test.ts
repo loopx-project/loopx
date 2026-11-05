@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createHash } from "node:crypto";
 import type { JsonObject } from "../../loopx/control_plane/effect_program.ts";
-import { planCollaborationResult, collaborationResultDeliveryReady, resultAttachmentRefs } from "../../loopx/control_plane/collaboration/result_publication.ts";
+import { planCollaborationResult, collaborationResultDeliveryReady, collaborationResultText, resultAttachmentRefs } from "../../loopx/control_plane/collaboration/result_publication.ts";
 
 const request = { request_id: "a".repeat(64), goal_id: "delivery", agent_id: "worker", source_id: "chat:original" };
 const initial = { ...request, phase: "conclusion", text: "Waiting for review.", decision: "adopt" };
@@ -11,6 +11,28 @@ function observation(key: string, receipt: JsonObject): JsonObject {
   return { key, value, text_chars: Array.from(String(text)).length, text_sha256: createHash("sha256").update(String(text)).digest("hex") };
 }
 const input = { request, phase: "conclusion", text: "Review finished.", decision: "adopt", update_id: "review-finished", results: [observation("conclusion", initial)] };
+
+test("new results use reader paragraphs while immutable legacy returns keep their original format", () => {
+  const text = "本地测试更快，正式结果却更差。费用未知，不能据此宣称改进。\n\n" + "完整证据与反例。\n".repeat(700);
+  const remaining_work = {summary: "仍需核验实际采用的版本。", resume_when: "取得原始验收证据后继续；不重复付费评测。"};
+  const source = {...input, text, remaining_work, update_id: null, results: []};
+  const plan = planCollaborationResult(source);
+  const value = plan.value as JsonObject;
+  assert.equal(value.return_format_version, 2);
+  assert.equal(value.text, text.trim());
+  assert.deepEqual(value.remaining_work, remaining_work);
+  assert.equal(collaborationResultText(value), `${text.trim()}\n\n${remaining_work.summary}\n\n${remaining_work.resume_when}`);
+  const replay = planCollaborationResult({...source, results: [observation("conclusion", value)]});
+  assert.deepEqual(replay.value, value);
+  const legacy = {...value};
+  delete legacy.return_format_version;
+  const original = collaborationResultText(legacy);
+  assert.equal(original, `${text.trim()}\n\n仍需完成 / Remaining work: ${remaining_work.summary}\n继续条件 / Continue when: ${remaining_work.resume_when}`);
+  assert.deepEqual(planCollaborationResult({...source, results: [observation("conclusion", legacy)]}).value, legacy);
+  assert.equal(collaborationResultText(legacy), original);
+  assert.throws(() => planCollaborationResult({...source,
+    results: [observation("conclusion", {...value, return_format_version: 999})]}), /return format/);
+});
 
 test("legacy original revision is an optional result selector, not request control", () => {
   const legacy = {...request, schema_version: "loopx_manager_context_entry_v1"};

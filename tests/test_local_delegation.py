@@ -396,7 +396,12 @@ def test_detached_result_reconnects_without_duplicate_execution(service):
                 inventory = await session.call_tool("list_delegations", {})
                 assert not inventory.isError and json.loads(inventory.content[0].text)["items"] == []
                 assert json.loads(inventory.content[0].text)["projection_envelope"]["complete"]
-                assert "stop_delegation" in {tool.name for tool in (await session.list_tools()).tools}
+                tools = (await session.list_tools()).tools
+                assert "stop_delegation" in {tool.name for tool in tools}
+                start = next(tool for tool in tools if tool.name == "start_delegation")
+                assert "complete goal, relevant corrections, intended reader, language and original result destination" in start.description
+                assert "negative results and unknowns" in start.description
+                assert "No worker is launched" not in start.description
                 result = await session.call_tool("start_delegation", {
                     "binding_id": "analysis", "operation_id": "analysis-1", "brief": brief()})
                 assert not result.isError

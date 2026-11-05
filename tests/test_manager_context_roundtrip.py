@@ -475,7 +475,7 @@ def test_cli_legacy_explicit_original_revision_returns_once(flow, capsys):
     returned = [row for row in store.messages(session["session_id"])
                 if row.get("origin") == "manager_followup"]
     assert len(returned) == 1 and returned[0]["turn_id"] == turn["turn_id"]
-    assert returned[0]["text"].split("\n\n", 1)[1] == text
+    assert returned[0]["text"] == f"{text}\n\n协作回复 · worker · 委托 {rid[:8]}"
     assert reply_status(root, receipt)[0]["status"] == "delivered"
     assert not list(_root(root).glob("policy*"))
     entry = next((_root(root) / "entries").glob("*/*.json"))
@@ -681,8 +681,8 @@ def test_later_completion_returns_to_original_conversation_once(flow, external):
     drain(root, registry, store, sender)
     messages = [m for m in store.messages(session["session_id"]) if m.get("origin") == "manager_followup"]
     assert len(messages) == 3
-    assert messages[1]["text"].endswith("Review passed; delivery complete.")
-    assert messages[-1]["text"].endswith("Receiver adopted the delivery.")
+    assert messages[1]["text"] == f"Review passed; delivery complete.\n\n协作回复 · worker · 委托 {rid[:8]}"
+    assert messages[-1]["text"] == f"Receiver adopted the delivery.\n\n协作回复 · worker · 委托 {rid[:8]}"
     assert len({m["message_id"] for m in messages}) == 3
     assert {m["turn_id"] for m in messages} == {turn["turn_id"]}
     assert (root / ".local/manager-context/replies" / rid / "conclusion.json").read_bytes() == before
@@ -710,7 +710,8 @@ def test_result_update_does_not_overtake_unknown_external_delivery(flow):
     assert len(calls) == 1
     assert [r["status"] for r in reply_status(root, receipt)] == ["explicit_unverified", "queued"]
     messages = [m for m in store.messages(session["session_id"]) if m.get("origin") == "manager_followup"]
-    assert len(messages) == 1 and messages[0]["text"].endswith("Waiting for review.")
+    assert len(messages) == 1
+    assert messages[0]["text"] == f"Waiting for review.\n\n协作回复 · worker · 委托 {rid[:8]}"
 
 
 def test_external_failure_retries_same_reply_after_restart_without_duplicate_transcript(
@@ -1677,7 +1678,8 @@ def test_reply_delivery_does_not_replace_receiver_disposition(flow, project, dec
     assert "/Users/example" not in collaboration["decision_reason"]
     assert collaboration["returns"][0]["status"] == "delivered"
     reply = next(row for row in snapshot["messages"] if row.get("origin") == "manager_followup")
-    assert reply["text"].startswith("协作回复 · worker")
+    assert reply["text"].startswith("The assessment is available.")
+    assert reply["text"].endswith(f"协作回复 · worker · 委托 {rid[:8]}")
     assert "处理结论" not in reply["text"]
     assert "Recipient assessment" not in reply["text"]
     assert len(list((store.root / "sessions" / session["session_id"] / "turns").glob("*.json"))) == 1
@@ -1696,9 +1698,86 @@ def test_external_reply_never_exposes_private_receiver_reason(flow):
     snapshot = project_chat_session_snapshot(root, store, session["session_id"], registry=registry)
     assert "Private receiver rationale" not in json.dumps(snapshot)
     assert len(sent) == 1
-    assert sent[0].startswith("协作回复 · worker")
+    assert sent[0].startswith("This request is deferred.")
+    assert sent[0].endswith(f"协作回复 · worker · 委托 {receipt['request_id'][:8]}")
     assert "Private receiver rationale" not in json.dumps(sent)
     assert all(not row.get("collaboration") for row in snapshot["messages"])
+
+
+@pytest.mark.parametrize("external", [False, True], ids=["app", "provider"])
+@pytest.mark.parametrize("body,remaining", [
+    ("修复已通过原请求的验收。\n\n- 结果保存在原项目。\n- 后续无需用户操作。", None),
+    ("新方案未通过验收，已保留原方案。\n\n本地耗时降低不代表实际结果更好；费用未知。", None),
+    ("源码修复已提交，安装后的表现还未核验。", {"summary": "仍需在隔离安装中验证原失败场景。", "resume_when": "取得相应环境后继续；不操作生产会话。"}),
+    ("当前结果未知。缺少的测量不能算作零，也不能据此认定成功。", None),
+    ("本次无法执行：请求超出当前授权。\n\n已有成果保留，未扩大受众。", None),
+    ("正在等待原始验收证据，当前尚无可确认的结论。", {"summary": "还欠原始证据核验。", "resume_when": "原证据可读取后继续，无需用户重复提出请求。"}),
+    ("目前只能确认部分结果；反例与未知项仍保留。\n\n" + "- 完整证据：测试通过，实际采用尚未验证；不能混为一谈。\n" * 180, None),
+], ids=["success", "negative", "partial", "unknown", "refusal", "waiting", "long"])
+def test_reader_return_keeps_complete_authored_answer_and_original_route(flow, external, body, remaining):
+    root, registry, store, create = flow
+    session, _, receipt = create(external=external)
+    rid = receipt["request_id"]
+    acknowledge(root, "research", "worker", rid, "adopt", "Read original requirements")
+    report(root, "research", "worker", rid, "conclusion", body, remaining_work=remaining)
+    path = _root(root) / "replies" / rid / "conclusion.json"
+    original = path.read_bytes()
+    saved = json.loads(original)
+    assert saved["return_format_version"] == 2
+    assert saved["text"] == body.strip()
+    expected = body.strip()
+    if remaining:
+        assert saved["remaining_work"] == remaining
+        expected += f"\n\n{remaining['summary']}\n\n{remaining['resume_when']}"
+    expected += f"\n\n协作回复 · worker · 委托 {rid[:8]}"
+    sent = []
+
+    def sender(route, actual_session, _, payload):
+        assert route["session_id"] == actual_session["session_id"] == session["session_id"]
+        assert actual_session["channel_id"] == session["channel_id"]
+        sent.append(payload)
+        return {"ok": True, "reply_verified": True, "verification_performed": True}
+
+    assert drain(root, registry, store, sender) == 1
+    snapshot = project_chat_session_snapshot(root, store, session["session_id"], registry=registry)
+    returned = [row for row in snapshot["messages"] if row.get("origin") == "manager_followup"]
+    assert len(returned) == 1 and returned[0]["text"] == expected
+    assert sent == ([expected] if external else [])
+    assert path.read_bytes() == original
+    assert reply_status(root, receipt)[0]["status"] == "delivered"
+    assert drain(root, registry, store, sender) == 0
+    report(root, "research", "worker", rid, "conclusion", body, remaining_work=remaining)
+    assert path.read_bytes() == original
+    assert len(list((store.root / "sessions" / session["session_id"] / "turns").glob("*.json"))) == 1
+
+
+def test_legacy_return_replay_keeps_published_text_and_rejects_unknown_format(flow):
+    root, registry, store, create = flow
+    session, _, receipt = create()
+    rid = receipt["request_id"]
+    acknowledge(root, "research", "worker", rid, "adopt", "Read original request")
+    body = "此前发表的完整结论，费用仍未知。"
+    remaining = {"summary": "原验收仍未完成。", "resume_when": "有原始证据时继续。"}
+    report(root, "research", "worker", rid, "conclusion", body, remaining_work=remaining)
+    path = _root(root) / "replies" / rid / "conclusion.json"
+    legacy = json.loads(path.read_text())
+    legacy.pop("return_format_version")
+    _write(path, legacy)
+    original = path.read_bytes()
+    report(root, "research", "worker", rid, "conclusion", body, remaining_work=remaining)
+    assert path.read_bytes() == original
+    assert drain(root, registry, store, lambda *_: pytest.fail("private message sent externally")) == 1
+    returned = next(row for row in project_chat_session_snapshot(root, store, session["session_id"], registry=registry)["messages"]
+                    if row.get("origin") == "manager_followup")
+    assert returned["text"] == (f"协作回复 · worker · 委托 {rid[:8]}\n\n{body}\n\n"
+                               f"仍需完成 / Remaining work: {remaining['summary']}\n继续条件 / Continue when: {remaining['resume_when']}")
+    report(root, "research", "worker", rid, "conclusion", "后续新增事实。", update_id="later-fact")
+    update = path.with_name("conclusion-00000001.json")
+    corrupt = json.loads(update.read_text())
+    corrupt["return_format_version"] = 999
+    _write(update, corrupt)
+    drain(root, registry, store, lambda *_: pytest.fail("unknown format sent"))
+    assert len([row for row in store.messages(session["session_id"]) if row.get("origin") == "manager_followup"]) == 1
 
 
 def test_unresolvable_return_transport_records_retry_without_fake_receipt(flow):

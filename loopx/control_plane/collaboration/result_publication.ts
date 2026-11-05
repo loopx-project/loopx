@@ -36,10 +36,20 @@ export function resultRemainingWork(value: unknown): JsonObject | null {
   return result;
 }
 
-/** The original conversation and peer return read the same bounded remainder. */
+/** Persisted formatting only; it never changes result lifecycle or authority. */
+export function usesReaderReturnFormat(reply: JsonObject): boolean {
+  if (reply.return_format_version !== undefined && reply.return_format_version !== 2) {
+    throw new EffectRuntimeRequestError("unsupported collaboration return format");
+  }
+  return reply.return_format_version === 2;
+}
+
+/** Keep published legacy text stable, including verification after response loss. */
 export function collaborationResultText(reply: JsonObject): string {
+  const readerFormat = usesReaderReturnFormat(reply);
   const work = resultRemainingWork(reply.remaining_work);
-  return String(reply.text) + (work ? `\n\n仍需完成 / Remaining work: ${work.summary}\n继续条件 / Continue when: ${work.resume_when}` : "");
+  return String(reply.text) + (work ? readerFormat ? `\n\n${work.summary}\n\n${work.resume_when}`
+    : `\n\n仍需完成 / Remaining work: ${work.summary}\n继续条件 / Continue when: ${work.resume_when}` : "");
 }
 
 export function resultAttachmentRefs(params: JsonObject): JsonObject {
@@ -88,6 +98,7 @@ export function collaborationResultObservations(request: JsonObject, observation
   const results = observations.map((item) => {
     const record = requireJsonObject(item, "result observation");
     const value = requireJsonObject(record.value, "result receipt");
+    usesReaderReturnFormat(value);
     const remainingWork = resultRemainingWork(value.remaining_work);
     if (remainingWork && value.phase !== "conclusion") {
       throw new EffectRuntimeRequestError("remaining work requires a conclusion");
@@ -186,6 +197,10 @@ export function planCollaborationResult(params: JsonObject): JsonObject {
   const value: JsonObject = Object.fromEntries(["request_id", "goal_id", "agent_id", "source_id", "goal_ref", "recipient", "requester"]
     .filter((key) => request[key] !== undefined).map((key) => [key, request[key]]));
   Object.assign(value, { phase, decision, text: params.text.trim() });
+  // An old publication keeps its exact renderer on replay; only a new result
+  // or explicit later update adopts the current format. No historical rewrite.
+  const returnFormatVersion = old ? old.value.return_format_version : 2;
+  if (returnFormatVersion !== undefined) value.return_format_version = returnFormatVersion;
   if (context !== null) Object.assign(value, {request_revision: context.revision, request_revision_digest: context.revision_digest});
   if (attachments.length) value.attachments = attachments;
   if (remainingWork) value.remaining_work = remainingWork;
