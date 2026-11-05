@@ -131,6 +131,67 @@ class ChatIngressStore:
             stack.close()
             raise
 
+    def mutate_queued_input(self, session_id: str, turn_id: str, request: dict[str, Any]) -> dict[str, Any]:
+        """Execute the TS owner's recoverable input plan under the consumer fences."""
+        from .chat_store import _atomic_write_json, _read_jsonl, utc_now
+        from .control_plane.chat_turn_acceptance import plan_queued_chat_mutation
+        from .file_lock import write_bytes_atomic
+
+        with self.queue_steering_lock(session_id, turn_id):
+            session, turn = self.load_session(session_id), self.load_turn(session_id, turn_id)
+            if session is None or turn is None:
+                raise KeyError("chat turn was not found")
+            plan = plan_queued_chat_mutation(session, turn, request)
+            if plan["action"] == "reject":
+                raise RuntimeError(plan["error_code"])
+            receipt = plan["receipt"]
+            if plan["action"] == "apply":
+                if turn.get("_queue_mutation") is None:
+                    self._recover_queued_turn_input(session_id, turn)
+                path = self._turn_path(session_id, turn_id)
+                # The receipt precedes all other writes. A partial write stays
+                # reserved, including across process death; only this identity
+                # can finish it. No native call or active-Turn interrupt occurs.
+                turn = {**turn, "_queue_mutation": receipt,
+                        "_queue_original_message": turn.get("_queue_original_message", turn["message"])}
+                _atomic_write_json(path, turn, preserve_mode=True)
+                messages_path = self._session_dir(session_id) / "messages.jsonl"
+                with exclusive_file_lock(messages_path, agent_id="loopx-chat", operation="update_queued_input"):
+                    rows = _read_jsonl(messages_path, raise_on_error=True, strict=True)
+                    matches = [r for r in rows if r.get("turn_id") == turn_id and r.get("role") == "user"]
+                    if len(matches) != 1:
+                        raise OSError("Original queued input is unavailable")
+                    row = matches[0]
+                    if row.get("queue_input_revision", 0) != receipt["input_revision"]:
+                        if row.get("text") != turn["message"] or row.get("attachments") != turn.get("attachments"):
+                            raise OSError("Original queued input changed")
+                        if "text" in plan["message_patch"]:
+                            row["queue_edit_history"] = [*row.get("queue_edit_history", []),
+                                {"text": row["text"], "input_revision": turn.get("input_revision", 0),
+                                 "operation_id": receipt["operation_id"]}]
+                        row.update(plan["message_patch"])
+                        write_bytes_atomic(messages_path,
+                            ("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows)).encode(), preserve_mode=True)
+                    elif any(row.get(key) != value for key, value in plan["message_patch"].items()):
+                        raise OSError("Queued input revision conflicts with its receipt")
+                event = plan["event"]
+                if not any(e.get("kind") == event["kind"] and e.get("payload") == event["payload"]
+                           for e in self.events_after(session_id, turn_id, None)):
+                    self.append_event(session_id, turn_id, kind=event["kind"], payload=event["payload"])
+                # Metadata edits do not invent worker activity; invalidate the
+                # existing Session history cache without changing liveness.
+                session["updated_at"] = utc_now()
+                _atomic_write_json(self._session_path(session_id), session, preserve_mode=True)
+                turn.update(plan["turn_patch"])
+                turn["_queue_operations"] = [*turn.get("_queue_operations", []), receipt]
+                turn.pop("_queue_mutation")
+                if receipt["action"] == "cancel":
+                    turn["completed_at"] = utc_now()
+                _atomic_write_json(path, turn, preserve_mode=True)
+            return {"session_id": session_id, "queued_turn_id": turn_id,
+                    "operation_id": receipt["operation_id"], "action": receipt["action"],
+                    "input_revision": receipt["input_revision"], "status": "applied"}
+
     def steering_receipt(self, session_id: str, ingress_id: str):
         """A corrupt receipt cannot be treated as absence and resent."""
         from .chat_store import CHAT_INGRESS_SCHEMA_VERSION
@@ -241,7 +302,7 @@ class ChatIngressStore:
                 existing = self.turn_for_client(session_id, client_id)
                 if existing is not None:
                     require_matching_replay(
-                        existing,
+                        {**existing, "message": existing.get("_queue_original_message", existing.get("message"))},
                         identity="client_turn_id",
                         request={
                             "message": str(message),

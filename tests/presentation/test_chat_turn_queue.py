@@ -8,6 +8,181 @@ import pytest
 from test_chat_ordinary_project import ordinary  # noqa: F401
 
 
+def queue_input_body(action="edit", revision=0, operation="input-1", message="Corrected queued input."):
+    return {"action": action, "expected_revision": revision, "operation_id": operation,
+            **({"message": message} if action == "edit" else {})}
+
+
+def test_edit_cancel_and_admission_retries_keep_exact_input_history_and_active_turn(ordinary):  # noqa: F811
+    store, runtime, contexts, request, capture, *_ = ordinary
+    sid, active, queued, original = held_queue(ordinary)
+    path = f"/api/chat/sessions/{sid}/queue/{queued}/input"
+    before = capture.read_bytes()
+    assert request(path)[0] == 404
+    assert store.load_turn(sid, queued)["message"] == original["message"]  # GET never mutates.
+    body = queue_input_body()
+    code, edited = request(path, body)
+    assert code == 200 and edited["input_revision"] == 1
+    assert request(path, body) == (code, edited)
+    assert request(path, queue_input_body(operation="stale"))[1]["error_code"] == "queue_input_revision_conflict"
+    # A lost original admission ACK cannot overwrite the explicit edit.
+    assert request(f"/api/chat/sessions/{sid}/turns", original)[1]["turn_id"] == queued
+    assert store.load_turn(sid, queued)["message"] == body["message"]
+    transcript = next(m for m in store.messages(sid) if m.get("turn_id") == queued)
+    assert transcript["text"] == body["message"]
+    assert transcript["queue_edit_history"] == [{"text": original["message"], "input_revision": 0, "operation_id": "input-1"}]
+    cancel = queue_input_body("cancel", 1, "cancel-1")
+    result = request(path, cancel)
+    assert result[0] == 200 and request(path, cancel) == result
+    assert request(path, body) == (code, edited)  # receipt replay, not another edit
+    assert store.load_turn(sid, queued)["status"] == "interrupted"
+    snapshot = request(f"/api/chat/sessions/{sid}")[1]
+    cancelled = next(row for row in snapshot["messages"] if row.get("turn_id") == queued)
+    assert cancelled["text"] == body["message"] and cancelled["queue_input_cancelled"] is True
+    assert cancelled["queue_input_revision"] == 2
+    assert store.load_session(sid)["active_turn_id"] == active
+    assert request(f"/api/chat/sessions/{sid}/queue")[1]["turns"] == []
+    assert len([e for e in store.events_after(sid, queued, None) if e["kind"] == "turn.interrupted"]) == 1
+    assert capture.read_bytes() == before  # edit/cancel never issue native I/O
+
+
+def test_partial_edit_is_reserved_and_recovers_the_same_operation_after_reopening(ordinary, monkeypatch):  # noqa: F811
+    import loopx.chat_store as store_io
+    from loopx.chat_store import ChatSessionStore
+    store, runtime, contexts, request, capture, *_ = ordinary
+    sid, active, queued, _ = held_queue(ordinary)
+    path = f"/api/chat/sessions/{sid}/queue/{queued}/input"
+    body = queue_input_body()
+    write = store_io._atomic_write_json
+
+    def fail_commit(path, value, **kwargs):
+        if value.get("_queue_operations") and not value.get("_queue_mutation"):
+            raise OSError("lost commit")
+        return write(path, value, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(store_io, "_atomic_write_json", fail_commit)
+        assert request(path, body)[0] == 503
+    reopened = ChatSessionStore(store.root.parent)
+    assert reopened.queued_turns(sid) == []
+    assert reopened.queued_turns(sid, include_reserved=True)[0]["_queue_mutation"]["operation_id"] == "input-1"
+    assert request(path, queue_input_body(operation="replacement"))[1]["error_code"] == "queue_mutation_in_progress"
+    assert request(f"/api/chat/sessions/{sid}/queue/{queued}/steer", {
+        "target_turn_id": active, "client_ingress_id": "do-not-send"})[1]["error_code"] == "queue_mutation_in_progress"
+    assert request(path, body)[0] == 200
+    assert len(next(m for m in store.messages(sid) if m.get("turn_id") == queued)["queue_edit_history"]) == 1
+    assert len([e for e in store.events_after(sid, queued, None) if e["kind"] == "turn.input_edited"]) == 1
+
+
+@pytest.mark.parametrize("action", ["edit", "cancel"])
+def test_input_change_and_queue_claim_have_both_serial_orders(ordinary, monkeypatch, action):  # noqa: F811
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    import loopx.chat_store as store_io
+    store, runtime, contexts, request, capture, *_ = ordinary
+    monkeypatch.setattr(runtime, "resume_session_queue", lambda **_: None)
+    sid, active, queued, _ = held_queue(ordinary)
+    # Stop this isolated native fixture through its real owner; no automatic
+    # queue worker is installed, so the following claims have controlled order.
+    runtime.interrupt_turn(session_id=sid, turn_id=active)
+    runtime.wait_for_turn(session_id=sid, turn_id=active, timeout_sec=10)
+    entered, proceed = Event(), Event()
+    write = store_io._atomic_write_json
+
+    def pause(path, value, **kwargs):
+        if value.get("_queue_mutation"):
+            entered.set()
+            assert proceed.wait(5)
+        return write(path, value, **kwargs)
+
+    with monkeypatch.context() as patch, ThreadPoolExecutor(max_workers=2) as pool:
+        patch.setattr(store_io, "_atomic_write_json", pause)
+        changing = pool.submit(request, f"/api/chat/sessions/{sid}/queue/{queued}/input", queue_input_body(action))
+        assert entered.wait(5)
+        claiming = pool.submit(store.claim_next_queued_turn, sid, host_claim_id="test-host")
+        assert not claiming.done()
+        proceed.set()
+        assert changing.result(timeout=10)[0] == 200
+        claimed = claiming.result(timeout=10)
+    if action == "edit":
+        assert claimed["message"] == "Corrected queued input."
+    else:
+        assert claimed is None
+    other, _ = store.create_queued_turn(sid, client_turn_id="other", message="Already claimed.", origin="web")
+    if claimed:
+        store.release_active_turn(sid, queued)
+    assert store.claim_next_queued_turn(sid, host_claim_id="test-host")["turn_id"] == other["turn_id"]
+    before = store.load_turn(sid, other["turn_id"])
+    rejected = request(f"/api/chat/sessions/{sid}/queue/{other['turn_id']}/input", queue_input_body(action))
+    assert rejected[0] == 409 and rejected[1]["error_code"] == "queue_turn_already_started"
+    assert store.load_turn(sid, other["turn_id"]) == before
+
+
+def test_mutation_respects_revoked_scope_external_source_and_other_session(ordinary):  # noqa: F811
+    from loopx.capabilities.native_chat.project_context import ChatProjectContexts
+    store, runtime, contexts, request, capture, *_ = ordinary
+    sid, active, queued, _ = held_queue(ordinary)
+    external, _ = store.create_queued_turn(sid, client_turn_id="external", message="Original external request", origin="external")
+    assert request(f"/api/chat/sessions/{sid}/queue/{external['turn_id']}/input", queue_input_body())[1]["error_code"] == "queue_mutation_source_unavailable"
+    original = store.load_turn(sid, queued)
+    other = store.create_session(goal_id="other", agent_id="codex", adapter_kind="codex", upstream_thread_id="other-thread")
+    assert request(f"/api/chat/sessions/{other['session_id']}/queue/{queued}/input", queue_input_body())[0] == 404
+    runtime.project_contexts = ChatProjectContexts([])
+    assert request(f"/api/chat/sessions/{sid}/queue/{queued}/input", queue_input_body())[0] == 400
+    assert store.load_turn(sid, queued) == original
+
+
+def test_edited_input_and_attachments_are_actually_dispatched_once(ordinary):  # noqa: F811
+    import base64
+    store, runtime, contexts, request, capture, *_ = ordinary
+    data = b"# Original source\nKeep this attachment.\n"
+    attachment = {"id": "source", "name": "source.md", "mime_type": "text/markdown",
+                  "size": len(data), "data_url": "data:text/markdown;base64," + base64.b64encode(data).decode()}
+    sid, active, queued, _ = held_queue(ordinary, attachments=[attachment])
+    body = queue_input_body()
+    assert request(f"/api/chat/sessions/{sid}/queue/{queued}/input", body)[0] == 200
+    runtime.steer_active_turn(session_id=sid, expected_turn_id=active, client_ingress_id="finish-current", message="Finish current work.")
+    assert runtime.wait_for_turn(session_id=sid, turn_id=queued, timeout_sec=10)["status"] == "completed"
+    calls = [json.loads(line) for line in capture.read_text().splitlines()]
+    starts = [c for c in calls if c["method"] == "turn/start"]
+    assert len(starts) == 2
+    inputs = json.dumps(starts[1]["params"]["input"])
+    assert body["message"] in inputs and "Keep this attachment." in inputs
+    assert store.load_turn(sid, queued)["attachments"] == [attachment]
+    # Rechecking the applied edit after native execution cannot start it again.
+    before = capture.read_bytes()
+    assert request(f"/api/chat/sessions/{sid}/queue/{queued}/input", body)[0] == 200
+    assert capture.read_bytes() == before
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_goal_queue_input_http_with_canonical_goal_providers(ordinary, tmp_path, monkeypatch, provider):  # noqa: F811
+    from tests.control_plane.canonical_authority_fixture import promoted_create_fixture, isolate_sqlite_runtime
+    from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+    (tmp_path / "provider").mkdir()
+    isolate_sqlite_runtime(tmp_path / "provider", monkeypatch)
+    registry, root, state = promoted_create_fixture(tmp_path / "goal-source", provider=provider)
+    store, runtime, contexts, request, capture, *_ = ordinary
+    server = next(c.cell_contents for c in request.__closure__ if hasattr(c.cell_contents, "serve_forever"))
+    server.registry_path, runtime.registry_path = registry, registry
+    server.runtime_root_override = str(root)
+    before = read_canonical_todos_if_promoted(runtime_root=root, goal_id="goal-a")
+    session = store.create_session(goal_id="goal-a", agent_id="codex", adapter_kind="codex", upstream_thread_id="goal-thread")
+    sid = session["session_id"]
+    queued, _ = store.create_queued_turn(sid, client_turn_id="goal-input", message="Original Goal input.", origin="web")
+    qid = queued["turn_id"]
+    assert request(f"/api/chat/sessions/{sid}/queue")[0] == 200
+    path = f"/api/chat/sessions/{sid}/queue/{qid}/input"
+    assert request(path, queue_input_body())[0] == 200
+    history = request(f"/api/chat/sessions/{sid}?turn_id={qid}&message_limit=200")[1]["messages"]
+    assert history[0]["text"] == "Corrected queued input." and history[0]["queue_input_revision"] == 1
+    assert request(path, queue_input_body("cancel", 1, "goal-cancel"))[0] == 200
+    assert store.load_turn(sid, qid)["status"] == "interrupted"
+    after = read_canonical_todos_if_promoted(runtime_root=root, goal_id="goal-a")
+    assert after["provider_revision"] == before["provider_revision"]
+    assert after["todos"] == before["todos"] and not capture.exists()
+
+
 def wait_for_active_turn(store, session_id, turn_id):
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:

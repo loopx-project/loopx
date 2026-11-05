@@ -1739,8 +1739,8 @@ class ChatRequestHandler(
         if len(action_parts) == 3 and action_parts[:2] == ["api", "actions"]:
             return self._action_snapshot(action_parts[2])
         session_parts = path.strip("/").split("/")
-        if len(session_parts) == 5 and session_parts[:3] == ["api", "chat", "sessions"] and session_parts[4] == "queue":
-            return self._session_queue(session_parts[3])
+        if self._dispatch_chat_queue(path, apply=False):
+            return
         if len(session_parts) == 5 and session_parts[:3] == ["api", "chat", "sessions"] and session_parts[4] == "native-turn":
             return self._managed_native_turn(session_parts[3])
         if len(session_parts) == 5 and session_parts[:3] == ["api", "chat", "sessions"] and session_parts[4] == "loopx":
@@ -1765,8 +1765,8 @@ class ChatRequestHandler(
         if path == "/api/chat/collaboration":
             return self._project_collaboration(apply=True)
         peer_parts = path.strip("/").split("/")
-        if len(peer_parts) == 7 and peer_parts[:3] == ["api", "chat", "sessions"] and peer_parts[4] == "queue" and peer_parts[6] == "steer":
-            return self._steer_queued_turn(peer_parts[3], peer_parts[5])
+        if self._dispatch_chat_queue(path, apply=True):
+            return
         if len(peer_parts) == 5 and peer_parts[:3] == ["api", "chat", "sessions"] and peer_parts[4] == "collaboration":
             return self._project_collaboration(peer_parts[3], apply=True)
         if self._dispatch_zcode_goal(path, apply=True):

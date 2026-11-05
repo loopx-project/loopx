@@ -531,6 +531,8 @@ type PersonalHomeModel = {
   workers?: WorkspaceWorker[];
 };
 type PersonalManagerMessage = {
+  queueInputRevision?: number;
+  queueInputCancelled?: true;
   queued?: boolean;
   replyContext?: ChatVisibleMessage["reply_context"];
   goalDraft?: GoalDraft | null;
@@ -1758,6 +1760,7 @@ function PersonalGoalHome({
         role: message.role === "user" ? "user" : "assistant",
         returnDelivery: message.return_delivery, collaboration: message.collaboration, collaborations: message.collaborations,
         replyContext: message.reply_context,
+        queueInputRevision: message.queue_input_revision, queueInputCancelled: message.queue_input_cancelled,
         sourceLabel: message.role === "user" ? undefined : message.role === "error" ? "本地会话记录"
           : contextId === "manager" ? `恢复的${t("header.manager")}会话` : `恢复的 ${sessionLabels.get(message.session_id ?? "") ?? selectedAgent.label} 会话`,
         text: message.role === "user" ? message.reply_context?.source_text ?? message.text : visibleAgentMessage(message.text),
@@ -2931,6 +2934,7 @@ function PersonalGoalHome({
         returnDelivery: message.returnDelivery,
         collaboration: message.collaboration, collaborations: message.collaborations,
         replyContext: message.replyContext,
+        queueInputCancelled: message.queueInputCancelled,
         goalDraft: message.goalDraft,
         role: message.role,
         sourceTurnId: message.sourceTurnId,
@@ -3139,6 +3143,7 @@ function PersonalGoalHome({
                 agentLabel: message.role === "user" ? undefined : run.agentLabel,
                 attachments: workspaceImageAttachments(message.attachments),
                 replyContext: message.reply_context,
+                queueInputRevision: message.queue_input_revision, queueInputCancelled: message.queue_input_cancelled,
                 id: managerMessageId.current++,
                 lines: [],
                 role: message.role === "user" ? "user" : "assistant",

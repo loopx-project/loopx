@@ -895,6 +895,8 @@ export type ManagerRuntimeSessionReadback = {
 };
 
 export type ChatVisibleMessage = {
+  queue_input_revision?: number;
+  queue_input_cancelled?: true;
   goal_draft?: ReturnType<typeof normalizeGoalDraft>;
   /** Client-side lineage added when messages from several Sessions are merged. */
   session_id?: string;
@@ -965,6 +967,27 @@ export async function fetchChatSession(sessionId: string, signal?: AbortSignal) 
   return requestJson<ChatSessionSnapshot>(`/api/chat/sessions/${encodeURIComponent(sessionId)}`, { signal });
 }
 
+export const chatQueueInputRequestSchema = z.discriminatedUnion("action", [
+  z.object({action: z.literal("edit"), operation_id: z.string().min(1).max(160),
+    expected_revision: z.number().int().nonnegative(), message: z.string().min(1).max(24000)}).strict(),
+  z.object({action: z.literal("cancel"), operation_id: z.string().min(1).max(160),
+    expected_revision: z.number().int().nonnegative()}).strict(),
+]);
+export type ChatQueueInputRequest = z.infer<typeof chatQueueInputRequestSchema>;
+const chatQueuedInputSchema = z.object({input_revision: z.number().int().nonnegative(), message: z.string(),
+  attachments: z.array(z.object({id: z.string(), name: z.string(), size: z.number(),
+    mime_type: z.string(), data_url: z.string()})),
+});
+export type ChatQueuedInput = z.infer<typeof chatQueuedInputSchema>;
+export async function fetchQueuedChatInput(sessionId: string, turnId: string, signal?: AbortSignal) {
+  // Keep original-source audience projection and complete paging. The visible
+  // input and its revision come from one canonical user row, never raw model context.
+  const history = await fetchChatSessionHistory(sessionId, signal, turnId);
+  const original = history.messages.find(row => row.role === "user" && row.turn_id === turnId);
+  if (!original) throw new Error("Original queued input is unavailable");
+  return chatQueuedInputSchema.parse({input_revision: original.queue_input_revision ?? 0,
+    message: original.reply_context?.source_text ?? original.text, attachments: original.attachments ?? []});
+}
 const chatQueueSchema = z.object({
   ok: z.literal(true), schema_version: z.literal("loopx_chat_store_v1"), session_id: z.string().min(1),
   active_turn_id: z.string().min(1).nullable(),
@@ -972,6 +995,10 @@ const chatQueueSchema = z.object({
     turn_id: z.string().min(1), created_at: z.string(), origin: z.string().nullable(),
     preview: z.string(), character_count: z.number().int().nonnegative(),
     attachment_count: z.number().int().nonnegative(),
+    input_revision: z.number().int().nonnegative().default(0),
+    mutation: z.object({action: z.enum(["edit", "cancel"]), operation_id: z.string().min(1),
+      expected_revision: z.number().int().nonnegative(), input_revision: z.number().int().positive(),
+      message: z.string().optional()}).nullable().optional().default(null),
     steering: z.object({
       schema_version: z.literal("loopx_chat_queue_steering_v1"),
       client_ingress_id: z.string().min(1), operation_id: z.string().min(1),
@@ -1001,6 +1028,17 @@ export async function steerQueuedChatTurn(sessionId: string, queuedId: string, t
   if (value.ok !== true || value.session_id !== sessionId || value.queued_turn_id !== queuedId
     || value.turn_id !== targetId || value.client_ingress_id !== ingressId || value.status !== "delivered") {
     throw new Error("Queue steering acknowledgement does not match the original request");
+  }
+}
+
+export async function mutateQueuedChatTurn(sessionId: string, queuedId: string, request: ChatQueueInputRequest) {
+  const value = await requestJson<Record<string, unknown>>(
+    `/api/chat/sessions/${encodeURIComponent(sessionId)}/queue/${encodeURIComponent(queuedId)}/input`,
+    {method: "POST", body: JSON.stringify(request), signal: AbortSignal.timeout(15_000)});
+  if (value.ok !== true || value.session_id !== sessionId || value.queued_turn_id !== queuedId ||
+      value.operation_id !== request.operation_id || value.action !== request.action ||
+      value.input_revision !== request.expected_revision + 1 || value.status !== "applied") {
+    throw new Error("Queue input acknowledgement does not match the original request");
   }
 }
 

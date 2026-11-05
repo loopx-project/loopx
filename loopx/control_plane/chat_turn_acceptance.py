@@ -179,7 +179,8 @@ def queued_chat_turn_ids(
         "active_turn_id": active_turn_id, "include_reserved": include_reserved,
         "capacity_at": capacity_at,
         "turns": [{"turn_id": t["turn_id"], "status": t["status"],
-                   "expires_at": t.get("expires_at"), "reservation": t.get("_queue_steering")} for t in turns],
+                   "expires_at": t.get("expires_at"), "reservation": t.get("_queue_steering"),
+                   "mutation": t.get("_queue_mutation")} for t in turns],
     })["turn_ids"]
 
 
@@ -197,11 +198,24 @@ def plan_queued_chat_steering(
                  "has_collaboration_request": turn.get("collaboration_request") is not None,
                  "has_external_agent_target": turn.get("external_agent_target") is not None,
                  "attachment_count": len(turn.get("attachments") or []),
-                 "reservation": turn.get("_queue_steering")},
+                 "reservation": turn.get("_queue_steering"), "mutation": turn.get("_queue_mutation")},
         "receipt": ({key: receipt.get(key) for key in (
             "status", "mode", "expected_turn_id", "active_turn_id", "error_code",
         )} if receipt is not None else None),
         "receipt_message_matches": receipt is not None and receipt.get("message") == turn.get("message"),
+    })
+
+
+def plan_queued_chat_mutation(session: dict[str, Any], turn: dict[str, Any], request: dict[str, Any]) -> dict[str, Any]:
+    return effect_runtime_result("chat.queue.mutate", {
+        "session": {"status": session.get("status"), "active_turn_id": session.get("active_turn_id")},
+        "turn": {"turn_id": turn["turn_id"], "status": turn["status"], "origin": turn.get("origin"),
+                 "has_collaboration_request": turn.get("collaboration_request") is not None,
+                 "has_external_agent_target": turn.get("external_agent_target") is not None,
+                 "loopx_execution": turn.get("loopx_execution", False), "has_acceptance": "_acceptance" in turn,
+                 "input_revision": turn.get("input_revision", 0), "reservation": turn.get("_queue_steering"),
+                 "mutation": turn.get("_queue_mutation"), "operations": turn.get("_queue_operations", [])},
+        "request": request,
     })
 
 
