@@ -181,7 +181,8 @@ class ChatExternalConversations:
                 "later_source_input_present": any(item.get("binding_id") == row["binding_id"]
                     and item.get("source") == row["source"] and item.get("command") is None
                     and datetime.fromisoformat(item["created_at"]) > datetime.fromisoformat(row["created_at"])
-                    for item in self.pending()) if turn.get("error_code") == "antigravity_step_error" else None,
+                    for item in (discovery_reads.source_controls() if discovery_reads is not None
+                                 else self.pending())) if turn.get("error_code") == "antigravity_step_error" else None,
                 "native_input": anchors[0] if len(anchors) == 1 else None,
                 "response_literal_open": bool(open_literal),
                 "metadata_capacity": metadata_capacity,
