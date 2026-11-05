@@ -489,105 +489,31 @@ def _promote_interaction_contract(payload: dict[str, Any]) -> dict[str, Any]:
     return promoted
 
 
-def _reference_inline_goal_acceptance(payload: dict[str, Any]) -> dict[str, Any]:
-    """Share exact JSON copies in this display only; never trim the contract.
-
-    Work context is the preferred full carrier, then the planning horizon.
-    This Python CLI adapter only changes serialization after owner decisions;
-    canonical state, captures and replan context construction remain untouched.
-    """
-    paths: list[tuple[str | int, ...]] = []
-    interaction = payload.get("interaction_contract")
-    channel = interaction.get("agent_channel") if isinstance(interaction, dict) else None
-    context = channel.get("work_context") if isinstance(channel, dict) else None
-    sources = context.get("sources") if isinstance(context, dict) else None
-    for index, source in enumerate(sources if isinstance(sources, list) else []):
-        if (isinstance(source, dict) and source.get("source") == "goal_acceptance"
-                and isinstance(source.get("content"), dict)
-                and source["content"].get("status", "loaded") == "loaded"
-                and isinstance(source["content"].get("goal_acceptance_contract"), dict)
-                and source["content"]["goal_acceptance_contract"]):
-            paths.append(("interaction_contract", "agent_channel", "work_context",
-                          "sources", index, "content", "goal_acceptance_contract"))
-            break
-    paths.extend([
-        ("planning_horizon", "core_goal", "acceptance_contract"),
-        ("autonomous_replan_obligation", "replan_context", "core_goal", "acceptance_contract"),
-        ("agent_todo_summary", "goal_acceptance_contract"),
-    ])
-    carriers: dict[str, str] = {}
-    relocated: dict[str, str] = {}
-    references: list[tuple[tuple[str | int, ...], str]] = []
-    result = payload
-
-    def writable_parent(path: tuple[str | int, ...]) -> dict[str, Any]:
-        nonlocal result
-        # Copy only the affected spine; never mutate caller-owned facts.
-        result = dict(result)
-        target: Any = result
-        for part in path[:-1]:
-            child = target[part]
-            target[part] = list(child) if isinstance(child, list) else dict(child)
-            target = target[part]
-        return cast(dict[str, Any], target)
-
-    for path in paths:
-        parent: Any = result
-        for part in path[:-1]:
-            if isinstance(parent, dict) and isinstance(part, str):
-                parent = parent.get(part)
-            elif isinstance(parent, list) and isinstance(part, int) and part < len(parent):
-                parent = parent[part]
-            else:
-                parent = None
-                break
-        field = str(path[-1])
-        existing = parent.get(field + "_ref") if isinstance(parent, dict) else None
-        if isinstance(existing, str):
-            references.append((path, existing))
-        value = parent.get(field) if isinstance(parent, dict) else None
-        if not isinstance(value, dict) or not value or field + "_ref" in parent:
-            continue
-        # Keep complete revision, scope, failures and sources in the identity.
-        encoded = _json_content_key(value)
-        reference = carriers.get(encoded)
-        own_ref = "$" + "".join(
-            f"[{part}]" if isinstance(part, int) else f".{part}" for part in path)
-        if reference is None:
-            carriers[encoded] = own_ref
-            continue
-        if len(encoded) <= len(reference) + 8:
-            continue
-        target = writable_parent(path)
-        del target[field]
-        target[field + "_ref"] = reference
-        relocated[own_ref] = reference
-    # Retarget only references to owners actually moved by this projection.
-    # A later owner can move after an earlier alias was visited; a second pass
-    # keeps both directions direct without following arbitrary input chains.
-    for path, reference in references:
-        if reference in relocated:
-            writable_parent(path)[str(path[-1]) + "_ref"] = relocated[reference]
-    return result
-
-
 def _reference_context(
     payload: dict[str, Any], *, task_title: bool = True, explore_guidance: bool = True,
-    diagnostics: dict[str, Any] | None = None,
+    goal_acceptance: bool = False, diagnostics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """One coarse transport call for the existing typed context owner."""
     contract = payload.get("interaction_contract")
     agent = contract.get("agent_channel") if isinstance(contract, dict) else None
     context = agent.get("work_context") if isinstance(agent, dict) else None
-    # No source carrier means neither operation can act. Leave semantic matching
-    # and reference validation in TypeScript, rather than replicating its rules.
-    if diagnostics is None and (not (task_title or explore_guidance) or not isinstance(context, dict) or not context.get("sources")):
+    # A lone carrier cannot be shared or relocated. Keep simple guards local.
+    if goal_acceptance:
+        goal_acceptance = sum(isinstance(value, dict) for value in (
+            context, payload.get("planning_horizon"), payload.get("autonomous_replan_obligation"),
+            payload.get("agent_todo_summary"),
+        )) >= 2
+    # Task/Explore sharing needs a source carrier; acceptance may use other root
+    # owners. Leave semantic matching and reference validation in TypeScript.
+    if diagnostics is None and not goal_acceptance and (
+        not (task_title or explore_guidance) or not isinstance(context, dict) or not context.get("sources")
+    ):
         return payload
     from .turn_envelope import _turn_envelope_result
 
     result = _turn_envelope_result("reference_context", payload=payload,
         task_title=task_title, explore_guidance=explore_guidance,
-        **({"diagnostics": diagnostics} if diagnostics is not None else {}))
+        goal_acceptance=goal_acceptance, **({"diagnostics": diagnostics} if diagnostics is not None else {}))
     return _apply_context_projection_changes(payload, result)
 
 
@@ -706,14 +632,13 @@ def compact_quota_should_run_cli_payload(
         agent_lane_next_action = dict(agent_lane_next_action)
         agent_lane_next_action.pop("content_revision", None)
         compact["agent_lane_next_action"] = agent_lane_next_action
-    compact = _reference_inline_goal_acceptance(compact)
     diagnostics = None
     if ((not include_todo_summary_detail and isinstance(payload.get("agent_todo_summary"), dict))
             or (not include_user_todo_summary_detail and isinstance(payload.get("user_todo_summary"), dict))):
         diagnostics = {"agent_detail": include_todo_summary_detail,
             "user_detail": include_user_todo_summary_detail}
     compact = _reference_context(compact, task_title=not include_todo_summary_detail,
-        explore_guidance=not include_vision_detail, diagnostics=diagnostics)
+        explore_guidance=not include_vision_detail, goal_acceptance=True, diagnostics=diagnostics)
     return _promote_interaction_contract(
         _promote_runtime_capability_reentry(compact)
     )
