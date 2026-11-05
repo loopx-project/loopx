@@ -271,6 +271,7 @@ def test_pr_list_paginates_files_when_graphql_detail_is_truncated(monkeypatch) -
         {"filename": f"src/file_{index}.py", "additions": index, "deletions": 0}
         for index in range(101)
     ]
+    row.update(additions=sum(item["additions"] for item in rest_files), deletions=0)
     calls: list[list[str]] = []
 
     def fake(args: list[str], *, cwd: Path | None = None):
@@ -278,6 +279,8 @@ def test_pr_list_paginates_files_when_graphql_detail_is_truncated(monkeypatch) -
         if args[:2] == ["pr", "list"]:
             return [row]
         if args[:2] == ["pr", "view"]:
+            if "files" not in args[args.index("--json") + 1].split(","):
+                return dict(row)
             details = _fake_run_gh_json(args, cwd=cwd)
             details["files"] = details["files"] * 100
             return details
@@ -296,6 +299,74 @@ def test_pr_list_paginates_files_when_graphql_detail_is_truncated(monkeypatch) -
     assert len(scan["pull_requests"][0]["files"]) == 101
     assert scan["pull_requests"][0]["files"][-1]["path"] == "src/file_100.py"
     assert ["api", "--paginate", "--slurp"] in [call[:3] for call in calls]
+
+
+@pytest.mark.parametrize("exact_target", [False, True])
+@pytest.mark.parametrize("drift", [
+    None, "headRefOid", "baseRefOid", "changedFiles", "additions", "deletions",
+    "unavailable", "duplicate_path",
+])
+def test_paginated_files_require_a_complete_unchanged_snapshot(
+    monkeypatch, exact_target: bool, drift: str | None,
+) -> None:
+    listed = _rows()[0] | {"changedFiles": 101, "additions": 101, "deletions": 0}
+    rest_files = [
+        {"filename": f"src/file_{index}.py", "additions": 1, "deletions": 0}
+        for index in range(101)
+    ]
+    if drift == "duplicate_path":
+        rest_files[-1] = dict(rest_files[0])
+    inventory_read = False
+    calls = []
+
+    def github(args, *, cwd=None):
+        nonlocal inventory_read
+        calls.append(args)
+        assert "statusCheckRollup" not in ",".join(args)
+        if args[:2] == ["pr", "list"]:
+            return [dict(listed)]
+        if args[:3] == ["api", "--paginate", "--slurp"]:
+            inventory_read = True
+            return [rest_files[:100], rest_files[100:]]
+        fields = args[args.index("--json") + 1].split(",")
+        if "files" in fields:
+            # The initial detail belongs to the original head; the REST pages
+            # can come from a later revision with the same number of files.
+            return _fake_run_gh_json(args, cwd=cwd) | {"files": [{}] * 100}
+        current = dict(listed)
+        if inventory_read:
+            if drift == "unavailable":
+                raise RuntimeError("version readback unavailable")
+            if drift in {"headRefOid", "baseRefOid"}:
+                current[drift] = "d" * 40
+            elif drift in {"changedFiles", "additions", "deletions"}:
+                current[drift] += 1
+        return current
+
+    if exact_target:
+        def scan():
+            return github_source_module.scan_github_pull_request_targets(
+                repository="owner/repo", exact_heads=[f"1@{HEAD_1}"],
+                run_gh_json=github, wait_for_ci=False,
+            )
+
+        if drift is not None:
+            with pytest.raises(RuntimeError, match="detail read was incomplete"):
+                scan()
+            return
+        result = scan()
+    else:
+        monkeypatch.setattr(pr_review_module, "_run_gh_json", github)
+        result = pr_review_module.scan_github_pull_requests(
+            repo="owner/repo", limit=10, wait_for_ci=False,
+        )
+        if drift is not None:
+            assert result["complete"] is False
+            assert result["states"][0]["detail_read_failures"] == 1
+            assert "files" not in result["pull_requests"][0]
+            return
+    assert result["complete"] is True
+    assert len(result["pull_requests"][0]["files"]) == 101
 
 
 def test_pr_list_marks_source_incomplete_when_rest_files_are_still_truncated(
