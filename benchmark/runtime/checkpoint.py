@@ -257,10 +257,17 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
     if native_context:
         from .context_delivery import preflight_context_instruction
 
-        # Bind the native reader to this invocation's immutable producer file.
-        # Wake-level paths can be overwritten by another preflight of the same Turn.
-        reading = preflight_context_instruction(env, captures[0],
-            hashlib.sha256(raw_guard).hexdigest(), receipt["turn_id"])
+        # A repeated preflight can replace wake-level paths. Bind both native
+        # read commands to the exact CLI view of this particular guard.
+        view_bytes = guard_run.stdout.encode("utf-8")
+        source_path = captures[0]
+        if view_bytes != raw_guard:
+            source_path = capture_root / "checkpoint-start-view.json"
+            with source_path.open("xb") as stream:
+                os.fchmod(stream.fileno(), 0o600)
+                stream.write(view_bytes)
+        reading = preflight_context_instruction(env, source_path,
+            hashlib.sha256(view_bytes).hexdigest(), receipt["turn_id"])
     else:
         view_path = guard_path.with_name("checkpoint-start-view.json")
         view_path.write_text(guard_run.stdout, encoding="utf-8")

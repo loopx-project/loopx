@@ -594,8 +594,11 @@ def test_preflight_defers_history_only_when_capture_will_verify_it(tmp_path, mon
         from pathlib import Path
         captured = Path(command[command.index("--decision-output-root") + 1]) / "decision-original"
         captured.mkdir()
-        (captured / "decision.json").write_text(json.dumps({"ok": True, "source": captured.parent.name}))
-        return SimpleNamespace(stdout=json.dumps({"ok": True}))
+        original = json.dumps({"ok": True, "source": captured.parent.name})
+        (captured / "decision.json").write_text(original)
+        (captured / "decision.json").chmod(0o600)
+        return SimpleNamespace(stdout=original if native_participant else
+                               json.dumps({"ok": True, "view": captured.parent.name}))
     monkeypatch.setattr(checkpoint.subprocess, "run", guard)
     monkeypatch.setattr(checkpoint, "effect_runtime_result", lambda *a, **k: {"capture": False, "reason": "no_fresh_replan"})
     observed = []
@@ -614,11 +617,18 @@ def test_preflight_defers_history_only_when_capture_will_verify_it(tmp_path, mon
     view = wake / "checkpoint-start-view.json"
     assert observed == [not native_participant]
     if native_context:
-        original, = wake.glob("checkpoint-start-*/decision-original/decision.json")
+        pattern = ("checkpoint-start-*/decision-original/decision.json" if native_participant else
+                   "checkpoint-start-*/checkpoint-start-view.json")
+        original, = wake.glob(pattern)
         assert str(original) in body and hashlib.sha256(original.read_bytes()).hexdigest() in body
         first_bytes = original.read_bytes()
+        if native_participant:
+            assert not list(wake.glob("checkpoint-start-*/checkpoint-start-view.json"))
+        else:
+            assert json.loads(first_bytes) == {"ok": True, "view": original.parent.name}
+        assert original.stat().st_mode & 0o077 == 0
         resumed = checkpoint.capture_before_replan(env, receipt, "resume")
-        second, = set(wake.glob("checkpoint-start-*/decision-original/decision.json")) - {original}
+        second, = set(wake.glob(pattern)) - {original}
         assert str(second) in resumed and hashlib.sha256(second.read_bytes()).hexdigest() in resumed
         assert original.read_bytes() == first_bytes != second.read_bytes()
         assert not view.exists()

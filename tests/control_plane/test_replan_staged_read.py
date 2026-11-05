@@ -264,6 +264,10 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
         assert len(commands) == 1 and "--turn-envelope" not in commands[0]
         assert "--decision-output-root" in commands[0]
         source_path, view_path = wake / "checkpoint-start-guard.json", wake / "checkpoint-start-view.json"
+        if context_delivery:
+            argv = shlex.split(body.split("```sh\n", 1)[1].split("\n```", 1)[0])
+            view_path = Path(argv[argv.index("--capture-file") + 1])
+            assert view_path.parent != wake and view_path.is_relative_to(wake)
         source, view = json.loads(source_path.read_bytes()), json.loads(view_path.read_bytes())
         assert str(view_path) in body and str(source_path) not in body
         assert body.endswith("original heartbeat instructions")
