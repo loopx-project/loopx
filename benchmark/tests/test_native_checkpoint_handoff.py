@@ -13,7 +13,7 @@ import time
 import pytest
 
 from loopx.hosts.codex_checkpoint import native_session_checkpoint
-from tests.control_plane.codex_checkpoint_fixture import real_native_source
+from tests.control_plane.codex_checkpoint_fixture import real_native_source, read_cli_policy_payload
 from loopx.capabilities.benchmark_toolkit.native_codex_goal import (
     NativeGoalProtocolError, StdioNativeGoalTransport,
 )
@@ -369,7 +369,7 @@ def test_midwake_native_profile_refusal_precedes_interruption(tmp_path, monkeypa
 @pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN") or
                    os.environ.get("LOOPX_CHECKPOINT_EXTERNAL_CONTROLLER") != "1",
                    reason="Requires the real native CLI and explicitly attached checkpoint supervisor")
-@pytest.mark.parametrize("capture_boundary", ["fresh_replan", "settled_work"])
+@pytest.mark.parametrize("capture_boundary", ["fresh_replan", "settled_work", "settled_once"])
 @pytest.mark.parametrize("explore_mode", ["off", "planning"])
 @pytest.mark.parametrize("context_delivery", ["off", "on"])
 def test_actual_worker_captures_pending_replan_before_native_model(tmp_path, explore_mode, context_delivery, capture_boundary):
@@ -469,8 +469,7 @@ def test_actual_worker_captures_pending_replan_before_native_model(tmp_path, exp
             if phase["kind"] == "work" and not phase["tool_sent"]:
                 # Only after complete native input delivery, inspect the
                 # original decision as an independent authority oracle.
-                source = Path(reader.deliveries[-1]["recovery"]["path"]).with_name("decision.json")
-                current = json.loads(source.read_text())
+                current = read_cli_policy_payload(json.dumps(reader.deliveries[-1]), returncode=0)
                 assert not current.get("autonomous_replan_obligation")
                 assert current["interaction_contract"]["agent_channel"]["delivery_allowed"]
                 (project / "work-guard.json").write_text(json.dumps(current))
@@ -500,7 +499,7 @@ def test_actual_worker_captures_pending_replan_before_native_model(tmp_path, exp
                     "[(Path('candidate.txt').write_text(str(v)),"
                     "Path('evidence-'+str(v)+'.json').write_text(json.dumps({'value':v,'synthetic':True}))) for v in values]; "
                     "assert Path('candidate.txt').read_text()==str(values[-1]); print('CANDIDATE_VERIFIED')")
-            if capture_boundary == "settled_work" and phase["values"] == [6]:
+            if capture_boundary != "fresh_replan" and phase["values"] == [6]:
                 # The actual native tool settles its original work before the
                 # completed-wake hook. No operator-side settlement is backdated.
                 prefix = [sys.executable, "-m", "loopx.entrypoint", "--registry", str(registry),
@@ -541,7 +540,7 @@ def test_actual_worker_captures_pending_replan_before_native_model(tmp_path, exp
             return {"type": "function_call", "id": "fc_packet", "call_id": "call_packet",
                     "name": "exec_command", "arguments": json.dumps({
                         "cmd": "cat " + shlex.quote(str(paths[0])), "max_output_tokens": 30000})}
-        if capture_boundary == "settled_work" and phase["kind"] == "work" and phase["values"] == [6]:
+        if capture_boundary != "fresh_replan" and phase["kind"] == "work" and phase["values"] == [6]:
             record_counterexample()
         message["content"][0]["text"] = "Original packet read." if phase["kind"] == "review" else "Synthetic work verified."
         return message
@@ -551,7 +550,7 @@ def test_actual_worker_captures_pending_replan_before_native_model(tmp_path, exp
         assert candidate.read_text() == str(expected)
         guard = json.loads((project / "work-guard.json").read_text())
         assert guard["heartbeat_receipt"]["turn_instance_id"] == result["turn_id"]
-        if capture_boundary == "settled_work" and expected == 6:
+        if capture_boundary != "fresh_replan" and expected == 6:
             from loopx.control_plane.quota.settlement import read_heartbeat_settlement
             observed = read_heartbeat_settlement(runtime, goal_id=cli.GOAL_ID, agent_id=cli.AGENT_ID,
                 todo_id=cli.TODO_ID, turn_instance_id=result["turn_id"], registry_path=registry)
@@ -582,12 +581,16 @@ def test_actual_worker_captures_pending_replan_before_native_model(tmp_path, exp
             "native_session": True, "loopx_state": True, "evaluation_opportunity": True, "controller_handoff": True}
         if capture_boundary == "fresh_replan":
             declaration["trigger"] = "fresh_replan"
+        elif capture_boundary == "settled_once":
+            declaration.update(trigger="fresh_replan", settled_work_capture_once={
+                "destination": str(logs.parent / "checkpoints" / "settled-work"),
+                "purpose": "Synthetic explicit source handoff"})
         else:
             declaration["destination"] += "/settled-work"
         request.write_text(json.dumps(declaration))
         for value in range(1, 7):
             phase.update(kind="work", values=[value], tool_sent=False, context_started=False)
-            actual = {**env, "LOOPX_CHECKPOINT_REQUEST": str(request)} if capture_boundary == "settled_work" and value == 6 else env
+            actual = {**env, "LOOPX_CHECKPOINT_REQUEST": str(request)} if capture_boundary != "fresh_replan" and value == 6 else env
             prior = run_once(actual)
             settle_work(prior, value)
         assert len(set(work_turns)) == 6
@@ -597,19 +600,28 @@ def test_actual_worker_captures_pending_replan_before_native_model(tmp_path, exp
             assert reader.deliveries[0]["mode"] == "full"
             assert any(row["mode"] == "delta" for row in reader.deliveries[1:])
         review_request_index = len(requests)
-        if capture_boundary == "settled_work":
-            assert prior["checkpoint"]["captured"], prior
-            assert not prior["checkpoint"]["research_point_qualified"]
+        if capture_boundary != "fresh_replan":
+            captured = prior["checkpoint_handoff"] if capture_boundary == "settled_once" else prior["checkpoint"]
+            assert captured["captured"], prior
+            assert not captured["research_point_qualified"]
             assert cli._heartbeat_receipt_count(runtime, prior["turn_id"]) == 1
-            assert not guards and not list(logs.glob("*/checkpoint-start-guard.json"))
+            assert not guards
+            assert len(list(logs.glob("*/checkpoint-start-guard.json"))) == (1 if capture_boundary == "settled_once" else 0)
+            if capture_boundary == "settled_once":
+                assert prior["checkpoint"]["reason"] == "no_fresh_replan"
+                assert captured["phase"] == "after_settled_work"
+                assert configured["after"]["execution_profile"]["replan_after_effective_turns"] == 6
             assert not prior.get("checkpoint_handoffs") and "turn_envelope" not in prior
             from benchmark.runtime.checkpoint import capture_after_wake
             replay = dict(prior)
             call_count = len(calls)
             capture_after_wake(actual, replay)
-            assert replay["checkpoint"]["reason"] == "destination_already_attempted_no_replay"
-            assert len(calls) == call_count and prior["checkpoint"]["captured"]
-            (tmp_path / "controller-result.json").write_text(json.dumps({**prior["checkpoint"],
+            if capture_boundary == "settled_once":
+                assert replay == prior  # Completed handoff is not retried, even on repeated host closeout.
+            else:
+                assert replay["checkpoint"]["reason"] == "destination_already_attempted_no_replay"
+            assert len(calls) == call_count and captured["captured"]
+            (tmp_path / "controller-result.json").write_text(json.dumps({**captured,
                 "natural_work_turns": work_turns, "capture_boundary": capture_boundary,
                 "context_delivery": context_delivery, "context_reads": reader.deliveries}))
             return

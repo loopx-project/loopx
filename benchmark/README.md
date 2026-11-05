@@ -276,6 +276,28 @@ and stride receivers, and another full capture/receiver. Its default remains
 feedback: they qualify mechanical reconstruction and adoption, not scientific
 benefit or authorization to stop a live campaign.
 
+To request **one explicit settled-work handoff alongside normal replan capture**,
+keep `trigger: "fresh_replan"` and the checkpoint-root `destination`, and add:
+
+```json
+"settled_work_capture_once": {
+  "destination": "/logs/agent/checkpoints/upgrade-handoff",
+  "purpose": "Explicit upgrade handoff"
+}
+```
+
+The handoff inherits the declared components and participant flags. It waits for
+a successful execute wake with its original settled Turn and unchanged request;
+restored-history gates still apply. It records its own `checkpoint_handoff`
+result without replacing the pre-replan result. A missed or uncertain attempt
+is consumed, including when its artifact index is unavailable. Later work cannot
+backfill it. Normal distinct replan captures continue at the configured cadence.
+Omit this field to retain the existing behavior. Use it only for a necessary
+operator-declared handoff, account for its one additional capture within the
+original phase, and do not turn it into per-wake captures or a preparation Todo.
+The joint qualifier's `--capture-boundary settled_once` exercises this path with
+the same real native session, SQLite state, controller and fresh receivers.
+
 For pre-decision capture at a **fresh replan projected at the start of a heartbeat
 wake**, add `"trigger": "fresh_replan"` and set `destination` to the trial's
 `checkpoints` directory itself. The Host preloads that wake's original quota guard
