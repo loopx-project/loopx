@@ -1,3 +1,4 @@
+import {EffectiveAction} from "./effective_action.generated.ts";
 /** Model presentation: requirements stay inline, supporting material is
  * addressed in the immutable source. This plan changes no canonical state. */
 import {isDeepStrictEqual} from "node:util";
@@ -293,7 +294,7 @@ export function initialContextReadPointers(context: JsonObject, decisionFields: 
   // A staged replan has already replaced inline acceptance with a pinned
   // review reader. Deliver its first action and ordering without writeback.
   const replan = object(context.replan_action_packet);
-  if (context.effective_action === "autonomous_replan_required" &&
+  if (context.effective_action === EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED &&
       replan?.schema_version === "replan_action_packet_v0" && replan.decision === "replan_required" &&
       replan.settlement_only !== true && typeof replan.review === "string" && replan.review) {
     include("replan_action_packet", "review");
