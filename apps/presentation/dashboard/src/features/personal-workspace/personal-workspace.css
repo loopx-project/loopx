@@ -2243,6 +2243,8 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-composer-toolbar .goal-loopx-message-mode { margin: 0; min-width: 0; }
 .personal-composer-toolbar .goal-loopx-message-mode select { max-width: 140px; min-height: 36px; border: 0; background: transparent; color: var(--pw-text); }
 .personal-composer-toolbar > .personal-composer-send { flex: none; margin-left: auto; }
+.personal-composer-stop { display: grid; place-items: center; flex: none; width: 36px; height: 36px; padding: 0; border: 1px solid var(--pw-line-strong); border-radius: 10px; background: #fff; color: var(--pw-text); cursor: pointer; }
+.personal-composer-stop:focus-visible { outline: 2px solid var(--pw-blue); outline-offset: 2px; }
 @media (max-width: 760px) {
   .personal-composer-runtime .personal-chat-model-menu { position: static; max-width: min(140px, 36vw); }
   .personal-composer-runtime .personal-chat-model-panel { left: 0; right: 0; width: auto; bottom: calc(100% + 8px); }

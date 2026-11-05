@@ -423,6 +423,7 @@ export async function installApi(page, { fixturePort = port, goalSubagentConfigu
   const sessions = runtime.sessions;
   const messages = runtime.messages;
   const turnMessages = runtime.turnMessages;
+  const queuedTurns = runtime.queuedTurns ??= new Map();
   const loopxModes = runtime.loopxModes ??= new Map();
   for (const proposal of initialActionProposals) {
     actionProposals.set(proposal.proposal_id, structuredClone(proposal));
@@ -1841,6 +1842,13 @@ export async function installApi(page, { fixturePort = port, goalSubagentConfigu
       };
       loopxModes.set(sessionId, configured);
       await route.fulfill({ contentType: "application/json", json: configured, status: 200 });
+      return;
+    }
+    const queue = url.pathname.match(/^\/api\/chat\/sessions\/([^/]+)\/queue$/);
+    if (queue && request.method() === "GET") {
+      const active = sessions.get(queue[1])?.active_turn_id ?? null;
+      await route.fulfill({json: {ok: true, schema_version: "loopx_chat_store_v1", session_id: queue[1], active_turn_id: active,
+        turns: (queuedTurns.get(queue[1]) ?? []).filter(turn => turn.turn_id !== active)}});
       return;
     }
     const snapshot = url.pathname.match(/^\/api\/chat\/sessions\/([^/]+)$/);

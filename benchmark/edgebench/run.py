@@ -14,6 +14,7 @@ import logging
 import ipaddress
 import os
 import signal
+import tempfile
 import time
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -36,7 +37,7 @@ from benchmark.runtime.sforge import (
     DEFAULT_TIMEOUT_SECONDS, PROFILES, SForgeWorker,
 )
 from benchmark.runtime.sforge_backend import RecordingDockerBackend
-from benchmark.runtime.source import source_pins
+from benchmark.runtime.source import archive_source, source_pins
 from benchmark.edgebench.prompts import (
     blind_task_prompt, best_only_task_prompt, native_task_prompt, native_task_instructions,
     checkpoint_research_instructions,
@@ -266,6 +267,14 @@ def main(argv=None):
     runner = Path(os.environ.get("LOOPX_RUNNER_SRC_DIR", str(product))).resolve()
     pins = source_pins(product, runner, os.environ["LOOPX_EXPECTED_COMMIT"],
                        os.environ.get("LOOPX_EXPECTED_RUNNER_COMMIT"))
+    if args.restore_checkpoint is not None:
+        # Activating the native capsule starts its remaining phase clock.
+        # Qualify the actual install archives first, including ignored assets;
+        # the adapter still checks them again when staging the worker.
+        with tempfile.TemporaryDirectory(prefix="benchmark-restore-source-") as directory:
+            archive_source(product, pins[0], Path(directory) / "source.tar")
+            if runner != product:
+                archive_source(runner, pins[1], Path(directory) / "runner.tar", ("benchmark/runtime",))
     task_file = args.tasks_dir / f"{args.task}.json"
     task = make_task_spec(task_file, load_benchmark(args.tasks_dir))
     blind_endpoint = None

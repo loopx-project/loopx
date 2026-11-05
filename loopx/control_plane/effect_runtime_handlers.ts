@@ -620,6 +620,8 @@ export function createEffectRuntimeHandlers(
     ["collaboration.source.configure_evidence_scope", lazyHandler(() => import("./collaboration/source_grants.ts"), ({configureSourceEvidenceScope}) => configureSourceEvidenceScope)],
     ["collaboration.conversation.reply_context", lazyHandler(() => import("./collaboration/conversation_reply_context.ts"), ({projectConversationReplyContext}) => projectConversationReplyContext)],
     ["chat.turn.accept", lazyHandler(() => import("./turn_driver/chat_turn_acceptance.ts"), ({planChatTurnAcceptance}) => planChatTurnAcceptance)],
+    ["chat.queue.select", lazyHandler(() => import("./turn_driver/chat_queue_steering.ts"), ({selectQueuedChatTurns}) => selectQueuedChatTurns)],
+    ["chat.queue.steer", lazyHandler(() => import("./turn_driver/chat_queue_steering.ts"), ({planQueuedChatSteering}) => planQueuedChatSteering)],
     ["chat.turn.execution_allowed", lazyHandler(() => import("./turn_driver/chat_turn_acceptance.ts"), ({mayContinueChatTurn}) => mayContinueChatTurn)],
     ["chat.turn.recovery_allowed", lazyHandler(() => import("./turn_driver/chat_turn_acceptance.ts"), ({mayRecoverChatTurn}) => mayRecoverChatTurn)],
     ["collaboration.delegation.observe", lazyHandler(() => import("./collaboration/delegation.ts"), ({transitionDelegationObservation}) => transitionDelegationObservation)],

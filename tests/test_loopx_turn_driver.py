@@ -15,6 +15,7 @@ import pytest
 
 import loopx.cli_commands.turn_run_once as turn_run_once_command
 from loopx.cli_commands.turn_rendering import render_loopx_turn_execution_markdown
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 from tests.control_plane.canonical_authority_fixture import (
     initialize_canonical_authority,
     isolate_sqlite_runtime,
@@ -1616,7 +1617,7 @@ def test_quota_cli_projects_outer_controller_without_codex_app_action(
             ]
         )
 
-    payload = json.loads(output.getvalue())
+    payload = read_cli_policy_payload(output.getvalue(), returncode=exit_code)
     hint = payload["scheduler_hint"]
     assert exit_code == 0, payload
     assert hint["execution_context"]["codex_app_applicability"] == "not_applicable"
@@ -1650,7 +1651,7 @@ def test_quota_cli_without_scheduler_context_fails_closed(tmp_path: Path) -> Non
             ]
         )
 
-    payload = json.loads(output.getvalue())
+    payload = read_cli_policy_payload(output.getvalue(), returncode=exit_code)
     hint = payload["scheduler_hint"]
     assert exit_code == 0, payload
     assert hint["action"] == "repair_scheduler_execution_context"
@@ -1779,7 +1780,7 @@ def test_quota_cli_short_context_flags_preserve_all_typed_fields(
             ]
         )
 
-    payload = json.loads(output.getvalue())
+    payload = read_cli_policy_payload(output.getvalue(), returncode=exit_code)
     context = payload["scheduler_hint"]["execution_context"]
     assert exit_code == 0, payload
     assert context["host_surface"] == "generic_cli"

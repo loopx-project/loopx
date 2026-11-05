@@ -101,7 +101,62 @@ def test_interrupted_native_inventory_is_exact_stable_and_contains_no_reasoning(
     assert not set(calls) - {"GetCascadeTrajectory", "GetCascadeTrajectorySteps"}
 
 
-@pytest.mark.parametrize("fault", [None, "stop", "source-changed", "no-capacity", "review-action", "review-gate", "queue-change", "already-codex", "post-enqueue-crash", "lost-ack", "new-question-during-answer", "restricted-review", "primary-quota-unreadable", "native-tail", "authenticated-host", "file-read", "file-running"])
+@pytest.mark.parametrize("fault", [None, "open", "busy", "mixed", "foreign", "changed", "wrong-hash",
+    "no-visible-answer", "tool-call", "unknown", "oversize"])
+def test_cleared_visible_answer_is_only_stable_historical_review_evidence(monkeypatch, fault):
+    prompt = "Original synthetic source"
+    meta = {"createdAt": "2026-01-01T00:00:05Z", "executionId": "original"}
+    steps = [
+        {"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_CLEARED", "metadata": meta,
+         "userInput": {"items": [{"text": prompt}]}},
+        {"type": "CORTEX_STEP_TYPE_GENERIC", "status": "CORTEX_STEP_STATUS_CLEARED", "metadata": meta,
+         "generic": {}},
+        {"type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE", "status": "CORTEX_STEP_STATUS_CLEARED", "metadata": meta,
+         "plannerResponse": {"response": "Existing visible draft", "thinking": "private reasoning"}},
+        {"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE", "metadata": meta,
+         "userInput": {"items": [{"text": "Later question"}]}}]
+    if fault == "open":
+        steps.pop()
+    elif fault == "mixed":
+        steps[1]["status"] = "CORTEX_STEP_STATUS_RUNNING"
+    elif fault == "foreign":
+        steps[1]["metadata"] = {**meta, "executionId": "other"}
+    elif fault == "no-visible-answer":
+        steps[2]["plannerResponse"].pop("response")
+    elif fault == "tool-call":
+        steps[2]["plannerResponse"]["toolCalls"] = [{"name": "unsettled"}]
+    elif fault == "unknown":
+        steps[1]["type"] = "FUTURE_NATIVE_OPERATION"
+    elif fault == "oversize":
+        steps[2]["plannerResponse"]["response"] = "x" * (256 * 1024)
+    trajectory = {"trajectory": {"cascadeId": "native"}, "numTotalSteps": len(steps),
+        "status": "RUNNING" if fault == "busy" else "CASCADE_RUN_STATUS_IDLE"}
+    calls = []
+    def read(_url, _token, method, _body, **_):
+        calls.append(method)
+        if method == "GetCascadeTrajectory":
+            return deepcopy(trajectory)
+        current = deepcopy(steps)
+        if fault == "changed" and calls.count("GetCascadeTrajectorySteps") > 1:
+            current[2]["plannerResponse"]["response"] = "Changed draft"
+        return {"steps": current}
+    monkeypatch.setattr(native, "discover_antigravity_language_server", lambda: {"url": "local", "csrf_token": "test"})
+    monkeypatch.setattr(native, "_rpc_post", read)
+    monkeypatch.setattr(native, "manager_input_matches", lambda *_args, **_kwargs: True)
+    proof = native.AntigravityAdapter.interrupted_answer_observation(cascade_id="native", request_ref="f" * 24,
+        message="Original question", started_at="2026-01-01T00:00:00Z", completed_at="2026-01-01T00:00:10Z",
+        input_anchor={"thread_id": "native", "start_step_index": 0,
+            "input_sha256": "0" * 64 if fault == "wrong-hash" else hashlib.sha256(prompt.encode()).hexdigest()})
+    if fault is None:
+        assert proof["visible_results"] == [{"visible_response": "Existing visible draft"}]
+        assert proof["read_only_review"] is True and proof["no_final_answer"] is True
+        assert "private reasoning" not in json.dumps(proof)
+    else:
+        assert proof is None
+    assert not set(calls) - {"GetCascadeTrajectory", "GetCascadeTrajectorySteps"}
+
+
+@pytest.mark.parametrize("fault", [None, "stop", "source-changed", "no-capacity", "review-action", "review-gate", "queue-change", "already-codex", "post-enqueue-crash", "lost-ack", "new-question-during-answer", "restricted-review", "primary-quota-unreadable", "native-tail", "authenticated-host", "file-read", "file-running", "cleared-answer"])
 def test_original_worker_answers_interrupted_steward_question_once(tmp_path, language_server, monkeypatch, fault):  # noqa: F811
     import loopx.chat_manager as manager_module
     import loopx.chat_runtime as runtime_module
@@ -122,6 +177,8 @@ def test_original_worker_answers_interrupted_steward_question_once(tmp_path, lan
         original = transport.core.read_request(ref)
         failed = runtime.wait_for_turn(session_id=original["session_id"], turn_id=original["turn_id"], timeout_sec=15)
         assert failed["status"] == "failed" and failed["delta_count"] == 0
+        if fault == "cleared-answer":
+            store.update_turn(original["session_id"], original["turn_id"], error_code="runtime_error")
         original_bytes = store._turn_path(original["session_id"], original["turn_id"]).read_bytes()
         path = transport.root / f"{ref}.json"
         transport.reconcile_request(path)
@@ -161,6 +218,22 @@ def test_original_worker_answers_interrupted_steward_question_once(tmp_path, lan
                         (5, "CORTEX_STEP_TYPE_ERROR_MESSAGE", {"errorMessage": {"error": {"errorCode": 429}}})]:
                     steps.append({"type": kind, "status": "CORTEX_STEP_STATUS_DONE", "metadata": {
                         **meta, "executionId": "other-execution", "sourceTrajectoryStepInfo": {"stepIndex": index}}, **payload})
+            if fault == "cleared-answer":
+                # Completion metadata/tool payloads were cleared, but the
+                # original input and visible response survive. A later input
+                # closes this segment; no completed-result adoption is proved.
+                steps = [user,
+                    {"type": "CORTEX_STEP_TYPE_GENERIC", "metadata": {**meta,
+                        "sourceTrajectoryStepInfo": {"stepIndex": 1}}, "generic": {}},
+                    {"type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE", "metadata": {**meta,
+                        "sourceTrajectoryStepInfo": {"stepIndex": 2}},
+                     "plannerResponse": {"response": "Original verified output, not a new execution",
+                        "thinking": "never forward this"}}]
+                for step in steps:
+                    step["status"] = "CORTEX_STEP_STATUS_CLEARED"
+                steps.append({"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE",
+                    "metadata": {**meta, "executionId": "later", "sourceTrajectoryStepInfo": {"stepIndex": 3}},
+                    "userInput": {"items": [{"text": "Later independent question"}]}})
             return {"steps": steps}
         monkeypatch.setattr(native, "_rpc_post", visible_tools)
         if fault == "native-tail":

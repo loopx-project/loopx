@@ -1,5 +1,5 @@
 import {DocumentAttachment, isTextDocument} from "./document-attachment";
-import {AlertCircle, Bot, CalendarClock, CircleHelp, FileText, ListPlus, MessageCircleQuestion, Paperclip, Plus, RefreshCw, Send, X} from "lucide-react";
+import {AlertCircle, Bot, CalendarClock, CircleHelp, FileText, ListPlus, MessageCircleQuestion, Paperclip, Plus, RefreshCw, Send, Square, X} from "lucide-react";
 import {ContextHelp} from "./context-help";
 import {readSettingsRoute, writeSettingsRoute} from "./workspace-settings-route";
 import {hasConfiguredGoalChecks} from "../../data/goal-acceptance-observation";
@@ -11,6 +11,8 @@ import { readSteeringRequest, retainSteeringRequest, retireSteeringRequest, lega
 import { conversationInputKey, useConversationInputState } from "./use-conversation-input-state";
 import { composerKeyAction } from "./composer-keyboard";
 import type { ConversationHistoryStatus } from "../../data/use-conversation-history";
+import { useConversationQueue } from "../../data/use-conversation-queue";
+import { ConversationQueue } from "./conversation-queue";
 import { GoalDraftCard } from "./goal-draft-card";
 import type { GoalDraft } from "../../../../../../loopx/control_plane/collaboration/goal_draft.js";
 import { CollaborationCards } from "./collaboration-card";
@@ -1389,8 +1391,29 @@ export function PersonalWorkspacePage({
   const conversationTurnRunning = !loopxDeliveryOpen && !conversationQueuesFollowUps && Boolean(runningMessage);
   const steeringTurnId = conversationTurnRunning && conversationSupportsSteering && !readOnly
     && callbacks.onSteerConversationTurn ? runningMessage?.sourceTurnId : undefined;
-  const queueTurnId = conversationTurnRunning && !readOnly && callbacks.onQueueConversationTurn
+  const queueTurnId = !loopxDeliveryOpen && !readOnly && callbacks.onQueueConversationTurn
     ? runningMessage?.sourceTurnId : undefined;
+  const interruptTurnId = !readOnly && callbacks.onInterruptConversationTurn
+    ? runningMessage?.sourceTurnId : undefined;
+  const conversationQueue = useConversationQueue({
+    sessionId: !readOnly && !workspaceConversations?.entryGate ? conversationSessionId : undefined,
+    scope: `${statusSourceControl?.activeSource.statusUrl ?? "/status.json"}:${conversationKey}`,
+    active: Boolean(runningMessage || selectedAgentModelReadback?.active_turn_id),
+    refreshKey: `${managerMessages.length}:${Boolean(managerMessages.at(-1)?.pending)}:${steering}`,
+  });
+  const queuedTurnKeys = new Set(conversationQueue.turns.map(turn => JSON.stringify([conversationSessionId, turn.turn_id])));
+  const observedQueueTurn = useRef("");
+  useEffect(() => {
+    const turnId = conversationQueue.activeTurnId;
+    if (!conversationSessionId || !turnId || turnId === runningMessage?.sourceTurnId || !callbacks.onObserveConversationTurn) return;
+    const key = JSON.stringify([statusSourceControl?.activeSource.statusUrl, conversationKey, conversationSessionId, turnId]);
+    if (observedQueueTurn.current === key) return;
+    observedQueueTurn.current = key;
+    void callbacks.onObserveConversationTurn(conversationKey, conversationSessionId, turnId).catch(() => {
+      if (observedQueueTurn.current === key) observedQueueTurn.current = "";
+    });
+  }, [conversationQueue.activeTurnId, conversationQueue.turns, conversationSessionId, runningMessage?.sourceTurnId,
+    callbacks.onObserveConversationTurn, conversationKey, statusSourceControl?.activeSource.statusUrl]);
   const legacyDrafts = conversationSessionId ? legacySteeringRequests(conversationSessionId, composerDraftKey) : [];
   function restoreLegacyDraft(key: string) {
     if (composer.trim() || !conversationSessionId) return;
@@ -1435,6 +1458,7 @@ export function PersonalWorkspacePage({
   );
   const conversationOpen = (!agentWorkActive || managedWorkActive) && (selectedGoal ? selectedGoalTab === "chat" : managerChatOpen);
   const timelineReading = {
+    queuedTurnKeys,
     messageFocus: conversationMessageFocus,
     historyPhase: conversationHistoryState?.phase,
     onRetryHistory: conversationHistoryState?.retry,
@@ -2484,7 +2508,6 @@ export function PersonalWorkspacePage({
           const acceptedImages = new Set(request.attachments?.map(image => image.id));
           setImageAttachments(current => current.filter(image => !acceptedImages.has(image.id)));
         }
-        setActionFeedback(locale === "zh-CN" ? "已排队，将在当前回合结束后处理。" : "Queued for the next turn.");
       } catch (error) {
         if (error instanceof ChatApiError && error.payload.delivery_state === "not_delivered") retireSteeringRequest(composerDraftKey, request.id);
         setActionFeedback(error instanceof Error ? error.message : t("feedback.sendGenericError"));
@@ -2519,7 +2542,7 @@ export function PersonalWorkspacePage({
       } finally { setSteering(false); }
       return;
     }
-    if (intent === "steer" && conversationTurnRunning) {
+    if (intent === "steer" && (conversationTurnRunning || queueTurnId)) {
       setActionFeedback(locale === "zh-CN" ? "此执行器不支持本轮纠偏；可按 Enter 排队，草稿已保留。" : "This executor cannot steer this turn. Press Enter to queue; draft retained.");
       return;
     }
@@ -3200,9 +3223,8 @@ export function PersonalWorkspacePage({
           {retryingSteering && retryingSteering.turnId !== steeringTurnId ? <p className="personal-composer-status" role="status">{locale === "zh-CN"
             ? "上次投递尚未确认，发送将重试原请求。"
             : "The previous delivery is unconfirmed. Send retries the original request."}</p> : null}
-          {conversationTurnRunning ? <p className="personal-composer-status" role="status">{queueTurnId
-              ? (locale === "zh-CN" ? "本轮进行中 · 新消息将在下一轮处理" : "Turn in progress · new messages queue for the next turn")
-              : t("composer.turnRunning")}</p> : null}
+          {conversationSessionId ? <ConversationQueue sessionId={conversationSessionId}
+            targetTurnId={steeringTurnId} turns={conversationQueue.turns} error={conversationQueue.error} onRetry={conversationQueue.retry}/> : null}
             <div
               className="personal-channel-composer"
               onDragOver={(event) => {
@@ -3271,6 +3293,13 @@ export function PersonalWorkspacePage({
                   onEffort={effort => saveModelSettings(() => callbacks.onSelectAgentReasoningEffort?.(selectedAgentId, effort))}
                   onDefaults={selectedGoal && !originalConversation ? () => openSettings({kind: "settings", tab: "conversation"}, true) : undefined}
                 /> : null}
+              {interruptTurnId && callbacks.onInterruptConversationTurn ? <button className="personal-composer-stop"
+                data-turn-id={interruptTurnId}
+                aria-label={locale === "zh-CN" ? "停止当前回合" : "Stop current turn"} type="button"
+                onClick={() => void callbacks.onInterruptConversationTurn!(conversationKey, interruptTurnId).catch(cause =>
+                  setActionFeedback(cause instanceof Error ? cause.message : (locale === "zh-CN" ? "停止失败，请查看当前回合。" : "Stop failed. Check the current turn.")))}>
+                <Square size={16}/>
+              </button> : null}
               <button className="personal-composer-send" aria-label={t("composer.send")} disabled={modelSettingsSaving[composerDraftKey] || (!composer.trim() && imageAttachments.length === 0) || composerBlocked || workspaceUnavailable || (originalConversation && !originalConversation.session?.resumable) || (workspaceConversations?.managed && !workspaceConversations.managed.session?.resumable) || conversationHistoryState?.sendBlocked} onClick={() => void sendMessage()} title={t("composer.sendMessageHint")} type="button"><Send size={18} /></button>
               </div>
             </div>

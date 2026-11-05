@@ -58,6 +58,25 @@ test("settled historical native work permits only one restricted steward answer 
   assert.equal(plan.read_only_review, true);
   assert.equal(plan.quota_attempt, undefined);
   assert.equal(plan.client_turn_id, `external-${ref}-recovery-22-review-1`);
+  const runtimeFailure = {...packet, context_recovery: {...packet.context_recovery,
+    failed_turn: {...failed, error_code: "runtime_error"},
+    native_observation: {...proof, visible_results: [{visible_response: "Existing visible draft"}]}}};
+  const draftReview = planBoundConversationRequest(runtimeFailure);
+  assert.equal(draftReview.recovery_eligible, true);
+  assert.equal(draftReview.answer_review, true);
+  assert.equal(draftReview.read_only_review, true);
+  assert.equal(draftReview.quota_attempt, undefined);
+  for (const result of [{visible_response: ""}, {visible_response: null},
+    {visible_response: "draft", newEffect: true}, {visible_response: "x".repeat(256 * 1024)}]) {
+    assert.notEqual(planBoundConversationRequest({...runtimeFailure,
+      context_recovery: {...runtimeFailure.context_recovery,
+        native_observation: {...proof, visible_results: [result]}}}).recovery_eligible, true);
+  }
+  for (const change of [{source_verified: false}, {stop_observed: true}, {steering_observed: true},
+    {attachments_present: true}, {queued_input_present: true}, {metadata_capacity: null}]) {
+    assert.notEqual(planBoundConversationRequest({...runtimeFailure,
+      context_recovery: {...runtimeFailure.context_recovery, ...change}}).recovery_eligible, true);
+  }
   const fileResult = {file_uri: "file:///authorized/existing-result.txt", content: "Original visible file result"};
   assert.equal(planBoundConversationRequest({...packet, context_recovery: {...packet.context_recovery,
     native_observation: {...proof, visible_results: [...proof.visible_results, fileResult]}}}).recovery_eligible, true);

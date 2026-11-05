@@ -414,8 +414,15 @@ class AntigravityAdapter:
             if len(current) > 128 or raw != read("GetCascadeTrajectorySteps", startIndex=start, endIndex=total).get("steps") or before != read("GetCascadeTrajectory"):
                 return None
             user, terminal = current[0], current[-1]
+            # A cleared historical segment can retain visible answer text while
+            # losing its completion marker and tool payloads. It is not a
+            # verified final or evidence that effects did not occur. Only the
+            # existing restricted answer review may consume this text.
+            cleared_answer = (end < total
+                and terminal.get("type") == "CORTEX_STEP_TYPE_PLANNER_RESPONSE"
+                and all(step.get("status") == "CORTEX_STEP_STATUS_CLEARED" for step in current))
             if (user.get("type") != "CORTEX_STEP_TYPE_USER_INPUT"
-                    or terminal.get("type") != "CORTEX_STEP_TYPE_ERROR_MESSAGE"):
+                    or not cleared_answer and terminal.get("type") != "CORTEX_STEP_TYPE_ERROR_MESSAGE"):
                 return None
             meta = user["metadata"]
             execution = meta.get("executionId")
@@ -429,15 +436,28 @@ class AntigravityAdapter:
             results = []
             for step in current:
                 step_execution = (step.get("metadata") or {}).get("executionId")
-                if (step.get("status") != "CORTEX_STEP_STATUS_DONE"
-                        or step_execution != execution and not (step is terminal and step_execution is None)):
+                if (step.get("status") != ("CORTEX_STEP_STATUS_CLEARED" if cleared_answer else "CORTEX_STEP_STATUS_DONE")
+                        or step_execution != execution and not (not cleared_answer and step is terminal and step_execution is None)):
                     return None
                 kind = step.get("type")
                 payload = {"CORTEX_STEP_TYPE_USER_INPUT": "userInput", "CORTEX_STEP_TYPE_PLANNER_RESPONSE": "plannerResponse",
                     "CORTEX_STEP_TYPE_RUN_COMMAND": "runCommand", "CORTEX_STEP_TYPE_VIEW_FILE": "viewFile",
                     "CORTEX_STEP_TYPE_ERROR_MESSAGE": "errorMessage"}.get(kind)
+                if cleared_answer:
+                    payload = {"CORTEX_STEP_TYPE_USER_INPUT": "userInput",
+                        "CORTEX_STEP_TYPE_PLANNER_RESPONSE": "plannerResponse",
+                        "CORTEX_STEP_TYPE_GENERIC": "generic", "CORTEX_STEP_TYPE_CHECKPOINT": "checkpoint",
+                        "CORTEX_STEP_TYPE_SYSTEM_MESSAGE": "systemMessage"}.get(kind)
                 if payload is None or set(step) - {"type", "status", "metadata", payload}:
                     return None
+                if cleared_answer:
+                    if step is terminal:
+                        planner = step.get("plannerResponse") or {}
+                        text = planner.get("modifiedResponse") or planner.get("response")
+                        if planner.get("toolCalls") or not isinstance(text, str) or not text.strip():
+                            return None
+                        results.append({"visible_response": text})
+                    continue
                 if kind == "CORTEX_STEP_TYPE_RUN_COMMAND":
                     command = step["runCommand"]
                     if command.get("blocking") is not True or type(command.get("exitCode")) is not int:
