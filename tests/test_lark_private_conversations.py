@@ -118,7 +118,7 @@ def test_original_post_image_preflight_recovery_keeps_images_source_and_failed_t
 
 
 @pytest.mark.parametrize("fault", [None, "stop", "source-changed", "later-source", "no-capacity", "native-tool",
-    "stop-after-discovery", "source-changed-after-discovery"])
+    "stop-after-discovery", "source-changed-after-discovery", "later-source-after-discovery"])
 def test_original_worker_continues_proven_unstarted_argon_quota_on_codex(tmp_path, language_server, monkeypatch, fault):  # noqa: F811
     from copy import deepcopy
     from datetime import timedelta
@@ -180,6 +180,16 @@ def test_original_worker_continues_proven_unstarted_argon_quota_on_codex(tmp_pat
                 transitions.append(session_id)
             return update_session(session_id, **changes)
         monkeypatch.setattr(store, "update_session", checked_update)
+        if fault in {None, "later-source-after-discovery"}:
+            pending = transport.core.pending
+            scans = []
+            def counted_pending():
+                scans.append(True)
+                return pending()
+            monkeypatch.setattr(transport.core, "pending", counted_pending)
+            discovery = transport.core.context_recovery_observer()
+            assert discovery(ref) and discovery(ref)
+            assert len(scans) == 1  # One full source inventory per discovery pass.
         if fault in {"stop-after-discovery", "source-changed-after-discovery"}:
             assert path in transport.pending_delivery_paths()
         if fault in {"stop", "stop-after-discovery"}:
@@ -187,13 +197,19 @@ def test_original_worker_continues_proven_unstarted_argon_quota_on_codex(tmp_pat
             original_events = store.events_after(original["session_id"], original["turn_id"], None)
         elif fault in {"source-changed", "source-changed-after-discovery"}:
             provider.messages[event["message_id"]]["content"] = "Changed original input"
-        elif fault == "later-source":
+        elif fault in {"later-source", "later-source-after-discovery"}:
             transport.admit("steward-app", provider.event("steward-app", "source-correction", "/status"))
             # A later ordinary source is observed without creating model work.
             later = deepcopy(original)
             later.update(request_ref="e" * 24, created_at=(datetime.now().astimezone() + timedelta(seconds=1)).isoformat())
             from loopx.chat_store import _atomic_write_json
             _atomic_write_json(transport.core.root / f"{later['request_ref']}.json", later)
+            if fault == "later-source-after-discovery":
+                before_discovery = len(scans)
+                assert discovery(ref)  # Retained hint, never permission to dispatch.
+                assert len(scans) == before_discovery
+                transport.core.context_recovery_observer()(ref)
+                assert len(scans) == before_discovery + 1  # A new pass observes the new source input.
         elif fault == "native-tool":
             post = antigravity_adapter._rpc_post
             def with_tool(*args, **kwargs):
