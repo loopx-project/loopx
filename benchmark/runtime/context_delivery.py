@@ -12,7 +12,8 @@ import shlex
 from pathlib import Path
 
 
-def preflight_context_instruction(env: dict[str, str], path: Path, digest: str, turn_id: str) -> str:
+def preflight_context_instruction(env: dict[str, str], path: Path, digest: str, turn_id: str, *,
+                                  guide_in_host: bool = False) -> str:
     """Delay presentation of the original preflight until its native tool call.
 
     Keep the original source/hash. The product's lifecycle owner chooses the
@@ -28,7 +29,7 @@ def preflight_context_instruction(env: dict[str, str], path: Path, digest: str, 
         "--turn-instance-id", turn_id, "--context-delivery", "on", "--runtime-profile", "generic_cli", "--codex-context-dir", env["LOOPX_CODEX_CONTEXT_DIR"]]
     recovery_index = [*prefix, "context-read", *source, "--list"]
     return ("Present that same immutable packet with:\n```sh\n" + shlex.join(project)
-        + "\n```\n" + CONTEXT_CAPTURE_NAVIGATION_GUIDANCE
+        + "\n```\n" + ("" if guide_in_host else CONTEXT_CAPTURE_NAVIGATION_GUIDANCE)
         + "If the projection command itself fails, recover necessary facts from the same original capture. "
         "When pointers are unknown, discover them with:\n```sh\n" + shlex.join(recovery_index)
         + "\n```\nUse the same capture's generic reader and selectors for the facts the current decision needs. "
