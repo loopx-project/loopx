@@ -37,7 +37,7 @@ def _turn_envelope_result(
     complete = isinstance(payload, Mapping) and payload.get("schema_version") == "loopx_turn_envelope_v1"
     token_source = payload if isinstance(payload, Mapping) else params
     if complete or operation in {"reference_context", "reference_replan_authoring",
-            "reference_vision_continuation", "compose_complete", "context_delivery", "context_recovery",
+            "compose_complete", "context_delivery", "context_recovery",
             "progressive_context_delivery", "context_read_sections"}:
         tokens = source_number_tokens(token_source)
         if tokens:

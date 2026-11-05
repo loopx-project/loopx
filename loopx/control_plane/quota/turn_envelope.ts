@@ -819,6 +819,8 @@ function replanView(request: JsonObject): JsonObject {
   // captures keep their decoder; modern captures must pass their shared owner.
   if (Object.hasOwn(payload, "schema_version") || Object.hasOwn(payload, "contract_binding")) {
     requireCompleteTurnDecision(payload, request.source_number_tokens);
+  } else {
+    requireVisionAuditReferences(payload);
   }
   const packet = object(payload.replan_action_packet);
   const obligation = object(payload.autonomous_replan_obligation);
@@ -2127,11 +2129,6 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     const {decision, projection} = completeHostSource(request);
     return {goal_id: decision.goal_id ?? null, ...projection};
   }
-  if (operation === "reference_vision_continuation") {
-    const source = requireJsonObject(request.payload, "vision audit sharing source");
-    return contextProjectionChanges(source, referenceVisionContinuation(source,
-      contextSourceIdentity(source, request.source_number_tokens)));
-  }
   if (operation === "reference_replan_authoring") {
     const source = requireJsonObject(request.payload, "authoring sharing source");
     return contextProjectionChanges(source, referenceReplanAuthoring(source,
@@ -2258,6 +2255,8 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
   if (operation === "reference_context") {
     const source = requireJsonObject(request.payload, "quota decision");
     let payload = source;
+    if (request.vision_audit === true) payload = referenceVisionContinuation(source,
+      contextSourceIdentity(source, request.source_number_tokens));
     if (jsonObject(request.diagnostics)) payload = projectQuotaDiagnostics(payload, request.diagnostics as JsonObject);
     if (request.goal_acceptance === true) payload = referenceGoalAcceptance(payload,
       contextSourceIdentity(source, request.source_number_tokens));

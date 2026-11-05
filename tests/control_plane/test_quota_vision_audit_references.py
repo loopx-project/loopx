@@ -370,7 +370,51 @@ def test_real_guard_capture_and_recovery_preserve_vision_before_effects(
         cwd=project,
     )
     assert rc != 0 and "Vision audit reference" in json.dumps(refused)
+    # The same conflicting projection must be rejected in a historical capture
+    # with an independently matching file digest and no current inner binding.
+    historical = {key: value for key, value in invalid.items() if key not in {"schema_version", "contract_binding"}}
+    invalid_path.write_text(json.dumps(historical))
+    rc, refused = _run_cli(registry, runtime, "quota", "replan-view", "--decision-file", str(invalid_path),
+        "--source-hash", _source_digest(historical), "--replan-stage", "review", cwd=project)
+    assert rc != 0 and "Vision audit reference" in json.dumps(refused)
     assert state.read_bytes() == original_state and _spend_run_count(runtime) == 0
+
+
+def test_review_accepts_a_valid_historical_audit_and_refuses_a_conflicting_stop():
+    from loopx.control_plane.quota.turn_envelope import _turn_envelope_result
+
+    source = compact_quota_should_run_cli_payload(packet())
+
+    def review():
+        digest = build_turn_envelope(source)["action_signature"]["source_decision_hash"]
+        return _turn_envelope_result("replan_view", payload=source, source_hash=digest, stage="review")
+
+    assert review()["core_goal"]["objective"] == source["autonomous_replan_obligation"]["replan_context"]["core_goal"]["objective"]
+    nested(source)[1]["vision_continuation_audit"]["vision_gap_judge"]["done"] = True
+    with pytest.raises(RuntimeError, match="Vision audit reference"):
+        review()
+
+
+def test_display_shares_audit_in_one_rpc_and_keeps_unrelated_sources_local(monkeypatch):
+    from loopx.control_plane.quota import turn_envelope
+
+    source = packet()
+    observation = {"source": "future_observation", "content": {"counter": 2**60 + 1}}
+    source["interaction_contract"]["agent_channel"]["work_context"]["sources"] = [observation]
+    operations = []
+    evaluate = turn_envelope.effect_runtime_projection_result
+
+    def observe(method, params, **kwargs):
+        operations.append(params["operation"])
+        assert "future_observation" not in json.dumps(params)
+        return evaluate(method, params, **kwargs)
+
+    monkeypatch.setattr(turn_envelope, "effect_runtime_projection_result", observe)
+    shared = compact_quota_should_run_cli_payload(source)
+    assert operations.count("reference_context") == 1
+    assert "reference_vision_continuation" not in operations
+    assert shared["interaction_contract"]["agent_channel"]["work_context"]["sources"] == [observation]
+    assert nested(shared)[0]["vision_continuation_audit"]["projection_ref"] == "$.vision_continuation_audit"
 
 
 def test_short_audit_remains_inline_without_reference_overhead(share):
