@@ -77,6 +77,16 @@ def test_unconfirmed_material_reaches_next_turn_work_from_current_capture(
     _, warm = project(tmp_path, "next-turn", payload=current)
     assert warm["mode"] == "delta"
     required = json.loads(Path(warm["recovery"]["path"]).read_bytes())
+    from loopx.control_plane.quota.turn_envelope import restore_context_delivery
+
+    current_capture = {"schema_version": warm["schema_version"], "mode": "full",
+        "target": warm["target"], "context": required}
+    restored = restore_context_delivery(warm, baseline=first, current=current_capture)
+    assert restored["mode"] == "delta" and restored["context"] == required
+    damaged = copy.deepcopy(warm)
+    damaged["changes"] = {"value": required}  # Same output, but an unauthorized alternative change tree.
+    rejected = restore_context_delivery(damaged, baseline=first, current=current_capture)
+    assert rejected["reason"] == "automatic_full_recovery" and rejected["context"] == required
     index = required["context_details"]["unread_context_index"]
     assert index["coverage_confirmed"] is False
     assert Path(index["source"]["path"]).name == "projection.json"
