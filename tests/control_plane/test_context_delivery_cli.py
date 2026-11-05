@@ -662,7 +662,7 @@ def test_native_projection_never_layers_host_projection(tmp_path, monkeypatch, n
             pytest.fail("failed native directory preparation must not reach projection")
         if native_failure == "projection":
             raise OSError("native observation unavailable")
-        return {"native_projection": payload}
+        return codex_context.NativeContextPreparation({"native_projection": payload})
 
     def unavailable_directory(**kwargs):
         raise OSError("native directory unavailable")
@@ -671,7 +671,7 @@ def test_native_projection_never_layers_host_projection(tmp_path, monkeypatch, n
         raise OSError("synthetic reader metadata unavailable")
 
     monkeypatch.setattr(quota, "project_captured_context", competing)
-    monkeypatch.setattr(codex_context, "project_codex_context", native)
+    monkeypatch.setattr(codex_context, "prepare_codex_context", native)
     if native_failure == "directory":
         monkeypatch.setattr(codex_context, "codex_context_directory", unavailable_directory)
     elif native_failure == "reader_reference":
@@ -699,7 +699,7 @@ def test_plain_quota_context_default_does_not_touch_transport(tmp_path, monkeypa
 
     def unexpected(*args, **kwargs):
         pytest.fail("off must not observe native context or create transport state")
-    monkeypatch.setattr(codex_context, "project_codex_context", unexpected)
+    monkeypatch.setattr(codex_context, "prepare_codex_context", unexpected)
     project, runtime, registry = _write_fixture(tmp_path)
     state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     initialize_canonical_authority(runtime, GOAL_ID,

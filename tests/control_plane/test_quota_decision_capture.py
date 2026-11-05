@@ -721,7 +721,7 @@ def test_native_recovery_failure_keeps_original_receipt_and_capture(
             'Read the saved original decision/receipt; do not rerun admission.'
         )
 
-    monkeypatch.setattr(codex_context, 'project_codex_context', refuse_recovery)
+    monkeypatch.setattr(codex_context, 'prepare_codex_context', refuse_recovery)
     args = ['--registry', str(registry), '--runtime-root', str(runtime), '--format', 'json',
         'quota', 'should-run', '--goal-id', GOAL_ID, '--agent-id', AGENT_ID,
         '--todo-id', TODO_ID, '--turn-instance-id', TURN_ID, '--codex-app',
