@@ -236,6 +236,7 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
   const [history, setHistory] = useState(false);
   const [pages, setPages] = useState<ConversationRequestInventory[]>([]);
   const [busy, setBusy] = useState(false);
+  const [cancelled, setCancelled] = useState(false);
   const [error, setError] = useState(false);
   const [noSession, setNoSession] = useState(false);
   const [revision, setRevision] = useState(0);
@@ -259,7 +260,7 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
     && (sessionId ? loadedSource.current === sessionId : ownerFallback)
     && loadedScope.current === otherViewScope;
   useEffect(() => {
-    setOpen(false); setHistory(false); setPages([]); setError(false); setSearch(""); setSearchDraft("");
+    setOpen(false); setHistory(false); setPages([]); setError(false); setCancelled(false); setBusy(false); setSearch(""); setSearchDraft("");
     loadedScope.current = null; loadedSource.current = null;
     requestedRows.current = 12;
   }, [sessionId, ownerFallback]);
@@ -281,7 +282,7 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
     const current = ++generation.current;
     requestAbort.current?.abort();
     const abort = new AbortController(); requestAbort.current = abort;
-    setBusy(true); setError(false); setNoSession(false); setConversationChanged(false);
+    setBusy(true); setCancelled(false); setError(false); setNoSession(false); setConversationChanged(false);
     const sameScope = loadedScope.current === scope;
     const loadedRows = pages.reduce((count, page) => count + page.rows.length, 0);
     // A fresh snapshot or parent refresh must retain the page requested by
@@ -349,19 +350,26 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
   const recipients = [...new Set(rows.map(row => `${row.goal_id}\n${row.agent_id}`))];
   const count = error || !page ? "—" : unknown ? (page.pending_count ? `${page.pending_count}+` : "—") : page.pending_count;
   const title = zh ? "委派" : "Delegations";
+  const cancelRead = () => {
+    // Abort only this reader. The server may still finish its read; its late
+    // response must not replace the last published view or a subsequent retry.
+    generation.current++; requestAbort.current?.abort(); requestAbort.current = null;
+    setBusy(false); setCancelled(true);
+  };
   const changeHistory = (value: boolean) => {
-    if (value === history) return;
+    if (value === history && !cancelled) return;
     generation.current++; requestAbort.current?.abort();
-    setBusy(true); setError(false); setHistory(value);
+    setBusy(true); setCancelled(false); setError(false); setHistory(value);
+    setRevision(value => value + 1);
   };
   const applySearch = (value: string) => {
     // Fence immediately, including the interval before the effect starts.
     generation.current++; requestAbort.current?.abort();
     requestedRows.current = 12;
-    setPages([]); setError(false); setBusy(true); setSearch(value.trim());
+    setPages([]); setError(false); setCancelled(false); setBusy(true); setSearch(value.trim());
     setRevision(value => value + 1);
   };
-  const close = () => {generation.current++; requestAbort.current?.abort(); requestedRows.current = 12; setBusy(false); setOpen(false); trigger.current?.focus();};
+  const close = () => {generation.current++; requestAbort.current?.abort(); requestedRows.current = 12; setBusy(false); setCancelled(false); setOpen(false); trigger.current?.focus();};
   return <div className="conversation-requests-entry">
     <button ref={trigger} type="button" onClick={() => {
       // Reopening always starts with follow-up, including after an interrupted switch.
@@ -383,7 +391,9 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
         <button type="button" aria-pressed={shownHistory} aria-busy={busy && history} onClick={() => changeHistory(true)}>{zh ? "全部记录" : "All records"}
           {busy && history ? <RefreshCw size={14} className="motion-safe:animate-spin" aria-hidden/> : null}</button>
         {conversationChanged ? <span className="conversation-requests-changed" role="status">{zh ? "对话有更新" : "Conversation updated"}</span> : null}
-        <button type="button" disabled={busy} onClick={() => setRevision(value => value + 1)} aria-label={zh ? "刷新委派" : "Refresh delegations"}><RefreshCw size={16}/></button>
+        <button type="button" onClick={() => busy ? cancelRead() : setRevision(value => value + 1)}
+          aria-label={busy ? (zh ? "取消读取委派" : "Cancel delegation read") : (zh ? "刷新委派" : "Refresh delegations")}>
+          {busy ? <><X size={16}/><span>{zh ? "取消读取" : "Cancel read"}</span></> : <RefreshCw size={16}/>}</button>
       </nav>
       <form className="conversation-requests-search" role="search" onSubmit={event => {event.preventDefault(); applySearch(searchDraft);}}>
         <input type="search" value={searchDraft} maxLength={200}
@@ -394,6 +404,9 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
         {search || searchDraft ? <button type="button" onClick={() => {setSearchDraft(""); applySearch("");}}>{zh ? "清空" : "Clear"}</button> : null}
       </form>
       <div className="conversation-requests-body" aria-busy={busy}>
+        {cancelled ? <p role="status">{rows.length
+          ? (zh ? "已取消读取，显示上次记录。" : "Read cancelled. Showing previous records.")
+          : (zh ? "已取消读取。" : "Read cancelled.")}</p> : null}
         {error ? <p role="alert">{zh ? "委派记录暂时无法核验。" : "Delegation records cannot be verified."} <button type="button" onClick={() => setRevision(value => value + 1)}>{zh ? "重试" : "Retry"}</button></p> : null}
         {busy && !rows.length ? <><p role="status">{zh ? "正在读取委派…" : "Loading delegations…"}</p>
           <div className="conversation-requests-loading" aria-hidden="true">{Array.from({length: 6}, (_, index) => <span key={index}/>)}</div></> : null}

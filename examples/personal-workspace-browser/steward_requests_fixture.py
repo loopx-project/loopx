@@ -6,7 +6,7 @@ decisions and return delivery below use the production owners in a temp runtime.
 Commands on stdin: inspect, fault, fault-window, deliver-window, report-window, recover,
 deliver, source-unavailable, source-recover, local-source-unavailable,
 local-source-recover, history-corrupt/history-recover (--long-history only),
-report-partial, complete-partial, stop. Window faults/returns apply
+report-partial, complete-partial, hold, hold-window, continue, release, stop. Window faults/returns apply
 after the first page to challenge multi-window refresh readback.
 """
 from __future__ import annotations
@@ -148,12 +148,24 @@ def main():
             def _request_inventory_read(self):
                 self.server.inventory_reads += 1
                 later_window = parse_qs(urlparse(self.path).query).get("offset", ["0"])[0] != "0"
+                held = self.server.inventory_hold and (not self.server.hold_window or later_window)
+                if held:
+                    print(json.dumps({"event": "inventory-held", "later_window": later_window}), flush=True)
+                    if not self.server.inventory_gate.wait(60):
+                        return self._send_error("Synthetic read gate was not released", status=503)
                 if self.server.fault or (later_window and self.server.fault_window):
                     return self._send_error("Synthetic inventory read failure", status=503)
                 if later_window and self.server.deliver_window:
                     self.server.deliver_window = False
                     drain(runtime, registry, store, lambda *_: None)
-                return super()._request_inventory_read()
+                try:
+                    return super()._request_inventory_read()
+                except (BrokenPipeError, ConnectionResetError):
+                    if not held:
+                        raise
+                finally:
+                    if held:
+                        print(json.dumps({"event": "inventory-finished"}), flush=True)
             def do_GET(self):
                 if urlparse(self.path).path == "/status.json":
                     query = parse_qs(urlparse(self.path).query)
@@ -183,6 +195,9 @@ def main():
         server.runtime_root_override, server.selected_goal_id, server.verbose = str(runtime), None, False
         server.assets_dir = selected.assets_dir or default_chat_assets_dir()
         server.fault, server.posts, server.inventory_reads = False, 0, 0
+        server.inventory_hold, server.hold_window = False, False
+        server.inventory_gate = threading.Event()
+        server.inventory_gate.set()
         server.fault_window, server.deliver_window = False, False
         server.runtime_controller = ChatRuntimeController(store=store, registry_path=registry, codex_bin="unused-fixture-codex")
         server.runtime_controller.capabilities = lambda: [{"agent_id": "codex", "display_name": "Codex",
@@ -207,7 +222,17 @@ def main():
                 command = line.strip()
                 if command == "stop":
                     break
-                if command == "fault":
+                if command in {"hold", "hold-window"}:
+                    server.inventory_gate.clear()
+                    server.inventory_hold, server.hold_window = True, command == "hold-window"
+                elif command == "continue":
+                    # Admit new reads while the cancelled HTTP read remains
+                    # held, so its real late response can challenge a retry.
+                    server.inventory_hold = False
+                elif command == "release":
+                    server.inventory_hold = False
+                    server.inventory_gate.set()
+                elif command == "fault":
                     server.fault = True
                 elif command == "fault-window":
                     server.fault_window = True
@@ -264,6 +289,7 @@ def main():
                     "chat_unchanged": journal.read_bytes() == original_journal,
                     "turn_count": len(list(store.sessions_root.glob("*/turns/*.json")))}), flush=True)
         finally:
+            server.inventory_gate.set()
             server.shutdown()
             server.server_close()
             thread.join(5)
