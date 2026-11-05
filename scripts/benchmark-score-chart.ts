@@ -13,7 +13,7 @@ export function escapeChartText(value: string) {
 }
 
 export function scoreChart(series: ChartSeries[], options: {
-  best: boolean; higherIsBetter: boolean; hours: number; unit: string;
+  best: boolean; higherIsBetter: boolean; hours: number; unit: string; axisDivisor?: number;
   marker?: { from: number; to: number; label: string };
 }) {
   const {best, higherIsBetter, hours, marker} = options;
@@ -44,7 +44,12 @@ export function scoreChart(series: ChartSeries[], options: {
   const width = 960, left = 105, right = 932, top = 37, bottom = 281;
   const x = (hour: number) => (left + (right-left) * hour/hours).toFixed(2);
   const y = (score: number) => (bottom - (bottom-top) * (score-low)/(high-low)).toFixed(2);
-  const precision = Math.max(0, Math.min(12, 1 - Math.floor(Math.log10((high-low)/4))));
+  const divisor = options.axisDivisor ?? 1;
+  if (!Number.isFinite(divisor) || divisor <= 0) throw new Error('Expected a positive score axis divisor');
+  const targetStep = (high-low)/4;
+  const magnitude = 10 ** Math.floor(Math.log10(targetStep));
+  const step = ([1, 2, 2.5, 5, 10].find(n => n*magnitude >= targetStep) ?? 10) * magnitude;
+  const precision = Math.max(0, Math.min(12, 1 - Math.floor(Math.log10(step/divisor))));
   const fmt = new Intl.NumberFormat('en-US', {maximumFractionDigits: precision});
   const title = best ? 'Best observed score' : 'Individual score observations';
   const svg = [`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} 322" role="img" aria-label="${title}" font-family="system-ui,sans-serif" font-size="13" fill="#4c5c59"><title>${title}</title>`];
@@ -54,9 +59,9 @@ export function scoreChart(series: ChartSeries[], options: {
     svg.push(`<rect x="${x(marker.from)}" y="${top}" width="${Number(x(marker.to))-Number(x(marker.from))}" height="${bottom-top}" fill="#edf0ef"/>`,
       `<path d="M${x(marker.to)} ${top}V${bottom}" stroke="#778780" stroke-dasharray="3 5"/><text x="${x(marker.to)}" y="22" text-anchor="middle">${escapeChartText(marker.label)}</text>`);
   }
-  for (let i = 0; i <= 4; i++) {
-    const score = low + (high-low)*i/4;
-    svg.push(`<path d="M${left} ${y(score)}H${right}" stroke="#e4e9e7"/><text x="${left-10}" y="${Number(y(score))+4}" text-anchor="end">${fmt.format(score)}</text>`);
+  for (let tick = Math.ceil(low / step); tick <= Math.floor(high / step); tick++) {
+    const score = tick * step;
+    svg.push(`<path d="M${left} ${y(score)}H${right}" stroke="#e4e9e7"/><text x="${left-10}" y="${Number(y(score))+4}" text-anchor="end">${fmt.format(score / divisor)}</text>`);
   }
   for (let i = 0; i <= 6; i++) {
     const hour = hours*i/6;
