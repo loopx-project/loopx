@@ -26,7 +26,8 @@ def test_saved_projection_checks_original_before_any_publication(tmp_path, failu
         path.rename(source)
         path.symlink_to(source)
     args = ["quota", "context-project", "--capture-file", str(path), "--capture-sha256", digest,
-        "--goal-id", "saved-goal", "--agent-id", "saved-agent", "--turn-instance-id", "saved-turn"]
+        "--goal-id", "saved-goal", "--agent-id", "saved-agent", "--turn-instance-id", "saved-turn",
+        "--context-delivery", "off"]
     for name in ("digest", "goal", "agent", "turn"):
         if failure == name:
             option = {"digest": "--capture-sha256", "goal": "--goal-id", "agent": "--agent-id", "turn": "--turn-instance-id"}[name]
@@ -500,7 +501,7 @@ def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monk
 
 
 @pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"), reason="Explicit native Codex; loopback inference only")
-@pytest.mark.parametrize("host", ["app_server", "benchmark", "benchmark_progressive", "app_machine", "app_code_mode", "app_progressive", "app_progressive_large", "app_program_route", "app_code_mode_program_route"])
+@pytest.mark.parametrize("host", ["app_server", "benchmark", "benchmark_progressive", "app_machine", "app_code_mode", "app_code_mode_async", "app_progressive", "app_progressive_large", "app_program_route", "app_code_mode_program_route"])
 def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, monkeypatch, host):
     from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
@@ -521,6 +522,7 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
     large_capture = host == "app_progressive_large"
     routed_program = host.endswith("_program_route")
     code_mode = host.startswith("app_code_mode")
+    force_async = host == "app_code_mode_async"
     if routed_program and os.name == "nt":
         pytest.skip("POSIX console alias and controlled PATH")
     unicode_requirement = "保留原始目标、范围与停止条件🙂\n" * 120
@@ -591,12 +593,21 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
     rejected_read = False
     reading_initial = False
     initial_content = {}
+    read_gate = workspace / "reader-may-finish"
+    read_gate_armed = False
+    async_observed = False
 
     def response(request, number, message):
-        nonlocal phase, queue, actual_turn, receipts, rejected_read, reading_initial
+        nonlocal phase, queue, actual_turn, receipts, rejected_read, reading_initial, read_gate_armed, async_observed
         try:
             if continuation := native_process_continuation(request, f"projection_{number}",
                     code_mode=code_mode):
+                if read_gate_armed:
+                    # The child cannot finish before its handle reaches this
+                    # next real native request. No timing luck decides success.
+                    async_observed = True
+                    read_gate.touch()
+                    read_gate_armed = False
                 return continuation
             if reading_initial:
                 name = phase.removesuffix("_read")
@@ -744,14 +755,23 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                         return message
                     return response(request, number, message)
             arguments = {"cmd": command, "max_output_tokens": 22000}
+            if force_async and not async_observed and " quota context-read " in command:
+                wait_code = ("import pathlib,time; p=pathlib.Path(" + repr(str(read_gate)) + "); "
+                    "deadline=time.monotonic()+20\n"
+                    "while not p.exists() and time.monotonic()<deadline: time.sleep(.05)\n"
+                    "assert p.exists(), 'native output handle was not delivered'")
+                arguments["cmd"] = shlex.join([sys.executable, "-c", wait_code]) + " && " + command
+                arguments["yield_time_ms"] = 1000
+                read_gate_armed = True
             if routed_program:
                 # A login shell may replace the controlled PATH before it
                 # executes the otherwise unchanged generated reader command.
                 arguments["login"] = False
             if code_mode:
+                from loopx.control_plane.turn_driver.decision_capture import CODE_MODE_EXEC_RESULT_FORWARDER
                 return {"type": "custom_tool_call", "id": f"fc_{number}", "call_id": f"call_{number}",
-                    "name": "exec", "input": '// @exec: {"max_output_tokens":24000}\ntext((await tools.exec_command('
-                        + json.dumps(arguments) + ')).output);'}
+                    "name": "exec", "input": '// @exec: {"max_output_tokens":24000}\nconst result=await tools.exec_command('
+                        + json.dumps(arguments) + ');' + CODE_MODE_EXEC_RESULT_FORWARDER + ';'}
             # Match the generated native profile's 64000-byte page transport;
             # the old 3000-token tool cap truncated its valid JSON first page.
             return {"type": "function_call", "id": f"fc_{number}", "call_id": f"call_{number}",
@@ -808,6 +828,8 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                 config.write_text(config.read_text().replace("[features]\n", "[features]\ncode_mode=true\n"))
             _app_server(binary, env, workspace, home, True, sandbox="workspace-write")
     assert not errors and phase == "done", (errors, phase, wrong_runtime.exists())
+    if force_async:
+        assert async_observed and read_gate.is_file()
     if routed_program:
         assert set(initial_content) == {"cold"} and not wrong_runtime.exists()
     if benchmark:
@@ -920,7 +942,7 @@ def test_native_discovery_keeps_plugins_out_of_probe_without_changing_solver(tmp
     assert not list(home.rglob("*.pack")), "discovery must not clone a plugin catalog"
 
 
-def test_saved_projection_default_off_ignores_available_native_cache(tmp_path, monkeypatch):
+def test_saved_projection_explicit_off_ignores_available_native_cache(tmp_path, monkeypatch):
     from loopx.cli import build_parser
     from loopx.cli_commands.quota_capture import project_saved_context_capture
     from loopx.control_plane.turn_driver import codex_context
@@ -930,11 +952,12 @@ def test_saved_projection_default_off_ignores_available_native_cache(tmp_path, m
         "heartbeat_receipt": {"turn_instance_id": "t"}}).encode()
     path.write_bytes(raw)
     def unexpected(*args, **kwargs):
-        pytest.fail("default-off saved presentation must not inspect/create native state")
+        pytest.fail("explicit-off saved presentation must not inspect/create native state")
     monkeypatch.setattr(codex_context, "codex_context_directory", unexpected)
     args = build_parser().parse_args(["quota", "context-project", "--capture-file", str(path),
         "--capture-sha256", hashlib.sha256(raw).hexdigest(), "--goal-id", "g", "--agent-id", "a",
-        "--turn-instance-id", "t", "--codex-context-dir", str(root), "--decision-output-root", str(root)])
+        "--turn-instance-id", "t", "--context-delivery", "off",
+        "--codex-context-dir", str(root), "--decision-output-root", str(root)])
     result = project_saved_context_capture(args)
     assert result["ok"] and result["mode"] == "full" and result["path"] == str(path)
     assert not root.exists() and path.read_bytes() == raw

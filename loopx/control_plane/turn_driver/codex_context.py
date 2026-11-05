@@ -18,7 +18,7 @@ import uuid
 from .decision_capture import (
     write_decision_capture, capture_context_projection, CONTEXT_CAPTURE_PAGE_GUIDANCE,
     capture_page_range, read_context_capture_file, CONTEXT_CAPTURE_NAVIGATION_GUIDANCE,
-    CONTEXT_CAPTURE_SELECTION_GUIDANCE,
+    CONTEXT_CAPTURE_SELECTION_GUIDANCE, CONTEXT_CAPTURE_CODE_MODE_GUIDANCE,
     context_capture_read_command,
 )
 from .native_context_profile import (
@@ -267,10 +267,10 @@ def codex_context_recovery_instructions(directory: str, *, goal_id: str, agent_i
         "--max-page-output-bytes", str(page_output_bytes)])
     return (
         _context_continuation_instructions(command) +
-        CONTEXT_CAPTURE_NAVIGATION_GUIDANCE +
+        CONTEXT_CAPTURE_NAVIGATION_GUIDANCE + CONTEXT_CAPTURE_CODE_MODE_GUIDANCE +
         ("The generated native configuration supports 64000-byte context-read outputs and a 20000-token history limit. "
          + _NATIVE_CONTEXT_OUTPUT_GUIDANCE +
-         "Read one continuation per tool call; in code-mode, forward successful stdout directly with text(result.output). "
+         "Read one continuation per tool call. "
          if page_output_bytes == NATIVE_CONTEXT_LARGE_OUTPUT_BYTES else "") +
         "For code-mode reads, size batches against both direct-result and retained-history output limits; "
         "max_output_tokens alone does not establish the latter. Read one output at a time with "
