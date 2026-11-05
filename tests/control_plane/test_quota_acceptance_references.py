@@ -81,14 +81,14 @@ def test_complete_composition_keeps_original_numeric_facts_and_returns_only_edit
     facts = {"scalar": value, "nested": [{"number": value}], "body": "Original supporting material. " * 2048}
     source["future_facts"] = deepcopy(facts)
     original, calls = json.dumps(source), []
-    real = turn_envelope.effect_runtime_result
+    real = turn_envelope.effect_runtime_projection_result
 
     def observed(*args, **kwargs):
         result = real(*args, **kwargs)
         calls.append((args[1], result))
         return result
 
-    monkeypatch.setattr(turn_envelope, "effect_runtime_result", observed)
+    monkeypatch.setattr(turn_envelope, "effect_runtime_projection_result", observed)
     shared = compose_turn_decision(source)
     assert json.dumps(shared["future_facts"]) == json.dumps(facts)
     assert json.dumps(source) == original
@@ -260,7 +260,7 @@ def test_progressive_cli_delivers_complete_acceptance_for_selection_and_replan(t
             chunks.extend(page["content"].encode())
             if page["eof"]:
                 assert len(chunks) == page["total_bytes"]
-                return selected_context_values(chunks)
+                return view["recovery"]["command"], selected_context_values(chunks)
             page = run_reader(page["next_command"])
 
     registry_path = tmp_path / "registry.json"
@@ -278,18 +278,25 @@ def test_progressive_cli_delivers_complete_acceptance_for_selection_and_replan(t
          "--document", str(document), "--expected-provider-revision", before["provider_revision"],
          "--operation-id", "source-requirements", "--execute")
     expected = call("goal-acceptance", "inspect", "--goal-id", GOAL)["goal_acceptance_contract"]
-    guard = first_read("--turn-instance-id", "turn-acceptance-sharing")
+    reader, guard = first_read("--turn-instance-id", "turn-acceptance-sharing")
     assert guard["/effective_action"] == "autonomous_replan_required"
     assert guard["/normal_delivery_allowed"] is False
     assert "/replan_action_packet/writeback" not in guard
-    review = run_reader(guard["/replan_action_packet/review"])
-    assert review["obligation_id"] == guard["/heartbeat_receipt/semantic_replan_obligation_id"]
-    acceptance = review["acceptance_index"]
-    row, = acceptance["outcomes"]
-    assert row["id"] == "export"
-    command = acceptance["read_action_template"].replace("{outcome_ref}", row["outcome_ref"])
+    assert guard["/replan_action_packet/required_outcome"] == "semantic_delta"
+    assert guard["/replan_action_packet/planning_guidance"]
+    assert "blocked" in guard["/replan_action_packet/allowed_terminal"]
+    # The complete contract exposes the source by its first-read JSON pointer,
+    # not by a second replan-view packet. Select its body from that same capture.
+    path, = (key.removesuffix("/id") for key, value in guard.items()
+             if key.endswith("/id") and "/outcome_requirements/outcomes/" in key and value == "export")
+    command = reader + " --select " + path
+    def read_original():
+        page = run_reader(command)
+        assert page["ok"] and page["offset"] == 0 and page["eof"]
+        return selected_context_values(page["content"])[path]
+
     original = expected["outcome_requirements"]["outcomes"][0]
-    assert run_reader(command)["outcome"] == original
+    assert read_original() == original
 
     # A later linked revision must reach the selected caller intact.
     index.write_text("")
@@ -307,10 +314,10 @@ def test_progressive_cli_delivers_complete_acceptance_for_selection_and_replan(t
          "--document", str(document), "--expected-provider-revision", revision,
          "--operation-id", "link-export", "--execute")
     expected = call("goal-acceptance", "inspect", "--goal-id", GOAL)["goal_acceptance_contract"]
-    planning = first_read("--turn-instance-id", "turn-export-planning")
+    _, planning = first_read("--turn-instance-id", "turn-export-planning")
     assert planning["/interaction_contract/agent_channel/delivery_allowed"] is False
     assert "/replan_action_packet/review" not in planning
-    selected = first_read("--todo-id", added["todo_id"], "--turn-instance-id", "turn-export-delivery")
+    _, selected = first_read("--todo-id", added["todo_id"], "--turn-instance-id", "turn-export-delivery")
     assert selected["/normal_delivery_allowed"] is True
     assert selected["/selected_todo/todo_id"] == added["todo_id"]
     assert "/replan_action_packet/review" not in selected
@@ -320,7 +327,7 @@ def test_progressive_cli_delivers_complete_acceptance_for_selection_and_replan(t
     outcome = selected[owner + "/content/goal_acceptance_contract/outcome_requirements/outcomes/0"]
     assert outcome == expected["outcome_requirements"]["outcomes"][0]
     assert original["revision"] < outcome["revision"]
-    assert run_reader(command)["outcome"] == original
+    assert read_original() == original
 
 
 @pytest.mark.parametrize("mutation", ["dangling", "cycle", "self", "unavailable"])

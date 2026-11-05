@@ -319,6 +319,14 @@ export function initialContextReadPointers(context: JsonObject, decisionFields: 
       replan.settlement_only !== true && typeof replan.review === "string" && replan.review) {
     include("replan_action_packet", "review");
     include("replan_action_packet", "guidance");
+  } else if (context.schema_version === "loopx_turn_envelope_v1" &&
+      context.effective_action === "autonomous_replan_required" && replan?.schema_version === "replan_action_packet_v0" &&
+      replan.decision === "replan_required" &&
+      replan.settlement_only !== true) {
+    // The complete contract already carries the review facts: use its own
+    // obligations and the indexed outcome paths below, without another writer.
+    for (const field of ["planning_guidance", "required_outcome", "allowed_terminal"])
+      include("replan_action_packet", field);
   }
   include("agent_lane_next_action", "next_step");
   include("agent_lane_next_action", "next_action_basis");
