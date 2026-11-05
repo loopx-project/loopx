@@ -108,12 +108,25 @@ def retention_plan(bank: Path, policy: dict | None, *, now: float | None = None)
 
 
 def _sync(path: Path) -> None:
-    if os.name == "posix":
-        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(fd)
-        finally:
-            os.close(fd)
+    # `_state` qualifies this transport on POSIX and the rotation moves recovery
+    # points only after that, so skipping the flush here would report a completed
+    # rotation that never made it durable. O_DIRECTORY is POSIX-only and only
+    # hardens the open, so take the flag this host has and keep the guarantee by
+    # refusing anything that is not the directory itself -- the pattern
+    # `file_lock.write_json_atomic` already uses.
+    if os.name != "posix":
+        return
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        _require_directory(os.fstat(fd).st_mode, path)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _require_directory(mode: int, path: Path) -> None:
+    if not stat.S_ISDIR(mode):
+        raise ValueError(f"checkpoint sync target is not a directory: {path}")
 
 
 def _receipt(path: Path, record: dict) -> None:
