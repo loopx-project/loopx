@@ -948,7 +948,8 @@ def bind_capture_selection_transport(payload: dict[str, Any], args: argparse.Nam
         options["--decision-output-root"] = str(Path(selected_root).expanduser().absolute())
     if getattr(args, "decision_handoff_socket", None):
         options["--decision-handoff-socket"] = args.decision_handoff_socket
-    if getattr(args, "context_delivery", "off") != "off":
+    # Selection is part of the same Turn, including a caller's explicit opt-out.
+    if getattr(args, "context_delivery", None) is not None:
         options["--context-delivery"] = args.context_delivery
     if getattr(args, "delta_delivery", None) is not None:
         options["--delta-delivery"] = args.delta_delivery

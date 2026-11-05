@@ -550,6 +550,7 @@ function replanView(request: JsonObject): JsonObject {
   }
   if (request.stage !== "review") throw new EffectRuntimeRequestError("unsupported replan read stage");
   const {core, horizon, acceptanceIndex} = replanGoalContext(payload, reads);
+  const cli = object(object(payload.interaction_contract).cli_channel);
   // Index every captured outcome, including differing context/horizon revisions.
   // Full-content equality alone shares a row; identical IDs do not erase edits.
   const coverage = Array.isArray(context.coverage_ledger) ? context.coverage_ledger.map(object) : [];
@@ -586,7 +587,12 @@ function replanView(request: JsonObject): JsonObject {
     uncovered_frontier: context.uncovered_frontier,
     // Facts and their provenance are the review input. Do not preselect a
     // diagnostic method, candidate route or judgment from observation counts.
-    next: {writeback: reads?.writeback ?? null},
+    // A suggested Todo can already be present before the guard binds it.
+    // Follow the entry's command: its host may already have bound the current
+    // presentation options after this immutable decision was captured.
+    next: cli.selection_required === true
+      ? {selection_required: true, selection_command_ref: "$.interaction_contract.cli_channel.selection_command"}
+      : {writeback: reads?.writeback ?? null},
   };
 }
 
@@ -595,7 +601,7 @@ function replanActionPacket(payload: JsonObject, reads = replanReadCommands(payl
   if (Object.keys(source).length === 0) return null;
   if (reads) return {...compactFields(source, ["schema_version", "decision", "obligation_id", "required_outcome", "allowed_terminal"]),
     review: reads.review, writeback: reads.writeback,
-    guidance: "Read review state and applicable acceptance/evidence; choose the next work and route before reading writeback for its format. Reads grant no authority and require no acknowledgement."};
+    guidance: "Read review state and applicable acceptance/evidence; choose the next work, then follow review.next for Todo selection or writeback. Reads grant no authority and require no acknowledgement."};
   const compact = compactFields(source, [
     "schema_version", "decision", "obligation_id", "uncovered_frontier",
     "required_outcome", "allowed_terminal", "bounded_frontier", "settlement_only", "successor_todo_id", "stride_control",
@@ -904,7 +910,7 @@ function actionProjection(payload: JsonObject, deferSettlement = true): JsonObje
   const recommendedAction = replanPacket
     ? replanSettlementOnly
       ? scalarString(object(object(payload.replan_action_packet).writeback_contract).rule, "replan settlement rule")
-      : replanReadCommands(payload) ? "read replan_action_packet.review, decide from state, then read writeback"
+      : replanReadCommands(payload) ? "read replan_action_packet.review, decide from state, then follow review.next"
       : "apply replan_action_packet and emit one required semantic outcome"
     : text(turn.observation.recommended_action || payload.recommended_action, 480);
   // The signed host action is executable authority, not a display summary.
