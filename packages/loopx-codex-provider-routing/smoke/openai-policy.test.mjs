@@ -18,6 +18,23 @@ test("cooldowns and model-scoped permission failures retain key order without ma
   assert.deepEqual(apiKeys({now:1000,model:"selected-model",keys}),["b","c"]);
   assert.deepEqual(apiKeys({now:1100,model:"selected-model",keys}),["a","b","c"]);
 });
+test("expired rejections yield to alternatives instead of starving a spaced recovery request", () => {
+  const rejected={id:"a",state:"quota_exhausted",observed_at:1000,blocked_until:1300};
+  const keys=[rejected,{id:"b",state:"accepted",observed_at:900},{id:"c"}];
+  assert.deepEqual(apiKeys({now:1400,model:"selected-model",keys}),["b","c","a"]);
+  assert.deepEqual(apiKeys({now:1200,model:"selected-model",keys:[rejected]}),[]);
+  assert.deepEqual(apiKeys({now:1400,model:"selected-model",keys:[rejected]}),["a"],"Expiry permits a future attempt, not a capacity claim");
+  const failures=[rejected,{id:"b",state:"rate_limited",observed_at:800,blocked_until:1200},
+    {id:"c",state:"authentication_failed",observed_at:800,blocked_until:1200}];
+  assert.deepEqual(apiKeys({now:1400,model:"selected-model",keys:failures}),["b","c","a"],"Oldest failures remain eligible with stable ties");
+  const permission={...rejected,state:"permission_denied",blocked_model:"other-model"};
+  assert.deepEqual(apiKeys({now:1400,model:"selected-model",keys:[permission,{id:"b"}]}),["a","b"]);
+  assert.deepEqual(apiKeys({now:1400,model:"other-model",keys:[permission,{id:"b"}]}),["b","a"]);
+  for (const state of ["accepted","failed",undefined]) {
+    assert.deepEqual(apiKeys({now:1400,model:"selected-model",keys:[{...rejected,state},{id:"b"}]}),["a","b"]);
+  }
+  assert.deepEqual(apiKeys({now:1400,model:"selected-model",keys:[{...rejected,observed_at:undefined},{id:"b"}]}),["a","b"]);
+});
 test("only structured streamed quota failures update future key availability", () => {
   for (const code of ["insufficient_quota", "credit_balance_exhausted", "organization_spend_limit_exceeded",
     "project_spend_limit_exceeded", "organization_usage_limit_exceeded", "usage_limit_exceeded",

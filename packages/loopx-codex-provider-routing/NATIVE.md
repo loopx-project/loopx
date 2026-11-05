@@ -154,6 +154,15 @@ balance query or permission to add credits. See the official
 For an HTTP 429 with this code, the existing quota cooldown (300 seconds when
 no `Retry-After` is supplied) replaces the generic rate-limit cooldown.
 
+Version 0.15.3 tries eligible alternatives before a previously rejected key,
+including when the next independently admitted request arrives after its
+cooldown. Among rejected keys, the oldest observation is tried first; ties and
+keys without a known rejection retain configured order. Model-specific
+permission failures affect only that model. An expired rejection remains
+eligible and a subsequent accepted request clears its preference penalty.
+Selection reuses the existing private runtime observations, adds no probes,
+and never retries an admitted stream or overrides the subscription/API role.
+
 **Check connection** only requests the official
 [`GET /v1/models`](https://developers.openai.com/api/reference/resources/models/methods/list).
 It makes no inference call and does not establish spendable quota. Its 401, 403,
