@@ -1,6 +1,6 @@
 import {capturedContextSelection} from "./context_selection.ts";
 import {contextReadSectionDigests, initialContextReadPointers, prepareProgressiveContext, prepareProgressiveContextDelivery} from "./progressive_context.ts";
-import {contextProjectionChanges, projectQuotaDiagnostics} from "./diagnostic_projection.ts";
+import {contextProjectionChanges, contextSourceIdentity, projectQuotaDiagnostics} from "./diagnostic_projection.ts";
 import type { LoopXTurnRouteValue } from "../turn_driver/turn_contract_generated.ts";
 import { EffectiveAction, type QuotaEffectiveActionValue } from "./effective_action.generated.ts";
 import { createHash } from "node:crypto";
@@ -250,6 +250,111 @@ function resolveExploreGuidance(payload: JsonObject, context: JsonObject): JsonO
   })};
 }
 
+/** Existing acceptance carriers only: this is not a general JSON-path codec.
+ * The loaded work context is preferred, then the complete planning/replan facts.
+ */
+function acceptanceCarriers(payload: JsonObject) {
+  // Keep read-only carrier parents attached to their source. The general
+  // object() helper intentionally returns copies for projection callers.
+  const carrierObject = (value: unknown): JsonObject =>
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? value as JsonObject : {};
+  const carriers: {parent: JsonObject; field: string; path: string; parentPath: (string | number)[]}[] = [];
+  const sources = carrierObject(carrierObject(carrierObject(payload.interaction_contract).agent_channel).work_context).sources;
+  if (Array.isArray(sources)) {
+    const index = sources.findIndex(value => {
+      const source = carrierObject(value), content = carrierObject(source.content);
+      return source.source === "goal_acceptance" &&
+        (content.status === undefined || content.status === "loaded") &&
+        Object.keys(carrierObject(content.goal_acceptance_contract)).length > 0;
+    });
+    if (index >= 0) carriers.push({parent: carrierObject(carrierObject(sources[index]).content),
+      field: "goal_acceptance_contract",
+      parentPath: ["interaction_contract", "agent_channel", "work_context", "sources", index, "content"],
+      path: `$.interaction_contract.agent_channel.work_context.sources[${index}].content.goal_acceptance_contract`});
+  }
+  carriers.push(
+    {parent: carrierObject(carrierObject(payload.planning_horizon).core_goal), field: "acceptance_contract",
+      parentPath: ["planning_horizon", "core_goal"],
+      path: "$.planning_horizon.core_goal.acceptance_contract"},
+    {parent: carrierObject(carrierObject(carrierObject(payload.autonomous_replan_obligation).replan_context).core_goal),
+      field: "acceptance_contract", path: "$.autonomous_replan_obligation.replan_context.core_goal.acceptance_contract",
+      parentPath: ["autonomous_replan_obligation", "replan_context", "core_goal"]},
+    {parent: carrierObject(payload.agent_todo_summary), field: "goal_acceptance_contract",
+      parentPath: ["agent_todo_summary"],
+      path: "$.agent_todo_summary.goal_acceptance_contract"},
+  );
+  return carriers;
+}
+
+function inlineAcceptance(payload: JsonObject, reference: unknown): JsonObject {
+  // Older captures may name any loaded work-context carrier, not only the
+  // preferred first source chosen for new sharing.
+  const match = typeof reference === "string"
+    ? /^\$\.interaction_contract\.agent_channel\.work_context\.sources\[(0|[1-9]\d*)\]\.content\.goal_acceptance_contract$/.exec(reference) : null;
+  if (match) {
+    const sources = object(object(object(payload.interaction_contract).agent_channel).work_context).sources;
+    const source = object(Array.isArray(sources) ? sources[Number(match[1])] : null);
+    const content = object(source.content);
+    if (source.source === "goal_acceptance" &&
+        (content.status == null || content.status === "loaded") &&
+        !Object.hasOwn(content, "goal_acceptance_contract_ref") &&
+        Object.keys(object(content.goal_acceptance_contract)).length) {
+      return object(content.goal_acceptance_contract);
+    }
+  }
+  const carrier = acceptanceCarriers(payload).find(item => item.path === reference);
+  const value = object(carrier?.parent[carrier.field]);
+  if (!carrier || Object.hasOwn(carrier.parent, `${carrier.field}_ref`) || !Object.keys(value).length) {
+    throw new EffectRuntimeRequestError("Goal acceptance reference must resolve to complete inline work context or planning facts");
+  }
+  return value;
+}
+
+function referenceGoalAcceptance(payload: JsonObject,
+    identity = contextSourceIdentity(payload)): JsonObject {
+  let result = payload;
+  // Copy only a changed registered carrier's spine. Retained source objects
+  // keep their identity for the display-edit transport and original numbers.
+  const writableParent = (path: (string | number)[]): JsonObject => {
+    result = {...result};
+    let target: Record<string | number, unknown> = result;
+    for (const key of path) {
+      const value = target[key];
+      target[key] = Array.isArray(value) ? [...value] : {...requireJsonObject(value, "acceptance carrier")};
+      target = target[key] as Record<string | number, unknown>;
+    }
+    return target;
+  };
+  const owners = new Map<string, string>();
+  const relocated = new Map<string, string>();
+  const carriers = acceptanceCarriers(payload);
+  for (const {parent, field, path, parentPath} of carriers) {
+    const value = object(parent[field]);
+    if (!Object.keys(value).length || Object.hasOwn(parent, `${field}_ref`)) continue;
+    // Complete canonical JSON distinguishes booleans/numbers, revisions,
+    // provenance and negative evidence. Never deduplicate a prose summary.
+    const encoded = identity(value, [...parentPath, field]);
+    const owner = owners.get(encoded);
+    if (!owner) owners.set(encoded, path);
+    else if (Buffer.byteLength(JSON.stringify(canonicalValue(value)), "utf8") > Buffer.byteLength(owner, "utf8") + 8) {
+      const target = writableParent(parentPath);
+      delete target[field];
+      target[`${field}_ref`] = owner;
+      relocated.set(path, owner);
+    }
+  }
+  // A historical source can already reference a carrier that was just shared.
+  // Rebind that exact reference to the retained inline owner, never a chain.
+  for (const {parent, field, parentPath} of carriers) {
+    const reference = parent[`${field}_ref`];
+    if (typeof reference === "string" && relocated.has(reference)) {
+      writableParent(parentPath)[`${field}_ref`] = relocated.get(reference);
+    }
+  }
+  return result;
+}
+
 function referenceExploreGuidance(payload: JsonObject): JsonObject {
   const interaction = object(payload.interaction_contract), agent = object(interaction.agent_channel);
   const context = object(agent.work_context);
@@ -401,18 +506,9 @@ function replanGoalContext(payload: JsonObject, reads: JsonObject | null, coreRe
   function indexedGoal(value: unknown): JsonObject {
     const core = {...object(value)};
     if (!("acceptance_contract" in core) && "acceptance_contract_ref" in core) {
-      const match = typeof core.acceptance_contract_ref === "string"
-        ? /^\$\.interaction_contract\.agent_channel\.work_context\.sources\[(0|[1-9]\d*)\]\.content\.goal_acceptance_contract$/.exec(core.acceptance_contract_ref) : null;
-      const sources = object(object(object(payload.interaction_contract).agent_channel).work_context).sources;
-      const source = object(match && Array.isArray(sources) ? sources[Number(match[1])] : null);
-      const content = object(source.content);
-      if (!match || source.source !== "goal_acceptance"
-        || content.status != null && content.status !== "loaded"
-        || !Object.keys(object(content.goal_acceptance_contract)).length) {
-        throw new EffectRuntimeRequestError("Goal acceptance reference must resolve to complete inline work context");
-      }
+      const acceptance = inlineAcceptance(payload, core.acceptance_contract_ref);
       delete core.acceptance_contract_ref;
-      core.acceptance_contract = content.goal_acceptance_contract;
+      core.acceptance_contract = acceptance;
     }
     const acceptance = {...object(core.acceptance_contract)};
     const requirements = object(acceptance.outcome_requirements);
@@ -1495,6 +1591,8 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     const source = requireJsonObject(request.payload, "quota decision");
     let payload = source;
     if (jsonObject(request.diagnostics)) payload = projectQuotaDiagnostics(payload, request.diagnostics as JsonObject);
+    if (request.goal_acceptance === true) payload = referenceGoalAcceptance(payload,
+      contextSourceIdentity(source, request.source_number_tokens));
     if (request.task_title === true) payload = referenceCurrentTaskTitle(payload);
     if (request.explore_guidance === true) payload = referenceExploreGuidance(payload);
     if (request.refresh_result === true) payload = referenceExploreResultDelivery(payload, request.source_number_tokens);

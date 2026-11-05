@@ -4,6 +4,7 @@ import {reportDownloadScenario} from "./personal-workspace-browser/report-downlo
 import { selectScenarioShard } from "./personal-workspace-browser/shard.mjs";
 import {completedHistoryIsolationScenario} from "./personal-workspace-browser/completed-history-isolation.mjs";
 import {researchWorkerReadbackScenario} from "./personal-workspace-browser/research-worker-readback.mjs";
+import {researchSourceRecoveryScenario} from "./personal-workspace-browser/research-source-recovery.ts";
 import {researchTurnCostsScenario} from "./personal-workspace-browser/research-turn-costs.mjs";
 import {researchToolContextScenario} from "./personal-workspace-browser/research-tool-context.mjs";
 import { zcodeGoalScenario } from "./personal-workspace-browser/zcode-goal.mjs";
@@ -134,6 +135,7 @@ scenarioCatalog.push(exploreCompositionOwnerScenario);
 scenarioCatalog.push(attentionUserActionScenario);
 scenarioCatalog.push(researchResultsScenario);
 scenarioCatalog.push(researchRealBenchmarkScenario);
+scenarioCatalog.push(researchSourceRecoveryScenario);
 scenarioCatalog.push(researchHistoryScenario);
 scenarioCatalog.push(researchMeasurementsScenario);
 scenarioCatalog.push(researchToolContextScenario, researchTurnCostsScenario);

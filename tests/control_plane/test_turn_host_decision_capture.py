@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
+import os
 import shlex
 import subprocess
 import sys
@@ -125,6 +127,22 @@ def test_real_host_reads_original_capture_after_source_change(
     if first_attempt_fails:
         retry = [*replay, "--resume-turn-key", request["turn_key"], "--retry-failed-turn", "--execute"]
         received_before = (workspace / "received.txt").read_bytes()
+        if hasattr(os, "mkfifo"):
+            journal_before_fifo = journal_path.read_bytes()
+            path.unlink()
+            os.mkfifo(path, 0o600)
+            # Bound the real recovery process: opening a pipe in blocking mode
+            # would wait for an absent writer under the Turn journal lock.
+            rejected_pipe = subprocess.run(
+                [sys.executable, "-m", "loopx.entrypoint", *retry], capture_output=True, timeout=15,
+            )
+            assert rejected_pipe.returncode == 1
+            assert "regular file" in json.loads(rejected_pipe.stdout)["error"]
+            assert journal_path.read_bytes() == journal_before_fifo
+            assert (workspace / "received.txt").read_bytes() == received_before
+            assert f._quota_spend_count(runtime) == 0
+            path.unlink()
+            path.write_bytes(original)
         for corrupt in (True, False):
             if corrupt:
                 path.write_text(json.dumps({**source_a, "reason": "replaced evidence"}))
@@ -205,3 +223,19 @@ def test_capture_compacts_layout_without_changing_values(tmp_path, caller):
     assert "保留".encode() in raw
     assert b"two  spaces" in raw and b"\\nnew line\\t" in raw
     assert len(raw) < len((json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode())
+
+
+def test_publication_digest_covers_exact_bytes_without_a_file_readback(tmp_path, monkeypatch):
+    from loopx.control_plane.turn_driver.decision_capture import capture_context_projection
+
+    payload = {"requirement": "保留每一条约束。", "counter": 2**80 + 1,
+               "values": [True, 1, -0.0, 1.25, None]}
+    expected = (json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False) + "\n").encode()
+    with monkeypatch.context() as writing:
+        def no_readback(*args, **kwargs):
+            pytest.fail("Publishing this new capture must not reread it merely to hash its bytes")
+        writing.setattr(Path, "read_bytes", no_readback)
+        reference = capture_context_projection(payload, directory=tmp_path)
+    assert Path(reference["path"]).read_bytes() == expected
+    assert reference["sha256"] == hashlib.sha256(expected).hexdigest()
+    assert Path(reference["path"]).stat().st_mode & 0o077 == 0

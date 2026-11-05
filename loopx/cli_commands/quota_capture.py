@@ -24,7 +24,7 @@ from ..control_plane.turn_driver.decision_capture import (
     validate_handoff_socket, CONTEXT_CAPTURE_READ_GUIDANCE, CONTEXT_CAPTURE_PAGE_GUIDANCE, context_capture_read_command,
     CONTEXT_CAPTURE_NAVIGATION_GUIDANCE,
     read_context_capture_file as _read_capture,
-    read_context_read_reference, write_context_read_reference, private_capture_uid,
+    read_context_read_reference, write_context_read_reference, private_capture_uid, read_turn_observation_text,
 )
 from ..control_plane.turn_driver.native_context_profile import (
     NATIVE_CONTEXT_PAGE_BYTES, NATIVE_CONTEXT_PAGE_OUTPUT_BYTES, native_context_page_budget,
@@ -595,13 +595,12 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
 
 
 def project_native_quota_context(payload: dict[str, Any], args: argparse.Namespace, *,
-                                 capture_directory: Path, decision_identity: tuple[str, str],
+                                 capture_directory: Path, capture_id: str, decision_identity: tuple[str, str],
                                  progressive_enabled: bool, reader_argv: list[str] | None) -> dict[str, Any]:
     """Prepare one already-decided native view; callers retain receipt failures."""
     from ..control_plane.turn_driver.codex_context import (
         NativeContextSessionUnavailable, codex_context_directory, prepare_codex_context,
     )
-    capture_id = hashlib.sha256((capture_directory / "decision.json").read_bytes()).hexdigest()
     try:
         directory = codex_context_directory(directory=args.codex_context_dir,
             root=getattr(args, "codex_context_root", None), create=True)
@@ -697,7 +696,7 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
                 or (args.initial_read and args.select)):
             raise ValueError("Use an enabled native JSON context-project with either --initial-read or --select "
                 "at offset zero. Use context-read for replay or continuation.")
-        path, raw, payload = _read_capture(args.capture_file, args.capture_sha256)
+        path, raw, payload = _read_capture(args.capture_file, args.capture_sha256, private=hook_session is not None)
         identity = payload.get("agent_identity")
         receipt = payload.get("heartbeat_receipt")
         if (payload.get("ok") is not True or not isinstance(identity, dict) or not isinstance(receipt, dict)
@@ -837,6 +836,13 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
 
 def prepare_quota_capture(args: argparse.Namespace, directory: Path | None) -> Path | None:
     """Validate transport options before allocating a new guard capture."""
+    if getattr(args, "prepared_capture_reference", False) and (
+        args.quota_command != "should-run" or args.format != "json"
+        or not getattr(args, "decision_output_dir", None) or not getattr(args, "turn_instance_id", None)
+        or getattr(args, "decision_handoff_socket", None) or getattr(args, "turn_envelope", False)
+        or (native_context_activation(args)["enabled"] and not getattr(args, "defer_context_presentation", False))
+    ):
+        raise QuotaCommandValidationError("prepared capture reference requires an explicit Turn and raw JSON capture")
     if getattr(args, "defer_context_presentation", False) and (
         args.quota_command != "should-run" or args.format != "json"
         or not native_context_activation(args)["enabled"]
@@ -908,13 +914,13 @@ def prepare_decision_capture(args: argparse.Namespace) -> Path | None:
     return directory
 
 
-def capture_decision(directory: Path | None, payload: dict[str, object]) -> None:
+def capture_decision(directory: Path | None, payload: dict[str, object]) -> str | None:
     if directory is None:
         return
     from ..control_plane.turn_driver.decision_capture import write_decision_capture
 
     try:
-        write_decision_capture(directory / "decision.json", payload, publish=os.replace)
+        return write_decision_capture(directory / "decision.json", payload, publish=os.replace)
     except (OSError, ValueError) as exc:
         raise QuotaDecisionTransportError(
             "Decision capture failed after guard evaluation; the Turn receipt may "
@@ -1248,6 +1254,7 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
                                 cwd=workspace.resolve(),
                                 scenario=activation["scenario"],
                                 capture_directory=capture,
+                                context_directory=directory if capture is not None else None,
                             )
                             record_native_execution_preparation(
                                 directory,
@@ -1263,13 +1270,19 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
                                 # The existing saved-capture owner preserves a
                                 # pinned full recovery even if native projection
                                 # fails. It never rereads authority or admits work.
+                                digest = receipt.pop("capture_sha256")
                                 receipt["context"] = project_saved_context_capture(argparse.Namespace(**{
                                     **vars(args), "quota_command": "context-project",
                                     "capture_file": str(source),
-                                    "capture_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+                                    "capture_sha256": digest,
                                     "goal_id": request["goal_id"], "agent_id": request["agent_id"],
                                     "turn_instance_id": request["turn_instance_id"],
                                 }), hook_session=event["session_id"])
+                                if receipt["context"].get("ok") is False:
+                                    from ..command_invocation import current_loopx_cli_argv
+
+                                    receipt["context"]["recovery_command"] = context_capture_read_command(
+                                        source, digest, reader_argv=current_loopx_cli_argv())
                             existing = payload.get("hookSpecificOutput")
                             existing_context = (
                                 str(existing.get("additionalContext") or "")
@@ -1317,8 +1330,7 @@ def read_replan_view(args: argparse.Namespace) -> dict[str, Any]:
     if not args.decision_file or not args.source_hash:
         raise ValueError("replan-view requires --decision-file and --source-hash")
     path = Path(args.decision_file).expanduser()
-    with path.open(encoding="utf-8") as stream:
-        payload = json.load(stream)
+    payload = json.loads(read_turn_observation_text(path))
     return _turn_envelope_result("replan_view", payload=payload, source_hash=args.source_hash,
                                  captured_decision_path=str(path), reader_argv=current_loopx_cli_argv(),
                                  stage=args.replan_stage, outcome_ref=args.outcome_ref)
