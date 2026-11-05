@@ -940,6 +940,10 @@ def _admitted_interaction_next_cli_actions(
             command_prefix=command_prefix,
             lifecycle_actor_args=lifecycle_actor_args,
             runtime_root=runtime_root,
+            quota_guard_action=(
+                f"{typed_quota_guard} --turn-instance-id {shlex.quote(turn_instance_id)}"
+                if scheduler_args and turn_instance_id else None
+            ),
             successor_closeout_guard=_render_replan_successor_closeout_guard(
                 settlement_plan=settlement_plan, scheduler_args=scheduler_args,
                 typed_quota_guard=typed_quota_guard, settlement_args=settlement_args,

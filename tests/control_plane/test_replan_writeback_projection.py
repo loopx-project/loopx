@@ -80,6 +80,37 @@ def test_unguarded_successor_still_ends_without_inventing_turn_settlement(settle
                        "on host_action=end_current_heartbeat: stop"]
 
 
+@pytest.mark.parametrize("profile", ["generic_cli", "codex_app_heartbeat", "outer_controller"])
+@pytest.mark.parametrize("turn", [None, "turn-active-lifecycle"])
+def test_lifecycle_reentry_retains_current_route_without_reusing_completion_identity(profile, turn):
+    import shlex
+    from loopx.control_plane.scheduler.execution_context import scheduler_execution_context_for_runtime_profile
+    from loopx.control_plane.work_items.interaction_contract import interaction_next_cli_actions
+
+    actions = interaction_next_cli_actions(
+        {"goal_id": "example", "agent_identity": {"agent_id": "agent-example"},
+         "autonomous_replan_obligation": {"resolution_mode": "todo_lifecycle_settlement",
+            "triggers": [{"kind": "completed_advancement_without_successor",
+                "todo_id": "todo_completed", "completion_turn_key": "old-completion"}]}},
+        mode="autonomous_replan", available_capabilities=["shell"],
+        scheduler_execution_context=scheduler_execution_context_for_runtime_profile(profile),
+        turn_instance_id=turn, runtime_root="/tmp/lifecycle-runtime",
+        registry_path="/tmp/lifecycle-registry.json",
+    )
+    assert "--completion-identity-key old-completion" in actions[0]
+    assert "--turn-instance-id" not in actions[0]
+    guard = shlex.split(actions[-1])
+    if turn is None:
+        assert "--turn-instance-id" not in guard
+    else:
+        assert guard[guard.index("--turn-instance-id") + 1] == turn
+        assert guard[guard.index("--registry") + 1] == "/tmp/lifecycle-registry.json"
+        assert guard[guard.index("--runtime-root") + 1] == "/tmp/lifecycle-runtime"
+        assert guard[guard.index("--available-capability") + 1] == "shell"
+        assert ("--codex-app" in guard) is (profile == "codex_app_heartbeat")
+    assert "--completion-identity-key" not in guard
+
+
 @pytest.mark.parametrize("profile", ["codex_app_heartbeat", "trae_app", "outer_controller"])
 @pytest.mark.parametrize("binding_kind", ["autonomous_replan", "todo"])
 def test_successor_guard_entrypoint_retains_host_and_only_pure_replan_binding(
