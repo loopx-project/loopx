@@ -172,6 +172,52 @@ export const attachedHostFollowUpScenario = {
       await racedStop.click();
       for (let attempt = 0; attempt < 100 && context.api.interrupts.length !== interruptsBefore + 2; attempt += 1) await page.waitForTimeout(50);
       if (context.api.interrupts.at(-1)?.turnId !== racedTurnId) throw new Error("A native-queued admission took the other page's running Turn controls");
+      // A host may consume a queued input while its editor is open. Retention
+      // must remain reachable after the row disappears, including after reload.
+      await page.setViewportSize({width: 1440, height: 900});
+      const retainedDraft = "保留这份尚未保存的更正。\n原消息启动后也不能把它重新发送或丢失。";
+      await queuedFollowUp.getByRole("button", {name: "更多操作：待处理消息 1", exact: true}).click();
+      await queuedFollowUp.getByRole("button", {name: "编辑", exact: true}).click();
+      await page.getByRole("textbox", {name: "编辑待处理消息 1", exact: true}).fill(retainedDraft);
+      await composer.fill("主输入框的另一份草稿");
+      page.__loopxRuntime.queuedTurns.set(attachedSessionId,
+        page.__loopxRuntime.queuedTurns.get(attachedSessionId).filter(turn => turn.turn_id !== "turn-queued-1"));
+      const recovery = page.getByRole("region", {name: "保留的队列修改", exact: true});
+      await recovery.waitFor({timeout: 15_000});
+      await recovery.locator("summary").first().click();
+      await recovery.locator(".personal-queue-retained-input > summary").click();
+      if (await recovery.getByRole("textbox", {name: "保留的编辑草稿", exact: true}).inputValue() !== retainedDraft) throw new Error("Consumed input lost its edit draft");
+      if (await composer.inputValue() !== "主输入框的另一份草稿" || posts.length !== 2) throw new Error("Draft recovery resent input or replaced the composer");
+      await page.evaluate(() => {
+        window.__queueStorageDescriptor = Object.getOwnPropertyDescriptor(window, "localStorage");
+        Object.defineProperty(window, "localStorage", {configurable: true, get() {throw new Error("Storage unavailable");}});
+        window.dispatchEvent(new Event("storage"));
+      });
+      await recovery.getByRole("alert").filter({hasText: "队列修改的恢复信息不可读"}).waitFor();
+      await page.evaluate(() => {
+        Object.defineProperty(window, "localStorage", window.__queueStorageDescriptor);
+        window.dispatchEvent(new Event("storage"));
+      });
+      await page.reload();
+      await recovery.waitFor({timeout: 15_000});
+      await recovery.locator("summary").first().click();
+      await recovery.locator(".personal-queue-retained-input > summary").click();
+      const retainedText = recovery.getByRole("textbox", {name: "保留的编辑草稿", exact: true});
+      if (await retainedText.inputValue() !== retainedDraft) throw new Error("Reload hid a consumed input's retained draft");
+      await recovery.getByRole("button", {name: "选择草稿", exact: true}).click();
+      if (!await retainedText.evaluate(el => document.activeElement === el && el.selectionEnd === el.value.length && el.selectionStart === 0)) throw new Error("Retained draft is not keyboard-copyable");
+      await page.locator(".personal-goal-link", {hasText: managedGoal.label}).click();
+      await recovery.waitFor({state: "hidden"});
+      await page.locator(".personal-goal-link", {hasText: attachedGoal.label}).click();
+      await recovery.waitFor();
+      await recovery.locator("summary").first().click();
+      await recovery.locator(".personal-queue-retained-input > summary").click();
+      await page.setViewportSize({width: 390, height: 844});
+      const recoveryBounds = await recovery.boundingBox();
+      if (!recoveryBounds || recoveryBounds.x < 0 || recoveryBounds.x + recoveryBounds.width > 391) throw new Error("Draft recovery overflows narrow viewport");
+      await recovery.getByRole("button", {name: "清除草稿", exact: true}).click();
+      await recovery.waitFor({state: "hidden"});
+      if (posts.length !== 2) throw new Error("Reading or clearing retained edits sent another Turn");
     } finally {
       for (const route of heldStreams.splice(0)) await route.abort().catch(() => {});
       await context.close();
