@@ -57,6 +57,7 @@ def prepared(tmp_path, monkeypatch):
         return {"ok": True, "stage": "execute", "mode": "heartbeat", "turn_id": turn,
             "checkpoint": {"phase": "before_replan", "captured": False, "reason": "no_fresh_replan"},
             "checkpoint_handoff": {"pending": True, "turn_id": turn,
+                "destination": request["settled_work_capture_once"]["destination"],
                 "request_sha256": hashlib.sha256(path.read_bytes()).hexdigest()}, **extra}
     return request, path, env, receipt, gate_calls, settlements
 
@@ -82,7 +83,8 @@ def test_changed_request_or_turn_cannot_capture(prepared, mutation):
         current["turn_id"] = "later"
     checkpoint.capture_after_wake(env, current)
     assert current["checkpoint_handoff"]["reason"] == "capture_failed"
-    assert not gates and not settlements
+    assert not gates
+    assert settlements == (["first"] if mutation == "request" else [])
 
 
 def test_failed_attempt_is_consumed_without_later_source_read(prepared, monkeypatch, tmp_path):
@@ -118,4 +120,97 @@ def test_restore_gate_still_blocks_explicit_handoff(prepared, monkeypatch):
     current = receipt()
     checkpoint.capture_after_wake(env, current)
     assert current["checkpoint_handoff"]["reason"] == "restored_replan_pending"
-    assert not settlements
+    assert settlements == ["first"]
+
+
+def test_unsettled_work_does_not_consume_a_handoff(prepared, monkeypatch, tmp_path):
+    _, _, env, receipt, gates, _ = prepared
+    monkeypatch.setattr(checkpoint, "read_heartbeat_settlement", lambda *args, **kwargs: None)
+    reads = []
+    monkeypatch.setattr(checkpoint, "read_checkpoint_request", lambda *args: reads.append(True))
+    current = receipt()
+    checkpoint.capture_after_wake(env, current)
+    assert current["checkpoint_handoff"]["reason"] == "owned_turn_not_settled"
+    assert not reads and not gates
+    assert not (tmp_path / "wakes").exists()
+
+
+def test_handoff_without_original_destination_fails_before_declaration_io(prepared, monkeypatch):
+    _, _, env, receipt, gates, settlements = prepared
+    current = receipt()
+    del current["checkpoint_handoff"]["destination"]
+    reads = []
+    monkeypatch.setattr(checkpoint, "read_checkpoint_request", lambda *args: reads.append(True))
+    checkpoint.capture_after_wake(env, current)
+    assert current["checkpoint_handoff"]["reason"] == "capture_failed"
+    assert not reads and not gates and not settlements
+
+
+@pytest.mark.parametrize("mutation", ["missing", "changed"])
+def test_lost_declaration_cannot_backfill_the_original_point(prepared, tmp_path, mutation):
+    _, path, env, receipt, _, _ = prepared
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    source = workspace / "candidate.txt"
+    source.write_text("original settled candidate")
+    raw = path.read_bytes()
+    first = receipt()
+    original_periodic = dict(first["checkpoint"])
+    if mutation == "missing":
+        path.unlink()
+    else:
+        path.write_bytes(raw + b"\n")
+    checkpoint.capture_after_wake(env, first)
+    assert first["checkpoint_handoff"]["reason"] == "capture_failed"
+    assert first["ok"] and first["checkpoint"] == original_periodic
+
+    # Restoring the same declaration must not label subsequent work as the
+    # missed point, even when real artifact probe/capture would now succeed.
+    path.write_bytes(raw)
+    source.write_text("later candidate must not replace the missed point")
+    later = receipt("later")
+    checkpoint.capture_after_wake(env, later)
+    assert later["checkpoint_handoff"].get("captured") is False
+    assert later["checkpoint_handoff"]["reason"] == "destination_already_attempted_no_replay"
+    assert later["checkpoint"] == original_periodic and later["ok"]
+    assert not (tmp_path / "checkpoints" / "handoff").exists()
+    witness = json.loads((tmp_path / "wakes/first/checkpoint-completed-request.json").read_text())
+    assert witness["request_sha256"] == hashlib.sha256(raw).hexdigest()
+    assert witness["settlement_effect_id"] == "first"
+
+
+@pytest.mark.parametrize("deadline", ["1", "nan", "inf"])
+def test_closed_original_phase_adds_no_handoff_reads(prepared, monkeypatch, deadline):
+    _, _, env, receipt, gates, settlements = prepared
+    current = receipt()
+    original_periodic = dict(current["checkpoint"])
+    env["LOOPX_PHASE_DEADLINE_EPOCH"] = deadline
+    reads = []
+    def forbidden_read(*args):
+        reads.append(True)
+        raise AssertionError("closed phase must not read a declaration")
+    monkeypatch.setattr(checkpoint, "read_checkpoint_request", forbidden_read)
+    checkpoint.capture_after_wake(env, current)
+    assert not reads and not gates and not settlements
+    expected = "capture_window_closed" if deadline == "1" else "capture_failed"
+    assert current["checkpoint_handoff"]["reason"] == expected
+    assert current["checkpoint"] == original_periodic and current["ok"]
+
+
+def test_phase_expiring_during_settlement_read_stops_before_declaration(prepared, monkeypatch):
+    _, _, env, receipt, gates, settlements = prepared
+    current = receipt()
+    env["LOOPX_PHASE_DEADLINE_EPOCH"] = "2"
+    now = [1.0]
+    monkeypatch.setattr(checkpoint.time, "time", lambda: now[0])
+    read_settlement = checkpoint.read_heartbeat_settlement
+    def settle_then_expire(*args, **kwargs):
+        result = read_settlement(*args, **kwargs)
+        now[0] = 3.0
+        return result
+    monkeypatch.setattr(checkpoint, "read_heartbeat_settlement", settle_then_expire)
+    reads = []
+    monkeypatch.setattr(checkpoint, "read_checkpoint_request", lambda *args: reads.append(True))
+    checkpoint.capture_after_wake(env, current)
+    assert current["checkpoint_handoff"]["reason"] == "capture_window_closed"
+    assert settlements == ["first"] and not reads and not gates
