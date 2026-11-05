@@ -923,6 +923,7 @@ test("legacy quota fields are bound by the existing adapter, never caller data",
 
 test("verified file deltas inherit unchanged controls within an epoch without retained-input claims", () => {
   const original = {ok: true, goal_id: "goal", controls: {stop: false, owner: "agent"},
+    context_details: {unread_context_index: {pointers: ["/support"]}},
     opaque_control: "Unknown controls also remain available in the exact file. ".repeat(400)};
   const baseline = full(original);
   const nextScope = {...scope};
@@ -934,6 +935,7 @@ test("verified file deltas inherit unchanged controls within an epoch without re
   assert.equal(delta.continuity_basis, "captured_file");
   assert.ok(JSON.stringify(delta).length < JSON.stringify(current).length / 3);
   const restored = restoreContextDelivery({delivery: delta, baseline, current: prepareContextDelivery(args)});
+  assert.equal(restored.mode, "delta");
   assert.deepEqual(restored.context, current);
   for (const key of ["goal_id", "agent_id", "session_id", "context_epoch", "continuity_generation"]) {
     assert.equal(prepareContextDelivery({...args, scope: {...nextScope, [key]: "other"}, baseline, continuity}).mode, "full");

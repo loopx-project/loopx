@@ -8,7 +8,7 @@ import {GOAL_OUTCOMES_SCHEMA, OUTCOME_CONTEXT_NAVIGATION_SCHEMA} from "../goals/
 import {FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE} from "../work_items/interaction_contract.ts";
 import {quotaSummaryReferences, contextSourceIdentity, contextProjectionChanges,
   type ProjectionSourceValues} from "./diagnostic_projection.ts";
-import {encodeContextDelivery} from "./context_delivery.ts";
+import {encodeContextDelivery, fileNavigationPaths} from "./context_delivery.ts";
 import {createHash} from "node:crypto";
 
 import {capturedContextSelection} from "./context_selection.ts";
@@ -249,10 +249,7 @@ export function prepareProgressiveContextDelivery(request: JsonObject, legacyFie
   const required = requiredNativeContext(request, sourceValues);
   const codec = nativeContextContinuity({...request, context: required.context,
     ...(request.source_number_tokens === undefined ? {} : {source_number_tokens: required.tokens})});
-  const details = jsonObject(required.context.context_details);
-  const navigation: Path[] = details && Object.hasOwn(details, "unread_context_index")
-    ? [["context_details", "unread_context_index"]] : [];
-  const delivery = encodeContextDelivery(codec, legacyFields, sourceValues, navigation);
+  const delivery = encodeContextDelivery(codec, legacyFields, sourceValues, fileNavigationPaths(required.context));
   const {operation: _operation, source_edits: _edits, source_number_tokens: _numbers, ...source} = request;
   return contextProjectionChanges(source, {context: required.context, delivery, projected: required.projected,
     read_sections: inlineReadSections(request, required.context),
