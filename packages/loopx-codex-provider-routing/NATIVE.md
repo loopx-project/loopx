@@ -7,6 +7,80 @@ handles credential/file/process IO; `native_policy.ts` owns availability and
 selection. No dotfiles checkout, Personal Apps command or external Python module
 is required.
 
+## Installed provider and transport lifecycle
+
+Version 0.15.1 ships a native provider entrypoint and a packaged
+`native-extension.toml`. Register **loopx-native-account-provider** through the
+existing extension lifecycle. The older permissionless qualification extension
+remains separate: its successful doctor does not certify native accounts or a
+running model transport. Neither registration enables paid API use, selects an
+account, creates another Chat worker, nor authorizes replaying business messages.
+Core's existing optional native account imports and original Lark extension stay
+the execution path; the provider owns only accounts and model transport.
+
+Install a reviewed wheel into an immutable virtual environment outside any
+checkout/worktree. Supply Python 3.11+ and Node with TypeScript stripping support;
+the native doctor actually executes the packaged TS bridge. Use the same
+environment for the existing Core/Chat host and provider entrypoints. Example
+operator sequence (paths and wheel are operator-supplied):
+
+```sh
+python3 -m venv --system-site-packages "$PROVIDER_ENV"
+"$PROVIDER_ENV/bin/python" -m pip install "$REVIEWED_PROVIDER_WHEEL"
+export PATH="$PROVIDER_ENV/bin:$PATH"
+PROVIDER_MANIFEST="$("$PROVIDER_ENV/bin/python" -c 'from importlib.resources import files; print(files("loopx_codex_provider_routing").joinpath("native-extension.toml"))')"
+loopx-native-account-provider --doctor
+loopx extension install --manifest "$PROVIDER_MANIFEST" --execute
+loopx extension doctor loopx-native-account-provider --execute
+```
+
+Keep the existing runtime root, private native-account state, key store and relay
+credentials outside this installation. Preserve original session storage, source
+bindings, grants, limits and LaunchAgent identity. Use Core's normal host installer
+to point that same host at the qualified interpreter, and its normal idle/restart
+boundary to adopt it. Do not retain custom launch scripts or editable imports in a
+temporary worktree. A missing optional channel or its credentials remains an
+explicit unavailable channel; never reconstruct credentials from chat history.
+
+`loopx-native-account-provider` reads this JSON protocol on stdin:
+
+```json
+{"schema_version":"loopx_native_account_provider_v1","operation":"status"}
+```
+
+It returns content-free loaded-build, instance, PID, admission state and active
+request count. `--runtime-root` selects an existing owner; default is `~/.loopx`.
+The doctor distinguishes installation readiness from message delivery, and never
+uses a model or checks an API key against an upstream service. An unstarted relay
+is a valid installation state; a healthy legacy or mismatched running daemon is
+not a qualified installation. Keep original-message acceptance as a separate
+end-to-end check.
+
+For upgrades, install the reviewed target into a new immutable environment and
+invoke its provider with `operation: "reconcile", execute: true`. The model
+transport's ordinary `ensure` also performs this reconciliation. An authenticated
+new-protocol daemon with a different loaded build stops new admissions, drains
+already accepted requests and releases its existing owner lock before one new
+daemon starts. The model, route credentials, key policy and message queue stay
+with their existing owners. A bounded timeout returns `api_relay_drain_pending`;
+read status later instead of forcing exit or replaying a Turn. Old `/health`
+response bytes remain compatible, but do not qualify version adoption.
+
+A pre-0.15.1 daemon has no drain protocol. The explicit reconcile request may
+include `legacy_pid`, requiring same-UID kernel executable/birth identity, exact
+module and runtime arguments, the relay lock and listening-port ownership,
+rechecked before normal SIGINT. Unknown ownership, PID changes and busy draining
+remain held. There is no forced kill. This migration cannot be requested with a
+model transport token; its separate control credential stays in mode-0600 runtime
+state and never enters model transport results.
+
+After successful live reconciliation, use `loopx extension upgrade --manifest
+"$PROVIDER_MANIFEST" --execute`, run the doctor and independently verify the
+original Core service and message returns. Rollback uses the previous immutable
+environment and its normal extension/host rollback paths with the same drain
+boundary. A successful pip install, plugin registration or relay health response
+alone never means pending user questions were answered.
+
 ## The user task
 
 Previously an exhausted account required finding another account, closing clients,
