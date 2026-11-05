@@ -12,7 +12,7 @@
 .personal-conversation-queue button:disabled { opacity: .45; cursor: default; }
 .personal-conversation-queue button:focus-visible, .personal-queue-row summary:focus-visible { outline: 2px solid var(--pw-blue); outline-offset: 2px; }
 .personal-queue-steer { flex-shrink: 0; }
-.personal-queue-message { margin: 8px 0 0; }
+.personal-queue-message { margin: 8px 0 0; font-size: var(--text-body); line-height: var(--leading-body); }
 .personal-queue-message p { white-space: pre-wrap; overflow-wrap: anywhere; }
 .personal-queue-message img { display: block; max-width: 100%; max-height: 120px; object-fit: contain; }
 .personal-queue-feedback { margin: 0; padding: 0 10px 8px; color: var(--pw-muted); overflow-wrap: anywhere; }
