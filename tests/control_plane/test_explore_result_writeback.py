@@ -880,6 +880,9 @@ def test_real_cli_open_capture_release_order_and_readback_replay(tmp_path, provi
     current = run("task-lease", "acquire", *lease_binding, "--idempotency-key", "recovery")["lease"]
     captured = run(*refresh)
     assert captured["appended"] and captured["explore_result_delivery"]["ok"]
+    display_input = captured["explore_result_delivery"]["hook"]["intents"][0]["payload"]
+    assert display_input == {"attachment_ref": "$.explore_result"}
+    assert captured["explore_result"] == ATTACHMENT
     assert len(load_explore_result_events(log)) == 2
     committed_index, committed_log = index.read_bytes(), log.read_bytes()
     rows = list_goal_todos(registry_path=path, goal_id=GOAL_ID)["todos"]
@@ -893,6 +896,8 @@ def test_real_cli_open_capture_release_order_and_readback_replay(tmp_path, provi
     assert leases[0]["status"] == "released"
     replay = run(*refresh)
     assert replay["idempotent_replay"] and replay["explore_result_delivery"]["idempotent_replay"]
+    assert replay["explore_result"] == captured["explore_result"]
+    assert replay["explore_result_delivery"]["hook"]["intents"][0]["payload"] == display_input
     assert index.read_bytes() == committed_index and log.read_bytes() == committed_log
     assert list_goal_todos(registry_path=path, goal_id=GOAL_ID)["todos"] == rows
     assert read_canonical_todos_if_promoted(

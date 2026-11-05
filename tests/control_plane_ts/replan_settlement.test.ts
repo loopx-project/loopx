@@ -117,6 +117,41 @@ test("Todo lifecycle reentry rejects untyped succession triggers", () => {
   );
 });
 
+test("lifecycle closeout returns to the active Turn's complete guard route", () => {
+  const guard = ["loopx", "--registry", "/tmp/registry with spaces.json",
+    "--runtime-root", "/tmp/current runtime", "--format", "json", "quota", "should-run",
+    "--goal-id", "goal-example", "--agent-id", "current-agent",
+    "--runtime-profile", "generic_cli", "--available-capability", "shell",
+    "--turn-instance-id", "current-turn"];
+  const result = projectTodoLifecycleSettlementReentry({
+    schema_version: TODO_LIFECYCLE_REENTRY_REQUEST_SCHEMA,
+    goal_id: "goal-example",
+    triggers: [{kind: "completed_advancement_without_successor", todo_id: "todo_old",
+      completion_turn_key: "old-completion-turn"}],
+    lifecycle_actor_args: ["--agent-id", "current-agent"],
+    quota_guard_argv: guard,
+  });
+  const actions = result.next_cli_actions as string[];
+  assert.match(actions[0], /--completion-identity-key old-completion-turn/);
+  assert.doesNotMatch(actions[0], /current-turn/);
+  assert.equal(actions.at(-1), "loopx --registry '/tmp/registry with spaces.json' " +
+    "--runtime-root '/tmp/current runtime' --format json quota should-run --goal-id goal-example " +
+    "--agent-id current-agent --runtime-profile generic_cli --available-capability shell " +
+    "--turn-instance-id current-turn");
+  assert.deepEqual(guard.slice(-2), ["--turn-instance-id", "current-turn"]);
+});
+
+test("lifecycle reentry rejects malformed supplied guard arguments", () => {
+  for (const guard of [null, "loopx quota should-run", [], ["loopx", 1], [""]]) {
+    assert.throws(() => projectTodoLifecycleSettlementReentry({
+      schema_version: TODO_LIFECYCLE_REENTRY_REQUEST_SCHEMA,
+      goal_id: "goal-example",
+      triggers: [{kind: "completed_advancement_without_successor", todo_id: "todo_old"}],
+      quota_guard_argv: guard,
+    }), /quota_guard_argv/);
+  }
+});
+
 test("Todo lifecycle reentry rejects a non-string runtime root", () => {
   assert.throws(
     () => projectTodoLifecycleSettlementReentry({

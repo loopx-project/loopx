@@ -109,6 +109,9 @@ def apply_selected_todo_execution_preparation(
     if (
         not isinstance(selected, dict)
         or payload.get("should_run") is not True
+        # Planning and recovery can retain a Todo without authorizing its
+        # business execution. Preserve their existing typed route.
+        or payload.get("normal_delivery_allowed") is not True
         or action_portfolio_requires_explicit_selection(payload)
     ):
         return

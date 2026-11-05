@@ -141,6 +141,17 @@ export function projectTodoLifecycleSettlementReentry(value: unknown): JsonObjec
       requireNonEmptyString(item, `quota_scoped_args[${index}]`)
     )
     : [];
+  let quotaGuardArgv: string[] | null = null;
+  if (request.quota_guard_argv !== undefined) {
+    if (!Array.isArray(request.quota_guard_argv) || request.quota_guard_argv.length === 0) {
+      throw new EffectRuntimeRequestError("quota_guard_argv must be a non-empty array");
+    }
+    // The interaction owner supplies its already-scoped guard. The old Todo's
+    // completion identity must never be substituted for the active Turn.
+    quotaGuardArgv = request.quota_guard_argv.map((item, index) =>
+      requireNonEmptyString(item, `quota_guard_argv[${index}]`)
+    );
+  }
   const nextCliActions = triggers.map((trigger) => {
     const todoId = String(trigger.todo_id);
     const completionIdentityKey = String(trigger.completion_turn_key);
@@ -166,8 +177,10 @@ export function projectTodoLifecycleSettlementReentry(value: unknown): JsonObjec
       "when this completed scope has no remaining follow-up, use its original completion identity " +
       "with --no-follow-up above. This closes only that scope, not the Goal or other Todos. " +
       "Do not create lifecycle-only filler",
-    `${commandPrefix} --format json quota should-run --goal-id ${shellArgument(goalId)}` +
-      argumentSuffix(quotaScopedArgs),
+    quotaGuardArgv === null
+      ? `${commandPrefix} --format json quota should-run --goal-id ${shellArgument(goalId)}` +
+        argumentSuffix(quotaScopedArgs)
+      : quotaGuardArgv.map(shellArgument).join(" "),
   );
   return {
     schema_version: TODO_LIFECYCLE_REENTRY_SCHEMA,

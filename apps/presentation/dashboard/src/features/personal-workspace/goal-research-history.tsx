@@ -445,6 +445,9 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
     control?.querySelector<HTMLElement>("button:not(:disabled)")?.focus({preventScroll: true});
   };
   const readFailure = error || history.error;
+  const emptyHistory = !busy && !readFailure && read.total === 0;
+  const emptyWithAnalysis = emptyHistory && Boolean(analysis.pack?.result || analysis.pack?.native_outcomes);
+  const emptyHistoryMessage = zh ? "这个 Goal 尚无研究历程" : "No research history for this Goal yet";
   return <section className="research-history" aria-label={copy.title} aria-busy={busy}>
     {progressiveOverview ? <>
       <nav className="research-reading-order" aria-label={zh ? "研究阅读" : "Research reading"}>
@@ -480,9 +483,11 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
         <button type="button" aria-label={copy.refresh} disabled={busy} onClick={refresh}><RefreshCw size={15} aria-hidden/></button>
       </div></header>
     <div className="research-history-meta">
-      <p className="research-history-coverage" role="status">{copy.time}{value?.startAt ? <> · <time>{timeLabel(value.startAt)}</time> — <time>{timeLabel(value.endAt)}</time></> : null} · {busy ? `${copy.reading} ${loaded}${read.total ? ` / ${read.total}` : ""}`
+      <div className="research-history-coverage" role="status">{emptyWithAnalysis ? <>{emptyHistoryMessage} · {read.events.length} / {read.total}<ContextHelp icon={FlaskConical} label={zh ? "研究历程来源" : "Research history source"}>
+        <p>{zh ? "已保存的分析、原生测量与 Explore 历程分别读取。这个 Goal 没有已记录的 Explore 历程；已保存的结果仍可在下方阅读。" : "Saved analysis, native measurements and Explore history are read separately. This Goal has no recorded Explore history; its saved results remain readable below."}</p>
+      </ContextHelp></> : <>{copy.time}{value?.startAt ? <> · <time>{timeLabel(value.startAt)}</time> — <time>{timeLabel(value.endAt)}</time></> : null} · {busy ? `${copy.reading} ${loaded}${read.total ? ` / ${read.total}` : ""}`
         : read.total === null ? (zh ? "来源尚未读到" : "Source has not been read")
-          : `${read.events.length} / ${read.total} ${read.total === 1 ? copy.record : copy.records}${read.complete ? "" : ` · ${copy.partial}`}`}</p>
+          : `${read.events.length} / ${read.total} ${read.total === 1 ? copy.record : copy.records}${read.complete ? "" : ` · ${copy.partial}`}`}</>}</div>
       {!readingSelection ? displayControl : null}
     </div>
     {readFailure ? <div className="research-history-read-error" role="alert">
@@ -492,8 +497,8 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
       </div>
       <button type="button" disabled={busy} onClick={refresh}><RefreshCw size={14} aria-hidden/>{zh ? "重试" : "Retry"}</button>
     </div> : null}
-    {!busy && !readFailure && read.total === 0 ? <div className="research-history-empty">
-      <div role="status"><strong>{zh ? "这个 Goal 尚无研究历程" : "No research history for this Goal yet"}</strong><ContextHelp icon={FlaskConical} label={zh ? "研究历程来源" : "Research history source"}><p>{zh ? "开启研究模式后，后续研究问题、尝试与证据会在这里形成可回读的历程。" : "Enable research mode to build a readable history of questions, attempts and evidence from later work."}</p></ContextHelp></div>
+    {emptyHistory && !emptyWithAnalysis ? <div className="research-history-empty">
+      <div role="status"><strong>{emptyHistoryMessage}</strong><ContextHelp icon={FlaskConical} label={zh ? "研究历程来源" : "Research history source"}><p>{zh ? "开启研究模式后，后续研究问题、尝试与证据会在这里形成可回读的历程。" : "Enable research mode to build a readable history of questions, attempts and evidence from later work."}</p></ContextHelp></div>
       <button type="button" onClick={focusResearchMode}>{zh ? "查看研究模式" : "Review research mode"}</button>
     </div> : null}
     {!progressiveOverview ? <><ResearchAnalysisStatus analysis={analysis}/>

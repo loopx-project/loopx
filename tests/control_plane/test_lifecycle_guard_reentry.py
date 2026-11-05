@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import shlex
+import subprocess
 from hashlib import sha256
 from pathlib import Path
 
@@ -46,8 +48,15 @@ def test_hidden_completed_source_recovers_its_original_guard_after_new_work(
         "action_kind": "monitor", "target_key": "independent-source",
         "cadence": "30m", "next_due_at": "2099-01-01T00:00:00Z",
         "expires_at": "2099-01-02T00:00:00Z"}
-    call, runtime, index = _fixture(tmp_path, monkeypatch, provider,
+    source_call, runtime, index = _fixture(tmp_path, monkeypatch, provider,
         initial_todos=[completed, *recent, watch])
+
+    def call(*args, **kwargs):
+        # This test inspects the explicit inline CLI contract, as does the
+        # affected context-off worker. Progressive reader coverage is separate.
+        return source_call(*args, *(["--context-delivery", "off"]
+            if "should-run" in args else []), **kwargs)
+
     index.write_text("")
     turn = "turn-admitted-lifecycle-recovery"
     admitted = _guard(call, turn)
@@ -55,6 +64,14 @@ def test_hidden_completed_source_recovers_its_original_guard_after_new_work(
     obligation = admitted["autonomous_replan_obligation"]
     assert obligation["resolution_mode"] == "todo_lifecycle_settlement"
     assert [row["todo_id"] for row in obligation["triggers"]] == [original_id]
+    # Follow the public recovery command, rather than supplying the missing
+    # identity by hand. The completed Todo's identity belongs to an older Turn.
+    reentry = shlex.split(admitted["interaction_contract"]["cli_channel"]["next_cli_actions"][-1])
+    assert reentry[reentry.index("--turn-instance-id") + 1] == turn
+    assert reentry[reentry.index("--registry") + 1] == str(tmp_path / "registry.json")
+    assert reentry[reentry.index("--runtime-root") + 1] == str(runtime)
+    assert "--codex-app" in reentry
+    assert "--completion-identity-key" not in reentry
 
     # Independent new work cannot discharge the admitted lifecycle.
     def add_work():
@@ -98,7 +115,7 @@ def test_hidden_completed_source_recovers_its_original_guard_after_new_work(
             "--agent-id", AGENT, "--task-class", "user_gate", "--global-gate",
             "--text", "Authorize the separate newly requested source.")
 
-    recovered = _guard(call, turn)
+    recovered = call(*reentry[1:])
     assert recovered["heartbeat_receipt"]["settlement_identity"] == identity
     assert recovered.get("selected_todo") is None
     assert recovered["autonomous_replan_obligation"]["resolution_mode"] == "receipt_bound_replan_settlement"
@@ -141,3 +158,37 @@ def test_hidden_completed_source_recovers_its_original_guard_after_new_work(
         assert interaction["response_plan"]["decision"] == "ask_user"
     assert len([row for row in index.read_text().splitlines()
         if json.loads(row).get("classification") == "quota_slot_spent"]) == 1
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("delivery", ["auto", "off"])
+def test_native_cli_context_exposes_the_same_bound_lifecycle_reentry(
+    tmp_path, monkeypatch, provider, delivery,
+):
+    completed = {"schema_version": "todo_item_v0", "archive_state": "active",
+        "source_section": "Agent Todo", "todo_id": "todo_completed", "role": "agent", "index": 1,
+        "text": "Deliver the accepted finite source audit.", "status": "done", "done": True,
+        "task_class": "advancement_task", "claimed_by": AGENT, "last_actor_agent_id": AGENT,
+        "completed_at": "2026-08-01T00:00:00Z", "updated_at": "2026-08-01T00:00:00Z",
+        "completion_continuation": "active_goal"}
+    call, _, index = _fixture(tmp_path, monkeypatch, provider, initial_todos=[completed])
+    index.write_text("")
+    turn = "turn-captured-lifecycle"
+    entry = call("quota", "should-run", "--runtime-profile", "generic_cli", "--goal-id", GOAL,
+        "--agent-id", AGENT, "--turn-instance-id", turn, "--context-delivery", delivery,
+        "--decision-output-dir", str(tmp_path / "capture"))
+    if delivery == "auto":
+        assert entry["schema_version"] == "context_capture_navigation_v1"
+        selected = call("quota", "context-read", "--reference-file", entry["recovery"]["reference_file"],
+            "--select", "/replan_action_packet/writeback", "--page-bytes", "8000")
+        assert selected["eof"] is True
+        writer_command = json.loads(selected["content"])["selections"][0]["value"]
+    else:
+        writer_command = entry["replan_action_packet"]["writeback"]
+    result = subprocess.run(shlex.split(writer_command), capture_output=True, text=True, check=True)
+    writer = json.loads(result.stdout)
+    actions = writer["writeback"]["next_cli_actions"]
+    guard = shlex.split(actions[-1])
+    assert guard[guard.index("--turn-instance-id") + 1] == turn
+    assert guard[guard.index("--runtime-profile") + 1] == "generic_cli"
+    assert guard[guard.index("--registry") + 1] == str(tmp_path / "registry.json")

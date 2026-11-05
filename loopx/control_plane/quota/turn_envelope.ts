@@ -12,6 +12,7 @@ import {prepareContextDelivery, restoreContextDelivery} from "./context_delivery
 import {updateNativeContextLifecycle} from "./native_context_lifecycle.ts";
 import {contextProjectionChanges, contextSourceIdentity, projectQuotaDiagnostics, referenceQuotaSummaryLanes,
   resolveQuotaSummaryLanes} from "./diagnostic_projection.ts";
+import {referenceExploreResultDelivery} from "../capabilities/explore_result_writeback.ts";
 
 import {
   interpretQuotaShouldRunPacket,
@@ -2261,6 +2262,7 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
       contextSourceIdentity(source, request.source_number_tokens));
     if (request.task_title === true) payload = referenceCurrentTaskTitle(payload);
     if (request.explore_guidance === true) payload = referenceExploreGuidance(payload);
+    if (request.refresh_result === true) payload = referenceExploreResultDelivery(payload, request.source_number_tokens);
     // References and diagnostic caps share one edit transport. Untouched facts
     // stay in the original caller, including numbers JSON.parse cannot retain.
     return contextProjectionChanges(source, payload);

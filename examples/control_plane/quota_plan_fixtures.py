@@ -22,6 +22,7 @@ from loopx.quota import (  # noqa: E402
     render_quota_slot_preview_markdown,
     void_quota_slot,
 )
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload  # noqa: E402
 
 
 SCOPED_AGENT_ID = "codex-side-bypass"
@@ -501,7 +502,7 @@ def run_cli_throttled_should_run(root: Path) -> dict:
         capture_output=True,
         text=True,
     )
-    return json.loads(result.stdout)
+    return read_cli_policy_payload(result.stdout, returncode=result.returncode)
 
 
 def run_cli_slot_preview(root: Path) -> tuple[dict, dict]:
@@ -546,7 +547,9 @@ def run_cli_slot_preview(root: Path) -> tuple[dict, dict]:
         capture_output=True,
         text=True,
     )
-    return json.loads(preview_result.stdout), json.loads(should_run_result.stdout)
+    return json.loads(preview_result.stdout), read_cli_policy_payload(
+        should_run_result.stdout, returncode=should_run_result.returncode,
+    )
 
 
 def run_cli_slot_spend_execute(root: Path) -> tuple[dict, dict, str, str]:
@@ -601,7 +604,7 @@ def run_cli_slot_spend_execute(root: Path) -> tuple[dict, dict, str, str]:
     )
     return (
         json.loads(result.stdout),
-        json.loads(should_run_result.stdout),
+        read_cli_policy_payload(should_run_result.stdout, returncode=should_run_result.returncode),
         registry_before,
         registry_path.read_text(encoding="utf-8"),
     )
@@ -682,7 +685,7 @@ def run_cli_slot_void_execute(root: Path) -> tuple[dict, dict, dict, str, str]:
     return (
         spend_payload,
         json.loads(void_result.stdout),
-        json.loads(should_run_result.stdout),
+        read_cli_policy_payload(should_run_result.stdout, returncode=should_run_result.returncode),
         registry_before,
         registry_path.read_text(encoding="utf-8"),
     )
