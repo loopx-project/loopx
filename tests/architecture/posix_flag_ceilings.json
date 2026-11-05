@@ -1,0 +1,12 @@
+{
+  "schema": "loopx_posix_flag_ceilings_v0",
+  "baseline_commit": "b4216d8c79f7f31785cf3bb6845f6847fcf0a6a6",
+  "note": "Per-file ceiling on bare `os.O_NOFOLLOW` / `os.O_DIRECTORY` / `os.O_NONBLOCK` references under loopx/. A ceiling is a maximum, not a target: the guard fails when a file exceeds it or a new file appears, and accepts a lower measurement, so retiring one of these sites needs no edit here. Lower or drop an entry whenever a file is fixed, so the ceiling does not describe an older tree than the code.",
+  "ceiling": {
+    "loopx/cli_commands/quota_capture.py": 2,
+    "loopx/control_plane/collaboration/result_files.py": 6,
+    "loopx/control_plane/effect_runtime.py": 2,
+    "loopx/control_plane/turn_driver/codex_context.py": 4,
+    "loopx/control_plane/turn_driver/codex_context_history.py": 2
+  }
+}
