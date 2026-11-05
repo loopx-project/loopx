@@ -627,6 +627,25 @@ def _apply_context_projection_changes(
     return cast(dict[str, Any], projected)
 
 
+def compact_refresh_state_cli_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Share only repeated successful Explore input; full output is the fallback."""
+    if (payload.get("ok") is not True or not isinstance(payload.get("explore_result"), dict)
+            or not isinstance(payload.get("explore_result_delivery"), dict)):
+        return payload
+    from ..effect_runtime import source_number_tokens
+    from .turn_envelope import _turn_envelope_result
+
+    source = {key: payload[key] for key in ("explore_result", "explore_result_delivery")}
+    try:
+        result = _turn_envelope_result("reference_context", payload=source,
+            refresh_result=True, source_number_tokens=source_number_tokens(source))
+        return {**payload, **_apply_context_projection_changes(source, result)}
+    except (RuntimeError, ValueError, OSError):
+        # A display failure must not obscure a committed result or suggest that
+        # the caller should repeat admission, writeback or accounting.
+        return payload
+
+
 def compact_quota_should_run_cli_payload(
     payload: dict[str, Any],
     *,

@@ -2,7 +2,8 @@
 import {createHash} from "node:crypto";
 import type {JsonObject} from "../effect_program.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
-import {requireJsonObject, requireNonEmptyString, requireStringArray, requireStringLiteral} from "../runtime_decode.ts";
+import {jsonObject, requireJsonObject, requireNonEmptyString, requireStringArray, requireStringLiteral} from "../runtime_decode.ts";
+import {contextSourceIdentity} from "../quota/diagnostic_projection.ts";
 import {normalizeGoalPathDelta} from "../goals/vision_checkpoint.ts";
 import {normalizeExploreExecutionObservation} from "./explore_execution_observation.ts";
 import {isExploreEvidenceRef} from "./explore_evidence_ref.ts";
@@ -328,4 +329,33 @@ export function produceExploreResultIntent(params: JsonObject): JsonObject {
     intent: {schema_version: "loopx_capability_intent_v0", intent_kind: "explore.result_ingestion",
       idempotency_key: `explore-result:${key}`, source_receipt_id: source,
       payload: {attachment}, requested_write_scope: []}};
+}
+
+/** Only the final display shares the successful hook's identical input. The
+ * complete attachment stays inline; durable intents and retry inputs never change. */
+export function referenceExploreResultDelivery(source: JsonObject, numberTokens?: unknown): JsonObject {
+  const attachment = jsonObject(source.explore_result), delivery = jsonObject(source.explore_result_delivery);
+  const hook = jsonObject(delivery?.hook);
+  if (attachment?.schema_version !== EXPLORE_RESULT_ATTACHMENT_SCHEMA ||
+      Object.hasOwn(attachment, "attachment_ref") || delivery?.ok !== true ||
+      delivery.retryable !== false || delivery.primary_committed !== true ||
+      hook?.schema_version !== "loopx_post_writeback_capability_hook_dispatch_v0" ||
+      hook.phase !== "post_writeback" || !Array.isArray(hook.failures) || hook.failures.length ||
+      !Array.isArray(hook.intents)) return source;
+  const identity = contextSourceIdentity(source, numberTokens);
+  const original = identity(attachment, ["explore_result"]);
+  const reference = {attachment_ref: "$.explore_result"};
+  if (Buffer.byteLength(JSON.stringify({attachment})) <= Buffer.byteLength(JSON.stringify(reference))) return source;
+  let changed = false;
+  const intents = hook.intents.map((value, index) => {
+    const intent = jsonObject(value), payload = jsonObject(intent?.payload);
+    if (intent?.schema_version !== "loopx_capability_intent_v0" ||
+        intent.intent_kind !== "explore.result_ingestion" || !payload ||
+        Object.hasOwn(payload, "attachment_ref") || !jsonObject(payload.attachment) ||
+        identity(payload.attachment, ["explore_result_delivery", "hook", "intents", index, "payload", "attachment"]) !== original) return value;
+    const {attachment: _duplicate, ...other} = payload;
+    changed = true;
+    return {...intent, payload: {...other, ...reference}};
+  });
+  return changed ? {...source, explore_result_delivery: {...delivery, hook: {...hook, intents}}} : source;
 }
