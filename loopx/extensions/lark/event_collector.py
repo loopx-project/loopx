@@ -40,6 +40,34 @@ OPERATION_CALLBACK_EVENT_KEY = "card.action.trigger"
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 
+# The collector accepts a config path only when Git proves it is ignored and
+# untracked. That proof costs three Git reads, and a Git blocked on a stale
+# index lock, a network mount or an oversized index would otherwise hold the
+# command open with no answer at all.
+GIT_PROBE_TIMEOUT_SECONDS = 5.0
+
+
+def _run_git_probe(root: Path, *arguments: str) -> subprocess.CompletedProcess[str] | None:
+    """Ask Git one ownership question, answering ``None`` when it cannot.
+
+    No answer is not a "no" for this caller: acceptance needs proof that the
+    config is ignored and untracked, so a probe that runs out of budget lands on
+    the refusing side instead of raising out of the command.
+    """
+
+    try:
+        return subprocess.run(
+            ["git", "-C", str(root), *arguments],
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            check=False,
+            timeout=GIT_PROBE_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+
 
 def _project_config_path(project: str | Path, raw: str | Path) -> Path:
     root = Path(project).expanduser().resolve()
@@ -50,11 +78,9 @@ def _project_config_path(project: str | Path, raw: str | Path) -> Path:
         relative = path.relative_to(root)
     except ValueError as exc:
         raise ValueError("lark collector config must stay inside the project") from exc
-    git_probe = subprocess.run(
-        ["git", "-C", str(root), "rev-parse", "--show-toplevel"],
-        capture_output=True,
-        check=False,
-    )
+    git_probe = _run_git_probe(root, "rev-parse", "--show-toplevel")
+    if git_probe is None:
+        raise ValueError("lark collector config needs a Git answer the probe could not give")
     if git_probe.returncode != 0:
         has_git_boundary = any(
             (candidate / ".git").exists() for candidate in (root, *root.parents)
@@ -65,16 +91,10 @@ def _project_config_path(project: str | Path, raw: str | Path) -> Path:
                 "under .loopx/config in a non-Git project"
             )
         return path
-    tracked = subprocess.run(
-        ["git", "-C", str(root), "ls-files", "--error-unmatch", "--", str(relative)],
-        capture_output=True,
-        check=False,
-    )
-    ignored = subprocess.run(
-        ["git", "-C", str(root), "check-ignore", "--quiet", "--", str(relative)],
-        capture_output=True,
-        check=False,
-    )
+    tracked = _run_git_probe(root, "ls-files", "--error-unmatch", "--", str(relative))
+    ignored = _run_git_probe(root, "check-ignore", "--quiet", "--", str(relative))
+    if tracked is None or ignored is None:
+        raise ValueError("lark collector config needs a Git answer the probe could not give")
     if tracked.returncode == 0 or ignored.returncode != 0:
         raise ValueError("lark collector config must be ignored and untracked")
     return path
