@@ -13,6 +13,7 @@ import socket
 import sys
 import tempfile
 import threading
+import time
 
 import pytest
 
@@ -135,6 +136,24 @@ class SyntheticPrivateSource:
         print(json.dumps({"origin": f"http://127.0.0.1:{server.server_port}",
             "bindingId": binding["binding_id"], "sessionId": sid, "ordinarySessionId": other["session_id"]}), flush=True)
         settings_handler = server.RequestHandlerClass._private_conversations
+        history_handler = server.RequestHandlerClass._session_snapshot
+        sessions_handler = server.RequestHandlerClass._list_sessions
+        slow_page, slow_source = threading.Event(), threading.Event()
+
+        def delayed_history(handler, selected_session):
+            if selected_session == sid and slow_page.is_set():
+                slow_page.clear()
+                time.sleep(5.2)
+            return history_handler(handler, selected_session)
+
+        def delayed_sessions(handler):
+            if slow_source.is_set() and "conversation_binding_id=" in handler.path:
+                slow_source.clear()
+                time.sleep(5.2)
+            return sessions_handler(handler)
+
+        server.RequestHandlerClass._session_snapshot = delayed_history
+        server.RequestHandlerClass._list_sessions = delayed_sessions
 
         def control():
             for line in sys.stdin:
@@ -150,6 +169,12 @@ class SyntheticPrivateSource:
                 elif command == "close":
                     server.chat_store.update_session(sid, status="closed")
                     result = {"closed": True}
+                elif command in {"slow-history", "slow-history-cancel"}:
+                    slow_page.set()
+                    result = {"slow_history": True}
+                elif command == "slow-history-source":
+                    slow_source.set()
+                    result = {"slow_history_source": True}
                 elif command == "replace-peer" and self.peer_provider is not None:
                     old = next(row for row in bindings.read()["bindings"] if row["transport_ref"] == self.peer_provider.transport_ref)
                     bindings.disconnect(old["binding_id"], expected_revision=bindings.read()["revision"])
