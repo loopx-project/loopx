@@ -187,10 +187,16 @@ def test_grouped_monitor_materialization_is_one_per_bucket_and_retires_empty_buc
     assert retired["write_performed"] is True
     final_state = state.read_text(encoding="utf-8")
     assert "status=done" in final_state
-    assert (
-        "evidence=Issue-fix%20PR%20lifecycle%20bucket%20"
-        "github-pr-state-huangruiteng--loopx-checks-pending%20is%20empty."
-    ) in final_state
+    # Full evidence belongs to the authority; the bounded projection may link it.
+    retired_monitors = _monitor_todos(registry, project)
+    assert len(retired_monitors) == 1
+    retired_monitor = retired_monitors[0]
+    assert retired_monitor["status"] == "done"
+    assert retired_monitor["no_followup"] is True
+    assert retired_monitor["evidence"] == (
+        "Issue-fix PR lifecycle bucket "
+        "github-pr-state-huangruiteng--loopx-checks-pending is empty."
+    )
 
     upsert_issue_fix_pr_lifecycle_ledger_jsonl(ledger, _packet(103))
     reopened = materialize_issue_fix_grouped_monitors(
@@ -208,6 +214,10 @@ def test_grouped_monitor_materialization_is_one_per_bucket_and_retires_empty_buc
     assert reopened_state.count("task_class=continuous_monitor") == 1
     assert "status=open" in reopened_state
     assert "no_followup=true" not in reopened_state
+    reopened_monitor = _monitor_todos(registry, project)[0]
+    assert reopened_monitor["todo_id"] == retired_monitor["todo_id"]
+    assert reopened_monitor["status"] == "open"
+    assert not reopened_monitor.get("no_followup", False)
     assert reopened["projection_delivery"] in {"delivered", "current"}
 
 

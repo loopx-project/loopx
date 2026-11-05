@@ -389,15 +389,59 @@ LoopX 才会等待复审而不再创建重复 patch successor；缺失、部分�
 monitor-only。
 
 当 review 或公开 maintainer comment 包含具体 correction 时，host 将其压缩成
-`issue_fix_maintainer_correction_input_v0` 再交给 `pr-lifecycle`。输入只保留 correction
+`issue_fix_maintainer_correction_input_v1` 再交给 `pr-lifecycle`。输入只保留 correction
 类型、公开 source reference、有限摘要，以及三类必要信息之一：验证计划与 PR 更新路径、
-具体歧义问题、或缺失 authority scope；不会复制 review/comment 原文。
+具体歧义问题、或缺失 authority scope，另加一个标识承载该 correction 的 provider event
+的 `source_event`：`{kind: issue_comment|review|review_comment, id, html_url,
+author_login, author_association, created_at, updated_at}`。不会复制 review/comment
+原文。不含 `source_event` 的旧 `issue_fix_maintainer_correction_input_v0` 输入仍被接受，
+并记录为 `admission_basis: host_asserted`；v1 输入为 `provider_verified`，因为 LoopX
+会将 event id 和 `updated_at` 与 PR 的无正文 comment/review metadata 匹配（来自同一
+`--metadata-json` fixture 的 `comments`、`reviews`、`reviewComments` key，或在
+`--fetch-metadata` 下通过 `gh api` 获取；review 使用 `submitted_at` 作为其 revision）。
 
-显式使用 `--execute-transition` 时，`actionable_patch` 只创建一个由当前注册 agent 认领的
+每个 correction 在任何 Todo 写入前都必须通过确定性的 admission gate；每次拒绝都会
+作为带有 `reason` 的 `context_only` 条目记录在 ledger row 中，不会被丢弃：
+`source_event_not_observed`、`source_event_revision_mismatch`、`stale_revision`
+（已接纳 event 的更旧 `updated_at`）、`self_or_bot_author`（login 以 `[bot]` 结尾；
+目前尚无已配置的 LoopX actor login）、`author_not_maintainer`（association 不属于
+`COLLABORATOR` / `MEMBER` / `OWNER`）以及 `terminal_pr_state`。
+紧接 Todo 写入之前，会基于 ledger 的当时状态再次执行这些 gate；已停止的 Goal 会以
+`goal_not_active` 拒绝。
+
+在 `--goal-id` 和 `--claimed-by` 之外，使用 `--origin-request-id`、`--origin-registry`
+与 `--origin-runtime-root` 绑定该 row：origin 使用独立的、仅用于 lifecycle 的
+`source_session_v1` registry，而 issue-fix 使用 project registry 执行 Goal/Todo 操作。
+所有 origin flag 必须一起提供；后续重跑即使不再提供这些 flag，绑定仍会保留；request id、
+registry 或 runtime root 不同会以 `origin_request_conflict` 失败。
+request record 提供 origin Goal、receiver agent 和可选 Goal reference；`--goal-id`
+与 `--claimed-by` 只标识 project 一侧。绑定要求 origin runtime 中存在一个可读且匹配的
+entry；不支持 recipient addressing。Settlement 会再次解析该 entry，并拒绝缺失或已变化的
+身份。本地 locator 只保留在 ledger 中。在创建 Todo 之前，origin 检查会以
+`origin_request_cancelled` 或 `origin_request_unreadable` fail closed；已有 Todo
+保持只读回读行为。在新 head 观察到已完成 Todo 时，会通过 origin runtime 将无正文的结论
+入队，在 `returns` 中按 operation/head 去重，并提供 `return_delivery` 回读；取消或不可读
+会阻止入队。完整 conclusion text、request revision 与所选 update identity 会在
+`report()` 前持久化，因此 return-ledger 写入中断后恢复的是同一份 publication，而不是
+根据更新的 PR state 重建文本。Return service 负责实际投递。Origin request 一旦取消，即使已接纳的 correction
+稍后完成，也不再返回任何结果；request 的 cancellation record 是其 accountability trail。
+
+显式使用 `--execute-transition` 时，已接纳的 `actionable_patch` 只创建一个由当前注册 agent 认领的
 `issue_fix_maintainer_correction_patch` todo；`semantic_ambiguity` 与
 `missing_authority` 创建会阻塞同一 agent 的具体 user gate；`unchanged` 不创建 todo。
-标准化 correction fingerprint 与确定性 todo 文本保证重试幂等，merged/closed terminal
-state 仍优先于迟到反馈。
+Todo 使用由 repository、PR、event id 和 `updated_at`（v0 则使用 correction fingerprint）
+派生的稳定 operation id 写入，因此完全相同的重放即使在 Todo 已完成后也返回
+`already_exists`；两个内容相同但不同的 comment 会生成两个 Todo；同一 comment 的更新
+revision 会生成新 Todo，并把先前条目标记为 `superseded`。Ledger row 在
+`maintainer_corrections` 中保留这些条目（`operation_id`、`source_event`、
+`correction_fingerprint`、`admission_basis`、`disposition`、`reason`、`todo_id`、
+`recorded_at`、`superseded_by`、`todo_intent`）；已接纳条目在 Todo 写入前先以
+`todo_id: null` 写入，随后补齐；任何后续运行都会按其 operation id 重试仍处于 pending
+状态的已接纳条目。每次重试都会用当前 provider metadata 重新验证 pending v1 source event，
+包括省略 correction input 的普通轮询，或报告了另一个 current correction 的运行。仅供测试的
+`LOOPX_ISSUE_FIX_FAULT_BEFORE_CORRECTION_TODO=1`
+会在这两次写入之间中止，仅用于演练该恢复路径。旧 `maintainer_correction` 字段为旧版
+reader 保留最新接纳的 correction。Merged/closed terminal state 仍优先于迟到反馈。
 
 当 connected lifecycle writeback 观察到 `MERGED`，LoopX 还会追加一条带 repository
 scope、public-safe 且幂等的 `pr_merge` rollout event。Todo resume 投影消费这条事件：例如
@@ -973,7 +1017,8 @@ loopx issue-fix pr-lifecycle \
 
 Correction source 是 provider-neutral 的：可以使用任意公开 HTTPS 或 repo-relative
 reference，而当前 PR monitor 仍是 lifecycle authority。完全相同的重试既不会新增
-successor，也不会重写同一 lifecycle row。
+successor，也不会重写同一 lifecycle row；输出中的 `maintainer_correction_admission`
+给出本次输入的 operation id、admission basis、disposition 和 reason。
 
 ## 状态与产出视图
 

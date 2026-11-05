@@ -12,6 +12,7 @@
   "work_item.interaction_reads.project",
   "scheduler.hint.project",
   "work_item.task_graph.goal_topology",
+  "work_item.task_graph.status",
   "work_item.replan_semantics.project",
   "quota.settlement.read",
   "quota.spend.commit",

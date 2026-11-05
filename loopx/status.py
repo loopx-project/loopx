@@ -229,7 +229,6 @@ from .control_plane.todos.todo_summary import (
     compact_todo_group as compact_todo_group,
     compact_todo_item as compact_todo_item,
     first_open_todo_text,
-    open_todo_items,
     project_asset_todo_summary,
     sync_connected_attention_action_from_todos as _sync_connected_attention_action_from_todos_read_model,
     todo_lane_items as todo_lane_items,
@@ -237,7 +236,6 @@ from .control_plane.todos.todo_summary import (
     todo_item_is_due_monitor as todo_item_is_due_monitor,
     todo_item_missing_monitor_schedule as todo_item_missing_monitor_schedule,
     todo_item_next_due_at as todo_item_next_due_at,
-    todo_item_task_class,
     todo_projection_sort_key as todo_projection_sort_key,
 )
 from .control_plane.todos.todo_index import (
@@ -254,11 +252,7 @@ from .state_projection import (
     state_projection_gap_warning,
 )
 from .control_plane.todos.contract import (
-    TODO_STATUS_OPEN,
-    TODO_TASK_CLASS_USER_GATE,
-    normalize_todo_status,
     normalize_todo_task_class as normalize_todo_task_class,
-    todo_done_for_status,
 )
 from .control_plane.todos.todo_semantics import (
     todo_item_is_expired_monitor as todo_item_is_expired_monitor,
@@ -1059,14 +1053,7 @@ def build_task_graph_projection(
         goal=goal,
         goal_latest_runs=goal_latest_runs,
         public_safe_compact_text=public_safe_compact_text,
-        normalize_todo_status=normalize_todo_status,
-        todo_done_for_status=todo_done_for_status,
-        todo_status_open=TODO_STATUS_OPEN,
-        open_todo_items=open_todo_items,
         max_status_todos_per_role=MAX_STATUS_TODOS_PER_ROLE,
-        todo_item_task_class=todo_item_task_class,
-        user_gate_task_class=TODO_TASK_CLASS_USER_GATE,
-        todo_summary_open_count=todo_summary_open_count,
         latest_run=latest_run,
     )
 
