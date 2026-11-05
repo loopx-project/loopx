@@ -579,7 +579,7 @@ def _native_context_request(state: dict[str, Any], scope: dict[str, Any]) -> dic
     return request
 
 
-def register_native_context_view(directory: str | None, view: dict[str, Any]) -> None:
+def register_native_context_view(directory: str | None, view: dict[str, Any], *, hook_session: str | None = None) -> None:
     """Bind the existing pending delivery to its actual paged wire, under lock."""
     if directory is None or not isinstance(view.get("target"), dict):
         return
@@ -587,7 +587,7 @@ def register_native_context_view(directory: str | None, view: dict[str, Any]) ->
         state = _state(root)
         pending = state.get("pending")
         if (not isinstance(pending, dict) or pending.get("target") != view["target"]
-                or state.get("session_id") != os.environ.get("CODEX_THREAD_ID")):
+                or state.get("session_id") != (hook_session or os.environ.get("CODEX_THREAD_ID"))):
             raise ValueError("native page view does not match the current pending capture")
         pending.update(path=view["path"], sha256=view["sha256"], total_bytes=view["total_bytes"],
             ancestry=view.get("ancestry", 0),
@@ -620,7 +620,8 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                           include_initial_read_plan: bool = True,
                           progressive_enabled: bool = False,
                           selection_command_args_template: str | None = None,
-                          captured_recovery: dict[str, Any] | None = None) -> NativeContextPreparation:
+                          captured_recovery: dict[str, Any] | None = None,
+                          hook_session: str | None = None) -> NativeContextPreparation:
     """Commit current recovery before optional projection or candidate updates.
 
     Serialization prevents invalidation from moving the epoch during preparation.
@@ -647,7 +648,7 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
             try:
                 state = _state(root)
                 session, epoch = state.get("session_id"), state.get("context_epoch")
-                native_session = os.environ.get("CODEX_THREAD_ID")
+                native_session = hook_session or os.environ.get("CODEX_THREAD_ID")
                 if (not isinstance(session, str) or not session
                         or (native_session and session != native_session)):
                     return NativeContextPreparation(payload)  # Do not replace another session's recovery.

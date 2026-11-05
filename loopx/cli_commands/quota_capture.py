@@ -470,6 +470,7 @@ def _native_context_read_bytes(reference: dict[str, Any], raw: bytes, *,
 
 def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
                                 context_directory: str | None = None,
+                                hook_session: str | None = None,
                                 captured_recovery: dict[str, Any] | None = None,
                                 metadata: dict[str, Any] | None = None,
                                 max_page_output_bytes: int | None = None,
@@ -587,7 +588,7 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
     from ..control_plane.turn_driver.codex_context import register_native_context_view
 
     register_native_context_view(context_directory,
-        {**result, "ancestry": ancestry})
+        {**result, "ancestry": ancestry}, hook_session=hook_session)
     return result
 
 
@@ -632,7 +633,7 @@ def progressive_context_capture_view(payload: dict[str, Any], args: argparse.Nam
     return readable if len(_native_output_bytes(readable)) < len(_native_output_bytes(required)) else required
 
 
-def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
+def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str | None = None) -> dict[str, Any]:
     """Present an immutable already-decided quota capture, without authority IO.
 
     Publication is delayed until this native tool runs, so the lifecycle owner
@@ -696,7 +697,7 @@ def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
             page_bytes=page_bytes, output_bytes=output_bytes, reader_argv=reader_argv)
         reference = dict(full_reference)
         directory = codex_context_directory(directory=args.codex_context_dir,
-            root=args.codex_context_root, create=True)
+            root=args.codex_context_root, session=hook_session, create=True)
         if not directory:
             raise ValueError("native context is unavailable")
         # The session already owns a private recovery location. Callers need
@@ -720,7 +721,8 @@ def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
             surface="complete_turn" if payload.get("schema_version") == "loopx_turn_envelope_v1" else "quota_packet",
             capture_id=hashlib.sha256(raw).hexdigest(),
             continuity_generation=getattr(args, "_context_delivery_generation", None),
-            progressive_enabled=activation["progressive_enabled"], selection_command_args_template=transport)
+            progressive_enabled=activation["progressive_enabled"], selection_command_args_template=transport,
+            hook_session=hook_session)
         projected = prepared.delivery
         native_prepared = True
         if projected.get("schema_version") == "context_delivery_v1":
@@ -730,7 +732,7 @@ def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
             full_reference = _capture_read_reference(projected["recovery"],
                 page_bytes=page_bytes, output_bytes=output_bytes, reader_argv=reader_argv)
             reference = dict(full_reference)
-        native_view = native_context_capture_view(projected, cache, context_directory=directory,
+        native_view = native_context_capture_view(projected, cache, context_directory=directory, hook_session=hook_session,
             metadata={"recovery": full_reference, "capture_sha256": args.capture_sha256,
                 "context_delivery": activation},
             max_page_output_bytes=getattr(args, "max_page_output_bytes", None), reader_argv=reader_argv,
@@ -1234,7 +1236,7 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
                                     "capture_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
                                     "goal_id": request["goal_id"], "agent_id": request["agent_id"],
                                     "turn_instance_id": request["turn_instance_id"],
-                                }))
+                                }), hook_session=event["session_id"])
                             existing = payload.get("hookSpecificOutput")
                             existing_context = (
                                 str(existing.get("additionalContext") or "")
