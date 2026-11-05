@@ -9,8 +9,8 @@ from typing import Any
 from .decision_capture import context_selection_bytes, write_context_read_reference
 
 
-def observed_first_read_reference(directory: str, target: dict, recovery: dict, context: dict,
-                                  plan: dict) -> dict | None:
+def observed_first_read_reference(directory: str, target: dict[str, Any], recovery: dict[str, Any],
+                                  context: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any] | None:
     """Write the typed delivery plan once. The host only renders original Python values."""
     try:
         selected = plan["selections"]

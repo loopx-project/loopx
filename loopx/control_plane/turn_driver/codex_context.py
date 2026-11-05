@@ -579,7 +579,8 @@ def _native_context_request(state: dict[str, Any], scope: dict[str, Any]) -> dic
     return request
 
 
-def register_native_context_view(directory: str | None, view: dict[str, Any], *, hook_session: str | None = None) -> dict | None:
+def register_native_context_view(directory: str | None, view: dict[str, Any], *,
+                                 hook_session: str | None = None) -> dict[str, Any] | None:
     """Bind the existing pending delivery to its actual paged wire, under lock."""
     if directory is None or not isinstance(view.get("target"), dict):
         return None
@@ -593,7 +594,8 @@ def register_native_context_view(directory: str | None, view: dict[str, Any], *,
             ancestry=view.get("ancestry", 0),
             read_sections=pending.get("full_read_sections", {}) if view.get("mode") == "full" else {})
         _save(root, state)
-        return pending.get("observed_first_read")
+        observed = pending.get("observed_first_read")
+        return observed if isinstance(observed, dict) else None
 
 
 @dataclass(frozen=True)
