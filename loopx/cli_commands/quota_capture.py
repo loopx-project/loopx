@@ -661,6 +661,22 @@ def progressive_context_capture_view(payload: dict[str, Any], args: argparse.Nam
     return readable if len(_native_output_bytes(readable)) < len(_native_output_bytes(required)) else required
 
 
+def _saved_context_read_page(args: argparse.Namespace, navigation: dict[str, Any], *,
+                             initial_reference: str | None, reader_argv: list[str]) -> dict[str, Any]:
+    """Use the ordinary verified reader; the first page and navigation share its output budget."""
+    recovery = navigation["recovery"]
+    pinned = initial_reference if args.initial_read else None
+    reference = pinned or recovery.get("reference_file")
+    read_args = argparse.Namespace(**{**vars(args), "quota_command": "context-read",
+        "reference_file": reference, "capture_file": None if reference else recovery["path"],
+        "capture_sha256": None if reference else recovery["sha256"],
+        "codex_context_dir": None, "codex_context_root": None, "initial_read": bool(args.initial_read and not pinned)})
+    page = read_context_capture(read_args, presentation={"navigation": navigation}, reader_argv=reader_argv)
+    if not page["ok"] and "recovery_command" not in page:
+        page["recovery_command"] = recovery["command"]
+    return page
+
+
 def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str | None = None) -> dict[str, Any]:
     """Present an immutable already-decided quota capture, without authority IO.
 
@@ -676,7 +692,14 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
     reader_argv = current_loopx_cli_argv()
     try:
         activation = native_context_activation(args)
-        path, raw, payload = _read_capture(args.capture_file, args.capture_sha256, private=hook_session is not None)
+        saved_page = bool(getattr(args, "initial_read", False) or getattr(args, "select", None))
+        if saved_page and (args.format != "json" or not activation["enabled"] or args.offset != 0
+                or args.reference_file or args.selection_sha256 or args.page_bytes is not None
+                or (args.initial_read and args.select)):
+            raise ValueError("Use an enabled native JSON context-project with either --initial-read or --select "
+                "at offset zero. Use context-read for replay or continuation.")
+        path, raw, payload = _read_capture(args.capture_file, args.capture_sha256,
+                                           private=hook_session is not None)
         identity = payload.get("agent_identity")
         receipt = payload.get("heartbeat_receipt")
         if (payload.get("ok") is not True or not isinstance(identity, dict) or not isinstance(receipt, dict)
@@ -699,6 +722,7 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
     target = None
     native_prepared = False
     native_view = None
+    initial_reference = None
     if not activation["enabled"] and activation["progressive_enabled"]:
         # Recovery is presentation of this exact saved decision, including its
         # original Turn. It does not need a supported host or a native session.
@@ -765,14 +789,15 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
             max_page_output_bytes=getattr(args, "max_page_output_bytes", None), reader_argv=reader_argv)
         reference = {key: native_view[key] for key in ("path", "sha256", "command")}
         mode, target = native_view["mode"], native_view.get("target")
+        initial_reference = native_view.get("first_read_reference")
         native_view = model_context_reference(native_view, reader_argv=reader_argv)
     except (QuotaDecisionTransportError, OSError, ValueError, TypeError, RecursionError) as exc:
         if native_view is not None and not isinstance(exc, QuotaDecisionTransportError):
             # The native view and journal are already valid. Publishing the
             # shorter reader metadata is optional; retain their exact legacy
             # recovery rather than losing the original capture or admitting again.
-            return native_view
-        if isinstance(exc, QuotaDecisionTransportError) or (activation["enabled"] and not native_prepared):
+            pass
+        elif isinstance(exc, QuotaDecisionTransportError) or (activation["enabled"] and not native_prepared):
             if not isinstance(exc, QuotaDecisionTransportError):
                 exc = QuotaDecisionTransportError(
                     "Current context recovery could not be prepared. Read the saved "
@@ -805,9 +830,10 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
         **({"context_delivery": activation} if activation["enabled"] else {}),
         "instruction": "Presentation of the original decision only; authority and freshness are unchanged. "
             + (CONTEXT_CAPTURE_NAVIGATION_GUIDANCE if activation["enabled"] else CONTEXT_CAPTURE_READ_GUIDANCE)}
-    if native_view is not None:
-        return native_view
-    return result
+    navigation = native_view or result
+    if saved_page:
+        return _saved_context_read_page(args, navigation, initial_reference=initial_reference, reader_argv=reader_argv)
+    return navigation
 
 
 def prepare_quota_capture(args: argparse.Namespace, directory: Path | None) -> Path | None:
@@ -1089,8 +1115,8 @@ def handoff_decision(directory: Path | None, socket_path: str | None,
 def handle_native_context_command(args: argparse.Namespace, *, print_payload: Callable[..., None],
                                   registry_path: Path | None = None, runtime_root_arg: str | None = None) -> int | None:
     """Dispatch native presentation/lifecycle IO before any quota authority read."""
-    if getattr(args, "initial_read", False) and args.quota_command != "context-read":
-        print_payload({"ok": False, "reason": "--initial-read is only supported by context-read"}, args.format, str)
+    if getattr(args, "initial_read", False) and args.quota_command not in ("context-read", "context-project"):
+        print_payload({"ok": False, "reason": "--initial-read is only supported by context-read or enabled native JSON context-project"}, args.format, str)
         return 1
     list_depth = getattr(args, "list_depth", None)
     if list_depth is not None and (args.quota_command != "context-read" or not getattr(args, "list_fields", False)
