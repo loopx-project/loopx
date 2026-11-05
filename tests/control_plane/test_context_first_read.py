@@ -76,6 +76,33 @@ def read_selection(command):
     return page, selected_context_values(page["content"])
 
 
+@pytest.mark.parametrize("required", [True, False])
+def test_initial_read_delivers_explicit_selection_only_at_its_gate(tmp_path, decision, required):
+    cli = decision["interaction_contract"]["cli_channel"]
+    route = {"schema_version": "action_selection_cli_command_v1", "route_prefix": "loopx --format json",
+             "command_args_template": "quota should-run --todo-id <todo-id> --turn-instance-id fixture-turn",
+             "candidate_discovery_args": "todo list --goal-id fixture --status open"}
+    policy = {"decision_owner": "agent", "suggestions_exhaustive": False}
+    candidates = [{"todo_id": "another", "text": "Verify a candidate."}]
+    cli.update(selection_required=required, next_cli_actions=[], selection_command=route,
+               selection_policy_ref="$.action_portfolio.selection_policy")
+    decision["action_portfolio"] = {"selection_policy": policy, "suggested_actions": candidates}
+    source = tmp_path / "decision.json"
+    source.write_bytes(json.dumps(decision).encode())
+    command = shlex.join(["loopx", "quota", "context-read", "--capture-file", str(source),
+                          "--capture-sha256", hashlib.sha256(source.read_bytes()).hexdigest(), "--initial-read"])
+    _, values = read_selection(command)
+    expected = {"/interaction_contract/cli_channel/selection_required": True,
+                "/interaction_contract/cli_channel/selection_command": route,
+                "/interaction_contract/cli_channel/selection_policy_ref": "$.action_portfolio.selection_policy",
+                "/action_portfolio/selection_policy": policy, "/action_portfolio/suggested_actions": candidates}
+    for pointer, value in expected.items():
+        if required:
+            assert values[pointer] == value
+        else:
+            assert pointer not in values
+
+
 def test_initial_read_keeps_supporting_index_obligations_and_recovers_its_full_list(tmp_path, decision):
     # A complete address inventory is navigation, not the Goal/Task/stop text.
     # Exercise the native reader and exact cold path over the same capture.

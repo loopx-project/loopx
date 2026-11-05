@@ -392,6 +392,14 @@ export function initialContextReadPointers(context: JsonObject, decisionFields: 
   for (const field of ["execution_preparation", "next_cli_actions", "spend_allowed_now", "spend_after_validation", "spend_policy",
     "quota_spend_source", "delivery_workspace_causality", "vision_continuation_audit"])
     include("interaction_contract", "cli_channel", field);
+  // Explicit selection clears next_cli_actions. Deliver the owner's discovery
+  // and same-Turn binding recipe alongside its non-exhaustive suggestions.
+  if (object(interaction.cli_channel)?.selection_required === true) {
+    for (const field of ["selection_required", "selection_policy_ref", "selection_command"])
+      include("interaction_contract", "cli_channel", field);
+    include("action_portfolio", "selection_policy");
+    include("action_portfolio", "suggested_actions");
+  }
   const planPath = ["interaction_contract", "cli_channel", "settlement_plan"];
   const plan = object(object(interaction.cli_channel)?.settlement_plan);
   if ((plan?.schema_version === "quota_settlement_plan_v1" || plan?.schema_version === "quota_settlement_plan_v2") && Array.isArray(plan.ordered_steps)) {
