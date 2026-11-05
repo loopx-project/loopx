@@ -21,10 +21,46 @@ import urllib.request
 
 from .native import NativeAccounts, atomic, private_read
 from .native_host import HostError
-from .openai_keys import NoRedirect
+from .openai_keys import NoRedirect, api_policy
 
 SCHEMA = "codex_openai_api_relay_v1"
 API_SLOT = "openai-api"
+
+
+class _StreamOutcome:
+    """Bounded, transient SSE framing; the existing TS owner classifies errors."""
+    def __init__(self):
+        self.buffer = b""
+        self.discard = False
+        self.finished = False
+
+    def feed(self, chunk: bytes):
+        if self.finished:
+            return None
+        self.buffer += chunk
+        while match := re.search(rb"\r?\n\r?\n", self.buffer):
+            frame, self.buffer = self.buffer[:match.start()], self.buffer[match.end():]
+            skipped, self.discard = self.discard, False
+            if skipped or len(frame) > 65536:
+                continue
+            data = b"\n".join(line[5:].removeprefix(b" ") for line in frame.splitlines()
+                              if line.startswith(b"data:"))
+            try:
+                event = json.loads(data)
+                # Ordinary token events need no policy subprocess or retained payload.
+                if not isinstance(event, dict) or event.get("type") not in ("error", "response.failed"):
+                    continue
+                outcome = api_policy({"operation": "stream-outcome", "event": event})
+            except (ValueError, OSError, HostError, subprocess.SubprocessError):
+                continue  # Observation failure never changes the original response.
+            if outcome is not None:
+                self.finished = True
+                self.buffer = b""
+                return outcome
+        if len(self.buffer) > 65536:
+            # Keep a possible split delimiter while skipping this oversized event.
+            self.buffer, self.discard = self.buffer[-3:], True
+        return None
 
 
 def route(owner: NativeAccounts) -> dict:
@@ -216,9 +252,17 @@ class RelayHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 # Once headers/output are admitted, disconnects and SSE errors
                 # end this request. No key rotation, synthetic completion or job replay.
+                observer = _StreamOutcome() if headers.get("content-type", "").split(";", 1)[0].strip().lower() == "text/event-stream" else None
                 try:
                     read = getattr(response, "read1", response.read)
                     while chunk := read(8192):
+                        outcome = observer.feed(chunk) if observer is not None else None
+                        if outcome is not None:
+                            try:
+                                keys.record(row["id"], status=outcome["status"], code=outcome["code"],
+                                            model=model, headers=headers)
+                            except (OSError, ValueError, HostError, subprocess.SubprocessError):
+                                pass
                         self.wfile.write(chunk)
                         self.wfile.flush()
                 except (OSError, TimeoutError):
