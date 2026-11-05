@@ -1,6 +1,7 @@
 """Native model stdout and private semantic grading must remain distinct."""
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import shlex
@@ -8,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+from control_plane.quota_context_fixture import latest_quota_payload
+from loopx.cli_commands.quota_capture import read_context_capture
 from loopx.control_plane.testing.model_tool_behavior import QuotaToolContext, snapshot_disposable_fixture
 from loopx.control_plane.turn_driver.decision_capture import (
     capture_context_projection,
@@ -49,6 +52,42 @@ def test_inline_output_retains_the_explicit_opt_out_contract():
     context = QuotaToolContext.from_output(output)
     assert context.packet == packet and context.output == output
     assert context.capture_path is None
+
+
+@pytest.mark.parametrize("attack", ["missing_middle", "changed_bytes", "unread_new_capture"])
+def test_scripted_consumer_cannot_replace_current_retained_context_with_eof(tmp_path, attack):
+    _, packet = _captured_output(tmp_path / "original")
+    packet["padding"] = "保留完整来源🙂" * 200
+    (tmp_path / "paged").mkdir()
+    capture = capture_context_projection(packet, directory=tmp_path / "paged")
+    pages, offset = [], 0
+    while True:
+        page = read_context_capture(argparse.Namespace(
+            capture_file=capture["path"], capture_sha256=capture["sha256"],
+            offset=offset, page_bytes=256,
+        ))
+        assert page["ok"], page
+        pages.append(page)
+        if page["eof"]:
+            break
+        offset = page["next_offset"]
+    assert len(pages) > 2
+    messages = [{"role": "tool", "content": json.dumps(page)} for page in pages]
+    assert latest_quota_payload({"messages": messages}) == packet
+    if attack == "missing_middle":
+        messages.pop(len(messages) // 2)
+    elif attack == "changed_bytes":
+        first = dict(pages[0])
+        assert "Do not" in first["content"]
+        first["content"] = first["content"].replace("Do not", "Please", 1)
+        messages[0]["content"] = json.dumps(first)
+    else:
+        messages.append({"role": "tool", "content": json.dumps({
+            "ok": True, "schema_version": "context_capture_navigation_v1",
+            "recovery": {"command": "a new current reader has not been read"},
+        })})
+    with pytest.raises((ValueError, AssertionError)):
+        latest_quota_payload({"messages": messages})
 
 
 @pytest.mark.parametrize("attack", ["other_capture", "other_digest", "session_lookup", "shell_chain"])

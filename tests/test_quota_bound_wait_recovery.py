@@ -13,6 +13,7 @@ from control_plane.canonical_authority_fixture import (
     initialize_canonical_authority, read_fixture_todos,
     isolate_sqlite_runtime,
 )
+from control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 from loopx.cli import main as cli_main
 from control_plane.test_quota_settlement_cli import (
     AGENT_ID,
@@ -62,7 +63,7 @@ def test_bound_wait_recovers_original_turn_before_selecting_successor(
                     *args,
                 ]
             )
-            return rc, json.loads(capsys.readouterr().out)
+            return rc, read_cli_policy_payload(capsys.readouterr().out, returncode=rc)
 
     state = _configure_completion_validation_todo(project)
     _configure_selectable_alternative(project)
@@ -197,6 +198,12 @@ def test_bound_wait_recovers_original_turn_before_selecting_successor(
     assert command_args[command_args.index("--registry") + 1] == str(registry)
     assert command_args[command_args.index("--runtime-root") + 1] == str(runtime)
     assert command_args[command_args.index("--todo-id") + 1] == TODO_ID
+    def work_identity():
+        fields = ("status", "claimed_by", "resume_when", "resume_monitor_generation", "successor_todo_ids")
+        return {todo["todo_id"]: {field: todo.get(field) for field in fields}
+                for todo in read_fixture_todos(state)}
+
+    original_todos = work_identity()
     rc, rejected = cli(
         "quota",
         "should-run",
@@ -214,8 +221,9 @@ def test_bound_wait_recovers_original_turn_before_selecting_successor(
     assert rejected["error_code"] == "heartbeat_receipt_identity_conflict"
     assert rejected["heartbeat_receipt"]["status"] == "replayed"
     assert rejected["heartbeat_receipt"]["settlement_identity"]["todo_id"] == TODO_ID
-    assert rejected["effective_action"] != "heartbeat_receipt_write_failed"
-    assert "without" in rejected["recommended_action"]
+    assert rejected["should_run"] is False
+    assert rejected["heartbeat_receipt"]["event_id"] == replay["heartbeat_receipt"]["event_id"]
+    assert work_identity() == original_todos
     # Execute the advertised recovery action, supplying independently verified
     # evidence and the actual delivery workspace, not a parallel test-only command.
     refresh_args = tuple(
