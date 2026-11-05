@@ -32,8 +32,10 @@ hint 仍是既有 quota 读模型及其 `projection_envelope` 内的建议，不
 
 ## 成本与资格
 
-已核实集成基线为 `d39662d79784e7afa9dbc844f61452a64cb92c1c`；早期审阅基线为
-`2c24d5d102dc35c417b3ce49e25096aa37e1642b`。验收须使用集成基线与不可变候选 revision。
+初始实现基线为 `d39662d79784e7afa9dbc844f61452a64cb92c1c`；早期审阅基线为
+`2c24d5d102dc35c417b3ce49e25096aa37e1642b`。最终 CLI 配对证据使用集成基线
+`2ce6a5dcd8a5396f5d60312f37958e1b05d529ca` 与候选
+`db7f364385bb4418ea223623f0d1ffbd9745a1bd`。
 
 | 局部 planning/route 段 | 修改前 | 候选设计 |
 | --- | --- | --- |
@@ -47,12 +49,34 @@ hint 仍是既有 quota 读模型及其 `projection_envelope` 内的建议，不
 或性能预算；使用完整快照传输，不截断来源行。性能失败不得保留生产双 owner 回退：
 应优化批处理，或暂停/回滚切换。
 
-本检查点生成合同新鲜度、29 项合同/catalog Python 测试及原生路径对两个相关 canary
-profile 的选择均为 **passed**。工作树双语镜像预检通过，staged/exact-head 门禁仍待运行。
-最终静态检查、原生规则及 v0/v1 反例、独立
-mutation、公开 CLI 清理回归、不可变 baseline/head 的 File 与默认 SQLite 配对
-readback、干净 wheel/sdist 安装及成本均为 **not_yet_proven**，须在最终候选上记录。
-p50/p95、冷启动、逻辑 IPC、wire/输出字节及持久状态 readback 分别记录；删除的
-Python 规则、新增兼容代码、生产代码净变化与测试、生成物及文档分别统计。
-不宣称 PostgreSQL 或 Host 资格。源码实现不等于端到端验收、性能、exact-head
-审查或维护者合并授权。
+### 已验证结果与剩余门禁
+
+- **Passed：**生成合同新鲜度、29 项合同/catalog 测试、两个原生路径 canary
+  选择、214 项聚焦 Python 测试，以及上述 revision 的 SQLite/File 共 12 项
+  真实 CLI 配对一致性用例全部通过。
+- **Passed，聚焦语义证据：**1,200 项确定性合成 Python baseline 与 codec/TS
+  对照通过；三个独立 mutation 均被测试击败（可执行候选按列表非空而非存在回退、
+  current/frontier 优先级颠倒、handoff gate 按列表非空而非存在回退）。这些不构成
+  额外的 CLI、后端或性能证据。
+- **Passed：**premerge 通过，保留继承的复杂度 advisory。完整原生测试运行记录为
+  6,105 passed、30 failed、77 skipped。运行时/临时文件系统失败后，30 项失败用例
+  均在隔离或扩大临时文件系统后单独通过；这不将原始整套运行改记为全部通过。
+
+20 样本完整命令测量保留以下超阈值结果：
+
+| 场景 | 基线 p95 | 候选 p95 | 变化 |
+| --- | --- | --- | --- |
+| SQLite current JSON | 879.85 ms | 975.16 ms | +10.83%，+95.31 ms |
+| SQLite current Markdown | 851.66 ms | 877.88 ms | +26.23 ms |
+| File durable Markdown | 583.29 ms | 618.80 ms | +6.09%，+35.51 ms |
+
+其余九项场景改善。另一组带 instrumentation 的 20 对 SQLite current JSON 测量中，
+完整命令 p95 为 723.73→694.55 ms，planning RPC p95 为 1.294→1.797 ms。
+这些独立观察不能抵消原始超阈值结果，也不能证明其原因。**性能资格仍待 owner review，
+不是 passed**，不宣称性能提升。
+
+冷启动资格、干净 wheel/sdist 安装、PostgreSQL 与 Host 覆盖仍为
+**not_yet_proven**。完整命令 p50/p95、逻辑 IPC、wire/输出字节及持久状态 readback
+须与投影耗时分开记录。删除的 Python 规则、新增兼容代码、生产代码净变化与测试、
+生成物及文档分别统计。后续源码变更须重新执行 exact-head 验证。这些结果不授予
+合并或部署权限。

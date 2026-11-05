@@ -40,9 +40,11 @@ not rewrite Goal state.
 
 ## Costs and qualification
 
-The verified integration base is `d39662d79784e7afa9dbc844f61452a64cb92c1c`.
-The earlier review base was `2c24d5d102dc35c417b3ce49e25096aa37e1642b`;
-acceptance must use the integration base and immutable candidate revision.
+Initial implementation used `d39662d79784e7afa9dbc844f61452a64cb92c1c`; the
+earlier review base was `2c24d5d102dc35c417b3ce49e25096aa37e1642b`. Final
+matched CLI evidence uses integration base
+`2ce6a5dcd8a5396f5d60312f37958e1b05d529ca` and candidate
+`db7f364385bb4418ea223623f0d1ffbd9745a1bd`.
 
 | Local planning/route segment | Before | Candidate design |
 | --- | --- | --- |
@@ -58,16 +60,40 @@ fixture and performance budgets; use the complete-snapshot transport rather
 than truncating source rows. Do not retain a production dual-owner fallback if
 performance fails: optimize the batch or hold/revert the cutover.
 
-At this checkpoint, generated-contract freshness, 29 contract/catalog Python
-tests and native-path selection of both affected canary profiles are **passed**.
-The working-tree bilingual mirror advisory passes; the staged/exact-head gate
-remains pending. Final static
-checks, native rules and v0/v1 negatives, independent mutations, public CLI
-cleanup regressions, matched immutable baseline/head File and default-SQLite
-readbacks, clean wheel/sdist installs, and costs are **not_yet_proven** until
-recorded against the final candidate. Record p50/p95, cold starts, logical IPC,
-wire/output bytes and persisted-state readback separately; record Python rules
-removed, compatibility code added and net production changes separately from
-tests, generated files and docs. PostgreSQL and Host qualification are not
-claimed. Source implementation alone does not certify end-to-end acceptance,
-performance, exact-head review or maintainer merge authority.
+### Verified results and remaining holds
+
+- **Passed:** generated-contract freshness, 29 contract/catalog tests, both
+  native-path canary selections, 214 focused Python tests, and all 12 matched
+  real CLI parity cases across SQLite/File at the revisions above.
+- **Passed, focused semantic evidence:** 1,200 deterministic synthetic
+  Python-baseline versus codec/TS cases; all three independent mutations were
+  killed (nonempty-list fallback for executable candidates, current/frontier
+  priority reversal, and nonempty-list fallback for handoff gates). This is not
+  additional CLI, backend or performance evidence.
+- **Passed:** premerge, with an inherited complexity advisory. The full native
+  suite recorded 6,105 passed, 30 failed and 77 skipped. All 30 failures passed
+  individually with isolation or a larger temporary filesystem after
+  runtime/filesystem failures; this does not recast the original aggregate run
+  as a clean pass.
+
+The 20-sample full-command measurements retain these threshold exceedances:
+
+| Case | Base p95 | Candidate p95 | Change |
+| --- | --- | --- | --- |
+| SQLite current JSON | 879.85 ms | 975.16 ms | +10.83%, +95.31 ms |
+| SQLite current Markdown | 851.66 ms | 877.88 ms | +26.23 ms |
+| File durable Markdown | 583.29 ms | 618.80 ms | +6.09%, +35.51 ms |
+
+The other nine cases improved. A separate instrumented 20-pair SQLite current
+JSON cohort measured full-command p95 723.73→694.55 ms and planning-RPC p95
+1.294→1.797 ms. These distinct observations do not cancel the original
+threshold exceedances or prove their cause. **Performance qualification remains
+held for owner review**, not passed; no speedup is claimed.
+
+Cold-start qualification, clean wheel/sdist installation, PostgreSQL and Host
+coverage remain **not_yet_proven**. Keep full-command p50/p95, logical IPC,
+wire/output bytes and persisted-state readback distinct from projection timing.
+Record Python rules removed, compatibility code added and net production changes
+separately from tests, generated files and docs. Later source changes need fresh
+exact-head verification. These results grant neither merge nor deployment
+authority.
