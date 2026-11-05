@@ -13,10 +13,41 @@ from typing import Any
 from .decision_capture import capture_page_range as _capture_page_range
 
 
+def _open_verified(path: Path) -> int:
+    """Open the entry at `path` without following a link, on any host.
+
+    `O_NOFOLLOW` and `O_NONBLOCK` are POSIX-only attributes, so a bare reference
+    raises AttributeError on a host that does not define them -- here, before the
+    bounded-regular-file check below can refuse anything.
+
+    Where the host has no no-follow flag, the open cannot refuse a link for us,
+    and checking the path first would only move the race: the entry can be
+    replaced between the check and the open. Bind the descriptor to the entry
+    instead, and do it before the caller reads one byte: a link opens to its
+    target, whose device and inode differ from the link's own, so a swapped or
+    linked entry is refused rather than followed.
+    """
+    descriptor = os.open(
+        path,
+        os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0),
+    )
+    try:
+        opened = os.fstat(descriptor)
+        entry = os.lstat(path)
+        if stat.S_ISLNK(entry.st_mode):
+            raise ValueError("native observation must not be a symlink")
+        if (entry.st_dev, entry.st_ino) != (opened.st_dev, opened.st_ino):
+            raise ValueError("native observation changed while it was opened")
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor
+
+
 def read_native_trace_file(path: Path, *, tail: bool = False) -> bytes:
     from ..effect_runtime import MAX_REQUEST_BYTES
 
-    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    descriptor = _open_verified(path)
     with os.fdopen(descriptor, "rb") as stream:
         metadata = os.fstat(stream.fileno())
         if not stat.S_ISREG(metadata.st_mode) or (metadata.st_size > MAX_REQUEST_BYTES and not tail):
