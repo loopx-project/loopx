@@ -820,3 +820,31 @@ def test_usage_turn_http_reads_registered_counter_evidence_without_analysis(work
         w["request"](suffix="/usage-turn", **query)
     assert error.value.code == 409
     assert not w["count"].exists()
+
+
+def test_usage_comparison_http_is_source_scoped_read_only_and_keeps_unknown(workspace):
+    from tests.capabilities.test_trajectory_assessment_store import _usage_fixture
+
+    w, read = workspace, workspace["request"]
+    packs = []
+    for session in ("solver-session", "reference-session"):
+        artifact = session + ".jsonl"
+        (w["sources"] / artifact).write_text(_usage_fixture().replace("solver-session", session))
+        packs.append(register_pack(runtime_root=w["tmp_path"] / "runtime", owner_goal_id="research-owner",
+            input_path=w["tmp_path"] / "input.json", source_root=w["sources"], title=session,
+            usage_jsonl=artifact, usage_session_id=session))
+    query = dict(pack_id=packs[0]["pack_id"], compare_pack_id=packs[1]["pack_id"])
+    comparison = read(**query)["comparison"]
+    # The historical fixture has no request receipts. Native counters cannot
+    # manufacture reconciled coverage or an attributable zero from that gap.
+    assert comparison == dict(method="trajectory_usage_comparison_v1", status="unavailable",
+                              reason="request_coverage_unavailable")
+    for invalid in (dict(compare_pack_id=packs[1]["pack_id"]),
+                    dict(query, compare_pack_id="0" * 64), dict(query, goal="other-owner"),
+                    dict(query, first_line="1")):
+        with pytest.raises(HTTPError) as failure:
+            read(**invalid)
+        assert failure.value.code in {400, 409}
+    for pack in packs:
+        assert read(pack_id=pack["pack_id"])["pack"]["job"] is None
+    assert not w["count"].exists(), "GET comparison and its refusal never dispatch an analysis"

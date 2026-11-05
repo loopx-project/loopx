@@ -2,6 +2,7 @@ import {useCallback, useEffect, useLayoutEffect, useRef, useState} from "react";
 import {ArrowLeft, ArrowUpRight, ChevronDown, CircleHelp, History, LoaderCircle, RefreshCw, Sparkles, TriangleAlert, X} from "lucide-react";
 import type {AssessmentCitation, TrajectoryAssessment, TrajectoryEpisode, TrajectoryOutputLanguage, TrajectoryContinuation} from "../../../../../../loopx/control_plane/capabilities/trajectory_assessment_types.js";
 import {ResearchProgress, episodeQuestionGroups, metricCopy, verdictLabel, type ResearchProgressPack} from "./goal-research-progress";
+import type {TrajectoryUsageComparison} from "../../../../../../loopx/control_plane/capabilities/trajectory_usage_comparison.js";
 import {requestJson} from "../../data/chat";
 import {sourceReadApiUrl} from "../../data/local-status-query";
 import {ContextHelp} from "./context-help";
@@ -73,6 +74,14 @@ export async function readAnalysisSnapshot(goalId: string, packId: string | null
 export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean, readSourceUrl?: string) {
   const endpoint = "/api/chat/research-analysis";
   const outputLanguage = zh ? "zh" : "en";
+  const readUsageComparison = useCallback(async (packId: string, referenceId: string, signal: AbortSignal) => {
+    const query = new URLSearchParams({goal_id: goalId, pack_id: packId, compare_pack_id: referenceId, output_language: outputLanguage});
+    const value = await requestJson<{ok: boolean; comparison: TrajectoryUsageComparison}>(
+      sourceReadApiUrl(readSourceUrl, `${endpoint}?${query}`), {signal});
+    if (!value?.ok || value.comparison?.method !== "trajectory_usage_comparison_v1"
+      || !["observed", "unavailable"].includes(value.comparison.status)) throw new Error("Comparison readback unavailable");
+    return value.comparison;
+  }, [goalId, readSourceUrl, outputLanguage]);
   const [citation, setCitation] = useState<Citation | null>(null);
   const [citationError, setCitationError] = useState("");
   const [citationBusy, setCitationBusy] = useState(false);
@@ -232,7 +241,7 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
   const readCitation = (c: AssessmentCitation, origin?: HTMLButtonElement) => readEvidence({source_id: c.source_id, first_line: String(c.first_line), last_line: String(c.last_line)}, "citation", origin);
   const readUsageTurn = (turnId: string, origin: HTMLButtonElement) => readEvidence({turn_id: turnId}, "usage-turn", origin);
   const closeCitation = () => {citeGeneration.current++; setCitation(null); setCitationError(""); setCitationBusy(false); requestAnimationFrame(() => sourceTrigger.current?.focus());};
-  return {readOnly: currentSnapshot?.execution_enabled === false || (Boolean(readSourceUrl) && currentSnapshot?.execution_enabled !== true), citation, citationBusy, citationError, sourcePanel, readCitation, readUsageTurn, closeCitation, goalId, zh, location, snapshot: currentSnapshot, pack: readingPack, requestPack: pack, savedOriginal, readError, error, loading, pending, cancelPending, recordedRunning, panel, trigger, read, show, execute, cancel,
+  return {readOnly: currentSnapshot?.execution_enabled === false || (Boolean(readSourceUrl) && currentSnapshot?.execution_enabled !== true), sourceScope, readUsageComparison, citation, citationBusy, citationError, sourcePanel, readCitation, readUsageTurn, closeCitation, goalId, zh, location, snapshot: currentSnapshot, pack: readingPack, requestPack: pack, savedOriginal, readError, error, loading, pending, cancelPending, recordedRunning, panel, trigger, read, show, execute, cancel,
     close: () => {citeGeneration.current++; setCitation(null); setCitationError(""); setCitationBusy(false); navigate(false); requestAnimationFrame(() => trigger.current?.focus());}, select: (id: string) => navigate(location.open, id, true)};
 }
 type Controller = ReturnType<typeof useResearchAnalysis>;
@@ -327,7 +336,7 @@ export function ResearchAnalysisStatus({analysis: a}: {analysis: Controller}) {
 export function ResearchProgressSummary({analysis: a, includeReport = true}: {analysis: Controller; includeReport?: boolean}) {
   const packs = a.snapshot?.catalog.packs ?? [];
   if (!a.pack && !packs.length) return null;
-  return <ResearchProgress pack={a.pack} packs={packs} selectedId={a.location.packId ?? a.snapshot?.catalog.default_pack_id ?? ""} zh={a.zh} analysisOpen={a.location.open} includeReport={includeReport} onSelect={a.select} onCitation={a.readCitation} onUsageTurn={a.readUsageTurn}/>;
+  return <ResearchProgress pack={a.pack} packs={packs} selectedId={a.location.packId ?? a.snapshot?.catalog.default_pack_id ?? ""} zh={a.zh} analysisOpen={a.location.open} includeReport={includeReport} onSelect={a.select} onCitation={a.readCitation} onUsageTurn={a.readUsageTurn} onUsageComparison={a.readUsageComparison} usageComparisonScope={a.sourceScope}/>;
 }
 
 export function ResearchReportSummary({analysis: a}: {analysis: Controller}) {

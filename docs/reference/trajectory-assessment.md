@@ -1180,6 +1180,71 @@ estimate and provider counters; do not add their different units or denominators
 租约获取、检查、续租、释放、转移及常见 Todo 操作分别列示；计数表示可识别的返回，
 不证明状态写入成功或恢复操作可以省略。
 
+#### Whole requests issuing LoopX commands and capture comparison
+
+The same opt-in registration now records
+`solver_usage.projection.loopx_requests.method=codex_ordered_loopx_requests_v1`.
+The TypeScript toolkit owner associates a simple recognized command with the
+next native response receipt only when its return arrives before another
+response in that Turn. Multiple commands in one response count that response
+once. Duplicate response receipts remain deduplicated by the existing request
+reconciler. Late/unmatched calls and unclassified commands stay explicit.
+Python only transports the original line positions, literal argv and return
+metadata; neither command arguments nor returned text enter this projection.
+
+Keep three overlapping observations separate:
+
+| Observation | Numerator and denominator | Interpretation |
+| --- | --- | --- |
+| Control text, `loopx_input` | Sum of attributed control-text tokens / native input of the same requests | Requires provider attribution or the separately labeled recorded-packet estimate; missing attribution is unknown |
+| Command requests, `loopx_requests` | Whole native input of requests issuing recognized LoopX commands / all native request input | Includes task history; a conservative observed subset, not pure-control tokens or avoidable cost |
+| Appended tool text, `tool_context` | Recognized returned UTF-8 bytes / captured appended input-text bytes | Inventory only, not per-request replay or token accounting |
+
+Cached input is already included in native input, reasoning in native output,
+and compaction mirrors in the reconciled request set. Do not add these subsets
+or the three views. Calls alongside other calls are identified as mixed;
+absence of another recognized call does not prove a pure-control workflow.
+The existing Turn-cost reader retains the broader workflow counters. Model
+generation latency, unreceipted failures, operator/shared-service cost and
+actual charges remain unknown; a configured budget is not a charge.
+
+Research → Sources and usage → **Compare captured usage** uses the same typed
+owner, `trajectory_usage_comparison_v1`. Choose another source-owned capture;
+the reader compares independent sessions only when Goal, case, source revision,
+declared window and usage method agree. It preserves each original run, pack,
+source digest, session and absolute capture time. This is a descriptive
+comparison, **not** qualification that study/arm, model, feedback, budget or
+other experimental conditions match. Unaligned scopes, historical sources and
+unreconciled counters withhold deltas. Input-attribution methods must agree for
+their deltas; partial attribution and zero denominators retain unknown shares.
+All ratios and percentage-point differences are derived by the toolkit from
+request sums, never by averaging percentages in the renderer. A falling share
+with rising absolute input is shown explicitly and is not labeled savings.
+
+The existing GET reader accepts two explicit `pack_id` / `compare_pack_id`
+identifiers within its registered Goal/source namespace. It verifies both
+sources before calling the builtin `benchmark.trajectory.usage-comparison`;
+the frontend only formats that projection. Loading, cancellation and retry
+are read-only. A failed or cancelled read clears the displayed comparison,
+and a late response cannot replace a different source or reference selection.
+
+This adds no configuration, model request, analysis job, recapture or experiment.
+Reads, language changes, source switches and refresh consume frozen values.
+Old packs keep their exact saved projection; absence of `loopx_requests` is
+uncaptured, not zero. Registering a new frozen observation preserves the original
+capture and its old pack identity. Revert the display/observation change to
+disable it; no ledger migration, source rewrite or runtime activation is needed.
+
+中文：控制文本 token、发出 LoopX 命令的整次请求用量、追加工具返回字节是三个重叠
+视角，不能相加。整次请求含任务历史，仅保守识别简单调用；混合调用、未分类和迟到
+返回保留，不将其认作纯控制、全部开销或可省成本。输入已含缓存、输出已含推理，
+压缩镜像不重复计数；模型耗时与实扣未知。对照沿同一 TS owner 校验原 Goal、案例、
+修订、窗口、方法及独立 Session，并保留原 run/pack/来源和时间，不据此核准科学配对。
+不平均百分比；归因缺失/部分、方法变化、来源失效或零分母保持未知。比例下降但绝对
+输入增加会明确提示。浏览零模型调用，不重采集、不重写旧包或账本；旧包缺字段不补零。
+既有 GET reader 在注册 Goal/来源命名空间中校验两个显式 pack，调用同一 builtin；
+前端只格式化返回值。取消、失败和重试均为只读，清除旧对照；迟到响应不能覆盖新选择。
+
 ### Recorded Turn packet estimate
 
 The existing native `codex-cli` Turn host can record its actual injected packet

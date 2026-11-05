@@ -125,6 +125,9 @@ def test_tool_inventory_is_opt_in_separate_and_retains_native_counter_identity(t
     assert 'tool_context' not in old['projection']
     measured = _usage_capture(tmp_path, 'usage.jsonl', 'session', include_tool_context=True)
     inventory = measured['projection'].pop('tool_context')
+    footprint = measured['projection'].pop('loopx_requests')
+    assert footprint['status'] == 'observed' and footprint['recognized_requests'] == 0
+    assert footprint['unmatched_calls'] == 1, 'A return before its request receipt stays unassociated'
     assert measured == old
     assert inventory['status'] == 'observed'
     assert inventory['loopx_tool_output_bytes'] == 15
@@ -142,7 +145,7 @@ def test_real_cli_registers_recorded_component_without_model_execution(tmp_path,
                 "input": 'text(await tools.exec_command({cmd: "loopx status"}))'}
         reply = {"type": "custom_tool_call_output", "call_id": "tool", "output": "saved"}
         items = [{"type": "response_item", "payload": item} for item in (call, reply)]
-        (tmp_path / "usage.jsonl").write_text("\n".join(map(json.dumps, rows[:2] + items + rows[2:])))
+        (tmp_path / "usage.jsonl").write_text("\n".join(map(json.dumps, rows[:2] + [items[0], rows[2], items[1]] + rows[3:])))
     evidence = "Synthetic fixed negative result."
     (tmp_path / "evidence.txt").write_text(evidence)
     data = {"schema_version": "trajectory_assessment_input_v1",
@@ -167,10 +170,16 @@ def test_real_cli_registers_recorded_component_without_model_execution(tmp_path,
     view = inspect_pack(runtime_root=runtime, owner_goal_id="research", pack_id=registered["pack_id"])
     assert view["solver_usage"]["projection"]["loopx_input"]["input_fraction"] == 0.02
     inventory = view["solver_usage"]["projection"]["tool_context"]
+    footprint = view["solver_usage"]["projection"]["loopx_requests"]
+    assert footprint["status"] == "observed"
     if direct_call:
         assert inventory["operations"] == [{"operation": "status", "calls": 1, "bytes": 5}]
         assert inventory["loopx_tool_output_fraction"] == 1.0
+        assert footprint["recognized_requests"] == 1
+        assert footprint["tokens"]["input_tokens"] == 100
+        assert footprint["input_fraction"] == 1.0  # Whole request, distinct from the packet estimate above.
     else:
         assert inventory["loopx_tool_output_fraction"] is None
+        assert footprint["recognized_requests"] == 0
     assert view["job"] is None and view["result"] is None
     assert "hello world" not in json.dumps(view)
