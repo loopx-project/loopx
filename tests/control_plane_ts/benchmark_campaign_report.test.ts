@@ -170,3 +170,27 @@ test('configuration requires typed public-safe fields and evidence', () => {
   d.selection[0].configuration.budget_ms=-1;
   assert.throws(()=>buildReport(d),/configuration numeric/);
 });
+
+test('opt-in HTML separates the record trajectory from all samples and splits different scales', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'campaign-curve-'));
+  try {
+    const input = fixture();
+    input.arms[0].label = 'A <script>';
+    input.selection[0].score_samples = [95, 2, 97, 96].map((value, i) => ({
+      elapsed_ms: i * 3600000, value, normalization_id: 'scale-a', evidence_ref: 'receipt:sample',
+    }));
+    input.selection[3].score_samples = [{elapsed_ms: 0, value: 92, normalization_id: 'scale-b', evidence_ref: 'receipt:b'}];
+    const path = join(dir, 'selection.json'), prefix = join(dir, 'report');
+    writeFileSync(path, JSON.stringify(input));
+    const run = spawnSync(process.execPath, ['--experimental-strip-types', resolve('scripts/benchmark-campaign-report.ts'),
+      path, prefix, '--score-curves'], {encoding:'utf8'});
+    assert.equal(run.status, 0, run.stderr);
+    const html = readFileSync(prefix + '.html', 'utf8');
+    assert.equal(html.includes('<script>'), false);
+    const charts = [...html.matchAll(/<svg\b.*?<\/svg>/gs)].map(match => match[0]);
+    assert.deepEqual(charts.map(chart => [...chart.matchAll(/<circle /g)].length), [2, 4, 1, 1]);
+    assert.doesNotMatch(charts[0], /1\.00 h · 2</);
+    assert.match(charts[1], /1\.00 h · 2</);
+    assert.match(charts[0], /H932\.00"/); // retain the best through the last observed regression
+  } finally { rmSync(dir, {recursive: true, force: true}); }
+});
