@@ -40,6 +40,7 @@ def test_captured_point_continues_with_fresh_authority(
     from benchmark.runtime.sessions import BenchmarkSessionWake
     from benchmark.runtime.worker import native_command
     from loopx.cli import main
+    from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
     from loopx.control_plane.effect_runtime import (
         effect_runtime_result,
         EffectRuntimeRemoteError,
@@ -123,7 +124,7 @@ def test_captured_point_continues_with_fresh_authority(
         code = main([*prefix, *args])
         output = capsys.readouterr().out
         assert code == 0, output
-        return json.loads(output)
+        return read_cli_policy_payload(output, returncode=code)
 
     def receiver_guard(*args):
         # The receiver checks machine fields. run_native_work presents this

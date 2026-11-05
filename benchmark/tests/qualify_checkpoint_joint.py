@@ -93,7 +93,7 @@ def main():
     parser.add_argument("--image", default="python:3.12-slim")
     parser.add_argument("--context-delivery", choices=("off", "on"), default="off",
                         help="Qualify the existing opt-in context transport through source and fresh receivers")
-    parser.add_argument("--capture-boundary", choices=("fresh_replan", "settled_work"), default="fresh_replan",
+    parser.add_argument("--capture-boundary", choices=("fresh_replan", "settled_work", "settled_once"), default="fresh_replan",
                         help="Qualify the existing automatic pre-replan or explicit settled-wake full capture")
     parser.add_argument("--reuse-point", type=Path, help="Reuse an already sealed synthetic source; never count its source test as passed")
     parser.add_argument("--captured-config", type=Path, help="The reused point's matching native fixture configuration")
