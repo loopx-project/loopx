@@ -270,6 +270,12 @@ operation also runs the owed command there, using the originating CLI's
 implementation. The normal workspace and settlement guards still apply; a
 missing or incompatible workspace leaves the original owed command recoverable.
 
+Callers that need a compact result can add `--settlement-receipt` to
+`refresh-state --settle-turn`. A successful settled result provides its exact
+identity and receipts inline and a `result_details.command` for the full saved
+result. Inspect unresolved controls before continuing. If saving the view fails
+after commitment, retry the same Turn and check its receipts.
+
 An in-flight recommendation does not require keeping a completed Todo open.
 Validate its original declaration, use ordinary completion when satisfied, and
 write semantic closeout with an evidence-linked vision decision on the original
@@ -291,6 +297,10 @@ Todo 或 obligation/Turn 的 canonical 待结算命令并验证回执；不重�
 指定 `--delivery-workspace-path` 后，组合操作也在该交付工作区执行待结算命令，
 继续使用原调用方的 CLI 实现。原工作区和结算校验保持；目录缺失或不兼容时保留
 原待结算命令以便恢复。
+
+需要紧凑回执时，在 `refresh-state --settle-turn` 后加 `--settlement-receipt`。
+结算成功后可直接核对本次身份和回执，用 `result_details.command` 读取完整结果。
+先处理未解决的控制项。若结算已提交而视图保存失败，按原 Turn 重试并核对回执。
 
 执行中续跑建议不要求把已完成的 Todo 保持开放。原声明验收满足后可正常完成，并
 在原 Turn 上按语义收尾写入有证据的 vision；未完成的阶段进展仍可保留开放状态。

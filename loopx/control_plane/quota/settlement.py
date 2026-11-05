@@ -340,6 +340,7 @@ def read_heartbeat_settlement(
     source_admission: Mapping[str, Any] | None = None,
     borrow_source_admission: bool = False,
     heartbeat_reentry_guard: dict[str, Any] | None = None,
+    include_record_bodies: bool = True,
 ) -> QuotaSettlementReadback | None:
     """Read one complete heartbeat settlement through the TS domain owner."""
 
@@ -357,6 +358,8 @@ def read_heartbeat_settlement(
                     "replan_obligation_id": replan_obligation_id,
                     "infer_turn_instance_id": infer_turn_instance_id,
                     "allow_unbound_binding": allow_unbound_binding,
+                    **({"include_record_bodies": include_record_bodies}
+                        if include_record_bodies is not True else {}),
                     **(
                         {"resolve_original_binding": True}
                         if resolve_original_binding
