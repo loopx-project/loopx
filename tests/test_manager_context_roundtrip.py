@@ -286,7 +286,9 @@ def test_handoff_reader_retains_partial_scope_after_delivery_and_later_results(f
         return page["rows"][0]
 
     remaining = {"summary": "Measure the original revision sequence", "resume_when": "The original evidence is available"}
-    sender = lambda *_: {"ok": True, "reply_verified": True}
+    def sender(*_):
+        return {"ok": True, "reply_verified": True}
+
     report(root, "research", "worker", rid, "conclusion", "An initial analysis is available.", remaining_work=remaining)
     assert read()["remaining_work"] == remaining
     assert drain(root, registry, store, sender) == 1
