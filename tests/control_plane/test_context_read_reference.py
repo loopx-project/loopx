@@ -32,6 +32,66 @@ def fixture(tmp_path):
     return payload, view, model_context_reference(view)
 
 
+@pytest.mark.parametrize("listing", [False, True])
+@pytest.mark.parametrize("selectors", [
+    [""], ["/a~1b~0c/0/number"], ["/a~1b~0c", "/a~1b~0c/0/number"],
+    ["/", "/0/01"], ["/scalar/child"], ["/null/child"], ["/empty/child"],
+    ["/a~1b~0c/3"], ["/a~1b~0c/01"], ["/a~1b~0c/-1"],
+    ["/a~1b~0c/9007199254740992"], ["/a~1b~0c/0/absent/child"],
+    ["/a~1b~0c/0/number", "/missing"], ["/invalid~2"], ["invalid"],
+])
+def test_selected_structure_preserves_original_reader_and_recovery(tmp_path, monkeypatch, selectors, listing):
+    from loopx.control_plane.turn_driver import decision_capture
+
+    payload = {"a/b~c": [{"number": 10**45 + 17}, {"tail": "完整原值"}],
+        "": "empty-key", "0": {"01": -0.0}, "scalar": "source text", "null": None,
+        "empty": {}, "unread": {f"sibling_{index}": {"value": index} for index in range(200)}}
+    source = tmp_path / "source.json"
+    original = (json.dumps(payload, ensure_ascii=False) + "\n").encode()
+    source.write_bytes(original)
+    source.chmod(0o600)
+    command = shlex.join(["loopx", "--format", "json", "quota", "context-read", "--capture-file", str(source),
+        "--capture-sha256", hashlib.sha256(original).hexdigest(), "--page-bytes", "64000",
+        "--max-page-output-bytes", "64000"])
+    # The unpruned transport independently exercises the original typed owner,
+    # including its failed-batch precedence and nearest-container remediation.
+    with monkeypatch.context() as old:
+        old.setattr(decision_capture, "context_selection_transport", lambda value, *args, **kwargs: value)
+        expected = read(command, select=selectors, list_fields=listing, list_depth=2 if listing else None)
+    observed = read(command, select=selectors, list_fields=listing, list_depth=2 if listing else None)
+    assert observed == expected
+    assert source.read_bytes() == original
+    if not listing and selectors == ["/a~1b~0c/0/number"]:
+        assert json.loads(observed["content"])["selections"][0]["value"] == 10**45 + 17
+    if not observed["ok"] and "recovery_command" in observed:
+        assert read(observed["recovery_command"])["ok"], "Recovery must still discover the complete original parent"
+
+
+def test_scoped_discovery_keeps_unrelated_values_out_of_the_runtime_request(tmp_path, monkeypatch):
+    from loopx.control_plane.quota import turn_envelope
+
+    sizes = []
+    evaluate = turn_envelope.effect_runtime_projection_result
+
+    def measure(method, request):
+        if request.get("operation") == "context_select":
+            sizes.append(len(json.dumps(request, ensure_ascii=False).encode()))
+        return evaluate(method, request)
+
+    monkeypatch.setattr(turn_envelope, "effect_runtime_projection_result", measure)
+    template = b'{"selected":{"answer":42},"unrelated":""}'
+    raw = template[:-2] + b"x" * 100_000 + template[-2:]
+    source = tmp_path / "decision.json"
+    source.write_bytes(raw)
+    command = shlex.join(["loopx", "--format", "json", "quota", "context-read",
+        "--capture-file", str(source), "--capture-sha256", hashlib.sha256(raw).hexdigest()])
+    page = read(command, select=["/selected"], list_fields=True)
+    assert page["ok"] and page["eof"], page
+    assert sizes and sum(sizes) < len(raw) // 100
+    assert json.loads(page["content"])["selections"] == [{"pointer": "/selected", "fields": [
+        {"pointer": "/selected/answer", "type": "number", "bytes": 2}]}]
+
+
 def assert_section_read_only(page, machine):
     raw = Path(machine["path"]).read_bytes()
     reference = {"path": machine["path"], "sha256": machine["sha256"]}
