@@ -16,7 +16,8 @@ from pathlib import Path
 
 from benchmark.runtime.codex import Execution, prepare_codex_home, process_environment
 
-PHASE_WORK_RESERVE_SECONDS = 160
+from benchmark.runtime.scheduler import PHASE_WORK_RESERVE_SECONDS as PHASE_WORK_RESERVE_SECONDS
+from benchmark.runtime.scheduler import phase_work_reserve
 
 
 def read_json(text: str) -> dict:
@@ -556,16 +557,18 @@ def run_once(env: dict[str, str]) -> dict:
     try:
         if stage == "execute" and env.get("LOOPX_PHASE_DEADLINE_EPOCH"):
             remaining = float(env["LOOPX_PHASE_DEADLINE_EPOCH"]) - time.time()
-            # Reserve startup and settlement on every wake, then allow the
-            # remaining time for work instead of reusing the initial timeout.
-            if remaining <= PHASE_WORK_RESERVE_SECONDS:
+            # Heartbeat work uses the whole remaining phase. Cleanup is bounded
+            # by its existing host transport, not subtracted from each wake.
+            # Native Goal and managed-turn transports retain their own reserve.
+            reserve = phase_work_reserve(execution.mode)
+            if remaining <= reserve:
                 receipt.update(ok=True, budget_exhausted=True, host_invoked=False)
                 return receipt
             if execution.mode == "heartbeat":
-                phase_work_deadline = float(env["LOOPX_PHASE_DEADLINE_EPOCH"]) - PHASE_WORK_RESERVE_SECONDS
+                phase_work_deadline = float(env["LOOPX_PHASE_DEADLINE_EPOCH"])
             execution = replace(
-                execution, timeout_seconds=(remaining - PHASE_WORK_RESERVE_SECONDS if execution.timeout_seconds is None
-                                             else min(execution.timeout_seconds, remaining - PHASE_WORK_RESERVE_SECONDS))
+                execution, timeout_seconds=(remaining - reserve if execution.timeout_seconds is None
+                                             else min(execution.timeout_seconds, remaining - reserve))
             )
         prepare_codex_home(
             home,
