@@ -23,7 +23,7 @@ from ..control_plane.turn_driver.decision_capture import (
     validate_handoff_socket, CONTEXT_CAPTURE_READ_GUIDANCE, CONTEXT_CAPTURE_PAGE_GUIDANCE, context_capture_read_command,
     CONTEXT_CAPTURE_NAVIGATION_GUIDANCE,
     read_context_capture_file as _read_capture,
-    read_context_read_reference, write_context_read_reference, private_capture_uid,
+    read_context_read_reference, write_context_read_reference, private_capture_uid, read_turn_observation_text,
 )
 from ..control_plane.turn_driver.native_context_profile import (
     NATIVE_CONTEXT_PAGE_BYTES, NATIVE_CONTEXT_PAGE_OUTPUT_BYTES, native_context_page_budget,
@@ -1249,8 +1249,7 @@ def read_replan_view(args: argparse.Namespace) -> dict[str, Any]:
     if not args.decision_file or not args.source_hash:
         raise ValueError("replan-view requires --decision-file and --source-hash")
     path = Path(args.decision_file).expanduser()
-    with path.open(encoding="utf-8") as stream:
-        payload = json.load(stream)
+    payload = json.loads(read_turn_observation_text(path))
     return _turn_envelope_result("replan_view", payload=payload, source_hash=args.source_hash,
                                  captured_decision_path=str(path), reader_argv=current_loopx_cli_argv(),
                                  stage=args.replan_stage, outcome_ref=args.outcome_ref)
