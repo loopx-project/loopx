@@ -23,6 +23,10 @@ OWNER_MODEL = pytest.mark.skipif(
     getattr(os, "getuid", None) is None,
     reason="this host has no owner model to check the private regular file against",
 )
+POSIX_SYNC = pytest.mark.skipif(
+    os.name != "posix",
+    reason="_sync only qualifies a POSIX bank; other hosts are claimed by the no-op case",
+)
 
 
 def _symlink(path, target) -> None:
@@ -84,6 +88,7 @@ def test_recovery_readback_refuses_a_symlink_without_the_flag(tmp_path, monkeypa
             pass
 
 
+@POSIX_SYNC
 def test_checkpoint_sync_flushes_the_directory_without_the_flag(tmp_path, monkeypatch):
     flushed, real = [], os.fsync
 
@@ -97,12 +102,24 @@ def test_checkpoint_sync_flushes_the_directory_without_the_flag(tmp_path, monkey
     assert flushed == [True], "the directory must be flushed, not silently skipped"
 
 
+@POSIX_SYNC
 def test_checkpoint_sync_refuses_a_target_that_is_not_a_directory(tmp_path, monkeypatch):
     target = tmp_path / "bank.json"
     target.write_text("{}")
     monkeypatch.delattr(os, "O_DIRECTORY", raising=False)
     with pytest.raises(ValueError, match="not a directory"):
         _sync(target)
+
+
+def test_checkpoint_sync_claims_nothing_off_posix(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(os, "fsync", lambda descriptor: calls.append(descriptor))
+    monkeypatch.setattr(os, "name", "nt")
+    target = tmp_path / "bank.json"
+    target.write_text("{}")
+    _sync(tmp_path)
+    _sync(target)
+    assert calls == [], "a host outside the POSIX contract must not report a flush"
 
 
 def test_checkpoint_sync_still_syncs_where_the_directory_flag_exists(tmp_path, monkeypatch):
