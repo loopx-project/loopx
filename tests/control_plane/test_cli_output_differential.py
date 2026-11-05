@@ -138,7 +138,8 @@ def test_over_budget_base_is_reported_before_candidate_failure_without_waiver(
         row_id="surface/quota_should_run/crowded/json", surface_id="quota_should_run",
         scenario="crowded", chars=chars, lines=1,
     )
-    probes, git_commands = [], []
+    probes, git_commands, workloads = [], [], []
+    fixture_bytes = namespace["PROBE_TEST"].read_bytes()
 
     def git_transport(command, **_):
         git_commands.append(command)
@@ -149,6 +150,7 @@ def test_over_budget_base_is_reported_before_candidate_failure_without_waiver(
 
     def probe_transport(**kwargs):
         probes.append(kwargs["enforce_budget"])
+        workloads.append((kwargs["probe_test"], kwargs["probe_test"].read_bytes(), kwargs["source_root"]))
         if not kwargs["enforce_budget"]:
             kwargs["receipt_path"].write_text(json.dumps(_receipt(row)))
         else:
@@ -167,6 +169,9 @@ def test_over_budget_base_is_reported_before_candidate_failure_without_waiver(
     with pytest.raises(AssertionError, match="baseline ceiling"):
         main()
     assert probes == [False, True]
+    assert workloads[0][0] == workloads[1][0]
+    assert all(body == fixture_bytes for _, body, _ in workloads)
+    assert workloads[0][2] != workloads[1][2]
     assert "remove" in git_commands[-1]
     output = capsys.readouterr().out
     prefix = "cli-output-base-current-ceilings "
