@@ -363,7 +363,11 @@ def _surface_commands(
     registry_path: Path,
     state_file: Path,
     output_format: str,
+    context_delivery: str | None = "off",
 ) -> dict[str, list[str]]:
+    # These ceilings characterize the complete inline policy, not its shorter
+    # file-navigation descriptor. Qualify default progressive recovery below.
+    delivery = ["--context-delivery", context_delivery] if context_delivery else []
     common = [
         "--registry",
         str(registry_path),
@@ -412,7 +416,7 @@ def _surface_commands(
             GOAL_ID,
             "--agent-id",
             AGENT_IDS[0],
-        ],
+        ] + delivery,
         "loopx_turn_plan": common
         + [
             "turn",
@@ -551,6 +555,10 @@ def _mode_variant_commands(
         "--agent-scope",
         "Public CLI output qualification.",
     ]
+    quota = _surface_commands(
+        project=project, runtime=runtime, registry_path=registry_path,
+        state_file=state_file, output_format=output_format,
+    )["quota_should_run"]
     return {
         "start_goal_guided_command_pack_detail": [
             "--format",
@@ -583,82 +591,13 @@ def _mode_variant_commands(
             GOAL_TEXT,
             "--message-only",
         ],
-        "quota_should_run_scheduler_detail": common
-        + [
-            "quota",
-            "should-run",
-            "--goal-id",
-            GOAL_ID,
-            "--agent-id",
-            AGENT_IDS[0],
-            "--include-detail",
-            "scheduler",
-        ],
-        "quota_should_run_todo_summary_detail": common
-        + [
-            "quota",
-            "should-run",
-            "--goal-id",
-            GOAL_ID,
-            "--agent-id",
-            AGENT_IDS[0],
-            "--include-detail",
-            "agent-todos",
-        ],
-        "quota_should_run_user_todo_summary_detail": common
-        + [
-            "quota",
-            "should-run",
-            "--goal-id",
-            GOAL_ID,
-            "--agent-id",
-            AGENT_IDS[0],
-            "--include-detail",
-            "user-todos",
-        ],
-        "quota_should_run_goal_boundary_detail": common
-        + [
-            "quota",
-            "should-run",
-            "--goal-id",
-            GOAL_ID,
-            "--agent-id",
-            AGENT_IDS[0],
-            "--include-detail",
-            "goal-boundary",
-        ],
-        "quota_should_run_vision_detail": common
-        + [
-            "quota",
-            "should-run",
-            "--goal-id",
-            GOAL_ID,
-            "--agent-id",
-            AGENT_IDS[0],
-            "--include-detail",
-            "vision",
-        ],
-        "quota_should_run_all_detail": common
-        + [
-            "quota",
-            "should-run",
-            "--goal-id",
-            GOAL_ID,
-            "--agent-id",
-            AGENT_IDS[0],
-            "--include-detail",
-            "all",
-        ],
-        "quota_should_run_turn_envelope": common
-        + [
-            "quota",
-            "should-run",
-            "--goal-id",
-            GOAL_ID,
-            "--agent-id",
-            AGENT_IDS[0],
-            "--turn-envelope",
-        ],
+        "quota_should_run_scheduler_detail": quota + ["--include-detail", "scheduler"],
+        "quota_should_run_todo_summary_detail": quota + ["--include-detail", "agent-todos"],
+        "quota_should_run_user_todo_summary_detail": quota + ["--include-detail", "user-todos"],
+        "quota_should_run_goal_boundary_detail": quota + ["--include-detail", "goal-boundary"],
+        "quota_should_run_vision_detail": quota + ["--include-detail", "vision"],
+        "quota_should_run_all_detail": quota + ["--include-detail", "all"],
+        "quota_should_run_turn_envelope": quota + ["--turn-envelope"],
         "loopx_turn_plan_transaction_detail": common
         + [
             "turn",
