@@ -175,18 +175,28 @@ def test_projected_claim_prepares_the_same_todo_for_a_fresh_guard(
     assert after["normal_delivery_allowed"] is True
 
 
-@pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("scenario", ["codex_app_heartbeat", "codex_app_ssh_goal"])
+@pytest.mark.parametrize("provider,scenario,location,ambient", [
+    (provider, scenario, "directory", "preparation-session")
+    for provider in ("file", "sqlite")
+    for scenario in ("codex_app_heartbeat", "codex_app_ssh_goal")
+] + [
+    ("sqlite", "codex_app_heartbeat", "root", None),
+    ("sqlite", "codex_app_heartbeat", "root", "other-session"),
+])
 def test_native_hook_returns_readable_ready_source_and_original_claim(
-    tmp_path, monkeypatch, provider, scenario,
+    tmp_path, monkeypatch, provider, scenario, location, ambient,
 ):
     from loopx.control_plane.turn_driver import codex_context
 
     tmp_path = tmp_path.resolve()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("CODEX_THREAD_ID", "preparation-session")
-    native = tmp_path / "native"
-    native.mkdir(mode=0o700)
+    root = tmp_path / "native"
+    root.mkdir(mode=0o700)
+    native = root
+    if location == "root":
+        native = Path(codex_context.codex_context_directory(directory=None, root=str(root),
+            session="preparation-session", create=True))
     event = {"session_id": "preparation-session", "cwd": str(tmp_path),
         "hook_event_name": "SessionStart", "source": "startup"}
     assert codex_context.codex_context_hook(str(native), event) == {}
@@ -204,15 +214,21 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
         goal_id=GOAL, agent_id=AGENT, surface="quota_packet", capture_id="before-claim")
     hook = [sys.executable, "-m", "loopx.entrypoint", "--registry", str(tmp_path / "registry.json"),
         "--runtime-root", str(tmp_path / "runtime"), "--format", "json", "quota", "context-hook",
-        "--context-delivery", "on", "--runtime-profile", scenario, "--codex-context-dir", str(native)]
+        "--context-delivery", "on", "--runtime-profile", scenario,
+        "--codex-context-root" if location == "root" else "--codex-context-dir", str(root)]
+    hook_env = os.environ.copy()
+    if ambient is None:
+        hook_env.pop("CODEX_THREAD_ID", None)
+    else:
+        hook_env["CODEX_THREAD_ID"] = ambient
     hook_event = {**event, "hook_event_name": "PostToolUse"}
     log = tmp_path / "runtime" / "goals" / GOAL / "rollout-event-log.jsonl"
     unchanged = log.read_bytes()
     disabled = subprocess.run(["off" if item == "on" else item for item in hook],
-        input=json.dumps(hook_event), cwd=tmp_path, capture_output=True, text=True, timeout=30)
+        input=json.dumps(hook_event), env=hook_env, cwd=tmp_path, capture_output=True, text=True, timeout=30)
     assert disabled.returncode == 0 and json.loads(disabled.stdout) == {}
     assert log.read_bytes() == unchanged
-    completed = subprocess.run(hook, input=json.dumps(hook_event), cwd=tmp_path,
+    completed = subprocess.run(hook, input=json.dumps(hook_event), env=hook_env, cwd=tmp_path,
         capture_output=True, text=True, timeout=30)
     assert completed.returncode == 0, completed.stderr
     additional = json.loads(completed.stdout)["hookSpecificOutput"]["additionalContext"]
@@ -223,6 +239,9 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
     claim_reference = receipt["claim_operation_id"]
     assert claim_reference.startswith("todo-claim:")
     ready = receipt["context"]
+    assert ready["ok"], ready.get("reason")
+    if location == "root":
+        assert list(root.iterdir()) == [native]
     read = shlex.split(ready["recovery"]["command"])
     pointers = ["/execution_preparation", "/selected_todo", "/heartbeat_receipt", "/interaction_contract/cli_channel",
         "/interaction_contract/agent_channel/work_context", "/interaction_contract/agent_channel/required_reads"]
@@ -259,7 +278,7 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
         registry_path=tmp_path / "registry.json", runtime_root=tmp_path / "runtime", cwd=tmp_path)
     assert code == 0 and progress["ok"], progress
     events = log.read_bytes()
-    repeat = subprocess.run(hook, input=json.dumps(hook_event), cwd=tmp_path,
+    repeat = subprocess.run(hook, input=json.dumps(hook_event), env=hook_env, cwd=tmp_path,
         capture_output=True, text=True, timeout=30)
     assert repeat.returncode == 0 and "host_execution_prepared" not in repeat.stdout
     assert log.read_bytes() == events
