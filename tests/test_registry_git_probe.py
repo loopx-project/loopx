@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
+import signal
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -35,7 +38,7 @@ def test_registry_git_probe_skips_git_when_discovery_has_no_marker(
         calls.append(tuple(command))
         return subprocess.CompletedProcess(command, 128, "", "not a git repository")
 
-    monkeypatch.setattr(registry_module.subprocess, "run", unexpected_git)
+    monkeypatch.setattr(registry_module.subprocess, "Popen", unexpected_git)
 
     assert registry_module._registry_git_probe(registry_path) == {
         "available": True,
@@ -102,7 +105,7 @@ def test_registry_git_probe_reports_unavailable_without_git(
     def unexpected_git(*_: object, **__: object) -> None:
         raise AssertionError("non-Git fast path must not launch Git")
 
-    monkeypatch.setattr(registry_module.subprocess, "run", unexpected_git)
+    monkeypatch.setattr(registry_module.subprocess, "Popen", unexpected_git)
 
     assert registry_module._registry_git_probe(registry_path) == {
         "available": False,
@@ -112,3 +115,42 @@ def test_registry_git_probe_reports_unavailable_without_git(
         "ignored": False,
         "worktree_root_recorded": False,
     }
+
+
+@pytest.mark.skipif(os.name != "posix", reason="the probe's fake git is a POSIX shell script")
+def test_registry_git_probe_retires_the_process_tree_on_timeout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Git that fans out must not outlive the deadline that ended the probe."""
+
+    probe = tmp_path / "project"
+    probe.mkdir()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    grandchild = tmp_path / "grandchild.pid"
+    fake_git = bin_dir / "git"
+    fake_git.write_text(
+        "#!/bin/sh\n"
+        "sleep 30 &\n"
+        f"echo $! > {grandchild}\n"
+        "sleep 30\n",
+        encoding="utf-8",
+    )
+    fake_git.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("GIT_DIR", str(tmp_path / "fake.git"))
+
+    observed = registry_module._registry_git_probe(probe / "registry.json")
+    assert observed["probe_status"] == "git_unavailable"
+
+    pid = int(grandchild.read_text(encoding="utf-8").strip())
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.05)
+    os.kill(pid, signal.SIGKILL)
+    raise AssertionError("the probe timed out but left its grandchild running")

@@ -95,6 +95,9 @@ PRIVATE_REGISTRY_TEXT_RE = re.compile(
 )
 
 
+_GIT_PROBE_TIMEOUT_SECONDS = 1.5
+
+
 def _definitely_outside_git_worktree(probe_dir: Path) -> bool:
     if os.environ.get("GIT_DIR") or os.environ.get("GIT_WORK_TREE"):
         return False
@@ -119,8 +122,11 @@ def _registry_git_probe(path: Path) -> dict[str, Any]:
         }
 
     def run_git(*args: str, cwd: Path = probe_dir) -> subprocess.CompletedProcess[str] | None:
+        # A probe that times out must retire everything it started. `run` kills
+        # only the leader, so a Git that fanned out into a helper, a hook or a
+        # remote would outlive the deadline on every later status read.
         try:
-            return subprocess.run(
+            process = subprocess.Popen(
                 ["git", *args],
                 cwd=cwd,
                 text=True,
@@ -128,11 +134,30 @@ def _registry_git_probe(path: Path) -> dict[str, Any]:
                 errors="replace",
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                check=False,
-                timeout=1.5,
+                start_new_session=os.name == "posix",
+                creationflags=(
+                    int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP"))
+                    if os.name == "nt" else 0
+                ),
             )
-        except (OSError, subprocess.TimeoutExpired):
+        except OSError:
             return None
+        try:
+            stdout, stderr = process.communicate(timeout=_GIT_PROBE_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            from .extensions.process_runtime import terminate_process_tree
+
+            try:
+                terminate_process_tree(process, 0)
+            except (OSError, RuntimeError, ValueError):
+                process.kill()
+            try:
+                process.communicate(timeout=1)
+            except subprocess.TimeoutExpired:  # pragma: no cover - kill is already sent.
+                process.kill()
+                process.communicate()
+            return None
+        return subprocess.CompletedProcess(["git", *args], process.returncode, stdout, stderr)
 
     # Git discovers a normal repository only through an ancestor `.git`
     # marker. Non-Git LoopX projects are common, and status can inspect the
