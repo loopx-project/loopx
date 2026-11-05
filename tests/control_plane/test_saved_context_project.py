@@ -391,6 +391,7 @@ def test_preflight_instruction_pins_both_projection_and_full_fallback(tmp_path):
         assert argv[argv.index("--capture-sha256") + 1] == "a" * 64
         assert "should-run" not in argv and "spend-slot" not in argv
     assert commands[0][commands[0].index("--turn-instance-id") + 1] == "original-turn"
+    assert "--initial-read" in commands[0]
     assert "--decision-output-root" not in commands[0]
 
 
@@ -469,9 +470,9 @@ def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monk
         command = shlex.split(body.split("```sh\n", 1)[1].split("\n```", 1)[0])
         command.extend(("--max-page-output-bytes", "32000"))
         rc, cold = _run_cli(registry, runtime, *command[command.index("quota"):], cwd=project)
-        assert rc == 0 and cold["mode"] == "full", cold
+        assert rc == 0 and cold["navigation"]["mode"] == "full" and cold["offset"] == 0, cold
         assert len(json.dumps(cold, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 32000
-        presented = consume(cold)
+        presented = consume(cold["navigation"])
         if compacted:
             codex_context_hook(str(native), {**event, "hook_event_name": "PreCompact"})
     else:
@@ -491,7 +492,7 @@ def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monk
         assert len(json.dumps(bound, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 32000
         delivered = consume(bound)
         if not compacted:
-            assert delivered["base"]["capture_id"] == machine_reference_oracle(cold)["target"]["capture_id"]
+            assert delivered["base"]["capture_id"] == machine_reference_oracle(cold["navigation"])["target"]["capture_id"]
     else:
         assert bound["mode"] == "should-run" and not list(native.iterdir())
     assert _heartbeat_receipt_count(runtime, turn) == 2 and _spend_run_count(runtime) == 0
@@ -630,6 +631,10 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                     sources.append((source, source.read_bytes()))
                     receipts = _heartbeat_receipt_count(runtime, actual_turn)
                     assert hashlib.sha256(source.read_bytes()).hexdigest() == argv[argv.index("--capture-sha256") + 1]
+                    assert "--initial-read" in argv
+                    if progressive:
+                        command = shlex.join([word for word in argv if word != "--initial-read"] + [
+                            "--select", "/goal_id", "--select", "/heartbeat_receipt"])
                     command += " --max-page-output-bytes 32000"
                 else:
                     source, raw = sources[0 if phase == "cold" else 1]
@@ -646,6 +651,15 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                 if isinstance(output, list):
                     output = [part["text"] for part in output if part.get("type") == "input_text"][-1]
                 navigation = json.loads(output.split("\nOutput:\n", 1)[-1])
+                if benchmark and name in ("cold", "warm"):
+                    page = navigation
+                    assert page["ok"] and len(json.dumps(page, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 32000
+                    assert page["offset"] == 0 and page["content"]
+                    navigation = page["navigation"]
+                    if progressive:
+                        assert page["eof"]
+                        values = {row["pointer"]: row["value"] for row in json.loads(page["content"])["selections"]}
+                        assert values["/goal_id"] == GOAL_ID and values["/heartbeat_receipt"]["turn_instance_id"] == actual_turn
                 descriptor = machine_reference_oracle(navigation)
                 # A selectively read large capture cannot become a retained
                 # full baseline; its next projection must remain full.
@@ -691,6 +705,8 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                         argv[index] = str(damaged)
                         queue.insert(0, shlex.join(argv))
                         rejected_read = True
+                if benchmark and progressive and name in ("cold", "warm"):
+                    queue.clear()  # The first tool result already contains the requested facts.
                 phase = name + "_read"
                 if not queue:
                     return response(request, number, message)
@@ -938,3 +954,55 @@ def test_saved_projection_default_off_ignores_available_native_cache(tmp_path, m
     result = project_saved_context_capture(args)
     assert result["ok"] and result["mode"] == "full" and result["path"] == str(path)
     assert not root.exists() and path.read_bytes() == raw
+
+
+def test_saved_page_continues_and_replays_after_compaction_without_republication(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from loopx.control_plane.turn_driver.codex_context import codex_context_hook
+
+    runtime, registry, context = tmp_path / "runtime", tmp_path / "registry.json", tmp_path / "native"
+    context.mkdir(mode=0o700)
+    monkeypatch.setenv("CODEX_THREAD_ID", "session")
+    monkeypatch.chdir(tmp_path)
+    event = {"source": "startup", "session_id": "session", "cwd": str(tmp_path)}
+    codex_context_hook(str(context), {**event, "hook_event_name": "SessionStart"})
+    value = "scope and stops: 保留原要求。" * 1200
+    original = tmp_path / "original.json"
+    original.write_text(json.dumps({"ok": True, "goal_id": "g", "agent_identity": {"agent_id": "a"},
+        "heartbeat_receipt": {"turn_instance_id": "t"}, "instructions": value}, ensure_ascii=False))
+    digest = hashlib.sha256(original.read_bytes()).hexdigest()
+    project = ["quota", "context-project", "--capture-file", str(original), "--capture-sha256", digest,
+        "--goal-id", "g", "--agent-id", "a", "--turn-instance-id", "t", "--codex-app",
+        "--context-delivery", "on", "--codex-context-dir", str(context), "--max-page-output-bytes", "6400"]
+    def cli(*args):
+        return _run_cli(registry, runtime, *args, cwd=tmp_path)
+    initial_files = set(context.rglob("*"))
+    for invalid in (["--initial-read", "--select", "/instructions"], ["--offset", "1", "--select", "/instructions"],
+                    ["--context-delivery", "off", "--initial-read"], ["--goal-id", "foreign", "--initial-read"]):
+        code, error = cli(*project, *invalid)
+        assert code and not error["ok"] and "content" not in error
+    assert set(context.rglob("*")) == initial_files
+    code, first = cli(*project, "--select", "/instructions")
+    assert code == 0 and first["offset"] == 0 and not first["eof"]
+    assert first["navigation"]["mode"] == "full"
+    codex_context_hook(str(context), {**event, "hook_event_name": "PreCompact"})
+    journal = (context / "session.json").read_bytes()
+    files = set(context.rglob("*"))
+    def read_reference():
+        ref = first["reference_file"]
+        result = bytearray()
+        args = ["quota", "context-read", "--reference-file", ref, "--max-page-output-bytes", "6400"]
+        while True:
+            code, page = cli(*args)
+            assert code == 0 and page["offset"] == len(result)
+            result.extend(page["content"].encode())
+            if page["eof"]:
+                assert len(result) == page["total_bytes"]
+                return json.loads(result)["selections"][0]["value"]
+            words = shlex.split(page["next_command"])
+            args = words[words.index("quota"):]
+    with ThreadPoolExecutor(2) as pool:
+        assert list(pool.map(lambda _: read_reference(), range(2))) == [value, value]
+    assert (context / "session.json").read_bytes() == journal and set(context.rglob("*")) == files
+    assert hashlib.sha256(original.read_bytes()).hexdigest() == digest
+    assert not registry.exists() and not runtime.exists()

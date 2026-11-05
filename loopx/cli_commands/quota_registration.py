@@ -238,10 +238,10 @@ def register_quota_command(
              "context-config renders native configuration for the exact Goal/Agent; no host configuration, trust, guard or spend are changed.")
     quota_parser.add_argument("--capture-sha256", help="For context-read/context-project: exact SHA-256 supplied with the capture reference.")
     quota_parser.add_argument("--initial-read", action="store_true",
-        help="For JSON context-read: read current controls, task text and source navigation from a recognized capture. "
+        help="For JSON context-read or enabled native context-project: read current controls, task text and source navigation from a recognized capture. "
              "Detailed criteria and operation contracts remain required before dependent work. Start at offset zero; follow next_command for continuation.")
     quota_parser.add_argument("--select", action="append",
-        help="For context-read: repeat an exact RFC 6901 JSON pointer to read a batch from the original capture. "
+        help="For context-read or enabled native JSON context-project: repeat an exact RFC 6901 JSON pointer to read a batch from the original capture. "
              "Selected detail pages never acknowledge full-context retention; omit for unchanged full capture reads.")
     quota_parser.add_argument("--list", dest="list_fields", action="store_true",
         help="For context-read: list immediate fields at the selected pointers (root by default), "
