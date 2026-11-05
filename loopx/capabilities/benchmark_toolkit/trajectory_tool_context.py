@@ -35,19 +35,26 @@ def _argv(command: str, depth: int = 0) -> list[str] | None:
 def _literal_exec_argv(script: object) -> list[str] | None:
     """Recognize one complete literal exec wrapper, never arbitrary JavaScript.
 
-    Codex's custom exec tool commonly wraps one exec_command in const/await/text.
+    Accept the stored-result and directly returned forms of one exec_command.
     Accept only JSON-valued object properties and one return; calls, spreads,
     interpolation, multiple commands and computed properties remain unknown.
     """
     if not isinstance(script, str):
         return None
-    match = re.fullmatch(
-        r"\s*const\s+([A-Za-z_]\w*)\s*=\s*await\s+tools\.exec_command\(\s*\{(.*)\}\s*\)\s*;"
-        r"\s*text\(\s*\1(?:\.output)?\s*\)\s*;?\s*", script, re.S,
+    invocation = r"await\s+tools\.exec_command\(\s*\{(?P<options>.*)\}\s*\)"
+    wrappers = (
+        r"const\s+(?P<result>[A-Za-z_]\w*)\s*=\s*" + invocation
+        + r"\s*;\s*text\(\s*(?P=result)(?:\.output)?\s*\)",
+        r"text\(\s*" + invocation + r"\s*\)",
+        r"text\(\s*\(\s*" + invocation + r"\s*\)\.output\s*\)",
     )
-    if match is None:
+    for wrapper in wrappers:
+        match = re.fullmatch(wrapper + r"\s*;?", script.strip(), re.S)
+        if match is not None:
+            break
+    else:
         return None
-    rest, values = match[2].strip(), {}
+    rest, values = match["options"].strip(), {}
     decoder = json.JSONDecoder()
     while rest:
         key = re.match(r'(?:"([A-Za-z_]\w*)"|([A-Za-z_]\w*))\s*:\s*', rest)
