@@ -131,9 +131,12 @@ def load_loopx_turn_plan_from_journal(
         raise ValueError("LoopX Turn resume journal has mismatched turn lineage")
     from .driver import COMPLETE_TURN_PLAN_SCHEMA_VERSION, turn_host_lineage
 
-    identity = (turn_host_lineage(plan) if plan.get("schema_version") == COMPLETE_TURN_PLAN_SCHEMA_VERSION else
-                cast(dict[str, Any], plan.get("turn_envelope"))
-                if isinstance(plan.get("turn_envelope"), dict) else {})
+    if plan.get("schema_version") == COMPLETE_TURN_PLAN_SCHEMA_VERSION or "work_contract" in plan:
+        # Recorded transitional plans must check their supplied complete source,
+        # just like current plans. Only source-absent history uses raw identity.
+        identity = turn_host_lineage(plan)
+    else:
+        identity = cast(dict[str, Any], plan.get("turn_envelope")) if isinstance(plan.get("turn_envelope"), dict) else {}
     if identity.get("goal_id") != goal_id or journal.get("goal_id") != goal_id:
         raise ValueError("LoopX Turn resume journal belongs to another goal")
     if agent_id is not None and identity.get("agent_id") != agent_id:

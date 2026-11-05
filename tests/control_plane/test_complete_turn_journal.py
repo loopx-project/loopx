@@ -6,7 +6,7 @@ import pytest
 
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.turn_driver.journal_store import (
-    find_loopx_turn_key_by_settlement_identity, turn_journal_path,
+    find_loopx_turn_key_by_settlement_identity, load_loopx_turn_plan_from_journal, turn_journal_path,
 )
 from loopx.control_plane.turn_driver.turn_journal_runtime import write_turn_journal
 from tests.control_plane.canonical_authority_fixture import (
@@ -121,6 +121,9 @@ def test_complete_journal_readers_and_writer_refuse_source_drift(complete_journa
         assert "work_contract_invalid" in result["violations"], mutation
         assert result["recovery_decision"]["action"] == "blocked", mutation
         assert result["effects"] == []
+        with pytest.raises((RuntimeError, ValueError)):
+            load_loopx_turn_plan_from_journal(runtime, goal_id=GOAL_ID,
+                agent_id=AGENT_ID, turn_key=key)
         with pytest.raises(ValueError, match="work_contract_invalid"):
             find_loopx_turn_key_by_settlement_identity(runtime, goal_id=GOAL_ID,
                 agent_id=AGENT_ID, todo_id=TODO_ID, turn_instance_id="journal-source")
@@ -146,6 +149,8 @@ def test_complete_journal_keeps_numeric_source_and_historical_decoder(complete_j
     written = write_turn_journal(str(path), journal, expected_effect_id=identity["effect_id"])
     assert written["appended"] is True
     assert json.loads(path.read_text())["plan"]["work_contract"]["future_measurements"] == [1.0, -0.0, 2**60 + 1]
+    assert load_loopx_turn_plan_from_journal(runtime, goal_id=GOAL_ID,
+        agent_id=AGENT_ID, turn_key=key) == plan
     assert _inspect(project, runtime, registry, key)["journal_consistent"] is True
     assert find_loopx_turn_key_by_settlement_identity(runtime, goal_id=GOAL_ID,
         agent_id=AGENT_ID, todo_id=TODO_ID, turn_instance_id="journal-source") == key
@@ -166,10 +171,36 @@ def test_complete_journal_keeps_numeric_source_and_historical_decoder(complete_j
         historical["plan"].pop("work_contract")
         path.write_text(json.dumps(historical))
         assert _inspect(project, runtime, registry, key)["journal_consistent"] is False
+        with pytest.raises(ValueError, match="complete Turn plan requires one source"):
+            load_loopx_turn_plan_from_journal(runtime, goal_id=GOAL_ID,
+                agent_id=AGENT_ID, turn_key=key)
         historical["plan"] = _journal_plan(contract, legacy=True, goal_ref=plan.get("goal_ref"))
     historical["plan"].pop("work_contract")
     path.write_text(json.dumps(historical))
+    original_bytes = path.read_bytes()
+    assert load_loopx_turn_plan_from_journal(runtime, goal_id=GOAL_ID,
+        agent_id=AGENT_ID, turn_key=key) == historical["plan"]
     assert _inspect(project, runtime, registry, key)["journal_consistent"] is True
+    assert path.read_bytes() == original_bytes
+
+
+def test_cli_resume_refuses_changed_complete_source_without_rewriting_history(complete_journal):
+    project, runtime, registry, journal = complete_journal
+    journal["plan"]["work_contract"]["reason"] = "Changed original requirement after capture"
+    key = journal["turn_key"]
+    path = turn_journal_path(runtime, goal_id=GOAL_ID, turn_key=key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(journal))
+    original_bytes = path.read_bytes()
+    for command in (
+        ("run-once", "--resume-turn-key", key, "--host", "generic-cli",
+         "--execution-mode", "isolated-headless", "--project", str(project)),
+        ("inspect-journal", "--turn-key", key, "--retry-failed-turn"),
+    ):
+        code, result = _run_cli(registry, runtime, "turn", *command,
+            "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, cwd=project)
+        assert code == 1 and result["ok"] is False, result
+        assert path.read_bytes() == original_bytes
 
 
 def test_managed_retry_reads_complete_source_with_original_numbers(complete_journal):
