@@ -225,9 +225,16 @@ export const configurationBackupScenario = {
       await contextSwitch.click();
       await page.getByText("Progressive reads preference saved.", {exact: true}).waitFor();
       const storedSettings = () => readFile(join(root, "runtime/machine/configuration.json"), "utf8").then(JSON.parse);
-      assert.equal((await storedSettings()).namespaces.context_delivery.mode, "off");
+      const deltaOnly = (await storedSettings()).namespaces.context_delivery;
+      assert.deepEqual([deltaOnly.schema_version, deltaOnly.mode, deltaOnly.delta_delivery],
+        ["context_delivery_machine_defaults_v1", "off", "auto"]);
       contextSwitch = await openContextSettings();
       assert.equal(await contextSwitch.isChecked(), false, "A saved off must survive reload and the new on default");
+      const deltaSwitch = page.getByRole("switch", {name: "Use cross-turn delta automatically on supported hosts"});
+      assert.equal(await deltaSwitch.isChecked(), true);
+      await deltaSwitch.click();
+      await page.getByText("Cross-turn delta preference saved.", {exact: true}).waitFor();
+      assert.equal(await contextSwitch.isChecked(), false);
       const applyRoute = "**/api/chat/machine-configuration/apply";
       await page.route(applyRoute, route => route.fulfill({status: 503, contentType: "application/json", body: JSON.stringify({ok: false, error: "Fixture unavailable"})}));
       await contextSwitch.click();
@@ -237,7 +244,8 @@ export const configurationBackupScenario = {
       await contextSwitch.click();
       await page.getByText("Progressive reads preference saved.", {exact: true}).waitFor();
       const afterSettings = await storedSettings();
-      assert.equal(afterSettings.namespaces.context_delivery.mode, "on");
+      assert.deepEqual([afterSettings.namespaces.context_delivery.mode, afterSettings.namespaces.context_delivery.delta_delivery],
+        ["on", "off"]);
       assert.equal(afterSettings.namespaces.goal_storage.new_goal_provider, "sqlite", "The opt-out/on transaction must preserve sibling settings");
       return {coverageEntries: context.coverageEntries, errors: context.errors, backend, verified: `Actual settings backend: Codex default on, saved off/reload, failed apply and explicit on; Packaged configuration recovery and full archive inspection; real ${backend.source_provider} head/history after original-source loss, no Goal registration, keyboard, corrupt-input recovery, immutable history reload and narrow viewport`};
     } finally {

@@ -593,10 +593,11 @@ revision-locked preview, apply, readback, disable and rollback owner. Read-only
 editors cannot save; sibling settings and Goal records remain unchanged. No choice
 installs hooks, trusts a host or proves actual delivery or model retention.
 
-The existing `context_delivery_machine_defaults_v0` namespace accepts
-`{"schema_version":"context_delivery_machine_defaults_v0","mode":"on","delta_delivery":"auto"}`.
-`mode` and `antigravity_mode` keep their `on|off` values; omitted `delta_delivery`
-defaults to `auto` and also accepts `off`. Old saved rows remain readable.
+The editor saves `context_delivery_machine_defaults_v1` with both choices.
+For example, `{"schema_version":"context_delivery_machine_defaults_v1","mode":"off","delta_delivery":"auto"}`
+allows a supported host to compare complete documents without progressive presentation.
+Existing v0 rows with `mode=off` retain their original full delivery, including rows
+that stored an implicit `delta_delivery=auto`. Editing either switch adopts v1.
 `machine-config preview/apply --namespace context_delivery --config-json FILE`
 requires the original preview revision. Removing the namespace restores progressive
 reads, supported-host Delta AUTO and Antigravity manager history reads. Save the
@@ -608,8 +609,9 @@ other declared hosts and recovery do not need native setup. A plain read-only
 `should-run` stays read-only: capture files do not create a Turn, receipt, session,
 journal or execution lease. `--delta-delivery off` independently disables Delta
 while retaining progressive reads. Delta AUTO only uses supported declared
-continuity hosts. Explicit `--context-delivery off`, a saved off or an inherited
-`LOOPX_CONTEXT_DELIVERY=off` keeps the original complete inline path. Environment
+continuity hosts. A lone `--context-delivery off` or inherited `LOOPX_CONTEXT_DELIVERY=off` keeps
+the original complete path. Explicit `--context-delivery off --delta-delivery auto`
+requests cross-Turn reuse of the complete document when continuity is available. Environment
 on alone supplies no host, retention or execution proof. Private capture failure
 retains the complete current input rather than using an older capture.
 New benchmark heartbeat trials default to `context_delivery=on`; pass `off` to
@@ -974,9 +976,10 @@ quota 能力候选沿用同一精确 codec 复用已登记 Todo 的正文、标�
 应用、读回、关闭和回滚 owner。只读编辑器不能保存；不改写其他配置和 Goal，不安装／信任 hook，
 保存偏好不证明原生初始化、实际投递或模型保留。
 
-既有 `context_delivery_machine_defaults_v0` namespace 接受
-`{"schema_version":"context_delivery_machine_defaults_v0","mode":"on","delta_delivery":"auto"}`。
-`mode` 与 `antigravity_mode` 保留 `on|off`；可选的 `delta_delivery` 默认为 `auto`，也可为 `off`；旧配置继续可读。
+设置页以 `context_delivery_machine_defaults_v1` 同时保存两个选择。
+例如 `{"schema_version":"context_delivery_machine_defaults_v1","mode":"off","delta_delivery":"auto"}`
+让支持的宿主比较完整文档，同时关闭渐进呈现。旧 v0 配置的 `mode=off` 保留原完整交付，
+包括曾隐式存入 `delta_delivery=auto` 的记录。编辑任一开关才采用 v1。
 CLI 的 `machine-config preview/apply --namespace context_delivery --config-json FILE` 仍需原预览修订。
 移除 namespace 恢复渐进读取、支持宿主的 Delta AUTO 与 Antigravity 管家历史读取；要保持关闭应保存对应 off。
 管家自动选择交付历史的读取方式。有权限读取私有快照的原生管家可按需读取已有历史，当前目标与待办仍直接可见。既有显式 `antigravity_mode=off` 偏好继续生效。
@@ -984,7 +987,8 @@ CLI 的 `machine-config preview/apply --namespace context_delivery --config-json
 CLI 的 `--context-delivery auto`（省略时也使用此门面）跨宿主先呈现当前要求，再按需展开材料。
 普通 CLI、其他已声明宿主及恢复读取不要求原生初始化；只读 `should-run` 仍不创建 Turn、回执、会话、journal 或执行 lease。
 `--delta-delivery off` 可独立关闭跨轮差分而保留渐进读取；Delta AUTO 只使用支持连续性的已声明宿主。
-显式 `--context-delivery off`、已保存的关闭及继承的 `LOOPX_CONTEXT_DELIVERY=off` 保留原完整内联路径。
+单独指定 `--context-delivery off` 或继承 `LOOPX_CONTEXT_DELIVERY=off` 保留原完整交付路径。
+同时指定 `--context-delivery off --delta-delivery auto` 时，有连续性依据的宿主可以复用完整文档的跨轮差分。
 环境 on 不证明宿主、保留或执行权限。私有捕获失败时保留本次完整输入，不借用旧捕获。
 新 benchmark heartbeat trial 默认 `context_delivery=on`，指定 `off` 可关闭；其他跑法仍关闭。
 worker 把本次运行已解析的选择固定传给预检和 solver 子进程，不改写调用方原设置，
