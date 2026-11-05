@@ -143,14 +143,11 @@ def check_corrections(provider: str) -> None:
         assert first["todo_write"]["claimed_by"] == AGENT_ID, first
         assert first["todo_write"]["path_recorded"] is False, first
 
-        replay = run_cli(registry, common)
-        assert replay["ok"] is True, replay
-        assert replay["todo_write"]["write_performed"] is False, replay
-        assert replay["todo_write"]["already_exists"] is True, replay
-        ledger_write = replay["domain_state_projection"]["write_result"]
-        assert ledger_write["status"] == "unchanged", replay
-        state_text = (project / "ACTIVE_GOAL_STATE.md").read_text(encoding="utf-8")
-        assert state_text.count("action_kind=issue_fix_maintainer_correction_patch") == 1
+        admission = first["maintainer_correction_admission"]
+        assert admission["admission_basis"] == "host_asserted", first
+        assert admission["disposition"] == "accepted", first
+        # Replay idempotence, stable operation ids and admission gates are
+        # covered by tests/capabilities/test_issue_fix_maintainer_correction_admission.py.
 
         ambiguity = correction_file(
             root,
