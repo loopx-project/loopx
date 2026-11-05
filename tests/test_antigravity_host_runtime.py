@@ -276,12 +276,16 @@ assert host_runtime._admitted(argparse.Namespace()) is True
     assert result.stdout == b""
 
 
-def test_native_hook_admission_uses_real_core_ready_user_gate_and_zero_quota(tmp_path):
+@pytest.mark.parametrize("context_delivery", ["on", "off"])
+def test_native_hook_admission_uses_real_core_ready_user_gate_and_zero_quota(
+    tmp_path, monkeypatch, context_delivery,
+):
     from examples.control_plane.quota_plan_fixtures import (
         SCOPED_AGENT_ID,
         write_cli_fixture,
     )
 
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", context_delivery)
     registry, runtime_root, _ = write_cli_fixture(tmp_path / "core", scoped_agents=True)
     data = json.loads(registry.read_text())
     for goal in data["goals"]:
@@ -302,6 +306,7 @@ def test_native_hook_admission_uses_real_core_ready_user_gate_and_zero_quota(tmp
     ):
         args.goal_id = goal
         assert runtime._admitted(args) is expected
+        assert os.environ["LOOPX_CONTEXT_DELIVERY"] == context_delivery
 
 
 def test_hooks_migrate_only_an_unchanged_owned_legacy_entry(tmp_path):

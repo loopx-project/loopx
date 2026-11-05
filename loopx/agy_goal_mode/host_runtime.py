@@ -70,7 +70,11 @@ def _admitted(args: argparse.Namespace) -> bool:
         encoding="utf-8",
         timeout=10,
         check=True,
-        env={key: value for key, value in os.environ.items() if key != "PYTHONPATH"},
+        env={
+            **{key: value for key, value in os.environ.items() if key != "PYTHONPATH"},
+            # This machine read needs Core's decision, not model context navigation.
+            "LOOPX_CONTEXT_DELIVERY": "off",
+        },
     )
     return json.loads(read.stdout).get("should_run") is True
 
