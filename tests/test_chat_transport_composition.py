@@ -168,6 +168,63 @@ def test_return_rechecks_actual_typed_binding_after_owner_disconnect(ordinary): 
     assert len(external.calls) == before
 
 
+def test_http_queue_pins_source_revision_but_rechecks_inputs_and_authority(ordinary, monkeypatch):  # noqa: F811
+    import loopx.control_plane.effect_runtime as effect
+    from loopx.capabilities.native_chat.conversation_bindings import ChatConversationBindings
+
+    store, runtime, contexts, request, _, _, _ = ordinary
+    external = Transport("external-owner")
+    composed = ChatConversationTransports(observe_default=lambda ref: {}, transports=(external,))
+    bindings = ChatConversationBindings(root=store.root, project_contexts=contexts, observe=composed.observe)
+    composed.bindings = bindings
+    contexts.conversation_bindings = bindings
+    row = bindings.configure(transport_ref=external.transport_ref,
+        project_ref=contexts.available()[0]["project_ref"], executor_endpoint_id="codex",
+        context_kind="steward", goal_scope="selected")
+    selected = bindings.resolve(binding_id=row["binding_id"], source_ref="c" * 24,
+        sender_ref=row["operator_ref"], private_human_message=True)
+    session = store.create_session(goal_id="loopx-manager", agent_id="codex", adapter_kind="codex",
+        upstream_thread_id="synthetic-thread", channel_id=selected["channel_id"],
+        steward_context=selected["context"])
+    sid = session["session_id"]
+    first, _ = store.create_queued_turn(sid, client_turn_id="first", message="First original input")
+    fingerprint = effect._runtime_fingerprint
+    qualifications = []
+
+    def qualify():
+        revision = fingerprint()
+        qualifications.append(revision)
+        return revision
+
+    monkeypatch.setattr(effect, "_runtime_fingerprint", qualify)
+
+    def read_queue():
+        qualifications.clear()
+        return request(f"/api/chat/sessions/{sid}/queue")
+
+    try:
+        status, payload = read_queue()
+        assert status == 200 and [turn["turn_id"] for turn in payload["turns"]] == [first["turn_id"]]
+        assert len(qualifications) == 1
+        second, _ = store.create_queued_turn(sid, client_turn_id="second", message="New original input")
+        status, payload = read_queue()
+        assert status == 200 and {turn["turn_id"] for turn in payload["turns"]} == {first["turn_id"], second["turn_id"]}
+        assert len(qualifications) == 1
+        external.available = False
+        status, payload = read_queue()
+        assert status == 400 and "turns" not in payload
+        external.available = True
+        bindings.disconnect(row["binding_id"], expected_revision=bindings.read()["revision"])
+        status, payload = read_queue()
+        assert status == 400 and "turns" not in payload
+        qualifications.clear()
+        assert request("/healthz")[0] == 200
+        assert qualifications == []
+        assert {turn["turn_id"] for turn in store.queued_turns(sid)} == {first["turn_id"], second["turn_id"]}
+    finally:
+        runtime.close()
+
+
 @pytest.mark.parametrize("installed", [False, True])
 def test_real_chat_entrypoint_composes_one_store_controller_and_return_service(tmp_path, monkeypatch, installed):
     import loopx.chat_server as chat

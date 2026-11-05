@@ -1739,8 +1739,9 @@ class ChatRequestHandler(
         if len(action_parts) == 3 and action_parts[:2] == ["api", "actions"]:
             return self._action_snapshot(action_parts[2])
         session_parts = path.strip("/").split("/")
-        if self._dispatch_chat_queue(path, apply=False):
-            return
+        with effect_runtime_request_scope():
+            if self._dispatch_chat_queue(path, apply=False):
+                return
         if len(session_parts) == 5 and session_parts[:3] == ["api", "chat", "sessions"] and session_parts[4] == "native-turn":
             return self._managed_native_turn(session_parts[3])
         if len(session_parts) == 5 and session_parts[:3] == ["api", "chat", "sessions"] and session_parts[4] == "loopx":
