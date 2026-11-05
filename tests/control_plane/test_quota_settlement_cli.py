@@ -5362,6 +5362,13 @@ def test_same_turn_bound_p0_does_not_project_p1_after_p0_becomes_deferred(
         "--agent-id", AGENT_ID, "--claimed-by", AGENT_ID, "--todo-id", TODO_ID,
     )
     assert claim_rc == 0 and claim["execution_managed"] is True, json.dumps(claim)
+    prepared_rc, prepared = _run_cli(registry_path, runtime, *guard, "--todo-id", TODO_ID)
+    assert prepared_rc == 0, prepared
+    assert prepared["execution_preparation"]["state"] == "ready"
+    assert prepared["normal_delivery_allowed"] is True
+    assert prepared["heartbeat_receipt"]["settlement_identity"] == (
+        first["heartbeat_receipt"]["settlement_identity"]
+    )
     # This result exists before the lifecycle wait; recovery must account for
     # it without executing more work or rebinding the original Turn.
     artifact = project / "verified-before-wait.txt"
@@ -5409,7 +5416,8 @@ def test_same_turn_bound_p0_does_not_project_p1_after_p0_becomes_deferred(
     )
     plan = interaction["cli_channel"].get("settlement_plan")
     assert plan["identity"] == first["heartbeat_receipt"]["settlement_identity"]
-    assert _heartbeat_receipt_count(runtime, turn_id) == 1
+    # Preparation and positive work admission share one settlement identity.
+    assert _heartbeat_receipt_count(runtime, turn_id) == 2
     assert _spend_run_count(runtime) == 0
 
     conflict_rc, conflict = _run_cli(
@@ -5420,7 +5428,7 @@ def test_same_turn_bound_p0_does_not_project_p1_after_p0_becomes_deferred(
         "heartbeat_receipt_identity_conflict",
         "quota_action_selection_rejected",
     }
-    assert _heartbeat_receipt_count(runtime, turn_id) == 1
+    assert _heartbeat_receipt_count(runtime, turn_id) == 2
 
     vision = tmp_path / "before-wait-vision.json"
     vision.write_text(json.dumps({
@@ -5464,9 +5472,10 @@ def test_same_turn_bound_p0_does_not_project_p1_after_p0_becomes_deferred(
     assert next_turn["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
 
 
+@pytest.mark.parametrize("handoff_mode", ["soft_claim", "hard_lease"])
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_due_successor_replan_replays_until_the_same_task_is_reopened(
-    tmp_path: Path, provider: str, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, provider: str, handoff_mode: str, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from canonical_authority_fixture import isolate_sqlite_runtime
 
@@ -5478,7 +5487,7 @@ def test_due_successor_replan_replays_until_the_same_task_is_reopened(
         f"todo_id={TODO_ID} status=open",
         f"todo_id={TODO_ID} status=deferred resume_when=resume_at:2000-01-01T00:00:00Z",
     ))
-    _initialize_fixture_authority(project, runtime, provider=provider)
+    _initialize_fixture_authority(project, runtime, provider=provider, handoff_mode=handoff_mode)
     guard = (
         "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
         "--agent-id", AGENT_ID, "--turn-instance-id", "due-successor-replay",
@@ -5486,6 +5495,10 @@ def test_due_successor_replan_replays_until_the_same_task_is_reopened(
     rc, first = _run_cli(registry_path, runtime, *guard)
     assert rc == 0, first
     assert first["effective_action"] == "successor_replan_required"
+    assert first["should_run"] is True
+    assert first["normal_delivery_allowed"] is False
+    assert first["interaction_contract"]["agent_channel"]["must_attempt"] is True
+    assert first["interaction_contract"]["agent_channel"]["quiet_noop_allowed"] is False
     identity = first["heartbeat_receipt"]["settlement_identity"]
     rc, replay = _run_cli(registry_path, runtime, *guard)
     assert rc == 0, replay
@@ -5495,12 +5508,35 @@ def test_due_successor_replan_replays_until_the_same_task_is_reopened(
     assert replay["heartbeat_receipt"]["settlement_identity"] == identity
     assert _spend_run_count(runtime) == 0
 
-    rc, deferred = _run_cli(
-        registry_path, runtime, "todo", "update", "--goal-id", GOAL_ID,
+    defer_args = (
+        "todo", "update", "--goal-id", GOAL_ID,
         "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
         "--status", "deferred", "--resume-when", "resume_at:2099-01-01T00:00:00Z",
         "--reason", "A new dependency is not ready yet.",
     )
+    rc, deferred = _run_cli(registry_path, runtime, *defer_args)
+    if handoff_mode == "hard_lease":
+        assert rc == 1 and deferred["error_code"] == "handoff_mode_requires_lease", deferred
+        recovery = deferred["recovery"]
+        assert recovery["execution_authority_granted"] is False
+        assert recovery["action"] == "resolve_lifecycle_edit"
+        # Follow the returned lifecycle recovery, without acquiring execution
+        # for a deferred Todo or changing its declaration.
+        rc, current = _run_cli(registry_path, runtime, "todo", "list",
+            "--goal-id", GOAL_ID, "--todo-id", TODO_ID)
+        assert rc == 0, current
+        command = shlex.join(["loopx", *recovery["retry"]["cli_args"],
+            "--reason", "Review the wait before rescheduling it.",
+            "--update-operation-id", "due-successor-reviewed-resume",
+            "--update-expected-provider-revision", current["authority_read"]["provider_revision"]])
+        rc, resumed_wait = _run_generated_cli(command, registry_path=registry_path)
+        assert rc == 0, resumed_wait
+        rc, current = _run_cli(registry_path, runtime, "todo", "list",
+            "--goal-id", GOAL_ID, "--todo-id", TODO_ID)
+        assert rc == 0, current
+        rc, deferred = _run_cli(registry_path, runtime, *defer_args,
+            "--update-operation-id", "due-successor-reviewed-deferral",
+            "--update-expected-provider-revision", current["authority_read"]["provider_revision"])
     assert rc == 0, deferred
     rc, paused = _run_cli(registry_path, runtime, *guard)
     assert rc == 0, paused
@@ -5518,6 +5554,15 @@ def test_due_successor_replan_replays_until_the_same_task_is_reopened(
     assert rc == 0, reopened
     rc, resumed = _run_cli(registry_path, runtime, *guard, "--todo-id", TODO_ID)
     assert rc == 0, resumed
+    if handoff_mode == "hard_lease":
+        assert resumed["normal_delivery_allowed"] is False
+        assert resumed["execution_preparation"]["state"] == "claim_required"
+        assert resumed["heartbeat_receipt"]["settlement_identity"] == identity
+        rc, claimed = _run_cli(registry_path, runtime, "todo", "claim", "--goal-id", GOAL_ID,
+            "--agent-id", AGENT_ID, "--claimed-by", AGENT_ID, "--todo-id", TODO_ID)
+        assert rc == 0 and claimed["execution_managed"] is True, claimed
+        rc, resumed = _run_cli(registry_path, runtime, *guard, "--todo-id", TODO_ID)
+        assert rc == 0 and resumed["execution_preparation"]["state"] == "ready", resumed
     assert resumed["normal_delivery_allowed"] is True
     assert resumed["heartbeat_receipt"]["settlement_identity"] == identity
     assert _spend_run_count(runtime) == 0
