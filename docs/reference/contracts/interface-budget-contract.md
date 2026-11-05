@@ -10,7 +10,7 @@ and size/count budgets.
 | --- | --- | --- | --- | --- | --- | --- |
 | `heartbeat_prompt_json` | heartbeat automation | wake and route one bounded turn | `quota should-run`, `status`, or `review-packet --handoff-only` | `json_chars <= 5400` plus `interface_budget.within_budget=true` | `nested_keys <= 40` | `top_level_keys <= 30` |
 | `review_packet_handoff_only_json` | project-agent handoff | forward the smallest sufficient task packet | full `review-packet` or run-history artifact | `json_chars <= 3000` plus `handoff_interface_budget.within_budget=true` | `nested_keys <= 40` | `top_level_keys <= 18` |
-| `quota_should_run_json` | quota guard | decide whether the selected goal may spend compute | `status`, `history`, or active state | `json_chars <= 20500` | `nested_keys <= 575` | `top_level_keys <= 55` |
+| `quota_should_run_json` | quota guard | decide whether the selected goal may spend compute | `status`, `history`, or active state | `json_chars <= 21000` | `nested_keys <= 575` | `top_level_keys <= 55` |
 | `dashboard_status_json` | operator dashboard | render first-screen operator state | `history`, run artifacts, or project-local adapter output | `json_chars <= 25000` | `nested_keys <= 350` | `top_level_keys <= 27` |
 
 These four budgets measure compact machine payloads. For
@@ -65,6 +65,25 @@ execution authority or change to frozen experiment or promotion criteria.
 分别改为 575 键与 25,000 字符，余量为 11 键、685 字符。quota 原 54 个顶层键
 已占满旧限、没有 cadence 余量，改为 55 后保留一个键。quota 字符、status 键数、
 夹具数量、采样深度和语义断言不变；不授予执行权限，也不改变冻结的实验或 promotion 标准。
+
+The standard premerge runner adds an isolation directory around this fixture.
+On base `6a92640346051b79d08fb369354180b613c8fa46` and the budget-only candidate,
+quota measures 20,341 characters directly and 20,509 through the native runner,
+with 565 nested and 54 top-level keys. Eight complete fixture-root references
+each gain the runner's 21-character directory component, accounting for all 168
+additional characters. Preserve the original 20,500-ceiling
+failure. Calibrate only this character regression allowance to 21,000, leaving
+491 characters in the runner; keep the 575/55 structure limits and complete
+source paths. The same quota payload with an oversized reason remains rejected.
+No production payload, execution budget, host hard limit or frozen qualification
+result changes; this is not a compaction or efficiency claim.
+
+标准 premerge 的隔离目录会增长同一夹具的完整路径。上述 base 与仅改预算的候选均为
+直接运行 20,341 字符、原生 runner 20,509 字符，565 个嵌套键及 54 个顶层键；
+8 处完整夹具路径各增加 21 字符，解释全部 168 字符差异。
+保留原 20,500 超限失败，仅将字符回归余量调至 21,000，给 runner 留 491 字符；
+575/55 结构限制、完整来源路径及超长 reason 拒绝继续。生产负载、执行预算、宿主
+硬边界和冻结资格结果均不变，不据此声称压缩或效率提升。
 
 The successful thin heartbeat projection contains only `schema_version`,
 `ok`, `goal_id`, optional `agent_id`, `task_body`, and the compact
