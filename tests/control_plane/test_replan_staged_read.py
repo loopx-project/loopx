@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
+
 from canonical_authority_fixture import isolate_sqlite_runtime
 from loopx.control_plane.effect_runtime import EffectRuntimeRejected, restart_effect_runtime
 from loopx.control_plane.quota.turn_envelope import (
@@ -107,6 +109,7 @@ def test_pure_replan_does_not_advertise_unavailable_explore_attachment(tmp_path,
     try:
         entry = call("quota", "should-run", "--codex-app", "--goal-id", goal,
             "--agent-id", agent, "--turn-instance-id", turn, "--decision-output-dir", str(capture))
+        entry = read_cli_policy_payload(json.dumps(entry), returncode=0)
         source = json.loads((capture / "decision.json").read_bytes())
         original = explore_source(source)["content"]["graph"]
         graph = explore_source(entry)["content"]["graph"]
@@ -390,6 +393,7 @@ def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, m
             "--goal-id", GOAL, "--agent-id", AGENT, "--turn-instance-id", TURN,
             "--todo-id", TODO, "--decision-output-dir", str(capture),
             *(["--turn-envelope"] if envelope else []))
+        guard = read_cli_policy_payload(json.dumps(guard), returncode=0)
         packet = guard["replan_action_packet"]
         if not envelope:
             assert "settlement_plan" not in guard["interaction_contract"]["cli_channel"]
