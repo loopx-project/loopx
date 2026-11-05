@@ -858,6 +858,8 @@ def test_cli_validation_projects_ordinary_completion_not_terminal_intent() -> No
     assert command is not None
     argv = shlex.split(command)
     assert "--no-follow-up" not in argv
+    assert "--successor-todo-id" in validation["precondition"]
+    assert "--successor-todo-id" not in argv
     assert "--next-agent-todo" not in argv
     assert argv[argv.index("--todo-id") + 1] == TODO_ID
     assert argv[argv.index("--agent-id") + 1] == AGENT_ID
