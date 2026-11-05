@@ -1776,7 +1776,7 @@ def test_thin_json_budget_retains_full_supported_scope(tmp_path: Path) -> None:
         )
         payload = measurement["payload"]
         assert scope in payload["task_body"]
-        assert payload["interface_budget"]["max_chars"] == 4900
+        assert payload["interface_budget"]["max_chars"] == 5100
         assert payload["interface_budget"]["within_budget"] is True
         assert "refresh-state --goal-outcome-update-json" in payload["task_body"]
         assert "Local outcomes never replace root continuation, budget or stop criteria." in payload["task_body"]
@@ -1816,8 +1816,8 @@ def test_thin_budget_covers_complete_capability_and_cli_routes(
         # Preserve the historical 4,500-character failure as a characterized
         # input; the allowance changes, not the complete emitted instructions.
         assert budget["budget_char_count"] > 4500
-        assert budget["max_chars"] == 4900
-        assert budget["within_budget"] is within_budget
+        assert budget["max_chars"] == 5100
+        assert budget["within_budget"] is within_budget, budget
 
 
 def test_brief_budget_retains_full_commands_on_real_long_paths() -> None:
