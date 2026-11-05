@@ -58,6 +58,8 @@ helper delivery neither launches trials nor changes frozen historical arms.
 
 ## Current work
 
+- [Compare a local proxy with released scores](../docs/reference/benchmark-behavior-findings.md#compare-a-local-proxy-with-released-scores) covers source matching, missing feedback and the later-submission control for an offline study.
+
 - [FrontierCS-2 compatibility repair v2](frontiercs2/README.md) provides an opt-in
   patch and synthetic HTTP/client/Docker checks for the frozen single-host v1
   sources. It preserves historical attribution and does not launch a model or

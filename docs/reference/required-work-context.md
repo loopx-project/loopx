@@ -355,6 +355,13 @@ cannot be combined with socket handoff. Ordinary callers keep their existing
 presentation, and context delivery off keeps its original pending Goal reads.
 Unbound staged replans retain their existing review-owned original Goal read.
 
+After a Host claim, the ready guard uses the private
+`--prepared-capture-reference` route. It publishes the complete decision and
+returns its writer digest with the fields needed to verify the same Todo and
+Turn. The hook verifies that digest when it opens the original file. If the
+file changed, the receipt preserves the claim and pins recovery to the original
+bytes before work can continue.
+
 The Goal availability adapter still reads and UTF-8-validates the complete file
 and hashes all bytes for its revision. With native context delivery off, only the path and revision of unmarked or mixed sources cross the
 internal context-projection bridge, preserving the complete progressive read
@@ -880,6 +887,10 @@ Checkpoint Host 预检在显式开启 native JSON `should-run` 捕获时使用�
 通过 `context-project` 呈现同一视图，不重复准入。延迟呈现必须指定捕获位置，不能
 与 socket handoff 组合。普通调用保持既有呈现；关闭差分时保留原来的待完成 Goal
 读取。未绑定任务的分阶段重规划继续沿用 review 所属的原始 Goal 读取。
+
+Host 领取 Todo 后，就绪检查使用内部 `--prepared-capture-reference` 路径。它保存完整决策，
+只返回写入时的摘要和核对同一 Todo、Turn 所需的字段。hook 打开原文件时校验该摘要；
+若文件已被替换，回执保留原领取记录，恢复原始内容后才能继续工作。
 
 Goal adapter 仍完整读取文件、校验 UTF-8，并以全部字节计算修订摘要；关闭 native
 context delivery 时，未标记或混合归属仅在内部桥接传路径与修订，避免未被消费的正文

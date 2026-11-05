@@ -6,7 +6,6 @@ the same Todo (and Turn when present) is ready before returning a Host receipt.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
@@ -120,12 +119,27 @@ def _run_json(
     return payload
 
 
+def prepared_capture_reference(payload: Mapping[str, Any], digest: str) -> dict[str, Any]:
+    """Carry only the guard fields the Host uses to verify its claimed Turn."""
+    selected = payload.get("selected_todo")
+    heartbeat = payload.get("heartbeat_receipt")
+    return {
+        **{key: payload.get(key) for key in (
+            "ok", "goal_id", "should_run", "normal_delivery_allowed", "execution_preparation",
+        )},
+        "selected_todo": {"todo_id": selected.get("todo_id")} if isinstance(selected, Mapping) else None,
+        "heartbeat_receipt": {"turn_instance_id": heartbeat.get("turn_instance_id")} if isinstance(heartbeat, Mapping) else None,
+        "capture_sha256": digest,
+    }
+
+
 def execute_codex_execution_preparation(
     request: Mapping[str, Any],
     *,
     cwd: Path,
     scenario: str,
     capture_directory: Path | None = None,
+    context_directory: Path | None = None,
     timeout: float = 8,
     runner: CommandRunner | None = None,
 ) -> dict[str, Any]:
@@ -175,6 +189,8 @@ def execute_codex_execution_preparation(
     ):
         raise ValueError("Codex execution preparation requires a physical workspace")
     invoke = runner or _default_runner
+    if context_directory is not None and (capture_directory is None or not turn_instance_id):
+        raise ValueError("Native execution preparation requires a bound captured Turn")
     claimed = _run_json(
         expected_claim,
         registry_path=registry_path,
@@ -189,10 +205,12 @@ def execute_codex_execution_preparation(
         "--agent-id", agent_id,
         *( ["--codex-app"] if scenario == "codex_app_heartbeat" else
            ["--runtime-profile", "codex_app_ssh_goal"] ),
-        "--context-delivery", "off",
+        *(["--context-delivery", "on", "--codex-context-dir", str(context_directory),
+           "--defer-context-presentation"] if context_directory is not None else
+          ["--context-delivery", "off"]),
         "--todo-id", todo_id,
         *(["--turn-instance-id", turn_instance_id] if turn_instance_id else []),
-        *(["--decision-output-dir", str(capture_directory)] if capture_directory is not None else []),
+        *(["--decision-output-dir", str(capture_directory), "--prepared-capture-reference"] if capture_directory is not None else []),
     ]
     after = _run_json(
         guard,
@@ -202,13 +220,6 @@ def execute_codex_execution_preparation(
         timeout=timeout / 2,
         runner=invoke,
     )
-    if capture_directory is not None:
-        from .decision_capture import read_context_capture_file
-
-        source = capture_directory / "decision.json"
-        _, _, after = read_context_capture_file(
-            str(source), hashlib.sha256(source.read_bytes()).hexdigest(), private=True,
-        )
     preparation = after.get("execution_preparation")
     selected = after.get("selected_todo")
     receipt = after.get("heartbeat_receipt")
@@ -243,6 +254,11 @@ def execute_codex_execution_preparation(
         "execution_preparation": dict(preparation),
         "normal_delivery_allowed": True,
     }
+    if capture_directory is not None:
+        digest = after.get("capture_sha256")
+        if not isinstance(digest, str) or len(digest) != 64:
+            raise ValueError("The guard did not return its published capture digest")
+        receipt["capture_sha256"] = digest
     claim_reference = claimed.get("claim_operation_id")
     if isinstance(claim_reference, str) and claim_reference:
         receipt["claim_operation_id"] = claim_reference
@@ -254,16 +270,24 @@ def execute_codex_execution_preparation(
 def codex_execution_preparation_context(receipt: Mapping[str, Any]) -> str:
     """Render the small Host receipt that supersedes an earlier stale guard."""
 
+    context = receipt.get("context")
+    guidance = ""
+    if isinstance(context, Mapping):
+        if context.get("ok") is False:
+            guidance = ("Ready context delivery failed. Restore the private original capture and use its "
+                        "recovery command before work. Retain the original claim reference. ")
+        else:
+            guidance = ("Read the ready context in this receipt for current work and settlement, "
+                        "replacing the earlier pre-claim view. Retain its original claim reference "
+                        "for managed progress or completion. A saved context is not proof of "
+                        "model consumption. ")
     return (
         "LoopX Host automatically restored the exact selected Todo lease and "
         "rechecked the same Todo/Turn before this model step. Treat the earlier "
         "claim_required state as superseded by this ready receipt; do not repeat "
         "its claim or guard solely for that lease state. Current gates and later "
         "settlement checks still apply. "
-        + ("Read the ready context in this receipt for current work and settlement, "
-           "replacing the earlier pre-claim view. Retain its original claim reference "
-           "for managed progress or completion. A saved context is not proof of "
-           "model consumption. " if "context" in receipt else "")
+        + guidance
         + "Receipt: "
         + json.dumps(dict(receipt), ensure_ascii=False, separators=(",", ":"))
     )

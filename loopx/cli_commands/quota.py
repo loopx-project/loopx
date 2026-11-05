@@ -387,7 +387,13 @@ def _emit_quota_result(
             context.status_payload, args, payload, registry_path=registry_path,
         )
     try:
-        capture_decision(capture_directory, payload)
+        captured_digest = capture_decision(capture_directory, payload)
+        if getattr(args, "prepared_capture_reference", False) and payload.get("ok") is True:
+            assert captured_digest is not None  # Preflight requires an explicit capture directory.
+            from ..control_plane.turn_driver.codex_execution_preparation import prepared_capture_reference
+
+            print_payload(prepared_capture_reference(payload, captured_digest), args.format, _quota_renderer(args))
+            return 0
         if (payload.get("ok") is False and context_delivery_enabled and capture_directory
                 and args.format == "json" and not getattr(args, "defer_context_presentation", False)):
             print_payload(_export("captured_quota_failure_view")(payload, capture_directory=capture_directory,
@@ -442,7 +448,8 @@ def _emit_quota_result(
     if (not deferred_context and args.format == "json" and succeeded and capture_directory
             and native_context):
         try:
-            payload = project_native_quota_context(payload, args, capture_directory=capture_directory,
+            assert captured_digest is not None  # Native publication requires the captured original.
+            payload = project_native_quota_context(payload, args, capture_directory=capture_directory, capture_id=captured_digest,
                 decision_identity=decision_identity, progressive_enabled=activation["progressive_enabled"],
                 reader_argv=reader_argv)
         except (QuotaDecisionTransportError, OSError, ValueError) as exc:
