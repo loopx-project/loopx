@@ -26,13 +26,15 @@ def preflight_context_instruction(env: dict[str, str], path: Path, digest: str, 
     source = ["--capture-file", str(path), "--capture-sha256", digest]
     project = [*prefix, "context-project", *source,
         "--goal-id", env["LOOPX_GOAL_ID"], "--agent-id", env["LOOPX_AGENT_ID"],
-        "--turn-instance-id", turn_id, "--context-delivery", "on", "--runtime-profile", "generic_cli", "--codex-context-dir", env["LOOPX_CODEX_CONTEXT_DIR"]]
+        "--turn-instance-id", turn_id, "--initial-read", "--context-delivery", "on", "--runtime-profile", "generic_cli", "--codex-context-dir", env["LOOPX_CODEX_CONTEXT_DIR"]]
     recovery_index = [*prefix, "context-read", *source, "--list"]
     return ("Present that same immutable packet with:\n```sh\n" + shlex.join(project)
         + "\n```\n" + ("" if guide_in_host else CONTEXT_CAPTURE_NAVIGATION_GUIDANCE)
         + "If the projection command itself fails, recover necessary facts from the same original capture. "
         "When pointers are unknown, discover them with:\n```sh\n" + shlex.join(recovery_index)
         + "\n```\nUse the same capture's generic reader and selectors for the facts the current decision needs. "
+        "For known fields, replace --initial-read with repeated --select pointers in the first command. "
+        "Continue the returned page or use navigation.recovery.command to reread; do not project again. "
         "Discovery does not require draining the packet. "
         "Neither presentation nor recovery renews this decision's authority or freshness. ")
 
