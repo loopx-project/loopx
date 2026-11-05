@@ -585,6 +585,12 @@ export function prepareContextDelivery(request: JsonObject, legacyQuotaFields: r
   return publish(request, encodeContextDelivery(request, legacyQuotaFields, values), values);
 }
 
+/** Progressive file deltas expose current discovery even without a retained model baseline. */
+export function fileNavigationPaths(context: JsonObject): Path[] {
+  const details = jsonObject(context.context_details);
+  return details && Object.hasOwn(details, "unread_context_index") ? [["context_details", "unread_context_index"]] : [];
+}
+
 /** Shared encoding within one presentation transaction; callers publish once
  * against their original source so numeric facts never round-trip through JS. */
 export function encodeContextDelivery(request: JsonObject, legacyQuotaFields: readonly string[],
@@ -675,13 +681,21 @@ export function restoreContextDelivery(request: JsonObject, legacyQuotaFields: r
         || delivery.ancestry !== Number(baseline.ancestry) + 1 || Number(delivery.ancestry) > MAX_ANCESTRY) return fallback();
     const before = freshPaths(context, surface, legacyQuotaFields, base), after = freshPaths(currentContext, surface, legacyQuotaFields, target);
     if (!fileBacked && (!before.valid || !after.valid)) return fallback();
-    const expected = changeTree(context, currentContext, fileBacked ? [] : after.paths, fileBacked,
+    const currentChanges = (paths: Path[]) => changeTree(context, currentContext, paths, fileBacked,
       {identity, before: ["baseline", "context"], after: ["current", "context"],
         ...(request.source_edits === true ? {values} : {})});
-    // Also rejects omitted unchanged controls, redundant/conflicting edits,
-    // malformed array indices/lengths and unsupported operations before applying.
-    if (contextProjectionIdentity(request, {changes: delivery.changes}, request.source_number_tokens, values)
-        !== contextProjectionIdentity(request, {changes: expected}, request.source_number_tokens, values)) return fallback();
+    const wireIdentity = contextProjectionIdentity(request, {changes: delivery.changes}, request.source_number_tokens, values);
+    const matches = (changes: ReturnType<typeof changeTree>) =>
+      contextProjectionIdentity(request, {changes}, request.source_number_tokens, values) === wireIdentity;
+    const navigation = fileBacked ? fileNavigationPaths(currentContext) : [];
+    let expected = currentChanges(fileBacked ? navigation : after.paths);
+    if (!matches(expected)) {
+      // The ordinary codec may encode the same file without progressive
+      // navigation. Verify that exact encoding too; never apply caller edits.
+      if (!navigation.length) return fallback();
+      expected = currentChanges([]);
+      if (!matches(expected)) return fallback();
+    }
     const result = applyTree(context, expected);
     if (!equal(result, currentContext)) return fallback();
     return publish(request, {...copy(delivery), context: copy(currentContext)}, values);
