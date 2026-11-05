@@ -58,6 +58,18 @@ test("settled historical native work permits only one restricted steward answer 
   assert.equal(plan.read_only_review, true);
   assert.equal(plan.quota_attempt, undefined);
   assert.equal(plan.client_turn_id, `external-${ref}-recovery-22-review-1`);
+  const fileResult = {file_uri: "file:///authorized/existing-result.txt", content: "Original visible file result"};
+  assert.equal(planBoundConversationRequest({...packet, context_recovery: {...packet.context_recovery,
+    native_observation: {...proof, visible_results: [...proof.visible_results, fileResult]}}}).recovery_eligible, true);
+  assert.equal(planBoundConversationRequest({...packet, context_recovery: {...packet.context_recovery,
+    native_observation: {...proof, visible_results: [fileResult]}}}).recovery_eligible, true);
+  for (const result of [{...fileResult, file_uri: "https://untrusted.invalid/result.txt"},
+    {...fileResult, file_uri: "file://remote-host/result.txt"}, {...fileResult, file_uri: "file:///result.txt?next=run"},
+    {...fileResult, content: null}, {file_uri: fileResult.file_uri}, {...fileResult, newEffect: true},
+    {...fileResult, content: "x".repeat(256 * 1024)}]) {
+    assert.notEqual(planBoundConversationRequest({...packet, context_recovery: {...packet.context_recovery,
+      native_observation: {...proof, visible_results: [result]}}}).recovery_eligible, true);
+  }
   assert.equal(planBoundConversationRequest({...packet, context_recovery: {...packet.context_recovery,
     metadata_capacity: {alternate_executor: capacity.alternate_executor}}}).recovery_eligible, true,
     "a verified alternate route does not depend on an unrelated primary quota read");
