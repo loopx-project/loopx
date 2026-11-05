@@ -266,64 +266,6 @@ def test_receipt_keeps_unknown_controls_and_never_hides_partial_failure(tmp_path
     assert selected["/future_control"] == large["future_control"]
 
 
-@pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_receipt_capture_failure_keeps_committed_receipts_and_exact_retry(tmp_path, monkeypatch, provider):
-    isolate_sqlite_runtime(tmp_path, monkeypatch)
-    project, runtime, registry = _write_fixture(tmp_path)
-    _initialize_fixture_authority(project, runtime, provider=provider)
-    binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
-               "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID]
-    rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding, cwd=project)
-    assert rc == 0, guard
-    private = runtime / "context-delivery"
-    private.mkdir(mode=0o700, exist_ok=True)
-    private.chmod(0o755)
-    command = ["refresh-state", *binding, "--classification", "verified_receipt_recovery",
-        "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
-        "--delivery-boundary", "in_flight_continuation", "--no-global-sync", "--suppress-external-sinks",
-        "--settle-turn", "--settlement-receipt"]
-    rc, failed = _run_cli(registry, runtime, *command, cwd=project)
-    assert rc != 0 and failed["ok"] is False
-    assert failed["settlement_progress"]["state"] == "settled"
-    assert len(failed["settlement_result"]["receipts"]) == 3
-    assert _spend_run_count(runtime) == 1
-    private.chmod(0o700)
-    rc, replay = _run_cli(registry, runtime, *command, cwd=project)
-    assert rc == 0, replay
-    assert replay["settlement_identity"] == failed["settlement_identity"]
-    assert len(replay["settlement_result"]["receipts"]) == 3
-    assert _spend_run_count(runtime) == 1
-
-
-def test_receipt_keeps_unknown_controls_and_never_hides_partial_failure(tmp_path):
-    from loopx.cli_commands.refresh_settlement import present_settled_refresh
-
-    payload = {"ok": True, "settlement_progress": {"state": "settled"},
-        "state": {"large_supporting_snapshot": "x" * 3000},
-        "future_control": {"required_resolution": "preserve exactly"},
-        "projection_outbox": {"status": "pending", "next_action": "retry"}}
-    receipt = present_settled_refresh(payload, runtime_root=tmp_path)
-    assert receipt["future_control"] == payload["future_control"]
-    assert receipt["projection_outbox"] == payload["projection_outbox"]
-    for update in ({"ok": False}, {"dry_run": True}, {"settlement_owed": {"command": "original"}},
-                   {"settlement_progress": {"state": "spend_required"}}):
-        original = {**payload, **update}
-        assert present_settled_refresh(original, runtime_root=tmp_path) is original
-    large = {**payload, "future_control": {"required_resolution": "x" * 100000}}
-    bounded = present_settled_refresh(large, runtime_root=tmp_path)
-    assert "Read the complete selected result controls before acting" in bounded["instruction"]
-    assert "Supporting snapshots" in bounded["instruction"]
-    command, bodies = bounded["command"], []
-    while command:
-        result = subprocess.run(shlex.split(command), capture_output=True, text=True, check=False)
-        page = json.loads(result.stdout)
-        assert result.returncode == 0 and len(result.stdout.encode()) <= 64000
-        bodies.append(page["content"])
-        command = page.get("next_command")
-    selected = {row["pointer"]: row["value"] for row in json.loads("".join(bodies))["selections"]}
-    assert selected["/future_control"] == large["future_control"]
-
-
 def _repository_delivery(tmp_path, provider):
     project, runtime, registry = _write_fixture(tmp_path)
     state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
