@@ -555,7 +555,7 @@ def _discard_recovery(root: Path) -> None:
     path.unlink()
 
 
-def _native_context_request(state: dict[str, Any], scope: dict[str, Any]) -> dict[str, Any]:
+def _native_context_request(state: dict[str, Any], scope: dict[str, Any], capture_id: str) -> dict[str, Any]:
     """Compare verified durable versions independently of model retention.
 
     The same session's last full capture is a file baseline after partial reads
@@ -565,6 +565,11 @@ def _native_context_request(state: dict[str, Any], scope: dict[str, Any]) -> dic
     """
     request: dict[str, Any] = {"scope": scope}
     previous = state.get("recovery")
+    target = previous.get("target") if isinstance(previous, dict) else None
+    if isinstance(target, dict) and target.get("capture_id") == capture_id:
+        # Publishing an offer does not mean a reader saw it. A retry may use
+        # the original predecessor, but never this offer as its own baseline.
+        previous = previous.get("comparison_base")
     if isinstance(previous, dict) and isinstance(previous.get("target"), dict):
         try:
             path, raw, payload = read_context_capture_file(previous["path"], previous["sha256"], private=True)
@@ -661,7 +666,7 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                     for key in ("consumed_pointers", "confirmed_read_sections", "section_reads"):
                         state.pop(key, None)
                 state["read_scope"] = scope
-                request = _native_context_request(state, scope)
+                request = _native_context_request(state, scope, capture_id)
                 recovery = capture_context_projection(payload, directory=capture_directory,
                     read_guidance=CONTEXT_CAPTURE_PAGE_GUIDANCE)
                 state["source_recovery"] = {key: recovery[key] for key in ("path", "sha256")}
@@ -708,6 +713,10 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                 if result.get("schema_version") == "context_delivery_v1":
                     state["recovery"]["target"] = result["target"]
                     state["recovery"]["continuity_basis"] = "captured_file"
+                    if result.get("continuity_basis") == "captured_file" and result.get("mode") == "delta":
+                        base = request["baseline_reference"]
+                        state["recovery"]["comparison_base"] = {
+                            "path": base["path"], "sha256": base["sha256"], "target": result["base"]}
                     state["pending"].update(target=result["target"], ancestry=result["ancestry"],
                         full_read_sections=transaction["read_sections"],
                         read_sections=transaction["read_sections"] if result["mode"] == "full" else {})
