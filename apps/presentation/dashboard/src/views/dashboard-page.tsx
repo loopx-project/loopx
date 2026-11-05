@@ -1523,6 +1523,7 @@ function PersonalGoalHome({
   const newSessionRequired = useRef(new Set<string>());
   const activeTurnIds = useRef(new Map<string, string>());
   const streamControllers = useRef(new Map<string, AbortController>());
+  const pendingTurnAdmissions = useRef(new Map<string, AbortController>());
   const preparationControllers = useRef(new Map<string, AbortController>());
   const interruptedTurnIds = useRef(new Set<string>());
   const recoveringTurnKeys = useRef(new Map<string, AbortController>());
@@ -1740,31 +1741,42 @@ function PersonalGoalHome({
     }
   }, [selectedAgents]);
 
-  useEffect(() => {
-    if (!conversationHistory.history) return;
-    const messages = conversationHistory.history.messages;
+  // Admission and history can arrive in either order. Stream callbacks need
+  // the current read owner, with its exact context, rather than the snapshot
+  // captured when the original send began.
+  const reconcileReadHistory = useRef<(targetContextId: string, previous: PersonalManagerMessage[], sessionId?: string) => PersonalManagerMessage[]>(
+    (_targetContextId, previous) => previous,
+  );
+  reconcileReadHistory.current = (targetContextId, previous, sessionId) => {
+    if (targetContextId !== contextId || !conversationHistory.history) return previous;
+    const messages = sessionId ? conversationHistory.history.messages.filter(message => message.session_id === sessionId)
+      : conversationHistory.history.messages;
     const sessionLabels = new Map(conversationHistory.history.sessions.map(session => [session.session_id,
       runtimeAgents.find(agent => agent.agent_id === session.agent_id)?.display_name ?? session.agent_id]));
+    return reconcileConversationHistory(previous, messages, (message): PersonalManagerMessage => ({
+      sourceMessageId: message.message_id,
+      sourceSessionId: message.session_id,
+      sourceTurnId: message.turn_id ?? undefined,
+      sourceCreatedAt: message.created_at,
+      goalDraft: normalizeGoalDraft(message.goal_draft),
+      agentLabel: message.role === "user" ? message.origin === "peer" ? (locale === "zh-CN" ? "协作者" : "Collaborator") : undefined : message.origin === "manager_followup"
+        ? "协作回执" : answerIdentityLabel(contextId, sessionLabels.get(message.session_id ?? "") ?? selectedAgent.label),
+      attachments: workspaceImageAttachments(message.attachments),
+      id: managerMessageId.current++, lines: [],
+      role: message.role === "user" ? "user" : "assistant",
+      returnDelivery: message.return_delivery, collaboration: message.collaboration, collaborations: message.collaborations,
+      replyContext: message.reply_context,
+      queueInputRevision: message.queue_input_revision, queueInputCancelled: message.queue_input_cancelled,
+      sourceLabel: message.role === "user" ? undefined : message.role === "error" ? "本地会话记录"
+        : contextId === "manager" ? `恢复的${t("header.manager")}会话` : `恢复的 ${sessionLabels.get(message.session_id ?? "") ?? selectedAgent.label} 会话`,
+      text: message.role === "user" ? message.reply_context?.source_text ?? message.text : visibleAgentMessage(message.text),
+    }));
+  };
+  useEffect(() => {
+    if (!conversationHistory.history) return;
     setMessagesByContext((current) => {
       const previous = current[contextId] ?? [];
-      const updated = reconcileConversationHistory(previous, messages, (message): PersonalManagerMessage => ({
-        sourceMessageId: message.message_id,
-        sourceSessionId: message.session_id,
-        sourceTurnId: message.turn_id ?? undefined,
-        sourceCreatedAt: message.created_at,
-        goalDraft: normalizeGoalDraft(message.goal_draft),
-        agentLabel: message.role === "user" ? message.origin === "peer" ? (locale === "zh-CN" ? "协作者" : "Collaborator") : undefined : message.origin === "manager_followup"
-          ? "协作回执" : answerIdentityLabel(contextId, sessionLabels.get(message.session_id ?? "") ?? selectedAgent.label),
-        attachments: workspaceImageAttachments(message.attachments),
-        id: managerMessageId.current++, lines: [],
-        role: message.role === "user" ? "user" : "assistant",
-        returnDelivery: message.return_delivery, collaboration: message.collaboration, collaborations: message.collaborations,
-        replyContext: message.reply_context,
-        queueInputRevision: message.queue_input_revision, queueInputCancelled: message.queue_input_cancelled,
-        sourceLabel: message.role === "user" ? undefined : message.role === "error" ? "本地会话记录"
-          : contextId === "manager" ? `恢复的${t("header.manager")}会话` : `恢复的 ${sessionLabels.get(message.session_id ?? "") ?? selectedAgent.label} 会话`,
-        text: message.role === "user" ? message.reply_context?.source_text ?? message.text : visibleAgentMessage(message.text),
-      }));
+      const updated = reconcileReadHistory.current(contextId, previous);
       return updated === previous ? current : { ...current, [contextId]: updated };
     });
   }, [conversationHistory.history, contextId, selectedAgent.label, runtimeAgents]);
@@ -1838,10 +1850,13 @@ function PersonalGoalHome({
         // A source index can observe the Turn this very composer is already
         // streaming. Exact contexts already key ownership by their Session;
         // keep that live observer instead of replacing its controls and reply.
+        // The history may discover our native Turn before the original ACK
+        // supplies its id. Its in-flight admission still owns observation.
         if ((targetContext.kind === "bound" || targetContext.kind === "managed")
           && targetContext.sessionId === created.session_id
-          && activeTurnIds.current.get(targetContextId) === activeTurnId
-          && streamControllers.current.get(targetContextId)?.signal.aborted === false) return;
+          && (pendingTurnAdmissions.current.get(targetContextId)?.signal.aborted === false
+            || (activeTurnIds.current.get(targetContextId) === activeTurnId
+              && streamControllers.current.get(targetContextId)?.signal.aborted === false))) return;
         const recoveryKey = `${created.session_id}:${activeTurnId}`;
         if (recoveringTurnKeys.current.has(recoveryKey)) return;
         const observer = new AbortController();
@@ -2244,13 +2259,14 @@ function PersonalGoalHome({
     message: Omit<PersonalManagerMessage, "id" | "role">,
   ) {
     const id = managerMessageId.current++;
-    setMessagesByContext((messages) => ({
-      ...messages,
-      [targetContextId]: [
+    setMessagesByContext((messages) => {
+      const updated: PersonalManagerMessage[] = [
         ...(messages[targetContextId] ?? []),
         { sourceCreatedAt: new Date().toISOString(), startedAt: message.pending ? Date.now() : undefined, updatedAt: Date.now(), ...message, id, role: "assistant" },
-      ],
-    }));
+      ];
+      return {...messages, [targetContextId]: message.sourceSessionId && message.sourceTurnId
+        ? reconcileReadHistory.current(targetContextId, updated, message.sourceSessionId) : updated};
+    });
     return id;
   }
 
@@ -2259,9 +2275,14 @@ function PersonalGoalHome({
     messageId: number,
     update: Partial<Omit<PersonalManagerMessage, "id" | "role">>,
   ) {
-    setMessagesByContext((messages) => ({
-      ...messages,
-      [targetContextId]: (messages[targetContextId] ?? []).filter((message) =>
+    setMessagesByContext((messages) => {
+      const previous = messages[targetContextId] ?? [];
+      const original = previous.find(message => message.id === messageId);
+      if (!original) return messages;
+      const identityChanged = (update.sourceSessionId !== undefined && update.sourceSessionId !== original.sourceSessionId)
+        || (update.sourceTurnId !== undefined && update.sourceTurnId !== original.sourceTurnId)
+        || ("sourceMessageId" in update && update.sourceMessageId !== original.sourceMessageId);
+      const updated = previous.filter((message) =>
         // A read may arrive before the original send's storage receipt. Keep
         // the live row when its exact persisted identity becomes known.
         message.id === messageId || !update.sourceMessageId || !update.sourceSessionId
@@ -2270,8 +2291,11 @@ function PersonalGoalHome({
           ...(update.text !== undefined || update.activity !== undefined ? { updatedAt: Date.now() } : {}),
           ...(message.pending && update.pending === false ? { preparing: false, endedAt: Date.now() } : {}),
           ...update,
-        } : message),
-    }));
+        } : message);
+      return {...messages, [targetContextId]: identityChanged
+        ? reconcileReadHistory.current(targetContextId, updated, update.sourceSessionId ?? original.sourceSessionId)
+        : updated};
+    });
   }
 
   async function prepareGoalConversation(goalId: string, agentId: string, signal?: AbortSignal) {
@@ -2411,7 +2435,10 @@ function PersonalGoalHome({
         signal: (() => {
           const controller = new AbortController();
           streamController = controller;
-          if (!route?.queue) streamControllers.current.set(targetContextId, controller);
+          if (!route?.queue) {
+            streamControllers.current.set(targetContextId, controller);
+            pendingTurnAdmissions.current.set(targetContextId, controller);
+          }
           return controller.signal;
         })(),
         onDelta: (delta: string) => {
@@ -2427,6 +2454,7 @@ function PersonalGoalHome({
           }));
         },
         onPhase: (phase: string, turnId: string) => {
+          if (pendingTurnAdmissions.current.get(targetContextId) === streamController) pendingTurnAdmissions.current.delete(targetContextId);
           if (submittedTurnId !== turnId) updateConversationMessage(targetContextId, userMessageId, {
             sourceTurnId: turnId, sourceSessionId: sessionId,
             ...(route?.queue ? {sourceMessageId: undefined} : {}),
@@ -2665,6 +2693,7 @@ function PersonalGoalHome({
         && payloadError.turn_replay_safe === true)) throw error;
     } finally {
       streamEnded = true;
+      if (pendingTurnAdmissions.current.get(targetContextId) === streamController) pendingTurnAdmissions.current.delete(targetContextId);
       // A handed-off Turn is still running: its ownership stays for the
       // recovery that adopts it or the read that finds it ended.
       const ownsTurn = !handedOff && activeTurnIds.current.get(targetContextId) === submittedTurnId;

@@ -368,6 +368,7 @@ COMMAND_GROUPS: list[dict[str, object]] = [
 MANPAGE_COMMAND_HELP_ONLY = frozenset(
     {
         "agent-context",
+        "anti-entropy",
         "archive-runtime",
         "automation-prompts",
         "automation-cadence",

@@ -291,3 +291,80 @@ def test_collect_status_defines_one_programmatic_request(
 
     assert payload == {"first": "revision-1", "second": "revision-1"}
     assert fingerprints == ["revision-1"]
+
+
+def test_repeated_todo_lenses_share_only_exact_request_inputs(monkeypatch):
+    calls = []
+
+    def request(method, params, **kwargs):
+        calls.append((method, params))
+        return {"result": {"items": [{"text": params["text"]}]}}
+
+    monkeypatch.setattr(effect_runtime, "effect_runtime_request", request)
+    with effect_runtime.effect_runtime_request_scope():
+        first = effect_runtime.effect_runtime_result("todo.context.page", {"text": "original"})
+        first["items"][0]["text"] = "caller edit"
+        assert effect_runtime.effect_runtime_result("todo.context.page", {"text": "original"}) == {
+            "items": [{"text": "original"}]}
+        assert effect_runtime.effect_runtime_result("todo.context.page", {"text": "revised"}) == {
+            "items": [{"text": "revised"}]}
+        # JSON equality must not use Python's bool/int equality or lose -0.0.
+        for value in (True, 1, 1.0, 0.0, -0.0, 2**60, 2**60 + 1):
+            effect_runtime.effect_runtime_result("todo.context.page", {"text": value})
+    assert len(calls) == 9
+
+
+def test_todo_reuse_ends_with_request_even_for_a_copied_context(monkeypatch):
+    calls = []
+
+    def request(method, params, **kwargs):
+        calls.append(method)
+        return {"result": {"observed": len(calls)}}
+
+    monkeypatch.setattr(effect_runtime, "effect_runtime_request", request)
+    with effect_runtime.effect_runtime_request_scope():
+        first = effect_runtime.effect_runtime_result("todo.context.page", {})
+        inherited = copy_context()
+        assert inherited.run(effect_runtime.effect_runtime_result, "todo.context.page", {}) == first
+    assert inherited.run(effect_runtime.effect_runtime_result, "todo.context.page", {}) != first
+    with effect_runtime.effect_runtime_request_scope():
+        assert effect_runtime.effect_runtime_result("todo.context.page", {}) != first
+    assert len(calls) == 3
+
+
+def test_authority_reads_settlement_and_failed_lenses_are_never_reused(monkeypatch):
+    calls = []
+
+    def request(method, params, **kwargs):
+        calls.append(method)
+        if method == "todo.context.page" and calls.count(method) == 1:
+            raise effect_runtime.EffectRuntimeRejected("invalid fixture")
+        return {"result": {"observed": len(calls)}}
+
+    monkeypatch.setattr(effect_runtime, "effect_runtime_request", request)
+    with effect_runtime.effect_runtime_request_scope():
+        for method in ("coordination.local_authority.todo_snapshot", "quota.settlement.read", "quota.spend.commit"):
+            assert effect_runtime.effect_runtime_result(method, {}) != effect_runtime.effect_runtime_result(method, {})
+        with pytest.raises(effect_runtime.EffectRuntimeRejected):
+            effect_runtime.effect_runtime_result("todo.context.page", {})
+        assert effect_runtime.effect_runtime_result("todo.context.page", {}) == {"observed": 8}
+        assert effect_runtime.effect_runtime_result("todo.context.page", {}) == {"observed": 8}
+    assert len(calls) == 8
+
+
+def test_todo_reuse_is_bounded_and_unscoped_calls_keep_original_behavior(monkeypatch):
+    calls = []
+
+    def request(method, params, **kwargs):
+        calls.append(method)
+        return {"result": {"text": "preserve all original output"}}
+
+    monkeypatch.setattr(effect_runtime, "effect_runtime_request", request)
+    monkeypatch.setattr(effect_runtime, "MAX_REQUEST_BYTES", 1)
+    with effect_runtime.effect_runtime_request_scope():
+        for _ in range(2):
+            assert effect_runtime.effect_runtime_result("todo.context.page", {}) == {
+                "text": "preserve all original output"}
+    for _ in range(2):
+        effect_runtime.effect_runtime_result("todo.context.page", {})
+    assert len(calls) == 4
