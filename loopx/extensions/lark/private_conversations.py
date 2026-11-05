@@ -1622,14 +1622,21 @@ class LarkPrivateConversations:
         if source.get("msg_type", source.get("message_type")) != message_type:
             return None
         if message_type == "post":
-            # A text-only post already froze its provider rendering at intake.
-            # Require that exact source and the same stripped model input; do
-            # not download resources or treat a partial media caption as text.
+            # Posts froze their provider rendering at intake. Text-only input
+            # must also equal its admitted text; image input retains its
+            # original model text and frozen attachment payload below.
             frozen = record.get("source_content")
-            if (record.get("attachments") != [] or native.get("attachments")
-                    or record.get("attachment_notice") or not isinstance(frozen, str)
-                    or frozen.strip() != expected):
+            images = record.get("attachments")
+            frozen_images = (isinstance(images, list) and bool(images)
+                and images == native.get("attachments") and record.get("message") == native.get("message"))
+            if (record.get("attachment_notice") or not isinstance(frozen, str)
+                    or (not frozen_images and (images != [] or native.get("attachments")
+                                              or frozen.strip() != expected))):
                 return None
+            # The original post's image keys/caption must still render exactly
+            # as frozen at intake. Core separately verifies the saved image
+            # bytes against the original pre-dispatch Turn; never redownload or
+            # silently execute a text-only replacement of an image request.
             expected = frozen
         elif message_type != "text":
             return None

@@ -1095,6 +1095,21 @@ function planUnfinishedWork(recovery: JsonObject, row: JsonObject, current: Json
     && matchesWork(observed.unfinished_work)};
 }
 
+function interruptedVisibleResult(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const result = value as JsonObject;
+  if (Object.keys(result).sort().join(",") === "content,file_uri") {
+    if (typeof result.file_uri !== "string" || typeof result.content !== "string") return false;
+    try {
+      const uri = new URL(result.file_uri);
+      return uri.protocol === "file:" && uri.host === "" && uri.pathname.startsWith("/")
+        && uri.search === "" && uri.hash === "";
+    } catch { return false; }
+  }
+  return typeof result.commandLine === "string" && result.commandLine.length > 0
+    && Number.isSafeInteger(result.exitCode);
+}
+
 /** Interrupted work may have effects. Never retry it. The original worker may
  * reserve one read-only review of existing results, with its own presentation.
  * The adapter retains only the original runtime's authorized reads, with
@@ -1143,9 +1158,7 @@ function planInterruptedStewardAnswer(recovery: JsonObject, row: JsonObject, cur
       || proof.read_only_review !== true || proof.no_final_answer !== true || proof.effects_observed !== true
       || !Array.isArray(proof.visible_results) || !proof.visible_results.length || proof.visible_results.length > 128
       || Buffer.byteLength(JSON.stringify(proof.visible_results), "utf8") > 256 * 1024
-      || proof.visible_results.some(value => !value || typeof value !== "object" || Array.isArray(value)
-        || typeof (value as JsonObject).commandLine !== "string" || !(value as JsonObject).commandLine
-        || !Number.isSafeInteger((value as JsonObject).exitCode))) return candidate;
+      || !proof.visible_results.every(interruptedVisibleResult)) return candidate;
   const capacity = nativeRecoveryCapacity(recovery, row, current, candidate);
   // This is a new restricted answer review, never native business replay.
   return {...capacity, recovery_eligible: capacity.recovery_eligible === true && capacity.answer_executor === "codex"};
@@ -1192,15 +1205,38 @@ function planResultReview(recovery: JsonObject, row: JsonObject, current: JsonOb
 /** A local manager-context failure precedes native dispatch. Only the Core's
  * exact preparation event sequence can qualify it; absence alone cannot.
  */
+function samePreparationImages(left: unknown, right: unknown): boolean {
+  if (!left || typeof left !== "object" || Array.isArray(left)) return false;
+  const image = left as JsonObject;
+  return Number.isSafeInteger(image.count) && Number(image.count) > 0
+    && typeof image.sha256 === "string" && BARE_SHA256_PATTERN.test(image.sha256)
+    && isDeepStrictEqual(left, right);
+}
+
+function legacyImagePreparation(recovery: JsonObject, failed: JsonObject): boolean {
+  const images = recovery.image_attachments as JsonObject | undefined;
+  // A bounded migration for the old adapter's exact pre-dispatch rejection.
+  // Neither generic runtime errors nor absent upstream IDs establish safety.
+  return failed.error_code === "runtime_error"
+    && failed.error === "attachments currently require the Codex Agent endpoint"
+    && recovery.attachments_present === true && recovery.native_result_present === false
+    && images != null && samePreparationImages(images.request, images.failed);
+}
+
 function planPreparationRecovery(recovery: JsonObject, row: JsonObject, current: JsonObject,
   failed: JsonObject, version: number): JsonObject | null {
-  if (failed.error_code !== "manager_authorization_unavailable") return null;
+  const images = legacyImagePreparation(recovery, failed);
+  if (failed.error_code !== "manager_authorization_unavailable" && !images) return null;
   const no = {operation: "admit_turn", recovery_candidate: false, recovery_eligible: false};
   if (failed.session_id !== current.session_id || failed.turn_id !== row.turn_id
       || failed.status !== "failed" || failed.response !== null || failed.upstream_turn_id !== null
-      || failed.delta_count !== 0 || failed.message !== row.message || recovery.attachments_present !== false
+      || failed.delta_count !== 0 || failed.message !== row.message || (!images && recovery.attachments_present !== false)
       || recovery.steering_observed !== false || recovery.native_observation != null) return no;
   const previous = row.context_recovery == null ? null : requireJsonObject(row.context_recovery, "preparation recovery");
+  // Only one migration of the original rejected image input. An admitted
+  // continuation that later fails cannot become another attachment retry.
+  if (images && previous !== null && (previous.failed_turn_id !== failed.turn_id
+      || previous.preparation_attempt !== 1)) return no;
   const otherKinds = ["routing_attempt", "quota_attempt", "read_only_review", "metadata_review", "work_attempt"];
   if (previous !== null && (!Number.isSafeInteger(previous.preparation_attempt)
       || Number(previous.preparation_attempt) < 1 || Number(previous.preparation_attempt) > 3
@@ -1221,7 +1257,9 @@ function planPreparationRecovery(recovery: JsonObject, row: JsonObject, current:
     if (previous?.client_turn_id !== client || admitted.client_turn_id !== client
         || admitted.session_id !== current.session_id || admitted.turn_id === failed.turn_id
         || admitted.message !== row.message || admitted.origin !== row.origin
-        || !Array.isArray(admitted.attachments ?? []) || (admitted.attachments as unknown[] | undefined)?.length) return no;
+        || (images ? !samePreparationImages((recovery.image_attachments as JsonObject).request,
+              (recovery.image_attachments as JsonObject).admitted)
+          : !Array.isArray(admitted.attachments ?? []) || (admitted.attachments as unknown[] | undefined)?.length)) return no;
     return {...no, recovery_candidate: true, recovery_eligible: recovery.source_verified === true,
       client_turn_id: client, admitted_turn_id: sessionIdentity(admitted.turn_id, "admitted preparation Turn"),
       preparation_attempt: previous?.preparation_attempt,
@@ -1241,7 +1279,8 @@ function planPreparationRecovery(recovery: JsonObject, row: JsonObject, current:
 function planRoutingRecovery(recovery: JsonObject, row: JsonObject, current: JsonObject,
   failed: JsonObject, previous: JsonObject | null, version: number): JsonObject | null {
   const quota = failed.error_code === "usage_limit_exceeded";
-  const preparation = failed.error_code === "manager_authorization_unavailable";
+  const images = legacyImagePreparation(recovery, failed);
+  const preparation = failed.error_code === "manager_authorization_unavailable" || images;
   const kind = preparation ? "preparation" : quota ? "quota" : "routing";
   const attemptKey = `${kind}_attempt`;
   if (!quota && !preparation && !["host_gate", "upstream_transport_failure"].includes(String(failed.error_code))) return null;
@@ -1279,12 +1318,15 @@ function planRoutingRecovery(recovery: JsonObject, row: JsonObject, current: Jso
   if (!observed) return candidate;
   if (preparation) {
     const events = observed.events;
-    if (observed.kind !== "core_context_preparation_failure" || observed.session_id !== failed.session_id
-        || observed.turn_id !== failed.turn_id || !Array.isArray(events) || events.length !== 4) return candidate;
-    const [queued, phase, context, terminal] = events.map(value => requireJsonObject(value, "Core preparation event"));
+    if (observed.kind !== (images ? "core_attachment_preparation_failure" : "core_context_preparation_failure")
+        || observed.session_id !== failed.session_id || observed.turn_id !== failed.turn_id
+        || !Array.isArray(events) || (events.length !== 4 && !(images && events.length === 3))) return candidate;
+    const rows = events.map(value => requireJsonObject(value, "Core preparation event"));
+    const queued = rows[0], terminal = rows.at(-1)!, context = rows.at(-2)!;
+    const phase = rows.length === 4 ? rows[1] : null;
     const ids = events.map(value => (value as JsonObject).event_id);
-    const verified = new Set(ids).size === 4 && ids.every(value => typeof value === "string" && value.length > 0)
-      && queued.kind === "turn.queued" && phase.kind === "agent.phase" && phase.phase === "manager_context"
+    const verified = new Set(ids).size === rows.length && ids.every(value => typeof value === "string" && value.length > 0)
+      && queued.kind === "turn.queued" && (phase === null || phase.kind === "agent.phase" && phase.phase === "manager_context")
       && context.kind === "manager.context" && context.schema_version === "manager_turn_context_v1"
       && terminal.kind === "turn.failed" && terminal.error_code === failed.error_code;
     return {...candidate, recovery_eligible: verified && recovery.source_verified === true

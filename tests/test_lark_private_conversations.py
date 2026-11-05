@@ -19,6 +19,104 @@ from loopx.extensions.lark.private_conversations import LarkPrivateConversations
 from loopx.extensions.lark.goal_topic_runtime import poll_lark_goal_topic_profile_once
 
 
+@pytest.mark.parametrize("fault", [None, "admission-crash", "source-image", "source-caption", "saved-image", "extra-native-event", "revoked", "stop"])
+def test_original_post_image_preflight_recovery_keeps_images_source_and_failed_turn(tmp_path, monkeypatch, fault):
+    from test_native_steward_private import steward, finish
+    from test_lark_private_images import image_runner
+    from test_chat_image_attachments import PNG_DATA_URL
+    from test_manager_preparation_recovery import advance_recovery_clock
+    from loopx.chat_store import _read_json, _atomic_write_json
+    from loopx.chat_manager import MANAGER_CONTEXT_VERSION
+    import loopx.chat_runtime as runtime_module
+
+    fixture = steward.__wrapped__(tmp_path)
+    store, runtime, provider, transport, binding, capture, _ = next(fixture)
+    transport.runner = image_runner(provider)
+    original_start = runtime_module.start_attachment_turn
+
+    def old_preflight(*_args, **_kwargs):
+        raise ValueError("attachments currently require the Codex Agent endpoint")
+
+    monkeypatch.setattr(runtime_module, "start_attachment_turn", old_preflight)
+    try:
+        event = provider.event("steward-app", "original-image-preflight", "Explain this image\n![Image](img_example)", kind="post")
+        assert transport.admit("steward-app", event)["status"] == "durably_accepted"
+        row = transport.core.pending()[0]
+        failed = finish(runtime, row)
+        assert failed["status"] == "failed" and failed["upstream_turn_id"] is None and failed["delta_count"] == 0
+        assert not any(json.loads(line)["method"] == "turn/start" for line in capture.read_text().splitlines())
+        transport.reconcile()
+        path = transport.root / f"{row['request_ref']}.json"
+        record = _read_json(path)
+        assert record["deliveries"]["terminal"]["verified"]
+        original_failure_bytes = store._turn_path(row["session_id"], row["turn_id"]).read_bytes()
+        monkeypatch.setattr(runtime_module, "start_attachment_turn", original_start)
+        advance_recovery_clock(monkeypatch)
+        if fault in {"source-image", "source-caption"}:
+            provider.messages[event["message_id"]]["content"] = ("Explain this image\n![Image](img_replaced)"
+                if fault == "source-image" else "Different intent\n![Image](img_example)")
+        elif fault == "saved-image":
+            original = _read_json(transport.core.root / f"{row['request_ref']}.json")
+            original["attachments"][0]["name"] = "a different frozen image"
+            _atomic_write_json(transport.core.root / f"{row['request_ref']}.json", original)
+        elif fault == "extra-native-event":
+            events_after = store.events_after
+            monkeypatch.setattr(store, "events_after", lambda sid, tid, cursor, **kw: events_after(sid, tid, cursor, **kw)
+                + ([{"event_id": "unknown-effect", "kind": "turn.started", "payload": {}}] if tid == row["turn_id"] else []))
+        elif fault == "revoked":
+            transport.bindings.disconnect(binding["binding_id"], expected_revision=transport.bindings.read()["revision"])
+        elif fault == "stop":
+            transport.admit("steward-app", provider.event("steward-app", "stop-original-image", "/stop"))
+        if fault in {None, "admission-crash"}:
+            assert transport.core.context_recovery_candidate(row["request_ref"])
+        if fault == "admission-crash":
+            enqueue = runtime.enqueue_turn
+
+            def committed_then_disconnected(**kwargs):
+                enqueue(**kwargs)
+                monkeypatch.setattr(runtime, "enqueue_turn", enqueue)
+                raise OSError("synthetic crash after original queue admission")
+
+            monkeypatch.setattr(runtime, "enqueue_turn", committed_then_disconnected)
+            with pytest.raises(OSError, match="after original queue admission"):
+                transport.reconcile_request(path)
+        # Exercise the existing reply worker after its next scheduled visit;
+        # discovery's monotonic backoff has separate real-pool coverage below.
+        if fault == "revoked":
+            with pytest.raises(ValueError, match="no longer authorized"):
+                transport.reconcile_request(path)
+        else:
+            transport.reconcile_request(path)
+        current = transport.core.read_request(row["request_ref"])
+        if fault not in {None, "admission-crash"}:
+            assert current["turn_id"] == row["turn_id"] and not current.get("context_recovery")
+            assert not any(json.loads(line)["method"] == "turn/start" for line in capture.read_text().splitlines())
+            return
+        assert current["session_id"] == row["session_id"] and current["turn_id"] != row["turn_id"]
+        assert current["context_recovery"]["preparation_attempt"] == 1
+        continued = runtime.wait_for_turn(session_id=row["session_id"], turn_id=current["turn_id"], timeout_sec=15)
+        assert continued["status"] == "completed" and continued["attachments"] == failed["attachments"]
+        transport.reconcile()
+        delivered = _read_json(path)
+        terminal = delivered["deliveries"][f"terminal.recovery.{MANAGER_CONTEXT_VERSION}.preparation.1"]
+        assert terminal["verified"] and terminal["text"] == continued["response"]["message"]
+        actual = provider.messages[terminal["attempt"]["message_ref"]]
+        body = json.loads(actual["body"]["content"])
+        assert body["zh_cn"]["content"][0][0]["text"] == terminal["text"]
+        assert actual["chat_id"] == event["chat_id"] and actual["sender"]["id"] == provider.profile_apps["steward-app"]
+        assert delivered["deliveries"]["terminal"] == record["deliveries"]["terminal"]
+        assert store._turn_path(row["session_id"], row["turn_id"]).read_bytes() == original_failure_bytes
+        wire = [json.loads(line) for line in capture.read_text().splitlines()]
+        model_calls = [call for call in wire if call["method"] == "turn/start"]
+        assert len(model_calls) == 1
+        assert any(item.get("type") == "image" and item["url"] == PNG_DATA_URL for item in model_calls[0]["params"]["input"])
+        transport.reconcile()
+        assert sum(json.loads(line)["method"] == "turn/start" for line in capture.read_text().splitlines()) == 1
+        assert len([call for call in provider.calls if "+messages-resources-download" in call]) == 1
+    finally:
+        fixture.close()
+
+
 @pytest.mark.parametrize("fault", [None, "stop", "source-changed", "later-source", "no-capacity", "native-tool",
     "stop-after-discovery", "source-changed-after-discovery"])
 def test_original_worker_continues_proven_unstarted_argon_quota_on_codex(tmp_path, language_server, monkeypatch, fault):  # noqa: F811
