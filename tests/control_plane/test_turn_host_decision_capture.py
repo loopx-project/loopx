@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib.util
 import hashlib
 import json
+import os
 import shlex
 import subprocess
 import sys
@@ -350,6 +351,21 @@ def test_real_host_reads_original_capture_after_source_change(
     if first_attempt_fails:
         retry = [*replay, "--resume-turn-key", request["turn_key"], "--retry-failed-turn", "--execute"]
         received_before = (workspace / "received.txt").read_bytes()
+        if hasattr(os, "mkfifo"):
+            path.unlink()
+            os.mkfifo(path, 0o600)
+            # Bound the real recovery process: opening a pipe in blocking mode
+            # would wait for an absent writer under the Turn journal lock.
+            rejected_pipe = subprocess.run(
+                [sys.executable, "-m", "loopx.entrypoint", *retry], capture_output=True, timeout=15,
+            )
+            assert rejected_pipe.returncode == 1
+            assert "regular file" in json.loads(rejected_pipe.stdout)["error"]
+            assert journal_path.read_bytes() == original_journal
+            assert (workspace / "received.txt").read_bytes() == received_before
+            assert f._quota_spend_count(runtime) == 0
+            path.unlink()
+            path.write_bytes(original)
         for corrupt in (True, False):
             if corrupt:
                 path.write_text(json.dumps({**source_a, "reason": "replaced evidence"}))

@@ -44,6 +44,10 @@ def private_capture_uid() -> int:
     return cast(int, getattr(os, "getuid")())
 
 
+def _decision_json(payload: Mapping[str, Any]) -> str:
+    return json.dumps(dict(payload), ensure_ascii=False, separators=(",", ":"), allow_nan=False) + "\n"
+
+
 def write_decision_capture(
     path: Path, payload: Mapping[str, Any], *, publish: Callable[[str, Path], None] = os.link,
 ) -> str:
@@ -52,7 +56,7 @@ def write_decision_capture(
     Digest the bytes we publish, rather than reopening the file solely to hash
     it. Independent readers still verify the original bytes on every read.
     """
-    raw = (json.dumps(dict(payload), ensure_ascii=False, separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8")
+    raw = _decision_json(payload).encode("utf-8")
     descriptor, temporary = tempfile.mkstemp(prefix=".decision-", dir=path.parent)
     try:
         with os.fdopen(descriptor, "wb") as stream:
@@ -63,6 +67,37 @@ def write_decision_capture(
         return hashlib.sha256(raw).hexdigest()
     finally:
         Path(temporary).unlink(missing_ok=True)
+
+
+def open_regular_capture(path: Path) -> int:
+    """Bind a regular file to its directory entry before reading.
+
+    Nonblocking open avoids waiting on FIFOs under the journal lock. Checking
+    descriptor identity also rejects substituted entries on hosts without
+    O_NOFOLLOW. Callers retain their own size and privacy checks.
+    """
+    descriptor = os.open(
+        path,
+        os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0),
+    )
+    try:
+        opened = os.fstat(descriptor)
+        entry = os.lstat(path)
+        if not stat.S_ISREG(opened.st_mode):
+            raise ValueError("capture must be a regular file")
+        if stat.S_ISLNK(entry.st_mode):
+            raise ValueError("capture must not be a symlink")
+        if (entry.st_dev, entry.st_ino) != (opened.st_dev, opened.st_ino):
+            raise ValueError("capture changed while it was opened")
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor
+
+
+def _read_turn_observation_text(path: Path) -> str:
+    with os.fdopen(open_regular_capture(path), encoding="utf-8") as source:
+        return source.read()
 
 
 @dataclass(frozen=True)
@@ -80,10 +115,15 @@ class StagedTurnDecisionCapture:
         if self.path.exists():
             # Python considers True == 1; original JSON evidence must retain
             # its value types as well as its content. Object key order is IO.
-            current = json.loads(self.path.read_text(encoding="utf-8"))
-            if (json.dumps(current, sort_keys=True, allow_nan=False)
-                    != json.dumps(self.observation, sort_keys=True, allow_nan=False)):
-                raise ValueError("Turn decision capture changed before publication")
+            text = _read_turn_observation_text(self.path)
+            # Compact objects start with a quoted key (or are empty). Pretty
+            # captures can go straight to their order-independent comparison.
+            compact = text.startswith('{"') or text == "{}\n"
+            if not compact or text != _decision_json(self.observation):
+                current = json.loads(text)
+                if (json.dumps(current, sort_keys=True, allow_nan=False)
+                        != json.dumps(self.observation, sort_keys=True, allow_nan=False)):
+                    raise ValueError("Turn decision capture changed before publication")
         elif self.existed:
             raise ValueError("Original Turn decision capture is missing; restore the original observation")
         else:
@@ -149,7 +189,7 @@ def stage_turn_decision_capture(
         raise ValueError("Turn decision capture must not be a symlink")
     existed = path.exists()
     if existed:
-        observation = json.loads(path.read_text(encoding="utf-8"))
+        observation = json.loads(_read_turn_observation_text(path))
     elif existing_journal or capture:
         raise ValueError("Original Turn decision capture is missing; restore the original "
                          "observation, do not rerun the guard to replace it")
@@ -337,10 +377,10 @@ def read_context_read_reference(value: str) -> tuple[Path, dict[str, Any]]:
     path = path.parent.resolve(strict=True) / path.name
     if path.is_symlink():
         raise ValueError("reader reference must be a physical file, not a symlink")
-    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    descriptor = open_regular_capture(path)
     with os.fdopen(descriptor, "rb") as stream:
         info = os.fstat(stream.fileno())
-        if (not stat.S_ISREG(info.st_mode) or info.st_uid != uid or info.st_mode & 0o077
+        if (info.st_uid != uid or info.st_mode & 0o077
                 or info.st_size > MAX_REQUEST_BYTES):
             raise ValueError("reader reference must be a private regular file owned by this user")
         raw = stream.read(MAX_REQUEST_BYTES + 1)
@@ -368,10 +408,10 @@ def read_context_capture_file(value: str, digest: str, *, private: bool = False)
     path = path.parent.resolve(strict=True) / path.name
     if path.is_symlink():
         raise ValueError("context-read requires the physical original capture path, not a symlink")
-    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    descriptor = open_regular_capture(path)
     with os.fdopen(descriptor, "rb") as stream:
         metadata = os.fstat(stream.fileno())
-        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > MAX_REQUEST_BYTES:
+        if metadata.st_size > MAX_REQUEST_BYTES:
             raise ValueError("capture must be a regular JSON file within the existing transport size limit")
         if private and (metadata.st_uid != uid or metadata.st_mode & 0o077):
             raise ValueError("native context requires a private capture owned by this user")
