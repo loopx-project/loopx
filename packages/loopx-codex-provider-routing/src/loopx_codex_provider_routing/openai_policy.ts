@@ -1,5 +1,6 @@
 /** OpenAI transport outcomes. No credentials, request contents or IO. */
-export type KeyRuntime = { id: string; blocked_until?: number; blocked_model?: string | null };
+export type KeyRuntime = { id: string; blocked_until?: number; blocked_model?: string | null;
+  state?: string; observed_at?: number };
 const QUOTA_CODES = ["insufficient_quota", "credit_balance_exhausted", "organization_spend_limit_exceeded",
   "project_spend_limit_exceeded", "organization_usage_limit_exceeded",
   "usage_limit_exceeded"];
@@ -24,8 +25,16 @@ export function apiStreamOutcome(value: unknown): {status: number; code: string}
   return null;
 }
 export function apiKeys(input: { now: number; model: string; keys: KeyRuntime[] }) {
+  // Expiry permits a future attempt; it does not establish recovered capacity.
+  // Try alternatives before a known rejection, even when requests are spaced
+  // farther apart than the cooldown. Oldest failures are reconsidered first.
+  const rejectionTime = (key: KeyRuntime) => ["quota_exhausted", "authentication_failed",
+    "permission_denied", "rate_limited"].includes(key.state ?? "")
+    && typeof key.observed_at === "number" && Number.isFinite(key.observed_at) && key.observed_at >= 0
+    && (!key.blocked_model || key.blocked_model === input.model) ? key.observed_at : -1;
   return input.keys.filter(key => !(typeof key.blocked_until === "number"
-    && key.blocked_until > input.now && (!key.blocked_model || key.blocked_model === input.model))).map(key => key.id);
+    && key.blocked_until > input.now && (!key.blocked_model || key.blocked_model === input.model)))
+    .sort((a,b) => rejectionTime(a) - rejectionTime(b)).map(key => key.id);
 }
 export function apiOutcome(input: { now: number; status: number; code: string | null; retry_after: number | null; model: string }) {
   const quota = input.status === 429 && QUOTA_CODES.includes(input.code ?? "");
