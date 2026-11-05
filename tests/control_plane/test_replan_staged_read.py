@@ -761,3 +761,31 @@ def test_explore_uses_its_own_incremental_budget_and_real_result_log(tmp_path):
     assert example["explore_review"]["revision"] == basis["revision"]
     assert example["explore_review"]["considered_refs"] == []
     assert json_bytes(writer) <= 16 * 1024
+
+
+def test_replan_reader_rejects_replaced_entries_and_recovers_original(tmp_path):
+    source = _quota_payload()
+    original = tmp_path / "decision.json"
+    original.write_text(json.dumps(source), encoding="utf-8")
+    digest = build_turn_envelope(source)["action_signature"]["source_decision_hash"]
+    command = [str(Path(sys.executable).with_name("loopx")), "--format", "json", "quota", "replan-view",
+               "--decision-file", str(original), "--source-hash", digest, "--replan-stage", "review"]
+
+    def read():
+        result = subprocess.run(command, capture_output=True, text=True, timeout=15)
+        return result.returncode, json.loads(result.stdout)
+
+    code, review = read()
+    assert code == 0 and review["ok"]
+    saved = original.rename(tmp_path / "saved.json")
+    original.symlink_to(saved)
+    code, rejected = read()
+    assert code == 1 and rejected["ok"] is False
+    original.unlink()
+    if hasattr(os, "mkfifo"):
+        os.mkfifo(original)
+        code, rejected = read()
+        assert code == 1 and rejected["ok"] is False
+        original.unlink()
+    saved.rename(original)
+    assert read() == (0, review)

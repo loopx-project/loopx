@@ -1450,6 +1450,72 @@ def test_original_quota_recovery_with_gate_remains_pending_after_verified_reply(
         runtime.close()
 
 
+def test_large_original_images_do_not_block_pending_work_or_connection_health(ordinary, monkeypatch):  # noqa: F811
+    from test_lark_private_images import image_runner
+    from test_chat_image_attachments import PNG_BYTES
+    from loopx.chat_agent import CodexChatAgentError
+    import loopx.chat_runtime as runtime_module
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+
+    store, runtime, provider, transport = connect(ordinary)
+    # Three accepted 3 MiB images fit Chat's 12 MiB input allowance, but their
+    # base64 encoding exceeds the ordinary 8 MiB Core observation transport.
+    image = PNG_BYTES + bytes(3 * 1024 * 1024 - len(PNG_BYTES))
+    transport.runner = image_runner(provider, content=image)
+
+    def quota_exhausted(*_args, **_kwargs):
+        raise CodexChatAgentError("Synthetic exhausted model", error_code="usage_limit_exceeded", gate=None)
+
+    monkeypatch.setattr(runtime_module, "start_attachment_turn", quota_exhausted)
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.chat_store, server.runtime_controller, server.verbose = store, runtime, False
+    server.lark_private_conversations = transport
+    server.lark_goal_topic_runtime = SimpleNamespace(health_snapshot=lambda: {}, close=lambda: None)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        event = provider.event("notes-app", "large-original-images",
+            "Explain all three diagrams\n" + "\n".join(f"![Image](img_{i})" for i in range(3)), kind="post")
+        assert transport.admit("notes-app", event)["status"] == "durably_accepted"
+        row = transport.core.pending()[0]
+        turn = runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)
+        assert turn["status"] == "failed" and turn["error_code"] == "usage_limit_exceeded"
+        assert len(turn["attachments"]) == 3 and sum(item["size"] for item in turn["attachments"]) == len(image) * 3
+        # The ordinary reply worker still delivers its failure notice; delivery
+        # does not retire the retained original work or authorize a replay.
+        transport.reconcile()
+        assert json.loads((transport.root / f"{row['request_ref']}.json").read_text())["status"] == "delivered"
+
+        def durable_state():
+            return {path: path.read_bytes() for path in store.root.rglob("*")
+                    if path.suffix in {".json", ".jsonl"}}
+
+        before = durable_state()
+        writes = list(provider.writes)
+        assert transport.core.quota_backlog_pending(row)
+        assert transport.core.quota_backlog_observer()([row]) == [True]
+        connection = http.client.HTTPConnection(*server.server_address, timeout=15)
+        try:
+            connection.request("GET", "/api/chat/lark/private-conversations")
+            response = connection.getresponse()
+            assert response.status == 200
+            result = json.loads(response.read())
+        finally:
+            connection.close()
+        binding = next(item for item in result["connections"] if item["binding_id"] == row["binding_id"])
+        assert binding["pending_count"] == 1 and binding["recovery_count"] == 0
+        assert durable_state() == before and provider.writes == writes
+        assert not ordinary[4].exists() or '"method": "turn/start"' not in ordinary[4].read_text()
+        store.update_session(row["session_id"], status="closed")
+        assert not transport.core.quota_backlog_pending(row)
+        assert transport.core.quota_backlog_observer()([row]) == [False]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+        runtime.close()
+
+
 @pytest.mark.parametrize("command", ["stop", "new"])
 def test_health_reads_source_controls_once_and_keeps_fresh_recovery(ordinary, monkeypatch, command):  # noqa: F811
     from loopx.capabilities.native_chat import external_conversations

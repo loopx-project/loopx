@@ -107,11 +107,15 @@ def test_invalid_optional_observation_cannot_erase_native_counters_or_escape_roo
     assert usage["projection"]["loopx_input"]["status"] == "unavailable"
 
 
-def test_tool_inventory_is_opt_in_separate_and_retains_native_counter_identity(tmp_path):
+@pytest.mark.parametrize('wrapper', [
+    'const r = await tools.exec_command({cmd: "loopx quota context-read"}); text(r.output);',
+    'text(await tools.exec_command({cmd: "loopx quota context-read"}))',
+    'text((await tools.exec_command({cmd: "loopx quota context-read"})).output)',
+])
+def test_tool_inventory_is_opt_in_separate_and_retains_native_counter_identity(tmp_path, wrapper):
     _, rows = native_trace(tmp_path)
     tool = [{'type': 'response_item', 'payload': {'type': 'custom_tool_call',
-        'name': 'exec', 'call_id': 'tool', 'input':
-        'const r = await tools.exec_command({cmd: "loopx quota context-read"}); text(r.output);'}},
+        'name': 'exec', 'call_id': 'tool', 'input': wrapper}},
         {'type': 'response_item', 'payload': {'type': 'custom_tool_call_output',
          'call_id': 'tool', 'output': '状态已保存'}}]
     path = tmp_path / 'usage.jsonl'
@@ -128,10 +132,17 @@ def test_tool_inventory_is_opt_in_separate_and_retains_native_counter_identity(t
     assert path.read_bytes() == raw
 
 
-def test_real_cli_registers_recorded_component_without_model_execution(tmp_path):
+@pytest.mark.parametrize("direct_call", [False, True])
+def test_real_cli_registers_recorded_component_without_model_execution(tmp_path, direct_call):
     from loopx.capabilities.benchmark_toolkit.trajectory_assessment_store import inspect_pack
 
-    source, _ = native_trace(tmp_path)
+    source, rows = native_trace(tmp_path)
+    if direct_call:
+        call = {"type": "custom_tool_call", "call_id": "tool", "name": "exec",
+                "input": 'text(await tools.exec_command({cmd: "loopx status"}))'}
+        reply = {"type": "custom_tool_call_output", "call_id": "tool", "output": "saved"}
+        items = [{"type": "response_item", "payload": item} for item in (call, reply)]
+        (tmp_path / "usage.jsonl").write_text("\n".join(map(json.dumps, rows[:2] + items + rows[2:])))
     evidence = "Synthetic fixed negative result."
     (tmp_path / "evidence.txt").write_text(evidence)
     data = {"schema_version": "trajectory_assessment_input_v1",
@@ -155,6 +166,11 @@ def test_real_cli_registers_recorded_component_without_model_execution(tmp_path)
     registered = json.loads(result.stdout)
     view = inspect_pack(runtime_root=runtime, owner_goal_id="research", pack_id=registered["pack_id"])
     assert view["solver_usage"]["projection"]["loopx_input"]["input_fraction"] == 0.02
-    assert view["solver_usage"]["projection"]["tool_context"]["loopx_tool_output_fraction"] is None
+    inventory = view["solver_usage"]["projection"]["tool_context"]
+    if direct_call:
+        assert inventory["operations"] == [{"operation": "status", "calls": 1, "bytes": 5}]
+        assert inventory["loopx_tool_output_fraction"] == 1.0
+    else:
+        assert inventory["loopx_tool_output_fraction"] is None
     assert view["job"] is None and view["result"] is None
     assert "hello world" not in json.dumps(view)

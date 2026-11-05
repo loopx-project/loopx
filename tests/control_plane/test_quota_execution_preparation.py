@@ -256,6 +256,7 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
     assert selected["/heartbeat_receipt"]["turn_instance_id"] == "preparation-turn"
     plan = selected["/interaction_contract/cli_channel"]["settlement_plan"]
     assert plan["identity"]["todo_id"] == TODO and plan["identity"]["turn_instance_id"] == "preparation-turn"
+    assert plan["schema_version"] == "quota_settlement_plan_v1"
     sources = selected["/interaction_contract/agent_channel/work_context"]["sources"]
     task = next(item["content"]["todo"] for item in sources if item["source"] == "selected_todo")
     # The v0 owner may deduplicate short text already in selected_todo.
@@ -263,10 +264,14 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
     # replacing it with the selected summary when that summary is shorter.
     assert task.get("text", selected["/selected_todo"]["text"]) == original["text"]
     assert task["note"] == original["note"]
-    goal_read = next(item for item in selected["/interaction_contract/agent_channel/required_reads"]
-        if item["source"] == "goal_state")
-    goal = subprocess.run(shlex.split(goal_read["command"]), capture_output=True, text=True, timeout=30)
-    assert goal.returncode == 0 and goal.stdout == goal_text
+    goal_reads = [item for item in selected["/interaction_contract/agent_channel/required_reads"]
+        if item["source"] == "goal_state"]
+    if goal_reads:
+        goal = subprocess.run(shlex.split(goal_reads[0]["command"]), capture_output=True, text=True, timeout=30)
+        assert goal.returncode == 0 and goal.stdout == goal_text
+    else:
+        goal = next(item["content"] for item in sources if item["source"] == "goal_state")
+        assert goal["text"] == goal_text
     code, current = run_json_cli_result("todo", "list", "--goal-id", GOAL, "--todo-id", TODO,
         registry_path=tmp_path / "registry.json", runtime_root=tmp_path / "runtime", cwd=tmp_path)
     assert code == 0
@@ -292,6 +297,91 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
     corrupted = subprocess.run(read, cwd=tmp_path, capture_output=True, text=True, timeout=30)
     assert corrupted.returncode != 0 and json.loads(corrupted.stdout)["ok"] is False
     assert log.read_bytes() == events
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("replace_stage", ["guard", "record"])
+def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
+    tmp_path, monkeypatch, capsys, provider, replace_stage,
+):
+    import hashlib
+    import io
+    from loopx.cli import main
+    from loopx.control_plane.turn_driver import codex_context
+
+    tmp_path = tmp_path.resolve()
+    monkeypatch.chdir(tmp_path)
+    session = "bound-preparation"
+    monkeypatch.setenv("CODEX_THREAD_ID", session)
+    native = tmp_path / "native"
+    native.mkdir(mode=0o700)
+    event = {"session_id": session, "cwd": str(tmp_path), "hook_event_name": "SessionStart", "source": "startup"}
+    assert codex_context.codex_context_hook(str(native), event) == {}
+    before = _run(tmp_path, monkeypatch, provider, [], "--codex-app",
+        "--turn-instance-id", "prepared-turn", "--todo-id", TODO)
+    assert before["execution_preparation"]["state"] == "claim_required"
+    original = tmp_path / "preparation"
+    original.mkdir(mode=0o700)
+    codex_context.project_codex_context(before, directory=str(native), capture_directory=original,
+        goal_id=GOAL, agent_id=AGENT, surface="quota_packet", capture_id="claim-required")
+    from loopx.control_plane.turn_driver import codex_execution_preparation
+    record = codex_context.record_native_execution_preparation
+    run = codex_execution_preparation._default_runner
+    verified = {}
+
+    def replace_capture():
+        source, = native.glob("prepared-*/ready/decision.json")
+        verified["path"], verified["bytes"] = source, source.read_bytes()
+        source.write_bytes(verified["bytes"] + b" ")
+
+    def observe_guard(command, **kwargs):
+        result = run(command, **kwargs)
+        if "--prepared-capture-reference" in command:
+            verified["writer"] = json.loads(result.stdout)
+            if replace_stage == "guard":
+                replace_capture()
+        return result
+
+    monkeypatch.setattr(codex_execution_preparation, "_default_runner", observe_guard)
+
+    def replace_after_ready(*args, **kwargs):
+        record(*args, **kwargs)
+        if replace_stage == "record":
+            replace_capture()
+
+    monkeypatch.setattr(codex_context, "record_native_execution_preparation", replace_after_ready)
+    command = ["--registry", str(tmp_path / "registry.json"), "--runtime-root", str(tmp_path / "runtime"),
+               "--format", "json", "quota", "context-hook", "--codex-app", "--context-delivery", "on",
+               "--codex-context-dir", str(native)]
+    def hook():
+        data = json.dumps({**event, "hook_event_name": "PostToolUse"}).encode()
+        monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(data)))
+        capsys.readouterr()
+        assert main(command) == 0
+        return json.loads(capsys.readouterr().out)
+
+    result = hook()["hookSpecificOutput"]["additionalContext"]
+    receipt = json.loads(result.rsplit("Receipt: ", 1)[1])
+    assert receipt["claim_operation_id"].startswith("todo-claim:")
+    context = receipt["context"]
+    assert context["ok"] is False
+    assert "digest mismatch" in context["reason"]
+    recovery = shlex.split(context["recovery_command"])
+    digest = hashlib.sha256(verified["bytes"]).hexdigest()
+    writer = verified["writer"]
+    assert writer["capture_sha256"] == digest and writer["execution_preparation"] == receipt["execution_preparation"]
+    assert writer["selected_todo"] == {"todo_id": TODO}
+    assert writer["heartbeat_receipt"] == {"turn_instance_id": "prepared-turn"}
+    assert "interaction_contract" not in writer and "work_context" not in writer
+    assert recovery[recovery.index("--capture-sha256") + 1] == digest
+    log = tmp_path / "runtime" / "goals" / GOAL / "rollout-event-log.jsonl"
+    after_claim = log.read_bytes()
+    assert hook() == {}
+    verified["path"].write_bytes(verified["bytes"])
+    read = subprocess.run([*recovery, "--select", "/execution_preparation/state"], cwd=tmp_path,
+                          check=True, text=True, capture_output=True)
+    assert json.loads(json.loads(read.stdout)["content"])["selections"][0]["value"] == "ready"
+    assert log.read_bytes() == after_claim
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

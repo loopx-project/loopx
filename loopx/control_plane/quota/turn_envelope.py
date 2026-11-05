@@ -56,7 +56,11 @@ def _turn_envelope_result(
     """Call the coarse TS owner and fail closed on transport shape drift."""
 
     request = {"operation": operation, **params}
-    if operation in {"context_delivery", "context_recovery", "progressive_context_delivery", "context_read_sections"}:
+    if operation == "reference_context" and params.get("goal_acceptance"):
+        tokens = source_number_tokens(params["payload"])
+        if tokens:
+            request["source_number_tokens"] = tokens
+    elif operation in {"context_delivery", "context_recovery", "progressive_context_delivery", "context_read_sections"}:
         tokens = source_number_tokens(params)
         if tokens:
             request["source_number_tokens"] = tokens
