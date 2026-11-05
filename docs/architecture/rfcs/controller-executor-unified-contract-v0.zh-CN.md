@@ -99,8 +99,10 @@
 绑定 Turn 的原生执行准备保留普通 managed claim 原引用，并在 CLI 压缩前捕获同一
 Turn 的 ready 决策。Host 将该原件交给既有 saved-capture 展示/reader owner，不丢弃
 它再要求模型重算 guard 才能取得当前契约。发布前须核对 Goal、Agent、Todo 和 Turn。
-必需材料读取（包括显式的完整 Goal 读取）仍须执行，ready 回执或已保存文件不能代替
-读取。可选展示失败保留原摘要绑定的恢复引用；显式 off 不产生动作，未绑定请求沿原
+具备资格的原生复查保留已启用的 profile，使用既有延后展示路径；强制 off 会将完整
+composer 的组合结算换回旧分步计划。随后仅由 saved-capture owner 展示已验证来源。
+必需材料仍保持完整：消费完整内联 Goal，未内联时执行其声明的读取；ready 回执或
+已保存文件不能代替消费。可选展示失败保留原摘要绑定的恢复引用；显式 off 不产生动作，未绑定请求沿原
 readiness 路径，不补造 Turn。这只是有界的 Host 交接修复，不代表 C1 切换、已安装
 采用，或模型费用与长程收益已取得资格。
 

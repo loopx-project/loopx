@@ -125,9 +125,13 @@ Bound native execution preparation retains the ordinary managed claim reference
 and captures its same-Turn ready decision before CLI compaction. The Host hands
 that source to the existing saved-capture presentation/reader owner, rather than
 discarding it and making the model evaluate another guard to obtain its current
-contract. Goal, Agent, Todo and Turn must match before publication. Required
-material reads, including an explicit complete Goal read, remain required; a
-ready receipt or saved file does not fulfill them. Optional presentation failure
+contract. Goal, Agent, Todo and Turn must match before publication. A qualified
+native recheck retains its enabled profile and uses the existing deferred
+presentation route; forcing it off would replace the complete composer's
+combined settlement with the older split plan. The saved-capture owner then
+presents the verified source once. Required material remains complete: consume
+the complete inline Goal or execute its declared read when it is not inline;
+a ready receipt or saved file does not fulfill that consumption. Optional presentation failure
 retains the original digest-bound recovery. Explicit off is inert, and an
 unbound request keeps its original readiness route without inventing a Turn.
 This is a bounded Host handoff repair, not C1 cutover, installed adoption or

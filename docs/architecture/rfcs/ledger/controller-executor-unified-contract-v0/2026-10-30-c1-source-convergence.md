@@ -460,6 +460,96 @@ the preceding C1 head, not a new comparison with latest main, a new same-capture
 BODY reduction or a qualification of the original quota workload's overall net
 benefit. Its warm-input regression and all frozen holds above remain open.
 
+### Native ready handoff on the complete contract
+
+This integration includes main `bd79adc64968` and the existing Host ready-source
+handoff. The unchanged handoff forced its ready recheck to `context-delivery
+off`; inside C1 that replaced the enabled complete composer's combined
+settlement with the older split plan. A new independent assertion fails in all
+four real File/SQLite × App/SSH paths before the correction. The thin adapter
+now preserves the enabled native profile and uses the existing deferred-display
+option. It captures the complete ready source before the existing saved-capture
+owner presents it once. No new flag, semantic owner, RPC or authority is added.
+
+| Actual caller | Replaced behavior | Shared owner and remaining boundary |
+| --- | --- | --- |
+| Bound native execution preparation | Forced-off ready recheck | Existing complete composer retains mandatory context and combined settlement; Python only forwards the native directory/display mode |
+| Host post-tool context | Model must recover the missing ready contract with another guard | Existing capture/reader publishes the verified same-Turn source and original claim reference |
+| Prepared native closeout | Active prepared caller receives the split v1 plan | Existing v2 settlement owner supplies the combined operation and three receipts; old records and unbound/off callers retain their original recovery contracts |
+
+The complete Goal is checked against the independent original text, inline or
+through an actually declared read. Off remains inert; identity mismatch, corrupt
+source, replay and once-only accounting checks remain. This fixes consumer
+adoption, not the separate requested semantic-rule-change exercise or the final
+historical-reader retirement. Those C1 acceptance boundaries remain open.
+
+Seven complete affected source modules and the actual isolated wheel each pass
+280 cases, with 70 existing opt-in skips. The wheel's 1,897 compared product
+files match; 235 completed processes and 44,758 Core-module observations show
+no checkout-origin violation. Abrupt exits remain outside exit-time auditing.
+The initial source run retains 279 passes, one stale reader-program assertion
+failure and 70 skips; the existing reader-program correction is reused, and its
+whole 20-case module passes before the final full run. Failed caller pilots
+requested the wrong legacy view or reused a capture directory; their failures
+are retained, not counted as completed comparisons or fixed by relaxing capture
+immutability. No active App/CLI installation is claimed.
+
+The new hard-lease cohort uses the frozen public numbered Task, stopping at
+step three. Cold completes step one; warm/recovery first validate and settle
+step one, release its lease, then admit and validate step two. Recovery runs
+the actual PreCompact/PostCompact hooks before that second Turn. Both arms use
+the original quota entrypoint, identical material, equal-width namespaces, one
+Python and one observer, with each parent/child importing its pinned product.
+This is separate from the historical soft-claim 36-condition cohort below.
+
+Three repeats across both providers, scenarios and arms give 36 conditions and
+60 independently checked work Turns. Each reaches the same artifact within its
+scenario, three committed receipts and one debit per Turn, including replay.
+All 654 parent/completed-child source observations and 640,896 module origins
+match their arm; product source hashes remain unchanged. Parent RPC totals
+already include children. Whole columns include the completed preparation work;
+current columns exclude it but retain compaction hooks. Tool output, all
+necessary reads, Host execution, writeback, spend, readback and lease release
+are included. Values are three-observation medians:
+
+| Provider / scenario | Whole stdout B | Current stdout B | RPCs | Framed RPC B | Python fixture read B | Python fixture write B |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| file / cold | 57,597 → 45,996 | 57,597 → 45,996 | 423 → 288 | 2,938,704 → 1,929,733 | 720,046 → 662,664 | 302,925 → 272,952 |
+| file / warm | 118,430 → 95,236 | 60,833 → 49,240 | 843 → 578 | 6,271,394 → 4,130,344 | 1,926,283 → 1,700,979 | 675,761 → 593,384 |
+| file / recovery | 118,202 → 94,776 | 60,269 → 48,556 | 845 → 580 | 6,259,244 → 4,112,058 | 1,942,194 → 1,715,504 | 656,353 → 573,186 |
+| sqlite / cold | 58,016 → 46,112 | 58,016 → 46,112 | 423 → 288 | 2,943,792 → 1,932,217 | 737,286 → 677,202 | 304,783 → 275,281 |
+| sqlite / warm | 119,272 → 95,472 | 61,256 → 49,360 | 843 → 578 | 6,281,728 → 4,136,666 | 1,965,207 → 1,734,459 | 679,477 → 598,310 |
+| sqlite / recovery | 119,040 → 95,008 | 60,688 → 48,672 | 845 → 580 | 6,269,816 → 4,117,784 | 1,981,156 → 1,748,980 | 660,103 → 577,919 |
+
+Warm whole stdout falls 19.58% / 19.95%, RPCs 31.44%, framed bytes 34.14% /
+34.15%, and observed fixture Python read-plus-write bytes about 11.8%. Current
+step stdout falls 19.06% / 19.42%. These are cumulative C1 comparisons, not
+attribution of every reduction to this small integration correction. The warm
+wire ranges are file: main 6,271,290–6,271,572; candidate 4,130,308–4,130,664; sqlite: main 6,281,492–6,281,936; candidate 4,136,236–4,136,704. No statistical significance is claimed.
+
+The primary metric uses each producer's original complete `decision.json`, not
+an already projected recovery document. All 60 producer/BODY pairs verify the
+original Turn and controls plus published recovery/selected digests:
+
+| Provider / scenario | Main producer F → BODY B (reduction) | Candidate producer F → BODY B (reduction) |
+| --- | ---: | ---: |
+| file / cold | 60,084 → 27,993 (53.41%) | 53,873 → 27,291 (49.34%) |
+| file / warm | 75,126 → 28,022 (62.70%) | 61,271 → 27,230 (55.56%) |
+| file / recovery | 75,342 → 28,135 (62.66%) | 61,465 → 27,376 (55.46%) |
+| sqlite / cold | 60,310 → 28,201 (53.24%) | 54,091 → 27,436 (49.28%) |
+| sqlite / warm | 75,352 → 28,195 (62.58%) | 61,491 → 27,434 (55.39%) |
+| sqlite / recovery | 75,568 → 28,319 (62.53%) | 61,683 → 27,530 (55.37%) |
+
+Candidate warm BODY is smaller in absolute bytes, while its reduction percentage
+is lower because its complete producer source is also smaller. Neither ratio
+replaces the complete caller comparison. File-backed delta does not establish
+model retention. Referenced RPC snapshot payload bytes are observed as zero in
+this cohort; provider/native/SQLite-page and full-process IO remain unmeasured.
+CPU/latency, actual model input/cache/generated output, fees, natural adoption
+and long-horizon net benefit remain unqualified. All earlier positive/negative
+cohorts, frozen budgets and original outcome requirements retain their versions;
+this source/package result is neither merge readiness nor complete C1 acceptance.
+
 ## Earlier integration evidence
 
 The integration preserves main's extracted quota-presentation owner and sparse
