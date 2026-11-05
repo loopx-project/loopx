@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {planQueuedChatSteering, selectQueuedChatTurns, QUEUE_STEERING_SCHEMA} from "../../loopx/control_plane/turn_driver/chat_queue_steering.ts";
+import {planQueuedChatMutation, planQueuedChatSteering, selectQueuedChatTurns, QUEUE_STEERING_SCHEMA} from "../../loopx/control_plane/turn_driver/chat_queue_steering.ts";
 
 function facts() {
   return {phase: "prepare", session: {status: "busy", active_turn_id: "active"}, active_status: "running",
@@ -10,6 +10,40 @@ function facts() {
 }
 const held = {schema_version: QUEUE_STEERING_SCHEMA, status: "pending", client_ingress_id: "native-op", operation_id: "op", target_turn_id: "active"};
 const receipt = {status: "delivered", expected_turn_id: "active", active_turn_id: "active", mode: "live_steering"};
+
+test("input changes require the exact unclaimed web input revision, without native steering", () => {
+  const f = facts();
+  const request = {action: "edit", expected_revision: 0, operation_id: "edit-1", message: "Corrected input"};
+  const input = {...f, request};
+  assert.equal(planQueuedChatMutation(input).action, "apply");
+  for (const status of ["starting", "running", "completed", "failed", "interrupted"]) {
+    assert.equal(planQueuedChatMutation({...input, turn: {...input.turn, status}}).error_code, "queue_turn_already_started");
+  }
+  assert.equal(planQueuedChatMutation({...input, turn: {...input.turn, input_revision: 1}}).error_code, "queue_input_revision_conflict");
+  for (const extra of [{origin: "external"}, {origin: "peer"}, {has_collaboration_request: true}, {loopx_execution: true}, {has_acceptance: true}]) {
+    assert.equal(planQueuedChatMutation({...input, turn: {...input.turn, ...extra}}).error_code, "queue_mutation_source_unavailable");
+  }
+  assert.equal(planQueuedChatMutation({...input, turn: {...input.turn, reservation: held}}).error_code, "queue_steering_in_progress");
+  assert.throws(() => planQueuedChatMutation({...input, request: {...request, message: " "}}));
+  assert.throws(() => planQueuedChatMutation({...input, request: {...request, action: "cancel"}}));
+});
+
+test("partial input writes exclude both FIFO and steering; exact retries finish or replay", () => {
+  const f = facts();
+  const request = {action: "cancel", expected_revision: 0, operation_id: "cancel-1"};
+  const pending = { ...request, input_revision: 1 };
+  const turn = {...f.turn, mutation: pending};
+  assert.deepEqual(selectQueuedChatTurns({turns: [turn]}).turn_ids, []);
+  assert.deepEqual(selectQueuedChatTurns({turns: [turn], include_reserved: true}).turn_ids, ["queued"]);
+  assert.deepEqual(selectQueuedChatTurns({turns: [{...turn, expires_at: "2020-01-01T00:00:00Z"}],
+    capacity_at: "2026-01-01T00:00:00Z", include_reserved: true}).turn_ids, ["queued"]);
+  assert.equal(planQueuedChatSteering({...f, turn}).error_code, "queue_mutation_in_progress");
+  assert.equal(planQueuedChatMutation({...f, turn, request}).action, "apply");
+  assert.equal(planQueuedChatMutation({...f, turn, request: {...request, operation_id: "different"}}).error_code, "queue_mutation_in_progress");
+  const ended = {...f.turn, status: "interrupted", input_revision: 1, operations: [pending]};
+  assert.equal(planQueuedChatMutation({...f, turn: ended, request}).action, "replay");
+  assert.equal(planQueuedChatMutation({...f, turn: ended, request: {...request, expected_revision: 1}}).error_code, "queue_mutation_identity_conflict");
+});
 
 test("queued steering requires an unclaimed original and exact live target", () => {
   const f = facts(); assert.equal(planQueuedChatSteering(f).action, "dispatch");
