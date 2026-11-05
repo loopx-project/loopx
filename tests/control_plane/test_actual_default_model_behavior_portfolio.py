@@ -542,7 +542,7 @@ def _capability_reentry_action(
     request: Mapping[str, Any],
 ) -> ScriptedExecToolAction:
     payload = _latest_tool_payload(request)
-    reentry = payload["runtime_capability_reentry"]
+    reentry = payload["interaction_contract"]["cli_channel"]["runtime_capability_reentry"]
     return ScriptedExecToolAction(str(reentry["candidates"][0]["command"]))
 
 
