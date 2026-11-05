@@ -28,15 +28,27 @@ function reservation(value: unknown): JsonObject | null {
   return row;
 }
 
+function mutation(value: unknown): JsonObject | null {
+  if (value == null) return null;
+  const row = requireJsonObject(value, "queue input receipt");
+  requireNonEmptyString(row.operation_id, "queue input operation_id");
+  if (!["edit", "cancel"].includes(String(row.action)) ||
+      !Number.isSafeInteger(row.expected_revision) || Number(row.expected_revision) < 0 ||
+      row.input_revision !== Number(row.expected_revision) + 1 ||
+      row.action === "edit" && typeof row.message !== "string") throw new Error("Invalid queue input receipt");
+  return row;
+}
+
 export function selectQueuedChatTurns(input: JsonObject): JsonObject {
   if (!Array.isArray(input.turns)) throw new Error("Queue turns must be an array");
   const ids = input.turns.flatMap(value => {
     const turn = requireJsonObject(value, "queue turn");
     const held = reservation(turn.reservation);
-    if (input.capacity_at && held?.status !== "pending" && typeof turn.expires_at === "string" &&
+    const editing = mutation(turn.mutation);
+    if (input.capacity_at && held?.status !== "pending" && !editing && typeof turn.expires_at === "string" &&
         Date.parse(turn.expires_at) <= Date.parse(String(input.capacity_at))) return [];
     return turn.status === "queued" && turn.turn_id !== input.active_turn_id &&
-      (input.include_reserved === true || held?.status !== "pending")
+      (input.include_reserved === true || (held?.status !== "pending" && !editing))
       ? [requireNonEmptyString(turn.turn_id, "turn.turn_id")] : [];
   });
   return {turn_ids: ids};
@@ -51,6 +63,7 @@ export function planQueuedChatSteering(input: JsonObject): QueueSteeringPlan {
   const held = reservation(turn.reservation);
   const reject = (code: string): QueueSteeringPlan => ({action: "reject", error_code: code});
   if (session.status === "closed") return reject("session_closed");
+  if (turn.mutation != null) return reject("queue_mutation_in_progress");
   if (held?.status === "pending" &&
       (held.client_ingress_id !== id || held.target_turn_id !== target)) {
     return reject("queue_steering_in_progress");
@@ -96,4 +109,55 @@ export function planQueuedChatSteering(input: JsonObject): QueueSteeringPlan {
     schema_version: QUEUE_STEERING_SCHEMA, client_ingress_id: id,
     target_turn_id: target, operation_id: requireNonEmptyString(request.operation_id, "operation_id"), status: "pending",
   }};
+}
+
+/** Pending input changes share the queue consumer's Session/Turn fence.
+ * The pending receipt excludes dispatch until transcript/event IO is finished.
+ * Retried operation identities describe the same request, even after a claim.
+ */
+export function planQueuedChatMutation(input: JsonObject): JsonObject {
+  const session = requireJsonObject(input.session, "session");
+  const turn = requireJsonObject(input.turn, "queued turn");
+  const request = requireJsonObject(input.request, "queue input request");
+  const operationId = requireNonEmptyString(request.operation_id, "operation_id");
+  if (operationId.length > 160 || !/^[A-Za-z0-9._-]+$/.test(operationId) ||
+      !Number.isSafeInteger(request.expected_revision) || Number(request.expected_revision) < 0 ||
+      !["edit", "cancel"].includes(String(request.action)) ||
+      Object.keys(request).some(key => !["operation_id", "expected_revision", "action", "message"].includes(key))) {
+    throw new Error("Invalid queue input request");
+  }
+  if (request.action === "edit" && (typeof request.message !== "string" ||
+      !request.message.trim() || [...request.message].length > 12000) ||
+      request.action === "cancel" && "message" in request) throw new Error("Invalid queued message");
+  const reject = (error_code: string): JsonObject => ({action: "reject", error_code});
+  if (session.status === "closed") return reject("session_closed");
+  if (turn.origin !== "web" || turn.has_collaboration_request === true ||
+      turn.has_external_agent_target === true || turn.loopx_execution === true || turn.has_acceptance === true) {
+    return reject("queue_mutation_source_unavailable");
+  }
+  const pending = mutation(turn.mutation);
+  const operations = turn.operations ?? [];
+  if (!Array.isArray(operations)) throw new Error("Invalid queue input receipts");
+  const previous = operations.map(row => mutation(row)!)
+    .find(row => row.operation_id === operationId);
+  const held = pending ?? previous;
+  if (held) {
+    if (held.operation_id !== operationId) return reject("queue_mutation_in_progress");
+    if (held.action !== request.action || held.expected_revision !== request.expected_revision ||
+        held.message !== request.message) return reject("queue_mutation_identity_conflict");
+    if (!pending) return {action: "replay", receipt: held};
+  }
+  if (turn.status !== "queued" || session.active_turn_id === turn.turn_id) return reject("queue_turn_already_started");
+  if (reservation(turn.reservation)?.status === "pending") return reject("queue_steering_in_progress");
+  if (request.expected_revision !== (turn.input_revision ?? 0)) return reject("queue_input_revision_conflict");
+  const receipt = held ?? {...request, input_revision: Number(request.expected_revision) + 1};
+  return {action: "apply", receipt,
+    message_patch: request.action === "edit" ? {text: request.message, queue_input_revision: receipt.input_revision}
+      : {queue_input_cancelled: true, queue_input_revision: receipt.input_revision},
+    turn_patch: request.action === "edit" ? {message: request.message, input_revision: receipt.input_revision}
+      : {status: "interrupted", input_revision: receipt.input_revision},
+    event: request.action === "edit" ? {kind: "turn.input_edited", payload: {
+      operation_id: operationId, input_revision: receipt.input_revision}}
+      : {kind: "turn.interrupted", payload: {reason: "queued_input_cancelled", operation_id: operationId}},
+  };
 }

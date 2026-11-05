@@ -16,3 +16,9 @@
 .personal-queue-message p { white-space: pre-wrap; overflow-wrap: anywhere; }
 .personal-queue-message img { display: block; max-width: 100%; max-height: 120px; object-fit: contain; }
 .personal-queue-feedback { margin: 0; padding: 0 10px 8px; color: var(--pw-muted); overflow-wrap: anywhere; }
+.personal-queue-actions { display: flex; flex-direction: column; align-items: flex-end; flex-shrink: 0; }
+.personal-queue-menu { display: flex; flex-direction: column; align-items: stretch; }
+.personal-queue-menu button { justify-content: flex-start; white-space: nowrap; }
+.personal-queue-editor { padding: 0 10px 8px; }
+.personal-queue-editor textarea { display: block; box-sizing: border-box; width: 100%; resize: vertical; min-height: 72px; padding: 8px; border: 1px solid var(--pw-line-strong); border-radius: 6px; font: inherit; font-size: var(--text-body); color: var(--pw-text); background: #fff; }
+.personal-queue-editor > div { display: flex; justify-content: flex-end; gap: 6px; margin-top: 4px; }
