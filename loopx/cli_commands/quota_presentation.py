@@ -54,6 +54,7 @@ def native_quota_result(payload, args, *, capture_directory: Path,
     payload = prepared.delivery
     recovery = payload.get("recovery")
     payload = native_context_capture_view(payload, capture_directory, context_directory=directory,
+        progressive_enabled=progressive_enabled,
         metadata={"capture_sha256": capture_id, **({"recovery": recovery} if recovery is not None else {})},
         max_page_output_bytes=getattr(args, "max_page_output_bytes", None), reader_argv=reader_argv,
         initial_read_plan=prepared.initial_read_plan)

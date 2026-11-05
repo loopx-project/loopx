@@ -579,10 +579,10 @@ def _native_context_request(state: dict[str, Any], scope: dict[str, Any]) -> dic
     return request
 
 
-def register_native_context_view(directory: str | None, view: dict[str, Any], *, hook_session: str | None = None) -> None:
+def register_native_context_view(directory: str | None, view: dict[str, Any], *, hook_session: str | None = None) -> dict[str, str]:
     """Bind the existing pending delivery to its actual paged wire, under lock."""
     if directory is None or not isinstance(view.get("target"), dict):
-        return
+        return {}
     with _locked(directory) as root:
         state = _state(root)
         pending = state.get("pending")
@@ -593,6 +593,7 @@ def register_native_context_view(directory: str | None, view: dict[str, Any], *,
             ancestry=view.get("ancestry", 0),
             read_sections=pending.get("full_read_sections", {}) if view.get("mode") == "full" else {})
         _save(root, state)
+        return state.get("consumed_pointers", {})
 
 
 @dataclass(frozen=True)
@@ -662,10 +663,13 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                 scope = dict(goal_id=goal_id, agent_id=agent_id, session_id=session, context_epoch=epoch)
                 if continuity_generation is not None:
                     scope["continuity_generation"] = continuity_generation
-                if state.get("read_scope") != scope:
+                selected = payload.get("selected_todo")
+                read_scope = {**scope, "surface": surface,
+                    "todo_id": selected.get("todo_id") if isinstance(selected, dict) else None}
+                if state.get("read_scope") != read_scope:
                     for key in ("consumed_pointers", "confirmed_read_sections", "section_reads"):
                         state.pop(key, None)
-                state["read_scope"] = scope
+                state["read_scope"] = read_scope
                 request = _native_context_request(state, scope)
                 recovery = dict(captured_recovery) if captured_recovery is not None else capture_context_projection(
                     payload, directory=capture_directory, read_guidance=CONTEXT_CAPTURE_PAGE_GUIDANCE)

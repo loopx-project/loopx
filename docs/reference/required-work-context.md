@@ -682,6 +682,15 @@ ceiling); if metadata cannot fit, recovery retains the current capture. Reader
 pages remain independently bounded. A complete raw tool log is not proof that
 the Host retained the same bytes in model history.
 
+In a native progressive session, the initial read can reference a previously
+delivered preferences block or acceptance outcome. The first page lists those
+pointers in `previously_delivered_fields`. Their requirements still apply.
+Use `recovery.command --select <pointer>` for the current body when needed.
+Reuse requires complete observed tool delivery in the same task, session and
+epoch, and a matching digest of the current visible field. A revised field
+appears in full. Losing the observation restores the ordinary initial read.
+A saved delta on its own provides no evidence of model retention.
+
 Each progressive `context_details.source_path` names this Turn's complete immutable
 `projection.json`, including when a warm wire omits unchanged material. The current
 `unread_context_index` preserves unobserved or changed supporting pointers and

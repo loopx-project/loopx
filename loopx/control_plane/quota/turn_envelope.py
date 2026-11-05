@@ -38,7 +38,7 @@ def _turn_envelope_result(
     token_source = payload if isinstance(payload, Mapping) else params
     if complete or operation in {"reference_context", "reference_replan_authoring",
             "compose_complete", "context_delivery", "context_recovery",
-            "progressive_context_delivery", "context_read_sections"}:
+            "progressive_context_delivery", "context_read_sections", "observed_first_read"}:
         tokens = source_number_tokens(token_source)
         if tokens:
             request["source_number_tokens"] = tokens

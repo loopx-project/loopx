@@ -334,6 +334,13 @@ Paired diffs do not certify translation accuracy.
     §11 targets one provider-result/adopted-work/next-review episode. Matched
     research continuation and adaptive promotion retain separate gates; see the
     [implementation comparison](../long-running-execution-exploration-and-correction.md).
+- [Joint Target, Yardstick and Stride Decisions v0](target-yardstick-stride-decisions-v0.md)
+  ([中文版](target-yardstick-stride-decisions-v0.zh-CN.md))
+  - **Delivery on `main`:** Design only; no new runtime behavior or default.
+  - **Current boundary:** Extends the Stride owner with joint direction/measurement
+    selection, a minimal ordinary-Turn cue and full replan composition. Scoped
+    fidelity, actual adoption, compatibility and matched outcome/cost qualification
+    remain implementation acceptance, not measured benefits.
 - [Post-Outcome Memory Utility Attribution v0](post-outcome-memory-utility-attribution-v0.md)
   ([中文版](post-outcome-memory-utility-attribution-v0.zh-CN.md))
   - **Delivery on `main`:** Stage 1 implemented.

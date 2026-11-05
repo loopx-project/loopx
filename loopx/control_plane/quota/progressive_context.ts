@@ -29,6 +29,37 @@ export function contextReadSectionDigests(request: JsonObject, paths: Path[]): J
     createHash("sha256").update(identity(at(context, path), ["context", ...path])).digest("hex")]));
 }
 
+/** Only previously delivered supplementary bodies may use a reference. Current
+ * decisions, stops, selection, settlement and unknown source shapes stay inline. */
+export function observedFirstRead(request: JsonObject, selections: {pointer: string; path: Path}[]): JsonObject {
+  const context = requireJsonObject(request.context, "current first read");
+  const seen = requireJsonObject(request.consumed_pointers, "observed sections");
+  if (typeof jsonObject(context.selected_todo)?.todo_id !== "string") return {selections, reused: {}};
+  const sources = ["interaction_contract", "agent_channel", "work_context", "sources"];
+  const identity = contextSourceIdentity(request, request.source_number_tokens);
+  const reused: JsonObject = {};
+  const current = selections.flatMap(row => {
+    const {path, pointer: address} = row;
+    if (typeof seen[address] !== "string" || !pathStartsWith(path, sources)
+        || typeof path[4] !== "number" || path[5] !== "content") return [row];
+    const source = jsonObject(at(context, path.slice(0, 5)));
+    const preference = source?.kind === "agent_preferences" && path.length === 6;
+    const outcome = source?.source === "goal_acceptance" && path.length === 10
+      && path[6] === "goal_acceptance_contract" && path[7] === "outcome_requirements"
+      && path[8] === "outcomes" && typeof path[9] === "number";
+    const body = jsonObject(at(context, path));
+    if (!body || !(preference || outcome) || (outcome && typeof body.id !== "string")) return [row];
+    const content = identity(body, ["context", ...path]);
+    // A reference and its recovery instructions should cost less than the field.
+    if (Buffer.byteLength(content) < 1024 || createHash("sha256").update(content).digest("hex") !== seen[address])
+      return [row];
+    reused[address] = seen[address];
+    return (outcome ? ["id", "revision"] : ["ok", "revision", "instruction"]).filter(key =>
+      Object.hasOwn(body, key)).map(key => ({pointer: address + "/" + key, path: [...path, key]}));
+  });
+  return {selections: current, reused};
+}
+
 function inlineReadSections(request: JsonObject, required: JsonObject): JsonObject {
   const original = requireJsonObject(request.context, "inline source"), paths: Path[] = [];
   const visit = (source: unknown, shown: unknown, path: Path) => {

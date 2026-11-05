@@ -812,3 +812,59 @@ def test_warm_delta_initial_read_uses_current_action_without_the_old_base(tmp_pa
     failure = json.loads(failed.stdout)
     assert failed.returncode != 0 and not failure["ok"] and "content" not in failure
     assert not registry.exists() and not runtime.exists()
+
+
+@pytest.mark.parametrize("invalidate", ["compact", "partial", "task_switch", "off"])
+def test_native_first_read_reuses_only_observed_current_fields(tmp_path, monkeypatch, navigated_decision, invalidate):
+    from test_codex_context_lifecycle import setup, project, deliver
+
+    event = setup(tmp_path, monkeypatch)
+    source = navigated_decision["interaction_contract"]["agent_channel"]["work_context"]["sources"][0]
+    content = source["content"]
+    outcomes = content["goal_acceptance_contract"]["outcome_requirements"]["outcomes"]
+    for outcome in outcomes:
+        outcome["requirements"][0]["description"] *= 240
+    prefix = "/interaction_contract/agent_channel/work_context/sources/0/content/goal_acceptance_contract/outcome_requirements/outcomes"
+    def navigation(capture, enabled=True):
+        _, wire = project(tmp_path, capture, payload=navigated_decision)
+        view = native_context_capture_view(wire, tmp_path / capture, context_directory=str(tmp_path),
+            progressive_enabled=enabled, max_page_output_bytes=6000)
+        return model_context_reference(view)
+
+    def pages(command):
+        found = []
+        while command:
+            words = shlex.split(command)
+            out = subprocess.check_output([sys.executable, "-m", "loopx.entrypoint", "--format", "json",
+                *words[words.index("quota"):]])
+            page = json.loads(out)
+            assert page["ok"], page
+            found.append(page)
+            command = page.get("next_command")
+        return found
+
+    def facts(pages):
+        return {row["pointer"]: row["value"] for row in json.loads(
+            "".join(page["content"] for page in pages))["selections"]}
+
+    first = pages(navigation("first")["first_read_command"])
+    assert len(first) > 1 and facts(first)[prefix + "/0"] == outcomes[0]
+    deliver(tmp_path, event, first[1:] if invalidate == "partial" else first)
+    outcomes[1]["requirements"][0]["description"] = "Revised stop: require the audited result."
+    if invalidate == "task_switch":
+        navigated_decision["selected_todo"]["todo_id"] = content["outcome_context"]["todo_id"] = "todo_next"
+    second = navigation("next", invalidate != "off")
+    warm = pages(second["first_read_command"])
+    observed = facts(warm)
+    assert observed[prefix + "/1"] == outcomes[1]
+    assert observed["/goal_boundary"] == navigated_decision["goal_boundary"]
+    if invalidate != "compact":
+        assert observed[prefix + "/0"] == outcomes[0]
+        assert "previously_delivered_fields" not in warm[0]
+        return
+    assert warm[0]["previously_delivered_fields"] == [prefix + "/0"]
+    assert observed[prefix + "/0/id"] == outcomes[0]["id"] and prefix + "/0" not in observed
+    assert facts(pages(second["recovery"]["command"] + " --select " + prefix + "/0"))[prefix + "/0"] == outcomes[0]
+    codex_context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": "PostCompact"})
+    recovered = pages(second["first_read_command"])
+    assert facts(recovered)[prefix + "/0"] == outcomes[0]

@@ -337,7 +337,7 @@ def context_capture_read_command(path: Path, digest: str, *, offset: int = 0,
 
 
 def write_context_read_reference(path: Path, digest: str, *, selection: dict[str, Any] | None = None,
-                                 navigation: dict[str, Any] | None = None) -> Path:
+                                 navigation: dict[str, Any] | None = None, observed_read: dict[str, Any] | None = None) -> Path:
     """Immutable reader IO metadata, not a new identity or authority store.
 
     A short filename locates the document; only its complete stored digests are
@@ -348,6 +348,8 @@ def write_context_read_reference(path: Path, digest: str, *, selection: dict[str
         payload["selection"] = selection
     if navigation is not None:
         payload["navigation"] = navigation
+    if observed_read is not None:
+        payload["observed_read"] = observed_read
     suffix = ("." + hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:16]
               if selection is not None or navigation is not None else "")
     reference = path.with_name(path.stem + suffix + ".reader.json")
