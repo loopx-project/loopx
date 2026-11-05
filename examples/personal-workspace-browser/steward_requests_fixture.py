@@ -6,7 +6,7 @@ decisions and return delivery below use the production owners in a temp runtime.
 Commands on stdin: inspect, fault, fault-window, deliver-window, report-window, recover,
 deliver, source-unavailable, source-recover, local-source-unavailable,
 local-source-recover, history-corrupt/history-recover (--long-history only),
-report-partial, complete-partial, hold, hold-window, continue, release, stop. Window faults/returns apply
+report-partial, complete-partial, report-readable, hold, hold-window, continue, release, stop. Window faults/returns apply
 after the first page to challenge multi-window refresh readback.
 """
 from __future__ import annotations
@@ -265,6 +265,36 @@ def main():
                     report(runtime, "billing-exports", "builder", first_receipt["request_id"], "conclusion",
                         "隔离包的字段映射与失败恢复已核验，原检查记录保留。", registry=registry,
                         caller_goal_ref=first_receipt["goal_ref"], update_id="qualified-installed-check")
+                    drain(runtime, registry, store, lambda *_: None)
+                elif command == "report-readable":
+                    # Settle earlier fixture results before publishing this new
+                    # observation; request-file ordering is not arrival order.
+                    drain(runtime, registry, store, lambda *_: None)
+                    body = ("迁移方案还不能直接上线，原导出路径继续保留。\n\n"
+                        "本地校验是预先检查，正式验收才决定能否替换。以下是完整检查结果：\n\n"
+                        "- **已通过**：14个字段的映射和重复读取检查。\n"
+                        "- **发现反例**：本地耗时从120毫秒降到105毫秒，隔离验收却从160毫秒增加到190毫秒；耗时越少越好，不能据此认定改进。\n"
+                        "- **仍未知**：完整运行费用、生产环境表现和实际采用版本，缺测不能按零计算。\n\n"
+                        "**实际处理**：保留旧路径，修正迁移说明；当前无需用户批准上线。\n\n"
+                        "证据详情保留完整，不替代上述结果：\n\n"
+                        '```json\n{"checked_fields":14,"installed":false,"cost":null}\n```\n\n'
+                        "[公开示例依据](https://example.org/reference/complete-migration-evidence-with-version-and-long-path)\n\n"
+                        + "\n\n".join([
+                            "金额精度：负数冲销记录保持原符号；小数按原币种精度核对，没有用格式化后的字符串替换原金额。",
+                            "字段顺序：导出列与调用方读取顺序一致。字段缺失仍报告为缺失，不以空字符串冒充已校验。",
+                            "重复请求：同一导出请求只得到原来的产物；超时后仍需验证原请求，不能为了取得回复另起一次执行。",
+                            "账期边界：保留来源时区与原始账期。跨日记录可以追溯，当前没有把时区变更解释为金额差异。",
+                            "回滚步骤：原导出入口仍可使用。新的迁移说明已保存，但保存文件不代表安装完成或已经上线。",
+                            "权限负例：没有获准读取的记录继续拒绝，不因结果展示改善而扩大调用方权限或消息受众。",
+                            "失败恢复：断线后沿原请求核验已有结果；重连读到结论不代表源任务已经通过全部验收。",
+                            "费用口径：现有记录没有完整费用，因此只保留未知；没有追加模型改写，也没有为补齐数字重复评测。",
+                        ]))
+                    prior = _root(runtime) / "replies" / first_receipt["request_id"] / "conclusion.json"
+                    report(runtime, "billing-exports", "builder", first_receipt["request_id"], "conclusion", body,
+                        registry=registry, caller_goal_ref=first_receipt["goal_ref"],
+                        update_id="readable-return" if prior.exists() else None,
+                        remaining_work={"summary": "还需核验安装包中的字段映射和失败恢复。",
+                            "resume_when": "隔离安装包就绪后由原负责人继续，不触碰生产会话。"})
                     drain(runtime, registry, store, lambda *_: None)
                 elif command == "conversation-arrival":
                     store.append_message(session["session_id"], role="assistant", text="新的委派阅读测试消息。", origin="manager_followup")

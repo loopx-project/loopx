@@ -24,7 +24,7 @@ for (const storage of ["file", "sqlite"]) {
   const exited = once(child, "exit");
   let stderr = "";
   child.stderr.on("data", data => stderr += data);
-  type Event = {event: string; origin: string; posts: number; source_unchanged: boolean; chat_unchanged: boolean};
+  type Event = {event: string; origin: string; posts: number; turn_count: number; source_unchanged: boolean; chat_unchanged: boolean};
   const queue: Event[] = [], waiting: {kind: string; receive: (event: Event) => void}[] = [];
   createInterface({input: child.stdout}).on("line", line => {
     try {
@@ -54,8 +54,8 @@ for (const storage of ["file", "sqlite"]) {
     await page.getByRole("navigation", {name: "管家视图"}).getByRole("button", {name: /^(Chat|对话)$/}).click();
     await page.getByText("复核迁移说明中的示例", {exact: true}).filter({visible: true}).first().waitFor();
     const before = await fixture("inspect");
-    const writes: string[] = [];
-    page.on("request", request => {if (request.method() !== "GET") writes.push(request.url());});
+    const writes: {url: string; method: string; body: unknown}[] = [];
+    page.on("request", request => {if (request.method() !== "GET") writes.push({url: request.url(), method: request.method(), body: request.postDataJSON()});});
     const trigger = page.getByRole("button", {name: /委派，.*条待跟进/});
     const dialog = page.getByRole("dialog", {name: "委派", exact: true});
     const settled = () => page!.waitForFunction(() => document.querySelector(".conversation-requests-body")?.getAttribute("aria-busy") === "false");
@@ -159,8 +159,60 @@ for (const storage of ["file", "sqlite"]) {
       assert.equal(await english.getByRole("button", {name: "All records", exact: true}).getAttribute("aria-pressed"), "true");
       await page.keyboard.press("Escape");
     }
+    // A completed long return opens at its answer, rather than its evidence
+    // tail. This uses the real publication, delivery and history owners.
+    await fixture("report-readable");
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({width, height: width === 390 ? 844 : 900});
+      await page.getByRole("button", {name: /^(总览|Overview)$/}).click();
+      await page.getByRole("button", {name: /^(对话|Chat)$/}).click();
+      const returned = page.locator(".personal-message.is-assistant").last();
+      await returned.getByText("迁移方案还不能直接上线，原导出路径继续保留。", {exact: true}).waitFor();
+      await page.waitForFunction(() => {
+        const viewport = document.querySelector(".personal-channel-scroll")!.getBoundingClientRect();
+        const row = [...document.querySelectorAll(".personal-message.is-assistant")].at(-1)!;
+        const answer = row.querySelector(".personal-md > p")!.getBoundingClientRect();
+        const delivery = row.querySelector(".personal-return-delivery")!.getBoundingClientRect();
+        return answer.top >= viewport.top && answer.bottom <= viewport.bottom
+          && delivery.top >= viewport.top && delivery.bottom <= viewport.bottom;
+      }).catch(async error => {
+        console.error(JSON.stringify(await page.evaluate(() => ({
+          viewport: document.querySelector(".personal-channel-scroll")?.getBoundingClientRect().toJSON(),
+          scroll: document.querySelector(".personal-channel-scroll")?.scrollTop,
+          last: [...document.querySelectorAll(".personal-message.is-assistant")].at(-1)?.getBoundingClientRect().toJSON(),
+          answer: [...document.querySelectorAll(".personal-message.is-assistant")].at(-1)?.querySelector(".personal-md > p")?.getBoundingClientRect().toJSON(),
+        }))));
+        throw error;
+      });
+      const full = await returned.innerText();
+      assert.match(full, /完整运行费用.*缺测不能按零计算/);
+      assert.match(full, /没有追加模型改写/);
+      assert.match(full, /隔离安装包就绪后由原负责人继续，不触碰生产会话/);
+      assert.doesNotMatch(full, /Remaining work|Continue when/);
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+      await page.screenshot({path: resolve(output, `reader-${storage}-${width}.png`)});
+      await page.getByRole("button", {name: /回到最新消息|Latest message/}).click();
+      await page.setViewportSize({width, height: width === 390 ? 820 : 880});
+      await page.waitForFunction(() => {
+        const viewport = document.querySelector(".personal-channel-scroll")!;
+        return viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 2;
+      });
+      await returned.getByRole("link", {name: /单独阅读完整答复|Read full answer separately/}).scrollIntoViewIfNeeded();
+      assert.ok(await returned.getByText("还需核验安装包中的字段映射和失败恢复。", {exact: true}).isVisible());
+    }
+    // Opening/reloading the existing conversation attempts its normal Session
+    // resume (the read-only fixture rejects POST). It must never submit input,
+    // start a Turn or dispatch a model. Inventory reading above remains GET-only.
+    const resumes = storage === "sqlite" ? 5 : 4;
+    assert.deepEqual(writes, Array.from({length: resumes}, () => ({url: ready.origin + "/api/chat/sessions",
+      method: "POST", body: {goal_id: "", mode: "resume_latest", context_kind: "manager"}})));
+    const readerAfter = await fixture("inspect");
+    assert.equal(readerAfter.posts, before.posts + resumes);
+    assert.equal(readerAfter.turn_count, before.turn_count);
+    assert.deepEqual(errors, []);
     results.push({storage, requests: 61, originalBodyChars: [...body].length, sourceUnchanged: true,
-      initial: true, filterRetry: true, staleSearch: true, more: true, multiWindow: true, sourceRecovery: true, writes: 0});
+      initial: true, filterRetry: true, staleSearch: true, more: true, multiWindow: true, sourceRecovery: true,
+      returnedAnswerStart: true, completeReaderBody: true, inventoryWrites: 0, readerSessionResumes: resumes, readerTurnsStarted: 0});
   } finally {
     // Release before shutdown: cancelled clients do not stop server work.
     child.stdin.write("release\nstop\n");

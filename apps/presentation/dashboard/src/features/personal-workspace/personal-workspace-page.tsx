@@ -23,7 +23,7 @@ import {
 } from "../../../../../../loopx/control_plane/presentation/action_review_plan.js";
 import { refreshAttention } from "./attention-details";
 import { teamPlanAssignments, teamPlanAppliedLine, teamPlanAppliedOutcome, teamPlanFields, teamPlanGoalId, teamPlanLaneCount, teamPlanReceiptGapLanes, teamPlanTodoIds } from "./team-plan-preview";
-import { Suspense, lazy, useEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type ReactNode } from "react";
+import { Suspense, lazy, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type ReactNode } from "react";
 
 import {
   applyTypedAction,
@@ -70,6 +70,7 @@ import { GoalWorkspacePanels } from "./goal-workspace-panels";
 import {GoalWorkBrowseProvider, readGoalWorkBrowse, type GoalWorkBrowseState} from "./goal-work-browse";
 import { localizedGoalState, localizedSessionStatus, useWorkspaceI18n, type WorkspaceTranslate } from "./i18n";
 import { MarkdownText } from "./markdown";
+import {returnedAnswerStart} from "./message-reading";
 import { ReturnDeliveryStatus } from "./return-delivery-status";
 import type {
   PersonalWorkspaceCallbacks,
@@ -1107,6 +1108,7 @@ export function PersonalWorkspacePage({
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const channelScrollRef = useRef<HTMLDivElement>(null);
   const followConversationRef = useRef(true);
+  const readReturnRef = useRef<string | undefined>(undefined);
   const conversationScrollTopRef = useRef(0);
   const [showLatestMessage, setShowLatestMessage] = useState(false);
   const settingsReturnFocusRef = useRef<HTMLElement | null>(null);
@@ -1472,14 +1474,28 @@ export function PersonalWorkspacePage({
     setShowLatestMessage(false);
     const scroller = channelScrollRef.current;
     if (scroller) {
+      readReturnRef.current = returnedAnswerStart(scroller)?.key;
       scroller.scrollTop = scroller.scrollHeight;
       conversationScrollTopRef.current = scroller.scrollTop;
     }
   }
-  useEffect(() => {
+  function readReturnedAnswer() {
+    const scroller = channelScrollRef.current;
+    const start = scroller ? returnedAnswerStart(scroller) : null;
+    if (!scroller || !start || start.key === readReturnRef.current) return false;
+    readReturnRef.current = start.key;
+    followConversationRef.current = false;
+    scroller.scrollTop = start.top;
+    conversationScrollTopRef.current = scroller.scrollTop;
+    setShowLatestMessage(false);
+    return true;
+  }
+  useLayoutEffect(() => {
+    readReturnRef.current = undefined;
     followConversationRef.current = !conversationMessageFocus;
     conversationScrollTopRef.current = channelScrollRef.current?.scrollTop ?? 0;
     setShowLatestMessage(false);
+    if (conversationOpen && !conversationMessageFocus) readReturnedAnswer();
   }, [conversationKey, selectedAgentId, conversationOpen, conversationMessageFocus?.sessionId, conversationMessageFocus?.messageId]);
   useEffect(() => {
     if (!conversationOpen) return;
@@ -1488,7 +1504,8 @@ export function PersonalWorkspacePage({
       if (!followConversationRef.current) return;
       window.cancelAnimationFrame(frame);
       frame = window.requestAnimationFrame(() => {
-        if (followConversationRef.current) scrollToLatestMessage();
+        if (!followConversationRef.current) return;
+        if (!readReturnedAnswer()) scrollToLatestMessage();
       });
     };
     follow();
