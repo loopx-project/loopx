@@ -5,7 +5,7 @@ import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireInteger, requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
 import {requireAutomationCadenceEligibility} from "../quota/automation_cadence.ts";
-import {normalizeProjectContext, normalizeStewardContext, normalizeStewardGoalScope} from "./conversation_scope.ts";
+import {boundConversationExecutorMatches, normalizeProjectContext, normalizeStewardContext, normalizeStewardGoalScope} from "./conversation_scope.ts";
 import {bindStewardManagedActor, normalizeStewardManagedActor} from "./steward_managed_mode.ts";
 
 /** Core owns the context and audience grant. A provider supplies verified,
@@ -323,21 +323,6 @@ function boundProject(params: JsonObject, row: JsonObject): Record<string, strin
   return projects[0];
 }
 
-function boundExecutorMatches(row: JsonObject, session: JsonObject): boolean {
-  if (session.agent_id === row.executor_endpoint_id && session.executor_endpoint_id === row.executor_endpoint_id) return true;
-  const allocation = session.manager_executor_allocation as JsonObject | undefined;
-  return row.context_kind === "steward" && row.audience !== "group"
-    && row.executor_endpoint_id === "antigravity" && session.agent_id === "codex"
-    && session.executor_endpoint_id === "codex" && allocation?.schema_version === "manager_executor_allocation_v0"
-    && allocation.selection_policy === "flexible" && allocation.configured_endpoint === "antigravity"
-    && allocation.executor_endpoint === "codex" && allocation.allocation_reason === "flexible_availability_fallback"
-    && typeof allocation.configuration_revision === "string" && allocation.configuration_revision.length > 0
-    && Array.isArray(allocation.eligible_endpoints) && allocation.eligible_endpoints.length === 2
-    && allocation.eligible_endpoints.includes("antigravity") && allocation.eligible_endpoints.includes("codex")
-    && Array.isArray(session.upstream_context_history) && session.upstream_context_history.some(value =>
-      value && typeof value === "object" && !Array.isArray(value) && (value as JsonObject).agent_id === "antigravity"
-      && typeof (value as JsonObject).thread_id === "string");
-}
 
 export function resolveBoundConversation(params: JsonObject): JsonObject {
   const current = state(params.current);
@@ -394,7 +379,7 @@ export function resolveBoundConversation(params: JsonObject): JsonObject {
     sessionIdentity(session.session_id, "bound Session identity");
     if (session.status === "closed" || session.channel_id !== channel
         || session.goal_id !== (steward ? "loopx-manager" : null)
-        || !boundExecutorMatches(row, session)
+        || !boundConversationExecutorMatches(row, session)
         || session.session_mode !== "managed_runtime" || (steward ? session.project_context : session.steward_context) != null
         || params.session_context === undefined
         || !isDeepStrictEqual(steward ? session.steward_context : session.project_context, params.session_context)) {
@@ -634,7 +619,7 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
   const selected = binding(params.binding);
   if (selected.audience === "group") return no;
   const steward = selected.context_kind === "steward";
-  if (!boundExecutorMatches(selected, {...current, executor_endpoint_id: current.executor_endpoint_id ?? current.agent_id}) || current.goal_id !== (steward ? "loopx-manager" : null)) return no;
+  if (!boundConversationExecutorMatches(selected, {...current, executor_endpoint_id: current.executor_endpoint_id ?? current.agent_id}) || current.goal_id !== (steward ? "loopx-manager" : null)) return no;
   const saved = steward ? normalizeStewardContext(current.steward_context)
     : normalizeProjectContext(current.project_context);
   const source = requireJsonObject(row.source, "original conversation source");
