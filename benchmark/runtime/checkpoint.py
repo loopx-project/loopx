@@ -257,7 +257,7 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
     view_path.write_text(guard_run.stdout, encoding="utf-8")
     view_path.chmod(0o600)
     reading = (f"Read the complete CLI view at {view_path} before work, then follow its interaction_contract "
-        "and replan review/writeback reads when present. ")
+        "and the next step in the replan review when present. ")
     if env.get("LOOPX_CONTEXT_DELIVERY") == "on" and env.get("LOOPX_CODEX_CONTEXT_DIR"):
         from .context_delivery import preflight_context_instruction
 
