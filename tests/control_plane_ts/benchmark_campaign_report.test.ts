@@ -188,6 +188,8 @@ test('opt-in HTML separates the record trajectory from all samples and splits di
     const html = readFileSync(prefix + '.html', 'utf8');
     assert.equal(html.includes('<script>'), false);
     const charts = [...html.matchAll(/<svg\b.*?<\/svg>/gs)].map(match => match[0]);
+    assert.match(html, /\.plot\{overflow-x:auto\}.*svg\{display:block;width:960px;max-width:none;height:auto\}/);
+    assert.equal([...html.matchAll(/class="plot" tabindex="0" role="region"/g)].length, 4);
     assert.deepEqual(charts.map(chart => [...chart.matchAll(/<circle /g)].length), [2, 4, 1, 1]);
     assert.doesNotMatch(charts[0], /1\.00 h · 2</);
     assert.match(charts[1], /1\.00 h · 2</);

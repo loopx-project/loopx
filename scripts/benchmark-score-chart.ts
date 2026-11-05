@@ -5,6 +5,7 @@ export type ChartSeries = {
   observedUntil?: number;
 };
 
+export const scoreChartWidth = 960;
 export const armColors = ['#3f5e80', '#7b4398', '#007b70', '#b55219'];
 const dashPatterns = ['', '7 3', '', '3 3'];
 export function escapeChartText(value: string) {
@@ -41,7 +42,7 @@ export function scoreChart(series: ChartSeries[], options: {
   const pad = (high - low) * .07 || Math.max(Math.abs(high) * .001, .01);
   low -= pad;
   high += pad;
-  const width = 960, left = 105, right = 932, top = 37, bottom = 281;
+  const width = scoreChartWidth, left = 105, right = 932, top = 37, bottom = 281;
   const x = (hour: number) => (left + (right-left) * hour/hours).toFixed(2);
   const y = (score: number) => (bottom - (bottom-top) * (score-low)/(high-low)).toFixed(2);
   const divisor = options.axisDivisor ?? 1;

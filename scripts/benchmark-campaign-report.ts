@@ -2,7 +2,7 @@
  * Benchmark toolkit owns run/countability authority. This developer helper neither
  * selects attempts nor normalizes native scores, adjudicates faults or launches work.
  */
-import { armColors, escapeChartText, scoreChart } from './benchmark-score-chart.ts';
+import { armColors, escapeChartText, scoreChart, scoreChartWidth } from './benchmark-score-chart.ts';
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
@@ -314,12 +314,12 @@ export function renderScoreCurves(report: Report): string {
       const legend = series.map((run, i) => run.points.length
         ? `<li style="color:${armColors[i % armColors.length]}">${escapeChartText(run.label)}</li>` : '').join('');
       sections.push(`<section><h2>${escapeChartText(caseId)}</h2><p>${escapeChartText(mapping)}</p><ul>${legend}</ul>
-        <h3>Best observed score</h3><div class="plot">${scoreChart(series, {...options, best: true})}</div>
-        <details><summary>All score observations</summary><div class="plot">${scoreChart(series, {...options, best: false})}</div></details></section>`);
+        <h3>Best observed score</h3><div class="plot" tabindex="0" role="region" aria-label="Best observed scores for ${escapeChartText(caseId)}, ${escapeChartText(mapping)}">${scoreChart(series, {...options, best: true})}</div>
+        <details><summary>All score observations</summary><div class="plot" tabindex="0" role="region" aria-label="All score observations for ${escapeChartText(caseId)}, ${escapeChartText(mapping)}">${scoreChart(series, {...options, best: false})}</div></details></section>`);
     }
   }
   return `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-    <title>${escapeChartText(report.title)}</title><style>body{max-width:960px;margin:2rem auto;padding:0 1rem;color:#20302c;font:16px system-ui}.plot{overflow-x:auto}svg{width:100%;min-width:580px;height:auto}ul{display:flex;flex-wrap:wrap;gap:1.3rem;padding:0;list-style:none;font-weight:600}section{border-top:1px solid #dce4e1}summary{cursor:pointer}</style>
+    <title>${escapeChartText(report.title)}</title><style>body{max-width:${scoreChartWidth}px;margin:2rem auto;padding:0 1rem;color:#20302c;font:16px system-ui}.plot{overflow-x:auto}.plot:focus-visible{outline:2px solid #3f5e80;outline-offset:3px}svg{display:block;width:${scoreChartWidth}px;max-width:none;height:auto}ul{display:flex;flex-wrap:wrap;gap:1.3rem;padding:0;list-style:none;font-weight:600}section{border-top:1px solid #dce4e1}summary{cursor:pointer}</style>
     <h1>${escapeChartText(report.title)}</h1><p>Observed scores · includes provisional runs · ${escapeChartText(report.observed_at)}</p>${sections.join('') || '<p>No observed scores.</p>'}</html>`;
 }
 
