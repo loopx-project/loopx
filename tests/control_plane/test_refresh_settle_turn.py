@@ -14,6 +14,9 @@ from test_quota_settlement_cli import (
     _run_cli, _run_generated_cli, _spend_run_count, _write_fixture,
 )
 
+# CLI effects belong to each fixture's producing project. The source checkout
+# must not accidentally satisfy workspace verification for installed tests.
+
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_native_caller_owns_writeback_spend_and_returns_recoverable_receipt(tmp_path, monkeypatch, provider):
@@ -23,7 +26,7 @@ def test_native_caller_owns_writeback_spend_and_returns_recoverable_receipt(tmp_
     binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
                "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID]
     rc, original = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding,
-        "--context-delivery", "off")
+        "--context-delivery", "off", cwd=project)
     assert rc == 0, original
     manual = original["interaction_contract"]["cli_channel"]["settlement_plan"]
     assert manual["schema_version"] == "quota_settlement_plan_v1"
@@ -31,7 +34,7 @@ def test_native_caller_owns_writeback_spend_and_returns_recoverable_receipt(tmp_
     assert "command_template" in manual["ordered_steps"][2]
     capture = tmp_path / "capture"
     rc, view = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding,
-        "--context-delivery", "on", "--decision-output-dir", str(capture))
+        "--context-delivery", "on", "--decision-output-dir", str(capture), cwd=project)
     assert rc == 0, view
     full = json.loads((capture / "decision.json").read_text())
     cli = full["interaction_contract"]["cli_channel"]
@@ -55,7 +58,7 @@ def test_native_caller_owns_writeback_spend_and_returns_recoverable_receipt(tmp_
         command = command.replace(key, value)
     command += " --delivery-boundary in_flight_continuation --no-global-sync --suppress-external-sinks"
     for replay in (False, True):
-        rc, receipt = _run_generated_cli(command, registry_path=registry)
+        rc, receipt = _run_generated_cli(command, registry_path=registry, cwd=project)
         assert rc == 0, receipt
         assert receipt["settlement_identity"] == plan["identity"]
         assert receipt["settlement_progress"]["state"] == "settled"
@@ -124,7 +127,7 @@ def test_native_caller_owns_writeback_spend_and_returns_recoverable_receipt(tmp_
     future_plan["schema_version"] = "future_plan_for_readback"
     recomposed = compose_turn_decision(future, composed_settlement=True)
     assert recomposed["interaction_contract"]["cli_channel"]["settlement_plan"] == future_plan
-    rc, todo = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID, "--todo-id", TODO_ID)
+    rc, todo = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID, "--todo-id", TODO_ID, cwd=project)
     assert rc == 0 and todo["todo"]["status"] == "open"
 
 
@@ -137,7 +140,7 @@ def test_complete_source_budget_recovery_keeps_original_turn_and_single_debit(tm
                "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID]
     capture = tmp_path / "capture"
     rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding,
-        "--context-delivery", "on", "--decision-output-dir", str(capture))
+        "--context-delivery", "on", "--decision-output-dir", str(capture), cwd=project)
     assert rc == 0, guard
     full = json.loads((capture / "decision.json").read_text())
     assert full["schema_version"] == "loopx_turn_envelope_v1"
@@ -172,7 +175,7 @@ def test_complete_source_budget_recovery_keeps_original_turn_and_single_debit(tm
     for invalid, diagnostics in cases:
         document.write_text(json.dumps(invalid))
         authored = document.read_bytes()
-        rc, rejected = _run_generated_cli(command, registry_path=registry)
+        rc, rejected = _run_generated_cli(command, registry_path=registry, cwd=project)
         assert rc == 1 and rejected["appended"] is False, rejected
         for diagnostic in diagnostics:
             assert diagnostic in rejected["error"], rejected
@@ -186,7 +189,7 @@ def test_complete_source_budget_recovery_keeps_original_turn_and_single_debit(tm
                                changed=["Measured change."], evidence_refs=["evidence:checked"])
     document.write_text(json.dumps(packet))
     for replay in (False, True):
-        rc, accepted = _run_generated_cli(command, registry_path=registry)
+        rc, accepted = _run_generated_cli(command, registry_path=registry, cwd=project)
         assert rc == 0, accepted
         assert accepted["settlement_identity"] == plan["identity"]
         assert accepted["settlement_progress"]["state"] == "settled"
@@ -194,7 +197,7 @@ def test_complete_source_budget_recovery_keeps_original_turn_and_single_debit(tm
         assert {step["step_kind"] for step in accepted["settlement_result"]["receipts"]} == {
             "validation", "durable_writeback", "quota_spend"}
         assert _spend_run_count(runtime) == 1
-    rc, history = _run_cli(registry, runtime, "history", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID)
+    rc, history = _run_cli(registry, runtime, "history", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, cwd=project)
     assert rc == 0, history
     goal = next(row for row in history["goals"] if row["id"] == GOAL_ID)
     saved = next(row["agent_vision"] for row in goal["latest_runs"] if row.get("agent_vision"))
@@ -212,7 +215,7 @@ def test_receipt_capture_failure_keeps_committed_receipts_and_exact_retry(tmp_pa
     _initialize_fixture_authority(project, runtime, provider=provider)
     binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
                "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID]
-    rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding)
+    rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding, cwd=project)
     assert rc == 0, guard
     private = runtime / "context-delivery"
     private.mkdir(mode=0o700, exist_ok=True)
@@ -221,13 +224,13 @@ def test_receipt_capture_failure_keeps_committed_receipts_and_exact_retry(tmp_pa
         "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
         "--delivery-boundary", "in_flight_continuation", "--no-global-sync", "--suppress-external-sinks",
         "--settle-turn", "--settlement-receipt"]
-    rc, failed = _run_cli(registry, runtime, *command)
+    rc, failed = _run_cli(registry, runtime, *command, cwd=project)
     assert rc != 0 and failed["ok"] is False
     assert failed["settlement_progress"]["state"] == "settled"
     assert len(failed["settlement_result"]["receipts"]) == 3
     assert _spend_run_count(runtime) == 1
     private.chmod(0o700)
-    rc, replay = _run_cli(registry, runtime, *command)
+    rc, replay = _run_cli(registry, runtime, *command, cwd=project)
     assert rc == 0, replay
     assert replay["settlement_identity"] == failed["settlement_identity"]
     assert len(replay["settlement_result"]["receipts"]) == 3
@@ -365,7 +368,7 @@ def test_same_turn_progress_or_completion_and_replay_without_extra_guard(
     vision_args = []
     if finish_todo:
         rc, complete = _run_generated_cli(validation["command_template"].replace(
-            "<validated evidence>", "Independent validation of the original deliverable."), registry_path=registry)
+            "<validated evidence>", "Independent validation of the original deliverable."), registry_path=registry, cwd=project)
         assert rc == 0, complete
         vision = tmp_path / "vision.json"
         vision.write_text(json.dumps({
@@ -389,13 +392,13 @@ def test_same_turn_progress_or_completion_and_replay_without_extra_guard(
     (trap / "loopx").chmod(0o700)
     monkeypatch.setenv("PATH", str(trap) + ":" + __import__("os").environ["PATH"])
     for replay in (False, True):
-        rc, result = _run_generated_cli(command, registry_path=registry)
+        rc, result = _run_generated_cli(command, registry_path=registry, cwd=project)
         assert rc == 0, json.dumps(result, ensure_ascii=False)
         assert result["settlement_progress"]["state"] == "settled"
         assert result["settlement_identity"] == plan["identity"]
         assert _spend_run_count(runtime) == 1
         assert result.get("idempotent_replay", False) is replay
-    rc, todo = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID, "--todo-id", TODO_ID)
+    rc, todo = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID, "--todo-id", TODO_ID, cwd=project)
     assert rc == 0 and todo["todo"]["status"] == ("done" if finish_todo else "open")
     events = runtime / "goals" / GOAL_ID / "rollout-events.jsonl"
     if not events.exists():
@@ -412,28 +415,28 @@ def test_failed_writeback_dry_run_and_missing_binding_cannot_spend(tmp_path, mon
     _initialize_fixture_authority(project, runtime, provider=provider)
     binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
                "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID]
-    rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding)
+    rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding, cwd=project)
     assert rc == 0, guard
     base = ["refresh-state", *binding, "--classification", "verified_slice",
             "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
             "--no-global-sync", "--suppress-external-sinks", "--settle-turn"]
-    rc, rejected = _run_cli(registry, runtime, *base, "--delivery-outcome", "surface_only")
+    rc, rejected = _run_cli(registry, runtime, *base, "--delivery-outcome", "surface_only", cwd=project)
     assert rc != 0 and _spend_run_count(runtime) == 0, rejected
     rc, bad_path = _run_cli(registry, runtime, *base,
-        "--delivery-workspace-path", "~loopx-missing-fixture-user")
+        "--delivery-workspace-path", "~loopx-missing-fixture-user", cwd=project)
     assert rc != 0 and bad_path["ok"] is False and _spend_run_count(runtime) == 0, bad_path
-    rc, preview = _run_cli(registry, runtime, *base, "--delivery-boundary", "in_flight_continuation", "--dry-run")
+    rc, preview = _run_cli(registry, runtime, *base, "--delivery-boundary", "in_flight_continuation", "--dry-run", cwd=project)
     assert rc == 0 and preview["dry_run"] and _spend_run_count(runtime) == 0, preview
     # Invalid vision fails before writeback; no direct-debit bypass is allowed.
     invalid = tmp_path / "invalid.json"
     invalid.write_text(json.dumps({"goal_id": GOAL_ID, "agent_id": AGENT_ID,
         "vision_patch": {"acceptance_summary": "x" * 421}}))
     rc, checkpoint = _run_cli(registry, runtime, *base, "--delivery-boundary", "semantic_closeout",
-                              "--agent-vision-json", str(invalid))
+                              "--agent-vision-json", str(invalid), cwd=project)
     assert rc != 0 and _spend_run_count(runtime) == 0, checkpoint
-    rc, missing = _run_cli(registry, runtime, "refresh-state", "--goal-id", GOAL_ID, "--settle-turn")
+    rc, missing = _run_cli(registry, runtime, "refresh-state", "--goal-id", GOAL_ID, "--settle-turn", cwd=project)
     assert rc != 0 and "exactly one" in missing["error"] and _spend_run_count(runtime) == 0
-    rc, receipt_only = _run_cli(registry, runtime, "refresh-state", *binding, "--settlement-receipt")
+    rc, receipt_only = _run_cli(registry, runtime, "refresh-state", *binding, "--settlement-receipt", cwd=project)
     assert rc != 0 and "requires --settle-turn" in receipt_only["error"] and _spend_run_count(runtime) == 0
 
 
@@ -449,7 +452,7 @@ def test_fresh_turn_honors_the_written_route_and_keeps_unfinished_requirements(
         f"  <!-- loopx:todo todo_id=todo_independent_gap status=open claimed_by={AGENT_ID} task_class=advancement_task action_kind=validate -->\n")
     _initialize_fixture_authority(project, runtime, provider=provider)
     binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID]
-    rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding)
+    rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding, cwd=project)
     assert rc == 0, guard
     vision = tmp_path / "vision.json"
     vision.write_text(json.dumps({
@@ -464,14 +467,14 @@ def test_fresh_turn_honors_the_written_route_and_keeps_unfinished_requirements(
         "--classification", "experiment_answered", "--delivery-batch-scale", "implementation",
         "--delivery-outcome", "outcome_progress", "--delivery-boundary",
         "semantic_closeout",
-        "--agent-vision-json", str(vision), "--no-global-sync", "--suppress-external-sinks", "--settle-turn")
+        "--agent-vision-json", str(vision), "--no-global-sync", "--suppress-external-sinks", "--settle-turn", cwd=project)
     assert rc == 0, result
     rc, next_turn = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
-        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", "next-route")
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", "next-route", cwd=project)
     assert rc == 0, next_turn
     assert next_turn["selected_todo"]["todo_id"] == "todo_independent_gap"
     assert next_turn["selected_todo"].get("selected_by") != "in_flight_todo"
-    rc, original = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID, "--todo-id", TODO_ID)
+    rc, original = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID, "--todo-id", TODO_ID, cwd=project)
     assert rc == 0 and original["todo"]["status"] == "open"
     assert "Validate and settle the selected delivery" in original["todo"]["text"]
 
@@ -484,11 +487,11 @@ def test_owed_command_identity_and_lost_response_recover_without_another_debit(t
     project, runtime, registry = _write_fixture(tmp_path)
     _initialize_fixture_authority(project, runtime, provider=provider)
     binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID]
-    rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding)
+    rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding, cwd=project)
     assert rc == 0, guard
     rc, original = _run_cli(registry, runtime, "refresh-state", *binding, "--classification", "verified",
         "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
-        "--delivery-boundary", "in_flight_continuation", "--no-global-sync", "--suppress-external-sinks")
+        "--delivery-boundary", "in_flight_continuation", "--no-global-sync", "--suppress-external-sinks", cwd=project)
     assert rc == 0 and _spend_run_count(runtime) == 0, original
     def settle(payload):
         refresh_settlement.settle_refreshed_turn(payload, registry_path=registry,

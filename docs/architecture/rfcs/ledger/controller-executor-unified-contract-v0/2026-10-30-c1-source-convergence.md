@@ -674,6 +674,62 @@ latency, natural adoption or long-horizon benefit. The original budget failure,
 historical-reader obligations and complete C1 acceptance remain open. No gate,
 default, scoring or runtime behavior changes in this measurement update.
 
+### Transitional journal intake
+
+The canonical resume loader checked a complete source only for current v1
+plans. Recorded v0 plans with a supplied `work_contract` instead took the raw
+legacy identity branch, although the writer, ordinary inspection and settlement
+lookup already rejected a changed source. The executing path still refused it
+downstream; this is an inconsistent recovery intake, not evidence of an
+unauthorized Host launch or debit. Explicit retry inspection likewise returned
+its blocked observation instead of the v1 intake error.
+
+The loader now sends every supplied complete source through the existing
+`turn_host_lineage`/TypeScript source owner, including the recorded transitional
+source/adapter cross-check. Current v1 loads already use that call; transitional
+loads add it. No normal-path RPC saving is claimed. Source-absent historical
+plans retain their exact raw identity checks and original bytes. The change
+does not impose whole-journal settlement consistency on plan loading: existing
+recovery inspection remains responsible for those diagnostics. Plain invalid-
+journal inspection still returns its structured blocked observation.
+
+The existing File/SQLite journal matrix now tests loader refusal for changed
+content, unknown version, null/missing binding, conflicting adapter and signed
+interaction/action/reference mutations. Numeric source values, current missing-
+source refusal, bare historical loading and byte preservation remain controls.
+The public `run-once --resume-turn-key` and explicit retry-inspection entries
+exercise the same source refusal without rewriting history or spending quota.
+The frozen pre-fix loader fails both transitional provider cases; after fixing
+the CLI fixture's omitted required project argument, explicit retry inspection
+also fails those two cases while both current-plan controls pass. Those are
+distinct product and harness findings, not six product defects.
+
+The pre-integration recovery cohort passes 139 cases in both source and an
+isolated installed wheel. Integration with main `2852eb453bef` preserves the
+complete native handoff, both lifecycle assertions and shared TypeScript imports.
+Its 81-case source cohort and 178 TypeScript cases pass. An interrupted source/
+wheel attempt has no terminal result and is not counted as a pass.
+
+The integrated wheel initially passes 67 cases and fails 14 settlement cases:
+their subprocesses default to the source checkout, which accidentally satisfies
+workspace verification there but cannot do so in an off-checkout installation.
+A diagnostic observer identifies the real workspace refusal. The existing tests
+now explicitly use their own producing project; all original assertions, bad-
+workspace cases and once-only recovery controls remain. The complete affected
+module then passes 23 cases in both source and the unchanged installed wheel;
+58 unaffected cases passed in the earlier wheel cohort. This covers 81 distinct
+cases across those cohorts, not one uninterrupted final 81-case run. All 1,898
+packaged source files match; the final 23-case wheel run observes 125 completed
+processes and 64,109 Core module origins without checkout contamination. Sudden
+exits remain outside that exit audit. Earlier failures remain recorded.
+
+This repairs a supported recovery consumer rather than deleting a reader to
+increase retirement counts. Legacy constructors remain only in the named
+historical/composition/model-behavior fixtures above; original outstanding work,
+supported recovery windows, independent review and complete C1 acceptance still
+govern retirement and adoption. The preceding cost cohort remains pinned to its
+original main/candidate snapshots; this integrity change does not remeasure it.
+
 ## Earlier integration evidence
 
 The integration preserves main's extracted quota-presentation owner and sparse

@@ -520,6 +520,48 @@ capture 摘要、recovery／所选正文摘要、原身份和控制事实：
 CPU、延迟、自然采用或长程收益。原体积失败、历史 reader 义务及完整 C1 验收仍开放；
 本次测量更新不改变门、默认、评分或运行时行为。
 
+### 过渡期 journal 的恢复入口
+
+canonical resume loader 原先只对当前 v1 plan 校验完整来源。已记录的 v0 plan
+即使带有 `work_contract`，仍走原始 legacy 身份分支；writer、普通 inspection
+和 settlement lookup 已会拒绝被改动的来源。执行路径仍在下游拒绝它，因此这是恢复
+入口不一致，不能据此声称 Host 越权启动或扣额。显式 retry inspection 同样返回
+blocked 观察，而非 v1 的入口错误。
+
+loader 现在把所有显式完整来源交给既有 `turn_host_lineage`／TypeScript source
+owner，包含已记录过渡格式的 source／adapter 交叉校验。当前 v1 加载本就使用该调用；
+过渡格式增加这次调用，不宣称普通路径 RPC 节省。没有完整来源的历史 plan 仍保留原始
+身份精确比较和原字节。plan 加载不新增整个 journal 的 settlement 一致性门，相关
+诊断仍归既有 recovery inspection；普通坏 journal inspection 继续返回结构化 blocked
+观察。
+
+既有 File／SQLite journal 矩阵补入 loader 对内容改动、未知版本、null／缺失 binding、
+冲突 adapter 及已重签名 interaction／action／reference 改动的拒绝。数值来源、当前
+版本缺源拒绝、纯历史格式加载及字节保留继续作为控制。公开
+`run-once --resume-turn-key` 与显式 retry-inspection 入口验证相同来源拒绝，不改写历史
+或扣额。冻结的修复前 loader 在两个 provider 的过渡格式用例均失败；修正 CLI fixture
+遗漏的必填 project 参数后，显式 retry inspection 的两个过渡用例也失败，两个当前
+plan 控制通过。这些是分别记录的产品与 harness 问题，不是六个产品缺陷。
+
+整合前的恢复 cohort 在源码和隔离实际 wheel 中均有 139 个用例通过。整合 main
+`2852eb453bef` 时保留完整原生交接、两侧 lifecycle 断言及共享 TypeScript import；
+随后源码 81 个、TypeScript 178 个用例通过。被中断的源码／wheel 尝试没有终态结果，
+不计作通过。
+
+整合后的 wheel 首次有 67 个用例通过、14 个 settlement 用例失败：其子进程默认在
+源码 checkout 工作，恰好借用了该目录的 workspace 资格，离开 checkout 安装后便无法
+验证。诊断 observer 确认实际 workspace 拒绝。既有测试现显式使用各自的真实产物
+project，全部原断言、坏 workspace 负例和 once-only 恢复控制保留；完整受影响模块在
+源码及字节未变的安装 wheel 中各有 23 个用例通过，另 58 个未改用例已在前一 wheel
+cohort 通过。这覆盖跨 cohort 的 81 个独立用例，并非一次未中断的最终 81 用例运行。
+1,898 个打包源文件逐字一致；最终 23 用例 wheel 运行观察到 125 个完成进程、64,109
+次 Core 模块来源，无 checkout 污染。突然退出仍不在退出审计范围；旧失败继续保留。
+
+本次修复实际仍受支持的恢复 consumer，不为退役数量删除 reader。legacy constructor
+只剩前述具名历史／composition／model-behavior fixture；原未结工作、支持恢复窗口、
+独立审阅及完整 C1 验收继续约束退役和采用。前述成本 cohort 仍固定于原 main／候选
+快照，本次完整性修复没有重新测量该 cohort。
+
 ## 较早的集成证据
 
 集成保留 main 已抽取的 quota-presentation owner 与稀疏原生 journal 运输。
