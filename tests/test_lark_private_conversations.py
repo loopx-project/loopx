@@ -5081,9 +5081,16 @@ def test_current_body_uses_next_slot_before_unattempted_recovery_backlog(tmp_pat
         release_old.set()
         with changed:
             assert changed.wait_for(lambda: len(finished) == slots, 2)
-        step()
+        # The provider returns just after its last observable checkpoint.
+        # Let the actual Future settle instead of racing its done flag.
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            step()
+            with changed:
+                if changed.wait_for(lambda: len(started) == slots * 2, .01):
+                    break
         with changed:
-            assert changed.wait_for(lambda: len(started) == slots * 2, 2)
+            assert len(started) == slots * 2
             assert fresh in started[slots:], "new body remained behind untouched historical recovery probes"
         service._closed.set()
         release_rest.set()
