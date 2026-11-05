@@ -185,12 +185,12 @@ def test_lifecycle_invalidates_and_recovers_current_capture_without_bodies(tmp_p
     if event_name == "SessionStart":
         body = result["hookSpecificOutput"]["additionalContext"]
         assert first["recovery"]["sha256"] in body and "quota context-read" in body
-        # The shared selection advice adds about 400 characters to recovery,
-        # avoiding mandatory discovery and duplicate/oversized read batches.
-        # Preserve identity/retention clauses; this is a synthetic regression
-        # allowance, not permission to raise any host output/context limit.
+        # Async handle/error preservation adds 212 characters to the shared
+        # read guide. Retain the complete identity/retention clauses; this
+        # synthetic allowance does not raise any host output/context limit.
         assert "max_output_tokens=22000" in body and "max_output_tokens=24000" in body
-        assert payload["requirements"] not in body and len(body) < 3100
+        assert "session_id" in body and "write_stdin" in body and "functions.wait" in body
+        assert payload["requirements"] not in body and len(body) < 3350
     else:
         assert result == {}
     _, second = project(tmp_path, "two")
