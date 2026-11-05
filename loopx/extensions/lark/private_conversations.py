@@ -1376,7 +1376,7 @@ class LarkPrivateConversations:
                     continue
         return [path for path in sorted(root.glob("*.json")) if _read_json(path).get("status") == "pending"]
 
-    def _web_projection_messages(self, row: dict[str, Any]) -> list[dict[str, Any]]:
+    def _web_projection_messages(self, row: dict[str, Any], *, inputs_only: bool = False) -> list[dict[str, Any]]:
         store = self.core.controller.store
         source = _read_json(self.root / f"{row['request_ref']}.json")
         native = self.core.read_request(row["request_ref"])
@@ -1399,6 +1399,11 @@ class LarkPrivateConversations:
             selected = []
             for message in messages:
                 if message.get("turn_id") not in web_turns or message.get("role") not in {"user", "agent"}:
+                    continue
+                # Reactions belong to canonical user inputs. The independent
+                # body outbox still reads and validates every answer; feedback
+                # need not reload those Turns just to discard their messages.
+                if inputs_only and message["role"] != "user":
                     continue
                 turn = store.load_turn(session["session_id"], message["turn_id"])
                 if not turn or turn.get("origin") != "web" or turn.get("session_id") != session["session_id"]:
@@ -1479,7 +1484,7 @@ class LarkPrivateConversations:
         if prior.get("ok") and prior.get("turn_status") == status:
             return
         try:
-            if message not in self._web_projection_messages(row):
+            if message not in self._web_projection_messages(row, inputs_only=True):
                 raise ValueError("canonical App input changed")
             expected_text = f"**你（App）**\n\n{message['text']}"
             if phase.get("text") not in (expected_text, _presentation_text(expected_text)):
@@ -1495,7 +1500,7 @@ class LarkPrivateConversations:
 
             def authorized() -> bool:
                 try:
-                    if message not in self._web_projection_messages(row):
+                    if message not in self._web_projection_messages(row, inputs_only=True):
                         return False
                     verified = verify_lark_inbox_reply(project=self.runtime_root, config_path=config,
                         message_id=row["event"]["message_id"], text=phase["text"], attempt=phase["attempt"],
@@ -1506,7 +1511,7 @@ class LarkPrivateConversations:
                     # Provider IO can outlast a grant or a Turn. Re-read both
                     # before this exact mirror's reaction, including cleanup.
                     if (verified.get("ok") is not True or verified.get("reply_verified") is not True
-                            or message not in self._web_projection_messages(row)):
+                            or message not in self._web_projection_messages(row, inputs_only=True)):
                         return False
                     current_source = _read_json(self.root / f"{row['request_ref']}.json")
                     current = store.load_turn(row["session_id"], message["turn_id"]) or {}
@@ -1581,7 +1586,7 @@ class LarkPrivateConversations:
                 with exclusive_file_lock(path, operation="read_web_input_feedback"):
                     row = _read_json(path)
                 try:
-                    messages = self._web_projection_messages(row)
+                    messages = self._web_projection_messages(row, inputs_only=True)
                 except (OSError, ValueError, KeyError):
                     continue
                 for message in messages:
