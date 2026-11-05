@@ -182,8 +182,13 @@ class NativeContextReader:
         if continuation := native_process_continuation(request, f"{self.identity}_{self.calls + 1}"):
             self.calls += 1
             return continuation
-        page = last_context_page(request, allow_reference=True)
+        page = last_context_page(request, allow_reference=True, allow_selection=True)
         assert page and page["ok"], "Native reader output must reach the model intact"
+        if page.get("schema_version") == "context_capture_selection_page_v1":
+            # The initial read carries a selected view and a separate navigation
+            # reference. Only complete delivery of the latter earns byte coverage.
+            page = page["navigation"]
+            assert page["ok"] and page["schema_version"] == "context_capture_navigation_v1"
         if page.get("schema_version") != "context_capture_page_v1":
             assert self.pending["descriptor"] is None and "reference" not in self.pending
             # This fixture voluntarily reads the complete saved input for its
