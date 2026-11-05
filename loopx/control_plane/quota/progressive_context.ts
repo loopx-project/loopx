@@ -275,6 +275,15 @@ export function initialContextReadPointers(context: JsonObject, decisionFields: 
     pointers.push("/" + path.map(key => String(key).replaceAll("~", "~0").replaceAll("/", "~1")).join("/"));
   };
   for (const field of decisionFields) include(field);
+  // A staged replan has already replaced inline acceptance with a pinned
+  // review reader. Deliver its first action and ordering without writeback.
+  const replan = object(context.replan_action_packet);
+  if (context.effective_action === "autonomous_replan_required" &&
+      replan?.schema_version === "replan_action_packet_v0" && replan.decision === "replan_required" &&
+      replan.settlement_only !== true && typeof replan.review === "string" && replan.review) {
+    include("replan_action_packet", "review");
+    include("replan_action_packet", "guidance");
+  }
   include("agent_lane_next_action", "next_step");
   include("agent_lane_next_action", "next_action_basis");
   include("interaction_contract", "user_channel");
