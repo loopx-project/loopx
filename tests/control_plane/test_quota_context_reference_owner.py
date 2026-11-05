@@ -167,9 +167,12 @@ def test_context_sharing_uses_one_boundary_and_keeps_explicit_detail(monkeypatch
     assert calls.count("reference_context") == 1
     assert "reference_goal_acceptance" not in calls
     assert "reference_current_task_title" not in calls and "reference_explore_guidance" not in calls
-    # Replan authoring has its own applicable lifecycle; this assertion measures
-    # the merged acceptance/task/Explore operation, not unrelated projections.
-    assert calls.count("reference_replan_authoring") == (0 if vision_detail else 1)
+    # This fixture has no authoring material to share. Explicit detail and
+    # ordinary display both preserve the original contract without a round trip.
+    writeback = source["replan_action_packet"]["writeback_contract"]
+    assert "vision_authoring" not in writeback and "vision_authoring_ref" not in writeback
+    assert result["replan_action_packet"]["writeback_contract"] == writeback
+    assert "reference_replan_authoring" not in calls
     if task_detail:
         assert result["agent_lane_next_action"]["title"] == title
     else:
