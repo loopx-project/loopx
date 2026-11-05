@@ -11,6 +11,7 @@ would replace a diagnosis the caller asked for.
 from __future__ import annotations
 
 import os
+import stat
 
 import pytest
 
@@ -83,12 +84,25 @@ def test_recovery_readback_refuses_a_symlink_without_the_flag(tmp_path, monkeypa
             pass
 
 
-def test_checkpoint_sync_skips_a_host_without_the_directory_flag(tmp_path, monkeypatch):
-    synced = []
-    monkeypatch.setattr(os, "fsync", synced.append)
+def test_checkpoint_sync_flushes_the_directory_without_the_flag(tmp_path, monkeypatch):
+    flushed, real = [], os.fsync
+
+    def recording(descriptor):
+        flushed.append(stat.S_ISDIR(os.fstat(descriptor).st_mode))
+        return real(descriptor)
+
+    monkeypatch.setattr(os, "fsync", recording)
     monkeypatch.delattr(os, "O_DIRECTORY", raising=False)
     _sync(tmp_path)
-    assert synced == []
+    assert flushed == [True], "the directory must be flushed, not silently skipped"
+
+
+def test_checkpoint_sync_refuses_a_target_that_is_not_a_directory(tmp_path, monkeypatch):
+    target = tmp_path / "bank.json"
+    target.write_text("{}")
+    monkeypatch.delattr(os, "O_DIRECTORY", raising=False)
+    with pytest.raises(ValueError, match="not a directory"):
+        _sync(target)
 
 
 def test_checkpoint_sync_still_syncs_where_the_directory_flag_exists(tmp_path, monkeypatch):
@@ -98,3 +112,59 @@ def test_checkpoint_sync_still_syncs_where_the_directory_flag_exists(tmp_path, m
     monkeypatch.setattr(os, "fsync", lambda descriptor: synced.append(descriptor) or real(descriptor))
     _sync(tmp_path)
     assert len(synced) == 1
+
+
+def _swap_at_open(monkeypatch, path, replacement):
+    """Replace `path` with a link to `replacement` the instant it is opened."""
+    real_open = os.open
+
+    def swapping(target, flags, *args, **kwargs):
+        if os.fspath(target) == os.fspath(path) and not os.path.islink(path):
+            path.unlink()
+            try:
+                path.symlink_to(replacement)
+            except (OSError, NotImplementedError):
+                pytest.skip("this host cannot create a file symlink")
+        return real_open(target, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", swapping)
+
+
+def test_native_trace_read_refuses_a_link_swapped_in_at_the_open(tmp_path, monkeypatch):
+    """Binding the descriptor refuses the entry the check-then-open window admits."""
+    outside = tmp_path / "outside.jsonl"
+    outside.write_bytes(b'{"external": true}\n')
+    trace = tmp_path / "trace.jsonl"
+    trace.write_bytes(b'{"seq": 1}\n')
+    monkeypatch.delattr(os, "O_NOFOLLOW", raising=False)
+    _swap_at_open(monkeypatch, trace, outside)
+    with pytest.raises(ValueError, match="symlink"):
+        read_native_trace_file(trace)
+
+
+def test_native_trace_read_refuses_the_same_swap_with_the_flag(tmp_path, monkeypatch):
+    """The native flag refuses it in the open, so the no-flag branch must match."""
+    if not getattr(os, "O_NOFOLLOW", 0):
+        pytest.skip("this host has no no-follow flag to compare against")
+    outside = tmp_path / "outside.jsonl"
+    outside.write_bytes(b'{"external": true}\n')
+    trace = tmp_path / "trace.jsonl"
+    trace.write_bytes(b'{"seq": 1}\n')
+    _swap_at_open(monkeypatch, trace, outside)
+    with pytest.raises(OSError):
+        read_native_trace_file(trace)
+
+
+@OWNER_MODEL
+def test_recovery_readback_refuses_a_link_swapped_in_at_the_open(tmp_path, monkeypatch):
+    outside = tmp_path / "outside.json"
+    outside.write_bytes(b'{"external": true}')
+    outside.chmod(0o600)
+    payload = tmp_path / "recovery-audit.json"
+    payload.write_bytes(b'{"ok": false}')
+    payload.chmod(0o600)
+    monkeypatch.delattr(os, "O_NOFOLLOW", raising=False)
+    _swap_at_open(monkeypatch, payload, outside)
+    with pytest.raises(StateRecoveryError, match="recovery_input_unavailable"):
+        with _regular_input(payload, 1024):
+            pass

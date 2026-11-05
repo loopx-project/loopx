@@ -113,13 +113,22 @@ def _regular_input(path: Path, limit: int) -> Iterator[BinaryIO]:
     getuid = getattr(os, "getuid", None)
     if getuid is None:
         raise StateRecoveryError("recovery_input_unavailable")
-    no_follow = getattr(os, "O_NOFOLLOW", 0)
-    if not no_follow and path.is_symlink():
-        raise StateRecoveryError("recovery_input_unavailable")
     try:
-        fd = os.open(path, os.O_RDONLY | no_follow)
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     except OSError as exc:
         raise StateRecoveryError("recovery_input_unavailable") from exc
+    try:
+        # Where the host has no no-follow flag the open cannot refuse a link, and
+        # inspecting the path first only moves the race to the open below. Bind the
+        # descriptor to the entry before anything is read: a link opens to its
+        # target, whose device and inode differ from the link's own.
+        opened, entry = os.fstat(fd), os.lstat(path)
+        _require(not stat.S_ISLNK(entry.st_mode)
+                 and (entry.st_dev, entry.st_ino) == (opened.st_dev, opened.st_ino),
+                 "recovery_input_unavailable")
+    except BaseException:
+        os.close(fd)
+        raise
     with os.fdopen(fd, "rb") as handle:
         info = os.fstat(handle.fileno())
         _require(stat.S_ISREG(info.st_mode), "recovery_input_not_regular")
