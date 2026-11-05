@@ -1220,6 +1220,11 @@ their deltas; partial attribution and zero denominators retain unknown shares.
 All ratios and percentage-point differences are derived by the toolkit from
 request sums, never by averaging percentages in the renderer. A falling share
 with rising absolute input is shown explicitly and is not labeled savings.
+Command-request deltas include input, its cached and uncached subsets, and
+output, all computed by the same owner from native sums. Missing observations
+or changed command methods withhold those deltas. An older response without
+the additive delta fields remains unknown in the reader; it is not recomputed
+by the frontend.
 
 The existing GET reader accepts two explicit `pack_id` / `compare_pack_id`
 identifiers within its registered Goal/source namespace. It verifies both
@@ -1244,6 +1249,8 @@ disable it; no ledger migration, source rewrite or runtime activation is needed.
 输入增加会明确提示。浏览零模型调用，不重采集、不重写旧包或账本；旧包缺字段不补零。
 既有 GET reader 在注册 Goal/来源命名空间中校验两个显式 pack，调用同一 builtin；
 前端只格式化返回值。取消、失败和重试均为只读，清除旧对照；迟到响应不能覆盖新选择。
+命令请求的输入、其中缓存、未缓存及输出差值均由同一 owner 按原生总和计算；缺测或
+命令方法变化时保持未知。旧响应缺少新增差值字段时，前端保留未知，不自行补算。
 
 ### Recorded Turn packet estimate
 

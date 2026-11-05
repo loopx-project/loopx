@@ -109,8 +109,9 @@ export function ResearchUsageComparison({pack, packs, zh, onRead}: {pack: Trajec
           [zh ? "全部输出（含推理）" : "All output (includes reasoning)", comparison.left.total.output, comparison.right.total.output, comparison.delta.output],
           [zh ? "已归因控制文本输入" : "Attributed control-text input", comparison.left.input.tokens, comparison.right.input.tokens, comparison.delta.input_tokens],
           [zh ? "LoopX 命令请求 · 整次输入" : "LoopX command requests · whole input", comparison.left.commands.input, comparison.right.commands.input, comparison.delta.command_input],
-          [zh ? "LoopX 命令请求 · 未缓存" : "LoopX command requests · uncached", comparison.left.commands.uncached, comparison.right.commands.uncached, null],
-          [zh ? "LoopX 命令请求 · 输出" : "LoopX command requests · output", comparison.left.commands.output, comparison.right.commands.output, null],
+          [zh ? "LoopX 命令请求 · 其中缓存" : "LoopX command requests · of which cached", comparison.left.commands.cached, comparison.right.commands.cached, comparison.delta.command_cached ?? null],
+          [zh ? "LoopX 命令请求 · 未缓存" : "LoopX command requests · uncached", comparison.left.commands.uncached, comparison.right.commands.uncached, comparison.delta.command_uncached ?? null],
+          [zh ? "LoopX 命令请求 · 输出" : "LoopX command requests · output", comparison.left.commands.output, comparison.right.commands.output, comparison.delta.command_output ?? null],
         ].map(([label, left, right, delta]) => <tr key={label as string}><th>{label}</th><td>{count(left as number | null, zh)}</td><td>{count(right as number | null, zh)}</td><td>{signed(delta as number | null)}</td></tr>)}
           <tr><th>{zh ? "控制文本占输入" : "Control text / input"}</th><td>{percent(comparison.left.input.fraction, zh)}</td><td>{percent(comparison.right.input.fraction, zh)}</td><td>{signed(comparison.delta.input_percentage_points)} pp</td></tr>
           <tr><th>{zh ? "控制文本归因 / 总请求" : "Text-attributed / total requests"}</th><td>{comparison.left.input.attributed_requests} / {comparison.left.input.total_requests}</td><td>{comparison.right.input.attributed_requests} / {comparison.right.input.total_requests}</td><td>—</td></tr>

@@ -5433,7 +5433,10 @@
           "input_tokens": null,
           "input_percentage_points": null,
           "command_input": 4796570,
-          "command_percentage_points": -0.1718845900336559
+          "command_percentage_points": -0.1718845900336559,
+          "command_cached": 3388032,
+          "command_uncached": 1408538,
+          "command_output": 4699
         },
         "input_share_down_absolute_up": null,
         "command_share_down_absolute_up": true,
@@ -5571,7 +5574,10 @@
           "input_tokens": null,
           "input_percentage_points": null,
           "command_input": -4796570,
-          "command_percentage_points": 0.1718845900336559
+          "command_percentage_points": 0.1718845900336559,
+          "command_cached": -3388032,
+          "command_uncached": -1408538,
+          "command_output": -4699
         },
         "input_share_down_absolute_up": null,
         "command_share_down_absolute_up": false,
@@ -5725,7 +5731,10 @@
           "input_tokens": null,
           "input_percentage_points": null,
           "command_input": 10385582,
-          "command_percentage_points": 7.34362753891773
+          "command_percentage_points": 7.34362753891773,
+          "command_cached": 9950208,
+          "command_uncached": 435374,
+          "command_output": 32218
         },
         "input_share_down_absolute_up": null,
         "command_share_down_absolute_up": false,
@@ -5863,7 +5872,10 @@
           "input_tokens": null,
           "input_percentage_points": null,
           "command_input": -10385582,
-          "command_percentage_points": -7.34362753891773
+          "command_percentage_points": -7.34362753891773,
+          "command_cached": -9950208,
+          "command_uncached": -435374,
+          "command_output": -32218
         },
         "input_share_down_absolute_up": null,
         "command_share_down_absolute_up": false,

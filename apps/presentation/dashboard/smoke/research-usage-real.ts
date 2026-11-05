@@ -68,6 +68,9 @@ export async function readRealUsage(browser: Browser, context: Context) {
     const row = (label: string) => codec.getByRole('row').filter({has: page!.getByRole('rowheader', {name: label, exact: true})});
     assert.deepEqual(await row('All-request input (includes cache)').locator('td').allTextContents(), ['184,098,417', '95,917,713', '+88,180,704']);
     assert.deepEqual(await row('LoopX command requests · whole input').locator('td').allTextContents(), ['10,358,194', '5,561,624', '+4,796,570']);
+    assert.deepEqual(await row('LoopX command requests · of which cached').locator('td').allTextContents(), ['8,858,112', '5,470,080', '+3,388,032']);
+    assert.deepEqual(await row('LoopX command requests · uncached').locator('td').allTextContents(), ['1,500,082', '91,544', '+1,408,538']);
+    assert.deepEqual(await row('LoopX command requests · output').locator('td').allTextContents(), ['20,026', '15,327', '+4,699']);
     assert.deepEqual(await row('Control text / input').locator('td').allTextContents(), ['—', '—', '— pp']);
     assert.deepEqual(await row('LoopX command requests / input').locator('td').allTextContents(), ['5.6%', '5.8%', '-0.17 pp']);
     assert.match(await page.getByRole('region', {name: 'Requests issuing LoopX commands', exact: true}).innerText(), /74 \/ 997.*incomplete attribution/);
@@ -145,6 +148,21 @@ export async function readRealUsage(browser: Browser, context: Context) {
     assert.equal(await restored.locator('table').count(), 0);
     await restored.getByRole('button', {name: '重试读取', exact: true}).click();
     await restored.locator('table').waitFor();
+
+    // Older servers omit additive delta fields; never render NaN or invent them in the view.
+    const legacy = structuredClone(source.comparisons[`${ids[2]}:${ids[3]}`]);
+    for (const key of ['command_cached', 'command_uncached', 'command_output']) delete legacy.comparison.delta[key];
+    await page.route(endpoint, route => new URL(route.request().url()).searchParams.has('compare_pack_id')
+      ? route.fulfill({json: legacy}) : route.continue());
+    await restored.locator(':scope > summary').click();
+    await restored.locator(':scope > summary').click();
+    await restored.locator('table').waitFor();
+    for (const name of ['LoopX 命令请求 · 其中缓存', 'LoopX 命令请求 · 未缓存', 'LoopX 命令请求 · 输出']) {
+      const cells = restored.getByRole('row').filter({has: page.getByRole('rowheader', {name, exact: true})}).locator('td');
+      await cells.last().filter({hasText: /^—$/}).waitFor();
+      assert.equal(await cells.last().innerText(), '—');
+    }
+    await page.unroute(endpoint);
     const readback = await (await page.request.get(`${owner.base}/fixture/readback`)).json();
     assert.equal(readback.source_unchanged, true);
     assert.equal(readback.mutation_attempts, 0);

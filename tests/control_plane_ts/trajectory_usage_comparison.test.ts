@@ -124,6 +124,9 @@ test('four real native prefixes retain the Bench owner counts, missing text attr
   const codec = compareTrajectoryUsage(packs[0]!, packs[1]!);
   assert.equal(codec.status, 'observed'); if (codec.status !== 'observed') return;
   assert.equal(codec.left.commands.uncached, 1500082); assert.equal(codec.right.commands.uncached, 91544);
+  assert.equal(codec.delta.command_cached, 3388032);
+  assert.equal(codec.delta.command_uncached, 1408538);
+  assert.equal(codec.delta.command_output, 4699);
   assert.equal(codec.command_share_down_absolute_up, true);
   assert.equal(codec.left.input.tokens, null); assert.equal(codec.right.input.fraction, null);
   assert.equal(codec.left.input.unattributed_requests, 997); assert.equal(codec.delta.input_percentage_points, null);
@@ -131,6 +134,7 @@ test('four real native prefixes retain the Bench owner counts, missing text attr
   const grid = compareTrajectoryUsage(packs[2]!, packs[3]!);
   assert.equal(grid.status, 'observed'); if (grid.status !== 'observed') return;
   assert.equal(grid.left.commands.uncached, 447095); assert.equal(grid.right.commands.uncached, 11721);
+  assert.equal(grid.delta.command_uncached, 435374);
   assert.equal(grid.left.input.unattributed_requests, 818); assert.equal(grid.right.input.unattributed_requests, 956);
   for (let i=0; i<packs.length; i++) {
     assert.equal(packs[i]!.solver_usage!.artifact_sha256, fixture.lineage[i].source_sha256);
@@ -144,6 +148,8 @@ test('unknown attribution and zero denominator stay unknown; source, method, ses
   assert.equal(zero.status, 'observed'); if (zero.status !== 'observed') return;
   assert.equal(zero.left.input.tokens, null); assert.equal(zero.left.commands.input, 0);
   assert.equal(zero.left.commands.fraction, null); assert.equal(zero.delta.command_percentage_points, null);
+  assert.equal(zero.delta.command_cached, 0); assert.equal(zero.delta.command_uncached, 0);
+  assert.equal(zero.delta.command_output, 0, 'Measured equal output has a known zero delta even with zero input');
   for (const mutate of [
     (p: TrajectoryUsageCapture) => {p.scope!.goal_id = 'other';},
     (p: TrajectoryUsageCapture) => {p.scope!.case_id = 'other';},
@@ -154,4 +160,21 @@ test('unknown attribution and zero denominator stay unknown; source, method, ses
     (p: TrajectoryUsageCapture) => {p.solver_usage!.projection.method = 'codex_observed_session_counters_v1';},
     (p: TrajectoryUsageCapture) => {p.solver_usage!.projection.request_coverage = undefined;},
   ]) {const right = pack('right', [100]); mutate(right); assert.equal(compareTrajectoryUsage(pack('left', [100]), right).status, 'unavailable');}
+});
+
+test('command deltas stay unknown for missing observations or a changed method', () => {
+  const left = pack('left', [100]), right = pack('right', [50]);
+  for (const mutate of [
+    (p: TrajectoryUsageCapture) => {delete p.solver_usage!.projection.loopx_requests;},
+    (p: TrajectoryUsageCapture) => {p.solver_usage!.projection.loopx_requests = {
+      method: 'codex_ordered_loopx_requests_v1', status: 'unavailable', reason: 'missing_observations'};},
+    (p: TrajectoryUsageCapture) => {(p.solver_usage!.projection.loopx_requests as {method: string}).method += '-changed';},
+  ]) {
+    const changed = structuredClone(right); mutate(changed);
+    const v = compareTrajectoryUsage(left, changed);
+    assert.equal(v.status, 'observed'); if (v.status !== 'observed') continue;
+    assert.equal(v.delta.command_input, null); assert.equal(v.delta.command_cached, null);
+    assert.equal(v.delta.command_uncached, null); assert.equal(v.delta.command_output, null);
+    assert.equal(v.delta.total_input, 50, 'Known total usage does not supply missing command attribution');
+  }
 });

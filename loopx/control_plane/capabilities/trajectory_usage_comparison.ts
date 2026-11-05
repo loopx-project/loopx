@@ -81,6 +81,9 @@ export function compareTrajectoryUsage(left: TrajectoryUsageCapture, right: Traj
         ? difference(leftValue.input.tokens, rightValue.input.tokens) : null,
       input_percentage_points: inputComparable ? pp(leftValue.input.fraction, rightValue.input.fraction) : null,
       command_input: commandsComparable ? difference(leftValue.commands.input, rightValue.commands.input) : null,
+      command_cached: commandsComparable ? difference(leftValue.commands.cached, rightValue.commands.cached) : null,
+      command_uncached: commandsComparable ? difference(leftValue.commands.uncached, rightValue.commands.uncached) : null,
+      command_output: commandsComparable ? difference(leftValue.commands.output, rightValue.commands.output) : null,
       command_percentage_points: commandsComparable ? pp(leftValue.commands.fraction, rightValue.commands.fraction) : null},
     input_share_down_absolute_up: inputComparable && leftValue.input.status === 'complete' && rightValue.input.status === 'complete'
       && leftValue.input.fraction !== null && rightValue.input.fraction !== null

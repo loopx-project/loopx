@@ -848,3 +848,40 @@ def test_usage_comparison_http_is_source_scoped_read_only_and_keeps_unknown(work
     for pack in packs:
         assert read(pack_id=pack["pack_id"])["pack"]["job"] is None
     assert not w["count"].exists(), "GET comparison and its refusal never dispatch an analysis"
+
+
+def test_usage_comparison_http_returns_native_command_deltas_without_execution(workspace):
+    from tests.capabilities.test_trajectory_assessment_store import _request_usage_fixture
+
+    w, packs = workspace, []
+    for session, response in (("current-session", "one"), ("reference-session", "two")):
+        rows = [json.loads(line) for line in _request_usage_fixture().replace("solver-session", session).splitlines()]
+        index = next(i for i, row in enumerate(rows)
+                     if row["type"] == "token_usage_record" and row["payload"]["response_id"] == response)
+        rows.insert(index, dict(type="response_item", payload=dict(type="function_call", name="exec_command",
+            call_id="command", arguments=json.dumps(dict(cmd="loopx todo list")))))
+        rows.insert(index + 2, dict(type="response_item", payload=dict(type="function_call_output",
+            call_id="command", output="No tasks")))
+        for i, row in enumerate(rows):
+            row["timestamp"] = f"2026-01-01T00:00:{i:02d}Z"
+        artifact = session + ".jsonl"
+        (w["sources"] / artifact).write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+        packs.append(register_pack(runtime_root=w["tmp_path"] / "runtime", owner_goal_id="research-owner",
+            input_path=w["tmp_path"] / "input.json", source_root=w["sources"], title=session,
+            usage_jsonl=artifact, usage_session_id=session, include_tool_context=True))
+    query = dict(pack_id=packs[0]["pack_id"], compare_pack_id=packs[1]["pack_id"])
+    comparison = w["request"](**query)["comparison"]
+    assert comparison["status"] == "observed"
+    # Independent native receipts: current 100/60/10; reference 40/20/5.
+    assert comparison["delta"]["command_input"] == 60
+    assert comparison["delta"]["command_cached"] == 40
+    assert comparison["delta"]["command_uncached"] == 20
+    assert comparison["delta"]["command_output"] == 5
+    assert comparison["delta"]["input_tokens"] is None
+    assert comparison["left"]["commands"]["charged_cost"] is None
+    (w["sources"] / "current-session.jsonl").write_text("{}\n")
+    changed = w["request"](**query)["comparison"]
+    assert changed["status"] == "unavailable"
+    assert changed["reason"] == "source_unavailable_or_changed"
+    assert "delta" not in changed
+    assert not w["count"].exists(), "Reading or rejecting native counters never executes the provider"
