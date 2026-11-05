@@ -606,12 +606,12 @@ class NativeContextPreparation:
 def project_codex_context(payload: dict[str, Any], *, directory: str | None, capture_directory: Path,
                           goal_id: str, agent_id: str, surface: str, capture_id: str,
                           continuity_generation: str | None = None,
-                          progressive_enabled: bool = False) -> dict[str, Any]:
+                          progressive_enabled: bool = False, hook_session: str | None = None) -> dict[str, Any]:
     """Keep the historical projection API without requiring native navigation."""
     return prepare_codex_context(payload, directory=directory, capture_directory=capture_directory,
         goal_id=goal_id, agent_id=agent_id, surface=surface, capture_id=capture_id,
         continuity_generation=continuity_generation, include_initial_read_plan=False,
-        progressive_enabled=progressive_enabled).delivery
+        progressive_enabled=progressive_enabled, hook_session=hook_session).delivery
 
 
 def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, capture_directory: Path,
