@@ -12,6 +12,7 @@ async function pagedHistoryRecovery(browser, url) {
     role: index % 2 ? "agent" : "user", text: index === 201 ? "原始长文。".repeat(2400) : `原始历史第 ${index} 条。`,
     created_at: "2026-08-13T01:00:00Z"}));
   const context = await openWorkspacePage(browser, url, {
+    // The second page stays in flight until this setup returns to the test.
     gotoWaitUntil: "domcontentloaded",
     async beforeGoto(_api, page) {
       const runtime = page.__loopxRuntime;

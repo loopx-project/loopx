@@ -22,3 +22,9 @@
 .personal-queue-editor { padding: 0 10px 8px; }
 .personal-queue-editor textarea { display: block; box-sizing: border-box; width: 100%; resize: vertical; min-height: 72px; padding: 8px; border: 1px solid var(--pw-line-strong); border-radius: 6px; font: inherit; font-size: var(--text-body); color: var(--pw-text); background: #fff; }
 .personal-queue-editor > div { display: flex; justify-content: flex-end; gap: 6px; margin-top: 4px; }
+.personal-queue-recovery > details { border: 1px solid var(--pw-line-strong); border-radius: 8px; padding: 8px 10px; }
+.personal-queue-recovery summary { cursor: pointer; }
+.personal-queue-retained-input { margin-top: 8px; }
+.personal-queue-retained-input p { margin: 6px 0; color: var(--pw-muted); }
+.personal-queue-retained-input textarea { box-sizing: border-box; width: 100%; resize: vertical; padding: 8px; font: inherit; font-size: var(--text-body); line-height: var(--leading-body); color: var(--pw-text); background: var(--pw-surface, #fff); border: 1px solid var(--pw-line-strong); border-radius: 6px; }
+.personal-queue-retained-actions { display: flex; flex-wrap: wrap; gap: 6px; }
