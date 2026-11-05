@@ -207,6 +207,7 @@ export function ChannelTimeline({
         {item.message.role !== "user" ? <span className="personal-message-avatar"><Bot size={17} /></span> : null}
         <div>
           <header><strong>{item.message.role === "user" ? item.message.agentLabel ?? t("common.you") : item.message.agentLabel ?? t("header.manager")}</strong>{item.message.time ? <time>{item.message.time}</time> : null}</header>
+          {item.message.queueInputCancelled ? <span>{locale === "zh-CN" ? "已取消排队" : "Cancelled before starting"}</span> : null}
           {item.message.attachments?.length ? <div className="personal-message-images">{item.message.attachments.map((attachment) => isTextDocument(attachment.mimeType) ? <DocumentAttachment key={attachment.id} {...attachment} zh={locale === "zh-CN"}/> : <img alt={attachment.name} key={attachment.id} src={attachment.dataUrl} />)}</div> : null}
           {item.message.role === "user" ? <p>{item.message.text}</p> : item.message.text ? <HistoricalMessageText text={item.message.text}
             initiallyCollapsed={Boolean(historical?.has(messageKey(item.message)))}

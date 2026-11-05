@@ -3224,6 +3224,7 @@ export function PersonalWorkspacePage({
             ? "上次投递尚未确认，发送将重试原请求。"
             : "The previous delivery is unconfirmed. Send retries the original request."}</p> : null}
           {conversationSessionId ? <ConversationQueue sessionId={conversationSessionId}
+            onInputChanged={() => {conversationQueue.retry(); conversationHistoryState?.retry();}}
             targetTurnId={steeringTurnId} turns={conversationQueue.turns} error={conversationQueue.error} onRetry={conversationQueue.retry}/> : null}
             <div
               className="personal-channel-composer"
