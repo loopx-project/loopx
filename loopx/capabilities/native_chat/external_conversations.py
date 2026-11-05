@@ -415,12 +415,30 @@ class ChatExternalConversations:
                             cascade_id=native_session["upstream_thread_id"],
                             model_id=native_session.get("agent_model_id") or ANTIGRAVITY_DEFAULT_MODEL)
             elif not plan.get("admitted_turn_id") and not preparation_retry:
-                proof = CodexAppServerAdapter.failed_request_observation(
-                    codex_bin=self.controller.codex_bin, codex_home=Path(session["codex_home"]),
-                    model_auth_home=model_auth_home,
-                    **({"read_only_review": True} if plan.get("read_only_review") else {}),
-                    **({"completed_work": True, "work_dir": Path(context["project"])} if plan.get("work_attempt") else {}),
-                    thread_ids=plan["native_thread_ids"], turn_id=turn["upstream_turn_id"])
+                if plan.get("work_attempt"):
+                    # Only the original live adapter can observe its background
+                    # effects. Never turn a cold client's missing thread into
+                    # permission to continue writable work.
+                    with self.controller.lock:
+                        adapter = self.controller.adapters.get(row["session_id"])
+                    if isinstance(adapter, CodexAppServerAdapter):
+                        proof = adapter.completed_work_observation(
+                            thread_ids=plan["native_thread_ids"], turn_id=turn["upstream_turn_id"])
+                else:
+                    proof = CodexAppServerAdapter.failed_request_observation(
+                        codex_bin=self.controller.codex_bin, codex_home=Path(session["codex_home"]),
+                        model_auth_home=model_auth_home,
+                        **({"read_only_review": True} if plan.get("read_only_review") else {}),
+                        thread_ids=plan["native_thread_ids"], turn_id=turn["upstream_turn_id"])
+                    if (proof is not None and proof.get("codex_error_info") == "usageLimitExceeded"
+                            and proof.get("only_original_user_item") is True and session.get("steward_context")):
+                        # The steward may use its API pool while the desktop's
+                        # subscription is exhausted. Reuse that same fresh owner;
+                        # it neither replaces native no-effects proof nor admits work.
+                        from ...chat_manager import manager_session_quota_route
+                        route = manager_session_quota_route(self.controller, session)
+                        if route and route["allocation"]["executor_endpoint"] == "codex":
+                            proof.update(quota_available=True, quota_observed_at=route["observed_at"])
             facts = proof.pop("retained_result", None) if proof is not None and metadata_review else None
             selected = self.bindings.resolve(binding_id=row["binding_id"], **row["source"], include_observation=True)
             source = source_observation(selected)

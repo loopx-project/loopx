@@ -10,16 +10,19 @@ available, run the printed interpreter line for real.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
 import sys
+from importlib.metadata import PathDistribution
 from pathlib import Path
 
 import pytest
 
-from loopx import python_install_owner
-from loopx.doctor import build_install_freshness, collect_doctor
+from loopx import doctor, python_install_owner
+from loopx.cli import main
+from loopx.doctor import build_install_freshness, collect_doctor, render_doctor_markdown
 from loopx.python_install_owner import (
     PythonInstallOwner,
     python_distribution_upgrade_command,
@@ -193,9 +196,49 @@ def test_windows_doctor_fix_hint_uses_the_call_operator(
     payload = collect_doctor()
 
     assert (
-        f"`& {powershell_literal(PLAIN_WINDOWS_INTERPRETER)} "
-        "-m pip install --upgrade loopx`"
+        f"& {powershell_literal(PLAIN_WINDOWS_INTERPRETER)} "
+        "-m pip install --upgrade loopx"
     ) in str(payload["fix"])
+
+
+@pytest.mark.parametrize("installer", ["pipx", "uv", "custom-manager"])
+def test_doctor_fix_preserves_installation_owner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], installer: str
+) -> None:
+    prefix = tmp_path / "loopx-preview"
+    metadata = prefix / "loopx-1.4.0.dist-info"
+    metadata.mkdir(parents=True)
+    (metadata / "METADATA").write_text("Name: loopx\nVersion: 1.4.0\n", encoding="utf-8")
+    (metadata / "INSTALLER").write_text(
+        "pip\n" if installer == "pipx" else installer + "\n", encoding="utf-8"
+    )
+    module = Path(doctor.__file__).as_posix()
+    (metadata / "RECORD").write_text(f"{module},,\n", encoding="utf-8")
+    if installer == "pipx":
+        (prefix / "pipx_metadata.json").write_text(
+            '{"environment":"loopx-preview"}', encoding="utf-8"
+        )
+    monkeypatch.setattr(doctor, "distribution", lambda _name: PathDistribution(metadata))
+    monkeypatch.setattr(sys, "prefix", str(prefix))
+    # A missing launcher makes doctor display its repair guidance on every host.
+    monkeypatch.setenv("PATH", "")
+
+    assert main(["--registry", str(tmp_path / "registry.json"), "--runtime-root", str(tmp_path / "runtime"),
+                 "--format", "json", "doctor"]) == 1
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["package"]["python_distribution"]["installer"] == installer
+    if installer == "pipx":
+        assert payload["install_freshness"]["upgrade_command"].startswith("pipx upgrade loopx-preview\n")
+        assert "pipx upgrade loopx-preview" in payload["fix"]
+    else:
+        assert payload["install_freshness"]["upgrade_command"] is None
+        assert "original package manager" in payload["fix"]
+        assert installer in payload["fix"]
+    assert "-m pip install" not in payload["fix"]
+    assert "loopx workflow-skills --install" in payload["fix"]
+    assert "loopx slash-commands --install" in payload["fix"]
+    assert payload["fix"] in render_doctor_markdown(payload)
 
 
 def test_native_host_prints_a_runnable_interpreter_line() -> None:

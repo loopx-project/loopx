@@ -116,7 +116,7 @@ def completed_work_readback(session: CodexChatAgentSession, turn_id: str) -> dic
     """
     from ...chat import parse_agent_response
 
-    deadline = time.monotonic() + session.response_timeout_sec
+    deadline = time.monotonic() + min(session.response_timeout_sec, 5.0)
     try:
         def turns():
             return list(session._control_items("thread/turns/list", {
@@ -152,7 +152,7 @@ def completed_work_readback(session: CodexChatAgentSession, turn_id: str) -> dic
             elif kind in {"commandExecution", "fileChange", "mcpToolCall"}:
                 if item.get("status") != "completed":
                     return None  # Declined/failed/live/unknown effects cannot request writable continuation.
-            elif kind not in {"reasoning", "webSearch", "contextCompaction"}:
+            elif kind not in {"reasoning", "webSearch", "imageView", "contextCompaction"}:
                 return None
         if (users != 1 or len(finals) != 1 or turns() != inventory
                 or list(session._control_items("thread/items/list", {"turnId": turn_id}, deadline)) != items
@@ -223,11 +223,21 @@ class CodexAppServerAdapter:
     session: CodexChatAgentSession
     goal_driver: CodexGoalDriver | None = None
 
+    def completed_work_observation(self, *, thread_ids: list[str], turn_id: str) -> dict[str, Any] | None:
+        """Read live effects through the adapter that owns the original thread.
+
+        A cold app-server can read persisted items, but cannot inventory another
+        process's background terminals. Missing ownership is not an empty list.
+        Do not resume or replace a native thread to manufacture that proof.
+        """
+        if self.upstream_thread_id not in thread_ids or not self.healthcheck():
+            return None
+        return completed_work_readback(self.session, turn_id)
+
     @staticmethod
     def failed_request_observation(*, codex_bin: str, codex_home: Path,
                                    thread_ids: list[str], turn_id: str,
                                    read_only_review: bool = False,
-                                   completed_work: bool = False,
                                    work_dir: Path | None = None,
                                    model_auth_home: Path | None = None) -> dict[str, Any] | None:
         """Read persisted native metadata/items; create no native conversation.
@@ -253,8 +263,7 @@ class CodexAppServerAdapter:
             for thread_id in dict.fromkeys(thread_ids):
                 native.thread_id = thread_id
                 native.response_timeout_sec = max(.01, deadline - time.monotonic())
-                reader = (completed_work_readback if completed_work else
-                          interrupted_result_readback if read_only_review else failed_request_readback)
+                reader = interrupted_result_readback if read_only_review else failed_request_readback
                 proof = reader(native, turn_id)
                 if proof is not None:
                     if proof.get("codex_error_info") == "usageLimitExceeded":

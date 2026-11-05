@@ -1450,6 +1450,95 @@ def test_original_quota_recovery_with_gate_remains_pending_after_verified_reply(
         runtime.close()
 
 
+@pytest.mark.parametrize("fault", [None, "pool-exhausted", "native-effect", "unknown-native", "source-changed", "stop", "stale-capacity"])
+def test_original_steward_quota_recovery_uses_its_api_pool_not_subscription(tmp_path, monkeypatch, fault):
+    from datetime import timedelta, timezone
+    from pathlib import Path
+    from test_native_steward_private import steward, finish
+    from test_chat_manager_model_adoption import configure
+    from loopx.capabilities.native_chat import codex_auth, external_conversations
+    from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter
+    from loopx import chat_manager
+
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "packages/loopx-codex-provider-routing/src"))
+    from loopx_codex_provider_routing.native import NativeAccounts
+
+    fixture = steward.__wrapped__(tmp_path)
+    store, runtime, provider, transport, binding, capture, _ = next(fixture)
+    fake = Path(runtime.codex_bin)
+    marker = tmp_path / "failed-once"
+    source = fake.read_text().replace('"codexErrorInfo": "cyberPolicy"', '"codexErrorInfo": "usageLimitExceeded"')
+    source = source.replace('        if "typed terminal failure" in json.dumps(request.get("params") or {}):',
+        f'        if "typed terminal failure" in json.dumps(request.get("params") or {{}}) and not __import__("os").path.exists({str(marker)!r}):\n'
+        f'            open({str(marker)!r}, "w").close()')
+    source = source.replace('            print(json.dumps({"method": "item/agentMessage/delta", "params": {"threadId": "durable-thread", "turnId": active_turn, "delta": "Partial answer."}}), flush=True)\n', '')
+    fake.write_text(source)
+    try:
+        event = provider.event("steward-app", "api-quota-original", "typed terminal failure")
+        transport.admit("steward-app", event)
+        row = transport.core.read_request(identity_ref(binding["provider_ref"], event["message_id"]))
+        failed = finish(runtime, row)
+        assert failed["error_code"] == "usage_limit_exceeded" and failed["delta_count"] == 0
+        original = store._turn_path(row["session_id"], row["turn_id"]).read_bytes()
+        transport.reconcile_request(transport.root / f"{row['request_ref']}.json")
+        configure(runtime.coordination_runtime_root, model="gemini-4-argon-high", effort="high",
+            endpoint="antigravity", policy="flexible")
+        monkeypatch.setattr(runtime, "capabilities", lambda: [
+            {"agent_id": name, "available": True, "adapter_kind": kind} for name, kind in
+            [("codex", "codex_app_server"), ("antigravity", "antigravity_ls")]])
+        owner = NativeAccounts(runtime.coordination_runtime_root)
+        keys = owner.api_keys()
+        for index in range(2):
+            keys.add(expected_revision=index, label=f"Synthetic {index}", api_key="sk-" + "synthetic-only-" * 3 + str(index))
+        owner.configure(expected_revision=0, enabled=False, slots=[], steward_api_role="primary")
+        rows = keys.status()["keys"]
+        for key in rows if fault == "pool-exhausted" else rows[:1]:
+            keys.record(key["id"], status=429, code="insufficient_quota", model="gpt-6.1-sol", headers={})
+        # Only paid upstream IO is substituted; the account owner, selection,
+        # canonical queue, original source, delivery and provider readback are real.
+        monkeypatch.setattr(codex_auth, "prepare_api_transport", lambda *_a, **_kw: None)
+        clock = datetime.now(timezone.utc) + timedelta(seconds=65)
+        class Ahead(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return clock
+        monkeypatch.setattr(external_conversations, "datetime", Ahead)
+        monkeypatch.setattr(CodexAppServerAdapter, "failed_request_observation", staticmethod(lambda **kw: None
+            if fault == "unknown-native" else {"thread_id": "durable-thread", "turn_id": kw["turn_id"],
+                "codex_error_info": "usageLimitExceeded", "only_original_user_item": fault != "native-effect",
+                "quota_available": False, "quota_observed_at": clock.timestamp() - 1}))
+        if fault == "stale-capacity":
+            route = chat_manager.manager_session_quota_route
+            monkeypatch.setattr(chat_manager, "manager_session_quota_route", lambda *a: {
+                **route(*a), "observed_at": clock.timestamp() - 121})
+        if fault == "source-changed":
+            provider.messages[event["message_id"]]["content"] = "Changed original intent"
+        elif fault == "stop":
+            transport.admit("steward-app", provider.event("steward-app", "stop-api-quota", "/stop"))
+        restarted = LarkPrivateConversations(controller=runtime, runtime_root=store.root.parent,
+            runner=provider, cli_bin="lark-cli")
+        restarted.reconcile()
+        current = transport.core.read_request(row["request_ref"])
+        assert store._turn_path(row["session_id"], row["turn_id"]).read_bytes() == original
+        if fault is not None:
+            assert current["turn_id"] == row["turn_id"] and not current.get("context_recovery")
+            assert sum(json.loads(line)["method"] == "turn/start" for line in capture.read_text().splitlines()) == 1
+            return
+        assert current["turn_id"] != row["turn_id"] and current["context_recovery"]["quota_attempt"] == 1
+        completed = finish(runtime, current)
+        assert completed["status"] == "completed"
+        restarted.reconcile_request(restarted.root / f"{row['request_ref']}.json")
+        record = json.loads((restarted.root / f"{row['request_ref']}.json").read_text())
+        delivery = record["deliveries"][f"terminal.recovery.{chat_manager.MANAGER_CONTEXT_VERSION}.quota.1"]
+        assert delivery["verified"] and delivery["text"] == completed["response"]["message"]
+        actual = provider.messages[delivery["attempt"]["message_ref"]]
+        assert actual["chat_id"] == event["chat_id"] and actual["sender"]["id"] == provider.profile_apps["steward-app"]
+        restarted.reconcile()
+        assert sum(json.loads(line)["method"] == "turn/start" for line in capture.read_text().splitlines()) == 2
+    finally:
+        fixture.close()
+
+
 def test_large_original_images_do_not_block_pending_work_or_connection_health(ordinary, monkeypatch):  # noqa: F811
     from test_lark_private_images import image_runner
     from test_chat_image_attachments import PNG_BYTES
@@ -1598,8 +1687,9 @@ def test_health_reads_source_controls_once_and_keeps_fresh_recovery(ordinary, mo
 
 
 @pytest.mark.parametrize("fault", [None, "changed-source", "revoked", "stop", "unknown-native",
-    "background", "later-user", "reservation-crash", "post-enqueue-crash", "queued-newer", "queued-input", "private-path", "still-incomplete"])
+    "background", "later-user", "reservation-crash", "post-enqueue-crash", "queued-newer", "queued-input", "private-path", "still-incomplete", "cold-native", "dead-native", "foreign-native", "failed-effect"])
 def test_original_worker_continues_explicit_unfinished_project_work_once_after_restart(ordinary, monkeypatch, fault):  # noqa: F811
+    """Reply-worker restart retains native ownership; native loss stays fenced."""
     from datetime import datetime, timedelta, timezone
     from pathlib import Path
     from loopx.capabilities.native_chat import external_conversations
@@ -1617,6 +1707,11 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
     partial = "Partial result retained; remaining work is blocked.\n<loopx-review-json>" + json.dumps({
         "message": "", "unfinished_work": work}) + "</loopx-review-json>"
     source = fake.read_text()
+    # Persisted history is readable from a cold client. Background terminals
+    # belong to the process that loaded the thread, as in native app-server.
+    source = source.replace("turn_count = 0", "loaded = False\nturn_count = 0")
+    source = source.replace('    elif method in {"thread/start", "thread/resume"}:',
+        '    elif method in {"thread/start", "thread/resume"}:\n        loaded = True')
     source = source.replace("turn_count = 0", f"turn_count = len(json.load(open({str(inventory)!r}))[\"turns\"]) if __import__(\"os\").path.exists({str(inventory)!r}) else 0")
     start = source.index("        response = 'Visible runtime response.")
     end = source.index('        print(json.dumps({"method": "item/agentMessage/delta"', start)
@@ -1633,6 +1728,7 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
         path.write_text(json.dumps({{"turns": [{{"id": active_turn, "status": "completed"}}, *previous["turns"]], "items": [
             {{"turnId": active_turn, "item": {{"id": "user", "type": "userMessage"}}}},
             {{"turnId": active_turn, "item": {{"id": "effect", "type": "fileChange", "status": "completed"}}}},
+            {{"turnId": active_turn, "item": {{"id": "view", "type": "imageView", "path": str(artifact)}}}},
             {{"turnId": active_turn, "item": {{"id": "answer", "type": "agentMessage", "phase": "final_answer", "text": response}}}}]}}))
 ''' + source[end:]
     start = source.index('    elif method == "thread/turns/list":')
@@ -1641,6 +1737,9 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
         snapshot = json.load(open({str(inventory)!r}))
         result = {{"data": snapshot["turns" if method == "thread/turns/list" else "items"]}}
     elif method == "thread/backgroundTerminals/list":
+        if not loaded:
+            print(json.dumps({{"id": request["id"], "error": {{"code": -32600, "message": "thread not found"}}}}), flush=True)
+            continue
         result = {{"data": [{{"processId": "still-live"}}] if {fault == "background"!r} else []}}
 ''' + source[end:]
     fake.write_text(source)
@@ -1660,7 +1759,13 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
     original_turn_bytes = store._turn_path(original["session_id"], original["turn_id"]).read_bytes()
     session_before = store.load_session(original["session_id"])
     Path(session_before["codex_home"]).mkdir(parents=True, exist_ok=True)
-    runtime.adapters.pop(original["session_id"]).close_session()
+    if fault == "cold-native":
+        runtime.adapters.pop(original["session_id"]).close_session()
+    elif fault == "dead-native":
+        runtime.adapters[original["session_id"]].close_session()
+    elif fault == "foreign-native":
+        runtime.adapters[original["session_id"]].session.thread_id = "foreign-thread"
+    before_recovery_calls = [json.loads(line) for line in capture.read_text().splitlines()]
     clock = datetime.now(timezone.utc) + timedelta(seconds=61)
     class AfterBackoff(datetime):
         @classmethod
@@ -1673,10 +1778,12 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
         transport.bindings.disconnect(binding["binding_id"], expected_revision=transport.bindings.read()["revision"])
     if fault == "stop":
         transport.admit("notes-app", provider.event("notes-app", "stop-later", "/stop"))
-    if fault in {"unknown-native", "later-user"}:
+    if fault in {"unknown-native", "later-user", "failed-effect"}:
         snapshot = json.loads(inventory.read_text())
         if fault == "unknown-native":
             snapshot["items"].append({"turnId": turn["upstream_turn_id"], "item": {"id": "unknown", "type": "futureEffect"}})
+        elif fault == "failed-effect":
+            snapshot["items"][1]["item"]["status"] = "failed"
         else:
             snapshot["turns"].insert(0, {"id": "newer-user", "status": "completed"})
         inventory.write_text(json.dumps(snapshot))
@@ -1686,6 +1793,11 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
     selected = worker()
     if fault in {"reservation-crash", "post-enqueue-crash", "queued-newer", "queued-input"}:
         enqueue = runtime.enqueue_turn
+        resume = runtime.resume_session_queue
+        if fault in {"queued-newer", "queued-input"}:
+            # Hold dispatch before enqueue, rather than relying on a slow
+            # adapter startup to let the newer-input fixture win a race.
+            monkeypatch.setattr(runtime, "resume_session_queue", lambda **kwargs: None)
         def crash(**kwargs):
             if fault in {"post-enqueue-crash", "queued-newer", "queued-input"}:
                 enqueue(**kwargs)
@@ -1699,14 +1811,13 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
             snapshot["turns"].insert(0, {"id": "newer-after-reservation", "status": "completed"})
             inventory.write_text(json.dumps(snapshot))
         if fault == "queued-input":
-            resume = runtime.resume_session_queue
-            monkeypatch.setattr(runtime, "resume_session_queue", lambda **kwargs: None)
             transport.admit("notes-app", provider.event("notes-app", "newer-input", "Newer follow-up: inspect this correction first."))
+        if fault in {"queued-newer", "queued-input"}:
             monkeypatch.setattr(runtime, "resume_session_queue", resume)
         selected = worker()
     selected.reconcile()
     continued = selected.core.read_request(ref)
-    if fault in {"changed-source", "revoked", "stop", "unknown-native", "background", "later-user"}:
+    if fault in {"changed-source", "revoked", "stop", "unknown-native", "background", "later-user", "cold-native", "dead-native", "foreign-native", "failed-effect"}:
         assert continued["turn_id"] == original["turn_id"] and not continued.get("context_recovery")
         assert artifact.read_text() == "first\n"
     else:
@@ -1745,6 +1856,10 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
         if fault is None:
             assert "Verified remaining work completed." in bodies
     assert store._turn_path(original["session_id"], original["turn_id"]).read_bytes() == original_turn_bytes
+    after_recovery_calls = [json.loads(line) for line in capture.read_text().splitlines()]
+    for method in ("initialize", "thread/start", "thread/resume"):
+        assert sum(row.get("method") == method for row in after_recovery_calls) == sum(
+            row.get("method") == method for row in before_recovery_calls)
 
 
 def _app_projection_journey(fixture):

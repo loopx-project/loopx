@@ -613,6 +613,7 @@ export function encodeContextDelivery(request: JsonObject, legacyQuotaFields: re
   const fileBacked = !retained && continuity?.basis === "captured_file"
     && continuity.capture_bytes_verified === true && equal(continuity.target, binding);
   if (!binding || !prior || (!confirmed && !assumed && !fileBacked) || !compatible(binding, target)
+      || (fileBacked && binding.capture_id === target.capture_id)
       || binding.context_digest !== digest(prior)) return fullResult("baseline_unavailable");
   const depth = baseline?.ancestry;
   if (!Number.isSafeInteger(depth) || Number(depth) < 0 || Number(depth) >= MAX_ANCESTRY) return fullResult("full_refresh_due");
@@ -677,6 +678,7 @@ export function restoreContextDelivery(request: JsonObject, legacyQuotaFields: r
     const fileBacked = delivery.continuity_basis === "captured_file";
     if (delivery.schema_version !== VERSION || delivery.mode !== "delta" || !equal(delivery.target, target)
         || !equal(delivery.base, base) || !compatible(base, target) || base.context_digest !== digest(context)
+        || (fileBacked && base.capture_id === target.capture_id)
         || !Number.isSafeInteger(baseline.ancestry) || Number(baseline.ancestry) < 0
         || delivery.ancestry !== Number(baseline.ancestry) + 1 || Number(delivery.ancestry) > MAX_ANCESTRY) return fallback();
     const before = freshPaths(context, surface, legacyQuotaFields, base), after = freshPaths(currentContext, surface, legacyQuotaFields, target);
