@@ -1154,10 +1154,15 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
                     if request is not None:
                         workspace = Path(event.get("cwd") or "")
                         if workspace.is_absolute() and workspace.resolve() == Path.cwd().resolve():
+                            capture = (
+                                Path(tempfile.mkdtemp(prefix="prepared-", dir=directory)) / "ready"
+                                if request.get("turn_instance_id") else None
+                            )
                             receipt = execute_codex_execution_preparation(
                                 request,
                                 cwd=workspace.resolve(),
                                 scenario=activation["scenario"],
+                                capture_directory=capture,
                             )
                             record_native_execution_preparation(
                                 directory,
@@ -1165,6 +1170,21 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
                                 source_sha256=request["source_sha256"],
                                 receipt=receipt,
                             )
+                            # Publish the decision that the Host just verified;
+                            # a model must not need a second guard to obtain its
+                            # Goal, task, requirements and settlement contract.
+                            if capture is not None:
+                                source = capture / "decision.json"
+                                # The existing saved-capture owner preserves a
+                                # pinned full recovery even if native projection
+                                # fails. It never rereads authority or admits work.
+                                receipt["context"] = project_saved_context_capture(argparse.Namespace(**{
+                                    **vars(args), "quota_command": "context-project",
+                                    "capture_file": str(source),
+                                    "capture_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+                                    "goal_id": request["goal_id"], "agent_id": request["agent_id"],
+                                    "turn_instance_id": request["turn_instance_id"],
+                                }))
                             existing = payload.get("hookSpecificOutput")
                             existing_context = (
                                 str(existing.get("additionalContext") or "")
