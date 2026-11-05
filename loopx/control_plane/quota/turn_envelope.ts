@@ -678,7 +678,7 @@ function selectedTodo(payload: JsonObject, recommendedAction: string | null): Js
 
 /** These reads stay on one captured observation; they never re-enter the guard. */
 function replanReadCommands(payload: JsonObject, path = payload.replan_read_path,
-  argv = payload.replan_read_argv ?? ["loopx"]): JsonObject | null {
+  argv = payload.replan_read_argv ?? ["loopx"], verifiedSourceHash?: string): JsonObject | null {
   const packet = object(payload.replan_action_packet);
   if (typeof path !== "string" || !path.trim() || path.includes("\0") || payload.ok !== true ||
       payload.effective_action === EffectiveAction.GOVERNED_CAPABILITY_INTENT ||
@@ -689,7 +689,7 @@ function replanReadCommands(payload: JsonObject, path = payload.replan_read_path
     throw new EffectRuntimeRequestError("captured replan CLI route is malformed");
   }
   const command = `${argv.map(arg => shellQuote(arg as string)).join(" ")} --format json quota replan-view --decision-file ${shellQuote(path)}` +
-    ` --source-hash ${decisionSourceHash(payload)}`;
+    ` --source-hash ${verifiedSourceHash ?? decisionSourceHash(payload)}`;
   return {review: `${command} --replan-stage review`, writeback: `${command} --replan-stage writeback`,
     acceptance: `${command} --replan-stage acceptance`, explore: `${command} --replan-stage explore`};
 }
@@ -811,7 +811,8 @@ function bindReplanSuccessorContract(value: JsonObject, plan: JsonObject): JsonO
 
 function replanView(request: JsonObject): JsonObject {
   const payload = requireJsonObject(request.payload, "captured replan decision");
-  if (request.source_hash !== decisionSourceHash(payload) || payload.ok !== true) {
+  const sourceHash = decisionSourceHash(payload);
+  if (request.source_hash !== sourceHash || payload.ok !== true) {
     throw new EffectRuntimeRequestError("Replan read requires the original successful decision and matching source hash");
   }
   // A matching file hash proves which bytes were read, not whether a modern
@@ -834,7 +835,7 @@ function replanView(request: JsonObject): JsonObject {
   // A native journal binds its path after planning. The CLI supplies that same
   // physical source route without modifying the captured observation or hash.
   const path = request.captured_decision_path ?? payload.replan_read_path;
-  const reads = replanReadCommands(payload, path, payload.replan_read_argv ?? request.reader_argv ?? ["loopx"]);
+  const reads = replanReadCommands(payload, path, payload.replan_read_argv ?? request.reader_argv ?? ["loopx"], sourceHash);
   const sourceRead = reads ? {source_read: `cat -- ${shellQuote(path as string)}`} : {};
   if (request.stage === "acceptance") {
     const {outcomes} = replanGoalContext(payload, reads);
@@ -856,14 +857,14 @@ function replanView(request: JsonObject): JsonObject {
       delete authoring.minimal_example;
       contract.vision_authoring = authoring;
     }
-    const writeback = actionProjection(payload, false).writeback;
-    const plan = object(object(writeback).settlement_plan);
+    const writeback = object(actionProjection(payload, false, sourceHash).writeback);
+    const plan = object(writeback.settlement_plan);
     const boundContract = payload.schema_version === COMPLETE_TURN_DECISION_VERSION
       ? contract : bindReplanSuccessorContract(contract, plan);
     if (typeof boundContract.successor_command === "string" && typeof object(plan.identity).turn_instance_id === "string") {
       // Creation returns the original settlement plan directly. A guard
       // reentry would repeat admission/context and can select new work.
-      object(writeback).next_cli_actions = [boundContract.successor_command];
+      writeback.next_cli_actions = [boundContract.successor_command];
     }
     const steps = Array.isArray(plan.ordered_steps) ? plan.ordered_steps.map(object) : [];
     const refresh = steps.find(step => step.kind === "durable_writeback");
@@ -1211,11 +1212,11 @@ function contractCapsule(payload: JsonObject): JsonObject {
   return capsule;
 }
 
-function actionProjection(payload: JsonObject, deferSettlement = true): JsonObject {
+function actionProjection(payload: JsonObject, deferSettlement = true, verifiedSourceHash?: string): JsonObject {
   // Reader identity belongs to the original captured source. Expanding shared
   // diagnostic lanes for the historical executor must not hash that local view.
   const reads = payload.effective_action === EffectiveAction.GOVERNED_CAPABILITY_INTENT
-    ? null : replanReadCommands(payload);
+    ? null : replanReadCommands(payload, payload.replan_read_path, payload.replan_read_argv ?? ["loopx"], verifiedSourceHash);
   if (payload.schema_version === COMPLETE_TURN_DECISION_VERSION) payload = resolveQuotaSummaryLanes(payload);
   const agentIdentity = object(payload.agent_identity);
   const semanticAgentId = scalarString(
@@ -1989,7 +1990,7 @@ function bindTurnDecisionCapture(request: JsonObject): JsonObject {
   }
   const capture = object(coldPath(payload, String(envelope.agent_id), "", path).captured_decision);
   const readerArgv = detail.replan_read_argv ?? request.reader_argv;
-  const reads = readerArgv ? replanReadCommands(payload, path, readerArgv) : null;
+  const reads = readerArgv ? replanReadCommands(payload, path, readerArgv, sourceHash) : null;
   const goal = reads ? replanGoalContext(payload, reads) : null;
   const boundDetail = {...detail,
     full_decision: `cat -- ${shellQuote(path)}`,

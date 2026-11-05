@@ -95,7 +95,7 @@ def open_regular_capture(path: Path) -> int:
     return descriptor
 
 
-def _read_turn_observation_text(path: Path) -> str:
+def read_turn_observation_text(path: Path) -> str:
     with os.fdopen(open_regular_capture(path), encoding="utf-8") as source:
         return source.read()
 
@@ -115,7 +115,7 @@ class StagedTurnDecisionCapture:
         if self.path.exists():
             # Python considers True == 1; original JSON evidence must retain
             # its value types as well as its content. Object key order is IO.
-            text = _read_turn_observation_text(self.path)
+            text = read_turn_observation_text(self.path)
             # Compact objects start with a quoted key (or are empty). Pretty
             # captures can go straight to their order-independent comparison.
             compact = text.startswith('{"') or text == "{}\n"
@@ -189,7 +189,7 @@ def stage_turn_decision_capture(
         raise ValueError("Turn decision capture must not be a symlink")
     existed = path.exists()
     if existed:
-        observation = json.loads(_read_turn_observation_text(path))
+        observation = json.loads(read_turn_observation_text(path))
     elif existing_journal or capture:
         raise ValueError("Original Turn decision capture is missing; restore the original "
                          "observation, do not rerun the guard to replace it")
