@@ -692,28 +692,23 @@ def test_native_projection_never_layers_host_projection(tmp_path, monkeypatch, n
     assert json.loads((tmp_path / "decision.json").read_text()) == original
 
 
-@pytest.mark.parametrize("scenario", [None, "off"])
-def test_plain_quota_context_default_does_not_touch_transport(tmp_path, monkeypatch, scenario):
-    from loopx.control_plane.turn_driver import codex_context
-    from loopx.cli import build_parser
-
-    def unexpected(*args, **kwargs):
-        pytest.fail("off must not observe native context or create transport state")
-    monkeypatch.setattr(codex_context, "prepare_codex_context", unexpected)
+def test_explicit_off_returns_inline_guard_without_native_transport(tmp_path, monkeypatch):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)
     state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     initialize_canonical_authority(runtime, GOAL_ID,
         build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=read_fixture_todos(state), handoff_mode="soft_claim"),
         state_path=state, provider="file")
-    args = ["quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
-        "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", "off-scenario"]
-    if scenario:
-        args += ["--context-delivery", scenario]
-    code, result = _run_cli(registry, runtime, *args, cwd=project)
-    assert code == 0 and result["ok"] and result.get("schema_version") != "context_delivery_v1", result
-    # Absence is distinct from an explicit off so a configured machine default
-    # can be inherited. The ordinary output above still proves default-off.
-    assert build_parser().parse_args(["quota", "should-run"]).context_delivery is None
+    native = tmp_path / "unused-native-root"
+    turn = "explicit-off"
+    code, result = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", turn,
+        "--codex-context-root", str(native), "--context-delivery", "off", cwd=project, raw_guard=False)
+    assert code == 0 and result["ok"], result
+    assert result["goal_id"] == GOAL_ID and result["heartbeat_receipt"]["turn_instance_id"] == turn
+    assert result["interaction_contract"]["cli_channel"]["settlement_plan"]
+    assert "reference_file" not in result and not native.exists()
+    assert _heartbeat_receipt_count(runtime, turn) == 1 and _spend_run_count(runtime) == 0
 
 
 @pytest.mark.parametrize("activation", [[], ["--context-delivery", "off"], ["--context-delivery", "on"]])
