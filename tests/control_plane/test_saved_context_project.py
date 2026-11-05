@@ -453,9 +453,15 @@ def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monk
     env.pop("CODEX_THREAD_ID", None)
     receipt = {"turn_id": turn, "mode": "heartbeat", "stage": "execute"}
     body = capture_before_replan(env, receipt, "Current work.")
-    source = wake / "checkpoint-start-view.json"
-    raw = source.read_bytes()
     original_guard = (wake / "checkpoint-start-guard.json").read_bytes()
+    if enabled:
+        command = shlex.split(body.split("```sh\n", 1)[1].split("\n```", 1)[0])
+        source = Path(command[command.index("--capture-file") + 1])
+        assert source.read_bytes() == original_guard
+        assert command[command.index("--capture-sha256") + 1] == hashlib.sha256(original_guard).hexdigest()
+    else:
+        source = wake / "checkpoint-start-view.json"
+    raw = source.read_bytes()
     assert _heartbeat_receipt_count(runtime, turn) == 1 and _spend_run_count(runtime) == 0
     assert not list(native.iterdir())  # Host preflight must not publish before native SessionStart.
 
@@ -482,7 +488,6 @@ def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monk
             assert rc == 0, page
 
     if enabled:
-        command = shlex.split(body.split("```sh\n", 1)[1].split("\n```", 1)[0])
         command.extend(("--max-page-output-bytes", "32000"))
         rc, cold = _run_cli(registry, runtime, *command[command.index("quota"):], cwd=project)
         assert rc == 0 and cold["mode"] == "full", cold
@@ -837,19 +842,24 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
     baseline = None
     for published, descriptor in observed.values():
         projected = json.loads(Path(descriptor["recovery"]["path"]).read_text())
+        if large_capture:
+            # Oversized inputs use the exact saved document without a delta target.
+            assert descriptor["mode"] == "full" and "target" not in descriptor
+            assert published == projected
+            assert projected["retained_material"] == {
+                "requirement": unicode_requirement, "supporting": supporting_material}
+            continue
         current = prepare_context_delivery(projected,
             scope={key: descriptor["target"][key] for key in
                 ("goal_id", "agent_id", "session_id", "context_epoch", "continuity_generation") if key in descriptor["target"]},
-            capture_id=descriptor["target"]["capture_id"], surface="quota_packet")
+            capture_id=descriptor["target"]["capture_id"],
+            surface="complete_turn" if projected.get("schema_version") == "loopx_turn_envelope_v1" else "quota_packet")
         # Full presentation publishes the original document; only deltas have
         # a separate wire target. Both retain the same typed recovery check.
         wire = current if descriptor["mode"] == "full" else published
         assert current["target"] == descriptor["target"]
         restored = restore_context_delivery(wire, baseline=baseline, current=current)
         assert restored["context"] == projected
-        if large_capture:
-            assert restored["context"]["retained_material"] == {
-                "requirement": unicode_requirement, "supporting": supporting_material}
         if wire["mode"] == "delta":
             assert restored["mode"] == "delta"  # A fallback would hide a broken baseline chain.
         # Match the native journal's exact prior full capture and depth. The
@@ -883,6 +893,13 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                         value = value[int(part)] if isinstance(value, list) else value[part]
                     assert "context_ref" not in value
                     rows[i] = value
+            if "context_reference_instruction" in presentation and "context_details" not in original:
+                details = presentation.pop("context_details")
+                assert set(details) == {"command_template"}
+                reader = shlex.split(details["command_template"])
+                signed_source = Path(reader[reader.index("--capture-file") + 1]).read_bytes()
+                assert hashlib.sha256(signed_source).hexdigest() == reader[reader.index("--capture-sha256") + 1]
+                assert json.loads(signed_source) == original
             presentation.pop("context_reference_instruction", None)
             assert presentation == original  # only presentation transport differs
     else:
