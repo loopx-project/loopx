@@ -16,7 +16,7 @@ import os
 import shutil
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -35,6 +35,47 @@ WINDOWS_INTERPRETERS = (
 )
 
 PWSH = shutil.which("pwsh")
+BASH = shutil.which("bash")
+
+
+@pytest.mark.skipif(BASH is None, reason="requires Bash to execute POSIX guidance")
+@pytest.mark.parametrize("directory", ["checkout", "Loop X", "O'Brien $checkout"])
+@pytest.mark.parametrize("skip_skills", [False, True])
+def test_posix_local_install_hint_runs_the_owned_installer(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, directory: str, skip_skills: bool
+) -> None:
+    monkeypatch.setattr(install_contract, "_is_windows_host", lambda: False)
+    root = tmp_path / directory
+    installer = root / "scripts/install-local.sh"
+    installer.parent.mkdir(parents=True)
+    source = Path(install_contract.__file__).resolve().parents[1] / "scripts/install-local.sh"
+    installer.write_text(source.read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
+    installer.chmod(0o755)
+    # Execute the shipped parser's early help path: no install, build or user state writes.
+    command = install_contract.local_install_command(
+        PurePosixPath(root.as_posix()), skip_skills=skip_skills
+    )
+    completed = subprocess.run(
+        [BASH, "-c", f"{command} --help"],
+        capture_output=True, encoding="utf-8", timeout=30,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "Usage: install-local.sh" in completed.stdout
+
+
+@pytest.mark.parametrize("skip_skills", [False, True])
+def test_posix_local_install_hint_preserves_the_skill_opt_out(
+    monkeypatch: pytest.MonkeyPatch, skip_skills: bool
+) -> None:
+    import shlex
+
+    monkeypatch.setattr(install_contract, "_is_windows_host", lambda: False)
+    root = Path("/opt/Loop X/O'Brien")
+    tokens = shlex.split(install_contract.local_install_command(root, skip_skills=skip_skills))
+    expected = [str(root / "scripts/install-local.sh")]
+    if skip_skills:
+        expected.insert(0, "LOOPX_INSTALL_SKILL=0")
+    assert tokens == expected
 
 
 def powershell_literal(value: str) -> str:
