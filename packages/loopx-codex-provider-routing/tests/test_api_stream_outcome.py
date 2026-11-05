@@ -40,6 +40,34 @@ def test_stream_failure_is_forwarded_once_and_only_next_request_uses_next_key(re
     assert keys.status()["balance_available"] is False
 
 
+@pytest.mark.parametrize("failure", [
+    {"type": "error", "code": "usage_limit_exceeded"},
+    {"type": "response.failed", "response": {"status": "failed", "error": {"code": "insufficient_quota"}}},
+])
+def test_spaced_request_after_cooldown_tries_alternative_without_replaying_failed_stream(relay, failure):
+    owner, keys, calls, outcomes, post, _ = relay
+    now = [1000]
+    owner.clock = lambda: now[0]
+    stream = event(failure)
+    outcomes.append(Response(stream))
+    assert post() == (200, stream) and len(calls) == 1
+    rejected_key = calls[0].get_header("Authorization")
+    now[0] = 1400  # The next original request arrives after the five-minute cooldown.
+    success = event({"type": "response.completed", "response": {"status": "completed"}})
+    outcomes.append(Response(success))
+    assert post() == (200, success) and len(calls) == 2
+    assert calls[1].get_header("Authorization") != rejected_key
+    now[0] = 1800
+    outcomes.append(Response(success))
+    assert post() == (200, success) and len(calls) == 3
+    assert calls[2].get_header("Authorization") == calls[1].get_header("Authorization")
+    # An expired rejection is a lower-priority candidate, not a permanent ban.
+    keys.remove(expected_revision=2, key_id=keys.status()["keys"][1]["id"])
+    outcomes.append(Response(success))
+    assert post() == (200, success) and len(calls) == 4
+    assert calls[3].get_header("Authorization") == rejected_key
+
+
 @pytest.mark.parametrize("stream", [
     event({"type": "response.output_text.delta", "delta": '{"type":"error","code":"insufficient_quota"}'}),
     event({"type": "error", "message": "Quota exceeded"}),
