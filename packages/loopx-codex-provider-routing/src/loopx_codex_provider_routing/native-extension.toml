@@ -1,0 +1,12 @@
+schema_version = "loopx_extension_manifest_v0"
+id = "loopx-native-account-provider"
+version = "0.15.2"
+requires_loopx_api = ">=1,<2"
+permissions = ["model-provider.local-read", "model-provider.transport-manage"]
+
+[runtime]
+protocol = "loopx_native_account_provider_v1"
+entrypoint = "loopx-native-account-provider"
+doctor_args = ["--doctor"]
+required_permissions = ["model-provider.local-read", "model-provider.transport-manage"]
+timeout_seconds = 30

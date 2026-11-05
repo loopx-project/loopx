@@ -1,6 +1,6 @@
 /** OpenAI transport outcomes. No credentials, request contents or IO. */
 export type KeyRuntime = { id: string; blocked_until?: number; blocked_model?: string | null };
-const QUOTA_CODES = ["insufficient_quota", "organization_spend_limit_exceeded",
+const QUOTA_CODES = ["insufficient_quota", "credit_balance_exhausted", "organization_spend_limit_exceeded",
   "project_spend_limit_exceeded", "organization_usage_limit_exceeded",
   "usage_limit_exceeded"];
 

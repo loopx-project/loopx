@@ -118,7 +118,7 @@ def test_original_post_image_preflight_recovery_keeps_images_source_and_failed_t
 
 
 @pytest.mark.parametrize("fault", [None, "stop", "source-changed", "later-source", "no-capacity", "native-tool",
-    "stop-after-discovery", "source-changed-after-discovery"])
+    "stop-after-discovery", "source-changed-after-discovery", "later-source-after-discovery"])
 def test_original_worker_continues_proven_unstarted_argon_quota_on_codex(tmp_path, language_server, monkeypatch, fault):  # noqa: F811
     from copy import deepcopy
     from datetime import timedelta
@@ -180,6 +180,16 @@ def test_original_worker_continues_proven_unstarted_argon_quota_on_codex(tmp_pat
                 transitions.append(session_id)
             return update_session(session_id, **changes)
         monkeypatch.setattr(store, "update_session", checked_update)
+        if fault in {None, "later-source-after-discovery"}:
+            pending = transport.core.pending
+            scans = []
+            def counted_pending():
+                scans.append(True)
+                return pending()
+            monkeypatch.setattr(transport.core, "pending", counted_pending)
+            discovery = transport.core.context_recovery_observer()
+            assert discovery(ref) and discovery(ref)
+            assert len(scans) == 1  # One full source inventory per discovery pass.
         if fault in {"stop-after-discovery", "source-changed-after-discovery"}:
             assert path in transport.pending_delivery_paths()
         if fault in {"stop", "stop-after-discovery"}:
@@ -187,13 +197,19 @@ def test_original_worker_continues_proven_unstarted_argon_quota_on_codex(tmp_pat
             original_events = store.events_after(original["session_id"], original["turn_id"], None)
         elif fault in {"source-changed", "source-changed-after-discovery"}:
             provider.messages[event["message_id"]]["content"] = "Changed original input"
-        elif fault == "later-source":
+        elif fault in {"later-source", "later-source-after-discovery"}:
             transport.admit("steward-app", provider.event("steward-app", "source-correction", "/status"))
             # A later ordinary source is observed without creating model work.
             later = deepcopy(original)
             later.update(request_ref="e" * 24, created_at=(datetime.now().astimezone() + timedelta(seconds=1)).isoformat())
             from loopx.chat_store import _atomic_write_json
             _atomic_write_json(transport.core.root / f"{later['request_ref']}.json", later)
+            if fault == "later-source-after-discovery":
+                before_discovery = len(scans)
+                assert discovery(ref)  # Retained hint, never permission to dispatch.
+                assert len(scans) == before_discovery
+                transport.core.context_recovery_observer()(ref)
+                assert len(scans) == before_discovery + 1  # A new pass observes the new source input.
         elif fault == "native-tool":
             post = antigravity_adapter._rpc_post
             def with_tool(*args, **kwargs):
@@ -4484,6 +4500,78 @@ def test_private_setup_companion_verifies_each_app_and_redacts_subjects(ordinary
         runtime.close()
 
 
+def test_http_authorization_read_does_not_wait_for_bot_health_or_delivery_history(ordinary, monkeypatch):  # noqa: F811
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+
+    store, runtime, _, transport = connect(ordinary)
+    bindings = transport.bindings
+    original = bindings.read()
+    sessions = store.list_sessions()
+
+    def blocked(*_args, **_kwargs):
+        raise AssertionError("Authorization reads must not observe unrelated bot work")
+
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.chat_store, server.runtime_controller = store, runtime
+    server.verbose = False
+    server.lark_private_conversations = transport
+    server.lark_goal_topic_runtime = SimpleNamespace(health_snapshot=blocked, close=lambda: None)
+    monkeypatch.setattr(transport, "health", blocked)
+    monkeypatch.setattr(bindings, "agent_candidates", blocked)
+    monkeypatch.setattr(bindings, "goal_scope_ids", blocked)
+    monkeypatch.setattr(bindings, "stop_recoveries", blocked)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def read(query="?view=authorization"):
+        connection = http.client.HTTPConnection(*server.server_address, timeout=5)
+        try:
+            connection.request("GET", "/api/chat/lark/private-conversations" + query)
+            response = connection.getresponse()
+            return response.status, json.loads(response.read())
+        finally:
+            connection.close()
+
+    try:
+        status, snapshot = read()
+        assert status == 200 and snapshot["ok"]
+        assert snapshot["revision"] == original["revision"]
+        assert {row["binding_id"] for row in snapshot["connections"]} == {row["binding_id"] for row in original["bindings"]}
+        for actual, saved in zip(snapshot["connections"], original["bindings"], strict=True):
+            assert actual["app_ref"] == saved["transport_ref"]
+            assert all(actual[key] == saved[key] for key in ("binding_id", "context_kind", "project_ref", "grant", "executor_endpoint_id"))
+            assert actual["context_available"] is True
+            assert not {"pending_count", "listener_status", "operator_ref", "provider_ref", "workspace_path"} & actual.keys()
+        for invalid in ("?view=", "?view=unknown", "?view=authorization&view=authorization"):
+            assert read(invalid)[0] == 400
+        with monkeypatch.context() as unavailable:
+            unavailable.setattr(runtime.project_contexts, "available", lambda: [])
+            assert all(not row["context_available"] for row in read()[1]["connections"])
+
+        # A real revocation disappears immediately, without caching old grants.
+        removed = original["bindings"][0]["binding_id"]
+        bindings.disconnect(removed, expected_revision=original["revision"])
+        assert removed not in {row["binding_id"] for row in read()[1]["connections"]}
+        current_read = bindings.read
+        count = 0
+
+        def changed_during_read():
+            nonlocal count
+            count += 1
+            result = current_read()
+            if count > 1:
+                result = {**result, "revision": result["revision"] + 1}
+            return result
+
+        monkeypatch.setattr(bindings, "read", changed_during_read)
+        assert read()[0] == 409
+        assert store.list_sessions() == sessions
+    finally:
+        server.shutdown()
+        server.server_close()
+        runtime.close()
+
+
 def test_rendered_cli_text_is_preserved_and_source_type_must_agree(ordinary):  # noqa: F811
     store, runtime, provider, transport = connect(ordinary)
     try:
@@ -4956,6 +5044,82 @@ def test_private_recovery_backlog_uses_released_capacity_before_retry_delay(tmp_
     assert attempts["late"] < 115
     assert all(path.read_bytes() == body for path, body in original_bytes.items())
     assert all(transport._context_recovery_probe_at[path] > clock[0] for path in paths)
+
+
+@pytest.mark.parametrize("background_slots", [0, 2])
+@pytest.mark.parametrize("origin", ["lark", "web"])
+def test_current_body_uses_next_slot_before_unattempted_recovery_backlog(tmp_path, monkeypatch, background_slots, origin):
+    from loopx.extensions.lark import goal_topic_runtime_service as worker
+
+    release_old, release_rest = threading.Event(), threading.Event()
+    changed = threading.Condition()
+    started, finished = [], []
+    slots = 4 - background_slots
+    transport = LarkPrivateConversations.__new__(LarkPrivateConversations)
+    transport.root = tmp_path
+    transport._context_recovery_probe_at = {}
+    transport.core = SimpleNamespace(context_recovery_observer=lambda: lambda ref: True)
+    transport.reconcile_app_feedback = lambda: 0
+    web = tmp_path / "web-projections" / "current.json"
+    transport._web_projection_paths = lambda: [web] if web.exists() else []
+    fresh = web if origin == "web" else tmp_path / "z-current.json"
+    for index in range(slots * 3):
+        (tmp_path / f"old-{index:02}.json").write_text(json.dumps({"status": "delivered",
+            "request_ref": str(index), "session_id": "original", "turn_id": "failed"}))
+
+    def reconcile(path):
+        with changed:
+            started.append(path)
+            first_wave = len(started) <= slots
+            changed.notify_all()
+        assert (release_old if first_wave else release_rest).wait(5)
+        with changed:
+            finished.append(path)
+            changed.notify_all()
+        return 0
+
+    transport.reconcile_request = reconcile
+    if background_slots:
+        transport.owner_attention = SimpleNamespace(has_enabled=lambda: True,
+            reconcile=lambda: release_rest.wait(5) and 0)
+        transport.steward_reports = SimpleNamespace(pending=lambda: True,
+            reconcile=lambda: release_rest.wait(5) and 0)
+    service = worker.LarkGoalTopicRuntimeService(snapshot_provider=lambda: {}, runtime_root=tmp_path,
+        runtime_controller=None, private_conversations=transport)
+
+    def drive(step, **_):
+        step()
+        with changed:
+            assert changed.wait_for(lambda: len(started) == slots, 2)
+        fresh.parent.mkdir(exist_ok=True)
+        fresh.write_text(json.dumps({"status": "pending" if origin == "web" else "accepted"}))
+        step()  # Retain the new discovery while every existing slot is held.
+        release_old.set()
+        with changed:
+            assert changed.wait_for(lambda: len(finished) == slots, 2)
+        # The provider returns just after its last observable checkpoint.
+        # Let the actual Future settle instead of racing its done flag.
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            step()
+            with changed:
+                if changed.wait_for(lambda: len(started) == slots * 2, .01):
+                    break
+        with changed:
+            assert len(started) == slots * 2
+            assert fresh in started[slots:], "new body remained behind untouched historical recovery probes"
+        service._closed.set()
+        release_rest.set()
+
+    monkeypatch.setattr(service._delivery_worker, "repeat", drive)
+    try:
+        service._reconcile_private()
+    finally:
+        service._closed.set()
+        release_old.set()
+        release_rest.set()
+    assert len(started) == slots * 2 and len(set(started)) == len(started)
+    assert sum(path.name.startswith("old-") for path in started) == slots * 2 - 1
 
 
 def test_private_recovery_discovery_keeps_negative_and_attempt_backoff(tmp_path, monkeypatch):
