@@ -265,6 +265,7 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
             presentation = json.loads(projected.stdout)
             assert presentation["ok"] and presentation["mode"] == "full"
             assert reference_metadata_oracle(presentation)["recovery"]["path"] == str(view_path)
+            assert read_cli_policy_payload(projected.stdout, returncode=projected.returncode) == view
         assert source["heartbeat_receipt"]["turn_instance_id"] == TURN
         assert source["heartbeat_receipt"] == view["heartbeat_receipt"]
         assert receipt["checkpoint"]["reason"] == "synthetic_no_native_capture"
