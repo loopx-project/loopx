@@ -1780,6 +1780,69 @@ def test_legacy_return_replay_keeps_published_text_and_rejects_unknown_format(fl
     assert len([row for row in store.messages(session["session_id"]) if row.get("origin") == "manager_followup"]) == 1
 
 
+@pytest.mark.parametrize("external", [False, True], ids=["app", "provider"])
+@pytest.mark.parametrize("symbol", ["证", "😀"], ids=["bmp", "non-bmp"])
+def test_cli_return_budget_uses_the_published_format_without_losing_content(flow, capsys, external, symbol):
+    from loopx.cli import main
+    from loopx.capabilities.manager_context.inspection import ManagerInspection, TOOL_NAME
+
+    root, registry, store, create = flow
+    session, turn, receipt = create(external=external)
+    rid = receipt["request_id"]
+    acknowledge(root, "research", "worker", rid, "adopt", "Read the original request")
+    remaining = {"summary": "实际采用尚未核验。", "resume_when": "取得原始证据后继续。"}
+    suffix = f"\n\n{remaining['summary']}\n\n{remaining['resume_when']}"
+    body = symbol * (20000 - len(suffix))
+    argv = ["--registry", str(registry), "--runtime-root", str(root), "--format", "json",
+            "manager-inbox", "report", "--goal-id", "research", "--agent-id", "worker",
+            "--request-id", rid, "--phase", "conclusion", "--remaining-work", remaining["summary"],
+            "--resume-when", remaining["resume_when"]]
+    path = _root(root) / "replies" / rid / "conclusion.json"
+    assert main([*argv, "--reply-text", body + symbol]) == 1
+    assert "result budget" in json.loads(capsys.readouterr().out)["error"]
+    assert not path.exists(), "An oversized result must not be committed or queued"
+    assert main([*argv, "--reply-text", body]) == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "queued_for_original_conversation"
+    original = path.read_bytes()
+    saved = json.loads(original)
+    assert saved["return_format_version"] == 2 and saved["text"] == body
+    assert saved["remaining_work"] == remaining and len(body + suffix) == 20000
+    expected = body + suffix + f"\n\n协作回复 · worker · 委托 {rid[:8]}"
+    sent = []
+
+    def sender(route, actual_session, actual_turn, payload):
+        assert route["session_id"] == actual_session["session_id"] == session["session_id"]
+        assert actual_turn["turn_id"] == turn["turn_id"]
+        sent.append(payload)
+        return {"ok": True, "reply_verified": True, "verification_performed": True}
+
+    assert drain(root, registry, store, sender) == 1
+    returned = [row for row in store.messages(session["session_id"]) if row.get("origin") == "manager_followup"]
+    assert len(returned) == 1 and returned[0]["text"] == expected
+    assert sent == ([expected] if external else [])
+    assert reply_status(root, receipt)[0]["status"] == "delivered"
+    tool = ManagerInspection(context={"goals": [{"goal_id": "research"}]}, registry_path=registry,
+        runtime_root=root, owner_scope=not external, channel_id=session["channel_id"],
+        scope_valid=lambda: True, record=lambda _: None)
+    inspected = tool.read(TOOL_NAME, {"view": "handoffs", "request_id": rid})
+    assert inspected["ok"] and not inspected["unknown"]
+    assert inspected["rows"][0]["remaining_work"] == remaining
+    assert inspected["rows"][0]["inbox_state"] == "awaiting_conclusion"
+    assert main([*argv, "--reply-text", body]) == 0
+    assert json.loads(capsys.readouterr().out)["ok"] is True
+    assert path.read_bytes() == original
+    assert drain(root, registry, ChatSessionStore(root), sender) == 0
+    assert len(list((store.root / "sessions" / session["session_id"] / "turns").glob("*.json"))) == 1
+    # Both compact observation codecs must retain the persisted version. An
+    # unknown renderer is not an unversioned result and cannot be replayed.
+    _write(path, {**saved, "return_format_version": 37})
+    corrupt = path.read_bytes()
+    assert main([*argv, "--reply-text", body]) == 1
+    assert "return format" in json.loads(capsys.readouterr().out)["error"]
+    assert path.read_bytes() == corrupt
+    assert tool.read(TOOL_NAME, {"view": "handoffs", "request_id": rid})["unknown"] is True
+
+
 def test_unresolvable_return_transport_records_retry_without_fake_receipt(flow):
     root, registry, store, create = flow
     session, _, receipt = create(True)

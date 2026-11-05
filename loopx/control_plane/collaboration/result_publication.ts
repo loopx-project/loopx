@@ -174,9 +174,6 @@ export function planCollaborationResult(params: JsonObject): JsonObject {
   if (typeof params.text !== "string" || !params.text.trim() || Array.from(params.text).length > 20000) {
     throw new EffectRuntimeRequestError("bounded reply text is required");
   }
-  if ([...collaborationResultText({text: params.text.trim(), remaining_work: remainingWork})].length > 20000) {
-    throw new EffectRuntimeRequestError("reply and remaining work must fit the existing 20000-character result budget");
-  }
   const results = collaborationResultObservations(request, params.results, decision, params.legacy_assessment ?? null);
   const updates = results.filter((r) => UPDATE_KEY.test(r.key)).sort((a, b) => a.key.localeCompare(b.key));
   const previous = updates.at(-1)?.key ?? "conclusion";
@@ -204,6 +201,9 @@ export function planCollaborationResult(params: JsonObject): JsonObject {
   if (context !== null) Object.assign(value, {request_revision: context.revision, request_revision_digest: context.revision_digest});
   if (attachments.length) value.attachments = attachments;
   if (remainingWork) value.remaining_work = remainingWork;
+  if ([...collaborationResultText(value)].length > 20000) {
+    throw new EffectRuntimeRequestError("reply and remaining work must fit the existing 20000-character result budget");
+  }
   const key = old?.key ?? (isUpdate ? `conclusion-${String(updates.length + 1).padStart(8, "0")}` : initialKey);
   if (phase === "decision" && key !== phase) value.result_key = key;
   if (isUpdate) Object.assign(value, { result_key: key, update_id: updateId, previous_result_key: old?.value.previous_result_key ?? previous });

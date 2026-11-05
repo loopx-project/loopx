@@ -24,7 +24,7 @@ for (const storage of ["file", "sqlite"]) {
   const exited = once(child, "exit");
   let stderr = "";
   child.stderr.on("data", data => stderr += data);
-  type Event = {event: string; origin: string; posts: number; turn_count: number; source_unchanged: boolean; chat_unchanged: boolean};
+  type Event = {event: string; origin: string; session_id?: string; posts: number; turn_count: number; source_unchanged: boolean; chat_unchanged: boolean};
   const queue: Event[] = [], waiting: {kind: string; receive: (event: Event) => void}[] = [];
   createInterface({input: child.stdout}).on("line", line => {
     try {
@@ -162,6 +162,12 @@ for (const storage of ["file", "sqlite"]) {
     // A completed long return opens at its answer, rather than its evidence
     // tail. This uses the real publication, delivery and history owners.
     await fixture("report-readable");
+    assert.equal(typeof ready.session_id, "string");
+    const history = await (await page.request.get(`${ready.origin}/api/chat/sessions/${ready.session_id}`)).json();
+    const complete = history.messages.filter((row: {origin: string}) => row.origin === "manager_followup").at(-1);
+    const provenance = complete.text.lastIndexOf("\n\n处理结论 · builder · 委托 ");
+    assert.ok(provenance > 0);
+    assert.equal([...complete.text.slice(0, provenance)].length, 20000, "The actual publication and history preserve the full result budget");
     for (const width of [1440, 390]) {
       await page.setViewportSize({width, height: width === 390 ? 844 : 900});
       await page.getByRole("button", {name: /^(总览|Overview)$/}).click();
@@ -187,6 +193,7 @@ for (const storage of ["file", "sqlite"]) {
       const full = await returned.innerText();
       assert.match(full, /完整运行费用.*缺测不能按零计算/);
       assert.match(full, /没有追加模型改写/);
+      assert.match(full, /完整预算边界答复结束。/);
       assert.match(full, /隔离安装包就绪后由原负责人继续，不触碰生产会话/);
       assert.doesNotMatch(full, /Remaining work|Continue when/);
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));

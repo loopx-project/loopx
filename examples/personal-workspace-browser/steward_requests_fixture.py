@@ -289,12 +289,21 @@ def main():
                             "失败恢复：断线后沿原请求核验已有结果；重连读到结论不代表源任务已经通过全部验收。",
                             "费用口径：现有记录没有完整费用，因此只保留未知；没有追加模型改写，也没有为补齐数字重复评测。",
                         ]))
+                    remaining = {"summary": "还需核验安装包中的字段映射和失败恢复。",
+                        "resume_when": "隔离安装包就绪后由原负责人继续，不触碰生产会话。"}
+                    suffix = f"\n\n{remaining['summary']}\n\n{remaining['resume_when']}"
+                    ending = "\n\n完整预算边界答复结束。"
+                    # A public synthetic payload at the existing Unicode limit,
+                    # including its actual v2 paragraph separators and remainder.
+                    padding = 20000 - len(body + suffix + ending)
+                    evidence = "\n\n补充原始记录：失败、未知和原始证据均保留，不增加模型调用。😀"
+                    body += (evidence * (padding // len(evidence) + 1))[:padding] + ending
+                    assert len(body + suffix) == 20000
                     prior = _root(runtime) / "replies" / first_receipt["request_id"] / "conclusion.json"
                     report(runtime, "billing-exports", "builder", first_receipt["request_id"], "conclusion", body,
                         registry=registry, caller_goal_ref=first_receipt["goal_ref"],
                         update_id="readable-return" if prior.exists() else None,
-                        remaining_work={"summary": "还需核验安装包中的字段映射和失败恢复。",
-                            "resume_when": "隔离安装包就绪后由原负责人继续，不触碰生产会话。"})
+                        remaining_work=remaining)
                     drain(runtime, registry, store, lambda *_: None)
                 elif command == "conversation-arrival":
                     store.append_message(session["session_id"], role="assistant", text="新的委派阅读测试消息。", origin="manager_followup")

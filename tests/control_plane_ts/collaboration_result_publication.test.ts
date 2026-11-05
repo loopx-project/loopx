@@ -34,6 +34,32 @@ test("new results use reader paragraphs while immutable legacy returns keep thei
     results: [observation("conclusion", {...value, return_format_version: 999})]}), /return format/);
 });
 
+for (const symbol of ["证", "😀"]) {
+  test(`the selected return format owns the 20000-character budget (${symbol})`, () => {
+    const remaining_work = {summary: "实际采用尚未核验。", resume_when: "取得原始证据后继续。"};
+    const readerSuffix = `\n\n${remaining_work.summary}\n\n${remaining_work.resume_when}`;
+    const text = symbol.repeat(20000 - [...readerSuffix].length);
+    const source = {...input, text, remaining_work, update_id: null, results: []};
+    const plan = planCollaborationResult(source);
+    const value = plan.value as JsonObject;
+    assert.equal(collaborationResultText(value), text + readerSuffix);
+    assert.equal([...collaborationResultText(value)].length, 20000);
+    assert.deepEqual(planCollaborationResult({...source, results: [observation("conclusion", value)]}).value, value);
+    assert.throws(() => planCollaborationResult({...source, text: text + symbol}), /result budget/);
+
+    // The immutable old format still pays for its actual labels. Replaying a
+    // legacy result must not silently adopt the shorter renderer's allowance.
+    const legacySuffix = `\n\n仍需完成 / Remaining work: ${remaining_work.summary}\n继续条件 / Continue when: ${remaining_work.resume_when}`;
+    const legacyText = symbol.repeat(20000 - [...legacySuffix].length);
+    const legacy = {...initial, text: legacyText, remaining_work};
+    const replay = planCollaborationResult({...source, text: legacyText, results: [observation("conclusion", legacy)]});
+    assert.equal(collaborationResultText(replay.value as JsonObject), legacyText + legacySuffix);
+    assert.equal([...collaborationResultText(replay.value as JsonObject)].length, 20000);
+    assert.throws(() => planCollaborationResult({...source,
+      results: [observation("conclusion", {...legacy, text})]}), /result budget/);
+  });
+}
+
 test("legacy original revision is an optional result selector, not request control", () => {
   const legacy = {...request, schema_version: "loopx_manager_context_entry_v1"};
   for (const phase of ["decision", "conclusion"]) {

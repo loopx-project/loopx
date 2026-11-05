@@ -68,6 +68,11 @@ provider returns share the same complete body and original route. Source tests
 and packaged readback do not establish installation, model writing quality or
 live provider delivery; qualify those boundaries separately.
 
+The existing 20,000-Unicode-character result budget counts the selected format's
+complete answer and remainder. Legacy labels count only for legacy results.
+Compact observations retain the persisted format marker for publication replay
+and Inbox readback, including rejection of an unsupported version.
+
 Chat opens a completed return taller than its viewport at the beginning of the
 answer. Live output and explicit scrolling to the latest message keep their
 existing behavior; opening the complete answer remains a separate reading choice.
