@@ -1,5 +1,5 @@
 import {ArrowUpRight, ChevronDown, CircleHelp, FileText, TriangleAlert, X} from "lucide-react";
-import {useId, useRef, useState} from "react";
+import {useId, useLayoutEffect, useRef, useState} from "react";
 import {TRAJECTORY_METRICS} from "../../../../../../loopx/control_plane/capabilities/trajectory_assessment_types.js";
 import type {AssessmentCitation, AssessmentVerdict, TrajectoryAssessment, TrajectoryEpisode, TrajectoryInput, TrajectoryMetric, TrajectorySolverUsage} from "../../../../../../loopx/control_plane/capabilities/trajectory_assessment_types.js";
 import type {TrajectoryNativeOutcomes} from "../../../../../../loopx/control_plane/capabilities/trajectory_native_outcomes.js";
@@ -196,6 +196,14 @@ function ResearchMetrics({pack: p, zh, onCitation}: {pack: ResearchProgressPack 
   const [selected, setSelected] = useState<TrajectoryMetric | null>(null);
   const panelId = useId(), panel = useRef<HTMLDivElement>(null);
   const origin = useRef<HTMLButtonElement | null>(null);
+  // Focus the committed region before the next interaction, even when the
+  // animation clock is suspended. A later frame must not steal a row's Enter.
+  useLayoutEffect(() => {
+    if (selected && panel.current) {
+      panel.current.focus({preventScroll: true});
+      panel.current.scrollIntoView({block: "nearest"});
+    }
+  }, [selected]);
   const result = p.result;
   const number = (n: number) => new Intl.NumberFormat(zh ? "zh-CN" : "en", {maximumFractionDigits: 1}).format(n);
   const percent = (n: number) => new Intl.NumberFormat(zh ? "zh-CN" : "en", {style: "percent", maximumFractionDigits: 0}).format(n);
@@ -219,7 +227,6 @@ function ResearchMetrics({pack: p, zh, onCitation}: {pack: ResearchProgressPack 
         onClick={event => {
           if (selected === metric) {close(); return;}
           origin.current = event.currentTarget; setSelected(metric);
-          requestAnimationFrame(() => {panel.current?.focus({preventScroll: true}); panel.current?.scrollIntoView({block: "nearest"});});
         }}>
         <span className="research-effect-title">{label[zh ? 0 : 1]}<ChevronDown size={13} aria-hidden/></span>
         <strong className="research-effect-number">{row?.eligible ? <>{number(row.yes)}<span> / {number(row.eligible)}</span></> : "—"}</strong>

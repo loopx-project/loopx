@@ -104,6 +104,12 @@ case supplements the recent Grid logs; it is not another recent complete history
 The analysis headline preserves the mixed result: five recorded utility tests
 and one unknown, without turning a test into a positive benefit.
 
+The same real saved-analysis reader checks keyboard focus with the opening
+click's animation callbacks held. Enter still opens the focused judgment and
+Escape returns to its metric, in both languages at desktop and 390px widths.
+Region focus is established when React commits the detail; a delayed frame
+cannot take focus away from a reader already navigating its rows.
+
 | Judgment | Yes / no / unknown |
 | --- | --- |
 | Goal alignment | 4 / 0 / 2 |

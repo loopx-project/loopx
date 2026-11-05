@@ -160,6 +160,37 @@ async function readSavedGraphAnalysis(browser, collectCoverage) {
       await page.goto(`${owner.base}/chat/?goalId=${capture.goal_id}&view=research`);
       const history = page.locator(".research-history");
       await readNativeResults(page, history, capture, language);
+      for (const width of [1440, 390]) {
+        await page.setViewportSize({width, height: 900});
+        const metric = history.locator('[data-metric="goal_alignment"]');
+        // Hold animation callbacks registered by the opening click. A suspended
+        // frame clock must not delay focus or steal a reader's next key press.
+        await metric.evaluate(element => element.addEventListener("click", () => {
+          const nativeFrame = window.requestAnimationFrame;
+          window.researchFocusFrames = [];
+          window.requestAnimationFrame = callback => window.researchFocusFrames.push(callback);
+          queueMicrotask(() => {window.requestAnimationFrame = nativeFrame;});
+        }, {capture: true, once: true}));
+        await metric.click();
+        const judgments = history.locator(".research-effect-evidence");
+        const first = judgments.locator(".research-assessment").first();
+        await first.locator(":scope > summary").focus();
+        await page.evaluate(() => {
+          for (const callback of window.researchFocusFrames.splice(0)) callback(performance.now());
+        });
+        await page.keyboard.press("Enter");
+        assert.equal(await first.evaluate(element => element.open), true,
+          "A delayed opening frame cannot steal Enter from the focused judgment");
+        assert.equal(await first.locator(":scope > summary").evaluate(element => element === document.activeElement), true);
+        assert.equal(await first.locator(".research-assessment-reason").innerText(),
+          saved.result.assessments.find(row => row.metric === "goal_alignment").reason);
+        await page.screenshot({path: resolve(outputDir, `research-real-graph-keyboard-${language}-${width}.png`), animations: "disabled"});
+        await page.keyboard.press("Escape");
+        assert.equal(await judgments.count(), 0);
+        assert.equal(await metric.evaluate(element => element === document.activeElement), true,
+          "Escape returns to the exact metric at either viewport");
+      }
+      await page.setViewportSize({width: 1440, height: 900});
       await history.getByRole("button", {name: language === "zh" ? "查看分析" : "View analysis", exact: true}).click();
       const analysis = history.locator(".research-analysis[role=region]");
       await analysis.locator(".analysis-episode").first().waitFor();
