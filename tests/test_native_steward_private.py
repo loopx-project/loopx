@@ -20,9 +20,14 @@ from loopx.extensions.lark.conversation_identity import identity_ref
 
 
 @pytest.fixture
-def steward(tmp_path, monkeypatch):
+def steward(tmp_path):
     # The synthetic native host has no operator-configured provider inventory.
-    monkeypatch.delenv("LOOPX_CHAT_CODEX_MODEL_PROVIDER", raising=False)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.delenv("LOOPX_CHAT_CODEX_MODEL_PROVIDER", raising=False)
+        yield from _steward_runtime(tmp_path)
+
+
+def _steward_runtime(tmp_path):
     workspace = tmp_path / "fresh-workspace"
     workspace.mkdir()
     contexts = ChatProjectContexts([workspace])
