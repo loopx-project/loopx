@@ -17,6 +17,9 @@ def event(value):
 
 @pytest.mark.parametrize("failure", [
     {"type": "error", "code": "usage_limit_exceeded", "message": "private quota detail"},
+    {"type": "error", "code": "credit_balance_exhausted", "message": "private quota detail"},
+    {"type": "response.failed", "response": {"status": "failed", "error": {
+        "code": "credit_balance_exhausted", "message": "private quota detail"}}},
     {"type": "response.failed", "response": {"status": "failed", "error": {
         "code": "insufficient_quota", "message": "private quota detail"}}},
 ])

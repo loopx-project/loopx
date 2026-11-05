@@ -145,6 +145,15 @@ the Chat/App restart used for native handoff; disabling stops new admissions and
 drains already accepted requests before its process exits. With the policy off,
 an existing subscription is never routed through this transport.
 
+Version 0.15.2 recognizes the official `credit_balance_exhausted` error in both
+HTTP rejections and typed streaming failures. A streamed rejection cools that
+key for later independently admitted requests; its current stream remains
+unchanged and is never replayed. This is an error observation, not a billing
+balance query or permission to add credits. See the official
+[API error codes](https://developers.openai.com/api/docs/guides/error-codes).
+For an HTTP 429 with this code, the existing quota cooldown (300 seconds when
+no `Retry-After` is supplied) replaces the generic rate-limit cooldown.
+
 **Check connection** only requests the official
 [`GET /v1/models`](https://developers.openai.com/api/reference/resources/models/methods/list).
 It makes no inference call and does not establish spendable quota. Its 401, 403,
