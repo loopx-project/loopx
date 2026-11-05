@@ -14,7 +14,9 @@ import uuid
 import hashlib
 
 from ...chat_store import TERMINAL_TURN_STATES, _atomic_write_json, _read_json
-from ...control_plane.effect_runtime import EffectRuntimeRejected, effect_runtime_result
+from ...control_plane.effect_runtime import (
+    EffectRuntimeRejected, effect_runtime_request_scope, effect_runtime_result,
+)
 from ...file_lock import exclusive_file_lock
 
 if TYPE_CHECKING:
@@ -530,12 +532,14 @@ class ChatConversationBindings:
             "target_observation": self.agent_observation(target["session_id"])})
 
 
+    @effect_runtime_request_scope()
     def stop_recoveries(self, current: dict[str, Any]) -> list[dict[str, Any]]:
         """Project revoked execution from canonical Turns, never recreate a grant.
 
         Session and external-target context retain the exact binding identity
         across restart. No second stop ledger or provider diagnostics are needed.
         A recovery disappears only when the existing Turn owner settles it.
+        Share the runtime source observation, while reading each queue afresh.
         """
         if self.controller is None:
             return []
