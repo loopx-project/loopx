@@ -430,6 +430,15 @@ class ChatExternalConversations:
                         model_auth_home=model_auth_home,
                         **({"read_only_review": True} if plan.get("read_only_review") else {}),
                         thread_ids=plan["native_thread_ids"], turn_id=turn["upstream_turn_id"])
+                    if (proof is not None and proof.get("codex_error_info") == "usageLimitExceeded"
+                            and proof.get("only_original_user_item") is True and session.get("steward_context")):
+                        # The steward may use its API pool while the desktop's
+                        # subscription is exhausted. Reuse that same fresh owner;
+                        # it neither replaces native no-effects proof nor admits work.
+                        from ...chat_manager import manager_session_quota_route
+                        route = manager_session_quota_route(self.controller, session)
+                        if route and route["allocation"]["executor_endpoint"] == "codex":
+                            proof.update(quota_available=True, quota_observed_at=route["observed_at"])
             facts = proof.pop("retained_result", None) if proof is not None and metadata_review else None
             selected = self.bindings.resolve(binding_id=row["binding_id"], **row["source"], include_observation=True)
             source = source_observation(selected)

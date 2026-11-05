@@ -1,12 +1,34 @@
 /** OpenAI transport outcomes. No credentials, request contents or IO. */
 export type KeyRuntime = { id: string; blocked_until?: number; blocked_model?: string | null };
+const QUOTA_CODES = ["insufficient_quota", "organization_spend_limit_exceeded",
+  "project_spend_limit_exceeded", "organization_usage_limit_exceeded",
+  "usage_limit_exceeded"];
+
+/** A streamed rejection updates future availability, never replays this stream. */
+export function apiStreamOutcome(value: unknown): {status: number; code: string} | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const event = value as Record<string, unknown>;
+  let error: Record<string, unknown>;
+  if (event.type === "error") {
+    error = event;
+  } else if (event.type === "response.failed") {
+    const response = event.response as Record<string, unknown> | undefined;
+    if (!response || response.status !== "failed" || !response.error ||
+        typeof response.error !== "object" || Array.isArray(response.error)) return null;
+    error = response.error as Record<string, unknown>;
+  } else return null;
+  const code = typeof error.code === "string" ? error.code : null;
+  if (code !== null && (QUOTA_CODES.includes(code) || code === "rate_limit_exceeded")) {
+    return {status: 429, code};
+  }
+  return null;
+}
 export function apiKeys(input: { now: number; model: string; keys: KeyRuntime[] }) {
   return input.keys.filter(key => !(typeof key.blocked_until === "number"
     && key.blocked_until > input.now && (!key.blocked_model || key.blocked_model === input.model))).map(key => key.id);
 }
 export function apiOutcome(input: { now: number; status: number; code: string | null; retry_after: number | null; model: string }) {
-  const quota = input.status === 429 && ["insufficient_quota", "organization_spend_limit_exceeded",
-    "project_spend_limit_exceeded", "organization_usage_limit_exceeded"].includes(input.code ?? "");
+  const quota = input.status === 429 && QUOTA_CODES.includes(input.code ?? "");
   const authentication = input.status === 401;
   const permission = input.status === 403;
   const limited = input.status === 429;
