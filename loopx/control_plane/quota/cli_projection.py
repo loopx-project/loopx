@@ -421,6 +421,12 @@ def _reference_context(
     contract = payload.get("interaction_contract")
     agent = contract.get("agent_channel") if isinstance(contract, dict) else None
     context = agent.get("work_context") if isinstance(agent, dict) else None
+    # A lone carrier cannot be shared or relocated. Keep simple guards local.
+    if goal_acceptance:
+        goal_acceptance = sum(isinstance(value, dict) for value in (
+            context, payload.get("planning_horizon"), payload.get("autonomous_replan_obligation"),
+            payload.get("agent_todo_summary"),
+        )) >= 2
     # Task/Explore sharing needs a source carrier; acceptance may use other root
     # owners. Leave semantic matching and reference validation in TypeScript.
     if diagnostics is None and not goal_acceptance and (

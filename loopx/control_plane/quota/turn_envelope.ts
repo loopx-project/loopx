@@ -290,13 +290,14 @@ function inlineAcceptance(payload: JsonObject, reference: unknown): JsonObject {
     const content = object(source.content);
     if (source.source === "goal_acceptance" &&
         (content.status == null || content.status === "loaded") &&
+        !Object.hasOwn(content, "goal_acceptance_contract_ref") &&
         Object.keys(object(content.goal_acceptance_contract)).length) {
       return object(content.goal_acceptance_contract);
     }
   }
   const carrier = acceptanceCarriers(payload).find(item => item.path === reference);
   const value = object(carrier?.parent[carrier.field]);
-  if (!carrier || !Object.keys(value).length) {
+  if (!carrier || Object.hasOwn(carrier.parent, `${carrier.field}_ref`) || !Object.keys(value).length) {
     throw new EffectRuntimeRequestError("Goal acceptance reference must resolve to complete inline work context or planning facts");
   }
   return value;
