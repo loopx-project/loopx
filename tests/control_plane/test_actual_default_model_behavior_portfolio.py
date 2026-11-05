@@ -18,10 +18,11 @@ from control_plane.quota_context_fixture import (
 from loopx.control_plane.quota.cli_projection import (
     compact_quota_should_run_cli_payload,
 )
-from loopx.control_plane.quota.turn_envelope import quota_action_signature_document
+from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision, quota_action_signature_document
 from loopx.control_plane.scheduler.execution_context import (
     scheduler_execution_context_for_runtime_profile,
 )
+from loopx.control_plane.testing.action_portfolio_scenarios import compose_scenario_decision
 from loopx.control_plane.testing.actual_default_model_behavior_portfolio import (
     ACTUAL_DEFAULT_MODEL_BEHAVIOR_HOT_PATH_JSON_BUDGET,
     actual_default_model_behavior_scenario_catalog,
@@ -89,7 +90,16 @@ from loopx.control_plane.testing.terminal_settlement_tool_behavior import (
 def _scenario_inputs(
     tmp_path: Path,
 ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
-    return build_actual_default_model_behavior_scenario_inputs(tmp_path)
+    # These scripted actor tests cover downstream scoring, abort and tool paths.
+    # Supply the historical within-budget controls for the three budget probes.
+    sources, packets = build_actual_default_model_behavior_scenario_inputs(tmp_path)
+    for name in (
+        "turn_quota_hot_path_compaction_regression",
+        "turn_quota_hot_path_selected_todo_invariance",
+        "turn_quota_hot_path_human_gate_invariance",
+    ):
+        packets[name] = compact_quota_should_run_cli_payload(deepcopy(sources[name]))
+    return sources, packets
 
 
 def _turn_decision(request: Mapping[str, Any]) -> dict[str, Any]:
@@ -552,17 +562,6 @@ def _terminal_writeback_action(
     )
 
 
-def _terminal_spend_action(request: Mapping[str, Any]) -> ScriptedExecToolAction:
-    payload = _latest_tool_payload(request)
-    command = payload["interaction_contract"]["cli_channel"]["next_cli_actions"][1]
-    return ScriptedExecToolAction(
-        command=command.replace(
-            '"${LOOPX_TURN:?}"',
-            "turn-portfolio-terminal",
-        )
-    )
-
-
 def _terminal_closeout_action(
     request: Mapping[str, Any],
 ) -> ScriptedExecToolAction:
@@ -681,7 +680,6 @@ def _real_tool_actors(root: Path) -> dict[str, Any]:
                 ScriptedExecToolAction(fixture.quota_guard_command),
                 ScriptedExecToolAction("cat fixture/settlement-proof.json"),
                 _terminal_writeback_action,
-                _terminal_spend_action,
                 _terminal_closeout_action,
             ]
         )
@@ -702,8 +700,36 @@ def _real_tool_actors(root: Path) -> dict[str, Any]:
     }
 
 
-def test_live_packet_builder_preserves_gate_and_vision_contracts(tmp_path: Path) -> None:
+def test_live_portfolio_uses_complete_decisions_before_any_provider_request(tmp_path: Path) -> None:
     sources, packets = build_actual_default_model_behavior_scenario_inputs(tmp_path)
+    for key, source in sources.items():
+        if source.get("mode") == "should-run":
+            assert_complete_turn_decision(packets[key])
+            if key.startswith("turn_quota_hot_path_"):
+                assert packets[key]["goal_route_hint"] == source["goal_route_hint"]
+    fallback = packets["turn_external_wait_fallback"]
+    assert fallback["contract_binding"]["scheduler_execution_args"] == " --runtime-profile outer_controller"
+    # Exercise the real preflight with an independently oversized diagnostic.
+    # This remains a negative case even if normal cold diagnostics get smaller.
+    key = "turn_quota_hot_path_compaction_regression"
+    sources[key]["capability_gate"]["runnable_candidates"][0]["text"] += (
+        "x" * ACTUAL_DEFAULT_MODEL_BEHAVIOR_HOT_PATH_JSON_BUDGET
+    )
+    packets[key] = compose_scenario_decision(sources[key])
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("over-budget actor input reached the provider")
+
+    with pytest.raises(ValueError, match="compaction-regression packet exceeds the hot-path budget"):
+        run_actual_default_model_behavior_portfolio(
+            packets, scenario_sources=sources, qualification_id="complete-over-budget",
+            turn_actor=forbidden, onboarding_actor=forbidden, selected_todo_actor=forbidden,
+            replan_semantic_action_actor=forbidden,
+        )
+
+
+def test_portfolio_packets_preserve_gate_and_vision_contracts(tmp_path: Path) -> None:
+    sources, packets = _scenario_inputs(tmp_path)
 
     selected = packets["turn_selected_todo"]
     assert selected["selected_todo"]["todo_id"] == "todo_portfolio001"
@@ -744,12 +770,7 @@ def test_live_packet_builder_preserves_gate_and_vision_contracts(tmp_path: Path)
     }
     replan = packets["turn_required_vision_replan"]
     assert replan["mode"] == "should-run"
-    assert replan["vision_continuation_audit"]["payload_compaction"] == {
-        "schema_version": "quota_cli_vision_continuation_compaction_v0",
-        "mode": "compact_hot_path",
-        "omitted_fields": [],
-        "full_detail_cold_path": "quota should-run --include-detail vision",
-    }
+    assert replan["vision_continuation_audit"] == sources["turn_required_vision_replan"]["vision_continuation_audit"]
     assert model_behavior_semantic_contract_from_packet(
         replan, arm="full_packet"
     ) == model_behavior_semantic_contract_from_packet(
@@ -1046,9 +1067,7 @@ def test_external_wait_preflight_rejects_shared_projection_drift(
     blocked = source["agent_todo_summary"]["resume_blocked_items"][0]
     blocked["resume_condition"]["baseline_generation"] = 3
     sources["turn_external_wait_fallback"] = source
-    packets["turn_external_wait_fallback"] = compact_quota_should_run_cli_payload(
-        source
-    )
+    packets["turn_external_wait_fallback"] = compose_scenario_decision(source)
     calls = 0
 
     def turn_actor(request: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -1244,7 +1263,7 @@ def test_portfolio_rejects_mutated_blocking_gate_response_plan(tmp_path: Path) -
     source = deepcopy(sources["turn_human_gate"])
     source["interaction_contract"]["response_plan"]["action_sequence"] = ["wait"]
     sources["turn_human_gate"] = source
-    packets["turn_human_gate"] = compact_quota_should_run_cli_payload(source)
+    packets["turn_human_gate"] = compose_scenario_decision(source)
 
     with pytest.raises(
         ValueError,
@@ -1462,9 +1481,7 @@ def test_portfolio_preflight_rejects_wrong_same_agent_route(tmp_path: Path) -> N
     source = deepcopy(sources["turn_same_agent_continuation"])
     source["selected_todo"]["claimed_by"] = "codex-wrong-peer"
     sources["turn_same_agent_continuation"] = source
-    packets["turn_same_agent_continuation"] = compact_quota_should_run_cli_payload(
-        source
-    )
+    packets["turn_same_agent_continuation"] = compose_scenario_decision(source)
     calls = 0
 
     def turn_actor(request: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -1700,7 +1717,7 @@ def test_portfolio_preflight_rejects_invalid_contrast_before_actor_spend(
     source["interaction_contract"]["user_channel"]["action_required"] = True
     source["action_required"] = True
     sources["turn_selected_todo"] = source
-    packets["turn_selected_todo"] = compact_quota_should_run_cli_payload(source)
+    packets["turn_selected_todo"] = compose_scenario_decision(source)
     calls = 0
 
     def turn_actor(request: Mapping[str, Any]) -> Mapping[str, Any]:
