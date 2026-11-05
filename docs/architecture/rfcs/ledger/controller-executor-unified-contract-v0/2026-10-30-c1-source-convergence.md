@@ -616,6 +616,64 @@ readers still need their supported work/window reconciliation; none is removed
 just to make a retirement count. This slice neither retires those readers nor
 closes the complete C1 acceptance.
 
+### Latest-main matched hard-lease comparison
+
+A separate repetition freezes main `92294e7245cb` against candidate
+`b3b3b232724d`, including the executable-read validation above. The original
+numbered Task, fixture, observer, shared Python and cold/warm/compaction-recovery
+protocol are unchanged. Three repeats per arm/provider again produce 36
+conditions and 60 work Turns. All 1,914 product source hashes per arm remain
+unchanged; 654 parent/completed-child observations and 640,896 Core-module
+origins match their source. The complete original Task appears in each actual
+consumed read. Every Turn keeps its original identity, three committed receipts,
+one debit and the same accepted artifact for its scenario. This is engineering
+qualification, without a model or an installed App rollout.
+
+The complete workflow includes the completed preparation Turn, all required
+reads, native Host preparation, compaction hooks where applicable, writeback,
+spend, replay/readback and lease release. Parent totals already include children.
+The current-step column excludes completed preparation. Three-sample medians:
+
+| Provider / scenario | Whole stdout B | Current stdout B | RPCs | Framed RPC B | Python fixture read B | Python fixture write B |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| file / cold | 57,221 → 45,732 | 57,221 → 45,732 | 423 → 288 | 2,930,378 → 1,924,529 | 715,582 → 658,504 | 301,509 → 271,509 |
+| file / warm | 117,662 → 94,692 | 60,441 → 48,960 | 843 → 578 | 6,254,008 → 4,120,060 | 1,916,435 → 1,691,969 | 672,788 → 590,508 |
+| file / recovery | 117,450 → 94,248 | 59,893 → 48,292 | 845 → 580 | 6,241,950 → 4,101,350 | 1,932,262 → 1,706,384 | 653,451 → 570,267 |
+| sqlite / cold | 57,640 → 45,848 | 57,640 → 45,848 | 423 → 288 | 2,935,504 → 1,927,053 | 732,814 → 673,042 | 303,374 → 273,849 |
+| sqlite / warm | 118,504 → 94,928 | 60,864 → 49,080 | 843 → 578 | 6,264,426 → 4,125,624 | 1,955,379 → 1,725,427 | 676,528 → 595,288 |
+| sqlite / recovery | 118,288 → 94,480 | 60,312 → 48,408 | 845 → 580 | 6,252,476 → 4,107,176 | 1,971,260 → 1,739,860 | 657,195 → 575,088 |
+
+Warm whole stdout falls 19.52% / 19.89%, RPCs 31.44%, framed bytes 34.12% /
+34.14%, and observed Python fixture read-plus-write bytes 11.85% / 11.82%.
+Current-step stdout falls 19.00% / 19.36%. Warm framed-byte ranges are file:
+main 6,253,744–6,254,276, candidate 4,119,902–4,120,628; SQLite: main
+6,264,262–6,264,682, candidate 4,125,580–4,125,850. No significance is inferred.
+Observed warm request counts include `quota.turn_envelope.evaluate` 20 → 10,
+`todo.context.page` 178 → 62, and capability-hook validation 8 → 4. These are
+cumulative C1 differences, not savings attributable to the new read validator.
+
+The primary metric remains the same producer's complete capture F → selected
+BODY. All 60 pairs match the published producer capture digest, recovery and
+selected-file digests, original identity and control facts:
+
+| Provider / scenario | Main F → BODY B (reduction) | Candidate F → BODY B (reduction) |
+| --- | ---: | ---: |
+| file / cold | 59,828 → 27,845 (53.46%) | 53,649 → 27,120 (49.45%) |
+| file / warm | 74,870 → 27,797 (62.87%) | 61,049 → 27,072 (55.66%) |
+| file / recovery | 75,086 → 27,921 (62.81%) | 61,241 → 27,194 (55.60%) |
+| sqlite / cold | 60,054 → 28,062 (53.27%) | 53,867 → 27,274 (49.37%) |
+| sqlite / warm | 75,096 → 28,003 (62.71%) | 61,267 → 27,274 (55.49%) |
+| sqlite / recovery | 75,316 → 28,131 (62.65%) | 61,459 → 27,403 (55.41%) |
+
+BODY is smaller while its reduction ratio is lower, because the full source is
+also smaller. Saved-file delta is not model retention. This new cohort supports
+lower measured engineering overhead at the same synthetic artifact outcome;
+it does not replace older cohorts or establish lower model-generated output,
+cached/uncached input, fees, native-provider/SQLite-page/full-process IO, CPU,
+latency, natural adoption or long-horizon benefit. The original budget failure,
+historical-reader obligations and complete C1 acceptance remain open. No gate,
+default, scoring or runtime behavior changes in this measurement update.
+
 ## Earlier integration evidence
 
 The integration preserves main's extracted quota-presentation owner and sparse
