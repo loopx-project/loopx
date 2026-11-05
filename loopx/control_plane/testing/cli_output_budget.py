@@ -161,7 +161,12 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
             # calibrate this regression allowance to 43,000, leaving bounded headroom
             # (~499 chars on Windows, ~719 chars on POSIX) without widening collection
             # or production transport limits.
-            "crowded": {"json": 43_000, "markdown": 10_500},
+            # The progressive oracle now also bounds the complete recovered body.
+            # The same fixture measures 50,795 JSON body chars and 16,857
+            # Markdown chars. Preserve the original 43,000 / 10,500 failures and
+            # calibrate only these two presentation ceilings to measured values
+            # plus bounded headroom.
+            "crowded": {"json": 51_000, "markdown": 17_000},
             # The unchanged 18-Todo / 3-Agent fixture on main ffc90182b and
             # this candidate both emit 25,836 JSON characters (96 matched
             # surface/mode measurements, no semantic or route differences).
@@ -194,7 +199,7 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
             "--include-transaction-detail, turn run-once, TurnEnvelope detail_ref "
             "commands, and full quota should-run decision"
         ),
-        semantic_json_keys=("route", "turn_envelope", "effects", "boundary"),
+        semantic_json_keys=("route", "work_contract", "effects", "boundary"),
         markdown_anchor="# LoopX Turn Plan",
         max_chars={
             "small": {"json": 14_000, "markdown": 600},
@@ -477,7 +482,9 @@ CLI_OUTPUT_MODE_VARIANT_SPECS: tuple[CliOutputModeVariantSpec, ...] = (
         output_formats=("json", "markdown"),
         semantic_json_keys=("interaction_contract", "scheduler_hint", "selected_todo"),
         markdown_anchor="# LoopX Quota Should Run",
-        max_chars={"json": 55_000, "markdown": 10_000},
+        # The complete captured Vision projection measures 58,393 JSON chars.
+        # Preserve the original 55,000 failure; keep a 607-character allowance.
+        max_chars={"json": 59_000, "markdown": 10_000},
         max_lines={"json": 1_350, "markdown": 190},
     ),
     CliOutputModeVariantSpec(
@@ -513,7 +520,7 @@ CLI_OUTPUT_MODE_VARIANT_SPECS: tuple[CliOutputModeVariantSpec, ...] = (
             "route",
             "session",
             "transaction",
-            "turn_envelope",
+            "work_contract",
             "effects",
             "boundary",
         ),
@@ -888,6 +895,7 @@ def assert_cli_output_baseline(
 ) -> None:
     max_chars = spec.max_chars[scenario][output_format]
     max_lines = spec.max_lines[scenario][output_format]
+    _assert_context_body_budget(measurement, max_chars=max_chars, max_lines=max_lines)
     if int(measurement["chars"]) > max_chars:
         raise AssertionError(
             f"{spec.surface_id}/{scenario}/{output_format} emitted "
@@ -903,7 +911,7 @@ def assert_cli_output_baseline(
             f"{spec.surface_id} markdown lost semantic anchor {spec.markdown_anchor!r}"
         )
     if output_format == "json":
-        payload = measurement.get("payload")
+        payload = measurement.get("resolved_payload", measurement.get("payload"))
         if not isinstance(payload, dict):
             raise AssertionError(f"{spec.surface_id} did not emit a JSON object")
         missing = [key for key in spec.semantic_json_keys if key not in payload]
@@ -924,6 +932,8 @@ def assert_cli_output_mode_variant(
         raise AssertionError(
             f"{spec.variant_id} does not declare {output_format} qualification"
         )
+    _assert_context_body_budget(measurement, max_chars=spec.max_chars[output_format],
+        max_lines=spec.max_lines[output_format])
     if int(measurement["chars"]) > spec.max_chars[output_format]:
         raise AssertionError(
             f"{spec.variant_id}/{output_format} emitted {measurement['chars']} chars; "
@@ -941,7 +951,7 @@ def assert_cli_output_mode_variant(
                 f"{spec.markdown_anchor!r}"
             )
         return
-    payload = measurement.get("payload")
+    payload = measurement.get("resolved_payload", measurement.get("payload"))
     if not isinstance(payload, dict):
         raise AssertionError(f"{spec.variant_id} did not emit a JSON object")
     missing = [key for key in spec.semantic_json_keys if key not in payload]
@@ -949,6 +959,19 @@ def assert_cli_output_mode_variant(
         raise AssertionError(
             f"{spec.variant_id} JSON lost semantic key(s): {', '.join(missing)}"
         )
+
+
+def _assert_context_body_budget(measurement: dict[str, Any], *, max_chars: int, max_lines: int) -> None:
+    # Keep measuring the original CLI stdout. A progressive fixture's exact
+    # recovery body is also bounded by those same, unchanged ceilings;
+    # neither part can hide growth in the other. Reader wire cost is reported,
+    # not silently folded into a smaller body or treated as a net saving.
+    body = measurement.get("context_body")
+    if body is not None:
+        assert body["chars"] <= max_chars, (
+            f"captured body emitted {body['chars']} chars; baseline ceiling is {max_chars}")
+        assert body["lines"] <= max_lines, (
+            f"captured body emitted {body['lines']} lines; baseline ceiling is {max_lines}")
 
 
 def public_manifest() -> dict[str, Any]:

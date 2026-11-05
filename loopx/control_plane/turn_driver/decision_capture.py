@@ -407,6 +407,8 @@ def capture_context_projection(payload: dict[str, Any], *, directory: Path,
                                read_guidance: str = CONTEXT_CAPTURE_READ_GUIDANCE,
                                filename: str = "projection.json") -> dict[str, Any]:
     """Save the full projection independently of the optional presentation codec."""
+    from ...command_invocation import current_loopx_cli_argv
+
     if filename not in ("projection.json", "required-context.json"):
         raise ValueError("unsupported captured context filename")
     projection = directory / filename
@@ -416,7 +418,7 @@ def capture_context_projection(payload: dict[str, Any], *, directory: Path,
         "instruction": "Complete JSON for this captured view. Use it when required content is missing or uncertain; "
             "compaction alone does not require replay within an existing work Turn. "
             + read_guidance,
-        "command": context_capture_read_command(projection, digest),
+        "command": context_capture_read_command(projection, digest, reader_argv=current_loopx_cli_argv()),
     }
 
 

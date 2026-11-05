@@ -629,6 +629,7 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
     A trusted caller may reuse the identical source it just published; this
     reference must never come from the external continuity request.
     """
+    from ...command_invocation import current_loopx_cli_argv
     from ..quota.error_codes import QuotaDecisionTransportError
     from ..quota.turn_envelope import prepare_context_delivery
     from ..effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
@@ -673,7 +674,7 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
 
                 def publish_recovery(reference: dict[str, Any]) -> None:
                     reference["command"] = context_capture_read_command(Path(reference["path"]), reference["sha256"],
-                        page_bytes=page_bytes, max_page_output_bytes=output_bytes)
+                        page_bytes=page_bytes, max_page_output_bytes=output_bytes, reader_argv=current_loopx_cli_argv())
                     preparation = compact_execution_preparation_request(payload)
                     state["recovery"] = {**{key: reference[key] for key in ("path", "sha256", "command")},
                         "goal_id": goal_id, "agent_id": agent_id,
@@ -696,9 +697,7 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                             "source_path": recovery["path"],
                             **({"selection_command_args_template": selection_command_args_template}
                                 if selection_command_args_template is not None else {}),
-                            "command_template": context_capture_read_command(Path(recovery["path"]), recovery["sha256"],
-                                page_bytes=page_bytes, max_page_output_bytes=output_bytes)
-                                + " --select '<supporting_material_pointer>/sources'",
+                            "command_template": recovery["command"] + " --select '<supporting_material_pointer>/sources'",
                         }, consumed_pointers=state.get("consumed_pointers"))
                 except (EffectRuntimeRemoteError, EffectRuntimeStartupError):
                     return NativeContextPreparation(payload)

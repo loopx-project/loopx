@@ -58,7 +58,7 @@ def _receipt_row(
     variant_id: str | None = None,
     output_contract_version: str | None = None,
 ) -> dict:
-    payload = measurement.get("payload")
+    payload = measurement.get("resolved_payload", measurement.get("payload"))
     return {
         "row_id": row_id,
         "surface_id": surface_id,
@@ -70,6 +70,11 @@ def _receipt_row(
         "chars": measurement["chars"],
         "utf8_bytes": measurement["utf8_bytes"],
         "lines": measurement["lines"],
+        **({"context_delivery": measurement["context_delivery"]}
+           if "context_delivery" in measurement else {}),
+        **({"context_body": {key: measurement["context_body"][key]
+              for key in ("chars", "utf8_bytes", "lines", "compact_payload_chars", "pretty_print_overhead_chars")}}
+           if "context_body" in measurement else {}),
         "compact_payload_chars": measurement["compact_payload_chars"],
         "pretty_print_overhead_chars": measurement["pretty_print_overhead_chars"],
         "semantic_json_keys": list(semantic_json_keys),
@@ -170,7 +175,7 @@ def _assert_output_contract(
                 f"markdown output lost semantic anchor {markdown_anchor!r}"
             )
         return
-    payload = measurement.get("payload")
+    payload = measurement.get("resolved_payload", measurement.get("payload"))
     if not isinstance(payload, dict):
         raise AssertionError("JSON output did not emit an object")
     missing = [key for key in semantic_json_keys if key not in payload]
@@ -208,7 +213,7 @@ def _default_rows(
                     exit_code, text = probe._invoke_cli(command)
                     if exit_code != 0:
                         raise AssertionError(f"{surface_id}/{output_format} failed")
-                    measurement = probe.measure_cli_output(
+                    measurement = probe._measure_context_output(
                         text, output_format=output_format
                     )
                     measurements.setdefault(scenario.name, {}).setdefault(
@@ -293,7 +298,7 @@ def _variant_rows(
             exit_code, text = probe._invoke_cli(command)
             if exit_code != 0:
                 raise AssertionError(f"{variant_id}/{output_format} failed")
-            measurement = probe.measure_cli_output(text, output_format=output_format)
+            measurement = probe._measure_context_output(text, output_format=output_format)
             if enforce_budget:
                 probe.assert_cli_output_mode_variant(
                     variant,
@@ -358,7 +363,7 @@ def _blocking_gate_rows(
     exit_code, output = probe._invoke_cli(command)
     if exit_code != 0:
         raise AssertionError("blocking user-gate turn envelope failed")
-    measurement = probe.measure_cli_output(output, output_format="json")
+    measurement = probe._measure_context_output(output, output_format="json")
     variant = probe.CLI_OUTPUT_MODE_VARIANT_BY_ID[
         "quota_should_run_turn_envelope"
     ]
@@ -418,7 +423,7 @@ def _multi_subagent_rows(probe, semantics, fixture_root, *, enforce_budget=True)
     exit_code, output = probe._invoke_cli(command)
     if exit_code != 0:
         raise AssertionError("enabled multi_subagent turn envelope failed")
-    measurement = probe.measure_cli_output(output, output_format="json")
+    measurement = probe._measure_context_output(output, output_format="json")
     variant = probe.CLI_OUTPUT_MODE_VARIANT_BY_ID[variant_id]
     if enforce_budget:
         probe.assert_cli_output_mode_variant(
@@ -462,6 +467,10 @@ def main() -> int:
     # Scenario helpers also call this owner; historical test modules must not
     # re-enter their old /tmp implementation from inside the shared outer root.
     probe._stable_budget_fixture_root = fixture_support.stable_budget_fixture_root
+    # One current reader/cost observer for both immutable product revisions.
+    # Historical fixture modules still invoke their own CLI and budget owner.
+    probe._measure_context_output = lambda text, *, output_format: fixture_support.measure_cli_context_for_oracle(
+        text, output_format=output_format, measure=probe.measure_cli_output)
     semantics = _load_module("loopx_cli_output_probe_semantics", args.semantics_source)
     if args.fixture_root.exists():
         shutil.rmtree(args.fixture_root)

@@ -212,6 +212,14 @@ function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSour
         + "Uncertain or missing necessary facts must be recovered before dependent action; Agent review is not independent acceptance."};
     }
   }
+  // A signed source and its presentation have different content hashes even
+  // when the only edit is a same-view Todo reference. Keep an address for the
+  // original and include its cost when deciding whether the projection wins.
+  const signedSource = request.surface === "complete_turn";
+  const sourceNavigation = typeof details.command_template === "string"
+    ? {command_template: details.command_template} : {path: details.path, sha256: details.sha256};
+  if (signedSource && required !== context && required.context_details === undefined)
+    required.context_details = sourceNavigation;
   const remaining = tokens.filter(([path]) => !removed.some(start => pathStartsWith(path, start)));
   // Unchanged source spellings cancel. Removed registered records contain only
   // safe integral numbers; sparse tokens retain their original float spelling.
@@ -228,7 +236,11 @@ function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSour
   const bindTransport = typeof transport === "string" && typeof at(context, selectionPath) === "string"
     && transport !== at(context, selectionPath);
   if (!projected) { required = context; copies.clear(); }
-  if (bindTransport) parent(selectionPath)[selectionPath.at(-1)!] = transport;
+  if (bindTransport) {
+    parent(selectionPath)[selectionPath.at(-1)!] = transport;
+    if (signedSource && required.context_details === undefined)
+      required.context_details = sourceNavigation;
+  }
   return {context: required, tokens: projected ? remaining : tokens, projected: projected || bindTransport};
 }
 
@@ -430,6 +442,8 @@ export function initialContextReadPointers(context: JsonObject, decisionFields: 
       include("context_details", "unread_context_index", field);
     include("context_details", "instruction");
     include("context_details", "command_template");
+  } else if (details && known(details, ["command_template", "path", "sha256"])) {
+    include("context_details");
   } else include("context_details", "unread_context_index");
   return pointers;
 }
