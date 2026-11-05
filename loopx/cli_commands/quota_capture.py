@@ -609,17 +609,14 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
         write_decision_capture(wire, projected)
     from ..control_plane.turn_driver.codex_context import register_native_context_view
 
-    seen = register_native_context_view(context_directory,
+    observed = register_native_context_view(context_directory,
         {**result, "ancestry": ancestry}, hook_session=hook_session)
-    if progressive_enabled and seen and initial_read_pointers and "first_read_command" in result:
-        from ..control_plane.turn_driver.native_first_read import observed_first_read_reference
-
-        first = observed_first_read_reference(context_directory, result["target"], current,
-            current_document, initial_read_pointers, seen, output_bytes)
-        if first is not None:
-            result["first_read_reference"] = str(first)
-            result["first_read_command"] = context_capture_read_command(Path(current["path"]), current["sha256"],
-                reference_file=first, page_bytes=page_bytes, max_page_output_bytes=output_bytes, reader_argv=reader_argv)
+    if (progressive_enabled and observed and "first_read_command" in result
+            and observed["pointer_bytes"] <= output_bytes // 4):
+        first = Path(observed["path"])
+        result["first_read_reference"] = str(first)
+        result["first_read_command"] = context_capture_read_command(Path(current["path"]), current["sha256"],
+            reference_file=first, page_bytes=page_bytes, max_page_output_bytes=output_bytes, reader_argv=reader_argv)
     return result
 
 

@@ -386,7 +386,11 @@ def test_review_routes_to_selection_before_the_bound_writer(tmp_path, monkeypatc
             "--context-delivery", mode, "--delta-delivery", "auto" if mode == "on" else "off",
             "--decision-output-root", str(captures),
             "--codex-context-dir", str(native), *(["--defer-context-presentation"] if mode == "on" else []))
-        review_argv = shlex.split(entry["replan_action_packet"]["review"])
+        # C1's complete decision exposes the executable selection directly.
+        # The staged compatibility reader must point back to that same selection.
+        assert entry["interaction_contract"]["cli_channel"]["selection_required"] is True
+        assert not entry["interaction_contract"]["cli_channel"].get("settlement_plan")
+        review_argv = shlex.split(build_turn_envelope(entry)["replan_action_packet"]["review"])
         review = json.loads(invoke(review_argv).stdout)
         assert review["next"]["selection_required"] is True and "writeback" not in review["next"]
         selection = entry
