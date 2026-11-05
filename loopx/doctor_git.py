@@ -11,6 +11,12 @@ from typing import Any
 from urllib.parse import urlsplit
 
 
+# `doctor` inspects a checkout the operator may not control, so every Git read
+# below runs under one budget. A repository blocked on a stale index lock, a
+# network mount or a very large history must not hold the diagnostic open.
+GIT_PROBE_TIMEOUT_SECONDS = 10.0
+
+
 class GitRevisionRelation(str, Enum):
     SAME = "same"
     INSTALLED_AHEAD = "installed_ahead"
@@ -27,24 +33,42 @@ def _source_git_environment() -> dict[str, str]:
     return env
 
 
+def _run_git(
+    source_root: Path, *arguments: str
+) -> subprocess.CompletedProcess[str] | None:
+    """Answer one local Git query, or None when Git cannot answer in budget.
+
+    Every caller already treats a missing answer as "unknown" rather than as
+    evidence, so an exhausted budget degrades along that existing path instead
+    of raising out of a read-only diagnostic.
+    """
+
+    try:
+        return subprocess.run(
+            ["git", "-C", str(source_root), *arguments],
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=_source_git_environment(),
+            timeout=GIT_PROBE_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
 def _is_git_worktree_root(source_root: Path) -> bool:
     """Reject Git's upward discovery while accepting linked worktree gitfiles."""
     if not (source_root / ".git").exists():
         return False
-    try:
-        result = subprocess.run(
-            ["git", "-C", str(source_root), "rev-parse", "--show-toplevel"],
-            check=False, capture_output=True, text=True,
-            encoding="utf-8", errors="replace",
-            env=_source_git_environment(),
-        )
-        return (
-            result.returncode == 0
-            and bool(result.stdout.strip())
-            and Path(result.stdout.strip()).resolve() == source_root
-        )
-    except OSError:
+    result = _run_git(source_root, "rev-parse", "--show-toplevel")
+    if result is None or result.returncode != 0:
         return False
+    reported = result.stdout.strip()
+    if not reported:
+        return False
+    return Path(reported).resolve() == source_root
 
 
 def git_metadata_for_root(root: Path | None) -> dict[str, Any]:
@@ -68,19 +92,8 @@ def git_metadata_for_root(root: Path | None) -> dict[str, Any]:
         }
 
     def _run(args: list[str]) -> str | None:
-        try:
-            result = subprocess.run(
-                ["git", "-C", str(source_root), *args],
-                check=False,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                env=_source_git_environment(),
-            )
-        except OSError:
-            return None
-        if result.returncode != 0:
+        result = _run_git(source_root, *args)
+        if result is None or result.returncode != 0:
             return None
         return result.stdout.strip()
 
@@ -124,25 +137,10 @@ def git_revision_relation(
         return GitRevisionRelation.UNKNOWN
 
     def _is_ancestor(ancestor: str, descendant: str) -> bool | None:
-        try:
-            result = subprocess.run(
-                [
-                    "git",
-                    "-C",
-                    str(source_root),
-                    "merge-base",
-                    "--is-ancestor",
-                    ancestor,
-                    descendant,
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                env=_source_git_environment(),
-            )
-        except OSError:
+        result = _run_git(
+            source_root, "merge-base", "--is-ancestor", ancestor, descendant
+        )
+        if result is None:
             return None
         if result.returncode == 0:
             return True
@@ -208,36 +206,16 @@ def trusted_release_ref_for_root(
     if not _is_git_worktree_root(source_root):
         return None
 
-    try:
-        remotes = subprocess.run(
-            ["git", "-C", str(source_root), "remote"],
-            check=False,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            env=_source_git_environment(),
-        )
-    except OSError:
-        return None
-    if remotes.returncode != 0:
+    remotes = _run_git(source_root, "remote")
+    if remotes is None or remotes.returncode != 0:
         return None
 
     for remote in remotes.stdout.splitlines():
         remote = remote.strip()
         if not remote:
             continue
-        try:
-            remote_url = subprocess.run(
-                ["git", "-C", str(source_root), "remote", "get-url", remote],
-                check=False,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                env=_source_git_environment(),
-            )
-        except OSError:
+        remote_url = _run_git(source_root, "remote", "get-url", remote)
+        if remote_url is None:
             continue
         if (
             remote_url.returncode != 0
@@ -246,23 +224,12 @@ def trusted_release_ref_for_root(
         ):
             continue
         trusted_ref = f"refs/remotes/{remote}/{expected_ref}"
-        resolved = subprocess.run(
-            [
-                "git",
-                "-C",
-                str(source_root),
-                "rev-parse",
-                "--verify",
-                f"{trusted_ref}^{{commit}}",
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            env=_source_git_environment(),
+        resolved = _run_git(source_root, "rev-parse", "--verify", f"{trusted_ref}^{{commit}}")
+        commit = (
+            resolved.stdout.strip()
+            if resolved is not None and resolved.returncode == 0
+            else ""
         )
-        commit = resolved.stdout.strip() if resolved.returncode == 0 else ""
         if commit:
             return {
                 "label": f"{expected_repository}@{expected_ref}",
