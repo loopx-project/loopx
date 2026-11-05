@@ -370,6 +370,27 @@ def capture_context_projection(payload: dict[str, Any], *, directory: Path,
     }
 
 
+def capture_progressive_context(payload: dict[str, Any], *, directory: Path,
+                                surface: str = "quota_packet") -> tuple[dict[str, Any], dict[str, Any]]:
+    """Publish the complete current source before optional stateless presentation.
+
+    The typed owner applies the shrink guard. This neither creates a native
+    journal nor requires/adopts an execution Turn. All recovery is same-capture.
+    """
+    from ..quota.turn_envelope import prepare_progressive_context
+
+    source = capture_context_projection(payload, directory=directory)
+    transaction = prepare_progressive_context(payload, surface=surface, source_reference={
+        **{key: source[key] for key in ("path", "sha256")},
+        "source_path": source["path"],
+        "command_template": source["command"] + " --select '<pointer>'",
+    })
+    if not transaction["projected"]:
+        return payload, source
+    required = transaction["context"]
+    return required, capture_context_projection(required, directory=directory, filename="required-context.json")
+
+
 def project_captured_context(
     payload: dict[str, Any], *, directory: Path | None, request: dict[str, Any] | None,
     goal_id: str, agent_id: str, surface: str, capture_id: str,
@@ -421,3 +442,90 @@ def project_captured_context(
         # The original full payload is already available. An unavailable optional
         # codec/capture must not convert safe full delivery into an execution gate.
         return payload
+
+
+def context_index_fields(payload: dict[str, Any], children: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Serialize metadata for TS-verified addresses, preserving Python JSON values."""
+    fields = []
+    for child in children:
+        value: Any = payload
+        for key in child["path"]:
+            value = value[key]
+        field = {"pointer": child["pointer"], "type":
+            "object" if isinstance(value, dict) else "array" if isinstance(value, list)
+            else "null" if value is None else "boolean" if isinstance(value, bool)
+            else "string" if isinstance(value, str) else "number",
+            "bytes": len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))}
+        if isinstance(value, (dict, list)):
+            field["count"] = len(value)
+        fields.append(field)
+    return fields
+
+
+def context_selection_transport(payload: dict[str, Any]) -> dict[str, Any]:
+    """Keep address structure without retransmitting unused scalar prose.
+
+    The TS owner validates pointers; selected values still come from the fully
+    digest-checked original. Initial navigation and discovery need real scalar
+    values and do not use this adapter. JSON null takes four bytes, so replacing
+    only strings longer than two characters cannot increase request bytes.
+    Iteration preserves the original JSON reader's supported nesting depth.
+    """
+    result: dict[str, Any] = {}
+    pending: list[tuple[Any, Any]] = [(payload, result)]
+    while pending:
+        source, target = pending.pop()
+        for key, value in source.items() if isinstance(source, dict) else enumerate(source):
+            if isinstance(value, (dict, list)):
+                child: Any = {} if isinstance(value, dict) else [None] * len(value)
+                target[key] = child
+                pending.append((value, child))
+            else:
+                target[key] = None if isinstance(value, str) and len(value) > 2 else value
+    return result
+
+
+def context_selection_bytes(payload: dict[str, Any], selections: list[dict[str, Any]],
+                             *, list_fields: bool, list_depth: int | None) -> bytes:
+    """Render TS-verified addresses from original, digest-checked JSON values."""
+    views: list[dict[str, Any]] = []
+    for item in selections:
+        selected: Any = payload
+        for key in item["path"]:
+            selected = selected[key]
+        if list_fields:
+            views.append({"pointer": item["pointer"], "fields": context_index_fields(payload, item["children"])})
+        else:
+            views.append({"pointer": item["pointer"], "value": selected})
+    view_options = {"list_depth": list_depth} if list_depth is not None and list_depth != 1 else {}
+    return json.dumps({"schema_version": "context_capture_index_v1" if list_fields else "context_capture_selection_v1",
+        "selections": views, **view_options}, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
+
+
+def context_selection_view(payload: dict[str, Any], *, select: list[str] | None,
+                           initial_read: bool, list_fields: bool, list_depth: int | None,
+                           expected_sha256: str | None, preserve_selection_order: bool = False,
+                           ) -> tuple[dict[str, Any], bytes | None, str | None]:
+    """Replay the TS selector and verify the original digest-pinned view."""
+    from ..quota.turn_envelope import _turn_envelope_result
+
+    context = payload if initial_read or list_fields else context_selection_transport(payload)
+    selection = {"initial_read": True} if initial_read else {"select": select}
+    depth = {"list_depth": list_depth} if list_depth is not None else {}
+    order = {"preserve_selection_order": True} if preserve_selection_order else {}
+    plan = _turn_envelope_result("context_select", context=context, list_fields=list_fields,
+        recover_selection_errors=not initial_read, **selection, **depth, **order)
+    if plan.get("rejected_selection"):
+        return plan, None, None
+    raw = context_selection_bytes(payload, plan["selections"], list_fields=list_fields, list_depth=list_depth)
+    digest = hashlib.sha256(raw).hexdigest()
+    if preserve_selection_order and expected_sha256 != digest:
+        # Historical explicit references may pin canonical output despite
+        # retaining caller order. Only the same source and addresses can replay.
+        plan = _turn_envelope_result("context_select", context=context,
+            list_fields=list_fields, **selection, **depth)
+        raw = context_selection_bytes(payload, plan["selections"], list_fields=list_fields, list_depth=list_depth)
+        digest = hashlib.sha256(raw).hexdigest()
+    if expected_sha256 is not None and expected_sha256 != digest:
+        raise ValueError("selected view digest changed; restore the original selection and reader")
+    return plan, raw, digest

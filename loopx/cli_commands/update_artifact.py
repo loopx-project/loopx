@@ -125,12 +125,20 @@ def resolve_artifact(repo: str, ref: str) -> dict[str, Any]:
     elif ref == "main":
         url = f"https://github.com/{repo}/releases/download/runtime-main/loopx-runtime.json"
     elif SHA.fullmatch(ref):
-        url = f"https://github.com/{repo}/releases/download/runtime-main/loopx-runtime-{ref}.json"
+        url = f"https://github.com/{repo}/releases/download/runtime-main-{ref}/loopx-runtime-{ref}.json"
     elif re.fullmatch(r"v[0-9][A-Za-z0-9.+-]*", ref):
         url = f"https://github.com/{repo}/releases/download/{ref}/loopx-runtime.json"
     else:
         raise ValueError("This ref has no runtime feed; explicitly use --source to build it")
-    artifact = validate_manifest(read_json(url), revision=ref if SHA.fullmatch(ref) else None)
+    try:
+        metadata = read_json(url)
+    except ValueError as exc:
+        # Older snapshots stay in the original release. Only a missing new
+        # address permits that lookup; corrupt metadata/auth/TLS failures stop.
+        if not (SHA.fullmatch(ref) and isinstance(exc.__cause__, HTTPError) and exc.__cause__.code == 404):
+            raise
+        metadata = read_json(f"https://github.com/{repo}/releases/download/runtime-main/loopx-runtime-{ref}.json")
+    artifact = validate_manifest(metadata, revision=ref if SHA.fullmatch(ref) else None)
     if ref in {"main", "stable"} and artifact.get("channel") != ref:
         raise ValueError("Runtime artifact belongs to another channel")
     return artifact

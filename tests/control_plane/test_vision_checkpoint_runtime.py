@@ -203,6 +203,43 @@ def test_runtime_budget_rejection_keeps_actionable_suggestion() -> None:
     assert len(str(error.value)) <= 240
 
 
+def test_runtime_budget_rejection_preserves_first_error_and_additional_details() -> None:
+    packet = {
+        "vision_patch": {"vision_summary": "x" * 421, "last_patch_summary": "y" * 241},
+        "path_delta": {"outcome": "continue", "prior_assumption": "Retain the objective.",
+                       "observed_reality": "Fresh evidence.", "retained": ["a", "b", "c", "d"]},
+    }
+    original = json.dumps(packet, sort_keys=True)
+    with pytest.raises(vision_checkpoint.GoalVisionBudgetError) as error:
+        vision_checkpoint.prepare_vision_refresh(
+            packet, goal_id="goal-main", agent_id="codex-main",
+            existing_agent_vision=None, merge_patch=False,
+            require_path_delta_for_durable_change=False,
+        )
+    assert (error.value.field, error.value.used, error.value.limit) == ("vision_summary", 421, 420)
+    assert error.value.suggestion == "x" * 93 + "..."
+    assert "last_patch_summary uses 241 chars; limit is 240" in str(error.value)
+    assert "path_delta.retained has 4 items; limit is 3" in str(error.value)
+    assert json.dumps(packet, sort_keys=True) == original
+
+
+@pytest.mark.parametrize("value", ["x" * 41, "invalid"])
+def test_runtime_enum_budget_keeps_legacy_python_exception_type(value) -> None:
+    with pytest.raises(ValueError) as error:
+        vision_checkpoint.prepare_vision_refresh(
+            {"vision_patch": {"advancement_policy": value}},
+            goal_id="goal-main", agent_id="codex-main", existing_agent_vision=None,
+            merge_patch=False, require_path_delta_for_durable_change=False,
+        )
+    if len(value) > 32:
+        assert type(error.value) is vision_checkpoint.GoalVisionBudgetError
+        assert (error.value.field, error.value.used, error.value.limit) == ("advancement_policy", 41, 32)
+        assert error.value.suggestion == "x" * 29 + "..."
+    else:
+        assert type(error.value) is ValueError
+        assert "must be one of" in str(error.value)
+
+
 @pytest.mark.parametrize(
     "malformed",
     [

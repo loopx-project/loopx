@@ -165,3 +165,17 @@
   .research-turn-cost-list dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .research-turn-costs-sort select { min-height: 44px; }
 }
+
+.research-usage-range { border: 1px solid var(--pw-line); border-radius: 6px; padding: 12px; min-width: 0; }
+.research-usage-range legend { font-size: var(--text-body); }
+.research-usage-range-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
+.research-usage-range-controls label { display: grid; gap: 4px; width: auto; font-size: 12px; }
+.research-usage-range input { width: 96px; min-height: 36px; padding: 4px 8px; border: 1px solid var(--pw-line); border-radius: 6px; background: var(--pw-card); color: var(--pw-text); font: inherit; }
+.research-usage-range-summary { font-size: 12px; }
+.research-usage-range-summary dl { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+.research-usage-range-summary dt, .research-usage-range-summary p { color: var(--pw-muted); }
+.research-usage-range-summary dd { margin: 4px 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+@media (max-width: 600px) {
+  .research-usage-range input { min-height: 44px; }
+  .research-usage-range-summary dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

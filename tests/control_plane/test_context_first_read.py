@@ -270,6 +270,9 @@ def test_advertised_native_reader_keeps_the_complete_current_contract_across_pag
     monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
     project, runtime, registry = _write_fixture(tmp_path)
     _initialize_fixture_authority(project, runtime, provider=provider, handoff_mode="hard_lease")
+    code, claim = _run_cli(registry, runtime, "todo", "claim", "--goal-id", GOAL_ID,
+        "--todo-id", TODO_ID, "--agent-id", AGENT_ID, "--claimed-by", AGENT_ID, cwd=project)
+    assert code == 0 and claim["ok"], claim
     state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     original_state = state.read_bytes()
     turn_id = "native-first-read"
@@ -295,7 +298,21 @@ def test_advertised_native_reader_keeps_the_complete_current_contract_across_pag
         words = shlex.split(page["next_command"])
     assert page["eof"] and len(content) > 1
     values = selected_context_values("".join(content))
-    assert values["/interaction_contract/cli_channel"] == source["interaction_contract"]["cli_channel"]
+    cli_path = "/interaction_contract/cli_channel"
+    expected_cli = selected_context_values(json.dumps({"selections": [
+        {"pointer": cli_path, "value": source["interaction_contract"]["cli_channel"]}]}))
+    vision_path = next(path for path in expected_cli if path.endswith("/vision_authoring"))
+    # Every CLI leaf outside the authoring reference must still be delivered.
+    for path, item in expected_cli.items():
+        if path.startswith(vision_path + "/") or (isinstance(item, (dict, list)) and item):
+            continue
+        assert values[path] == item
+    assert values[vision_path + "/rule"] == expected_cli[vision_path]["rule"]
+    code, detail = _run_cli(registry, runtime, "quota", "context-read", "--reference-file",
+        view["recovery"]["reference_file"], "--select", vision_path, "--page-bytes", "8000",
+        "--max-page-output-bytes", "9000", cwd=project)
+    assert code == 0 and detail["eof"]
+    assert selected_context_values(detail["content"])[vision_path] == expected_cli[vision_path]
     assert values["/heartbeat_receipt"] == source["heartbeat_receipt"]
     assert values["/selected_todo"] == source["selected_todo"]
     assert _heartbeat_receipt_count(runtime, turn_id) == 1 and _spend_run_count(runtime) == 0

@@ -70,6 +70,14 @@ def test_unattributed_newer_result_cannot_hide_existing_obligation(tmp_path, unb
     assert any(item.get("required") and any(t.get("kind") == "external_progress_review_drift" for t in item.get("triggers", []))
                for item in _find(json.loads(process.stdout), "autonomous_replan_obligation") if isinstance(item, dict))
     before = index.read_bytes()
+    # The inherited Stride policy still refuses a missing structured decision.
+    with pytest.raises(ValueError, match=r"enabled stride review requires agent_vision\.stride_decision"):
+        _refresh(project, runtime, registry, autonomous_replan_recorded=True,
+                 progress_observation=rows[0]["progress_observation"])
+    assert index.read_bytes() == before
+    # Isolate the external-review identity rule without weakening that default gate.
+    configure_goal(registry_path=registry, goal_id=GOAL_ID,
+                   execution_stride_strategy="off", execute=True)
     with pytest.raises(ValueError, match="already claimed in the obligation window"):
         _refresh(project, runtime, registry, autonomous_replan_recorded=True,
                  progress_observation=rows[0]["progress_observation"])

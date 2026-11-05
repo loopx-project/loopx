@@ -15,7 +15,9 @@ from loopx.capabilities.native_chat import external_conversations
 from loopx.extensions.lark.conversation_identity import identity_ref
 
 
-@pytest.mark.parametrize("fault", [None, "terminal-without-execution", "foreign-terminal", "busy", "changed", "truncated", "wrong-hash", "async", "unknown", "final", "reasoning"])
+@pytest.mark.parametrize("fault", [None, "terminal-without-execution", "foreign-terminal", "busy", "changed", "truncated", "wrong-hash", "async", "unknown", "final", "reasoning",
+    "file-read", "file-only", "file-running", "file-foreign", "file-changed", "file-remote", "file-missing-content",
+    "file-missing-uri", "file-unknown-field", "file-oversize"])
 def test_interrupted_native_inventory_is_exact_stable_and_contains_no_reasoning(monkeypatch, fault):
     # The real matcher is exercised in the original-worker integration below;
     # this bounded native inventory fixture isolates index/effect/read stability.
@@ -33,6 +35,26 @@ def test_interrupted_native_inventory_is_exact_stable_and_contains_no_reasoning(
          "errorMessage": {"error": {"errorCode": 429}}},
         {"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE", "metadata": meta,
          "userInput": {"items": [{"text": "later independent question"}]}}]
+    if isinstance(fault, str) and fault.startswith("file-"):
+        view = {"type": "CORTEX_STEP_TYPE_VIEW_FILE", "status": "CORTEX_STEP_STATUS_DONE", "metadata": meta,
+            "viewFile": {"absolutePathUri": "file:///authorized/existing-result.txt", "content": "Original visible file result"}}
+        steps.insert(3, view)
+        if fault == "file-only":
+            steps.pop(2)
+        elif fault == "file-running":
+            view["status"] = "CORTEX_STEP_STATUS_RUNNING"
+        elif fault == "file-foreign":
+            view["metadata"] = {**meta, "executionId": "another-execution"}
+        elif fault == "file-remote":
+            view["viewFile"]["absolutePathUri"] = "https://untrusted.invalid/result.txt"
+        elif fault == "file-missing-content":
+            view["viewFile"].pop("content")
+        elif fault == "file-missing-uri":
+            view["viewFile"].pop("absolutePathUri")
+        elif fault == "file-unknown-field":
+            view["newEffect"] = {}
+        elif fault == "file-oversize":
+            view["viewFile"]["content"] = "x" * (256 * 1024)
     if fault == "async":
         steps[2]["runCommand"]["blocking"] = False
     elif fault == "unknown":
@@ -56,6 +78,8 @@ def test_interrupted_native_inventory_is_exact_stable_and_contains_no_reasoning(
         result = deepcopy(steps[:-1] if fault == "truncated" else steps)
         if fault == "changed" and calls.count(method) > 1:
             result[2]["runCommand"]["combinedOutput"] = "changed"
+        if fault == "file-changed" and calls.count(method) > 1:
+            result[3]["viewFile"]["content"] = "changed"
         return {"steps": result}
     monkeypatch.setattr(native, "discover_antigravity_language_server", lambda: {"url": "synthetic", "csrf_token": "synthetic"})
     monkeypatch.setattr(native, "_rpc_post", read)
@@ -64,16 +88,20 @@ def test_interrupted_native_inventory_is_exact_stable_and_contains_no_reasoning(
         message="original question", started_at="2026-01-01T00:00:00Z", completed_at="2026-01-01T00:00:10Z",
         input_anchor={"thread_id": "native", "start_step_index": 0,
             "input_sha256": "0" * 64 if fault == "wrong-hash" else hashlib.sha256(prompt.encode()).hexdigest()})
-    if fault in {None, "terminal-without-execution"}:
-        assert proof["end_step_index"] == 4 and proof["total_steps"] == 5
-        assert proof["visible_results"][0]["combinedOutput"] == "already observed"
+    if fault in {None, "terminal-without-execution", "file-read", "file-only"}:
+        assert proof["end_step_index"] == len(steps) - 1 and proof["total_steps"] == len(steps)
+        if fault != "file-only":
+            assert proof["visible_results"][0]["combinedOutput"] == "already observed"
+        if fault in {"file-read", "file-only"}:
+            assert proof["visible_results"][-1] == {"file_uri": "file:///authorized/existing-result.txt",
+                "content": "Original visible file result"}
         assert "thinking" not in json.dumps(proof) and "private reasoning" not in json.dumps(proof)
     else:
         assert proof is None
     assert not set(calls) - {"GetCascadeTrajectory", "GetCascadeTrajectorySteps"}
 
 
-@pytest.mark.parametrize("fault", [None, "stop", "source-changed", "no-capacity", "review-action", "review-gate", "queue-change", "already-codex", "post-enqueue-crash", "lost-ack", "new-question-during-answer", "restricted-review", "primary-quota-unreadable", "native-tail"])
+@pytest.mark.parametrize("fault", [None, "stop", "source-changed", "no-capacity", "review-action", "review-gate", "queue-change", "already-codex", "post-enqueue-crash", "lost-ack", "new-question-during-answer", "restricted-review", "primary-quota-unreadable", "native-tail", "authenticated-host", "file-read", "file-running"])
 def test_original_worker_answers_interrupted_steward_question_once(tmp_path, language_server, monkeypatch, fault):  # noqa: F811
     import loopx.chat_manager as manager_module
     import loopx.chat_runtime as runtime_module
@@ -104,7 +132,7 @@ def test_original_worker_answers_interrupted_steward_question_once(tmp_path, lan
             method = args[2]
             if method == "GetCascadeTrajectory":
                 packet = post(*args, **kwargs)
-                packet["numTotalSteps"] += 4 if native_tail else 2
+                packet["numTotalSteps"] += 4 if native_tail else 3 if fault in {"file-read", "file-running"} else 2
                 return packet
             if method != "GetCascadeTrajectorySteps":
                 return post(*args, **kwargs)
@@ -121,6 +149,13 @@ def test_original_worker_answers_interrupted_steward_question_once(tmp_path, lan
                     "blocking": True, "exitCode": 0, "combinedOutput": "Original verified output, not a new execution"}}
             error["metadata"]["sourceTrajectoryStepInfo"] = {"stepIndex": 3}
             steps = [user, planner, tool, error]
+            if fault in {"file-read", "file-running"}:
+                error["metadata"]["sourceTrajectoryStepInfo"] = {"stepIndex": 4}
+                steps.insert(3, {"type": "CORTEX_STEP_TYPE_VIEW_FILE",
+                    "status": "CORTEX_STEP_STATUS_RUNNING" if fault == "file-running" else "CORTEX_STEP_STATUS_DONE",
+                    "metadata": {**meta, "sourceTrajectoryStepInfo": {"stepIndex": 3}},
+                    "viewFile": {"absolutePathUri": (workspace / "original-result.txt").as_uri(),
+                        "content": "Original visible file result"}})
             if native_tail:
                 for index, kind, payload in [(4, "CORTEX_STEP_TYPE_USER_INPUT", {"userInput": {"items": [{"text": "Another native question"}]}}),
                         (5, "CORTEX_STEP_TYPE_ERROR_MESSAGE", {"errorMessage": {"error": {"errorCode": 429}}})]:
@@ -165,11 +200,25 @@ def test_original_worker_answers_interrupted_steward_question_once(tmp_path, lan
         if fault == "primary-quota-unreadable":
             monkeypatch.setattr(native.AntigravityAdapter, "metadata_review_capacity",
                 lambda **_: pytest.fail("a verified API-primary alternate must not probe unrelated primary quota"))
+        api_calls = []
+        auth_before = None
+        if fault == "authenticated-host":
+            from loopx.capabilities.native_chat import codex_auth
+            runtime.codex_home.mkdir(parents=True, exist_ok=True)
+            auth = runtime.codex_home / "auth.json"
+            auth.write_text('{"auth_mode":"chatgpt","fixture":"original-host-login"}')
+            auth_before = auth.read_bytes()
+            def api_route(runtime_root, home, *, consumer, model):
+                api_calls.append((runtime_root, home, consumer, model))
+                return codex_auth.CodexApiTransport("http://127.0.0.1:1/steward/v1", "synthetic-loopback-token")
+            monkeypatch.setattr(codex_auth, "native_api_transport", api_route)
         fake = Path(runtime.codex_bin)
         source = fake.read_text().replace('result = {"thread": {"id": "durable-thread"}}', '''result = {"thread": {"id": "durable-thread"}, "model": "gpt-6.1-sol"}
         permissions = request.get("params", {}).get("permissions")
         if permissions:
             result.update(activePermissionProfile={"id": permissions}, runtimeWorkspaceRoots=[request["params"]["cwd"]])''')
+        if fault == "authenticated-host":
+            source = source.replace('"model": "gpt-6.1-sol"}', '"model": "gpt-6.1-sol", "modelProvider": request.get("params", {}).get("modelProvider")}')
         if fault in {"review-action", "review-gate"}:
             response = {"message": "The existing evidence supports only this limited answer.", "proposals": [],
                 "gate": {"kind": "host_tool_gate", "summary": "Missing original validation evidence", "next_action": "Keep original question owed"} if fault == "review-gate" else None}
@@ -222,7 +271,7 @@ def test_original_worker_answers_interrupted_steward_question_once(tmp_path, lan
             provider.lose_next_reply = True
         transport.reconcile_request(path)
         recovered = transport.core.read_request(ref)
-        if fault in {"stop", "source-changed", "no-capacity", "queue-change"}:
+        if fault in {"stop", "source-changed", "no-capacity", "queue-change", "file-running"}:
             assert recovered["turn_id"] == original["turn_id"] and not recovered.get("context_recovery")
         else:
             assert recovered["context_recovery"]["answer_review"] is True
@@ -243,6 +292,8 @@ def test_original_worker_answers_interrupted_steward_question_once(tmp_path, lan
             profile = "loopx_steward_host_read" if host_reads else "loopx_workspace_only_read"
             assert reviews[0]["permissions"] == profile
             assert "Original verified output" in reviews[0]["input"][0]["text"]
+            if fault == "file-read":
+                assert "Original visible file result" in reviews[0]["input"][0]["text"]
             assert "never forward this" not in reviews[0]["input"][0]["text"]
             opens = [p["params"] for p in packets if p.get("method") == "thread/start"]
             review_opens = [p for p in opens if p.get("permissions") == profile]
@@ -255,6 +306,11 @@ def test_original_worker_answers_interrupted_steward_question_once(tmp_path, lan
             assert permissions["network"]["enabled"] is False
             assert permissions["filesystem"][":root"] == ("read" if host_reads else "deny")
             assert permissions["filesystem"][":workspace_roots"]["."] == "read"
+            if fault == "authenticated-host":
+                assert api_calls == [(runtime.coordination_runtime_root, runtime.codex_home, "steward", "gpt-6.1-sol")]
+                assert review_opens[0]["modelProvider"] == "loopx_account_api"
+                assert review_opens[0]["config"]["model_providers"]["loopx_account_api"]["base_url"] == "http://127.0.0.1:1/steward/v1"
+                assert (runtime.codex_home / "auth.json").read_bytes() == auth_before
             after = capture.read_bytes()
             transport.reconcile_request(path)
             assert capture.read_bytes() == after

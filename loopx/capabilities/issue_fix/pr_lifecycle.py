@@ -6,13 +6,18 @@ import json
 import re
 import subprocess
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import PurePosixPath
 from typing import Any
 from urllib.parse import quote, urlsplit
 
 from ...control_plane.runtime.public_safety import public_safe_compact_text
+from ...domain_packs.issue_fix import issue_fix_maintainer_correction_entries
 
+from .github_public import (
+    MAINTAINER_ASSOCIATIONS,
+    fetch_github_pull_request_event_metadata,
+)
 from .metadata_preview import (
     normalise_github_issue_link_reference,
     normalise_github_issue_reference,
@@ -26,6 +31,20 @@ ISSUE_FIX_PR_GROUPED_MONITOR_PROJECTION_SCHEMA_VERSION = (
 ISSUE_FIX_MAINTAINER_CORRECTION_INPUT_SCHEMA_VERSION = (
     "issue_fix_maintainer_correction_input_v0"
 )
+ISSUE_FIX_MAINTAINER_CORRECTION_INPUT_SCHEMA_VERSION_V1 = (
+    "issue_fix_maintainer_correction_input_v1"
+)
+MAINTAINER_CORRECTION_INPUT_SCHEMA_VERSIONS = {
+    ISSUE_FIX_MAINTAINER_CORRECTION_INPUT_SCHEMA_VERSION,
+    ISSUE_FIX_MAINTAINER_CORRECTION_INPUT_SCHEMA_VERSION_V1,
+}
+ISSUE_FIX_MAINTAINER_CORRECTION_ADMISSION_SCHEMA_VERSION = (
+    "issue_fix_maintainer_correction_admission_v0"
+)
+ISSUE_FIX_MAINTAINER_CORRECTION_LEDGER_ENTRY_SCHEMA_VERSION = (
+    "issue_fix_maintainer_correction_ledger_entry_v0"
+)
+MAINTAINER_CORRECTION_OPERATION_ID_PREFIX = "issue-fix-correction:"
 MAINTAINER_CORRECTION_KINDS = {
     "actionable_patch",
     "semantic_ambiguity",
@@ -33,6 +52,38 @@ MAINTAINER_CORRECTION_KINDS = {
     "unchanged",
 }
 MAINTAINER_CORRECTION_SOURCE_KINDS = {"review", "maintainer_comment"}
+MAINTAINER_CORRECTION_SOURCE_EVENT_KINDS = {
+    "issue_comment",
+    "review",
+    "review_comment",
+}
+MAINTAINER_CORRECTION_SOURCE_EVENT_FIELDS = {
+    "kind",
+    "id",
+    "html_url",
+    "author_login",
+    "author_association",
+    "created_at",
+    "updated_at",
+}
+MAINTAINER_CORRECTION_ADMISSION_BASES = {"host_asserted", "provider_verified"}
+MAINTAINER_CORRECTION_DISPOSITIONS = {"accepted", "context_only", "superseded"}
+MAINTAINER_CORRECTION_REJECTION_REASONS = {
+    "source_event_not_observed",
+    "source_event_revision_mismatch",
+    "stale_revision",
+    "self_or_bot_author",
+    "author_not_maintainer",
+    "terminal_pr_state",
+    "goal_not_active",
+    "origin_request_cancelled",
+    "origin_request_unreadable",
+}
+# GitHub Apps post as `<slug>[bot]`; without a configured LoopX actor login this
+# suffix is the only self/bot signal available from body-free event metadata.
+BOT_LOGIN_SUFFIX = "[bot]"
+_GITHUB_LOGIN_PATTERN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\[bot\])?")
+_PROVIDER_EVENT_ID_PATTERN = re.compile(r"[0-9]{1,20}")
 WRITE_SCOPES = {"write", "publish", "external_review_request"}
 MAINTAINER_CORRECTION_INPUT_FIELDS = {
     "schema_version",
@@ -44,8 +95,8 @@ MAINTAINER_CORRECTION_INPUT_FIELDS = {
     "pr_update_path",
     "user_question",
     "missing_authority_scopes",
+    "source_event",
 }
-
 TERMINAL_PR_STATES = {"MERGED", "CLOSED"}
 FAILING_CHECK_STATES = {
     "ACTION_REQUIRED",
@@ -230,6 +281,74 @@ def _public_source_reference(value: Any) -> str:
     return path.as_posix()
 
 
+def _normalise_provider_event_id(value: Any) -> str:
+    if isinstance(value, bool):
+        raise ValueError("maintainer correction source_event id must be a provider id")
+    text = str(value if value is not None else "").strip()
+    if not _PROVIDER_EVENT_ID_PATTERN.fullmatch(text):
+        raise ValueError("maintainer correction source_event id must be a numeric provider id")
+    return text
+
+
+def _normalise_author_login(value: Any, *, field: str) -> str:
+    text = str(value or "").strip()
+    if not _GITHUB_LOGIN_PATTERN.fullmatch(text):
+        raise ValueError(f"maintainer correction {field} must be a public provider login")
+    return text
+
+
+def _normalise_event_timestamp(value: Any, *, field: str) -> str:
+    text = str(value or "").strip()
+    parsed = _timestamp(text)
+    if parsed is None:
+        raise ValueError(
+            f"maintainer correction {field} must be a timezone-aware ISO timestamp"
+        )
+    return parsed.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def normalise_issue_fix_maintainer_correction_source_event(
+    value: Any,
+) -> dict[str, Any]:
+    """Normalise the provider event that carried a maintainer correction.
+
+    Only identity and revision metadata survive; no body field is accepted.
+    """
+
+    if not isinstance(value, Mapping):
+        raise ValueError("maintainer correction source_event must be an object")
+    unknown_fields = set(value) - MAINTAINER_CORRECTION_SOURCE_EVENT_FIELDS
+    if unknown_fields:
+        raise ValueError(
+            "maintainer correction source_event contains unsupported fields: "
+            + ", ".join(sorted(str(field) for field in unknown_fields))
+        )
+    kind = str(value.get("kind") or "").strip()
+    if kind not in MAINTAINER_CORRECTION_SOURCE_EVENT_KINDS:
+        raise ValueError(
+            "maintainer correction source_event kind must be issue_comment, review, or review_comment"
+        )
+    html_url = _public_source_reference(value.get("html_url"))
+    if "://" not in html_url:
+        raise ValueError("maintainer correction source_event html_url must be a public https URL")
+    return {
+        "kind": kind,
+        "id": _normalise_provider_event_id(value.get("id")),
+        "html_url": html_url,
+        "author_login": _normalise_author_login(
+            value.get("author_login"), field="source_event author_login"
+        ),
+        "author_association": _upper_label(value.get("author_association"), "NONE"),
+        "created_at": _normalise_event_timestamp(
+            value.get("created_at"), field="source_event created_at"
+        ),
+        "updated_at": _normalise_event_timestamp(
+            value.get("updated_at"), field="source_event updated_at"
+        ),
+        "body_captured": False,
+    }
+
+
 def normalise_issue_fix_maintainer_correction_input(
     value: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -239,13 +358,31 @@ def normalise_issue_fix_maintainer_correction_input(
             "maintainer correction input contains unsupported fields: "
             + ", ".join(sorted(str(field) for field in unknown_fields))
         )
-    if (
-        value.get("schema_version")
-        != ISSUE_FIX_MAINTAINER_CORRECTION_INPUT_SCHEMA_VERSION
-    ):
+    schema_version = value.get("schema_version")
+    if schema_version not in MAINTAINER_CORRECTION_INPUT_SCHEMA_VERSIONS:
         raise ValueError(
-            "maintainer correction schema_version must be issue_fix_maintainer_correction_input_v0"
+            "maintainer correction schema_version must be "
+            "issue_fix_maintainer_correction_input_v0 or issue_fix_maintainer_correction_input_v1"
         )
+    provider_verified = (
+        schema_version == ISSUE_FIX_MAINTAINER_CORRECTION_INPUT_SCHEMA_VERSION_V1
+    )
+    if provider_verified:
+        if "source_event" not in value:
+            raise ValueError(
+                "issue_fix_maintainer_correction_input_v1 requires source_event"
+            )
+        source_event: dict[str, Any] | None = (
+            normalise_issue_fix_maintainer_correction_source_event(
+                value.get("source_event")
+            )
+        )
+    else:
+        if "source_event" in value:
+            raise ValueError(
+                "source_event requires schema_version issue_fix_maintainer_correction_input_v1"
+            )
+        source_event = None
     correction_kind = str(value.get("correction_kind") or "").strip()
     if correction_kind not in MAINTAINER_CORRECTION_KINDS:
         raise ValueError(
@@ -285,7 +422,11 @@ def normalise_issue_fix_maintainer_correction_input(
                 missing_authority_scopes.append(scope)
         if not missing_authority_scopes:
             raise ValueError("missing_authority requires at least one authority scope")
-    normalized = {
+    # The fingerprint covers the compacted correction content under the v0
+    # field set, so existing v0 ledger rows keep their recorded fingerprints and
+    # a v1 event carrying identical content hashes the same; event identity
+    # lives in the operation id, not here.
+    content = {
         "schema_version": ISSUE_FIX_MAINTAINER_CORRECTION_INPUT_SCHEMA_VERSION,
         "correction_kind": correction_kind,
         "source_kind": source_kind,
@@ -300,11 +441,379 @@ def normalise_issue_fix_maintainer_correction_input(
         "raw_provider_payload_captured": False,
         "local_paths_captured": False,
     }
-    normalized["correction_fingerprint"] = hashlib.sha256(
-        json.dumps(normalized, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    fingerprint = hashlib.sha256(
+        json.dumps(content, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()[:16]
+    normalized = {
+        **content,
+        "schema_version": str(schema_version),
+        "source_event": source_event,
+        "admission_basis": "provider_verified" if provider_verified else "host_asserted",
+    }
+    normalized["correction_fingerprint"] = fingerprint
     return normalized
 
+
+def issue_fix_maintainer_correction_operation_id(
+    correction: Mapping[str, Any], *, repo: str, pr_ref: str
+) -> str:
+    """Return the stable Todo operation id for one correction revision."""
+
+    source_event = correction.get("source_event")
+    if isinstance(source_event, Mapping):
+        identity = [
+            repo,
+            pr_ref,
+            str(source_event.get("kind")),
+            str(source_event.get("id")),
+            str(source_event.get("updated_at")),
+        ]
+    else:
+        identity = [repo, pr_ref, str(correction.get("correction_fingerprint"))]
+    digest = hashlib.sha256(
+        json.dumps(identity, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()[:24]
+    return f"{MAINTAINER_CORRECTION_OPERATION_ID_PREFIX}{digest}"
+
+
+def _provider_event_entries(value: Any) -> list[Mapping[str, Any]]:
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return [item for item in value if isinstance(item, Mapping)]
+    return []
+
+
+def normalise_issue_fix_pr_source_events(
+    provider_payload: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Project body-free PR comment/review metadata into verifiable events.
+
+    Reviews expose ``submitted_at`` instead of ``updated_at``; that timestamp
+    stands in as the review revision because GitHub does not re-time edits of a
+    review summary through the list endpoint.
+    """
+
+    payload = provider_payload if isinstance(provider_payload, Mapping) else {}
+    groups = (
+        ("issue_comment", payload.get("comments") or payload.get("issueComments")),
+        ("review", payload.get("reviews")),
+        ("review_comment", payload.get("reviewComments") or payload.get("review_comments")),
+    )
+    available = any(
+        isinstance(raw, Sequence) and not isinstance(raw, (str, bytes))
+        for _kind, raw in groups
+    )
+    events: list[dict[str, Any]] = []
+    for kind, raw in groups:
+        for item in _provider_event_entries(raw):
+            raw_id = item.get("id")
+            if isinstance(raw_id, bool) or raw_id is None:
+                continue
+            event_id = str(raw_id).strip()
+            if not _PROVIDER_EVENT_ID_PATTERN.fullmatch(event_id):
+                continue
+            author = item.get("author") or item.get("user")
+            if isinstance(author, Mapping):
+                author = author.get("login")
+            updated_at = (
+                item.get("updated_at")
+                or item.get("updatedAt")
+                or item.get("submitted_at")
+                or item.get("submittedAt")
+            )
+            created_at = item.get("created_at") or item.get("createdAt")
+            events.append(
+                {
+                    "kind": kind,
+                    "id": event_id,
+                    "author_login": str(author or "").strip()[:60] or None,
+                    "author_association": _upper_label(
+                        item.get("author_association")
+                        or item.get("authorAssociation"),
+                        "NONE",
+                    ),
+                    "created_at": (
+                        _normalise_event_timestamp(created_at, field="created_at")
+                        if _timestamp(created_at) else None
+                    ),
+                    "updated_at": (
+                        _normalise_event_timestamp(updated_at, field="updated_at")
+                        if _timestamp(updated_at) else None
+                    ),
+                    "body_captured": False,
+                }
+            )
+    return {
+        "status": "available" if available else "unavailable",
+        "events": events,
+        "body_captured": False,
+    }
+
+
+def _same_instant(left: Any, right: Any) -> bool:
+    left_time = _timestamp(left)
+    right_time = _timestamp(right)
+    return left_time is not None and right_time is not None and left_time == right_time
+
+
+def _is_bot_or_self_login(login: Any) -> bool:
+    text = str(login or "").strip().lower()
+    return text.endswith(BOT_LOGIN_SUFFIX)
+
+
+def _latest_accepted_revision(
+    prior_entries: Sequence[Mapping[str, Any]], *, source_event: Mapping[str, Any]
+) -> dict[str, Any] | None:
+    latest: dict[str, Any] | None = None
+    for entry in prior_entries:
+        event = entry.get("source_event")
+        if not isinstance(event, Mapping):
+            continue
+        if event.get("kind") != source_event.get("kind") or str(
+            event.get("id")
+        ) != str(source_event.get("id")):
+            continue
+        if entry.get("disposition") not in {"accepted", "superseded"}:
+            continue
+        candidate_time = _timestamp(event.get("updated_at"))
+        if candidate_time is None:
+            continue
+        latest_time = (
+            _timestamp(latest["source_event"].get("updated_at")) if latest else None
+        )
+        if latest_time is None or candidate_time > latest_time:
+            latest = dict(entry)
+    return latest
+
+
+def evaluate_issue_fix_maintainer_correction_admission(
+    correction: Mapping[str, Any],
+    *,
+    observation: Mapping[str, Any],
+    source_events: Mapping[str, Any] | None,
+    prior_entries: Sequence[Mapping[str, Any]] | None,
+    prior_ledger_read: bool,
+    recorded_at: str | None,
+) -> dict[str, Any]:
+    """Run the deterministic admission gates for one maintainer correction.
+
+    Returns the admission record plus the ledger entries this run touches:
+    the entry for this correction and any earlier revision it supersedes.
+    """
+
+    repo = str(observation.get("repo") or "")
+    pr_ref = str(observation.get("pr_ref") or "")
+    operation_id = issue_fix_maintainer_correction_operation_id(
+        correction, repo=repo, pr_ref=pr_ref
+    )
+    source_event = correction.get("source_event")
+    admission_basis = str(correction.get("admission_basis") or "host_asserted")
+    prior = issue_fix_maintainer_correction_entries(
+        {"maintainer_corrections": prior_entries}
+    )
+    existing_entry = next(
+        (entry for entry in prior if entry.get("operation_id") == operation_id), None
+    )
+    gates: list[dict[str, Any]] = []
+    reason: str | None = None
+    verified_event: dict[str, Any] | None = None
+    provider_events_status = (
+        str(source_events.get("status") or "unavailable")
+        if isinstance(source_events, Mapping)
+        else "unavailable"
+    )
+
+    def record(name: str, passed: bool, failure_reason: str | None = None) -> None:
+        nonlocal reason
+        gates.append({"gate": name, "passed": passed})
+        if not passed and reason is None:
+            reason = failure_reason
+
+    if isinstance(source_event, Mapping):
+        observed = [
+            event
+            for event in (
+                source_events.get("events") if isinstance(source_events, Mapping) else []
+            )
+            if isinstance(event, Mapping)
+            and event.get("kind") == source_event.get("kind")
+            and str(event.get("id")) == str(source_event.get("id"))
+        ]
+        if not observed:
+            record("source_event_observed", False, "source_event_not_observed")
+        elif not any(
+            _same_instant(event.get("updated_at"), source_event.get("updated_at"))
+            for event in observed
+        ):
+            record("source_event_observed", False, "source_event_revision_mismatch")
+        else:
+            record("source_event_observed", True)
+            provider_event = observed[0]
+            verified_event = {
+                **dict(source_event),
+                "author_login": str(
+                    provider_event.get("author_login") or source_event.get("author_login")
+                ),
+                "author_association": _upper_label(
+                    provider_event.get("author_association"),
+                    str(source_event.get("author_association") or "NONE"),
+                ),
+                "created_at": _normalise_event_timestamp(
+                    provider_event.get("created_at") or source_event.get("created_at"),
+                    field="source_event created_at",
+                ),
+            }
+        effective_event = verified_event or dict(source_event)
+        latest_prior = _latest_accepted_revision(prior, source_event=source_event)
+        prior_time = (
+            _timestamp(latest_prior["source_event"].get("updated_at"))
+            if latest_prior
+            else None
+        )
+        incoming_time = _timestamp(source_event.get("updated_at"))
+        revision_relation = "first"
+        if prior_time is not None and incoming_time is not None:
+            if incoming_time < prior_time:
+                revision_relation = "stale"
+            elif incoming_time == prior_time:
+                revision_relation = "replay"
+            else:
+                revision_relation = "newer"
+        record("revision_not_stale", revision_relation != "stale", "stale_revision")
+        record(
+            "not_self_or_bot_author",
+            not _is_bot_or_self_login(effective_event.get("author_login")),
+            "self_or_bot_author",
+        )
+        record(
+            "author_is_maintainer",
+            _upper_label(effective_event.get("author_association"), "NONE")
+            in MAINTAINER_ASSOCIATIONS,
+            "author_not_maintainer",
+        )
+    else:
+        effective_event = None
+        latest_prior = None
+        revision_relation = "replay" if existing_entry else "first"
+    record(
+        "pr_state_not_terminal",
+        str(observation.get("state") or "") not in TERMINAL_PR_STATES,
+        "terminal_pr_state",
+    )
+
+    accepted = reason is None
+    replay = existing_entry is not None and (
+        not accepted or existing_entry.get("disposition") in {"accepted", "superseded"}
+    )
+    if replay:
+        entry = dict(existing_entry)
+    else:
+        entry = {
+            "schema_version": ISSUE_FIX_MAINTAINER_CORRECTION_LEDGER_ENTRY_SCHEMA_VERSION,
+            "operation_id": operation_id,
+            "source_event": effective_event,
+            "correction_fingerprint": correction.get("correction_fingerprint"),
+            "correction_kind": correction.get("correction_kind"),
+            "admission_basis": admission_basis,
+            "disposition": "accepted" if accepted else "context_only",
+            "reason": reason,
+            "todo_id": None,
+            "accepted_head_sha": observation.get("head_commit_ref") if accepted else None,
+            "recorded_at": recorded_at,
+            "superseded_by": None,
+            "body_captured": False,
+        }
+    touched_entries = [entry]
+    superseded_operation_id = None
+    if (
+        accepted
+        and revision_relation == "newer"
+        and latest_prior is not None
+        and latest_prior.get("operation_id") != operation_id
+    ):
+        superseded_operation_id = str(latest_prior.get("operation_id"))
+        touched_entries.append(
+            {
+                **latest_prior,
+                "disposition": "superseded",
+                "superseded_by": operation_id,
+            }
+        )
+    return {
+        "schema_version": ISSUE_FIX_MAINTAINER_CORRECTION_ADMISSION_SCHEMA_VERSION,
+        "operation_id": operation_id,
+        "admission_basis": admission_basis,
+        "disposition": "accepted" if accepted else "context_only",
+        "reason": reason,
+        "host_summary_mismatch": bool(
+            existing_entry is not None
+            and correction.get("correction_fingerprint")
+            != existing_entry.get("correction_fingerprint")
+        ),
+        "gates": gates,
+        "revision_relation": revision_relation,
+        "replay": replay,
+        "supersedes_operation_id": superseded_operation_id,
+        "provider_events_status": provider_events_status,
+        "prior_ledger_read": bool(prior_ledger_read),
+        "source_event": effective_event,
+        "entries": touched_entries,
+        "body_captured": False,
+    }
+
+
+def recheck_issue_fix_maintainer_correction_effect_gates(
+    entry: Mapping[str, Any],
+    *,
+    observation: Mapping[str, Any],
+    ledger_entries: Sequence[Mapping[str, Any]] | None,
+    goal_stopped: bool,
+    source_events: Mapping[str, Any] | None = None,
+) -> str | None:
+    """Re-run the effect-time gates for an accepted entry just before its Todo write."""
+
+    source_event = entry.get("source_event")
+    if isinstance(source_event, Mapping):
+        observed = [
+            event
+            for event in (
+                source_events.get("events") if isinstance(source_events, Mapping) else []
+            )
+            if isinstance(event, Mapping)
+            and event.get("kind") == source_event.get("kind")
+            and str(event.get("id")) == str(source_event.get("id"))
+        ]
+        if not observed:
+            return "source_event_not_observed"
+        current_event = next(
+            (event for event in observed
+             if _same_instant(event.get("updated_at"), source_event.get("updated_at"))),
+            None,
+        )
+        if current_event is None:
+            return "source_event_revision_mismatch"
+        latest = _latest_accepted_revision(
+            issue_fix_maintainer_correction_entries(
+                {"maintainer_corrections": ledger_entries}
+            ),
+            source_event=source_event,
+        )
+        if latest is not None and latest.get("operation_id") != entry.get("operation_id"):
+            latest_time = _timestamp(latest["source_event"].get("updated_at"))
+            own_time = _timestamp(source_event.get("updated_at"))
+            if latest_time is not None and own_time is not None and own_time < latest_time:
+                return "stale_revision"
+        if _is_bot_or_self_login(current_event.get("author_login")):
+            return "self_or_bot_author"
+        if (
+            _upper_label(current_event.get("author_association"), "NONE")
+            not in MAINTAINER_ASSOCIATIONS
+        ):
+            return "author_not_maintainer"
+    if str(observation.get("state") or "") in TERMINAL_PR_STATES:
+        return "terminal_pr_state"
+    if goal_stopped:
+        return "goal_not_active"
+    return None
 
 def _maintainer_correction_transition(
     correction: Mapping[str, Any],
@@ -314,6 +823,15 @@ def _maintainer_correction_transition(
     correction_kind = str(correction.get("correction_kind"))
     source_ref = str(correction.get("source_ref"))
     summary = str(correction.get("summary"))
+    source_event = correction.get("source_event")
+    # Todo creation dedupes identical active text, so distinct provider events
+    # or revisions with the same wording must name the event they came from.
+    event_suffix = (
+        f" Source event: {source_event.get('kind')} {source_event.get('id')}"
+        f" updated {source_event.get('updated_at')}."
+        if isinstance(source_event, Mapping)
+        else ""
+    )
     if correction_kind == "actionable_patch":
         verification_plan = str(correction.get("verification_plan"))
         pr_update_path = str(correction.get("pr_update_path"))
@@ -327,6 +845,7 @@ def _maintainer_correction_transition(
             text=(
                 f"[P0] Apply maintainer correction for {pr_permalink} from {source_ref}: "
                 f"{summary} Verify: {verification_plan} Update PR via: {pr_update_path}"
+                f"{event_suffix}"
             ),
         ) | {
             "terminal_state_precedence": False,
@@ -344,7 +863,7 @@ def _maintainer_correction_transition(
             depends_on=["issue_fix_pr_lifecycle_monitor"],
             text=(
                 f"[P0] Clarify maintainer correction for {pr_permalink} from {source_ref}: "
-                f"{correction.get('user_question')} Context: {summary}"
+                f"{correction.get('user_question')} Context: {summary}{event_suffix}"
             ),
         ) | {"terminal_state_precedence": False, "material_change": True}
     if correction_kind == "missing_authority":
@@ -361,7 +880,7 @@ def _maintainer_correction_transition(
             depends_on=["issue_fix_pr_lifecycle_monitor"],
             text=(
                 f"[P0] Grant or decline [{scopes}] authority for maintainer correction "
-                f"{source_ref} on {pr_permalink}: {summary}"
+                f"{source_ref} on {pr_permalink}: {summary}{event_suffix}"
             ),
         ) | {
             "terminal_state_precedence": False,
@@ -978,6 +1497,26 @@ def validate_github_pr_provider_identity(
     return provider_reference
 
 
+def _fetch_pr_source_events(
+    reference: Mapping[str, Any], *, timeout_seconds: int
+) -> dict[str, Any]:
+    repo = str(reference.get("repo") or "")
+    number = reference.get("number")
+    if "/" not in repo or not isinstance(number, int):
+        return {"status": "unavailable", "events": [], "body_captured": False}
+    owner, repo_name = repo.split("/", 1)
+    try:
+        payload = fetch_github_pull_request_event_metadata(
+            owner=owner,
+            repo=repo_name,
+            number=number,
+            timeout_seconds=timeout_seconds,
+        )
+    except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired):
+        return {"status": "unavailable", "events": [], "body_captured": False}
+    return normalise_issue_fix_pr_source_events(payload)
+
+
 def build_issue_fix_pr_lifecycle_monitor_packet(
     *,
     repo: str = "public_repo_fixture",
@@ -988,6 +1527,7 @@ def build_issue_fix_pr_lifecycle_monitor_packet(
     fetch_metadata: bool = False,
     fetch_timeout_seconds: int = 10,
     maintainer_correction_input: Mapping[str, Any] | None = None,
+    prior_maintainer_corrections: Sequence[Mapping[str, Any]] | None = None,
     generated_at: str | None = "2026-06-23T00:00:00Z",
 ) -> dict[str, Any]:
     reference = normalise_github_issue_reference(repo=repo, issue_ref=pr_ref, url=url)
@@ -1046,18 +1586,66 @@ def build_issue_fix_pr_lifecycle_monitor_packet(
         if maintainer_correction_input is not None
         else None
     )
-    if (
-        maintainer_correction is not None
-        and observation["state"] not in TERMINAL_PR_STATES
-    ):
-        transition = _maintainer_correction_transition(
-            maintainer_correction,
-            pr_permalink=str(
-                observation.get("permalink")
-                or reference.get("permalink")
-                or observation["pr_ref"]
-            ),
+    maintainer_correction_admission: dict[str, Any] | None = None
+    source_events: dict[str, Any] | None = None
+    pending_source_event_recheck = any(
+        entry.get("disposition") == "accepted"
+        and not entry.get("todo_id")
+        and isinstance(entry.get("source_event"), Mapping)
+        for entry in issue_fix_maintainer_correction_entries(
+            {"maintainer_corrections": prior_maintainer_corrections}
         )
+    )
+    if pending_source_event_recheck or (
+        maintainer_correction is not None
+        and isinstance(maintainer_correction.get("source_event"), Mapping)
+    ):
+        if fetch_metadata:
+            source_events = _fetch_pr_source_events(
+                reference, timeout_seconds=fetch_timeout_seconds
+            )
+        else:
+            source_events = normalise_issue_fix_pr_source_events(payload)
+    if maintainer_correction is not None:
+        maintainer_correction_admission = (
+            evaluate_issue_fix_maintainer_correction_admission(
+                maintainer_correction,
+                observation=observation,
+                source_events=source_events,
+                prior_entries=prior_maintainer_corrections,
+                prior_ledger_read=prior_maintainer_corrections is not None,
+                recorded_at=generated_at,
+            )
+        )
+        if (
+            maintainer_correction_admission["disposition"] == "accepted"
+            and observation["state"] not in TERMINAL_PR_STATES
+        ):
+            transition = _maintainer_correction_transition(
+                maintainer_correction,
+                pr_permalink=str(
+                    observation.get("permalink")
+                    or reference.get("permalink")
+                    or observation["pr_ref"]
+                ),
+            )
+            if (
+                transition["decision"] in {"runnable_successor", "user_gate"}
+                and not maintainer_correction_admission["replay"]
+            ):
+                # The entry carries its own Todo intent so a later run can
+                # finish an interrupted write without the original input.
+                maintainer_correction_admission["entries"][0]["todo_intent"] = {
+                    "role": transition["role"],
+                    "text": transition["text"],
+                    "task_class": transition["task_class"],
+                    "action_kind": transition["action_kind"],
+                    "required_write_scopes": (
+                        list(transition.get("required_write_scopes") or [])
+                        if transition["role"] == "agent"
+                        else None
+                    ),
+                }
     packet: dict[str, Any] = {
         "ok": True,
         "schema_version": ISSUE_FIX_PR_LIFECYCLE_MONITOR_SCHEMA_VERSION,
@@ -1124,6 +1712,17 @@ def build_issue_fix_pr_lifecycle_monitor_packet(
     first_push_ci = _first_push_ci_evidence(observation, observed_at=generated_at)
     if first_push_ci is not None:
         packet["first_push_ci"] = first_push_ci
+    if maintainer_correction_admission is not None:
+        entries = maintainer_correction_admission.pop("entries")
+        packet["maintainer_correction_admission"] = maintainer_correction_admission
+        packet["maintainer_corrections"] = entries
+    if source_events is not None:
+        packet["source_events_observed"] = {
+            "status": source_events.get("status"),
+            "event_count": len(source_events.get("events") or []),
+            "body_captured": False,
+        }
+        packet["_maintainer_correction_source_events"] = source_events
     validation = validate_issue_fix_pr_lifecycle_monitor_packet(packet)
     packet["ok"] = bool(validation["ok"])
     packet["validation"] = validation
@@ -1229,6 +1828,47 @@ def validate_issue_fix_pr_lifecycle_monitor_packet(
                 )
             if state in TERMINAL_PR_STATES and decision != "no_followup":
                 errors.append("terminal PR state must supersede maintainer correction")
+    admission = packet.get("maintainer_correction_admission")
+    if correction is not None and admission is None:
+        errors.append("maintainer_correction requires maintainer_correction_admission")
+    if admission is not None:
+        if not isinstance(admission, Mapping):
+            errors.append("maintainer_correction_admission must be an object")
+        else:
+            if admission.get("body_captured") is not False:
+                errors.append("maintainer_correction_admission body_captured must be false")
+            if admission.get("admission_basis") not in MAINTAINER_CORRECTION_ADMISSION_BASES:
+                errors.append("maintainer_correction_admission admission_basis is invalid")
+            if admission.get("disposition") not in MAINTAINER_CORRECTION_DISPOSITIONS:
+                errors.append("maintainer_correction_admission disposition is invalid")
+            if admission.get("disposition") == "context_only" and (
+                admission.get("reason") not in MAINTAINER_CORRECTION_REJECTION_REASONS
+            ):
+                errors.append("context_only maintainer correction must record a reason")
+            if not str(admission.get("operation_id") or "").startswith(
+                MAINTAINER_CORRECTION_OPERATION_ID_PREFIX
+            ):
+                errors.append("maintainer_correction_admission operation_id is invalid")
+    entries = packet.get("maintainer_corrections")
+    if entries is not None:
+        if not isinstance(entries, list):
+            errors.append("maintainer_corrections must be a list")
+        else:
+            for entry in entries:
+                if not isinstance(entry, Mapping):
+                    errors.append("maintainer_corrections entries must be objects")
+                    continue
+                if entry.get("body_captured") is not False:
+                    errors.append("maintainer_corrections entry body_captured must be false")
+                if entry.get("disposition") not in MAINTAINER_CORRECTION_DISPOSITIONS:
+                    errors.append("maintainer_corrections entry disposition is invalid")
+                event = entry.get("source_event")
+                if event is not None and (
+                    not isinstance(event, Mapping)
+                    or event.get("body_captured") is not False
+                    or any(str(key).lower() in {"body", "body_text", "body_html"} for key in event)
+                ):
+                    errors.append("maintainer_corrections source_event must stay body-free")
     contract = packet.get("writeback_contract")
     if not isinstance(contract, Mapping):
         errors.append("writeback_contract is required")
@@ -1367,6 +2007,19 @@ def render_issue_fix_pr_lifecycle_monitor_markdown(payload: dict[str, Any]) -> s
                 f"- source_kind: `{correction.get('source_kind')}`",
                 f"- source_ref: `{correction.get('source_ref')}`",
                 f"- correction_fingerprint: `{correction.get('correction_fingerprint')}`",
+            ]
+        )
+    admission = payload.get("maintainer_correction_admission")
+    if isinstance(admission, Mapping):
+        lines.extend(
+            [
+                "",
+                "## Maintainer Correction Admission",
+                "",
+                f"- admission_basis: `{admission.get('admission_basis')}`",
+                f"- disposition: `{admission.get('disposition')}`",
+                f"- reason: `{admission.get('reason')}`",
+                f"- operation_id: `{admission.get('operation_id')}`",
             ]
         )
     domain_state = payload.get("domain_state_projection")

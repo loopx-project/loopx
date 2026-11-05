@@ -174,9 +174,14 @@ def main() -> None:
         restart_tokens = set()
         restart_refusals = set()
         executor_restored = False
+        executor_allocated = False
         try:
             while not stop.wait(.2):
                 server.assets_dir = current_assets if (output / "use-current-assets").exists() else baseline_assets
+                if args.retained_executor and not executor_allocated and (output / "qualify-codex-fallback").exists():
+                    from test_native_steward_managed_mode import retain_codex_fallback
+                    retain_codex_fallback(store, runtime, sid)
+                    executor_allocated = True
                 if args.retained_executor and not executor_restored and (output / "restore-supported-executor").exists():
                     current = transport.bindings.read()
                     selected = next(row for row in current["bindings"] if row["binding_id"] == binding["binding_id"])
@@ -263,6 +268,7 @@ def main() -> None:
                     "existing_wake_owner_running": wake is not None,
                     "existing_wake_owner_starts": owner_start_count,
                     "retained_executor_restored": executor_restored,
+                    "retained_executor_allocated": executor_allocated,
                     "runtime_restarts": len(restart_tokens),
                     "runtime_restart_rejections": len(restart_refusals),
                     **({"managed_source_present": artifact.exists(),

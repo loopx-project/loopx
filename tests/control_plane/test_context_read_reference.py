@@ -7,7 +7,7 @@ import shlex
 import pytest
 
 from loopx.cli_commands.quota_capture import model_context_reference, native_context_capture_view, read_context_capture
-from loopx.control_plane.turn_driver.codex_context import _context_pages
+from loopx.control_plane.turn_driver.codex_context import _context_pages, _verified_context_pages
 from loopx.control_plane.turn_driver.decision_capture import (
     capture_page_range, read_context_read_reference, write_context_read_reference,
 )
@@ -30,6 +30,19 @@ def fixture(tmp_path):
         "criterion": {"value": 9007199254740993, "stop": "No publication is authorized."}}
     view = native_context_capture_view(payload, tmp_path)
     return payload, view, model_context_reference(view)
+
+
+def assert_section_read_only(page, machine):
+    raw = Path(machine["path"]).read_bytes()
+    reference = {"path": machine["path"], "sha256": machine["sha256"]}
+    pages = _context_pages(page)
+    assert pages == [page]
+    assert capture_page_range(page, raw=raw, digest=machine["sha256"]) is None
+    observed = _verified_context_pages({"source_recovery": reference, "recovery": reference}, pages)
+    assert len(observed) == 1, "a valid selected page must reach the section-read owner"
+    assert observed[0]["source_sha256"] == machine["sha256"]
+    assert observed[0]["read_sections"]
+    assert capture_page_range(observed[0], raw=raw, digest=machine["sha256"]) is None
 
 
 @pytest.mark.parametrize("mode", ["full", "delta"])
@@ -97,7 +110,7 @@ def test_selected_continuations_hide_both_digests_and_preserve_exact_values(tmp_
     while True:
         assert page["ok"] and page["schema_version"] == "context_capture_selection_page_v1"
         assert not any(key in page for key in ("sha256", "selection_sha256", "selected_pointers"))
-        assert _context_pages(page) == []  # selected EOF is never a full-input receipt
+        assert_section_read_only(page, machine)
         parts.append(page["content"])
         if page["eof"]:
             break
@@ -170,7 +183,7 @@ def test_initial_reference_navigation_change_preserves_original_read_boundary(tm
         parts = [first["content"]]
         while True:
             assert following["ok"] and following["schema_version"] == "context_capture_selection_page_v1"
-            assert _context_pages(following) == []
+            assert_section_read_only(following, machine)
             assert following["offset"] == len("".join(parts).encode())
             parts.append(following["content"])
             if following["eof"]:
@@ -209,12 +222,13 @@ def test_pinned_explicit_replay_keeps_the_digest_bound_order_and_original_values
 
     monkeypatch.setattr(turn_envelope, "_turn_envelope_result", observe)
     command = f"loopx --format json quota context-read --reference-file {shlex.quote(str(reference))} --page-bytes 3000 --max-page-output-bytes 3500"
-    content, pages = b"", 0
+    content, pages, observed_pages = b"", 0, []
     while True:
         page = read(command)
         assert page["ok"] and page["offset"] == len(content), page
-        assert _context_pages(page) == []
+        assert _context_pages(page) == [page]
         assert capture_page_range(page, raw=path.read_bytes(), digest=digest) is None
+        observed_pages.append(page)
         content += page["content"].encode()
         pages += 1
         if page["eof"]:
@@ -225,6 +239,8 @@ def test_pinned_explicit_replay_keeps_the_digest_bound_order_and_original_values
     assert requests[0]["preserve_selection_order"] is True
     if layout == "legacy_canonical":
         assert all(not request.get("preserve_selection_order", False) for request in requests[1::2])
+    for page in observed_pages:
+        assert_section_read_only(page, machine)
     assert {f: f.read_bytes() for f in before} == before
 
 
@@ -263,6 +279,86 @@ def test_resolved_initial_addresses_replay_without_replanning_the_initial_profil
         replay += page["content"].encode()
     assert replay == initial
     assert {f: f.read_bytes() for f in before} == before
+
+
+@pytest.mark.parametrize("kind", ["initial", "historical_initial", "pinned"])
+def test_native_hook_records_frozen_selection_without_full_input_retention(tmp_path, monkeypatch, kind):
+    from loopx.control_plane.turn_driver import codex_context as context
+    from loopx.control_plane.turn_driver.decision_capture import context_capture_read_command
+    from test_codex_context_lifecycle import setup, project, deliver
+    from test_progressive_native_context import payload, outcome
+
+    event = setup(tmp_path, monkeypatch)
+    original = payload()
+    original["interaction_contract"] = {"schema_version": "loopx_interaction_contract_v0",
+        "agent_channel": {"work_context": {"sources": []}}}
+    original["selected_todo"] = {"todo_id": "todo_work", "claimed_by": "agent",
+        "text": "Read the complete original requirement. " * 400}
+    outcome(original)["requirements"][0]["description"] += " Keep the original Stop." * 400
+    project(tmp_path, payload=original)
+    source = context._state(tmp_path)["source_recovery"]
+    path, digest = Path(source["path"]), source["sha256"]
+    reference = write_context_read_reference(path, digest)
+    command = context_capture_read_command(path, digest, reference_file=reference)
+    if kind == "pinned":
+        pointers = ["/stop", "/planning_horizon"]
+        expected = json.dumps({"schema_version": "context_capture_selection_v1", "selections": [
+            {"pointer": pointer, "value": original[pointer[1:]]} for pointer in pointers]},
+            ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+        reference = write_context_read_reference(path, digest, selection={"select": pointers,
+            "initial_read": False, "list_fields": False, "list_depth": None,
+            "sha256": hashlib.sha256(expected).hexdigest()})
+        page = read(command, reference_file=str(reference), page_bytes=3000, max_page_output_bytes=3500)
+    else:
+        page = read(command, initial_read=True, page_bytes=3000, max_page_output_bytes=3500)
+        if kind == "historical_initial":
+            _, descriptor = read_context_read_reference(page["reference_file"])
+            reference = write_context_read_reference(path, digest, selection={
+                **descriptor["selection"], "select": None, "initial_read": True})
+            page = read(command, reference_file=str(reference), page_bytes=3000, max_page_output_bytes=3500)
+    pages = []
+    while True:
+        assert page["ok"], page
+        pages.append(page)
+        if page["eof"]:
+            break
+        page = read(page["next_command"])
+    assert len(pages) > 2
+    before = path.read_bytes()
+    deliver(tmp_path, event, pages[1:])
+    assert not context._state(tmp_path).get("confirmed_read_sections"), "EOF cannot hide unread earlier pages"
+    deliver(tmp_path, event, pages[:1])
+    state = context._state(tmp_path)
+    assert state["confirmed_read_sections"]
+    assert state["consumed_pointers"]
+    assert "candidate" not in state, "section coverage cannot establish full model-input retention"
+    assert path.read_bytes() == before
+    _, warm = project(tmp_path, "after-selected-read", payload=original)
+    current = json.loads(Path(warm["recovery"]["path"]).read_bytes())
+    unread = current["context_details"]["unread_context_index"]["pointers"]
+    for pointer in state["consumed_pointers"]:
+        assert not any(item == pointer or item.startswith(pointer + "/") for item in unread)
+    assert "candidate" not in context._state(tmp_path)
+
+
+@pytest.mark.parametrize("damage", ["content", "foreign_capture", "index"])
+def test_native_selection_observer_rejects_unverified_or_discovery_only_reads(tmp_path, damage):
+    _, machine, model = fixture(tmp_path)
+    reference = {"path": machine["path"], "sha256": machine["sha256"]}
+    state = {"source_recovery": reference, "recovery": reference}
+    page = read(model["command"], select=["/criterion"])
+    assert_section_read_only(page, machine)
+    if damage == "content":
+        page = {**page, "content": page["content"][:-1] + "!",
+            "read_sections": {"/criterion": "a" * 64}, "source_sha256": machine["sha256"]}
+    elif damage == "foreign_capture":
+        other = tmp_path / "foreign"
+        other.mkdir(mode=0o700)
+        _, _, foreign = fixture(other)
+        page = read(foreign["command"], select=["/criterion"])
+    else:
+        page = read(model["command"], select=[""], list_fields=True)
+    assert _verified_context_pages(state, _context_pages(page)) == []
 
 
 @pytest.mark.parametrize("selection", ["fields", "index", "initial"])

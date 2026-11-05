@@ -14,6 +14,52 @@ from loopx.control_plane.testing.canary_harness import import_fixture_authority
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_cli_collects_budget_diagnostics_before_writes_and_preserves_corrected_packet(tmp_path, monkeypatch, provider):
+    from canonical_authority_fixture import isolate_sqlite_runtime
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    source = Path(__file__).resolve().parents[2] / "examples/project/goal-vision-refresh-state-budget-smoke.py"
+    spec = importlib.util.spec_from_file_location("budget_diagnostics_fixture", source)
+    fixture = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fixture)
+    registry, runtime, project = fixture.write_fixture(tmp_path)
+    import_fixture_authority(registry, fixture.GOAL_ID, provider=provider)
+    state = project / ".codex/goals" / fixture.GOAL_ID / "ACTIVE_GOAL_STATE.md"
+    before = state.read_bytes()
+    document = tmp_path / "vision.json"
+    packet = {"vision_patch": {"vision_summary": "Keep the original objective.", "last_patch_summary": "s" * 244},
+              "path_delta": {"outcome": "continue", "prior_assumption": "Retain the route.",
+                             "observed_reality": "o" * 354, "retained": ["a", "b", "c", "d"],
+                             "changed": ["Measured change.", "c" * 178], "evidence_refs": ["a", "b", "c", "d", "e"]}}
+    fixture.write_json(document, packet)
+    authored = document.read_bytes()
+    result = fixture.run_cli(registry, runtime, vision_path=document, check=False,
+                             dry_run=False, autonomous_replan_recorded=False)
+    rejected = fixture.payload(result)
+    assert result.returncode == 1 and rejected["appended"] is False
+    for detail in ("last_patch_summary uses 244", "path_delta.observed_reality uses 354",
+                   "path_delta.retained has 4 items", "path_delta.changed[1] uses 178",
+                   "path_delta.evidence_refs has 5 items"):
+        assert detail in rejected["error"]
+    assert document.read_bytes() == authored and state.read_bytes() == before
+    index = runtime / "goals" / fixture.GOAL_ID / "runs/index.jsonl"
+    assert not index.exists()
+    packet["vision_patch"]["last_patch_summary"] = "Verified the bounded change."
+    packet["path_delta"].update(observed_reality="Evidence supports continuing.", retained=["Keep acceptance."],
+                               changed=["Measured change."], evidence_refs=["evidence:checked"])
+    fixture.write_json(document, packet)
+    result = fixture.run_cli(registry, runtime, vision_path=document, check=True,
+                             dry_run=False, autonomous_replan_recorded=False)
+    accepted = fixture.payload(result)
+    assert accepted["appended"] is True
+    cold = fixture.run_status(registry, runtime)
+    goal = next(g for g in cold["run_history"]["goals"] if g["id"] == fixture.GOAL_ID)
+    assert goal["latest_runs"][0]["agent_vision"]["vision_patch"] == packet["vision_patch"]
+    assert goal["latest_runs"][0]["agent_vision"]["path_delta"] == {"schema_version": "goal_path_delta_v0", **packet["path_delta"]}
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("complete_prior", [False, True])
 @pytest.mark.parametrize("reader", ["status", "history"])
 def test_projected_autonomous_example_updates_evidence_without_changing_goal(

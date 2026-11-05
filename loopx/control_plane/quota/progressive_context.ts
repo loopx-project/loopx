@@ -1,5 +1,7 @@
-/** Native model presentation: requirements stay inline, supporting material is
+/** Model presentation: requirements stay inline, supporting material is
  * addressed in the immutable source. This plan changes no canonical state. */
+import {isDeepStrictEqual} from "node:util";
+import {visionAuthoringContract} from "../goals/vision_checkpoint.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {jsonObject, requireJsonObject} from "../runtime_decode.ts";
 import {GOAL_OUTCOMES_SCHEMA, OUTCOME_CONTEXT_NAVIGATION_SCHEMA} from "../goals/outcome_requirements.ts";
@@ -7,13 +9,35 @@ import {FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE} from "../
 import {quotaSummaryReferences, contextSourceIdentity, contextProjectionChanges,
   type ProjectionSourceValues} from "./diagnostic_projection.ts";
 import {encodeContextDelivery} from "./context_delivery.ts";
+import {createHash} from "node:crypto";
 
 type Path = (string | number)[];
-const pointer = (path: Path): string => "/" + path.map(key =>
-  String(key).replaceAll("~", "~0").replaceAll("/", "~1")).join("/");
+const pointer = (path: Path): string => path.length ? "/" + path.map(key =>
+  String(key).replaceAll("~", "~0").replaceAll("/", "~1")).join("/") : "";
 const at = (root: unknown, path: Path): unknown => path.reduce<unknown>((row, key) =>
   Array.isArray(row) ? row[Number(key)] : jsonObject(row)?.[key], root);
 const known = (row: JsonObject, fields: string[]): boolean => Object.keys(row).every(key => fields.includes(key));
+
+/** Digests stay in the private observed-read journal, never repeated to the model.
+ * The existing exact-source identity preserves non-JS numeric spellings. */
+export function contextReadSectionDigests(request: JsonObject, paths: Path[]): JsonObject {
+  const context = requireJsonObject(request.context, "read section source");
+  const identity = contextSourceIdentity(request, request.source_number_tokens);
+  return Object.fromEntries(paths.map(path => [pointer(path),
+    createHash("sha256").update(identity(at(context, path), ["context", ...path])).digest("hex")]));
+}
+
+function inlineReadSections(request: JsonObject, required: JsonObject): JsonObject {
+  const original = requireJsonObject(request.context, "inline source"), paths: Path[] = [];
+  const visit = (source: unknown, shown: unknown, path: Path) => {
+    if (source === shown) { paths.push(path); return; }
+    if (!source || !shown || typeof source !== "object" || typeof shown !== "object") return;
+    for (const key of Object.keys(source)) if (Object.hasOwn(shown, key)) visit(
+      (source as JsonObject)[key], (shown as JsonObject)[key], [...path, Array.isArray(source) ? Number(key) : key]);
+  };
+  visit(original, required, []);
+  return contextReadSectionDigests(request, paths);
+}
 
 /** Return paths instead of round-tripping the caller's JSON numeric values
  * through JS. The IO adapter performs only these typed-owner-selected edits. */
@@ -147,12 +171,31 @@ function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSour
       const path = edit.path as Path;
       parent(path)[path.at(-1)!] = edit.value;
     }
-    if (deferred.length) required.context_details = {...details,
+    if (deferred.length) {
+      const consumed = jsonObject(request.consumed_pointers) ?? {};
+      const digests = new Map<string, string>();
+      const currentDigest = (path: Path) => {
+        const address = pointer(path);
+        if (!digests.has(address)) digests.set(address,
+          createHash("sha256").update(identity(at(context, path), ["context", ...path])).digest("hex"));
+        return digests.get(address);
+      };
+      const hasRead = (path: Path) => path.map((_, i) => path.slice(0, i + 1)).concat([[]]).some(parent => {
+        const address = pointer(parent), seen = consumed[address];
+        return typeof seen === "string" && currentDigest(parent) === seen;
+      });
+      const sourcePath: Path = ["interaction_contract", "agent_channel", "work_context", "sources"];
+      const sources = at(context, sourcePath);
+      required.context_details = {...details, source_path: details.path,
       unread_context_index: {
         source: {path: details.path, sha256: details.sha256},
         coverage_confirmed: false,
         read_before_dependent_work: true,
-        pointers: [...new Set(deferred.map(edit => pointer(edit.path as Path)))],
+        pointers: [...new Set(deferred.filter(edit => !hasRead(edit.path as Path)).map(edit => pointer(edit.path as Path)))],
+        source_blocks: Array.isArray(sources) ? sources.flatMap((source, i) => {
+          const path = [...sourcePath, i, "content"];
+          return jsonObject(source)?.content !== undefined && !hasRead(path) ? [pointer(path)] : [];
+        }) : [],
       },
       instruction: "This view retains complete requirements and current review/check states. "
         + "Source history, review reasoning and evidence references are supporting material. "
@@ -160,11 +203,13 @@ function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSour
         + "For source history use supporting_material_pointer plus /sources. For review detail append "
         + "/requirements/<index>/agent_review/note or /requirements/<index>/agent_review/evidence_refs instead. "
         + "Repeat --select to batch needed fields without replaying the outcome's requirements. "
-        + "unread_context_index lists unconfirmed supporting fields in the current complete source. "
+        + "unread_context_index lists supporting fields not observed read in this epoch, or changed since that read. "
+        + "source_blocks conservatively includes partially read current sources; this index is not a full-read gate. "
         + "Use its source path and sha256 with quota context-read --select for each exact pointer. "
         + "A prior selected read, EOF or saved file does not confirm model-visible coverage or retention. "
         + "Detail reads never establish a full baseline. "
         + "Uncertain or missing necessary facts must be recovered before dependent action; Agent review is not independent acceptance."};
+    }
   }
   const remaining = tokens.filter(([path]) => !removed.some(start => pathStartsWith(path, start)));
   // Unchanged source spellings cancel. Removed registered records contain only
@@ -204,7 +249,17 @@ export function prepareProgressiveContextDelivery(request: JsonObject, legacyFie
     ? [["context_details", "unread_context_index"]] : [];
   const delivery = encodeContextDelivery(codec, legacyFields, sourceValues, navigation);
   const {operation: _operation, source_edits: _edits, source_number_tokens: _numbers, ...source} = request;
-  return contextProjectionChanges(source, {context: required.context, delivery, projected: required.projected}, sourceValues);
+  return contextProjectionChanges(source, {context: required.context, delivery, projected: required.projected,
+    read_sections: inlineReadSections(request, required.context)}, sourceValues);
+}
+
+/** Stateless presentation uses the same plan without inventing a native session,
+ * retained baseline or admission identity. Hosts may add delta independently. */
+export function prepareProgressiveContext(request: JsonObject): JsonObject {
+  const values: ProjectionSourceValues = new WeakMap();
+  const required = requiredNativeContext(request, values);
+  const {operation: _operation, source_edits: _edits, source_number_tokens: _numbers, ...source} = request;
+  return contextProjectionChanges(source, {context: required.context, projected: required.projected}, values);
 }
 
 export function initialContextReadPointers(context: JsonObject, decisionFields: readonly string[]): string[] {
@@ -301,7 +356,7 @@ export function initialContextReadPointers(context: JsonObject, decisionFields: 
     include(...source, "content", "harness", "guidance");
     include(...source, "content", "harness", "orchestration_gate");
   });
-  for (const field of ["next_cli_actions", "spend_allowed_now", "spend_after_validation", "spend_policy",
+  for (const field of ["execution_preparation", "next_cli_actions", "spend_allowed_now", "spend_after_validation", "spend_policy",
     "quota_spend_source", "delivery_workspace_causality", "vision_continuation_audit"])
     include("interaction_contract", "cli_channel", field);
   const planPath = ["interaction_contract", "cli_channel", "settlement_plan"];
@@ -312,6 +367,13 @@ export function initialContextReadPointers(context: JsonObject, decisionFields: 
       const step = object(value), stepPath = [...planPath, "ordered_steps", stepIndex];
       if (!step) { include(...stepPath); return; }
       for (const field of Object.keys(step)) {
+        if (field === "vision_authoring" && step.kind === "durable_writeback"
+            && [false, true].some(replan => isDeepStrictEqual(step[field], visionAuthoringContract(replan)))) {
+          // Keep the decision and continuation policy at admission. Field limits
+          // and worked examples are read from this step when writing the Vision.
+          for (const key of ["schema_version", "rule", "continuation_review"]) include(...stepPath, field, key);
+          continue;
+        }
         if (field !== "optional_attachments" || !Array.isArray(step[field])) { include(...stepPath, field); continue; }
         step[field].forEach((attachment, attachmentIndex) => {
           const path = [...stepPath, field, attachmentIndex];
@@ -333,7 +395,9 @@ export function initialContextReadPointers(context: JsonObject, decisionFields: 
   // Keep its original source, unknown coverage and read-before-work obligation
   // inline; the complete pointer list remains at this same captured address.
   // Unknown/future layouts stay whole rather than hiding a new obligation.
-  if (unread && Object.keys(unread).length === 4 && unread.coverage_confirmed === false
+  if (unread && Object.keys(unread).every(key => ["source", "coverage_confirmed", "read_before_dependent_work", "pointers", "source_blocks"].includes(key))
+      && (unread.source_blocks === undefined || Array.isArray(unread.source_blocks)
+        && unread.source_blocks.every(pointer => typeof pointer === "string")) && unread.coverage_confirmed === false
       && unread.read_before_dependent_work === true && Array.isArray(unread.pointers)
       && unread.pointers.every(pointer => typeof pointer === "string")
       && typeof source?.path === "string" && typeof source.sha256 === "string"

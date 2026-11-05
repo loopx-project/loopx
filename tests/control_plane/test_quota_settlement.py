@@ -826,7 +826,9 @@ def test_private_capture_support_matches_uid_boundary(
 def test_settlement_command_uses_private_capture_support() -> None:
     # The generated command and the CLI's private-capture check must share one
     # platform qualification; a POSIX-looking host without getuid is unsupported.
-    with patch.object(quota_effect_program, "private_capture_supported", return_value=False):
+    # The settlement kernel resolves the predicate at its owner, because keeping
+    # capture IO out of the plan module's cold import is itself a guard.
+    with patch.object(decision_capture_module, "private_capture_supported", return_value=False):
         plan = quota_effect_program.build_turn_scoped_cli_settlement_plan(
             goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID,
             turn_instance_id=TURN_ID, scoped_cli_args="", lifecycle_actor_args="",
@@ -835,7 +837,7 @@ def test_settlement_command_uses_private_capture_support() -> None:
         assert command is not None
         assert "--max-page-output-bytes" not in command
 
-    with patch.object(quota_effect_program, "private_capture_supported", return_value=True):
+    with patch.object(decision_capture_module, "private_capture_supported", return_value=True):
         plan = quota_effect_program.build_turn_scoped_cli_settlement_plan(
             goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID,
             turn_instance_id=TURN_ID, scoped_cli_args="", lifecycle_actor_args="",

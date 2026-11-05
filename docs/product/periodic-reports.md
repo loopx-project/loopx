@@ -29,6 +29,29 @@ readback and executor compatibility, not scheduled generation or live delivery.
 
 ![The same retained schedule at 390 pixels](../assets/personal-workspace/steward-reports/retained-executor-narrow.png)
 
+A preferred executor is distinct from the executor already allocated to the
+original Session. When Core has retained a private Antigravity steward on its
+qualified, flexible Codex fallback, the existing monitor and report controls
+remain usable. Bound input, recovery and native consent share the same executor
+match; the settings API observes that Core decision instead of rejecting the
+configured preference. This neither switches hosts nor enables native scheduled
+work on Antigravity. A preference alone, an unallocated historical thread or a
+pinned policy does not qualify the fallback. Original source, grant, actor,
+idle-queue and report-window checks still apply on every operation.
+
+The same disposable journey accepts `qualify-codex-fallback` to seed this
+retained allocation. With the same packaged UI, the baseline backend disables
+all four controls; the current backend preserves the actor and window and
+enables them. An unavailable synthetic original source rejects a pause without
+changing the schedule. Restoring it permits pause and re-enable through the
+existing UI. These views qualify configuration and admission, not model quality
+or an installed scheduled delivery; the fixture's unchanged endpoint-pool
+configuration still refuses a mismatched model dispatch.
+
+![Qualified retained fallback in desktop settings](../assets/personal-workspace/steward-reports/allocated-fallback-desktop.png)
+
+![The same qualified fallback at 390 pixels](../assets/personal-workspace/steward-reports/allocated-fallback-narrow.png)
+
 Markdown, the HTML report and its copied full text use the same source-link
 rule. An unchanged, well-formed HTTP(S) address is a link. Opaque evidence
 digests, native Task/artifact references and private relative paths stay source

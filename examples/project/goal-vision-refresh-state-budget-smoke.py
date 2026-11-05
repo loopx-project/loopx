@@ -175,6 +175,8 @@ def run_quota(registry_path: Path, runtime: Path) -> dict:
             "json",
             "quota",
             "should-run",
+            "--context-delivery",
+            "off",
             "--goal-id",
             GOAL_ID,
             "--agent-id",

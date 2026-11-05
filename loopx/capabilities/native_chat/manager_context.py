@@ -5,6 +5,7 @@ provider does not create a live reader, grant or retained-context baseline.
 """
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import shutil
@@ -25,6 +26,11 @@ NATIVE_MANAGER_READ_INSTRUCTION = (
     "a fresh live observation or execution authority. If reading is denied or unavailable, "
     "report that exact unread coverage; do not infer no progress or expand permissions.\n\n"
 )
+
+
+def _evidence_bytes(value: object) -> int:
+    # Match the frozen evidence serialization in Chat's real manager input.
+    return len(json.dumps(value, ensure_ascii=False).encode("utf-8"))
 
 
 def native_manager_context(context: dict[str, Any], adapter: object, *, runtime_root: Path,
@@ -68,6 +74,13 @@ def native_manager_context(context: dict[str, Any], adapter: object, *, runtime_
             setting = registry.resolve("context_delivery").public_descriptor()["configuration_template"]
         if setting.get("antigravity_mode", "on") == "off":
             return context
+        # Even the reader instructions alone must fit inside the removed text.
+        # Avoid private capture IO entirely for common short histories.
+        inline_bytes = {index: _evidence_bytes({"status": history["status"], "deliveries": history["deliveries"]})
+                        for index, history in histories.items()}
+        reader_cost = len(NATIVE_MANAGER_READ_INSTRUCTION.encode("utf-8"))
+        if sum(inline_bytes.values()) <= reader_cost:
+            return context
         private_capture_uid()
         # A new 0700 directory in Chat's existing private store, not the selected
         # project's checkout. Do not change another directory's permissions.
@@ -76,19 +89,28 @@ def native_manager_context(context: dict[str, Any], adapter: object, *, runtime_
         path, digest = Path(recovery["path"]), recovery["sha256"]
         reference = write_context_read_reference(path, digest)
         rows = list(goals)
+        savings = 0
         for index, history in histories.items():
             pointer = f"/goals/{index}/recent_delivery_history"
-            rows[index] = {**goals[index], "recent_delivery_history": {
-                **history, "status": "not_read", "deliveries": [],
-                "read_reference": {"pointer": pointer,
-                    "command": context_capture_read_command(path, digest, reference_file=reference, select=[pointer])},
-            }}
-        return {**context, "goals": rows, "context_read": {
+            if "read_reference" in history:
+                continue  # Preserve a history with an existing binding.
+            read = {"pointer": pointer, "command": context_capture_read_command(
+                path, digest, reference_file=reference, select=[pointer])}
+            deferred = {"status": "not_read", "deliveries": [], "read_reference": read}
+            saved = inline_bytes[index] - _evidence_bytes(deferred)
+            if saved > 0:
+                savings += saved
+                rows[index] = {**goals[index], "recent_delivery_history": {**history, **deferred}}
+        reader = {
             "reference_file": str(reference),
             "recovery_command": context_capture_read_command(path, digest, reference_file=reference),
             "index_command": context_capture_read_command(path, digest, reference_file=reference,
                 list_fields=True, list_depth=2),
-        }}
+        }
+        if savings <= reader_cost + _evidence_bytes({"context_read": reader}):
+            shutil.rmtree(directory)
+            return context
+        return {**context, "goals": rows, "context_read": reader}
     except (OSError, ValueError, TypeError):
         if directory is not None:
             shutil.rmtree(directory, ignore_errors=True)

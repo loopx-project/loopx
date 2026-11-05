@@ -58,6 +58,18 @@ test("settled historical native work permits only one restricted steward answer 
   assert.equal(plan.read_only_review, true);
   assert.equal(plan.quota_attempt, undefined);
   assert.equal(plan.client_turn_id, `external-${ref}-recovery-22-review-1`);
+  const fileResult = {file_uri: "file:///authorized/existing-result.txt", content: "Original visible file result"};
+  assert.equal(planBoundConversationRequest({...packet, context_recovery: {...packet.context_recovery,
+    native_observation: {...proof, visible_results: [...proof.visible_results, fileResult]}}}).recovery_eligible, true);
+  assert.equal(planBoundConversationRequest({...packet, context_recovery: {...packet.context_recovery,
+    native_observation: {...proof, visible_results: [fileResult]}}}).recovery_eligible, true);
+  for (const result of [{...fileResult, file_uri: "https://untrusted.invalid/result.txt"},
+    {...fileResult, file_uri: "file://remote-host/result.txt"}, {...fileResult, file_uri: "file:///result.txt?next=run"},
+    {...fileResult, content: null}, {file_uri: fileResult.file_uri}, {...fileResult, newEffect: true},
+    {...fileResult, content: "x".repeat(256 * 1024)}]) {
+    assert.notEqual(planBoundConversationRequest({...packet, context_recovery: {...packet.context_recovery,
+      native_observation: {...proof, visible_results: [result]}}}).recovery_eligible, true);
+  }
   assert.equal(planBoundConversationRequest({...packet, context_recovery: {...packet.context_recovery,
     metadata_capacity: {alternate_executor: capacity.alternate_executor}}}).recovery_eligible, true,
     "a verified alternate route does not depend on an unrelated primary quota read");
@@ -236,6 +248,67 @@ test("Core preparation failures resume through one bounded original-source queue
       context_recovery: {...next.context_recovery, failed_turn: {...next.context_recovery.failed_turn, client_turn_id: lastClient}}}).recovery_candidate, false);
     assert.equal(planBoundConversationRequest({...packet, request: {...packet.request,
       context_recovery: {...reservation, work_attempt: 1}}}).recovery_candidate, false);
+  }
+});
+
+test("legacy image preflight failures need exact Core and image proof before one original continuation", () => {
+  for (const endpoint of ["codex", "antigravity"]) {
+    const selected = {...row, context_kind: "steward", grant: "portfolio_read", goal_ids: [], executor_endpoint_id: endpoint};
+    const configured = planConversationBinding({...request, binding: selected}).state;
+    const source = {source_ref: "e".repeat(24), sender_ref: row.operator_ref, private_human_message: true};
+    const context = resolveBoundConversation({current: configured, binding_id: row.binding_id,
+      observation, available_projects: [project], ...source}).context;
+    const ref = "f".repeat(24), client = `external-${ref}`;
+    const session = {session_id: "original", goal_id: "loopx-manager", agent_id: endpoint,
+      upstream_mode: endpoint === "codex" ? "chat" : "default", status: "ready", upstream_thread_id: "native",
+      active_turn_id: null, channel_id: `manager.external.native.${row.binding_id}.${source.source_ref}`, steward_context: context};
+    const failed = {session_id: "original", turn_id: "failed", client_turn_id: client, message: "Explain this image",
+      status: "failed", delta_count: 0, response: null, upstream_turn_id: null, error_code: "runtime_error",
+      error: "attachments currently require the Codex Agent endpoint", completed_at: "2026-01-01T00:00:00Z"};
+    const images = {count: 1, sha256: "a".repeat(64)};
+    const proof = {kind: "core_attachment_preparation_failure", session_id: "original", turn_id: "failed", events: [
+      {event_id: "one", kind: "turn.queued"},
+      {event_id: "three", kind: "manager.context", schema_version: "manager_turn_context_v1"},
+      {event_id: "four", kind: "turn.failed", error_code: "runtime_error"}]};
+    const packet = {request: {request_ref: ref, command: null, status: "accepted", delivery_verified: true,
+      message: failed.message, origin: "lark", binding_id: row.binding_id, session_id: "original", turn_id: "failed", source},
+      binding: selected, current_session: session, context_recovery: {version: 22, failed_turn: failed,
+        observed_at: "2026-01-01T00:10:00Z", steering_observed: false, stop_observed: false, attachments_present: true,
+        image_attachments: {request: images, failed: images}, native_result_present: false,
+        source_verified: true, queued_input_present: false, later_equivalent_input_present: false,
+        preparation_scope_available: true, preparation_observation: proof}};
+    const plan = planBoundConversationRequest(packet);
+    assert.equal(plan.recovery_eligible, true);
+    assert.equal(plan.preparation_attempt, 1);
+    assert.deepEqual(plan.native_thread_ids, []);
+    const withPhase = {...proof, events: [proof.events[0],
+      {event_id: "two", kind: "agent.phase", phase: "manager_context"}, ...proof.events.slice(1)]};
+    assert.equal(planBoundConversationRequest({...packet, context_recovery: {
+      ...packet.context_recovery, preparation_observation: withPhase}}).recovery_eligible, true);
+    for (const change of [{source_verified: false}, {stop_observed: true}, {queued_input_present: true},
+      {later_equivalent_input_present: true}, {preparation_scope_available: false}, {attachments_present: false},
+      {native_result_present: true}, {native_result_present: undefined}, {native_observation: {effects_observed: true}},
+      {image_attachments: {request: images, failed: {...images, sha256: "b".repeat(64)}}},
+      {image_attachments: {request: {count: 0, sha256: images.sha256}, failed: {count: 0, sha256: images.sha256}}},
+      {preparation_observation: {...proof, events: proof.events.slice(1)}},
+      {preparation_observation: {...proof, events: [...proof.events, {event_id: "native", kind: "turn.started"}]}},
+      ...[{upstream_turn_id: "started"}, {delta_count: 1}, {response: {}}, {client_turn_id: "foreign"},
+        {error: "The worker exited; execution may have occurred"}].map(value => ({failed_turn: {...failed, ...value}}))]) {
+      assert.notEqual(planBoundConversationRequest({...packet, context_recovery: {
+        ...packet.context_recovery, ...change}}).recovery_eligible, true);
+    }
+    const reservation = {version: 22, failed_turn_id: "failed", preparation_attempt: 1, client_turn_id: plan.client_turn_id};
+    const admitted = {session_id: "original", turn_id: "continued", client_turn_id: plan.client_turn_id,
+      message: failed.message, origin: "lark"};
+    const crash = {...packet, request: {...packet.request, context_recovery: reservation}, context_recovery: {
+      ...packet.context_recovery, admitted_turn: admitted, image_attachments: {request: images, failed: images, admitted: images}}};
+    assert.equal(planBoundConversationRequest(crash).admitted_turn_id, "continued");
+    assert.notEqual(planBoundConversationRequest({...crash, context_recovery: {...crash.context_recovery,
+      image_attachments: {...crash.context_recovery.image_attachments, admitted: {...images, sha256: "b".repeat(64)}}}}).recovery_eligible, true);
+    assert.equal(planBoundConversationRequest({...packet, request: {...packet.request, turn_id: "continued",
+      context_recovery: reservation}, context_recovery: {...packet.context_recovery,
+        failed_turn: {...failed, turn_id: "continued", client_turn_id: plan.client_turn_id},
+        preparation_observation: {...proof, turn_id: "continued"}}}).recovery_candidate, false);
   }
 });
 

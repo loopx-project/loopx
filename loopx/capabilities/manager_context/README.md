@@ -792,6 +792,19 @@ the same text and remainder: changing either under a committed result key is a
 conflict. Valid unmarked legacy results retain their ordinary reply state and
 unknown fulfillment qualification; unreadable or conflicting result chains stay
 unavailable. This path does not batch-close old work.
+
+The manager's scoped `view=handoffs` reader joins each audience-checked page to
+that same native Inbox readback. `inbox_state` and `remaining_work` describe the
+latest request revision; `agenda` retains its existing continuation or return
+delivery obligation. A delivered `return_replies[].phase=conclusion` is only a
+transport observation: it may carry a remainder, and a later reply may still be
+queued. Never clear a request merely because any historical conclusion was
+delivered. An unavailable/conflicting result chain retains a `recover_evidence`
+agenda and marks the page unknown. A null agenda means no outstanding obligation
+in these receipts, not verified business completion or a substantive answer to
+every original question. The read is side-effect-free: it neither consumes a
+result nor records a receiver read, schedules work, or retries a send.
+
 Before rolling back to a reader without remainder support, stop new partial
 publications and reconcile the retained result chains with the compatible
 reader. Do not rewrite their receipts or treat an older reader's empty queue as
