@@ -2,6 +2,7 @@
  * Benchmark toolkit owns run/countability authority. This developer helper neither
  * selects attempts nor normalizes native scores, adjudicates faults or launches work.
  */
+import { armColors, escapeChartText, scoreChart, scoreChartWidth } from './benchmark-score-chart.ts';
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
@@ -298,13 +299,38 @@ export function renderCsv(r: Report): string {
     ...r.selection.map(s => [s.arm_id,s.case_id,s.run_id,s.status,s.score?.value,s.score?.origin,s.score?.normalization_id,s.score?.countable,s.rerun_reason,s.exclude_reason,s.score?.evidence_ref,s.effort?.duration_ms,s.effort?.token_count,s.effort?.model_request_count,s.effort?.evidence_ref,s.score_samples?.length ?? 0,s.configuration?.source_revision_id,s.configuration?.scorer_revision_id,s.configuration?.model_id,s.configuration?.budget_ms,s.configuration?.active_submission_cooldown_ms,s.configuration?.background_evaluation_interval_ms,s.configuration?.resource_profile,s.configuration?.evidence_ref])].map(row => row.map(q).join(',')).join('\n')+'\n';
 }
 
+export function renderScoreCurves(report: Report): string {
+  const sections: string[] = [];
+  for (const caseId of new Set(report.score_time_series.map(s => s.case_id))) {
+    const samples = report.score_time_series.filter(s => s.case_id === caseId);
+    for (const mapping of new Set(samples.map(s => s.normalization_id))) {
+      const series = report.summary.map(arm => ({
+        label: arm.label,
+        points: samples.filter(s => s.arm_id === arm.arm_id && s.normalization_id === mapping)
+          .map(s => ({hour: s.elapsed_ms / 3_600_000, value: s.value})),
+      }));
+      const hours = series.reduce((max, run) => Math.max(max, run.points.at(-1)?.hour ?? 0), 0) || 1;
+      const options = {higherIsBetter: true, hours, unit: 'Normalized score'};
+      const legend = series.map((run, i) => run.points.length
+        ? `<li style="color:${armColors[i % armColors.length]}">${escapeChartText(run.label)}</li>` : '').join('');
+      sections.push(`<section><h2>${escapeChartText(caseId)}</h2><p>${escapeChartText(mapping)}</p><ul>${legend}</ul>
+        <h3>Best observed score</h3><div class="plot" tabindex="0" role="region" aria-label="Best observed scores for ${escapeChartText(caseId)}, ${escapeChartText(mapping)}">${scoreChart(series, {...options, best: true})}</div>
+        <details><summary>All score observations</summary><div class="plot" tabindex="0" role="region" aria-label="All score observations for ${escapeChartText(caseId)}, ${escapeChartText(mapping)}">${scoreChart(series, {...options, best: false})}</div></details></section>`);
+    }
+  }
+  return `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>${escapeChartText(report.title)}</title><style>body{max-width:${scoreChartWidth}px;margin:2rem auto;padding:0 1rem;color:#20302c;font:16px system-ui}.plot{overflow-x:auto}.plot:focus-visible{outline:2px solid #3f5e80;outline-offset:3px}svg{display:block;width:${scoreChartWidth}px;max-width:none;height:auto}ul{display:flex;flex-wrap:wrap;gap:1.3rem;padding:0;list-style:none;font-weight:600}section{border-top:1px solid #dce4e1}summary{cursor:pointer}</style>
+    <h1>${escapeChartText(report.title)}</h1><p>Observed scores · includes provisional runs · ${escapeChartText(report.observed_at)}</p>${sections.join('') || '<p>No observed scores.</p>'}</html>`;
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   try {
     const [input, prefix, ...extra] = process.argv.slice(2);
-    requireThat(input && prefix && !extra.length, 'Usage: node --experimental-strip-types scripts/benchmark-campaign-report.ts INPUT.json OUTPUT_PREFIX');
+    requireThat(input && prefix && (!extra.length || (extra.length === 1 && extra[0] === '--score-curves')), 'Usage: node --experimental-strip-types scripts/benchmark-campaign-report.ts INPUT.json OUTPUT_PREFIX [--score-curves]');
     const report = buildReport(JSON.parse(readFileSync(input, 'utf8')));
     mkdirSync(dirname(resolve(prefix)), { recursive: true });
-    const files = {json: JSON.stringify(report,null,2)+'\n', md:renderMarkdown(report), csv:renderCsv(report)};
+    const files: Record<string, string> = {json: JSON.stringify(report,null,2)+'\n', md:renderMarkdown(report), csv:renderCsv(report)};
+    if (extra.length) files.html = renderScoreCurves(report);
     for (const [ext, body] of Object.entries(files)) {
       const path = `${prefix}.${ext}`; const temporary = `${path}.${process.pid}.tmp`;
       writeFileSync(temporary,body,{mode:0o600}); renameSync(temporary,path);

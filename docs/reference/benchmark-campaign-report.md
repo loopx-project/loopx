@@ -182,3 +182,10 @@ node --experimental-strip-types --test \
 The suite exercises the real CLI and missing versus zero scores, replacements,
 unique-case incidents, incompatible normalization, known-invalid exclusions and
 qualification contradictions, configuration heterogeneity and unknown fields.
+
+Append `--score-curves` to also write a self-contained local HTML report.
+Choose a case and normalization by its section. The default chart shows the
+running best from the first observed score, with a new step on improvement.
+Expand **All score observations** for the full range, including unsuccessful
+iterations. Each chart uses its own labeled score axis. Lines end at observed
+samples. The figure is descriptive and includes provisional runs.
