@@ -33,6 +33,8 @@ from loopx.help_surface import COMMAND_GROUPS
 from loopx.rollout_event_log import rollout_event_log_path
 from tests.control_plane.cli_output_fixture import (
     budget_fixture_path,
+    read_cli_context_for_oracle,
+    measure_cli_context_for_oracle,
     stable_budget_fixture_root as _stable_budget_fixture_root,
 )
 
@@ -314,7 +316,7 @@ def _write_todo_list_limit_stress_fixture(state_file: Path) -> None:
 
 
 
-def _invoke_cli(args: list[str]) -> tuple[int, str]:
+def _invoke_cli(args: list[str], *, read_context: bool = False) -> tuple[int, str]:
     output = io.StringIO()
     ambient_thread_id = os.environ.pop("CODEX_THREAD_ID", None)
     try:
@@ -323,11 +325,33 @@ def _invoke_cli(args: list[str]) -> tuple[int, str]:
     finally:
         if ambient_thread_id is not None:
             os.environ["CODEX_THREAD_ID"] = ambient_thread_id
-    return exit_code, output.getvalue()
+    text = output.getvalue()
+    if read_context:
+        # Semantic callers consume the original reader while their fixture is
+        # still alive; measurement callers retain the literal stdout above.
+        try:
+            json.loads(text)
+        except json.JSONDecodeError:
+            pass
+        else:
+            text = read_cli_context_for_oracle(text)[0]
+    return exit_code, text
+
+
+def _json_payload(text: str) -> dict:
+    return json.loads(read_cli_context_for_oracle(text)[0])
+
+
+def _measured_payload(measurement):
+    return measurement.get("resolved_payload", measurement["payload"])
+
+
+def _measure_context_output(text, *, output_format):
+    return measure_cli_context_for_oracle(text, output_format=output_format, measure=measure_cli_output)
 
 
 def _quota_payload_without_rollout_receipt(text: str) -> dict[str, object]:
-    payload = json.loads(text)
+    payload = _json_payload(text)
     payload.pop("rollout_event", None)
     return payload
 
@@ -468,7 +492,7 @@ def _measure_scenario(root: Path, scenario: Scenario) -> dict[str, dict[str, dic
             for surface_id, command in commands.items():
                 exit_code, text = _invoke_cli(command)
                 assert exit_code == 0, (surface_id, output_format, text)
-                measurement = measure_cli_output(  # type: ignore[arg-type]
+                measurement = _measure_context_output(  # type: ignore[arg-type]
                     text,
                     output_format=output_format,
                 )
@@ -492,7 +516,7 @@ def _assert_turn_plan_writeback_routes(
     measurement: dict, registry_path: Path, runtime: Path
 ) -> None:
     # Budget compaction must not discard or redirect the writeback target.
-    action = measurement["payload"]["turn_envelope"]["writeback"]["next_cli_actions"][0]
+    action = _measured_payload(measurement)["turn_envelope"]["writeback"]["next_cli_actions"][0]
     argv = shlex.split(action)
     assert argv.count("--registry") == argv.count("--runtime-root") == 1
     # Windows drive-rooted aliases are canonicalized by the runtime owner.
@@ -853,10 +877,10 @@ def test_diagnose_keeps_selected_reads_once_and_out_of_the_goal_overview(
             state_file=state_file,
             output_format="json",
         )["diagnose"]
-        exit_code, text = _invoke_cli(command)
+        exit_code, text = _invoke_cli(command, read_context=True)
 
     assert exit_code == 0, text
-    payload = json.loads(text)
+    payload = _json_payload(text)
     assert payload["selected"]["interaction_contract"]["agent_channel"]["required_reads"]
     assert "required_reads" not in payload["goals"][0]["interaction_contract"]["agent_channel"]
 
@@ -874,10 +898,10 @@ def test_quota_packet_drops_transient_path_but_keeps_verified_todo_reference(
             state_file=state_file,
             output_format="json",
         )["quota_should_run"]
-        exit_code, text = _invoke_cli(command)
+        exit_code, text = _invoke_cli(command, read_context=True)
 
     assert exit_code == 0, text
-    payload = json.loads(text)
+    payload = _json_payload(text)
     assert "goal_state_file" not in payload
     assert payload["interaction_contract"]["agent_channel"]["work_context"]["selected_todo_ref"] == "selected_todo"
 
@@ -895,10 +919,10 @@ def test_turn_envelope_references_selected_todo_without_duplicate_context(
             state_file=state_file,
             output_format="json",
         )["quota_should_run_turn_envelope"]
-        exit_code, text = _invoke_cli(command)
+        exit_code, text = _invoke_cli(command, read_context=True)
 
     assert exit_code == 0, text
-    payload = json.loads(text)
+    payload = _json_payload(text)
     assert payload["action"]["selected_todo"]["text_ref"] == "action.recommended_action"
     work_context = payload["work_context"]
     assert work_context["selected_todo_ref"] == "selected_todo"
@@ -953,12 +977,12 @@ def test_compact_selected_todo_markdown_preserves_work_context_instruction(
                 output_format="markdown",
             )[surface_id]
 
-        json_exit_code, json_text = _invoke_cli(json_command)
-        markdown_exit_code, markdown_text = _invoke_cli(markdown_command)
+        json_exit_code, json_text = _invoke_cli(json_command, read_context=True)
+        markdown_exit_code, markdown_text = _invoke_cli(markdown_command, read_context=True)
 
     assert json_exit_code == 0, json_text
     assert markdown_exit_code == 0, markdown_text
-    payload = json.loads(json_text)
+    payload = _json_payload(json_text)
     work_context = (
         payload["interaction_contract"]["agent_channel"]["work_context"]
         if surface_id == "quota_should_run"
@@ -1012,11 +1036,11 @@ def test_quota_should_run_no_format_uses_machine_contract_json(
             output_format="markdown",
         )["quota_should_run"]
 
-        no_format_exit_code, no_format_text = _invoke_cli(no_format_command)
-        markdown_exit_code, markdown_text = _invoke_cli(explicit_markdown_command)
+        no_format_exit_code, no_format_text = _invoke_cli(no_format_command, read_context=True)
+        markdown_exit_code, markdown_text = _invoke_cli(explicit_markdown_command, read_context=True)
 
     assert no_format_exit_code == 0, no_format_text
-    assert json.loads(no_format_text)["goal_id"] == GOAL_ID
+    assert _json_payload(no_format_text)["goal_id"] == GOAL_ID
     assert markdown_exit_code == 0, markdown_text
     assert markdown_text.startswith("# LoopX Quota Should Run")
     assert not markdown_text.lstrip().startswith("{")
@@ -1046,15 +1070,15 @@ def test_quota_cli_keeps_full_agent_todo_diagnostics_on_explicit_cold_path(
             output_format="json",
         )["quota_should_run_todo_summary_detail"]
 
-        default_exit_code, default_text = _invoke_cli(default_command)
-        detail_exit_code, detail_text = _invoke_cli(detail_command)
+        default_exit_code, default_text = _invoke_cli(default_command, read_context=True)
+        detail_exit_code, detail_text = _invoke_cli(detail_command, read_context=True)
 
     assert default_exit_code == 0, default_text
     assert detail_exit_code == 0, detail_text
     assert '"content_revision"' not in default_text
     assert '"content_revision"' not in detail_text
-    default_payload = json.loads(default_text)
-    detail_payload = json.loads(detail_text)
+    default_payload = _json_payload(default_text)
+    detail_payload = _json_payload(detail_text)
     default_summary = default_payload["agent_todo_summary"]
     detail_summary = detail_payload["agent_todo_summary"]
     assert "agent_todo_planning_inventory" not in default_payload
@@ -1109,9 +1133,9 @@ def test_unmigrated_malformed_todo_state_stays_bounded_and_refuses_ordinary_read
             output_format="json",
         )["quota_should_run_todo_summary_detail"]
         for command in [commands["status"], commands["quota_should_run"], detail_command]:
-            exit_code, text = _invoke_cli(command)
+            exit_code, text = _invoke_cli(command, read_context=True)
             assert exit_code == 1, text
-            payload = json.loads(text)
+            payload = _json_payload(text)
             assert payload["error_code"] == "canonical_authority_required"
             authority = payload.get("authority_read", payload)
             assert authority["write_admitted"] is False
@@ -1150,17 +1174,20 @@ def test_quota_cli_keeps_complete_vision_rules_with_reachable_duplicate_refs(
             output_format="json",
         )["quota_should_run_vision_detail"]
 
-        default_exit_code, default_text = _invoke_cli(default_command)
-        detail_exit_code, detail_text = _invoke_cli(detail_command)
+        default_exit_code, default_text = _invoke_cli(default_command, read_context=True)
+        detail_exit_code, detail_text = _invoke_cli(detail_command, read_context=True)
 
     assert default_exit_code == 0, default_text
     assert detail_exit_code == 0, detail_text
     # Same 36-Todo / 12-run workload: 45,313 lossy -> 48,418 complete chars.
-    # Retain the required clauses; the qualified 50k ceiling leaves 1,582 chars.
+    # Retain the required clauses; the qualified complete-body ceiling is owned
+    # by the budget spec and leaves bounded headroom above the measured payload.
     # The separate 40k compactor fixture and collection-growth guards stay fixed.
-    assert len(default_text) <= 50_000
-    default_payload = json.loads(default_text)
-    detail_payload = json.loads(detail_text)
+    assert len(default_text) <= CLI_OUTPUT_MODE_VARIANT_BY_ID[
+        "quota_should_run_vision_detail"
+    ].max_chars["json"]
+    default_payload = _json_payload(default_text)
+    detail_payload = _json_payload(detail_text)
     compact_audit = default_payload["vision_continuation_audit"]
     detailed_audit = detail_payload["vision_continuation_audit"]
     assert compact_audit["required"] is True
@@ -1250,10 +1277,10 @@ def test_crowded_turn_plan_budget_preserves_executable_vision_authoring(
             state_file=state_file,
             output_format="json",
         )["loopx_turn_plan"]
-        exit_code, text = _invoke_cli(command)
+        exit_code, text = _invoke_cli(command, read_context=True)
 
     assert exit_code == 0, text
-    payload = json.loads(text)
+    payload = _json_payload(text)
     writeback = payload["turn_envelope"]["replan_action_packet"][
         "writeback_contract"
     ]
@@ -1280,9 +1307,9 @@ def test_crowded_quota_preserves_long_chain_decision_clauses(
             project=project, runtime=runtime, registry_path=registry_path,
             state_file=state_file, output_format="json",
         )["quota_should_run"]
-        code, text = _invoke_cli(command)
+        code, text = _invoke_cli(command, read_context=True)
     assert code == 0, text
-    payload = json.loads(text)
+    payload = _json_payload(text)
     # Independently required semantics: replan before continuing a long lane,
     # evidence-linked authoring and conditional reuse. Stable fields alone
     # would not detect the instruction loss in the earlier compact wording.
@@ -1316,9 +1343,9 @@ def test_native_stride_projection_rejects_each_missing_decision_field(
             project=project, runtime=runtime, registry_path=registry_path,
             state_file=state_file, output_format="json",
         )[surface]
-        code, text = _invoke_cli(command)
+        code, text = _invoke_cli(command, read_context=True)
     assert code == 0, text
-    payload = json.loads(text)
+    payload = _json_payload(text)
 
     def envelope(value):
         return value["turn_envelope"] if surface == "loopx_turn_plan" else value
@@ -1384,13 +1411,13 @@ def test_quota_cli_keeps_full_user_todo_diagnostics_on_explicit_cold_path(
             output_format="json",
         )["quota_should_run_user_todo_summary_detail"]
 
-        default_exit_code, default_text = _invoke_cli(default_command)
-        detail_exit_code, detail_text = _invoke_cli(detail_command)
+        default_exit_code, default_text = _invoke_cli(default_command, read_context=True)
+        detail_exit_code, detail_text = _invoke_cli(detail_command, read_context=True)
 
     assert default_exit_code == 0, default_text
     assert detail_exit_code == 0, detail_text
-    default_payload = json.loads(default_text)
-    detail_payload = json.loads(detail_text)
+    default_payload = _json_payload(default_text)
+    detail_payload = _json_payload(detail_text)
     default_summary = default_payload["user_todo_summary"]
     detail_summary = detail_payload["user_todo_summary"]
     assert default_summary["payload_compaction"]["schema_version"] == (
@@ -1440,13 +1467,13 @@ def test_quota_cli_keeps_goal_boundary_authority_on_explicit_cold_path(
             output_format="json",
         )["quota_should_run_goal_boundary_detail"]
 
-        default_exit_code, default_text = _invoke_cli(default_command)
-        detail_exit_code, detail_text = _invoke_cli(detail_command)
+        default_exit_code, default_text = _invoke_cli(default_command, read_context=True)
+        detail_exit_code, detail_text = _invoke_cli(detail_command, read_context=True)
 
     assert default_exit_code == 0, default_text
     assert detail_exit_code == 0, detail_text
-    default_payload = json.loads(default_text)
-    detail_payload = json.loads(detail_text)
+    default_payload = _json_payload(default_text)
+    detail_payload = _json_payload(detail_text)
     default_boundary = default_payload["goal_boundary"]
     detail_boundary = detail_payload["goal_boundary"]
     default_authority = default_boundary["checkpointed_boundary_authority"]
@@ -1499,10 +1526,12 @@ def test_quota_cli_deprecated_scheduler_detail_flag_matches_canonical_selector(
             output_format="json",
         )["quota_should_run"]
         canonical_exit_code, canonical_text = _invoke_cli(
-            default_command + ["--include-detail", "scheduler"]
+            default_command + ["--include-detail", "scheduler"],
+            read_context=True,
         )
         legacy_exit_code, legacy_text = _invoke_cli(
-            default_command + ["--include-scheduler-detail"]
+            default_command + ["--include-scheduler-detail"],
+            read_context=True,
         )
 
     assert canonical_exit_code == 0, canonical_text
@@ -1539,14 +1568,15 @@ def test_quota_cli_all_detail_matches_repeated_canonical_selectors(
         repeated_command = list(default_command)
         for section in ("scheduler", "agent-todos", "user-todos", "goal-boundary"):
             repeated_command.extend(["--include-detail", section])
-        repeated_exit_code, repeated_text = _invoke_cli(repeated_command)
+        repeated_exit_code, repeated_text = _invoke_cli(repeated_command, read_context=True)
         all_exit_code, all_text = _invoke_cli(
-            default_command + ["--include-detail", "all"]
+            default_command + ["--include-detail", "all"],
+            read_context=True,
         )
 
     assert repeated_exit_code == 0, repeated_text
     assert all_exit_code == 0, all_text
-    all_payload = json.loads(all_text)
+    all_payload = _json_payload(all_text)
     assert _quota_payload_without_rollout_receipt(
         all_text
     ) == _quota_payload_without_rollout_receipt(repeated_text)
@@ -1574,11 +1604,11 @@ def test_agent_scoped_status_keeps_whole_goal_todo_index_on_cold_path(
         agent_flag = command.index("--agent-id")
         operator_command = command[:agent_flag] + command[agent_flag + 2 :]
 
-        exit_code, text = _invoke_cli(command)
-        operator_exit_code, operator_text = _invoke_cli(operator_command)
+        exit_code, text = _invoke_cli(command, read_context=True)
+        operator_exit_code, operator_text = _invoke_cli(operator_command, read_context=True)
 
     assert exit_code == 0, text
-    payload = json.loads(text)
+    payload = _json_payload(text)
     todo_index = payload["todo_index"]
     assert todo_index["total_count"] > 0
     assert todo_index["items"] == []
@@ -1595,7 +1625,7 @@ def test_agent_scoped_status_keeps_whole_goal_todo_index_on_cold_path(
         SCENARIOS[1].todo_count
     )
     assert operator_exit_code == 0, operator_text
-    operator_todo_index = json.loads(operator_text)["todo_index"]
+    operator_todo_index = _json_payload(operator_text)["todo_index"]
     assert len(operator_todo_index["items"]) == operator_todo_index["total_count"]
     assert "payload_compaction" not in operator_todo_index
 
@@ -1623,8 +1653,8 @@ def test_status_and_quota_json_ignore_compatibility_reexport_bindings(
             for surface_id in ("status", "quota_should_run"):
                 exit_code, text = _invoke_cli(commands[surface_id])
                 assert exit_code == 0, (surface_id, text)
-                measurement = measure_cli_output(text, output_format="json")
-                payload = measurement["payload"]
+                measurement = _measure_context_output(text, output_format="json")
+                payload = _measured_payload(measurement)
                 assert isinstance(payload, dict)
                 receipts[surface_id] = {
                     "top_level_keys": sorted(payload),
@@ -1666,7 +1696,7 @@ def _assert_collection_growth_and_bootstrap_duplication(
         )
         fixed_semantic_growth = spec.max_json_fixed_semantic_growth_chars
         if fixed_semantic_growth and spec.surface_id == "quota_should_run":
-            context = crowded[spec.surface_id]["json"]["payload"]["autonomous_replan_obligation"]["replan_context"]
+            context = _measured_payload(crowded[spec.surface_id]["json"])["autonomous_replan_obligation"]["replan_context"]
             assert 0 < len(context["evidence"]) <= 24
             assert len(context["coverage_ledger"]) <= 24
             assert context["from_full_index"] is True
@@ -1678,14 +1708,14 @@ def _assert_collection_growth_and_bootstrap_duplication(
                 command = shlex.split(template.replace("{evidence_ref}", row["evidence_ref"]))
                 assert command[-2:] == ["--evidence-ref", row["evidence_ref"]]
         elif fixed_semantic_growth and spec.surface_id == "diagnose":
-            context = crowded[spec.surface_id]["json"]["payload"]["selected"]["projection_warnings"]["autonomous_replan_obligation"]["replan_context"]
+            context = _measured_payload(crowded[spec.surface_id]["json"])["selected"]["projection_warnings"]["autonomous_replan_obligation"]["replan_context"]
             assert 0 < len(context["evidence"]) <= 24
         elif fixed_semantic_growth:
             assert spec.surface_id == "loopx_turn_plan"
-            small_packet = small[spec.surface_id]["json"]["payload"][
+            small_packet = _measured_payload(small[spec.surface_id]["json"])[
                 "turn_envelope"
             ].get("replan_action_packet")
-            crowded_packet = crowded[spec.surface_id]["json"]["payload"][
+            crowded_packet = _measured_payload(crowded[spec.surface_id]["json"])[
                 "turn_envelope"
             ]["replan_action_packet"]
             small_writeback = (
@@ -1746,7 +1776,7 @@ def _assert_mode_variant_budgets(root: Path, *, only: str | None = None) -> None
                 continue
             exit_code, text = _invoke_cli(command)
             assert exit_code == 0, (variant_id, output_format, text)
-            measurement = measure_cli_output(text, output_format=output_format)  # type: ignore[arg-type]
+            measurement = _measure_context_output(text, output_format=output_format)  # type: ignore[arg-type]
             assert_cli_output_mode_variant(
                 spec,
                 output_format=output_format,  # type: ignore[arg-type]
@@ -1769,12 +1799,12 @@ def test_thin_json_budget_retains_full_supported_scope(tmp_path: Path) -> None:
         command[command.index("--agent-scope") + 1] = scope
         exit_code, text = _invoke_cli(command)
         assert exit_code == 0, text
-        measurement = measure_cli_output(text, output_format="json")
+        measurement = _measure_context_output(text, output_format="json")
         assert_cli_output_baseline(
             CLI_OUTPUT_BUDGET_BY_ID["heartbeat_prompt_thin"], scenario="small",
             output_format="json", text=text, measurement=measurement,
         )
-        payload = measurement["payload"]
+        payload = _measured_payload(measurement)
         assert scope in payload["task_body"]
         assert payload["interface_budget"]["max_chars"] == 5100
         assert payload["interface_budget"]["within_budget"] is True
@@ -1802,9 +1832,9 @@ def test_thin_budget_covers_complete_capability_and_cli_routes(
         capabilities = ("shell", "filesystem", "network", "external_evidence_poll", "browser")
         for capability in capabilities:
             command.extend(["--available-capability", capability])
-        exit_code, text = _invoke_cli(command)
+        exit_code, text = _invoke_cli(command, read_context=True)
         assert exit_code == 0, text
-        payload = json.loads(text)
+        payload = _json_payload(text)
         body, budget = payload["task_body"], payload["interface_budget"]
         assert scope in body and body.count(cli_route) >= 2
         assert all(f"--available-capability {capability}" in body for capability in capabilities)
@@ -1867,7 +1897,7 @@ def test_brief_long_path_budget_retains_semantics_across_parent_depths(
         output_format = command[command.index("--format") + 1]
         root = str(roots[-1])
         if output_format == "json":
-            canonical = json.dumps(json.loads(text), ensure_ascii=False, sort_keys=True)
+            canonical = json.dumps(_json_payload(text), ensure_ascii=False, sort_keys=True)
             normalized = json.loads(canonical.replace(
                 json.dumps(root, ensure_ascii=False)[1:-1], "<OWNED_ROOT>"
             ))
@@ -1983,22 +2013,22 @@ def test_todo_list_explicit_limit_stays_bounded_and_default_path_unchanged(
             output_format="json",
         )["todo_list"]
 
-        limited_exit_code, limited_text = _invoke_cli(limited_command)
-        cold_default_exit_code, cold_default_text = _invoke_cli(cold_default_command)
-        default_exit_code, default_text = _invoke_cli(default_command)
+        limited_exit_code, limited_text = _invoke_cli(limited_command, read_context=True)
+        cold_default_exit_code, cold_default_text = _invoke_cli(cold_default_command, read_context=True)
+        default_exit_code, default_text = _invoke_cli(default_command, read_context=True)
 
     assert limited_exit_code == 0, limited_text
     assert cold_default_exit_code == 0, cold_default_text
     assert default_exit_code == 0, default_text
     spec = CLI_OUTPUT_MODE_VARIANT_BY_ID["todo_list_limited"]
-    measurement = measure_cli_output(limited_text, output_format="json")
+    measurement = _measure_context_output(limited_text, output_format="json")
     assert_cli_output_mode_variant(
         spec,
         output_format="json",
         text=limited_text,
         measurement=measurement,
     )
-    limited_payload = json.loads(limited_text)
+    limited_payload = _json_payload(limited_text)
     assert limited_payload["explicit_limit"] == 3
     assert limited_payload["todo_list_projection"]["view"] == (
         "explicit_limit_cold_path"
@@ -2009,13 +2039,13 @@ def test_todo_list_explicit_limit_stays_bounded_and_default_path_unchanged(
     assert limited_payload["agent_todos"]["total_count"] == 36
     assert int(measurement["chars"]) < len(cold_default_text)
 
-    cold_default_payload = json.loads(cold_default_text)
+    cold_default_payload = _json_payload(cold_default_text)
     assert cold_default_payload["todo_count"] == 36
     assert len(cold_default_payload["todos"]) == 36
     for absent_key in ("explicit_limit", "returned_todo_count", "todo_list_projection"):
         assert absent_key not in cold_default_payload
 
-    default_payload = json.loads(default_text)
+    default_payload = _json_payload(default_text)
     assert "explicit_limit" not in default_payload
     assert "returned_todo_count" in default_payload
     assert default_payload["todo_list_projection"]["view"] == "agent_lane_hot_path"
@@ -2056,20 +2086,20 @@ def test_todo_list_thin_reduces_crowded_output_and_keeps_default_unchanged(
             "--goal-id",
             GOAL_ID,
         ]
-        thin_exit_code, thin_text = _invoke_cli(thin_command)
-        default_exit_code, default_text = _invoke_cli(cold_default_command)
+        thin_exit_code, thin_text = _invoke_cli(thin_command, read_context=True)
+        default_exit_code, default_text = _invoke_cli(cold_default_command, read_context=True)
 
     assert thin_exit_code == 0, thin_text
     assert default_exit_code == 0, default_text
     spec = CLI_OUTPUT_MODE_VARIANT_BY_ID["todo_list_thin"]
-    measurement = measure_cli_output(thin_text, output_format="json")
+    measurement = _measure_context_output(thin_text, output_format="json")
     assert_cli_output_mode_variant(
         spec,
         output_format="json",
         text=thin_text,
         measurement=measurement,
     )
-    payload = json.loads(thin_text)
+    payload = _json_payload(thin_text)
     assert payload["thin"] is True
     assert payload["todo_count"] == payload["matched_todo_count"] == 36
     assert payload["returned_todo_count"] == len(payload["todos"]) == 2
@@ -2082,7 +2112,7 @@ def test_todo_list_thin_reduces_crowded_output_and_keeps_default_unchanged(
     assert "project" not in payload
     assert len(thin_text) < len(default_text) * 0.45
 
-    default_payload = json.loads(default_text)
+    default_payload = _json_payload(default_text)
     assert "thin" not in default_payload
     assert "todo_list_field_projection" not in default_payload
     assert default_payload["state_file"]
@@ -2106,18 +2136,18 @@ def test_todo_list_explicit_limit_bounds_monitor_and_blocker_lanes(
             state_file=state_file,
             output_format="json",
         )["todo_list_limited"]
-        exit_code, text = _invoke_cli(command)
+        exit_code, text = _invoke_cli(command, read_context=True)
 
     assert exit_code == 0, text
     spec = CLI_OUTPUT_MODE_VARIANT_BY_ID["todo_list_limited"]
-    measurement = measure_cli_output(text, output_format="json")
+    measurement = _measure_context_output(text, output_format="json")
     assert_cli_output_mode_variant(
         spec,
         output_format="json",
         text=text,
         measurement=measurement,
     )
-    payload = json.loads(text)
+    payload = _json_payload(text)
     summary = payload["agent_todos"]
     assert summary["total_count"] == 200
     assert len(summary["items"]) == 3
@@ -2154,10 +2184,10 @@ def test_turn_envelope_cli_preserves_codex_app_scheduler_binding(
         output_format="json",
     )["quota_should_run_turn_envelope"]
 
-    exit_code, text = _invoke_cli([*command, "--codex-app"])
+    exit_code, text = _invoke_cli([*command, "--codex-app"], read_context=True)
 
     assert exit_code == 0, text
-    payload = json.loads(text)
+    payload = _json_payload(text)
     full_decision = shlex.split(payload["detail_ref"]["full_decision"])
     # A cold read must preserve the complete originating source and host profile.
     assert full_decision == [
@@ -2165,9 +2195,9 @@ def test_turn_envelope_cli_preserves_codex_app_scheduler_binding(
         "--format", "json", "quota", "should-run", "--goal-id", GOAL_ID,
         "--agent-id", AGENT_IDS[0], "--codex-app",
     ]
-    read_rc, read_text = _invoke_cli(full_decision[1:])
+    read_rc, read_text = _invoke_cli(full_decision[1:], read_context=True)
     assert read_rc == 0, read_text
-    assert json.loads(read_text)["goal_id"] == GOAL_ID
+    assert _json_payload(read_text)["goal_id"] == GOAL_ID
 
 
 def test_quota_should_run_cli_actions_keep_explicit_runtime_root(
@@ -2197,11 +2227,12 @@ def test_quota_should_run_cli_actions_keep_explicit_runtime_root(
             "codex_cli",
             "--turn-instance-id",
             "turn-runtime-root-contract",
-        ]
+        ],
+        read_context=True,
     )
 
     assert exit_code == 0, text
-    payload = json.loads(text)
+    payload = _json_payload(text)
     cli_channel = payload["interaction_contract"]["cli_channel"]
 
     def assert_selected_runtime_root(command: str) -> None:
@@ -2277,11 +2308,12 @@ def test_first_class_runtime_profiles_fit_thin_prompt_budget_and_cli_round_trip(
                     AGENT_IDS[0],
                     "--runtime-profile",
                     profile.value,
-                ]
+                ],
+                read_context=True,
             )
 
             assert exit_code == 0, text
-            payload = json.loads(text)
+            payload = _json_payload(text)
             assert payload["scheduler_hint"].get("action") != (
                 "repair_scheduler_execution_context"
             )

@@ -1366,6 +1366,37 @@ fields; this does not introduce a new telemetry system or receipt gate.
 及验收成果。费用/采纳未测仍为未知；分页成功或预算扩容不能证明读取—压缩—恢复
 循环得到解决，恢复后实际继续完成有用操作才支持接续收益判断。
 
+The CLI canary's complete-source oracle follows the current capture's published
+recovery reader, preserving its program, globals, digest and byte cursors. It
+does not evaluate another guard. Original stdout metrics remain unchanged;
+the complete recovered body must also fit the same existing character/line
+ceilings. Receipts separately record navigation, every reader response and body
+bytes. This full fixture traversal is an oracle, not a model read obligation,
+retention proof or a claim that the complete workflow costs less.
+
+CLI canary 的完整来源 oracle 沿当前 capture 公布的 recovery reader 读取，保留原
+程序、全局参数、摘要和字节游标，不重算 guard。原 stdout 指标不改写；恢复的完整
+正文也须满足同一既有字符／行数上限。回执分别记录导航、每次 reader 响应和正文字节。
+此处完整遍历只服务夹具 oracle，不新增模型读取义务，不证明 retention 或完整流程更省。
+
+The complete-body oracle exposed existing quota presentation overruns that the
+navigation-only measurement could not see. On the unchanged 36-Todo / 12-run
+fixture, the recovered quota body is 50,795 JSON characters and the Markdown
+carrier is 16,857 characters, against the previous 43,000 / 10,500 regression
+allowances. The complete Vision-detail body is 58,393 characters against 55,000.
+Preserve those original failures and all collection, per-Todo, line and semantic
+guards. Calibrate only the three presentation ceilings to 51,000 / 17,000 /
+59,000, with bounded headroom for the measured bodies. This does not change a
+transport limit, execution quota, provider IO or a claim that the complete
+workflow costs less.
+
+完整正文 oracle 暴露了仅测导航时看不到的既有 quota 展示超限：同一 36-Todo／12-run
+夹具的恢复正文为 50,795 JSON 字符、Markdown 载体为 16,857 字符，原回归上限分别为
+43,000／10,500；完整 Vision detail 正文为 58,393 字符，原上限为 55,000。保留这些
+原始失败以及全部采集、每 Todo、行数和语义守卫，仅将三项展示回归预算校准为
+51,000／17,000／59,000，并为实测正文保留有界余量。此变更不修改传输硬限制、执行
+配额或 provider IO，也不宣称完整流程成本更低。
+
 ### Budget Failure Decisions
 
 The thin heartbeat's 4,500-character presentation allowance did not cover the
