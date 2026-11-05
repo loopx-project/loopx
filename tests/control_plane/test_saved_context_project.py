@@ -457,6 +457,7 @@ def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monk
     if enabled:
         command = shlex.split(body.split("```sh\n", 1)[1].split("\n```", 1)[0])
         source = Path(command[command.index("--capture-file") + 1])
+        assert source.parent != wake and source.is_relative_to(wake)
         assert source.read_bytes() == original_guard
         assert command[command.index("--capture-sha256") + 1] == hashlib.sha256(original_guard).hexdigest()
     else:
