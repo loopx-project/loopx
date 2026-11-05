@@ -467,26 +467,46 @@ def context_index_fields(payload: dict[str, Any], children: list[dict[str, Any]]
     return fields
 
 
-def context_selection_transport(payload: dict[str, Any]) -> dict[str, Any]:
-    """Keep address structure without retransmitting unused scalar prose.
+def context_selection_transport(payload: dict[str, Any], select: list[str] | None, *,
+                                list_fields: bool, list_depth: int | None) -> dict[str, Any]:
+    """Supply the address shape for the TS selector. Values are read from the verified original."""
+    # Root discovery also derives initial navigation from real decision values.
+    if not select or list_fields and "" in select:
+        return payload
+    # Leave malformed requests to the typed owner, including error ordering.
+    if not all(isinstance(pointer, str) for pointer in select):
+        return payload
 
-    The TS owner validates pointers; selected values still come from the fully
-    digest-checked original. Initial navigation and discovery need real scalar
-    values and do not use this adapter. JSON null takes four bytes, so replacing
-    only strings longer than two characters cannot increase request bytes.
-    Iteration preserves the original JSON reader's supported nesting depth.
-    """
+    paths: dict[str | None, Any] = {}
+    for pointer in select:
+        branch = paths
+        for token in pointer.split("/")[1:]:
+            branch = branch.setdefault(token, {})
+        # None cannot collide with a JSON object key (including the empty key).
+        branch[None] = True
+
     result: dict[str, Any] = {}
-    pending: list[tuple[Any, Any]] = [(payload, result)]
+    pending: list[tuple[Any, Any, dict[str | None, Any], int]] = [(payload, result, paths, 0)]
     while pending:
-        source, target = pending.pop()
+        source, target, branch, depth = pending.pop()
+        if list_fields and None in branch:
+            depth = max(depth, list_depth or 1)
+        if depth <= 0 and not any(key is not None for key in branch):
+            continue
         for key, value in source.items() if isinstance(source, dict) else enumerate(source):
+            token = str(key).replace("~", "~0").replace("/", "~1")
+            if depth <= 0 and token not in branch:
+                continue
             if isinstance(value, (dict, list)):
+                subtree = branch.get(token, {})
+                # Length matters when validating array indices or listing children.
                 child: Any = {} if isinstance(value, dict) else [None] * len(value)
                 target[key] = child
-                pending.append((value, child))
+                pending.append((value, child, subtree, depth - 1))
             else:
-                target[key] = None if isinstance(value, str) and len(value) > 2 else value
+                # Every scalar has the same address behavior. Keep original scalar
+                # types, precision, and byte counts at the file rendering boundary.
+                target[key] = None
     return result
 
 
@@ -514,7 +534,8 @@ def context_selection_view(payload: dict[str, Any], *, select: list[str] | None,
     """Replay the TS selector and verify the original digest-pinned view."""
     from ..quota.turn_envelope import _turn_envelope_result
 
-    context = payload if initial_read or list_fields else context_selection_transport(payload)
+    context = payload if initial_read else context_selection_transport(
+        payload, select, list_fields=list_fields, list_depth=list_depth)
     selection = {"initial_read": True} if initial_read else {"select": select}
     depth = {"list_depth": list_depth} if list_depth is not None else {}
     order = {"preserve_selection_order": True} if preserve_selection_order else {}
