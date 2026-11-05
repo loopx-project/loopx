@@ -1220,8 +1220,11 @@ their deltas; partial attribution and zero denominators retain unknown shares.
 All ratios and percentage-point differences are derived by the toolkit from
 request sums, never by averaging percentages in the renderer. A falling share
 with rising absolute input is shown explicitly and is not labeled savings.
-Command-request deltas include input, its cached and uncached subsets, and
-output, all computed by the same owner from native sums. Missing observations
+Command-request deltas include input, its cached and uncached subsets, output,
+and uncached-input share in percentage points, all computed by the same owner
+from native sums. The uncached share uses all native input minus cached input
+as its denominator; it remains separate from the share of total input, which
+includes cache. Missing observations
 or changed command methods withhold those deltas. An older response without
 the additive delta fields remains unknown in the reader; it is not recomputed
 by the frontend.

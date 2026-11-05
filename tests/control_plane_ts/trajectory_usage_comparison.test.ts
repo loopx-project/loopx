@@ -127,6 +127,10 @@ test('four real native prefixes retain the Bench owner counts, missing text attr
   assert.equal(codec.delta.command_cached, 3388032);
   assert.equal(codec.delta.command_uncached, 1408538);
   assert.equal(codec.delta.command_output, 4699);
+  assert.equal(codec.left.commands.uncached_fraction, 1500082 / 3223153);
+  assert.equal(codec.right.commands.uncached_fraction, 91544 / 1215761);
+  assert(Math.abs(codec.delta.command_uncached_percentage_points! - 39.01105566635043) < 1e-12,
+    'The uncached share rises even though the total-input share falls');
   assert.equal(codec.command_share_down_absolute_up, true);
   assert.equal(codec.left.input.tokens, null); assert.equal(codec.right.input.fraction, null);
   assert.equal(codec.left.input.unattributed_requests, 997); assert.equal(codec.delta.input_percentage_points, null);
@@ -148,8 +152,13 @@ test('unknown attribution and zero denominator stay unknown; source, method, ses
   assert.equal(zero.status, 'observed'); if (zero.status !== 'observed') return;
   assert.equal(zero.left.input.tokens, null); assert.equal(zero.left.commands.input, 0);
   assert.equal(zero.left.commands.fraction, null); assert.equal(zero.delta.command_percentage_points, null);
+  assert.equal(zero.delta.command_uncached_percentage_points, null);
   assert.equal(zero.delta.command_cached, 0); assert.equal(zero.delta.command_uncached, 0);
   assert.equal(zero.delta.command_output, 0, 'Measured equal output has a known zero delta even with zero input');
+  const knownZero = compareTrajectoryUsage(pack('zero-left', [0, 100]), pack('zero-right', [0, 100]));
+  assert.equal(knownZero.status, 'observed'); if (knownZero.status !== 'observed') return;
+  assert.equal(knownZero.left.commands.uncached_fraction, 0);
+  assert.equal(knownZero.delta.command_uncached_percentage_points, 0, 'A positive denominator preserves measured zero');
   for (const mutate of [
     (p: TrajectoryUsageCapture) => {p.scope!.goal_id = 'other';},
     (p: TrajectoryUsageCapture) => {p.scope!.case_id = 'other';},
@@ -175,6 +184,7 @@ test('command deltas stay unknown for missing observations or a changed method',
     assert.equal(v.status, 'observed'); if (v.status !== 'observed') continue;
     assert.equal(v.delta.command_input, null); assert.equal(v.delta.command_cached, null);
     assert.equal(v.delta.command_uncached, null); assert.equal(v.delta.command_output, null);
+    assert.equal(v.delta.command_uncached_percentage_points, null);
     assert.equal(v.delta.total_input, 50, 'Known total usage does not supply missing command attribution');
   }
 });

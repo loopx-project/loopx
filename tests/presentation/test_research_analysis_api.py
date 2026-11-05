@@ -877,6 +877,10 @@ def test_usage_comparison_http_returns_native_command_deltas_without_execution(w
     assert comparison["delta"]["command_cached"] == 40
     assert comparison["delta"]["command_uncached"] == 20
     assert comparison["delta"]["command_output"] == 5
+    # All three native receipts include the compaction request: 160 - 90 = 70.
+    assert comparison["left"]["commands"]["uncached_fraction"] == 40 / 70
+    assert comparison["right"]["commands"]["uncached_fraction"] == 20 / 70
+    assert comparison["delta"]["command_uncached_percentage_points"] == pytest.approx(200 / 7)
     assert comparison["delta"]["input_tokens"] is None
     assert comparison["left"]["commands"]["charged_cost"] is None
     (w["sources"] / "current-session.jsonl").write_text("{}\n")

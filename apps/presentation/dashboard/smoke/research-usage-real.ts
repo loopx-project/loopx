@@ -6,6 +6,7 @@ import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {resolve} from 'node:path';
 import type {Browser, Page} from 'playwright';
+import {compareTrajectoryUsage} from '../../../../loopx/control_plane/capabilities/trajectory_usage_comparison.ts';
 
 type Owner = {base: string; close(): Promise<void>};
 type Context = {repoRoot: string; outputDir: string; startOwner(path: string): Promise<Owner>};
@@ -31,8 +32,11 @@ export async function readRealUsage(browser: Browser, context: Context) {
       record(`${language}:${pack.pack_id}`, {...query, pack_id: pack.pack_id}, response);
       if (pack.pack_id === source.default_pack_id) record(language, query, response);
       for (const reference of ids.filter(id => id !== pack.pack_id)) {
+        // Derive the current comparison from the immutable captured projections;
+        // older recorded comparison responses remain available for compatibility.
+        const comparison = compareTrajectoryUsage(pack, packs.find((p: {pack_id: string}) => p.pack_id === reference));
         record(`${language}:${pack.pack_id}:${reference}`, {...query, pack_id: pack.pack_id, compare_pack_id: reference},
-          source.comparisons[`${pack.pack_id}:${reference}`]);
+          {ok: true, comparison});
       }
     }
   }
@@ -64,7 +68,7 @@ export async function readRealUsage(browser: Browser, context: Context) {
     };
     const codec = await open(0, 'en', 1);
     await codec.locator('table').waitFor();
-    assert.match(await codec.innerText(), /share fell while its absolute input rose/);
+    assert.match(await codec.innerText(), /share of total input.*fell while its absolute input rose/);
     const row = (label: string) => codec.getByRole('row').filter({has: page!.getByRole('rowheader', {name: label, exact: true})});
     assert.deepEqual(await row('All-request input (includes cache)').locator('td').allTextContents(), ['184,098,417', '95,917,713', '+88,180,704']);
     assert.deepEqual(await row('LoopX command requests · whole input').locator('td').allTextContents(), ['10,358,194', '5,561,624', '+4,796,570']);
@@ -73,6 +77,7 @@ export async function readRealUsage(browser: Browser, context: Context) {
     assert.deepEqual(await row('LoopX command requests · output').locator('td').allTextContents(), ['20,026', '15,327', '+4,699']);
     assert.deepEqual(await row('Control text / input').locator('td').allTextContents(), ['—', '—', '— pp']);
     assert.deepEqual(await row('LoopX command requests / input').locator('td').allTextContents(), ['5.6%', '5.8%', '-0.17 pp']);
+    assert.deepEqual(await row('LoopX command requests / uncached input').locator('td').allTextContents(), ['46.5%', '7.5%', '+39.01 pp']);
     assert.match(await page.getByRole('region', {name: 'Requests issuing LoopX commands', exact: true}).innerText(), /74 \/ 997.*incomplete attribution/);
     await codec.locator('.research-comparison-sources > details > summary').first().click();
     assert.match(await codec.innerText(), /codec-sol-xhigh-03-explore-on-fourarm-r12-a2/);
@@ -102,6 +107,7 @@ export async function readRealUsage(browser: Browser, context: Context) {
     assert.match(await page.getByRole('region', {name: 'LoopX 命令请求', exact: true}).innerText(), /58 \/ 818/);
     assert.match(await grid.innerText(), /10,759,031/);
     assert.match(await grid.innerText(), /373,449/);
+    assert.deepEqual(await grid.getByRole('row').filter({has: page.getByRole('rowheader', {name: 'LoopX 命令请求占未缓存输入', exact: true})}).locator('td').allTextContents(), ['22.4%', '0.7%', '+21.69 pp']);
     await page.reload();
     await page.locator('.research-progress-basis > summary').click();
     const restored = page.locator('.research-usage-comparison');
@@ -151,7 +157,7 @@ export async function readRealUsage(browser: Browser, context: Context) {
 
     // Older servers omit additive delta fields; never render NaN or invent them in the view.
     const legacy = structuredClone(source.comparisons[`${ids[2]}:${ids[3]}`]);
-    for (const key of ['command_cached', 'command_uncached', 'command_output']) delete legacy.comparison.delta[key];
+    for (const key of ['command_cached', 'command_uncached', 'command_output', 'command_uncached_percentage_points']) delete legacy.comparison.delta[key];
     await page.route(endpoint, route => new URL(route.request().url()).searchParams.has('compare_pack_id')
       ? route.fulfill({json: legacy}) : route.continue());
     await restored.locator(':scope > summary').click();
@@ -162,6 +168,7 @@ export async function readRealUsage(browser: Browser, context: Context) {
       await cells.last().filter({hasText: /^—$/}).waitFor();
       assert.equal(await cells.last().innerText(), '—');
     }
+    assert.equal(await restored.getByRole('row').filter({has: page.getByRole('rowheader', {name: 'LoopX 命令请求占未缓存输入', exact: true})}).locator('td').last().innerText(), '— pp');
     await page.unroute(endpoint);
     const readback = await (await page.request.get(`${owner.base}/fixture/readback`)).json();
     assert.equal(readback.source_unchanged, true);
