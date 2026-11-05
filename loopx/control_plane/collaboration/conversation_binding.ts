@@ -1095,6 +1095,21 @@ function planUnfinishedWork(recovery: JsonObject, row: JsonObject, current: Json
     && matchesWork(observed.unfinished_work)};
 }
 
+function interruptedVisibleResult(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const result = value as JsonObject;
+  if (Object.keys(result).sort().join(",") === "content,file_uri") {
+    if (typeof result.file_uri !== "string" || typeof result.content !== "string") return false;
+    try {
+      const uri = new URL(result.file_uri);
+      return uri.protocol === "file:" && uri.host === "" && uri.pathname.startsWith("/")
+        && uri.search === "" && uri.hash === "";
+    } catch { return false; }
+  }
+  return typeof result.commandLine === "string" && result.commandLine.length > 0
+    && Number.isSafeInteger(result.exitCode);
+}
+
 /** Interrupted work may have effects. Never retry it. The original worker may
  * reserve one read-only review of existing results, with its own presentation.
  * The adapter retains only the original runtime's authorized reads, with
@@ -1143,9 +1158,7 @@ function planInterruptedStewardAnswer(recovery: JsonObject, row: JsonObject, cur
       || proof.read_only_review !== true || proof.no_final_answer !== true || proof.effects_observed !== true
       || !Array.isArray(proof.visible_results) || !proof.visible_results.length || proof.visible_results.length > 128
       || Buffer.byteLength(JSON.stringify(proof.visible_results), "utf8") > 256 * 1024
-      || proof.visible_results.some(value => !value || typeof value !== "object" || Array.isArray(value)
-        || typeof (value as JsonObject).commandLine !== "string" || !(value as JsonObject).commandLine
-        || !Number.isSafeInteger((value as JsonObject).exitCode))) return candidate;
+      || !proof.visible_results.every(interruptedVisibleResult)) return candidate;
   const capacity = nativeRecoveryCapacity(recovery, row, current, candidate);
   // This is a new restricted answer review, never native business replay.
   return {...capacity, recovery_eligible: capacity.recovery_eligible === true && capacity.answer_executor === "codex"};
