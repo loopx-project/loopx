@@ -325,6 +325,14 @@ def test_default_feedback_tracks_queue_execution_stop_and_app_isolation(ordinary
         transport.admit('notes-app', slow)
         first = transport.core.pending()[0]
         active(store, first)
+        # A queue claim precedes the host's confirmed start. Presentation must
+        # not be asserted until its canonical source event actually exists.
+        deadline = time.monotonic() + 10
+        while not any(event.get('kind') == 'agent.phase'
+                      and event.get('payload', {}).get('method') == 'turn/started'
+                      for event in store.events_after(first['session_id'], first['turn_id'], None)):
+            assert time.monotonic() < deadline
+            time.sleep(.01)
         queued = provider.event('notes-app', 'feedback_queued', 'follow-up')
         transport.admit('notes-app', queued)
         transport.reconcile()
@@ -354,6 +362,46 @@ def test_default_feedback_tracks_queue_execution_stop_and_app_isolation(ordinary
         assert not any(row[1:] == (slow['message_id'], 'OnIt') for row in provider.reactions.values())
         assert ('notes-app', slow['message_id'], 'Get') in provider.reactions.values()
         assert all(row['goal_id'] is None for row in store.list_sessions())
+    finally:
+        runtime.close()
+
+
+def test_app_feedback_scan_work_tracks_inputs_not_retained_answer_chunks(ordinary, monkeypatch):  # noqa: F811
+    store, runtime, provider, transport = connect(ordinary)
+    try:
+        event = provider.event('notes-app', 'feedback-history', 'Original source')
+        transport.admit('notes-app', event)
+        source = transport.core.pending()[0]
+        sid = source['session_id']
+        runtime.wait_for_turn(session_id=sid, turn_id=source['turn_id'], timeout_sec=10)
+        transport.reconcile()
+        with monkeypatch.context() as queued:
+            queued.setattr(runtime, 'resume_session_queue', lambda **_: None)
+            status, turn = ordinary[3](f'/api/chat/sessions/{sid}/turns',
+                {'message': 'App input with retained answer history', 'client_turn_id': 'feedback-history'})
+        assert status == 202 and turn['status'] == 'queued'
+        for index in range(48):
+            store.append_message(sid, role='agent', turn_id=turn['turn_id'],
+                text=f'Retained answer part {index}. ' + 'Evidence stays in the body outbox. ' * 200)
+        transport._web_projection_scan_at = 0
+        transport._web_projection_paths()
+        journal = store.sessions_root / sid / 'messages.jsonl'
+        before = journal.read_bytes(), ordinary[4].read_bytes(), list(provider.writes)
+        load_turn = store.load_turn
+        reads = []
+
+        def read_turn(session_id, turn_id):
+            reads.append((session_id, turn_id))
+            return load_turn(session_id, turn_id)
+
+        monkeypatch.setattr(store, 'load_turn', read_turn)
+        transport.reconcile_app_feedback()
+        # No body has been mirrored yet, so this is discovery, not a reaction
+        # effect. One canonical input needs one Turn validation regardless of
+        # how many answer chunks the independent body outbox still owes.
+        assert reads == [(sid, turn['turn_id'])]
+        assert (journal.read_bytes(), ordinary[4].read_bytes(), provider.writes) == before
+        assert store.load_turn(sid, turn['turn_id'])['status'] == 'queued'
     finally:
         runtime.close()
 
