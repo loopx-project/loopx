@@ -133,6 +133,7 @@ async function retiredHistoryRead(browser, url) {
   const readWait = new Promise(resolve => { releaseRead = resolve; });
   const readStarted = new Promise(resolve => { markReadStarted = resolve; });
   const context = await openWorkspacePage(browser, url, {
+    gotoWaitUntil: "domcontentloaded",
     async beforeGoto(api, page) {
       const runtime = page.__loopxRuntime;
       runtime.sessions.set(sessionId, {
@@ -200,6 +201,7 @@ async function recoveryObserverHandover(browser, url) {
   const newTurnWait = new Promise(resolve => { releaseNewTurn = resolve; });
   const previewStarted = new Promise(resolve => { markPreviewStarted = resolve; });
   const context = await openWorkspacePage(browser, url, {
+    gotoWaitUntil: "domcontentloaded",
     async beforeGoto(api, page) {
       const runtime = page.__loopxRuntime;
       runtime.sessions.set(sessionId, {
@@ -279,6 +281,7 @@ export const conversationHistoryRecoveryScenario = {
     let unavailable = oldId;
     let failedReads = 0;
     const context = await openWorkspacePage(browser, url, {
+      gotoWaitUntil: "domcontentloaded",
       collectCoverage,
       beforeGoto(_api, page) {
         for (const [id, agentId, date, text] of [

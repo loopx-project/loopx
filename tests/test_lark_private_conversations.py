@@ -1598,8 +1598,9 @@ def test_health_reads_source_controls_once_and_keeps_fresh_recovery(ordinary, mo
 
 
 @pytest.mark.parametrize("fault", [None, "changed-source", "revoked", "stop", "unknown-native",
-    "background", "later-user", "reservation-crash", "post-enqueue-crash", "queued-newer", "queued-input", "private-path", "still-incomplete"])
+    "background", "later-user", "reservation-crash", "post-enqueue-crash", "queued-newer", "queued-input", "private-path", "still-incomplete", "cold-native", "dead-native", "foreign-native", "failed-effect"])
 def test_original_worker_continues_explicit_unfinished_project_work_once_after_restart(ordinary, monkeypatch, fault):  # noqa: F811
+    """Reply-worker restart retains native ownership; native loss stays fenced."""
     from datetime import datetime, timedelta, timezone
     from pathlib import Path
     from loopx.capabilities.native_chat import external_conversations
@@ -1617,6 +1618,11 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
     partial = "Partial result retained; remaining work is blocked.\n<loopx-review-json>" + json.dumps({
         "message": "", "unfinished_work": work}) + "</loopx-review-json>"
     source = fake.read_text()
+    # Persisted history is readable from a cold client. Background terminals
+    # belong to the process that loaded the thread, as in native app-server.
+    source = source.replace("turn_count = 0", "loaded = False\nturn_count = 0")
+    source = source.replace('    elif method in {"thread/start", "thread/resume"}:',
+        '    elif method in {"thread/start", "thread/resume"}:\n        loaded = True')
     source = source.replace("turn_count = 0", f"turn_count = len(json.load(open({str(inventory)!r}))[\"turns\"]) if __import__(\"os\").path.exists({str(inventory)!r}) else 0")
     start = source.index("        response = 'Visible runtime response.")
     end = source.index('        print(json.dumps({"method": "item/agentMessage/delta"', start)
@@ -1633,6 +1639,7 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
         path.write_text(json.dumps({{"turns": [{{"id": active_turn, "status": "completed"}}, *previous["turns"]], "items": [
             {{"turnId": active_turn, "item": {{"id": "user", "type": "userMessage"}}}},
             {{"turnId": active_turn, "item": {{"id": "effect", "type": "fileChange", "status": "completed"}}}},
+            {{"turnId": active_turn, "item": {{"id": "view", "type": "imageView", "path": str(artifact)}}}},
             {{"turnId": active_turn, "item": {{"id": "answer", "type": "agentMessage", "phase": "final_answer", "text": response}}}}]}}))
 ''' + source[end:]
     start = source.index('    elif method == "thread/turns/list":')
@@ -1641,6 +1648,9 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
         snapshot = json.load(open({str(inventory)!r}))
         result = {{"data": snapshot["turns" if method == "thread/turns/list" else "items"]}}
     elif method == "thread/backgroundTerminals/list":
+        if not loaded:
+            print(json.dumps({{"id": request["id"], "error": {{"code": -32600, "message": "thread not found"}}}}), flush=True)
+            continue
         result = {{"data": [{{"processId": "still-live"}}] if {fault == "background"!r} else []}}
 ''' + source[end:]
     fake.write_text(source)
@@ -1660,7 +1670,13 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
     original_turn_bytes = store._turn_path(original["session_id"], original["turn_id"]).read_bytes()
     session_before = store.load_session(original["session_id"])
     Path(session_before["codex_home"]).mkdir(parents=True, exist_ok=True)
-    runtime.adapters.pop(original["session_id"]).close_session()
+    if fault == "cold-native":
+        runtime.adapters.pop(original["session_id"]).close_session()
+    elif fault == "dead-native":
+        runtime.adapters[original["session_id"]].close_session()
+    elif fault == "foreign-native":
+        runtime.adapters[original["session_id"]].session.thread_id = "foreign-thread"
+    before_recovery_calls = [json.loads(line) for line in capture.read_text().splitlines()]
     clock = datetime.now(timezone.utc) + timedelta(seconds=61)
     class AfterBackoff(datetime):
         @classmethod
@@ -1673,10 +1689,12 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
         transport.bindings.disconnect(binding["binding_id"], expected_revision=transport.bindings.read()["revision"])
     if fault == "stop":
         transport.admit("notes-app", provider.event("notes-app", "stop-later", "/stop"))
-    if fault in {"unknown-native", "later-user"}:
+    if fault in {"unknown-native", "later-user", "failed-effect"}:
         snapshot = json.loads(inventory.read_text())
         if fault == "unknown-native":
             snapshot["items"].append({"turnId": turn["upstream_turn_id"], "item": {"id": "unknown", "type": "futureEffect"}})
+        elif fault == "failed-effect":
+            snapshot["items"][1]["item"]["status"] = "failed"
         else:
             snapshot["turns"].insert(0, {"id": "newer-user", "status": "completed"})
         inventory.write_text(json.dumps(snapshot))
@@ -1686,6 +1704,11 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
     selected = worker()
     if fault in {"reservation-crash", "post-enqueue-crash", "queued-newer", "queued-input"}:
         enqueue = runtime.enqueue_turn
+        resume = runtime.resume_session_queue
+        if fault in {"queued-newer", "queued-input"}:
+            # Hold dispatch before enqueue, rather than relying on a slow
+            # adapter startup to let the newer-input fixture win a race.
+            monkeypatch.setattr(runtime, "resume_session_queue", lambda **kwargs: None)
         def crash(**kwargs):
             if fault in {"post-enqueue-crash", "queued-newer", "queued-input"}:
                 enqueue(**kwargs)
@@ -1699,14 +1722,13 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
             snapshot["turns"].insert(0, {"id": "newer-after-reservation", "status": "completed"})
             inventory.write_text(json.dumps(snapshot))
         if fault == "queued-input":
-            resume = runtime.resume_session_queue
-            monkeypatch.setattr(runtime, "resume_session_queue", lambda **kwargs: None)
             transport.admit("notes-app", provider.event("notes-app", "newer-input", "Newer follow-up: inspect this correction first."))
+        if fault in {"queued-newer", "queued-input"}:
             monkeypatch.setattr(runtime, "resume_session_queue", resume)
         selected = worker()
     selected.reconcile()
     continued = selected.core.read_request(ref)
-    if fault in {"changed-source", "revoked", "stop", "unknown-native", "background", "later-user"}:
+    if fault in {"changed-source", "revoked", "stop", "unknown-native", "background", "later-user", "cold-native", "dead-native", "foreign-native", "failed-effect"}:
         assert continued["turn_id"] == original["turn_id"] and not continued.get("context_recovery")
         assert artifact.read_text() == "first\n"
     else:
@@ -1745,6 +1767,10 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
         if fault is None:
             assert "Verified remaining work completed." in bodies
     assert store._turn_path(original["session_id"], original["turn_id"]).read_bytes() == original_turn_bytes
+    after_recovery_calls = [json.loads(line) for line in capture.read_text().splitlines()]
+    for method in ("initialize", "thread/start", "thread/resume"):
+        assert sum(row.get("method") == method for row in after_recovery_calls) == sum(
+            row.get("method") == method for row in before_recovery_calls)
 
 
 def _app_projection_journey(fixture):
