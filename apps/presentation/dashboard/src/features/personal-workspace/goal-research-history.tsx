@@ -101,7 +101,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
   const copy = zh ? {
     title: "研究历程", loading: "正在读取完整记录", reading: "读取中", refresh: "刷新记录",
     all: "回到全图", scope: "Explore 已记录历史", coverage: "其他来源覆盖、尝试发生时序尚未核验",
-    partial: "历史尚未完整载入", failure: "无法继续读取历史。已读记录保留；请重试。",
+    partial: "历史尚未完整载入", failure: "无法读取此来源的研究记录",
     time: "记录时间（本地）", unknown: "时间未记录", record: "条记录", records: "条记录", evidence: "已记录依据",
     interpretation: "独立检查与实际采用尚未核验", versions: "来源与版本引用", updates: "历史记录",
     changes: "次记录", question: "个问题", questions: "个问题", links: "显式关联", missing: "部分关联的来源节点尚未记录",
@@ -109,7 +109,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
   } : {
     title: "Research history", loading: "Reading the full recorded history", reading: "Reading", refresh: "Refresh history",
     all: "Whole graph", scope: "Recorded Explore history", coverage: "Other-source coverage and attempt-time coverage are unverified",
-    partial: "History is not fully loaded", failure: "Cannot continue reading history. Loaded records remain; retry.",
+    partial: "History is not fully loaded", failure: "Could not read this source's research history",
     time: "Recorded time (local)", unknown: "Time not recorded", record: "record", records: "records", evidence: "Recorded evidence",
     interpretation: "Independent checking and actual adoption are unverified", versions: "Source and version references", updates: "History",
     changes: "records", question: "question", questions: "questions", links: "Explicit relationships", missing: "Some linked source nodes are not recorded",
