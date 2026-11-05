@@ -55,7 +55,7 @@ def context_delivery_for_arguments(args: Any, *, codex_machine_preference: bool 
         "antigravity_app" if getattr(args, "antigravity_app", False) else None) if value is not None]
     setting = getattr(args, "context_delivery", None)
     setting = ("off" if os.environ.get("LOOPX_CONTEXT_DELIVERY") == "off" else "auto") if setting is None else setting
-    delta = getattr(args, "delta_delivery", None) or "auto"
+    delta = getattr(args, "delta_delivery", None)
     if len(profiles) > 1:
         return context_delivery_activation(setting, delta_delivery=delta)
     return context_delivery_activation(setting, runtime_profile=profiles[0] if profiles else None,
@@ -69,7 +69,7 @@ def context_delivery_activation(setting: str, *, runtime_profile: str | None = N
                                 scheduler_execution_context: dict[str, Any] | None = None,
                                 benchmark_mode: str | None = None,
                                 codex_machine_preference: bool = False,
-                                delta_delivery: str = "auto") -> dict[str, Any]:
+                                delta_delivery: str | None = None) -> dict[str, Any]:
     from ..scheduler.execution_context import (
         ExecutionMode, HostSurface, SchedulerOwner, resolve_scheduler_execution_context,
         scheduler_execution_context_for_runtime_profile,
@@ -77,10 +77,12 @@ def context_delivery_activation(setting: str, *, runtime_profile: str | None = N
 
     if setting not in CONTEXT_DELIVERY_SETTINGS:
         raise ValueError("context-delivery must be off, on or auto")
-    if delta_delivery not in DELTA_DELIVERY_SETTINGS:
+    if delta_delivery is not None and delta_delivery not in DELTA_DELIVERY_SETTINGS:
         raise ValueError("delta-delivery must be off or auto")
     scenario = None
-    if setting != "off" and delta_delivery != "off":
+    # A lone legacy off is raw. An explicit pair can qualify Delta on the
+    # full document without opting into progressive presentation.
+    if delta_delivery == "auto" or (delta_delivery is None and setting != "off"):
         # Conflicting declarations cannot activate transport. The scheduler
         # owner still validates execution; this adapter does not repair it.
         if runtime_profile is not None and scheduler_execution_context is not None:
@@ -283,7 +285,7 @@ def codex_context_recovery_instructions(directory: str, *, goal_id: str, agent_i
 
 def codex_context_configuration(directory: str, *, goal_id: str, agent_id: str,
                                  cli_argv: list[str], scenario: str, session_root: bool = False,
-                                 inherit_machine: bool = False) -> dict[str, Any]:
+                                 inherit_machine: bool = False, progressive_enabled: bool = True) -> dict[str, Any]:
     """Native configuration data shared by the worker and CLI setup journey.
 
     This renders no trust hashes and writes no host configuration. The native
@@ -298,9 +300,11 @@ def codex_context_configuration(directory: str, *, goal_id: str, agent_id: str,
         raise ValueError("context configuration requires exact goal-id and agent-id")
     directory = str(_private_root(directory))
     option = "--codex-context-root" if session_root else "--codex-context-dir"
+    activation_args = ["--context-delivery", "on"] if progressive_enabled else [
+        "--context-delivery", "off", "--delta-delivery", "auto"]
     handler = {"type": "command", "command": shlex.join([
         *cli_argv, "--format", "json", "quota", "context-hook",
-        *([] if inherit_machine else ["--context-delivery", "on"]),
+        *([] if inherit_machine else activation_args),
         *(["--codex-app"] if scenario == "codex_app_heartbeat" else
           ["--runtime-profile", "codex_app_ssh_goal" if scenario == "codex_app_ssh_goal" else "generic_cli"]),
         option, directory]), "timeout": 10}
@@ -597,7 +601,7 @@ def register_native_context_view(directory: str | None, view: dict[str, Any], *,
 def project_codex_context(payload: dict[str, Any], *, directory: str | None, capture_directory: Path,
                           goal_id: str, agent_id: str, surface: str, capture_id: str,
                           continuity_generation: str | None = None,
-                          progressive_enabled: bool = False, hook_session: str | None = None) -> dict[str, Any]:
+                          progressive_enabled: bool | None = None, hook_session: str | None = None) -> dict[str, Any]:
     """Commit current recovery before optional projection or candidate updates.
 
     Serialization prevents invalidation from moving the epoch during preparation.
@@ -661,6 +665,8 @@ def project_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                 # or encoding can be interrupted. Never recover its predecessor.
                 publish_recovery(recovery)
                 recovery_committed = True
+                # Legacy direct native callers omitted the presentation option.
+                progressive = progressive_enabled is not False
                 try:
                     transaction = prepare_context_delivery(payload, scope=scope, capture_id=capture_id,
                         surface=surface, baseline=request.get("baseline"),
@@ -671,14 +677,15 @@ def project_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                             "command_template": context_capture_read_command(Path(recovery["path"]), recovery["sha256"],
                                 page_bytes=page_bytes, max_page_output_bytes=output_bytes)
                                 + " --select '<supporting_material_pointer>/sources'",
-                        }, consumed_pointers=state.get("consumed_pointers"))
+                        } if progressive else None, consumed_pointers=state.get("consumed_pointers"))
                 except (EffectRuntimeRemoteError, EffectRuntimeStartupError):
                     return payload
-                if transaction["projected"]:
+                if progressive and transaction["projected"]:
                     recovery = capture_context_projection(transaction["context"], directory=capture_directory,
                         filename="required-context.json", read_guidance=CONTEXT_CAPTURE_PAGE_GUIDANCE)
                     publish_recovery(recovery)
-                result: dict[str, Any] = transaction["delivery"]
+                result: dict[str, Any] = transaction["delivery"] if progressive else transaction
+                read_sections = transaction["read_sections"] if progressive else {}
                 result["recovery"] = recovery
                 if result.get("continuity_basis") == "captured_file" and result.get("mode") == "delta":
                     result["baseline_reference"] = request["baseline_reference"]
@@ -686,8 +693,8 @@ def project_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                     state["recovery"]["target"] = result["target"]
                     state["recovery"]["continuity_basis"] = "captured_file"
                     state["pending"].update(target=result["target"], ancestry=result["ancestry"],
-                        full_read_sections=transaction["read_sections"],
-                        read_sections=transaction["read_sections"] if result["mode"] == "full" else {})
+                        full_read_sections=read_sections,
+                        read_sections=read_sections if result["mode"] == "full" else {})
                     _save(root, state)
                 return result
             except (OSError, ValueError, KeyError, TypeError, RecursionError):
