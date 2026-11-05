@@ -608,6 +608,7 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
         (home / "hooks.json").write_text(json.dumps({"hooks": configuration["hooks"]}))
     phase, queue, observed, errors = "cold", [], {}, []
     read_offsets = {}
+    visible_choices = {}
     actual_turn = None
     rejected_read = False
     reading_initial = False
@@ -704,9 +705,17 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                     # Exercise the actual small reference and selective public
                     # reader in native model input; never consume either file in full.
                     assert "content" not in descriptor
-                    queue = [navigation["recovery"]["command"] + " --list", navigation["recovery"]["command"]
-                        + " --select /goal_id --select /heartbeat_receipt"
-                        + (" --select /retained_material/requirement" if large_capture else "")]
+                    reader = navigation["recovery"]["command"]
+                    select = " --select /goal_id --select /heartbeat_receipt"
+                    if benchmark and name in ("cold", "warm"):
+                        select += (" --select /interaction_contract/cli_channel/selection_command"
+                            " --select /action_portfolio/suggested_actions/0/todo_id"
+                            " --select /action_portfolio/suggested_actions/1/todo_id")
+                    if large_capture:
+                        select += " --select /retained_material/requirement"
+                    # The benchmark receiver knows these paths. Other native
+                    # scenarios exercise index discovery and digest recovery.
+                    queue = ([] if benchmark else [reader + " --list"]) + [reader + select]
                     if large_capture:
                         # Reject a different digest through the real native CLI,
                         # then continue with the unchanged original reference.
@@ -739,6 +748,13 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                         assert len(page["content"].encode()) == page["total_bytes"]
                         assert values["/retained_material/requirement"] == unicode_requirement
                         assert "资料🙂" not in _input_text(request)
+                    if benchmark:
+                        if name.endswith("_bound"):
+                            bound_id = values["/heartbeat_receipt"]["settlement_identity"]["todo_id"]
+                            assert bound_id == visible_choices[name.removesuffix("_bound")]
+                        else:
+                            slot = 0 if name == "cold" else 1
+                            visible_choices[name] = values[f"/action_portfolio/suggested_actions/{slot}/todo_id"]
                     native_context = home / "loopx-context" if benchmark else context
                     assert "candidate" not in json.loads((native_context / "session.json").read_bytes())
                 else:
@@ -754,9 +770,15 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                 if benchmark and name in ("cold", "warm"):
                     # Consume the command actually delivered to the native
                     # worker, rather than manually supplying missing flags.
-                    presented = json.loads(Path(descriptor["recovery"]["path"]).read_text())
-                    selection = presented["interaction_contract"]["cli_channel"]["selection_command"]
-                    command = selection["route_prefix"] + " " + selection["command_args_template"].replace("{todo_id}", TODO_ID)
+                    if progressive:
+                        assert page["offset"] == 0 and page["eof"]
+                        selection = values["/interaction_contract/cli_channel/selection_command"]
+                        todo_id = visible_choices[name]
+                    else:
+                        presented = json.loads(Path(descriptor["recovery"]["path"]).read_text())
+                        selection = presented["interaction_contract"]["cli_channel"]["selection_command"]
+                        todo_id = TODO_ID
+                    command = selection["route_prefix"] + " " + selection["command_args_template"].format(todo_id=todo_id)
                     argv = shlex.split(command)
                     assert argv[argv.index("--context-delivery") + 1] == "on"
                     assert argv[argv.index("--codex-context-dir") + 1] == str(home / "loopx-context")
@@ -841,6 +863,8 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
         assert set(initial_content) == {"cold"} and not wrong_runtime.exists()
     if benchmark:
         turns = [json.loads(raw)["heartbeat_receipt"]["turn_instance_id"] for _, raw in sources]
+        if progressive:
+            assert visible_choices["cold"] == TODO_ID and visible_choices["warm"] != TODO_ID
         assert len(set(turns)) == 2
         assert all(_heartbeat_receipt_count(runtime, turn) == 2 for turn in turns)  # original guard + selection
         assert _spend_run_count(runtime) == 1  # only the explicit inter-wake settlement above
