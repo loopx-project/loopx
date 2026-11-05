@@ -108,8 +108,11 @@ def retention_plan(bank: Path, policy: dict | None, *, now: float | None = None)
 
 
 def _sync(path: Path) -> None:
-    if os.name == "posix":
-        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    # O_DIRECTORY is POSIX-only, so the platform gate and the flag lookup must
+    # name the same thing rather than trusting `os.name` alone.
+    directory = getattr(os, "O_DIRECTORY", 0)
+    if os.name == "posix" and directory:
+        fd = os.open(path, os.O_RDONLY | directory)
         try:
             os.fsync(fd)
         finally:

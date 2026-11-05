@@ -13,10 +13,26 @@ from typing import Any
 from .decision_capture import capture_page_range as _capture_page_range
 
 
+def _no_follow_flag() -> int:
+    """The host's no-follow flag, or 0 where it has none.
+
+    `O_NOFOLLOW` and `O_NONBLOCK` are POSIX-only attributes: referencing them
+    bare raises AttributeError on a host that does not define them, before the
+    bounded-regular-file check below can refuse anything. Read them per call so
+    the probe describes this host, as the peer and completion readers do.
+    """
+    return getattr(os, "O_NOFOLLOW", 0)
+
+
 def read_native_trace_file(path: Path, *, tail: bool = False) -> bytes:
     from ..effect_runtime import MAX_REQUEST_BYTES
 
-    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    no_follow = _no_follow_flag()
+    if not no_follow and path.is_symlink():
+        # Without O_NOFOLLOW the open cannot refuse a symlink for us. Refuse it
+        # here rather than letting a diagnostic read follow an arbitrary target.
+        raise ValueError("native observation must not be a symlink")
+    descriptor = os.open(path, os.O_RDONLY | no_follow | getattr(os, "O_NONBLOCK", 0))
     with os.fdopen(descriptor, "rb") as stream:
         metadata = os.fstat(stream.fileno())
         if not stat.S_ISREG(metadata.st_mode) or (metadata.st_size > MAX_REQUEST_BYTES and not tail):

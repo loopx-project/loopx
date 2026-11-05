@@ -105,14 +105,25 @@ def _audit_owners(request: dict[str, Any]) -> dict[str, Any]:
 
 @contextmanager
 def _regular_input(path: Path, limit: int) -> Iterator[BinaryIO]:
+    # O_NOFOLLOW and os.getuid are POSIX-only. A bare reference to either raises
+    # AttributeError on a host that does not define it, so this reader would
+    # surface an untyped crash instead of its own refusal -- and the readback is
+    # reachable without the platform gate verify_state_backup applies. Ask for
+    # what this host has, and refuse a symlink here when the open cannot.
+    getuid = getattr(os, "getuid", None)
+    if getuid is None:
+        raise StateRecoveryError("recovery_input_unavailable")
+    no_follow = getattr(os, "O_NOFOLLOW", 0)
+    if not no_follow and path.is_symlink():
+        raise StateRecoveryError("recovery_input_unavailable")
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        fd = os.open(path, os.O_RDONLY | no_follow)
     except OSError as exc:
         raise StateRecoveryError("recovery_input_unavailable") from exc
     with os.fdopen(fd, "rb") as handle:
         info = os.fstat(handle.fileno())
         _require(stat.S_ISREG(info.st_mode), "recovery_input_not_regular")
-        _require(info.st_uid == os.getuid() and not info.st_mode & 0o077, "recovery_input_not_private")
+        _require(info.st_uid == getuid() and not info.st_mode & 0o077, "recovery_input_not_private")
         _require(0 < info.st_size <= limit, "recovery_capacity_exceeded")
         yield handle
 
