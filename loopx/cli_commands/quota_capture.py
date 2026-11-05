@@ -1212,6 +1212,7 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
                                 cwd=workspace.resolve(),
                                 scenario=activation["scenario"],
                                 capture_directory=capture,
+                                context_directory=directory if capture is not None else None,
                             )
                             record_native_execution_preparation(
                                 directory,

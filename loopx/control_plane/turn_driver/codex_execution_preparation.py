@@ -126,6 +126,7 @@ def execute_codex_execution_preparation(
     cwd: Path,
     scenario: str,
     capture_directory: Path | None = None,
+    context_directory: Path | None = None,
     timeout: float = 8,
     runner: CommandRunner | None = None,
 ) -> dict[str, Any]:
@@ -175,6 +176,8 @@ def execute_codex_execution_preparation(
     ):
         raise ValueError("Codex execution preparation requires a physical workspace")
     invoke = runner or _default_runner
+    if context_directory is not None and (capture_directory is None or not turn_instance_id):
+        raise ValueError("Native execution preparation requires a bound captured Turn")
     claimed = _run_json(
         expected_claim,
         registry_path=registry_path,
@@ -189,7 +192,9 @@ def execute_codex_execution_preparation(
         "--agent-id", agent_id,
         *( ["--codex-app"] if scenario == "codex_app_heartbeat" else
            ["--runtime-profile", "codex_app_ssh_goal"] ),
-        "--context-delivery", "off",
+        *(["--context-delivery", "on", "--codex-context-dir", str(context_directory),
+           "--defer-context-presentation"] if context_directory is not None else
+          ["--context-delivery", "off"]),
         "--todo-id", todo_id,
         *(["--turn-instance-id", turn_instance_id] if turn_instance_id else []),
         *(["--decision-output-dir", str(capture_directory)] if capture_directory is not None else []),

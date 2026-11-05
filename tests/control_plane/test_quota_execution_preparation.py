@@ -254,6 +254,7 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
     assert selected["/heartbeat_receipt"]["turn_instance_id"] == "preparation-turn"
     plan = selected["/interaction_contract/cli_channel"]["settlement_plan"]
     assert plan["identity"]["todo_id"] == TODO and plan["identity"]["turn_instance_id"] == "preparation-turn"
+    assert plan["schema_version"] == "quota_settlement_plan_v2"
     sources = selected["/interaction_contract/agent_channel/work_context"]["sources"]
     task = next(item["content"]["todo"] for item in sources if item["source"] == "selected_todo")
     # The v0 owner may deduplicate short text already in selected_todo.
@@ -261,10 +262,14 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
     # replacing it with the selected summary when that summary is shorter.
     assert task.get("text", selected["/selected_todo"]["text"]) == original["text"]
     assert task["note"] == original["note"]
-    goal_read = next(item for item in selected["/interaction_contract/agent_channel/required_reads"]
-        if item["source"] == "goal_state")
-    goal = subprocess.run(shlex.split(goal_read["command"]), capture_output=True, text=True, timeout=30)
-    assert goal.returncode == 0 and goal.stdout == goal_text
+    goal_reads = [item for item in selected["/interaction_contract/agent_channel/required_reads"]
+        if item["source"] == "goal_state"]
+    if goal_reads:
+        goal = subprocess.run(shlex.split(goal_reads[0]["command"]), capture_output=True, text=True, timeout=30)
+        assert goal.returncode == 0 and goal.stdout == goal_text
+    else:
+        goal = next(item["content"] for item in sources if item["source"] == "goal_state")
+        assert goal["text"] == goal_text
     code, current = run_json_cli_result("todo", "list", "--goal-id", GOAL, "--todo-id", TODO,
         registry_path=tmp_path / "registry.json", runtime_root=tmp_path / "runtime", cwd=tmp_path)
     assert code == 0
