@@ -285,6 +285,12 @@ def test_progressive_cli_delivers_complete_acceptance_for_selection_and_replan(t
     assert guard["/replan_action_packet/required_outcome"] == "semantic_delta"
     assert guard["/replan_action_packet/planning_guidance"]
     assert "blocked" in guard["/replan_action_packet/allowed_terminal"]
+    basis = "/autonomous_replan_obligation"
+    assert guard[basis + "/obligation_id"] == guard["/heartbeat_receipt/settlement_identity/replan_obligation_id"]
+    assert guard[basis + "/replan_context/context_id"]
+    assert guard[basis + "/triggers/0/kind"]
+    assert guard[basis + "/stop_condition"]
+    assert basis + "/replan_context/evidence" not in guard
     # The complete contract exposes the source by its first-read JSON pointer,
     # not by a second replan-view packet. Select its body from that same capture.
     path, = (key.removesuffix("/id") for key, value in guard.items()

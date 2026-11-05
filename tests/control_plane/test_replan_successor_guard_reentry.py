@@ -71,9 +71,11 @@ def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, *, 
     ), state_path=state, provider=provider)
 
     def call(*args: str, expected_code: int = 0) -> dict:
-        # These policy oracles inspect the complete authority decision, as the
-        # shared guard fixture does. Native transport tests explicitly opt in.
-        if args[:2] == ("quota", "should-run") and "--context-delivery" not in args:
+        # This fixture inspects the authority decision; checkpoint tests cover
+        # presentation and follow its captured reader to the delivered policy.
+        if args[:2] == ("quota", "should-run") and not any(
+            arg == "--context-delivery" or arg.startswith("--context-delivery=") for arg in args
+        ):
             args = (*args, "--context-delivery", "off")
         result = subprocess.run([sys.executable, "-m", "loopx.cli", "--registry", str(registry),
             "--runtime-root", str(runtime), "--format", "json", *args], cwd=ROOT,
@@ -356,13 +358,16 @@ def test_invalidated_successor_cannot_rebind_or_close_original_turn(
             "unclaimed": ["--clear-claim"]}[invalidation]
     call("todo", "update", "--goal-id", GOAL, "--agent-id", AGENT,
          "--todo-id", added["todo_id"], *edit)
-    # An unclaimed successor loses its original-lane proof. Fail closed while
-    # retaining the original receipt; a stale creation ACK cannot settle it.
-    guarded = _guard(call, expected_code=1 if invalidation == "unclaimed" else 0)
+    # Losing the successor invalidates its settlement proof. The same Turn
+    # can still review the original obligation from current canonical facts.
+    guarded = _guard(call)
     assert guarded["heartbeat_receipt"]["settlement_identity"] == identity
-    if invalidation == "unclaimed":
-        assert "settlement identity conflicts" in guarded["reason"]
-        assert guarded["heartbeat_receipt"]["event_id"] == prior_guard["heartbeat_receipt"]["event_id"]
+    assert guarded["heartbeat_receipt"]["event_id"] == prior_guard["heartbeat_receipt"]["event_id"]
+    obligation = guarded["autonomous_replan_obligation"]
+    assert guarded["effective_action"] == "autonomous_replan_required"
+    assert obligation["selection_binding"] == "heartbeat_receipt"
+    assert obligation["obligation_id"] == identity["replan_obligation_id"]
+    assert obligation["replan_context"]["obligation_id"] == identity["replan_obligation_id"]
     assert guarded.get("selected_todo") is None
     assert (guarded.get("autonomous_replan_obligation") or {}).get("resolution_mode") != "receipt_bound_replan_settlement"
     assert (guarded.get("replan_action_packet") or {}).get("settlement_only") is not True

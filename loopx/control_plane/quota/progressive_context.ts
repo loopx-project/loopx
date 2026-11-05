@@ -327,6 +327,19 @@ export function initialContextReadPointers(context: JsonObject, decisionFields: 
     // obligations and the indexed outcome paths below, without another writer.
     for (const field of ["planning_guidance", "required_outcome", "allowed_terminal"])
       include("replan_action_packet", field);
+    // An invalidated successor can reopen review under the same receipt. Show
+    // the current cause and basis before the agent chooses a writeback route.
+    const obligation = object(context.autonomous_replan_obligation);
+    const review = object(obligation?.replan_context);
+    if (obligation?.schema_version === "autonomous_replan_obligation_v0" &&
+        typeof replan.obligation_id === "string" && obligation.obligation_id === replan.obligation_id &&
+        review?.schema_version === "replan_context_v0" && review.obligation_id === replan.obligation_id) {
+      include("autonomous_replan_obligation", "obligation_id");
+      include("autonomous_replan_obligation", "stop_condition");
+      include("autonomous_replan_obligation", "replan_context", "context_id");
+      if (Array.isArray(obligation.triggers)) obligation.triggers.forEach((_trigger, index) =>
+        include("autonomous_replan_obligation", "triggers", index, "kind"));
+    }
   }
   include("agent_lane_next_action", "next_step");
   include("agent_lane_next_action", "next_action_basis");
