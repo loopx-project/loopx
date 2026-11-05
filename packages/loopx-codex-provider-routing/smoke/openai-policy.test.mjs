@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
-import {apiKeys, apiOutcome} from "../src/loopx_codex_provider_routing/openai_policy.ts";
+import {apiKeys, apiOutcome, apiStreamOutcome} from "../src/loopx_codex_provider_routing/openai_policy.ts";
 
 test("known quota rejection rotates a key; unknown effects and ordinary request failures do not", () => {
   const input={now:1000,status:429,code:"insufficient_quota",retry_after:null,model:"selected-model"};
@@ -15,4 +15,23 @@ test("cooldowns and model-scoped permission failures retain key order without ma
   const keys=[{id:"a",blocked_until:1100},{id:"b",blocked_until:1100,blocked_model:"other-model"},{id:"c"}];
   assert.deepEqual(apiKeys({now:1000,model:"selected-model",keys}),["b","c"]);
   assert.deepEqual(apiKeys({now:1100,model:"selected-model",keys}),["a","b","c"]);
+});
+test("only structured streamed quota failures update future key availability", () => {
+  for (const code of ["insufficient_quota", "organization_spend_limit_exceeded",
+    "project_spend_limit_exceeded", "organization_usage_limit_exceeded", "usage_limit_exceeded",
+    "rate_limit_exceeded"]) {
+    for (const event of [{type:"error",code},
+      {type:"response.failed",response:{status:"failed",error:{code}}}]) {
+      assert.deepEqual(apiStreamOutcome(event),{status:429,code});
+      assert.ok(apiOutcome({now:1000,...apiStreamOutcome(event),retry_after:null,model:"selected-model"}).blocked_until>1000);
+    }
+  }
+  for (const event of [null, [], "insufficient_quota", {type:"error",message:"Quota exceeded"},
+    {type:"error",code:"server_error"}, {type:"error",code:{insufficient_quota:true}},
+    {type:"response.output_text.delta",delta:JSON.stringify({type:"error",code:"insufficient_quota"})},
+    {type:"response.completed",response:{status:"failed",error:{code:"insufficient_quota"}}},
+    {type:"response.failed",response:{status:"completed",error:{code:"insufficient_quota"}}},
+    {type:"response.failed",response:{status:"failed",error:"insufficient_quota"}}]) {
+    assert.equal(apiStreamOutcome(event),null);
+  }
 });
