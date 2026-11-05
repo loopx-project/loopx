@@ -29,6 +29,37 @@ export function contextReadSectionDigests(request: JsonObject, paths: Path[]): J
     createHash("sha256").update(identity(at(context, path), ["context", ...path])).digest("hex")]));
 }
 
+/** Only previously delivered supplementary bodies may use a reference. Current
+ * decisions, stops, selection, settlement and unknown source shapes stay inline. */
+function observedFirstRead(request: JsonObject, selections: {pointer: string; path: Path}[]): JsonObject | undefined {
+  const context = requireJsonObject(request.context, "current first read");
+  const seen = requireJsonObject(request.consumed_pointers, "observed sections");
+  if (typeof jsonObject(context.selected_todo)?.todo_id !== "string") return undefined;
+  const sources = ["interaction_contract", "agent_channel", "work_context", "sources"];
+  const identity = contextSourceIdentity(request, request.source_number_tokens);
+  const reused: JsonObject = {};
+  const current = selections.flatMap(row => {
+    const {path, pointer: address} = row;
+    if (typeof seen[address] !== "string" || !pathStartsWith(path, sources)
+        || typeof path[4] !== "number" || path[5] !== "content") return [row];
+    const source = jsonObject(at(context, path.slice(0, 5)));
+    const preference = source?.kind === "agent_preferences" && path.length === 6;
+    const outcome = source?.source === "goal_acceptance" && path.length === 10
+      && path[6] === "goal_acceptance_contract" && path[7] === "outcome_requirements"
+      && path[8] === "outcomes" && typeof path[9] === "number";
+    const body = jsonObject(at(context, path));
+    if (!body || !(preference || outcome) || (outcome && typeof body.id !== "string")) return [row];
+    const content = identity(body, ["context", ...path]);
+    // A reference and its recovery instructions should cost less than the field.
+    if (Buffer.byteLength(content) < 1024 || createHash("sha256").update(content).digest("hex") !== seen[address])
+      return [row];
+    reused[address] = seen[address];
+    return (outcome ? ["id", "revision"] : ["ok", "revision", "instruction"]).filter(key =>
+      Object.hasOwn(body, key)).map(key => ({pointer: address + "/" + key, path: [...path, key]}));
+  });
+  return Object.keys(reused).length ? {selections: current, reused} : undefined;
+}
+
 function inlineReadSections(request: JsonObject, required: JsonObject): JsonObject {
   const original = requireJsonObject(request.context, "inline source"), paths: Path[] = [];
   const visit = (source: unknown, shown: unknown, path: Path) => {
@@ -250,11 +281,18 @@ export function prepareProgressiveContextDelivery(request: JsonObject, legacyFie
   const codec = nativeContextContinuity({...request, context: required.context,
     ...(request.source_number_tokens === undefined ? {} : {source_number_tokens: required.tokens})});
   const delivery = encodeContextDelivery(codec, legacyFields, sourceValues, fileNavigationPaths(required.context));
+  const observe = request.observe_first_read === true && !!jsonObject(required.context.selected_todo)?.todo_id;
+  const readPlan = observe || request.include_initial_read_plan === true
+    ? nativeContextReadPlan(required.context, decisionFields) : undefined;
+  const selection = readPlan?.initial ? jsonObject(readPlan.plan)?.selections : undefined;
+  const observed = observe && Array.isArray(selection)
+    ? observedFirstRead(codec, selection as {pointer: string; path: Path}[]) : undefined;
   const {operation: _operation, source_edits: _edits, source_number_tokens: _numbers, ...source} = request;
   return contextProjectionChanges(source, {context: required.context, delivery, projected: required.projected,
+    ...(observed ? {observed_first_read: observed} : {}),
     read_sections: inlineReadSections(request, required.context),
     ...(request.include_initial_read_plan === true
-      ? {initial_read_plan: nativeContextReadPlan(required.context, decisionFields)} : {})}, sourceValues);
+      ? {initial_read_plan: readPlan} : {})}, sourceValues);
 }
 
 /** Stateless presentation uses the same plan without inventing a native session,
