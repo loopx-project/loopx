@@ -5030,6 +5030,82 @@ def test_private_recovery_backlog_uses_released_capacity_before_retry_delay(tmp_
     assert all(transport._context_recovery_probe_at[path] > clock[0] for path in paths)
 
 
+@pytest.mark.parametrize("background_slots", [0, 2])
+@pytest.mark.parametrize("origin", ["lark", "web"])
+def test_current_body_uses_next_slot_before_unattempted_recovery_backlog(tmp_path, monkeypatch, background_slots, origin):
+    from loopx.extensions.lark import goal_topic_runtime_service as worker
+
+    release_old, release_rest = threading.Event(), threading.Event()
+    changed = threading.Condition()
+    started, finished = [], []
+    slots = 4 - background_slots
+    transport = LarkPrivateConversations.__new__(LarkPrivateConversations)
+    transport.root = tmp_path
+    transport._context_recovery_probe_at = {}
+    transport.core = SimpleNamespace(context_recovery_observer=lambda: lambda ref: True)
+    transport.reconcile_app_feedback = lambda: 0
+    web = tmp_path / "web-projections" / "current.json"
+    transport._web_projection_paths = lambda: [web] if web.exists() else []
+    fresh = web if origin == "web" else tmp_path / "z-current.json"
+    for index in range(slots * 3):
+        (tmp_path / f"old-{index:02}.json").write_text(json.dumps({"status": "delivered",
+            "request_ref": str(index), "session_id": "original", "turn_id": "failed"}))
+
+    def reconcile(path):
+        with changed:
+            started.append(path)
+            first_wave = len(started) <= slots
+            changed.notify_all()
+        assert (release_old if first_wave else release_rest).wait(5)
+        with changed:
+            finished.append(path)
+            changed.notify_all()
+        return 0
+
+    transport.reconcile_request = reconcile
+    if background_slots:
+        transport.owner_attention = SimpleNamespace(has_enabled=lambda: True,
+            reconcile=lambda: release_rest.wait(5) and 0)
+        transport.steward_reports = SimpleNamespace(pending=lambda: True,
+            reconcile=lambda: release_rest.wait(5) and 0)
+    service = worker.LarkGoalTopicRuntimeService(snapshot_provider=lambda: {}, runtime_root=tmp_path,
+        runtime_controller=None, private_conversations=transport)
+
+    def drive(step, **_):
+        step()
+        with changed:
+            assert changed.wait_for(lambda: len(started) == slots, 2)
+        fresh.parent.mkdir(exist_ok=True)
+        fresh.write_text(json.dumps({"status": "pending" if origin == "web" else "accepted"}))
+        step()  # Retain the new discovery while every existing slot is held.
+        release_old.set()
+        with changed:
+            assert changed.wait_for(lambda: len(finished) == slots, 2)
+        # The provider returns just after its last observable checkpoint.
+        # Let the actual Future settle instead of racing its done flag.
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            step()
+            with changed:
+                if changed.wait_for(lambda: len(started) == slots * 2, .01):
+                    break
+        with changed:
+            assert len(started) == slots * 2
+            assert fresh in started[slots:], "new body remained behind untouched historical recovery probes"
+        service._closed.set()
+        release_rest.set()
+
+    monkeypatch.setattr(service._delivery_worker, "repeat", drive)
+    try:
+        service._reconcile_private()
+    finally:
+        service._closed.set()
+        release_old.set()
+        release_rest.set()
+    assert len(started) == slots * 2 and len(set(started)) == len(started)
+    assert sum(path.name.startswith("old-") for path in started) == slots * 2 - 1
+
+
 def test_private_recovery_discovery_keeps_negative_and_attempt_backoff(tmp_path, monkeypatch):
     from loopx.extensions.lark import private_conversations as private
 

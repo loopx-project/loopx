@@ -1323,6 +1323,14 @@ class LarkPrivateConversations:
                     paths.append(path)
         return [*paths, *self._web_projection_paths()]
 
+    def is_recovery_path(self, path: Path) -> bool:
+        """Local scheduling hint; reconciliation still rechecks every effect.
+
+        A verified old notice may need a native recovery probe, but must not
+        precede an unsent body just because both have zero worker attempts.
+        """
+        return path.parent != self.root / "web-projections" and _read_json(path).get("status") == "delivered"
+
     def _web_projection_paths(self) -> list[Path]:
         """Discover committed App messages, using the existing reply workers.
 
