@@ -1269,16 +1269,7 @@ class ChatRuntimeController:
             raise
         return True
 
-    def steer_active_turn(
-        self,
-        *,
-        session_id: str,
-        client_ingress_id: str,
-        message: str,
-        expected_turn_id: str | None = None,
-    ) -> tuple[dict[str, Any], bool]:
-        """Steer the exact active Codex Turn with durable ingress deduplication."""
-
+    def _require_steering_session(self, session_id: str) -> dict[str, Any]:
         session = self.store.load_session(session_id)
         if session is None or session.get("status") == "closed":
             raise KeyError("chat session was not found")
@@ -1295,6 +1286,59 @@ class ChatRuntimeController:
                 registry_path=self.registry_path,
                 session_id=session_id,
             )
+        return session
+
+    def steer_queued_turn(
+        self, *, session_id: str, queued_turn_id: str, expected_turn_id: str,
+        client_ingress_id: str,
+    ) -> dict[str, Any]:
+        """Transfer original queued input under the automatic consumer's fences.
+
+        Only a proven non-delivery restores FIFO eligibility. A lost native
+        acknowledgement keeps the original input durably reserved.
+        """
+        from .control_plane.chat_turn_acceptance import plan_queued_chat_steering
+        self._require_steering_session(session_id)
+        ingress_id = "queue-steer-" + hashlib.sha256(
+            json.dumps([session_id, queued_turn_id, client_ingress_id]).encode()
+        ).hexdigest()[:40]
+        with self.store.queue_steering_lock(session_id, queued_turn_id):
+            session = self.store.load_session(session_id)
+            turn = self.store.load_turn(session_id, queued_turn_id)
+            if session is None or turn is None:
+                raise KeyError("chat turn was not found")
+            active = self.store.load_turn(session_id, str(session.get("active_turn_id") or "")) if session.get("active_turn_id") else None
+
+            def plan(phase):
+                return plan_queued_chat_steering(session, turn, active,
+                    self.store.steering_receipt(session_id, ingress_id),
+                    ingress_id=ingress_id, operation_id=client_ingress_id, target=expected_turn_id, phase=phase)
+
+            decision = plan("prepare")
+            if decision["action"] == "dispatch":
+                turn = self.store.write_queue_steering(session_id, turn, decision)
+                try:
+                    self.steer_active_turn(session_id=session_id, expected_turn_id=expected_turn_id,
+                        client_ingress_id=ingress_id, message=turn["message"],
+                        _queued_turn_id=queued_turn_id)
+                except Exception:
+                    # The durable ingress, including absence before any send,
+                    # owns the outcome. Exception wording cannot release work.
+                    pass
+                decision = plan("settle")
+            self.store.write_queue_steering(session_id, turn, decision)
+            if decision["action"] != "complete":
+                raise RuntimeError(decision["error_code"])
+            return {"session_id": session_id, "queued_turn_id": queued_turn_id,
+                "turn_id": expected_turn_id, "client_ingress_id": client_ingress_id,
+                "status": "delivered"}
+
+    def steer_active_turn(
+        self, *, session_id: str, client_ingress_id: str, message: str,
+        expected_turn_id: str | None = None, _queued_turn_id: str | None = None,
+    ) -> tuple[dict[str, Any], bool]:
+        """Steer the exact active Codex Turn with durable ingress deduplication."""
+        session = self._require_steering_session(session_id)
         receipt, created = self.store.create_ingress_receipt(
             session_id,
             client_ingress_id=client_ingress_id,
@@ -1383,17 +1427,14 @@ class ChatRuntimeController:
                 error_code="live_steering_rejected",
             )
             raise
-        self.store.append_message(
-            session_id,
-            role="user",
-            text=message,
-            turn_id=active_turn_id,
-        )
+        if _queued_turn_id is None:
+            self.store.append_message(session_id, role="user", text=message, turn_id=active_turn_id)
         self.store.append_event(
             session_id,
             active_turn_id,
             kind="turn.steered",
-            payload={"client_ingress_id": client_ingress_id},
+            payload={"client_ingress_id": client_ingress_id,
+                **({"queued_turn_id": _queued_turn_id} if _queued_turn_id is not None else {})},
         )
         self.store.update_ingress_receipt(
             session_id,

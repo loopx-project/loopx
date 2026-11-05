@@ -531,6 +531,7 @@ type PersonalHomeModel = {
   workers?: WorkspaceWorker[];
 };
 type PersonalManagerMessage = {
+  queued?: boolean;
   replyContext?: ChatVisibleMessage["reply_context"];
   goalDraft?: GoalDraft | null;
   sourceMessageId?: string;
@@ -1421,6 +1422,8 @@ function PersonalGoalHome({
   const sessionDiscoveryKey = model.goals.some((goal) => goal.activationState === "active" && goal.loadState === "loading")
     ? "loading" : model.goals.map((goal) => `${goal.goalId}:${goal.agentId}`).join("|");
   const contextId = conversationContextKey(conversationContext);
+  const activeConversationContext = useRef(contextId);
+  activeConversationContext.current = contextId;
   const discoveredAgents: PersonalAgentOption[] = runtimeAgents.length > 0
     ? runtimeAgents.map((agent) => ({
         agentId: agent.agent_id,
@@ -2361,6 +2364,8 @@ function PersonalGoalHome({
     let submittedTurnId: string | undefined;
     let submittedSessionId: string | undefined;
     let streamController: AbortController | undefined;
+    const previousStreamController = streamControllers.current.get(targetContextId);
+    let submittedAsQueue = Boolean(route?.queue);
     let queueAccepted = false;
     let streamEnded = false;
     let handedOff = false;
@@ -2408,7 +2413,7 @@ function PersonalGoalHome({
         })(),
         onDelta: (delta: string) => {
           streamedText += delta;
-          updateConversationMessage(targetContextId, streamingMessageId, { text: streamedText });
+          updateConversationMessage(targetContextId, streamingMessageId, { text: streamedText, queued: false });
         },
         onActivity: (label: string, step: TurnStep | null) => {
           setMessagesByContext((messages) => ({
@@ -2428,18 +2433,28 @@ function PersonalGoalHome({
             sourceTurnId: turnId, sourceSessionId: sessionId,
             ...(phase === "turn.accepted" ? { activity: [locale === "zh-CN" ? "请求已接收，等待执行器输出" : "Request accepted · waiting for executor output"] } : {}),
           });
-          if (route?.queue) {
-            if (phase === "turn.queued") {
-              updateConversationMessage(targetContextId, streamingMessageId, {
-                pending: false, preparing: false, endedAt: undefined,
-                text: locale === "zh-CN" ? "已排队，等待当前回合结束。" : "Queued for the next turn.", activity: [],
-              });
-              return;
+          if (phase === "turn.queued") {
+            submittedAsQueue = true;
+            updateConversationMessage(targetContextId, streamingMessageId, {
+              pending: false, preparing: false, endedAt: undefined,
+              text: "", queued: true, activity: [],
+            });
+            // Native hosts can queue ordinary sends; their receipt must not
+            // replace the observed running Turn's stream controls.
+            if (!route?.queue && streamControllers.current.get(targetContextId) === streamController) {
+              if (previousStreamController && !previousStreamController.signal.aborted) {
+                streamControllers.current.set(targetContextId, previousStreamController);
+              } else {
+                streamControllers.current.delete(targetContextId);
+              }
             }
+            return;
+          }
+          if (submittedAsQueue) {
             // Queued is a durable receipt, not observed execution. Only the
             // original worker's start/stream may take the active controls.
             if (phase === "turn.started") {
-              updateConversationMessage(targetContextId, streamingMessageId, { pending: true, startedAt: Date.now(), endedAt: undefined, text: "" });
+              updateConversationMessage(targetContextId, streamingMessageId, { queued: false, pending: true, startedAt: Date.now(), endedAt: undefined, text: "" });
               const previousActive = activeTurnIds.current.get(targetContextId);
               // Replaying an acknowledged queued Turn can include a historical
               // start. Its original Session, not that replay, owns live controls.
@@ -2485,11 +2500,12 @@ function PersonalGoalHome({
       }
       const response = streamed.response;
       updateConversationMessage(targetContextId, streamingMessageId, {
+        queued: Boolean(streamed.steeredIntoTurnId),
         goalDraft: response.goal_draft,
         lines: response.gate ? [response.gate.summary, response.gate.next_action].filter(Boolean).slice(0, 2) : [],
         pending: false,
-        text: visibleAgentMessage(response.message || streamedText.trim())
-          || `${answerIdentityLabel(targetContextId, selectedRoute.label)} 已完成分析。`,
+        text: streamed.steeredIntoTurnId ? "" : (visibleAgentMessage(response.message || streamedText.trim())
+          || `${answerIdentityLabel(targetContextId, selectedRoute.label)} 已完成分析。`),
       });
       // The completed transcript is the immutable answer owner. Resolve its
       // stored identity before offering a link; a failed read never hides the
@@ -2543,6 +2559,7 @@ function PersonalGoalHome({
         || (error instanceof ChatApiError && error.payload.error_code === "turn_interrupted");
       if (userInterrupted) {
         const interruptedMessage = {
+          queued: false,
           agentLabel: answerIdentityLabel(targetContextId, selectedRoute.label),
           lines: [],
           pending: false,
@@ -2617,6 +2634,7 @@ function PersonalGoalHome({
       // an unacknowledged dispatch after that boundary remains uncertain.
       const preparationFailed = preparationControllers.current.get(targetContextId) === preparationController;
       const failureMessage = {
+        queued: false,
         agentLabel: answerIdentityLabel(targetContextId, selectedRoute.label),
         lines: gateSummary ? [gateSummary] : [],
         pending: false,
@@ -2905,6 +2923,7 @@ function PersonalGoalHome({
           attachments: message.attachments,
         id: String(message.id),
         pending: message.pending,
+        queued: message.queued,
         preparing: message.preparing,
         startedAt: message.startedAt,
         updatedAt: message.updatedAt,
@@ -3235,6 +3254,20 @@ function PersonalGoalHome({
             void sendManagerQuestion(message, { agentId: runtimeBindings[targetContextId]?.agentId,
               contextId: targetContextId, attachments, queue: { sessionId, ingressId, onAccepted: resolve } }).catch(reject);
           }),
+          onObserveConversationTurn: async (targetContextId, sessionId, turnId) => {
+            const key = `${targetContextId}:${selectedAgent.agentId}`;
+            if (activeConversationContext.current !== targetContextId || sessionIds.current.get(key) !== sessionId
+                || (activeTurnIds.current.get(targetContextId) === turnId
+                  && streamControllers.current.get(targetContextId)?.signal.aborted === false)) return;
+            // Queue advancement is a read observation. The existing history
+            // recovery owner adopts the exact current Session/Turn and stream.
+            const history = await conversationHistory.refresh();
+            const current = currentChannelSession(history, selectedAgent.agentId);
+            if (activeConversationContext.current === targetContextId && sessionIds.current.get(key) === sessionId
+                && current?.session_id === sessionId && current.active_turn_id === turnId) {
+              setTurnRecoveryRequest(value => value + 1);
+            }
+          },
           onPrepareLoopX: (agentId, goalId) => prepareGoalConversation(goalId, agentId),
           onStartLoopX: (operation, agentId, goalId, settings) => { void sendManagerQuestion(operation === "start" ? "开启 LoopX 模式，持续推进当前 Goal。" : "恢复 LoopX 模式。", {agentId, contextId: goalId, loopxMode: {operation, settings}}); },
           onStartNewRunSession: startNewManagerSession,

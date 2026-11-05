@@ -390,13 +390,14 @@ export const chatRecoveryScenario = {
       await page.getByRole("button", { name: "发送", exact: true }).click();
       while (api.turnRequests.length === turnsBeforeRunningCheck) await page.waitForTimeout(50);
       const unsupportedSessionId = api.turnRequests.at(-1).sessionId;
+      const recoveredTurnId = api.turnRequests.at(-1).turnId;
       page.__loopxRuntime.sessions.set(unsupportedSessionId, { ...page.__loopxRuntime.sessions.get(unsupportedSessionId), adapter_kind: "external" });
       await page.reload({ waitUntil: "domcontentloaded" });
       await page.getByTestId("personal-goal-home").waitFor({ state: "visible" });
       await page.locator(".personal-goal-link").first().click();
       await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
-      const turnRunningHint = page.locator(".personal-composer-status", { hasText: "本轮进行中" });
-      await turnRunningHint.waitFor({ state: "visible", timeout: 5_000 });
+      const currentTurnControl = page.locator(`.personal-composer-stop[data-turn-id="${recoveredTurnId}"]`);
+      await currentTurnControl.waitFor({ state: "visible", timeout: 5_000 });
       await page.getByLabel("向 LoopX 发送消息").fill("回合进行中不应发送");
       if (await page.getByRole("button", { name: "发送", exact: true }).isDisabled()) {
         throw new Error("Recovered work did not offer explicit next-Turn queuing");
@@ -407,12 +408,12 @@ export const chatRecoveryScenario = {
       await page.locator(".personal-goal-link").nth(1).click();
       await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
       await page.getByLabel("向 LoopX 发送消息").waitFor({ state: "visible" });
-      if (await turnRunningHint.count()) throw new Error("Another Goal's composer waited for this Goal's running Turn");
+      if (await currentTurnControl.count()) throw new Error("Another Goal's composer controlled this Goal's running Turn");
       await page.locator(".personal-goal-link").first().click();
       await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
-      await turnRunningHint.waitFor({ state: "visible", timeout: 5_000 });
+      await currentTurnControl.waitFor({ state: "visible", timeout: 5_000 });
       await page.getByLabel("向 LoopX 发送消息").fill("回合进行中不应发送");
-      await turnRunningHint.waitFor({ state: "hidden", timeout: 10_000 });
+      await currentTurnControl.waitFor({ state: "hidden", timeout: 10_000 });
       if (await page.getByRole("button", { name: "发送", exact: true }).isDisabled()) {
         throw new Error("Composer stayed blocked after the running Turn completed");
       }
@@ -425,6 +426,7 @@ export const chatRecoveryScenario = {
       // controls and keep the draft; the owner can explicitly queue it next.
       const busySessionId = api.turnRequests.at(-1).sessionId;
       const foreignTurnId = `turn-foreign-${Date.now()}`;
+      const foreignTurnControl = page.locator(`.personal-composer-stop[data-turn-id="${foreignTurnId}"]`);
       page.__loopxRuntime.turnMessages.set(foreignTurnId, "另一页面发起的中断控制回合");
       page.__loopxRuntime.sessions.set(busySessionId, { ...page.__loopxRuntime.sessions.get(busySessionId), active_turn_id: foreignTurnId, status: "busy" });
       let rejectedPosts = 0;
@@ -465,7 +467,7 @@ export const chatRecoveryScenario = {
       holdReads = false;
       for (const route of heldReads.splice(0)) await route.fallback();
       await page.unroute("**/api/chat/sessions?*");
-      await turnRunningHint.waitFor({ state: "visible", timeout: 5_000 });
+      await foreignTurnControl.waitFor({ state: "visible", timeout: 5_000 });
       await page.getByRole("button", { name: "中断本轮" }).waitFor({ state: "visible" });
       if (await page.getByRole("button", { name: "中断本轮" }).count() !== 1) {
         throw new Error("The recovery added a second pending reply instead of adopting the handoff reply");
@@ -476,7 +478,7 @@ export const chatRecoveryScenario = {
       if (await page.locator(".personal-channel-timeline .personal-message").filter({ hasText: draft }).count()) {
         throw new Error("A message the service did not accept stayed in the conversation");
       }
-      await turnRunningHint.waitFor({ state: "hidden", timeout: 10_000 });
+      await foreignTurnControl.waitFor({ state: "hidden", timeout: 10_000 });
       if (await sendButton.isDisabled()) throw new Error("Send stayed blocked after the adopted Turn completed");
       if (rejectedPosts !== 1) throw new Error(`The composer posted ${rejectedPosts} times into a running Turn`);
       await page.unroute(`**/api/chat/sessions/${busySessionId}/turns`);
@@ -486,6 +488,7 @@ export const chatRecoveryScenario = {
       // Turn, so the handoff must retain it and read again rather than
       // treat the failure as the Turn having ended.
       const retriedTurnId = `turn-foreign-retry-${Date.now()}`;
+      const retriedTurnControl = page.locator(`.personal-composer-stop[data-turn-id="${retriedTurnId}"]`);
       page.__loopxRuntime.turnMessages.set(retriedTurnId, "读取失败后仍在运行的中断控制回合");
       page.__loopxRuntime.sessions.set(busySessionId, { ...page.__loopxRuntime.sessions.get(busySessionId), active_turn_id: retriedTurnId, status: "busy" });
       let retryRejectedPosts = 0;
@@ -517,7 +520,7 @@ export const chatRecoveryScenario = {
       if (!failedReads) throw new Error("The 409 did not make the page re-read the Session");
       if (!heldRetryReads.length) throw new Error("A failed Session read was not retried while the reported Turn could still run");
       if (await sendButton.isDisabled()) throw new Error("The retried Session read hid explicit next-Turn queuing");
-      await turnRunningHint.waitFor({ state: "visible", timeout: 5_000 });
+      await retriedTurnControl.waitFor({ state: "visible", timeout: 5_000 });
       await page.getByRole("button", { name: "中断本轮" }).waitFor({ state: "visible" });
       if (retryRejectedPosts !== 1) throw new Error(`The composer posted ${retryRejectedPosts} times while the Session read was failing`);
       failReads = false;
@@ -527,7 +530,7 @@ export const chatRecoveryScenario = {
         throw new Error("The retried recovery added a second pending reply instead of adopting the handoff reply");
       }
       if (await composerInput.inputValue() !== draft) throw new Error("The draft rejected by a running Turn was not kept across the failed read");
-      await turnRunningHint.waitFor({ state: "hidden", timeout: 10_000 });
+      await retriedTurnControl.waitFor({ state: "hidden", timeout: 10_000 });
       if (await sendButton.isDisabled()) throw new Error("Send stayed blocked after the retried recovery saw the Turn complete");
       if (retryRejectedPosts !== 1) throw new Error(`The composer posted ${retryRejectedPosts} times into a running Turn`);
       await page.unroute(`**/api/chat/sessions/${busySessionId}/turns`);
@@ -541,6 +544,7 @@ export const chatRecoveryScenario = {
       // The pending reply shows Adjust/Interrupt from the 409 on, so before any
       // Session read returns, both must act on the exact reported Turn.
       const controlledTurnId = `turn-foreign-controls-${Date.now()}`;
+      const controlledTurnControl = page.locator(`.personal-composer-stop[data-turn-id="${controlledTurnId}"]`);
       page.__loopxRuntime.turnMessages.set(controlledTurnId, "交接期间可调整和中断的中断控制回合");
       page.__loopxRuntime.sessions.set(busySessionId, { ...page.__loopxRuntime.sessions.get(busySessionId), active_turn_id: controlledTurnId, status: "busy" });
       let controlRejectedPosts = 0;
@@ -567,6 +571,7 @@ export const chatRecoveryScenario = {
       await sendButton.click();
       for (let attempt = 0; attempt < 100 && (!controlRejectedPosts || !heldControlReads.length); attempt += 1) await page.waitForTimeout(50);
       if (!heldControlReads.length) throw new Error("The 409 did not make the page re-read the Session");
+      await controlledTurnControl.waitFor({ state: "visible", timeout: 5_000 });
       const handoffReply = page.locator(".personal-message").filter({ has: page.getByRole("button", { name: "中断本轮", exact: true }) });
       await handoffReply.getByRole("button", { name: "调整本轮", exact: true }).click();
       await composerInput.fill("交接期间先核对依赖。");
@@ -583,7 +588,7 @@ export const chatRecoveryScenario = {
         throw new Error(`Interrupt during the handoff did not reach the reported Turn: ${JSON.stringify(interrupted)}`);
       }
       await page.locator(".personal-message").filter({ hasText: "已中断。你可以在当前会话继续发送消息。" }).last().waitFor({ timeout: 5_000 });
-      await turnRunningHint.waitFor({ state: "hidden", timeout: 5_000 });
+      await controlledTurnControl.waitFor({ state: "hidden", timeout: 5_000 });
       if (await composerInput.inputValue() !== "") throw new Error("The accepted shared-composer adjustment did not clear");
       await composerInput.fill("中断后的后续消息草稿");
       if (await sendButton.isDisabled()) throw new Error("A new follow-up draft stayed blocked after interruption");
