@@ -88,6 +88,7 @@ def run_cli(
     process_env = os.environ.copy()
     if env:
         process_env.update(env)
+    process_env["LOOPX_USAGE_PING"] = "0"
     return subprocess.run(
         command,
         cwd=REPO_ROOT,
