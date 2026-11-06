@@ -45,6 +45,21 @@ test("partial input writes exclude both FIFO and steering; exact retries finish 
   assert.equal(planQueuedChatMutation({...f, turn: ended, request: {...request, expected_revision: 1}}).error_code, "queue_mutation_identity_conflict");
 });
 
+test("queue input actions are literal strings in requests and stored receipts", () => {
+  const f = facts();
+  const request = {action: "cancel", expected_revision: 0, operation_id: "strict-input"};
+  for (const action of [null, false, 0, {}, [], ["edit"], ["cancel"], [["edit"]], {toString: "edit"}, "unknown"]) {
+    assert.throws(() => planQueuedChatMutation({...f, request: {...request, action}}), /Invalid queue input request/);
+    const invalid = {...request, action, input_revision: 1};
+    assert.throws(() => selectQueuedChatTurns({turns: [{...f.turn, mutation: invalid}], include_reserved: true}),
+      /Invalid queue input receipt/);
+    for (const extra of [{mutation: invalid}, {operations: [invalid]}]) {
+      assert.throws(() => planQueuedChatMutation({...f, request, turn: {...f.turn, ...extra}}),
+        /Invalid queue input receipt/);
+    }
+  }
+});
+
 test("queued steering requires an unclaimed original and exact live target", () => {
   const f = facts(); assert.equal(planQueuedChatSteering(f).action, "dispatch");
   for (const status of ["starting", "running", "interrupting", "completed", "failed"]) {
