@@ -1857,7 +1857,22 @@ function PersonalGoalHome({
         if (observedSessionId === created.session_id
           && pendingTurnAdmissions.current.get(targetContextId)?.signal.aborted === false) return;
         const recoveryKey = `${created.session_id}:${activeTurnId}`;
-        if (turnObservers.current.get(recoveryKey)?.signal.aborted === false) return;
+        const existingObserver = turnObservers.current.get(recoveryKey);
+        if (existingObserver && !existingObserver.signal.aborted) {
+          // The Session may confirm a queued Turn started before its stream
+          // reports that start. Adopt its controls and row, not another stream.
+          activeTurnIds.current.set(targetContextId, activeTurnId);
+          streamControllers.current.set(targetContextId, existingObserver);
+          setMessagesByContext(current => {
+            const rows = current[targetContextId] ?? [];
+            if (!rows.some(row => row.role === "assistant" && row.queued
+              && row.sourceSessionId === created.session_id && row.sourceTurnId === activeTurnId)) return current;
+            return {...current, [targetContextId]: rows.map(row => row.role === "assistant" && row.queued
+              && row.sourceSessionId === created.session_id && row.sourceTurnId === activeTurnId
+              ? {...row, queued: false, pending: true, endedAt: undefined, startedAt: Date.now()} : row)};
+          });
+          return;
+        }
         const observer = new AbortController();
         turnObservers.current.set(recoveryKey, observer);
         activeTurnIds.current.set(targetContextId, activeTurnId);
