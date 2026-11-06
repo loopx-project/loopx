@@ -603,6 +603,10 @@ CLI/SSH 导出使用 `goal-portfolio --manager-view todos --goal-id GOAL --todo-
   命令标题。群聊及未经限定的投影仍只显示粗粒度状态。反重力把经过共享脱敏的
   `plannerResponse.thinking` 摘要映射进活动契约；`rawThinking`、planner 完成与
   工具完成仍是不同事实。最终答案仍在绑定原请求的同一消息中替换草稿。
+- 普通 Codex Chat 在每个 Turn 明确请求简短的原生思考摘要，包括继承了
+  `summary=none` 的恢复会话和受限答复复核会话。执行宿主保留自己的摘要配置。
+  现有活动投影只展示上游实际返回的摘要；模型没有输出摘要时仍显示粗粒度状态。
+  该请求不增加 Turn，也不暴露原始推理正文。
 - 可见答案只生成一次，随后附加完整隐藏 review envelope，`message: ""` 表示
   复用前面的 Markdown，仍经过相同脱敏与 typed 元数据归一化。旧的非空 message
   保持优先；缺失或 null 不启用该约定。Codex 采用完成的最终答案 item，排除之前
