@@ -16,6 +16,62 @@ const row = {schema_version: "loopx_chat_conversation_binding_v0", binding_id: "
 const observation = {transport_ref: row.transport_ref, provider_ref: row.provider_ref,
   operator_ref: row.operator_ref, verified: true};
 
+test("legacy context-free partial answers qualify one correction without replaying business", () => {
+  const request = "f".repeat(24), client = `external-${request}-recovery-22-review-1`;
+  const source = {source_ref: "e".repeat(24), sender_ref: row.operator_ref, private_human_message: true};
+  const reserved = {version: 22, history_review: true, read_only_review: true, answer_review: true,
+    failed_turn_id: null, native_observation: null, client_turn_id: client};
+  const response = {message: "Partial interpretation", proposals: [], gate: {kind: "evidence_gap"}};
+  const previous = {turn_id: "original-answer", upstream_turn_id: "native-original", session_id: "original", client_turn_id: client,
+    status: "completed", message: "Those four", response};
+  const packet = {request: {request_ref: request, binding_id: row.binding_id, source,
+      session_id: "original", turn_id: previous.turn_id, message: previous.message, command: null,
+      status: "accepted", capture_origin: "provider_history", delivery_verified: true, context_recovery: reserved},
+    binding: {...row, context_kind: "steward", grant: "portfolio_read"},
+    current_session: {session_id: "original", agent_id: "codex", status: "ready", active_turn_id: null,
+      steward_context: {...source, binding_id: row.binding_id, provider_ref: row.provider_ref, operator_ref: row.operator_ref},
+      created_at: "2026-01-01T00:00:00Z"},
+    history_answer_review: {version: 22, source_verified: true, queue_empty: true, adapter_replaceable: true,
+      stop_observed: false, source_created_at: "2026-01-01T00:01:00Z", observed_at: "2026-01-01T00:02:00Z",
+      previous_turn: previous}};
+  const plan = planBoundConversationRequest(packet);
+  assert.equal(plan.operation, "admit_history_answer");
+  assert.equal(plan.client_turn_id, `external-${request}-recovery-23-review-1`);
+  assert.equal(plan.version, 23);
+  assert.equal(plan.context_correction, true);
+  assert.equal(plan.previous_answer_turn_id, previous.turn_id);
+  const discovery = planBoundConversationRequest({...packet,
+    history_answer_review: {...packet.history_answer_review, discovery_only: true}});
+  assert.deepEqual(discovery, {pending: true});
+  assert.deepEqual(planBoundConversationRequest({...packet,
+    history_answer_review: {...packet.history_answer_review, discovery_only: true,
+      previous_turn: {...previous, response: {...response, gate: null}}}}), {pending: false});
+  const inFlight = {...packet, request: {...packet.request, delivery_verified: false,
+    context_recovery_history: [reserved], context_recovery: {...reserved, version: 23, context_version: 1,
+      context_correction: true, previous_delivery_verified: true, previous_answer_turn_id: previous.turn_id,
+      client_turn_id: `external-${request}-recovery-23-review-1`}},
+    current_session: {...packet.current_session, status: "busy", active_turn_id: "reserved-child"}};
+  assert.deepEqual(planBoundConversationRequest({...inFlight,
+    history_answer_review: {...packet.history_answer_review, discovery_only: true}}), {pending: true});
+  assert.equal(planBoundConversationRequest(inFlight).operation, "hold_history_answer");
+  for (const changed of [
+    {...packet, request: {...packet.request, delivery_verified: false}},
+    {...packet, request: {...packet.request, capture_origin: "live"}},
+    {...packet, request: {...packet.request, session_id: "foreign"}},
+    {...packet, request: {...packet.request, context_recovery: {...reserved, context_version: 1}}},
+    {...packet, request: {...packet.request, context_recovery: {...reserved, read_only_review: false}}},
+    {...packet, history_answer_review: {...packet.history_answer_review, previous_turn: {...previous, status: "failed"}}},
+    {...packet, history_answer_review: {...packet.history_answer_review, previous_turn: {...previous, status: "running"}}},
+    {...packet, history_answer_review: {...packet.history_answer_review, previous_turn: {...previous, upstream_turn_id: ""}}},
+    {...packet, history_answer_review: {...packet.history_answer_review, previous_turn: {...previous, session_id: "foreign"}}},
+    {...packet, history_answer_review: {...packet.history_answer_review, previous_turn: {...previous, response: {...response, gate: null}}}},
+    {...packet, history_answer_review: {...packet.history_answer_review, previous_turn: {...previous, response: {...response, context_handoff: [{brief: "write"}]}}}},
+    {...packet, history_answer_review: {...packet.history_answer_review, stop_observed: true}},
+    {...packet, history_answer_review: {...packet.history_answer_review, adapter_replaceable: false}},
+    {...packet, history_answer_review: {...packet.history_answer_review, queue_empty: false}},
+  ]) assert.equal(planBoundConversationRequest(changed).operation, "hold_history_answer");
+});
+
 test("uncaptured provider history can reserve only one same-owner read-only answer", () => {
   const source = {source_ref: "e".repeat(24), sender_ref: row.operator_ref, private_human_message: true};
   const binding = {...row, context_kind: "steward", grant: "portfolio_read"};
