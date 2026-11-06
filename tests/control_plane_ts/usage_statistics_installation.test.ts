@@ -20,7 +20,7 @@ async function fixture(t: test.TestContext) {
 }
 test("device context is shared, environment wins, and labeling never enables or rotates identity", async t => {
   const path = await fixture(t);
-  const ctx: Context = { env: {}, version: "1.2.4", python: "3.13", channel: "source" };
+  const ctx: Context = { env: { LOOPX_USAGE_PING: "1", LOOPX_USAGE_PING_ENDPOINT: "http://127.0.0.1:1/v1/ping" }, version: "1.2.4", python: "3.13", channel: "source" };
   await configureContext(path, ctx, "maintainer");
   assert.equal((await inspect(path, ctx)).sending, false);
   assert.equal((await inspect(path, ctx)).effective_context, "maintainer");
@@ -119,7 +119,7 @@ test("expanded fixed families reject custom names and transport rejects content 
 });
 test("suppression and disable fence all new channels and erase local interval history", async t => {
   const path = await fixture(t);
-  const ctx: Context = { env: {}, version: "1.2.4", python: "3.13", channel: "source", now: new Date(at("01T12:00:00")) };
+  const ctx: Context = { env: { LOOPX_USAGE_PING: "1", LOOPX_USAGE_PING_ENDPOINT: "http://127.0.0.1:1/v1/ping" }, version: "1.2.4", python: "3.13", channel: "source", now: new Date(at("01T12:00:00")) };
   await configureContext(path, ctx, "maintainer"); await configure(path, ctx, "enable");
   const generation = JSON.parse(await readFile(path, "utf8")).generation;
   const sent: unknown[] = [], post: Post = async (_url, payload) => { sent.push(payload); return 204; };
@@ -136,7 +136,7 @@ test("suppression and disable fence all new channels and erase local interval hi
 });
 test("short-lived CLI completion survives a competing detached startup observation", async t => {
   const path = await fixture(t);
-  const ctx: Context = { env: {}, version: "1.2.4", python: "3.13", channel: "source" };
+  const ctx: Context = { env: { LOOPX_USAGE_PING: "1", LOOPX_USAGE_PING_ENDPOINT: "http://127.0.0.1:1/v1/ping" }, version: "1.2.4", python: "3.13", channel: "source" };
   await configure(path, ctx, "enable");
   const generation = JSON.parse(await readFile(path, "utf8")).generation;
   const sent: Parameters<Post>[1][] = [];

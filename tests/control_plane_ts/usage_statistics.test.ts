@@ -16,7 +16,7 @@ import { acquireFileMutationLock, releaseFileMutationLock } from "../../loopx/co
 import type { FileMutationLock } from "../../loopx/control_plane/effect_runtime_io.ts";
 
 const row: Counter = { feature: "todo", outcome: "ok", duration: "lt_1s", error: "none", count: 1 };
-const context = (day = "2026-09-26"): Context => ({ env: { LOOPX_USAGE_PING_ENDPOINT: "http://127.0.0.1:8787/v1/ping" }, version: "1.2.0", python: "3.13", channel: "source", now: new Date(day + "T12:00:00Z") });
+const context = (day = "2026-09-26"): Context => ({ env: { LOOPX_USAGE_PING: "1", LOOPX_USAGE_PING_ENDPOINT: "http://127.0.0.1:8787/v1/ping" }, version: "1.2.0", python: "3.13", channel: "source", now: new Date(day + "T12:00:00Z") });
 async function fixture(t: test.TestContext) {
   const root = await mkdtemp(join(tmpdir(), "loopx-usage-"));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -88,7 +88,7 @@ test("consent-required policy cannot be satisfied by acknowledgment; recipient c
   await configure(path, ctx, "acknowledge", (await inspect(path, ctx)).notice);
   assert.equal((await inspect(path, ctx)).blocked_by, "consent_required");
   await configure(path, ctx, "enable"); assert.equal((await inspect(path, ctx)).sending, true);
-  ctx.env.LOOPX_USAGE_PING_ENDPOINT = "https://another.example/v1/ping";
+  ctx.env.LOOPX_USAGE_PING_ENDPOINT = "http://127.0.0.1:8788/v1/ping";
   assert.equal((await inspect(path, ctx)).blocked_by, "notice_required");
 });
 

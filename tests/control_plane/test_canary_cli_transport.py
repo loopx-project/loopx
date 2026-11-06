@@ -15,6 +15,59 @@ import pytest
 from loopx.control_plane.testing import canary_harness
 
 
+@pytest.mark.parametrize("parent_setting", ["on", "off"])
+def test_machine_cli_child_is_inline_without_changing_parent_or_raw_helper(monkeypatch, tmp_path, parent_setting):
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", parent_setting)
+    observed = []
+    def run(*args, **kwargs):
+        observed.append(kwargs.get("env"))
+        return SimpleNamespace(stdout='{"ok":true,"unknown":null}', stderr="", returncode=0)
+    monkeypatch.setattr(canary_harness.subprocess, "run", run)
+    assert canary_harness.run_json_cli("probe", registry_path=tmp_path / "registry.json")["ok"] is True
+    assert observed[0]["LOOPX_CONTEXT_DELIVERY"] == "off"
+    canary_harness.run_json_cli_result("probe", registry_path=tmp_path / "registry.json")
+    assert observed[1] is None  # Raw-wire callers retain their own transport.
+    assert os.environ["LOOPX_CONTEXT_DELIVERY"] == parent_setting
+
+
+@pytest.mark.parametrize("parent_setting", ["on", "off"])
+def test_real_peer_guard_and_successor_remain_machine_decisions(monkeypatch, parent_setting):
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", parent_setting)
+    path = Path(__file__).resolve().parents[2] / "examples/control_plane/peer-agent-continuation-state-machine-smoke.py"
+    fixture = runpy.run_path(str(path))
+    fixture["assert_same_peer_continuation"]()
+    fixture["assert_review_is_action_semantics_over_generic_handoff"]()
+    assert os.environ["LOOPX_CONTEXT_DELIVERY"] == parent_setting
+
+
+@pytest.mark.parametrize("parent_setting", ["on", "off"])
+@pytest.mark.parametrize("gate", ["user", "quota"])
+def test_inline_machine_transport_preserves_real_core_gates(monkeypatch, tmp_path, parent_setting, gate):
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", parent_setting)
+    original = canary_harness.write_fixture_registry
+    def write_registry(**kwargs):
+        if gate == "quota":
+            kwargs["quota_allowed_slots"] = 0
+        registry = original(**kwargs)
+        if gate == "user":
+            state = canary_harness.project_state_path(kwargs["project"], kwargs["goal_id"])
+            state.write_text(state.read_text() + "\n## User Todo\n\n- [ ] [P0] Confirm this fixture's boundary.\n"
+                "  <!-- loopx:todo todo_id=todo_owner_gate status=open task_class=user_gate "
+                "blocks_agent=codex-alpha -->\n")
+        return registry
+    monkeypatch.setattr(canary_harness, "write_fixture_registry", write_registry)
+    path = Path(__file__).resolve().parents[2] / "examples/control_plane/peer-agent-continuation-state-machine-smoke.py"
+    fixture = runpy.run_path(str(path))
+    project, runtime, registry = fixture["write_fixture"](tmp_path)
+    result = fixture["should_run"](project, runtime, registry, fixture["PEER_ALPHA"])
+    assert result["should_run"] is False
+    if gate == "quota":
+        assert result["quota"]["allowed_slots"] == 0
+    else:
+        assert result["requires_user_action"] is True
+    assert os.environ["LOOPX_CONTEXT_DELIVERY"] == parent_setting
+
+
 @pytest.mark.parametrize("exit_code", [0, 7])
 @pytest.mark.parametrize("producer_field", [False, True])
 def test_result_transport_does_not_inject_or_overwrite_source_fields(tmp_path, monkeypatch, exit_code, producer_field):
