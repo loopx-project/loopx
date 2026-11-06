@@ -660,6 +660,16 @@ readback and downgrade behavior; retain the old reader until the supported
 retention/upgrade boundary is satisfied. No destructive migration is authorized
 by this document alone.
 
+#### Recorded acceptance-index compatibility
+
+The staged Turn extraction keeps recorded unversioned/v0 replan reads on their
+original count-only acceptance index and 12 KiB index allowance. Complete v1
+reads retain current owner/work facts and grouped exact requirement states,
+with full original outcomes available through their digest-bound detail readers.
+Grouping is presentation, not independent acceptance evidence. The earlier
+rich-index measurement and its 20 KiB candidate allowance remain evidence for
+the complete-source path; they do not increase the historical reader's budget.
+
 ### C1 baseline boundary and reuse inventory
 
 The baseline is the **original caller-visible quota delivery**, not the raw

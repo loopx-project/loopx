@@ -710,7 +710,10 @@ function deferredReplanWriteback(writeback: JsonObject): JsonObject {
  */
 function replanGoalContext(payload: JsonObject, reads: JsonObject | null, coreRef = "$.core_goal") {
   const context = object(object(payload.autonomous_replan_obligation).replan_context);
-  const outcomes = (reads ? capturedAcceptanceOutcomes(payload) : null) ?? new Map<string, JsonObject>();
+  const complete = payload.schema_version === COMPLETE_TURN_DECISION_VERSION;
+  // Recorded quota/v0 reads retain their bounded original index. The complete
+  // source indexes every registered carrier and its current requirement facts.
+  const outcomes = (reads && complete ? capturedAcceptanceOutcomes(payload) : null) ?? new Map<string, JsonObject>();
   function indexedGoal(value: unknown): JsonObject {
     const core = {...object(value)};
     if (!("acceptance_contract" in core) && "acceptance_contract_ref" in core) {
@@ -724,6 +727,7 @@ function replanGoalContext(payload: JsonObject, reads: JsonObject | null, coreRe
     const refs = requirements.outcomes.map(value => {
       const outcome = requireJsonObject(value, "captured acceptance outcome");
       const ref = canonicalHash(outcome);
+      outcomes.set(ref, outcome);
       return ref;
     });
     const {outcomes: _outcomes, ...metadata} = requirements;
@@ -742,7 +746,9 @@ function replanGoalContext(payload: JsonObject, reads: JsonObject | null, coreRe
   }
   const acceptanceIndex = outcomes.size ? {
     read_action_template: `${reads!.acceptance} --outcome-ref {outcome_ref}`,
-    outcomes: capturedOutcomeIndex(outcomes),
+    outcomes: complete ? capturedOutcomeIndex(outcomes) : [...outcomes].map(([ref, outcome]) => ({
+      outcome_ref: ref, id: outcome.id, objective: outcome.objective, revision: outcome.revision,
+      requirement_count: Array.isArray(outcome.requirements) ? outcome.requirements.length : null})),
   } : null;
   return {core, horizon, outcomes, acceptanceIndex};
 }

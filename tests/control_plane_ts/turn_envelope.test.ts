@@ -316,21 +316,23 @@ test("complete validation and replan reads preserve the original shared source",
   }
 });
 
-function stagedAcceptanceRead(source: JsonObject, outcomeRef = ""): JsonObject {
-  const captured = {...source, replan_read_path: "/capture/original.json",
+function completeAcceptanceRead(source: JsonObject, outcomeRef = ""): JsonObject {
+  const base = payload(), interaction = base.interaction_contract as JsonObject;
+  const incoming = (source.interaction_contract ?? {}) as JsonObject;
+  const captured = evaluateTurnEnvelope({operation: "compose_complete", scheduler_execution_args: "", payload: {
+    ...base, ...source, interaction_contract: {...interaction, ...incoming,
+      agent_channel: {...(interaction.agent_channel as JsonObject), ...(incoming.agent_channel as JsonObject ?? {})}},
+    replan_read_path: "/capture/original.json",
     replan_action_packet: {obligation_id: "original-obligation"},
     autonomous_replan_obligation: {replan_context: {
-      obligation_id: "original-obligation", context_id: "original-context"}}};
-  const ordered = (value: unknown): unknown => Array.isArray(value) ? value.map(ordered)
-    : value !== null && typeof value === "object" ? Object.fromEntries(Object.keys(value).sort()
-      .map(key => [key, ordered((value as JsonObject)[key])])) : value;
-  const sourceHash = "sha256:" + createHash("sha256").update(JSON.stringify(ordered(captured))).digest("hex");
+      obligation_id: "original-obligation", context_id: "original-context"}}}});
+  const sourceHash = (captured.contract_binding as JsonObject).content_hash;
   const read = evaluateTurnEnvelope({operation: "replan_view", payload: captured,
     source_hash: sourceHash, stage: outcomeRef ? "acceptance" : "review", outcome_ref: outcomeRef});
   return outcomeRef ? read : {outcomes: (read.acceptance_index as JsonObject | undefined)?.outcomes};
 }
 
-test("staged acceptance lookup shares exact content across registered carriers and retains revisions", () => {
+test("complete acceptance lookup shares exact content across registered carriers and retains revisions", () => {
   const one = {id: "shared", owner_agent_id: "peer", objective: "Original", revision: 1,
     requirements: [{id: "a", planning_satisfied: false, status: "unverified", description: "Full a"},
       {id: "b", planning_satisfied: false, status: "unverified", description: "Full b"},
@@ -349,7 +351,7 @@ test("staged acceptance lookup shares exact content across registered carriers a
       "$.interaction_contract.agent_channel.work_context.sources[0].content.goal_acceptance_contract"}},
     agent_todo_summary: {goal_acceptance_contract: contract(typedDifference)}};
   const original = structuredClone(source);
-  const index = stagedAcceptanceRead(source);
+  const index = completeAcceptanceRead(source);
   const rows = index.outcomes as JsonObject[];
   assert.equal(rows.length, 3);
   assert.notEqual(rows[0].outcome_ref, rows[1].outcome_ref);
@@ -361,14 +363,14 @@ test("staged acceptance lookup shares exact content across registered carriers a
   // The preferred work carrier appears first, followed by the registered
   // summary carrier and the second loaded work source.
   for (const [i, outcome] of [one, typedDifference, two].entries()) {
-    const detail = stagedAcceptanceRead(source, String(rows[i].outcome_ref));
+    const detail = completeAcceptanceRead(source, String(rows[i].outcome_ref));
     assert.deepEqual(detail.outcome, outcome);
   }
   assert.deepEqual(source, original);
 });
 
-test("staged acceptance index refuses unknown sources and keeps missing facts unknown", () => {
-  const read = (payload: JsonObject) => stagedAcceptanceRead(payload);
+test("complete acceptance index refuses unknown sources and keeps missing facts unknown", () => {
+  const read = (payload: JsonObject) => completeAcceptanceRead(payload);
   for (const payload of [{ok: false}, {ok: true, schema_version: "unknown"},
     {ok: true, agent_todo_summary: {goal_acceptance_contract: {outcome_requirements: {outcomes: null}}}}]) {
     assert.throws(() => read(payload));
@@ -380,7 +382,7 @@ test("staged acceptance index refuses unknown sources and keeps missing facts un
   assert.deepEqual(row.requirement_states, [{requirement_ids: ["r"]},
     {requirement_ids: ["null"], agent_review: null}]);
   assert.equal(row.work, undefined);
-  assert.throws(() => stagedAcceptanceRead(source, "sha256:" + "0".repeat(64)), /exact captured outcome reference/);
+  assert.throws(() => completeAcceptanceRead(source, "sha256:" + "0".repeat(64)), /exact captured outcome reference/);
 });
 
 test("task text commitment has one selected-Todo carrier without changing legacy context elision", () => {
