@@ -535,3 +535,46 @@ def test_owner_scope_correction_restores_independent_work_through_real_cli(accep
     assert code == 1 and verified["checks_passed"] is False
     (project / "artifact.txt").write_text("accepted")
     assert cli("verify", "--execute")[0] == 0
+
+
+def test_goal_only_checks_keep_local_work_free_and_outcome_unmet(acceptance_goal):
+    project, checks_file, cli, run = acceptance_goal
+    outcome_file = project / "goal-outcome.json"
+    outcome_file.write_text(json.dumps({"outcome_id": "campaign", "owner_agent_id": "agent-a",
+        "objective": "Complete the authorized ongoing work", "requirements": [
+            {"id": "commitment", "description": "The external work commitment is fulfilled"}],
+        "source": {"ref": "owner:commitment", "summary": "The owner retained a Goal-wide commitment"}}))
+    code, refined = cli("refine", "--agent-id", "agent-a", "--document", str(outcome_file),
+        "--expected-provider-revision", cli("inspect")[1]["provider_revision"],
+        "--operation-id", "goal-only-outcome", "--execute")
+    assert code == 0, refined
+    checks_file.write_text(json.dumps({"outcome_id": "campaign", "scope": {"kind": "goal"},
+        "criteria": [{"id": "commitment", "validation_argv": [sys.executable, "-c",
+            "from pathlib import Path; assert Path('commitment.txt').read_text() == 'fulfilled'"]}]}))
+    code, configured = cli("configure", "--document", str(checks_file),
+        "--expected-provider-revision", cli("inspect")[1]["provider_revision"],
+        "--operation-id", "goal-only-configure", "--execute")
+    assert code == 0, configured
+    contract = configured["goal_acceptance_contract"]
+    assert contract["scope"] == {"kind": "goal"}
+    assert contract["tasks"] == [] and contract["held_todo_ids"] == []
+    assert contract["status"] == "unverified"
+    assert contract["outcome_requirements"]["acceptance_gaps"][0]["kind"] == "goal_outcome_uncovered"
+    code, failed = cli("verify", "--agent-id", "agent-a", "--execute")
+    assert code == 1 and failed["checks_passed"] is False, failed
+    assert cli("inspect")[1]["goal_acceptance_contract"]["status"] == "failed"
+    code, completed = run("todo", "complete", "--goal-id", "goal-acceptance",
+        "--todo-id", "todo_export", "--agent-id", "agent-a")
+    assert code == 0, completed
+    code, quota = run("quota", "should-run", "--goal-id", "goal-acceptance", "--agent-id", "agent-a",
+        "--context-delivery", "off", "--delta-delivery", "off")
+    assert code == 0, quota
+    assert quota["decision"] == "autonomous_replan_required", quota
+    assert quota["goal_frontier_projection"].get("terminal_state") is None
+    (project / "commitment.txt").write_text("fulfilled")
+    code, passed = cli("verify", "--agent-id", "agent-a", "--execute")
+    assert code == 0 and passed["checks_passed"] is True, passed
+    current = cli("inspect")[1]["goal_acceptance_contract"]
+    assert current["status"] == "accepted"
+    assert current["outcome_requirements"]["acceptance_gaps"] == []
+    assert current["outcome_requirements"]["outcomes"][0]["requirements"][0]["status"] == "accepted"

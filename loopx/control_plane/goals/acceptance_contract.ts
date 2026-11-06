@@ -27,6 +27,7 @@ export interface AcceptanceCriterion extends JsonObject {
 }
 export type AcceptanceScope =
   | {kind: "all_advancement"}
+  | {kind: "goal"}
   | {kind: "selected_work"; todo_ids: string[]};
 export interface AcceptanceDocument extends JsonObject {
   outcome_id?: string;
@@ -169,6 +170,10 @@ function validationFiles(value: unknown): {path: string; sha256: string}[] {
  * and its canonical bytes; an explicit subset may still contain unbound work. */
 function normalizeAcceptanceScope(value: unknown): AcceptanceScope {
   const scope = canonicalAuthorityObject(value, "acceptance scope");
+  if (scope.kind === "goal") {
+    acceptanceKeys(scope, ["kind"]);
+    return {kind: "goal"};
+  }
   if (scope.kind === "all_advancement") {
     acceptanceKeys(scope, ["kind"]);
     return {kind: "all_advancement"};
@@ -179,7 +184,7 @@ function normalizeAcceptanceScope(value: unknown): AcceptanceScope {
     list(scope.todo_ids, "acceptance scope Todos", 4096, 1).map(id), "acceptance scope Todos")};
 }
 function acceptanceIncludes(scope: AcceptanceScope | undefined, todoId: string): boolean {
-  return scope?.kind !== "selected_work" || scope.todo_ids.includes(todoId);
+  return scope?.kind !== "goal" && (scope?.kind !== "selected_work" || scope.todo_ids.includes(todoId));
 }
 
 export function normalizeGoalAcceptanceDocument(value: unknown): AcceptanceDocument {
@@ -225,11 +230,13 @@ export function normalizeGoalAcceptanceDocument(value: unknown): AcceptanceDocum
 export function resolveGoalAcceptanceDocument(head: JsonObject, goalId: string, value: unknown): AcceptanceDocument {
   const raw = canonicalAuthorityObject(value, "acceptance document");
   if (raw.outcome_id === undefined) return normalizeGoalAcceptanceDocument(raw);
-  acceptanceKeys(raw, ["outcome_id", "criteria"]);
+  acceptanceKeys(raw, ["outcome_id", "criteria"], ["scope"]);
+  const goalOnly = raw.scope !== undefined && normalizeAcceptanceScope(raw.scope).kind === "goal";
+  acceptanceRequire(raw.scope === undefined || goalOnly, "compact outcome checks support only explicit Goal scope");
   const basis = goalOutcomeCheckBasis(head, goalId, raw.outcome_id);
   const requirements = basis.requirements as {id: string; description: string}[];
   const todoIds = basis.todo_ids as string[];
-  acceptanceRequire(todoIds.length > 0, "link outcome work before preparing executable checks");
+  acceptanceRequire(goalOnly || todoIds.length > 0, "link outcome work before preparing executable checks");
   const criteria = list(raw.criteria, "acceptance criteria", 64, 1).map(value => {
     const check = canonicalAuthorityObject(value, "requirement check");
     acceptanceKeys(check, ["id", "validation_argv"], ["validation_timeout_seconds", "validation_files", "oracle"]);
@@ -238,8 +245,8 @@ export function resolveGoalAcceptanceDocument(head: JsonObject, goalId: string, 
     return {...check, id: requirement.id, description: requirement.description};
   });
   return normalizeGoalAcceptanceDocument({outcome_id: basis.outcome_id, objective: basis.objective, non_goals: [],
-    scope: {kind: "selected_work", todo_ids: todoIds}, criteria,
-    bindings: todoIds.map(todo_id => ({todo_id, criterion_ids: criteria.map(c => c.id)}))});
+    scope: goalOnly ? {kind: "goal"} : {kind: "selected_work", todo_ids: todoIds}, criteria,
+    bindings: goalOnly ? [] : todoIds.map(todo_id => ({todo_id, criterion_ids: criteria.map(c => c.id)}))});
 }
 
 function acceptanceDigestMatches(todo: JsonObject, boundDigest: string): boolean {
@@ -343,6 +350,7 @@ function acceptanceWorkDigest(todos: ReadonlyMap<string, JsonObject>, scope: Acc
   head: JsonObject): string {
   const objective = currentGoalObjective(head)?.revisions.at(-1)?.digest;
   const digest = (work: unknown) => canonicalAuthoritySha256(objective === undefined ? work : {work, objective});
+  if (scope?.kind === "goal") return digest([]);
   if (scope?.kind === "selected_work") return digest(scope.todo_ids.map(todo_id => ({
     todo_id, digest: todos.has(todo_id) ? goalAcceptanceTodoDigest(todos.get(todo_id)!) : null,
   })));
@@ -563,7 +571,8 @@ export class GoalAcceptanceRead {
     }
     this.validateTodoReadModel();
     const todos = this.read.todoIndex.todos;
-    const taskIds = new Set(state.document.scope?.kind === "selected_work" ? state.document.scope.todo_ids
+    const taskIds = new Set(state.document.scope?.kind === "goal" ? []
+      : state.document.scope?.kind === "selected_work" ? state.document.scope.todo_ids
       : [...todos.values()].filter(advancement).map(todo => String(todo.todo_id)));
     for (const binding of state.bindings) taskIds.add(binding.todo_id);
     const tasks = [...taskIds].sort(authorityUnicodeCompare).map(key => this.task(key, todos.get(key), state));

@@ -133,6 +133,23 @@ def todo_authoring_steps(
         agent_id=agent_id,
         registry_path=registry_path,
     )
+    prefix = render_cli_command_prefix(cli_bin=cli_bin, runtime_root=runtime_root)
+    if registry_path is not None:
+        prefix += f" --registry {shell_arg(str(registry_path))}"
+    acceptance = f"{prefix} --format json goal-acceptance"
+    route = f"--goal-id {shell_arg(str(goal_id))}"
+    if agent_id:
+        route += f" --agent-id {shell_arg(str(agent_id))}"
+    # The existing planning checkpoint owns declaration and later work linking.
+    # Keep their exact routed commands reachable without adding model stages.
+    requirement_commands = {
+        "inspect_command": f"{acceptance} inspect {route}",
+        "refine_command_template": (
+            f"{acceptance} refine {route} --document '<agent-authored-file>' "
+            "--expected-provider-revision '<current-provider-revision>' "
+            "--operation-id '<stable-original-operation-id>' --execute"
+        ),
+    }
     # This adapter already owns routed CLI templates for both planning entrypoints.
     readback = {
         "id": "read_back_authored_todos",
@@ -147,15 +164,20 @@ def todo_authoring_steps(
         "purpose": (
             "Read each authored/reused id: one match, todo_detail_projection.source_complete=true; "
             "compare .todo.text, status/claim. Excerpts cannot verify writes. "
-            "Missing/ambiguous/changed: reinspect before handoff. Readback grants no guard/lease authority."
+            "Read back the same overall requirements, provenance and work links too; "
+            "missing/ambiguous/changed: reinspect before handoff. Readback grants no guard/lease authority."
         ),
     }
+    readback["goal_requirements_readback"] = (
+        "Repeat goal_requirements.inspect_command from the planning checkpoint after linking."
+    )
     if not existing_runnable_frontier:
         return [
             {
                 "id": "plan_ranked_todos",
                 "kind": "model_checkpoint",
                 "prompt": plan_prompt,
+                "goal_requirements": requirement_commands,
                 "purpose": (
                     "produce one public-safe, small, verifiable checkpoint Todo; keep "
                     "later options as evidence-linked planning notes"
@@ -182,6 +204,7 @@ def todo_authoring_steps(
             "id": "compare_planned_todos_with_frontier",
             "kind": "model_checkpoint",
             "prompt": plan_prompt,
+            "goal_requirements": requirement_commands,
             "purpose": (
                 "compare the continuation with existing_runnable_frontier "
                 "by text/action_kind before any writeback"
@@ -216,7 +239,13 @@ def append_todo_delta_render_line(
     raw_step: Mapping[str, Any],
     step_lines: list[str],
 ) -> None:
-    """Render the Todo-delta decision rule compactly for the markdown packet."""
+    """Keep planning instructions reachable without repeating routed commands."""
+    requirements = raw_step.get("goal_requirements")
+    if isinstance(requirements, Mapping):
+        step_lines.append(
+            "   - overall requirements: declare before Todos, link actual ids, then read back; "
+            "use this checkpoint's goal_requirements commands in the JSON detail packet."
+        )
     todo_delta = raw_step.get("todo_delta")
     if not isinstance(todo_delta, Mapping):
         return

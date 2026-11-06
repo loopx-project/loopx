@@ -677,6 +677,7 @@ def test_sforge_command_preserves_native_timing_and_planning_boundary(tmp_path, 
     assert first == resumed
     assert ("benchmark.runtime.sforge_entry" in first) is (entry == "loopx-planned")
     assert "test -f /opt/loopx-benchmark/control/phase-deadline ||" in first
+    assert first.index("-m benchmark.runtime.codex_readiness") < first.index("test -f /opt/loopx-benchmark/control/phase-deadline ||")
     assert first.index("export LOOPX_PHASE_DEADLINE_EPOCH") < first.index("timeout --signal")
     profile = json.loads((tmp_path / "worker-profile.json").read_text())
     assert profile["task_entry"] == entry
@@ -1211,6 +1212,7 @@ def test_custom_provider_uses_environment_credential_without_copying_login(tmp_p
         worker.prepared = True
     command = worker.format_run_cmd('/task/prompt.md')
     assert config.agent_api_key not in command
+    assert "benchmark.runtime.codex_readiness" not in command
     assert all(config.agent_api_key not in contents for contents in copied.values())
     config.agent_api_key = None
     with pytest.raises(ValueError, match='API credential'):

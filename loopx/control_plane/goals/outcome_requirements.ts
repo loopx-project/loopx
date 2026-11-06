@@ -238,6 +238,19 @@ export function projectGoalOutcomes(head: JsonObject, goalId: string, acceptance
     execution_authority_granted: false, goal_completion_assessed: false}, acceptance);
 }
 
+/** Structural first-plan readback, not evidence of comprehension or acceptance.
+ * This projection shares the exact canonical declaration/lifetime observation.
+ * Hosts check returned Todo ids against it without inventing semantic criteria. */
+export function outcomePlanningReadback(acceptance: JsonObject, agentId: string): JsonObject {
+  const declaration = acceptance.outcome_requirements as JsonObject | undefined;
+  const current = declaration?.current_lifetime === true;
+  const outcomes = current ? (declaration!.outcomes as JsonObject[])
+    .filter(outcome => outcome.owner_agent_id === agentId) : [];
+  return {agent_id: agentId, declaration_current: current && outcomes.length > 0,
+    outcome_ids: outcomes.map(outcome => outcome.id),
+    linked_todo_ids: [...new Set(outcomes.flatMap(outcome => outcome.todo_ids as string[]))]};
+}
+
 /** Suggest reading order from registered relationships, never reading obligations.
  * Use the complete canonical work snapshot and the existing relation owner;
  * the bounded planning horizon cannot establish this registered-relation closure.
@@ -354,7 +367,7 @@ export function observeOutcomeRequirements(declaration: JsonObject, acceptance: 
     requirements: o.requirements.map(r => {
       const criteria = acceptance.outcome_id === undefined || acceptance.outcome_id === o.id ? allCriteria : [];
       const criterion = criteria.find(c => c.id === r.id && c.description === r.description);
-      const covered = o.todo_ids.length > 0 && o.todo_ids.every(key => tasks.some(t => t.todo_id === key && t.state === "ready" && (t.criterion_ids as string[]).includes(r.id)));
+      const covered = (acceptance.scope as JsonObject | undefined)?.kind === "goal" || o.todo_ids.length > 0 && o.todo_ids.every(key => tasks.some(t => t.todo_id === key && t.state === "ready" && (t.criterion_ids as string[]).includes(r.id)));
       const oracle = criterion?.oracle as JsonObject | undefined;
       const receipt = acceptance.verification as JsonObject | null | undefined;
       const ownResult = (receipt?.results as JsonObject[] | undefined)?.find(result => result.criterion_id === r.id);

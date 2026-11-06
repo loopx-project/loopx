@@ -5,6 +5,16 @@ LHTB, SWE-Marathon and other Harbor tasks use
 `PYTHONPATH`. This research runner is not another installed product package.
 Native tasks, environment, phases, feedback, verifier and scores stay in Harbor.
 
+SForge LoopX workers using a native ChatGPT login check that login through the
+receiver's native app-server before entering the phase clock or scheduler. This
+one startup observation reads the account and usage route without requesting a
+credential refresh or invoking a model. An unavailable route exits with
+`native_receiver_unavailable`; repair the receiver's proxy/login and retry its
+ordinary entry. Existing phase deadlines, sessions, pending requests and retry
+limits are retained. This check does not recover an already dispatched failed
+Turn, extend its budget, select an account or authorize a retry. Official/plain
+workers and custom API routes keep their existing entry behavior.
+
 The shared adapter reads `PATH` from the task container before installing its
 isolated profile. Worker and login shells retain those task toolchain directories;
 LoopX modes prepend their staged Node and CLI. No operator-host PATH or other
@@ -61,6 +71,7 @@ owner requires `mode=heartbeat` and explicitly propagates `LOOPX_EXECUTION_MODE=
 and `LOOPX_CONTEXT_DELIVERY=on` into the native tool environment. Generic CLI
 without these worker declarations stays full. These are caller declarations,
 not host authentication or a new admission grant.
+
 It works with ordinary quota or the explicit TurnEnvelope view. The existing
 worker stages the product's generated lifecycle hooks (currently SessionStart,
 PreCompact, PostCompact, PostToolUse and Interrupt) in the trial's private Codex
@@ -384,6 +395,41 @@ The deadline uses the task environment's clock, including remote Harbor backends
 Budget exhaustion is distinct from task completion: this clock does not override
 provider failures, Stop, blocked planning, or a valid terminal LoopX decision.
 Campaign duration coverage must still classify an early exit as missing time.
+
+### Optional native execution evidence
+
+A benchmark host can expose finalized and live solver intervals through the
+existing campaign duration owner. This read-only provider does not declare
+Goal requirements, configure acceptance checks or decide whether to continue.
+The Agent owns semantic requirements in the shared first-planning checkpoint;
+independent executable checks remain optional. A maximum timeout alone never
+creates a minimum execution commitment.
+
+```python
+from benchmark.edgebench.execution_commitment import (
+    NativeExecutionEvidence, install_execution_commitment,
+)
+
+evidence = NativeExecutionEvidence(
+    run_id=run_id, task_id=task_id, trial=trial,
+    target_seconds=explicit_caller_target_seconds,
+    runner_active=lambda: worker is not None and worker.poll() is None,
+)
+install_execution_commitment(
+    app, run_id=run_id, task_id=task_id, observe=evidence.fulfilled,
+)
+```
+
+Use the native trial directory containing `solver_execution.json` and the exact
+worker process. For continuation, supply finalized earlier receipts as explicit
+`(Path, sha256)` pairs in `previous`. Setup, grading and downtime contribute no
+execution credit; missing, altered or unfinished previous evidence stays unknown.
+The scoped feedback route resolves the exact `(run_id, task_id)` pair. Reinstalling
+the same observer is idempotent; replacing it is rejected. The command adapter
+`python -m benchmark.runtime.execution_commitment probe|check --task-id TASK`
+reads the explicitly selected native relay and rejects stale or malformed data.
+Apps without this extension and ordinary worker entry/restore behavior remain
+unchanged. No default semantic requirement or automatic check is installed.
 
 To compare entry policies, hold the execution mode, session policy, model,
 effort, tools, feedback and total budget fixed, and use separate trials:

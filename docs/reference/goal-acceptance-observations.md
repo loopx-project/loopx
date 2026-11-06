@@ -98,6 +98,21 @@ and natural native Goal completion retain their existing owners.
 已经启动过会话的旧创建记录保持原义，不自动迁移。停止、权限、预算、独立检查及
 原生 Goal 的自然结束规则保持有效。
 
+The shared `/loopx` and `todo plan` first-planning contract asks the Agent to
+declare source-grounded overall requirements through `goal-acceptance refine`,
+link the actual task Todos and read the declaration back. The caller supplies
+the original task and execution facts; it does not write the Agent's semantic
+requirements. Reuse the same outcome on continuation. Unchanged requirements
+need no rewrite, and independent executable checks remain optional.
+
+An open-ended objective remains open-ended. A maximum timeout is an upper
+bound, not an instruction to use every remaining minute. Local Todo completion
+leaves unmet overall requirements with the existing frontier/replan owner;
+real Stop, budget, refusal and waiting conditions still apply. Benchmark's
+`loopx-planned` ready handoff checks the canonical Agent-owned work links.
+Blocked planning can return its actual blocker without fabricating a declaration.
+The structural readback proves persistence, not model comprehension or task success.
+
 Goal Overview shows supporting outcomes recorded by a bound Agent: original
 objective, cumulative requirements, linked work, sources and separate Agent
 review/check results. The local owner can **Add a requirement** and read the
@@ -337,11 +352,26 @@ and binding are separate: selected work with no confirmed binding remains held.
 Bindings outside the selected set are rejected. Agents cannot change coverage;
 owner configuration still uses preview, provider CAS and exact operation replay.
 
+`goal` checks the Goal as a whole without gating local Todo execution or
+completion. It requires empty `bindings`; it does not mean every new task needs
+an acceptance association. Use it for an independently checked cross-task
+commitment. With a retained outcome, `{"outcome_id":"...","scope":{"kind":"goal"},"criteria":[...]}`
+uses the original requirement descriptions and needs no placeholder Todo.
+An unmet configured check cannot be satisfied by an Agent's self-review or local
+Todo completion. The outcome remains available to ordinary replanning when its
+linked work ends; permission, Stop, real blockers and the host's finite budget
+still govern execution. A scope declaration itself never runs a checker.
+
+`goal` 只验收整个 Goal，不给局部 Todo 加执行或完成门禁，`bindings` 必须为空。
+它适用于跨任务的独立验收承诺，可直接引用既有成果要求，无需占位 Todo。
+局部任务完成或 Agent 自评不能替代已配置检查；未满足的成果在工作结束后仍进入
+原有重规划流程。权限、Stop、真实阻塞及宿主有限预算继续生效。
+
 Legacy persisted documents without `scope` retain their Goal-wide behavior and
 original digest. Reading or upgrading does not narrow them. A fresh configuration
 without scope is rejected with an actionable error; original committed retries
-still recover their receipts. An older runtime that does not understand selected
-coverage rejects it rather than silently ignoring it; update readers before an
+still recover their receipts. An older runtime that does not understand the selected
+coverage kind rejects it rather than silently ignoring it; update readers before an
 owner-approved scope change.
 
 Unselected work retains its ordinary validation, claims, leases, permissions and
