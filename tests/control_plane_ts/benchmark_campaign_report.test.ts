@@ -196,3 +196,23 @@ test('opt-in HTML separates the record trajectory from all samples and splits di
     assert.match(charts[0], /H932\.00"/); // retain the best through the last observed regression
   } finally { rmSync(dir, {recursive: true, force: true}); }
 });
+
+test('duration policy checks every selected arm and only accepts verified voluntary goal completion', () => {
+  const input = fixture();
+  input.duration_policy = {target_ms: 100, allow_goal_completion: ['b']};
+  input.selection[0].active_intervals = [[0,30],[10,40],[80,100]].map(([start_ms,end_ms]) =>
+    ({start_ms,end_ms,evidence_ref:'solver:segment'}));
+  input.selection[1].active_intervals = [{start_ms:10,end_ms:110,evidence_ref:'solver:segment'}];
+  input.selection[2].active_intervals = [];
+  input.execution_audit = [{case_id:'one', arm_id:'b', run_id:'b-one',initial_attempt:true,
+    outcome:'normal_end',goal_verdict:'satisfied',attribution:'not_applicable',evidence_refs:['receipt:goal']}];
+  const report = buildReport(input);
+  const rows = report.duration_coverage!;
+  assert.equal(rows.length,6);
+  assert.deepEqual(rows.map(row => row.disposition), ['needs_makeup','covered','needs_makeup','goal_completed','verify_duration','verify_duration']);
+  assert.deepEqual(rows.map(row => row.remaining_ms),[40,0,100,null,null,null]);
+  assert.equal(report.comparisons[0].qualified_common_n,0);
+  assert.match(renderMarkdown(report),/needs_makeup/);
+  input.selection[0].active_intervals[0].end_ms = -1;
+  assert.throws(() => buildReport(input),/observed solver interval/);
+});
