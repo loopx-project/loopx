@@ -24,7 +24,8 @@ def observed_first_read_reference(directory: str, target: dict[str, Any], recove
         return None  # The ordinary first read remains available.
 
 
-def observation_current(observation: dict[str, Any], path: Path, digest: str) -> bool:
+def observation_current(observation: dict[str, Any], path: Path, digest: str, *,
+                        hook_session: str | None = None) -> bool:
     from .codex_context import _private_root, _state
 
     try:
@@ -32,7 +33,7 @@ def observation_current(observation: dict[str, Any], path: Path, digest: str) ->
         recovery = state["recovery"]
         target = observation["target"]
         return (target == recovery.get("target") and target["context_epoch"] == state["context_epoch"]
-                and target["session_id"] == state["session_id"] == os.environ.get("CODEX_THREAD_ID")
+                and target["session_id"] == state["session_id"] == (hook_session or os.environ.get("CODEX_THREAD_ID"))
                 and recovery["sha256"] == digest and Path(recovery["path"]).resolve() == path.resolve()
                 and bool(observation["fields"]) and all(state.get("consumed_pointers", {}).get(pointer) == expected
                     for pointer, expected in observation["fields"].items()))

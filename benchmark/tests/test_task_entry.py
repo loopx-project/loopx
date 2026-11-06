@@ -324,6 +324,44 @@ def test_planning_writes_real_todo_then_reuses_it_without_executing_task(
     )
 
 
+def test_real_planning_rejects_todos_without_agent_requirements(planning_env):
+    binary = Path(planning_env["CODEX_BIN"])
+    source = binary.read_text().replace("if not own:", "if False:").replace(
+        'if not own or todo_id not in own[0]["todo_ids"]:', "if False:")
+    binary.write_text(source)
+    with pytest.raises(ValueError, match="canonical overall requirements"):
+        run_once(planning_env)
+    assert not Path(planning_env["LOOPX_PLANNING_RESULT"]).exists()
+    receipts = list(Path(planning_env["LOOPX_WAKE_LOG_DIR"]).glob("*/receipt.json"))
+    assert len(receipts) == 1 and not json.loads(receipts[0].read_text())["ok"]
+    from benchmark.runtime.planning import task_plan_packet
+    from benchmark.runtime.worker import loopx_command
+    packet = task_plan_packet(planning_env, loopx_command(planning_env))
+    assert len(packet["runnable_todo_ids"]) == 1, "An actual task alone cannot satisfy ready"
+    assert not packet["goal_acceptance"]["planning_requirements"]["declaration_current"]
+
+
+def test_stopped_goal_cannot_launch_first_planner_or_fabricate_requirements(planning_env):
+    from loopx.control_plane.goals.first_party_host_admission import FirstPartyHostRuntimeRejected
+    from benchmark.runtime.planning import task_plan_packet
+    from benchmark.runtime.worker import loopx_command
+
+    command = loopx_command(planning_env) + ["goal-lifecycle", "--goal-id", "planning-goal", "--operation", "stop"]
+    preview = json.loads(subprocess.run(command, env=planning_env, capture_output=True,
+        text=True, check=True).stdout)
+    stopped = subprocess.run(command + ["--actor-kind", "owner", "--expected-state-fingerprint",
+        preview["observed_state_fingerprint"], "--execute"], env=planning_env, capture_output=True,
+        text=True, check=True)
+    assert json.loads(stopped.stdout)["after_state"] == "stopped"
+    with pytest.raises(FirstPartyHostRuntimeRejected, match="goal_stopped"):
+        run_once(planning_env)
+    packet = task_plan_packet(planning_env, loopx_command(planning_env))
+    assert not packet["existing_todos"]
+    assert not packet["goal_acceptance"]["planning_requirements"]["declaration_current"]
+    assert not Path(planning_env["LOOPX_PLANNING_RESULT"]).exists()
+    assert not (Path(planning_env["LOOPX_CODEX_HOME"]) / "seen-argv.json").exists()
+
+
 def test_prose_or_fabricated_todo_does_not_qualify_planning(planning_env):
     binary = Path(planning_env["CODEX_BIN"])
     binary.write_text(

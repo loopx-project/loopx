@@ -237,9 +237,12 @@ def test_first_plan_declares_then_links_and_reads_canonical_requirements(bound_g
         "source": {"ref": "user-task", "summary": bound_goal["text"]}}
     path = bound_goal["project"] / "requirements.json"
     path.write_text(json.dumps(document))
-    declared = cli("goal-acceptance", "refine", *route, "--document", str(path),
+    declaration = ["goal-acceptance", "refine", *route, "--document", str(path),
         "--expected-provider-revision", before["goal_acceptance"]["provider_revision"],
-        "--operation-id", "first-declaration", "--execute")
+        "--operation-id", "first-declaration", "--execute"]
+    cli(*declaration)  # The write committed, but its caller lost the response.
+    declared = cli(*declaration)
+    assert declared["status"] in {"replayed", "recovered"}
     outcome = declared["goal_acceptance_contract"]["outcome_requirements"]["outcomes"][0]
     assert outcome["todo_ids"] == []
     assert not build_task_planning_packet(**bound_goal)["existing_todos"], "Declaration precedes task Todos"
@@ -267,7 +270,8 @@ def test_shared_planning_preserves_open_intent_and_stop_in_both_entries(bound_go
     guidance = goal_planner_contract()["goal_requirements_guidance"]
     for requirement in ("source-grounded overall requirements", "an open-ended objective stays open-ended",
         "maximum timeout is not a requirement to spend it", "independent executable checks", "optional",
-        "Unchanged declarations need no rewrite", "accurate wait/Stop", "not an additional model call"):
+        "Unchanged declarations need no rewrite", "reuse the existing outcome",
+        "only for missing requirements", "accurate wait/Stop", "not an additional model call"):
         assert requirement in guidance
     packet = build_task_planning_packet(**bound_goal)
     assert packet["planner"]["goal_requirements_guidance"] == guidance

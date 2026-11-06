@@ -270,6 +270,22 @@ def failed_request_readback(session: CodexChatAgentSession, turn_id: str) -> dic
         return None
 
 
+def _settled_work_effect(item: dict[str, Any]) -> bool:
+    """A recorded process exit can settle a command without making it succeed.
+
+    This is native DTO evidence only. The original worker's explicit settled
+    report, live background inventory and Core continuation checks still apply.
+    Missing exits, timeouts/signals and failed non-process effects stay unknown.
+    """
+    if item.get("status") == "completed":
+        return True
+    code, started, ended = item.get("exitCode"), item.get("startedAtMs"), item.get("completedAtMs")
+    return (item.get("type") == "commandExecution" and item.get("status") == "failed"
+            and type(code) is int and 0 < code < 128 and code not in {124, 125}
+            and type(started) is int and type(ended) is int and 0 < started <= ended
+            and isinstance(item.get("aggregatedOutput"), str))
+
+
 def completed_work_readback(session: CodexChatAgentSession, turn_id: str, *,
                             known_turn_ids: set[str] | None = None) -> dict[str, Any] | None:
     """Read stable settled work, including history correlated by its Core owner.
@@ -317,8 +333,8 @@ def completed_work_readback(session: CodexChatAgentSession, turn_id: str, *,
                 elif item.get("phase") != "commentary":
                     return None
             elif kind in {"commandExecution", "fileChange", "mcpToolCall"}:
-                if item.get("status") != "completed":
-                    return None  # Declined/failed/live/unknown effects cannot request writable continuation.
+                if not _settled_work_effect(item):
+                    return None  # Declined/live/unobserved effects cannot request writable continuation.
             elif kind not in {"reasoning", "webSearch", "imageView", "contextCompaction"}:
                 return None
         if (users != 1 or len(finals) != 1 or turns() != inventory
@@ -345,7 +361,7 @@ def completed_work_readback(session: CodexChatAgentSession, turn_id: str, *,
                         "mcpToolCall", "reasoning", "webSearch", "imageView", "contextCompaction"}
                         or item.get("type") == "agentMessage" and item.get("phase") not in {"commentary", "final_answer"}
                         or item.get("type") in {"commandExecution", "fileChange", "mcpToolCall"}
-                        and item.get("status") != "completed"):
+                        and not _settled_work_effect(item)):
                     return None
             later_items[value] = rows
         if (any(list(session._control_items("thread/items/list", {"turnId": value}, deadline)) != rows
@@ -397,7 +413,7 @@ def interrupted_result_readback(session: CodexChatAgentSession, turn_id: str) ->
             elif kind == "agentMessage":
                 if item.get("phase") != "commentary":
                     return None
-            elif kind in {"commandExecution", "fileChange", "mcpToolCall"}:
+            elif kind in {"commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall"}:
                 if item.get("status") not in {"completed", "failed", "declined"}:
                     return None
                 effects += 1
@@ -407,7 +423,10 @@ def interrupted_result_readback(session: CodexChatAgentSession, turn_id: str) ->
                 or list(session._control_items("thread/items/list", {"turnId": turn_id}, deadline)) != items):
             return None
         return {"thread_id": session.thread_id, "turn_id": turn_id, "read_only_review": True,
-                "no_final_answer": True, "effects_observed": True}
+                "no_final_answer": True, "effects_observed": True,
+                "native_inventory_sha256": hashlib.sha256(json.dumps([
+                    next(row for row in inventory if row["id"] == turn_id), items],
+                    sort_keys=True, separators=(",", ":")).encode()).hexdigest()}
     except (CodexChatAgentError, OSError, TypeError, ValueError):
         return None
 

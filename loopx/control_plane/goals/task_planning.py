@@ -142,7 +142,7 @@ def build_task_planning_packet(
             "Execute the LoopX task-planning checkpoint for this already registered Goal/Agent. "
             "Use the attached planner and ordered_steps, shared with /loopx. Read the exact text "
             "and inspect the workspace as needed; follow goal_requirements_guidance to "
-            "declare sourced overall requirements through the existing outcome owner, "
+            "reuse existing requirements or declare missing sourced requirements through the existing outcome owner, "
             "link actual work and read it back before ready. Make the approach explicit "
             "before writing task Todos through the routed public CLI. Compare all existing "
             "work and waits; reuse/update covered work and add only uncovered work. "

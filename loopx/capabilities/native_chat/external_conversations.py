@@ -379,6 +379,7 @@ class ChatExternalConversations:
                 return self._recover_native_result(path, row, session, turn, source_observation)
             metadata_review = plan.get("metadata_review") is True
             answer_review = plan.get("answer_review") is True
+            codex_answer = answer_review and session.get("agent_id") == "codex"
             quota_answer = answer_review and session.get("agent_id") == "codex" and turn.get("error_code") == "usage_limit_exceeded"
             preparation_retry = plan.get("preparation_attempt") is not None
             model_auth_home = (None if metadata_review or answer_review or preparation_retry
@@ -397,7 +398,7 @@ class ChatExternalConversations:
             # checks and the typed eligibility decision remain below that fence.
             proof = None
             capacity = None
-            if not plan.get("admitted_turn_id") and (metadata_review or answer_review and not quota_answer or turn.get("error_code") == "antigravity_step_error"):
+            if not plan.get("admitted_turn_id") and (metadata_review or answer_review and not codex_answer or turn.get("error_code") == "antigravity_step_error"):
                 from .antigravity_adapter import AntigravityAdapter, ANTIGRAVITY_DEFAULT_MODEL
                 events = self.controller.store.events_after(row["session_id"], row["turn_id"], None)
                 anchors = [item["payload"]["native_input"] for item in events
@@ -452,6 +453,11 @@ class ChatExternalConversations:
                                 capacity = {"alternate_executor": route}
                             else:
                                 proof.update(quota_available=True, quota_observed_at=route["observed_at"])
+            if codex_answer and not quota_answer and proof is not None:
+                from ...chat_manager import manager_session_quota_route
+                route = manager_session_quota_route(self.controller, session)
+                if route and route["allocation"]["executor_endpoint"] == "codex":
+                    capacity = {"alternate_executor": route}
             facts = proof.pop("retained_result", None) if proof is not None and metadata_review else None
             selected = self.bindings.resolve(binding_id=row["binding_id"], **row["source"], include_observation=True)
             source = source_observation(selected)
@@ -801,6 +807,12 @@ class ChatExternalConversations:
                 if observed is not None:
                     observed = {key: observed.get(key) for key in ("thread_id", "turn_id", "only_original_user_item", "codex_error_info")}
                 expected = {key: proof.get(key) for key in ("thread_id", "turn_id", "only_original_user_item", "codex_error_info")}
+            elif proof.get("read_only_review") is True and proof.get("turn_id"):
+                from .codex_adapter import CodexAppServerAdapter
+                observed = CodexAppServerAdapter.failed_request_observation(codex_bin=self.controller.codex_bin,
+                    codex_home=Path(session["codex_home"]), thread_ids=[proof["thread_id"]],
+                    turn_id=proof["turn_id"], read_only_review=True)
+                expected = proof
             else:
                 observed = AntigravityAdapter.interrupted_answer_observation(cascade_id=proof["thread_id"],
                     request_ref=row["request_ref"], message=original["message"], started_at=original["started_at"],

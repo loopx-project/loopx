@@ -202,7 +202,7 @@ def test_native_turn_preserves_operator_material(monkeypatch, tmp_path, mode):
 
 
 @pytest.mark.parametrize("fault", [None, "active", "completed", "final", "missing-phase", "correction",
-    "unknown", "foreign", "duplicate", "live-tool", "late-items", "late-turn"])
+    "unknown", "foreign", "duplicate", "live-tool", "late-items", "late-turn", "dynamic-tool", "live-dynamic-tool", "later-completed"])
 def test_interrupted_result_review_requires_stable_full_inventory_without_final_or_live_effects(tmp_path, monkeypatch, fault):
     session = chat_agent.CodexChatAgentSession(process=SimpleNamespace(poll=lambda: None),
         messages=queue.Queue(), thread_id="original", work_dir=tmp_path, response_timeout_sec=.2)
@@ -220,6 +220,8 @@ def test_interrupted_result_review_requires_stable_full_inventory_without_final_
                 {"id": "interrupted", "status": "completed" if fault == "completed" else "interrupted"}]
             if fault == "late-turn" and turns_read > 1:
                 rows.append({"id": "new", "status": "inProgress"})
+            if fault == "later-completed" and turns_read > 2:
+                rows.append({"id": "other-completed", "status": "completed"})
             result = {"data": rows}
         else:
             assert method == "thread/items/list"
@@ -232,6 +234,8 @@ def test_interrupted_result_review_requires_stable_full_inventory_without_final_
                 item.update({"type": "futureItem"} if fault == "unknown" else
                     {"id": "user"} if fault == "duplicate" else
                     {"status": "inProgress"} if fault == "live-tool" else {})
+                if fault in {"dynamic-tool", "live-dynamic-tool"}:
+                    item.update(type="dynamicToolCall", status="completed" if fault == "dynamic-tool" else "inProgress")
                 rows = [{"turnId": "foreign" if fault == "foreign" else "interrupted", "item": item},
                     {"turnId": "interrupted", "item": {"id": "comment", "type": "agentMessage", "phase": "commentary"}}]
                 if fault in {"final", "missing-phase", "correction"} or fault == "late-items" and items_read > 1:
@@ -243,10 +247,14 @@ def test_interrupted_result_review_requires_stable_full_inventory_without_final_
 
     monkeypatch.setattr(session, "_write", write)
     proof = interrupted_result_readback(session, "interrupted")
-    if fault is None:
+    if fault in {None, "dynamic-tool", "later-completed"}:
+        digest = proof.pop("native_inventory_sha256")
+        assert len(digest) == 64 and set(digest) <= set("0123456789abcdef")
         assert proof == {"thread_id": "original", "turn_id": "interrupted", "read_only_review": True,
             "no_final_answer": True, "effects_observed": True}
         assert turns_read == items_read == 2
+        if fault == "later-completed":
+            assert interrupted_result_readback(session, "interrupted")["native_inventory_sha256"] == digest
     else:
         assert proof is None
     assert set(calls) <= {"thread/turns/list", "thread/items/list"}

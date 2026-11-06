@@ -18,8 +18,9 @@ _FIRST_DELIVERY_GUIDANCE = (
 
 _GOAL_REQUIREMENTS_GUIDANCE = (
     "In this first planning step, read the original Goal/task and existing outcome "
-    "requirements. As the Agent, declare source-grounded overall requirements through "
-    "goal-acceptance refine before task Todos, then link the actual authored/reused "
+    "requirements, including owner-approved Goal creation completion criteria. As the Agent, "
+    "reuse the existing outcome when it covers the request; declare source-grounded overall requirements through "
+    "goal-acceptance refine only for missing requirements before task Todos, then link the actual authored/reused "
     "Todo ids and read the canonical declaration back. Preserve explicit user criteria, "
     "constraints, permissions and Stop; an open-ended objective stays open-ended, and "
     "a maximum timeout is not a requirement to spend it. Do not invent metrics, minimum "

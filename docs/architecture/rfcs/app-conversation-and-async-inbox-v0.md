@@ -1816,6 +1816,34 @@ native inventory reads and crashes before admission, after enqueue and before
 transport synchronization. Synthetic model/provider journeys and read-only native
 observations do not certify live model completion or the wider conversation SLA.
 
+### A steward answer interrupted by service restart
+
+A Codex steward using the configured flexible allowance route can reserve one
+restricted answer review after `server_restarted`, even when tools already ran.
+The original reply worker must independently read a stable, complete interrupted
+native inventory with no final answer or live items. Native dynamic-tool calls
+are effect items too; a stable terminal inventory permits only this read-only
+review, never business replay. Its digest is rechecked before review execution.
+
+The same source, owner, grant, stop checks and `review-1` queue reservation apply.
+Fresh configured Codex capacity must verify before admission and again before
+dispatch. The new restricted thread retains only authorized manager reads; writes,
+network effects, handoffs and business continuation are disabled. It answers from
+existing evidence or gives a concrete partial answer. The original failed Turn
+and failure notice remain unchanged; restart or an uncertain enqueue response
+adopts the reserved review instead of granting another attempt. Missing native
+evidence or capacity remains pending. The failure notice describes this qualified
+recovery instead of giving every restart the same blanket no-replay message.
+
+This isolated answer review receives its complete original question and verified
+visible results at dispatch. It does not import or serially compact the unrelated
+conversation before it can answer. Core retains the full transcript, and ordinary
+conversation restoration continues to preserve that history.
+If restart happens after the queue claim but before native dispatch, the worker
+adopts that same unstarted Turn through ordinary preparation and execution
+fences. It does not wait forever for a queued Turn to become running by itself;
+unfinished managed acceptance and already-started work retain their own owners.
+
 ### Explicit unfinished work after a completed Turn
 
 A terminal model Turn is distinct from completed business work. A private
@@ -1830,14 +1858,21 @@ The existing original-source reply worker may reserve one continuation after
 60 seconds. Core revalidates the original owner/App/source, unchanged message,
 workspace grant and stop/correction state. Native readback must independently
 show that the exact original Turn completed, its full item inventory is stable,
-every effect item completed, no background work remains, and the same final
+every effect item is settled, no background work remains, and the same final
 answer explicitly contains that report. Historical work may continue only when
 every later native Turn correlates to a settled canonical Core Turn and its full
 item inventory is independently stable with no unknown or unfinished effects.
 The proof pins a digest of these inventories; a later equivalent source submission,
-foreign native input, unknown item, failed/declined/live effect, edited source or
+foreign native input, unknown item, unsettled/declined/live effect, edited source or
 revoked grant remains a hold. Native loss remains a hold: a cold client cannot
 certify another process's background effects by resuming the thread.
+
+A failed native command can be settled without having succeeded: the provider
+must retain its ordinary nonzero process exit, ordered start/end timestamps and
+output. Missing exits, timeout/signal exits and failed file-change or MCP effects
+remain holds. This distinction does not certify a business outcome or authorize
+repeating the failed command; the worker still verifies existing artifacts and
+performs only the remaining work under the original settled report and grant.
 
 The original Session queue and deterministic `work-1` reservation own execution;
 restart adopts an already committed Turn instead of dispatching it again. The
