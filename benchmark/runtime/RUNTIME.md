@@ -385,6 +385,51 @@ Budget exhaustion is distinct from task completion: this clock does not override
 provider failures, Stop, blocked planning, or a valid terminal LoopX decision.
 Campaign duration coverage must still classify an early exit as missing time.
 
+### Explicit ongoing execution commitments in SForge
+
+For a heartbeat trial whose caller requires continued task work through the
+finite allowance, pass `--require-full-budget`. The runner records that outcome
+through Core's ordinary Goal-only acceptance scope. Completing a local Todo
+remains valid; an unmet overall commitment follows the existing replan path.
+Stop, exhausted allowance and genuine blockers retain their existing authority.
+Official and Native Goal controls reject this option and keep their defaults.
+
+The native judge host must install the read-only provider before model entry:
+
+```python
+from benchmark.edgebench.execution_commitment import (
+    NativeExecutionEvidence, install_execution_commitment,
+)
+
+evidence = NativeExecutionEvidence(
+    run_id=run_id, task_id=task_id, trial=trial,
+    target_seconds=timeout_seconds,
+    runner_active=lambda: worker is not None and worker.poll() is None,
+)
+install_execution_commitment(
+    app, run_id=run_id, task_id=task_id, observe=evidence.fulfilled,
+)
+```
+
+Use the native trial directory containing `solver_execution.json` and the exact
+worker process. The provider uses the campaign report's TypeScript duration
+owner; installation, grading and gaps between executions contribute no time.
+The original scoped feedback relay reveals only whether the commitment is
+fulfilled. It exposes neither a countdown nor another registration's state.
+An absent or unavailable provider fails the pre-model probe; it does not become
+an always-false check or silently fall back to a different execution policy.
+
+On restore, keep this option and the original task identity. The runner compares
+the inherited acceptance document through the owner's read-only preview, without
+refining requirements, reconfiguring checks or resetting planning. A legacy
+Goal without that contract is rejected rather than rewritten. The native host
+supplies earlier finalized execution receipts as explicit `(Path, sha256)` pairs
+in `previous`; mismatched pins or unfinished intervals remain unknown. No new
+worker clock or additional checkpoint trigger is introduced. Omitting the option
+preserves ordinary trial behavior and installs no provider route automatically.
+The receiver preserves routing for the original scoped relay. A changed endpoint
+fails the inherited-document comparison rather than silently replacing the check.
+
 To compare entry policies, hold the execution mode, session policy, model,
 effort, tools, feedback and total budget fixed, and use separate trials:
 

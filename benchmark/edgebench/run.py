@@ -129,6 +129,9 @@ def main(argv=None):
     parser.add_argument("--native-goal-continue", action="store_true",
                         help="Opt-in: when a native Goal declares completion with budget left, start "
                              "continuation Goals until the budget edge (native-goal worker only)")
+    parser.add_argument("--require-full-budget", action="store_true",
+                        help="Opt-in Goal-level execution commitment from the scoped native provider; "
+                             "local Todo completion does not complete the ongoing trial")
     parser.add_argument("--model", required=True)
     parser.add_argument("--effort", choices=REASONING_EFFORTS, required=True)
     parser.add_argument("--provider-rate-limit-retry-seconds", type=int, default=0,
@@ -211,6 +214,8 @@ def main(argv=None):
             parser.error("--provider-request-admission requires CODEX_WIRE_API=responses")
     if args.native_goal_continue and args.worker != "native-goal":
         parser.error("--native-goal-continue requires --worker native-goal")
+    if args.require_full_budget and (not args.worker.startswith("heartbeat-") or args.feedback != "native"):
+        parser.error("--require-full-budget requires a heartbeat worker and native feedback")
     if (args.replan_after_turns is not None or args.replan_after_todos is not None
             ) and not args.worker.startswith("heartbeat-"):
         parser.error("Replan cadence requires a heartbeat worker")
@@ -367,6 +372,8 @@ def main(argv=None):
                          context_delivery=args.context_delivery,
                          **({"provider_request_admission": True} if args.provider_request_admission else {}),
                          native_goal_continue=args.native_goal_continue,
+                         **({"require_full_budget": True, "commitment_task_id": args.task}
+                            if args.require_full_budget else {}),
                          replan_after_turns=args.replan_after_turns,
                          replan_after_todos=args.replan_after_todos,
                          planning_horizon_goal=args.planning_horizon_goal,
@@ -457,6 +464,7 @@ def main(argv=None):
            if agent.replan_after_todos is not None else {}),
         **({"planning_horizon_goal": agent.planning_horizon_goal}
            if agent.planning_horizon_goal is not None else {}),
+        **({"require_full_budget": True} if args.require_full_budget else {}),
         **({"stride_strategy": args.stride_strategy}
            if args.stride_strategy is not None else {}),
         **({"checkpoint_request_sha256": hashlib.sha256(checkpoint_request).hexdigest()}
