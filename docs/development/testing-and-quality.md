@@ -1696,6 +1696,19 @@ Heartbeat 的正文回归计量先归一化已选择的 runtime、registry 和 a
    or promotion thresholds stay fixed for that result; revised thresholds belong
    to a new qualification, never a relabeled historical pass.
 
+The capture cursor fixture uses a 2,048-byte positive page budget. The old
+1,600-byte success case fails on both the matched main and C1: with the same
+137-byte capture path, mandatory recovery guidance and a one-character
+continuation already require 1,759 JSON bytes. Keep the guidance and original
+failure; the separate oversized-reader case still requires refusal at 1,600
+bytes without changing the caller's limit. This changes only the positive test
+fixture, not production page budgets, UTF-8/digest checks or recovery authority.
+
+capture 游标成功用例使用 2,048 字节页预算。同一 137 字节路径下，main 与 C1 的
+必需恢复说明和一个字符的续页已需 1,759 JSON 字节，原 1,600 字节成功用例均失败。
+保留说明、原失败及超长 reader 在原 1,600 字节下拒绝且不修改调用方预算的负例；
+仅调整成功场景 fixture，不改变生产预算、UTF-8／digest 校验或恢复权限。
+
 Native progressive-context qualification found an existing default-output
 budget failure: immutable base `fb331f45c` and candidate `edbd56b14` both emit
 25,836 JSON characters for `quota_should_run/multi_agent` with the unchanged

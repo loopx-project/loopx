@@ -81,7 +81,6 @@ def test_reader_rejects_budget_too_small_for_reader_program_metadata(
     raw = (json.dumps({"requirements": body}, ensure_ascii=False) + "\n").encode()
     capture.write_bytes(raw)
     digest = hashlib.sha256(raw).hexdigest()
-    # 1600 bytes can carry a small valid page, depending on command/path length.
     # This budget fits a rejection but not mandatory first-page metadata.
     limit = 512
     response = subprocess.run(
@@ -183,13 +182,15 @@ def test_bounded_continuation_rechecks_original_capture_and_utf8_cursor(tmp_path
     raw = json.dumps({"requirements": "🙂" * 900}, ensure_ascii=False).encode()
     capture.write_bytes(raw)
     args = argparse.Namespace(capture_file=str(capture), capture_sha256=hashlib.sha256(raw).hexdigest(),
-        offset=0, page_bytes=8192, max_page_output_bytes=1600, format="json")
-    # This fixture exercises byte cursors with its original small output cap;
-    # installation-path length is a separate metadata-budget input below.
+        offset=0, page_bytes=8192, max_page_output_bytes=2048, format="json")
+    # Mandatory first-page recovery guidance plus the digest-bound continuation
+    # exceeds the historical 1600-byte fixture cap even with a short command.
+    # Keep a small positive cursor case; the separate oversized-reader case
+    # retains 1600-byte refusal without silently raising the caller's budget.
     with loopx_cli_route("fixture-loopx"):
         page = read_context_capture(args)
         assert page["ok"] and not page["eof"]
-        assert len(json.dumps(page, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 1600
+        assert len(json.dumps(page, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 2048
         args.offset = raw.index("🙂".encode()) + 1
         assert "UTF-8 boundary" in read_context_capture(args)["reason"]
         args.offset = page["next_offset"]

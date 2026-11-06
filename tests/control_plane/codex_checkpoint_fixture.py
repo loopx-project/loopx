@@ -56,7 +56,9 @@ def delivered_context(request, digest):
                 delivered[offset] = value
     if not delivered:
         return ""
-    assert set(delivered) == set(range(len(delivered)))
+    assert set(delivered) == set(range(len(delivered))), (
+        f"Non-contiguous native context: received {len(delivered)} bytes; "
+        f"first offset {min(delivered, default=None)}, last offset {max(delivered, default=None)}")
     raw = bytes(delivered[i] for i in range(len(delivered)))
     assert hashlib.sha256(raw).hexdigest() == digest
     return raw.decode().rstrip("\n")

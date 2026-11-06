@@ -13,6 +13,7 @@ import re
 import shlex
 import subprocess
 import sys
+import traceback
 
 import pytest
 
@@ -477,6 +478,17 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
         if host == "code_mode":
             pragma = ('// @exec: {"max_output_tokens":24000}\n' if automatic_output_budget else
                 '// @exec: {"max_output_tokens":12000}\n' if native_pragma else "")
+            if bounded_pages and native_read_batch > 1:
+                # A smaller output budget can shorten any page. Follow each
+                # returned cursor inside the same bounded batch rather than
+                # leaving gaps between precomputed offsets.
+                options = {"max_output_tokens": tool_output_tokens(cmd, 11000 if reader_output_bytes else 2000)}
+                code = ("let command=" + json.dumps(cmd) + ";for(let i=0;i<" + str(native_read_batch) + ";i++){"
+                    "const r=await tools.exec_command({..." + json.dumps(options) + ",cmd:command});"
+                    "text(r.exit_code===0?r.output:r);if(r.exit_code!==0)break;"
+                    "const page=JSON.parse(r.output);if(page.eof!==false)break;command=page.next_command;}")
+                return {"type": "custom_tool_call", "id": f"ctc_{number}", "call_id": f"call_{number}",
+                    "name": "exec", "input": pragma + code}
             # Exercise the shipped default page size and bounded batching for
             # both output forms. One model round per page can exhaust the
             # unchanged native turn deadline before same-capture recovery ends.
@@ -503,10 +515,10 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
     def observed_response(request, number, message):
         try:
             return response(request, number, message)
-        except Exception as error:
+        except Exception:
             # End the native fixture and report the original assertion,
             # rather than making Codex retry a broken HTTP connection.
-            errors.append(error)
+            errors.append(traceback.format_exc())
             return message
 
     with local_inference_provider(observed_response, usage) as (url, calls, observed):
@@ -591,7 +603,7 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
                     "components": [{"id": "task", "source_path": str(state)}], "point_metadata": {}}))
                 env["LOOPX_CHECKPOINT_REQUEST"] = str(declaration)
             result = run_once(env)
-            assert not errors, errors
+            assert not errors, "\n".join(errors)
             assert result["ok"] and result["host_invoked"], result
             assert result["context_transport"] == {"available": True}
             assert result["session"]["session_id"]
@@ -666,7 +678,7 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
             if recovery_resume:
                 assert _app_server(binary, env, workspace, home, True, sandbox=sandbox,
                                    resume=session_id, turn_timeout_sec=60) == session_id
-    assert not errors, errors
+    assert not errors, "\n".join(errors)
 
     assert stages["phase"] == "done"
     assert len(snapshots) == 2  # compaction/readback never invokes a third guard
@@ -808,7 +820,7 @@ def test_native_known_history_budget_keeps_larger_batches_and_recovery(tmp_path,
     test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch,
         "code_mode", surface, False, True, True, "missing", shared_root=True,
         native_pragma=True, native_read_batch=8, native_history_tokens=10000,
-        reader_output_bytes=4000)
+        reader_output_bytes=4000, bounded_pages=True)
 
 
 @pytest.mark.parametrize("surface", ["quota_packet", "turn_envelope"])

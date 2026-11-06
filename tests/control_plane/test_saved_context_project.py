@@ -755,8 +755,8 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                         argv[index] = str(damaged)
                         queue.insert(0, shlex.join(argv))
                         rejected_read = True
-                if benchmark and progressive and name in ("cold", "warm"):
-                    queue.clear()  # The first tool result already contains the requested facts.
+                # The initial explicit selection contains only Goal and receipt.
+                # Read the offered choices and selection command before choosing.
                 phase = name + "_read"
                 if not queue:
                     return response(request, number, message)
