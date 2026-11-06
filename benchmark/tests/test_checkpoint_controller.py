@@ -283,7 +283,7 @@ def host_phase_command(tmp_path, monkeypatch):
     # unrelated subscription-account preflight; native readiness has its own
     # installed-container qualification.
     worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh",
-        agent_api_base_url="http://127.0.0.1:1/v1"),
+        agent_api_base_url="http://127.0.0.1:1/v1", agent_api_key="synthetic-local-only"),
         profile="heartbeat-resume", cwd="/task", timeout_seconds=43200, task_entry="seeded-todo")
     worker.install_stop_hook(None, None, logs, None)
     worker.prepared = True
