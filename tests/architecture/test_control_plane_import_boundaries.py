@@ -324,6 +324,31 @@ def test_read_adapters_do_not_load_writeback_facades_for_leaf_helpers() -> None:
         assert completed.returncode == 0, completed.stderr
 
 
+def test_turn_run_once_defers_dsh_builders_and_preserves_exports() -> None:
+    completed = subprocess.run(
+        [sys.executable, "-c", """
+import sys
+import loopx.cli_commands.turn_run_once as command
+assert 'loopx.cli_commands.turn_dsh_host' not in sys.modules
+assert 'loopx.dsh_goal_mode.turn_host_adapter' not in sys.modules
+names = {'build_dsh_host_runner', 'build_dsh_operation_host_runner'}
+assert names <= set(dir(command))
+assert not hasattr(command, 'unknown_host_builder')
+from loopx.cli_commands.turn_run_once import build_dsh_host_runner, build_dsh_operation_host_runner
+from loopx.cli_commands import turn_dsh_host
+assert build_dsh_host_runner is turn_dsh_host.build_dsh_host_runner
+assert build_dsh_operation_host_runner is turn_dsh_host.build_dsh_operation_host_runner
+exports = {}
+exec('from loopx.cli_commands.turn_run_once import *', exports)
+assert exports['build_dsh_host_runner'] is build_dsh_host_runner
+assert exports['build_dsh_operation_host_runner'] is build_dsh_operation_host_runner
+assert exports['execute_turn_run_once'] is command.execute_turn_run_once
+"""],
+        cwd=REPOSITORY_ROOT, capture_output=True, check=False, text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_settlement_plan_import_does_not_load_native_capture_io() -> None:
     # A command template needs the native output profile, not capture binding
     # or the complete quota/Goal routing graph. Keep the typed kernel usable
