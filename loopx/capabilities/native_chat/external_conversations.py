@@ -141,14 +141,16 @@ class ChatExternalConversations:
         preparation = None
         later_equivalent = None
         image_failure = turn.get("error_code") == "runtime_error" and bool(row.get("attachments"))
-        if turn.get("error_code") == "manager_authorization_unavailable" or image_failure:
+        runtime_failure = turn.get("error_code") in {"model_auth_unavailable", "resume_failed"}
+        if turn.get("error_code") == "manager_authorization_unavailable" or image_failure or runtime_failure:
             # Collect canonical facts only. The typed planner owns the exact
             # pre-dispatch sequence, retry budget and authority decision.
-            preparation = {"kind": ("core_attachment_preparation_failure" if image_failure
+            preparation = {"kind": ("core_runtime_preparation_failure" if runtime_failure else
+                                    "core_attachment_preparation_failure" if image_failure
                                     else "core_context_preparation_failure"), "session_id": session["session_id"],
                 "turn_id": turn["turn_id"], "events": [
                     {"event_id": item["event_id"], "kind": item["kind"],
-                     **{key: item.get("payload", {})[key] for key in ("phase", "schema_version", "error_code")
+                     **{key: item.get("payload", {})[key] for key in ("phase", "schema_version", "error_code", "delivery_mode", "message")
                         if key in item.get("payload", {})}} for item in events]}
             created = datetime.fromisoformat(turn["created_at"])
             later_equivalent = any(item.get("role") == "user" and item.get("turn_id") != turn["turn_id"]
@@ -167,7 +169,8 @@ class ChatExternalConversations:
                     "failed": _preparation_image_identity(turn.get("attachments")),
                     "admitted": _preparation_image_identity((admitted or {}).get("attachments"))},
                     "native_result_present": bool(store.native_result(session["session_id"], turn["turn_id"]))}
-                   if image_failure else {}),
+                    if image_failure else {"native_result_present": bool(store.native_result(session["session_id"], turn["turn_id"]))}
+                    if runtime_failure else {}),
                 "observed_at": datetime.now(timezone.utc).isoformat(),
                 "admitted_turn": ({key: value for key, value in admitted.items() if key != "attachments"}
                                   if image_failure and admitted is not None else admitted),
@@ -449,7 +452,8 @@ class ChatExternalConversations:
             facts = proof.pop("retained_result", None) if proof is not None and metadata_review else None
             selected = self.bindings.resolve(binding_id=row["binding_id"], **row["source"], include_observation=True)
             source = source_observation(selected)
-            scope_available = (self._preparation_scope_available(session)
+            scope_available = (self._preparation_scope_available(session,
+                runtime_preparation=turn.get("error_code") in {"model_auth_unavailable", "resume_failed"})
                 if preparation_retry and source is not None and not plan.get("admitted_turn_id") else False)
             # Identity and original-message reads are fallible provider IO too.
             # Never hold up newer source input while they wait. If another
@@ -542,13 +546,26 @@ class ChatExternalConversations:
                 work_dir=context["project"], objective=context["objective"])
             return row
 
-    def _preparation_scope_available(self, session: dict[str, Any]) -> bool:
+    def _preparation_scope_available(self, session: dict[str, Any], *, runtime_preparation: bool = False) -> bool:
         # A local queue hint does not perform this fallible authority read.
         # Fresh admission must establish the current manager scope before
         # spending a preparation attempt; dispatch checks the scope again.
         from ...chat_manager_context import manager_authorization_scope_id_for_registry
 
         try:
+            if runtime_preparation:
+                # Preparation never starts a model request. Check the same
+                # optional transport owner before reserving a bounded retry.
+                from .codex_auth import native_api_transport
+                native_api_transport(self.controller.coordination_runtime_root,
+                    checked_session_home(self.controller.codex_home, session),
+                    consumer="worker" if session.get("project_context") is not None else "steward",
+                    model=session.get("requested_agent_model_id") or session.get("agent_model_id"))
+            if session.get("project_context") is not None:
+                # Resolve the existing project grant again; a project assistant
+                # has no manager portfolio scope to borrow.
+                self.controller.project_contexts.session_context(session)
+                return True
             scope = (self.controller.manager_scope_resolver(session)
                 if self.controller.manager_scope_resolver is not None else self.bindings.steward_scope(session))
             return bool(isinstance(scope, list) and self.controller.registry_path is not None
