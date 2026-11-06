@@ -207,11 +207,18 @@ def native_child_process(command, *, env, stdout, stderr, session_wake, receipt,
         guard = ProviderRequestAdmission(env, session_wake, receipt, wake,
             timeout=timeout, original_quota=original_quota)
         scope = guard.serve(command)
+    observation = guard
+    if env.get("LOOPX_HOST_ATTEMPT_ID") and session_wake is not None:
+        from loopx.capabilities.benchmark_toolkit.native_codex_process import NativeCodexProcessObservation
+        from .interruption_recovery import ProcessObservers
+
+        native_observation = NativeCodexProcessObservation(lambda value: receipt.update(native_process=value))
+        observation = ProcessObservers(native_observation, guard)
     with scope as routed:
         with child_process(routed, env=env, stdout=stdout, stderr=stderr,
                 goal_admission=session_wake.admission if session_wake is not None else None,
                 check_current_launch=heartbeat_launch_check(env, session_wake, original_quota=original_quota),
-                **({"process_observation": guard} if guard is not None else {})) as process:
+                **({"process_observation": observation} if observation is not None else {})) as process:
             yield process
     if guard is not None and guard.refusal_code is not None:
         from loopx.control_plane.goals.first_party_host_admission import FirstPartyHostRuntimeRejected
@@ -548,6 +555,11 @@ def run_once(env: dict[str, str]) -> dict:
         "ok": False,
         "timed_out": False,
     }
+    if env.get("LOOPX_HOST_ATTEMPT_ID"):
+        # The scheduler supplies the transport identity, never model prose.
+        receipt.update(host_attempt_id=env["LOOPX_HOST_ATTEMPT_ID"],
+            goal_id=env.get("LOOPX_GOAL_ID"), agent_id=env.get("LOOPX_AGENT_ID"),
+            phase_deadline_epoch=env.get("LOOPX_PHASE_DEADLINE_EPOCH"))
     session_wake = None
     phase_work_deadline = None
     checkpoint_context = ExitStack()

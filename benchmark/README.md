@@ -1377,3 +1377,63 @@ This used real Codex processes and native HTTP with deterministic local inferenc
 and synthetic grading. It does **not** qualify scientific research utility,
 matched strategy results, or the frontend restore journey. Actual task/profile
 admission and measured continuation outcomes remain required.
+
+### Continue an interrupted Host in its retained filesystem
+
+The explicit `benchmark.runtime.scheduler` budget-continuation entrypoint can
+settle a returned, budget-interrupted native Host before the next normal wake.
+It retains the original scheduler attempt, wake receipt, Goal, Todos and native
+conversation. A new append-only phase records the exact source and one finite
+deadline; retrying that phase cannot refill time. The next wake still performs
+ordinary quota, Stop, current-profile and session checks. No tool is replayed,
+work marked complete, or replan obligation discarded by this settlement.
+
+New scheduler-owned attempts carry an attempt identity and passive process
+cleanup observations. Recovery requires one matching returned budget receipt,
+a terminated original process group, the unchanged session binding, and stable
+native history ending in an interrupted Turn within that process window.
+Unknown failures, live processes, pending native effects, ambiguous receipts,
+changed profiles and stopped Goals remain held. Ordinary scheduler invocation
+does not opt into continuation. Completed-checkpoint admission stays unchanged.
+
+An older worker without the process observation can instead retain its exact
+stopped Docker filesystem. Prepare evidence through the existing Docker archive
+provider; do not substitute an older sealed checkpoint or copy files over the
+current workspace. The declaration names the original `goal_id`, `agent_id`,
+`workspace`, `runtime_root`, `native_home`, `registry`, `scheduler_state`,
+`wake_log_dir`, `phase_clock` and `wake_turn_id` (absolute guest paths for paths).
+For example:
+
+```sh
+python -m benchmark.edgebench.stopped_recovery \
+  --source-container FULL_CONTAINER_ID \
+  --declaration /private/recovery/source.json \
+  --output /private/recovery/source-proof.json --install
+```
+
+The command refuses a running container, non-inert restart command or external
+mounts. It inventories the current workspace, runtime, registry, original wake,
+native history and SQLite WAL/journal companions, then verifies the container
+remained stopped. `--install` places and reads back only a content-addressed
+inert proof in that same container's control directory; omitting it is read-only.
+Neither form starts the container, restores scoring authority or calls a model.
+Keep exclusive ownership of the source during preparation and continuation.
+
+After independently restoring the original native evaluator's history,
+opportunities and actual cooldown, restart only the same inert container and
+pass its returned `installed_proof_path` as `LOOPX_INTERRUPTED_SOURCE` to the
+explicit scheduler continuation. Preserve all original guest paths, native
+configuration and session. Hot-upgraded LoopX source belongs outside inventoried
+directories. Supply the separately admitted remaining allowance through the
+existing `LOOPX_PHASE_DEADLINE_EPOCH`; leave the original phase-clock file intact
+for source verification. Any changed participant, including a missing WAL,
+refuses settlement. A held reason is printed and the original phase remains
+selected; inspect the original evidence rather than delete it or select fresh.
+
+This provider path qualifies transport recovery, not a new sealed research point
+or cross-container restore. It never grants evaluator registration, budget,
+execution authorization or scientific comparability. Keep the prior failed
+segment and new segment separately attributable, and verify actual model activity
+and native feedback after dispatch. Disposable tests exercise real Docker archive
+and proof installation; SQLite/process tests exercise interrupted work followed
+by the same session's next Turn without paid model calls.

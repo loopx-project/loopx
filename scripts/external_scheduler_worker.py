@@ -30,6 +30,7 @@ import shlex
 import signal
 import sys
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -921,12 +922,15 @@ def _run_worker_locked(
                         # state write or the Host invocation can be interrupted.
                         _save_host_pending(state_path, True)
                         state["host_attempt"] = {"scope": scope, "status": "started",
+                            "attempt_id": uuid.uuid4().hex,
                             "attempt": prior.get("attempt", 0) + 1,
-                            "session_id": prior.get("session_id"),
+                            "session_id": prior.get("session_id") or state.get("recovered_session_id"),
                             **({"replan_obligation_id": attempt["obligation_id"]}
                                if attempt is not None else {})}
                         save({})
-                        environment = {**os.environ, "LOOPX_HOST_RETRY_SESSION_ID": prior.get("session_id") or ""}
+                        environment = {**os.environ,
+                            "LOOPX_HOST_ATTEMPT_ID": state["host_attempt"]["attempt_id"],
+                            "LOOPX_HOST_RETRY_SESSION_ID": state["host_attempt"]["session_id"] or ""}
                     wake_result = _run_wake(
                         args.wake_cmd,
                         timeout_seconds=getattr(args, "wake_timeout_seconds", None),
