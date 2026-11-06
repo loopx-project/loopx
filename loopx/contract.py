@@ -367,7 +367,9 @@ def _git_query(*arguments: str) -> _GitAnswer | None:
     """One bounded local Git read, or None when it cannot answer in budget.
 
     Git is started in a session of its own so an exhausted budget retires the
-    helpers that read would have started along with it.
+    helpers that read would have started along with it. That session also keeps
+    a terminal Ctrl-C away from Git, so an interrupted wait retires the same
+    helpers before the cancellation keeps travelling.
     """
 
     argv = ["git", *arguments]
@@ -388,6 +390,12 @@ def _git_query(*arguments: str) -> _GitAnswer | None:
     except subprocess.TimeoutExpired:
         _retire_owned_probe(process)
         return None
+    except BaseException:
+        # The operator cancelled the scan. An exhausted budget keeps answering
+        # "unavailable", while Ctrl-C retires this read's helpers and stays the
+        # cancellation the caller raised.
+        _retire_owned_probe(process)
+        raise
     return _GitAnswer(returncode=process.returncode, stdout=stdout)
 
 
