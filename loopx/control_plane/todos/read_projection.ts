@@ -103,6 +103,73 @@ function handoffGates(items: JsonObject[], evaluations: JsonObject[]): JsonObjec
   }).sort((a, b) => Number(a.index || 999999) - Number(b.index || 999999) || authorityUnicodeCompare(text(a.todo_id), text(b.todo_id)));
 }
 
+const CAPABILITY_ACTION_ITEM_LIMIT = 3;
+const CAPABILITY_ACTION_BINDING = /^[a-z][a-z0-9_.-]{0,31}:[a-z][a-z0-9_.:-]{2,95}$/u;
+const CAPABILITY_ACTION_KIND = /^[a-z][a-z0-9_-]{0,63}$/;
+
+/** Capability-bound User actions grouped before the generic Todo display cap. */
+function projectCapabilityActions(
+  items: readonly JsonObject[], openIndices: readonly number[], compacts: readonly JsonObject[],
+): JsonObject {
+  const groups = new Map<string, number[]>();
+  for (const index of openIndices) {
+    const item = items[index]!;
+    const status = stripPythonWhitespace(text(item.status || (item.done === true ? "done" : "open"))).toLowerCase();
+    if (item.done === true || item.archive_state === "archive" || id(item.superseded_by) !== null
+        || !["open", "blocked"].includes(status)) continue;
+    if (taskClass(item) !== "user_action") continue;
+    const actionKind = stripPythonWhitespace(text(item.action_kind)).toLowerCase();
+    const binding = stripPythonWhitespace(text(item.capability_binding_ref)).toLowerCase();
+    if (!CAPABILITY_ACTION_KIND.test(actionKind) || !CAPABILITY_ACTION_BINDING.test(binding)) continue;
+    const group = groups.get(actionKind) ?? [];
+    group.push(index);
+    groups.set(actionKind, group);
+  }
+  const byRecency = (left: number, right: number) => {
+    const l = compacts[left]!, r = compacts[right]!;
+    return authorityUnicodeCompare(text(r.updated_at || r.created_at), text(l.updated_at || l.created_at)) ||
+      authorityUnicodeCompare(text(l.todo_id), text(r.todo_id));
+  };
+  const projectedGroups = [...groups.entries()].map(([actionKind, indices]) => {
+    const ordered = [...indices].sort(byRecency);
+    return {
+      action_kind: actionKind,
+      count: ordered.length,
+      latest_at: ordered.length ? (compacts[ordered[0]!]!.updated_at ?? compacts[ordered[0]!]!.created_at ?? null) : null,
+      items: ordered.slice(0, CAPABILITY_ACTION_ITEM_LIMIT).flatMap(index => {
+        const item = items[index]!;
+        const summary = compacts[index]!;
+        const todoId = id(item.todo_id);
+        const title = compactTodoReadText(text(item.title || item.text), 200);
+        if (!todoId || !title) return [];
+        return [withoutNull({
+          index: item.index ?? null,
+          done: false,
+          text: title,
+          todo_id: todoId,
+          role: "user",
+          goal_id: item.goal_id ?? null,
+          status: text(item.status) || "open",
+          task_class: "user_action",
+          action_kind: actionKind,
+          capability_binding_ref: text(item.capability_binding_ref).toLowerCase(),
+          created_by: summary.created_by ?? null,
+          bound_agent: summary.bound_agent ?? null,
+          created_at: summary.created_at ?? null,
+          updated_at: summary.updated_at ?? null,
+        })];
+      }),
+    };
+  }).sort((left, right) =>
+    authorityUnicodeCompare(text(right.latest_at), text(left.latest_at)) ||
+    authorityUnicodeCompare(left.action_kind, right.action_kind));
+  return {
+    schema_version: "todo_capability_actions_v0",
+    total_count: projectedGroups.reduce((sum, group) => sum + group.count, 0),
+    groups: projectedGroups,
+  };
+}
+
 export async function projectTodoReadGroup(input: JsonObject): Promise<JsonObject> {
   if (!Array.isArray(input.items) || !Array.isArray(input.lineage)) throw new EffectRuntimeRequestError("Todo read requires complete source arrays");
   const items = input.items.map(value => ({...requireJsonObject(value, "Todo read item")}));
@@ -180,6 +247,9 @@ export async function projectTodoReadGroup(input: JsonObject): Promise<JsonObjec
       if (lane.format === "gap") Object.assign(row, {succession_tracked: true, recommended_action: object(summary.todo_succession_warning).recommended_action});
       return row;
     });
+  }
+  if (input.role === "user") {
+    summary.capability_actions = projectCapabilityActions(items, projected.source_indices, compacts);
   }
   if (summary.todo_succession_warning) object(summary.todo_succession_warning).items = summary.completed_without_successor_items!;
   const chosen = projected.source_indices.map(index => items[index]!);

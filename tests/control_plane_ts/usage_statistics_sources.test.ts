@@ -21,7 +21,7 @@ const event = (type: string, time: number, fields = {}) => JSON.stringify({ type
 
 test("cycle observations survive a short local statistics lock without inventing another cycle", async t => {
   const path = join(await fixture(t), "usage.json");
-  const ctx = { env: { LOOPX_USAGE_PING_ENDPOINT: "http://127.0.0.1:1/v1/ping" }, version: "1.4.2", python: "3.11", channel: "source", now: new Date(at + 2000) };
+  const ctx = { env: { LOOPX_USAGE_PING: "1", LOOPX_USAGE_PING_ENDPOINT: "http://127.0.0.1:1/v1/ping" }, version: "1.4.2", python: "3.11", channel: "source", now: new Date(at + 2000) };
   await configure(path, ctx, "enable");
   const generation = JSON.parse(await readFile(path, "utf8")).generation;
   for (const input of [cycle("start", at), cycle("spend", at + 1000)]) {
@@ -44,7 +44,7 @@ test("cycle observations survive a short local statistics lock without inventing
 
 test("cycle observations retain a bounded contention failure and recover only after release", { timeout: 10000 }, async t => {
   const path = join(await fixture(t), "usage.json");
-  const ctx = { env: { LOOPX_USAGE_PING_ENDPOINT: "http://127.0.0.1:1/v1/ping" }, version: "1.4.2", python: "3.11", channel: "source", now: new Date(at) };
+  const ctx = { env: { LOOPX_USAGE_PING: "1", LOOPX_USAGE_PING_ENDPOINT: "http://127.0.0.1:1/v1/ping" }, version: "1.4.2", python: "3.11", channel: "source", now: new Date(at) };
   await configure(path, ctx, "enable");
   const generation = JSON.parse(await readFile(path, "utf8")).generation;
   const lock = await acquireFileMutationLock(path);
@@ -64,7 +64,7 @@ test("cycle observations retain a bounded contention failure and recover only af
 test("queued cycle observations recheck withdrawal and consent generation under the lock", async t => {
   for (const revoked of [{ consent: "disabled" }, { generation: randomUUID() }]) {
     const path = join(await fixture(t), "usage.json");
-    const ctx = { env: { LOOPX_USAGE_PING_ENDPOINT: "http://127.0.0.1:1/v1/ping" }, version: "1.4.2", python: "3.11", channel: "source", now: new Date(at) };
+    const ctx = { env: { LOOPX_USAGE_PING: "1", LOOPX_USAGE_PING_ENDPOINT: "http://127.0.0.1:1/v1/ping" }, version: "1.4.2", python: "3.11", channel: "source", now: new Date(at) };
     await configure(path, ctx, "enable");
     const state = JSON.parse(await readFile(path, "utf8"));
     const lock = await acquireFileMutationLock(path);
@@ -187,7 +187,7 @@ test("three clocks remain separate and same-source overlaps are deduplicated", a
 
 test("opt-out prevents opening bound transcript files; disable erases cycle cursors", async t => {
   const path=join(await fixture(t),"usage.json");
-  const ctx={env:{LOOPX_USAGE_PING_ENDPOINT:"http://127.0.0.1:1/v1/ping"},version:"1.0.0",python:"3.13",channel:"source",now:new Date(at)};
+  const ctx={env:{LOOPX_USAGE_PING:"1",LOOPX_USAGE_PING_ENDPOINT:"http://127.0.0.1:1/v1/ping"},version:"1.0.0",python:"3.13",channel:"source",now:new Date(at)};
   await configure(path,ctx,"enable"); const generation=JSON.parse(await readFile(path,"utf8")).generation;
   const input=cycle("start",at,{codex:{path:"/nonexistent/private.jsonl",id:"thread"}});
   await observe(path,{...ctx,env:{...ctx.env,DO_NOT_TRACK:"1"}},generation,null,async()=>{throw new Error("must not send");},undefined,input);
@@ -269,7 +269,7 @@ test("unbound sequential cycles restart but exact replay keeps its original Host
 
 test("scope expansion renews disclosure and fences old observations without undoing disable", async t => {
   const path=join(await fixture(t),"usage.json");
-  const ctx={env:{LOOPX_USAGE_PING_ENDPOINT:"http://127.0.0.1:1/v1/ping"},version:"1.0.0",python:"3.13",channel:"source",now:new Date(at)};
+  const ctx={env:{LOOPX_USAGE_PING:"1",LOOPX_USAGE_PING_ENDPOINT:"http://127.0.0.1:1/v1/ping"},version:"1.0.0",python:"3.13",channel:"source",now:new Date(at)};
   await configure(path,ctx,"enable");
   const prior=JSON.parse(await readFile(path,"utf8")); prior.notice.version=2;
   await writeFile(path,JSON.stringify(prior));

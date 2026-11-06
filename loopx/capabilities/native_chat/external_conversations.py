@@ -24,6 +24,7 @@ from ...control_plane.quota.automation_cadence_readback import (
 )
 from ...file_lock import exclusive_file_lock, try_exclusive_file_lock
 from .codex_context import checked_session_home
+from .file_discovery import FileChatDiscovery
 
 # Request journals are named by their 24-hex request_ref; lock metadata and
 # other siblings in this directory are not requests.
@@ -82,7 +83,7 @@ class _RecoveryDiscoveryReads:
 
     def source_controls(self) -> list[dict[str, Any]]:
         if self.controls is None:
-            self.controls = self.core.pending()
+            self.controls = self.core.source_controls()
         return self.controls
 
 
@@ -92,6 +93,7 @@ class ChatExternalConversations:
         self.bindings = controller.project_contexts.conversation_bindings
         self.bindings.controller = controller
         self.root = controller.store.root / "external-requests"
+        self._source_control_discovery = FileChatDiscovery()
         self.actions: Any | None = None
 
     def _context_recovery_plan(self, row: dict[str, Any], *,
@@ -139,15 +141,19 @@ class ChatExternalConversations:
         preparation = None
         later_equivalent = None
         image_failure = turn.get("error_code") == "runtime_error" and bool(row.get("attachments"))
-        if turn.get("error_code") == "manager_authorization_unavailable" or image_failure:
+        runtime_failure = turn.get("error_code") in {"model_auth_unavailable", "resume_failed"}
+        unfinished = turn.get("status") == "completed" and bool((turn.get("response") or {}).get("unfinished_work"))
+        if turn.get("error_code") == "manager_authorization_unavailable" or image_failure or runtime_failure:
             # Collect canonical facts only. The typed planner owns the exact
             # pre-dispatch sequence, retry budget and authority decision.
-            preparation = {"kind": ("core_attachment_preparation_failure" if image_failure
+            preparation = {"kind": ("core_runtime_preparation_failure" if runtime_failure else
+                                    "core_attachment_preparation_failure" if image_failure
                                     else "core_context_preparation_failure"), "session_id": session["session_id"],
                 "turn_id": turn["turn_id"], "events": [
                     {"event_id": item["event_id"], "kind": item["kind"],
-                     **{key: item.get("payload", {})[key] for key in ("phase", "schema_version", "error_code")
+                     **{key: item.get("payload", {})[key] for key in ("phase", "schema_version", "error_code", "delivery_mode", "message")
                         if key in item.get("payload", {})}} for item in events]}
+        if preparation is not None or unfinished:
             created = datetime.fromisoformat(turn["created_at"])
             later_equivalent = any(item.get("role") == "user" and item.get("turn_id") != turn["turn_id"]
                 and item.get("text") == row.get("message") and item.get("origin") in {None, "lark", "web"}
@@ -165,7 +171,8 @@ class ChatExternalConversations:
                     "failed": _preparation_image_identity(turn.get("attachments")),
                     "admitted": _preparation_image_identity((admitted or {}).get("attachments"))},
                     "native_result_present": bool(store.native_result(session["session_id"], turn["turn_id"]))}
-                   if image_failure else {}),
+                    if image_failure else {"native_result_present": bool(store.native_result(session["session_id"], turn["turn_id"]))}
+                    if runtime_failure else {}),
                 "observed_at": datetime.now(timezone.utc).isoformat(),
                 "admitted_turn": ({key: value for key, value in admitted.items() if key != "attachments"}
                                   if image_failure and admitted is not None else admitted),
@@ -182,7 +189,7 @@ class ChatExternalConversations:
                     and item.get("source") == row["source"] and item.get("command") is None
                     and datetime.fromisoformat(item["created_at"]) > datetime.fromisoformat(row["created_at"])
                     for item in (discovery_reads.source_controls() if discovery_reads is not None
-                                 else self.pending())) if turn.get("error_code") == "antigravity_step_error" else None,
+                                 else self.source_controls())) if turn.get("error_code") == "antigravity_step_error" else None,
                 "native_input": anchors[0] if len(anchors) == 1 else None,
                 "response_literal_open": bool(open_literal),
                 "metadata_capacity": metadata_capacity,
@@ -212,7 +219,7 @@ class ChatExternalConversations:
                 item.get("binding_id") == row["binding_id"] and item.get("source") == row["source"]
                 and item.get("command") in {"stop", "new"}
                 and datetime.fromisoformat(item["created_at"]) >= datetime.fromisoformat(row["created_at"])
-                for item in (source_controls or self.pending)())))
+                for item in (source_controls or self.source_controls)())))
 
     def quota_backlog_observer(self) -> Callable[[Sequence[dict[str, Any]]], list[bool]]:
         """Batch the existing typed projection; share controls only within this read."""
@@ -221,7 +228,7 @@ class ChatExternalConversations:
         def read_controls() -> list[dict[str, Any]]:
             nonlocal controls
             if controls is None:
-                controls = self.pending()
+                controls = self.source_controls()
             return controls
 
         def observe(rows: Sequence[dict[str, Any]]) -> list[bool]:
@@ -425,7 +432,8 @@ class ChatExternalConversations:
                         adapter = self.controller.adapters.get(row["session_id"])
                     if isinstance(adapter, CodexAppServerAdapter):
                         proof = adapter.completed_work_observation(
-                            thread_ids=plan["native_thread_ids"], turn_id=turn["upstream_turn_id"])
+                            thread_ids=plan["native_thread_ids"], turn_id=turn["upstream_turn_id"],
+                            known_turn_ids=self._settled_native_turn_ids(session["session_id"]))
                 else:
                     proof = CodexAppServerAdapter.failed_request_observation(
                         codex_bin=self.controller.codex_bin, codex_home=Path(session["codex_home"]),
@@ -447,7 +455,8 @@ class ChatExternalConversations:
             facts = proof.pop("retained_result", None) if proof is not None and metadata_review else None
             selected = self.bindings.resolve(binding_id=row["binding_id"], **row["source"], include_observation=True)
             source = source_observation(selected)
-            scope_available = (self._preparation_scope_available(session)
+            scope_available = (self._preparation_scope_available(session,
+                runtime_preparation=turn.get("error_code") in {"model_auth_unavailable", "resume_failed"})
                 if preparation_retry and source is not None and not plan.get("admitted_turn_id") else False)
             # Identity and original-message reads are fallible provider IO too.
             # Never hold up newer source input while they wait. If another
@@ -540,13 +549,26 @@ class ChatExternalConversations:
                 work_dir=context["project"], objective=context["objective"])
             return row
 
-    def _preparation_scope_available(self, session: dict[str, Any]) -> bool:
+    def _preparation_scope_available(self, session: dict[str, Any], *, runtime_preparation: bool = False) -> bool:
         # A local queue hint does not perform this fallible authority read.
         # Fresh admission must establish the current manager scope before
         # spending a preparation attempt; dispatch checks the scope again.
         from ...chat_manager_context import manager_authorization_scope_id_for_registry
 
         try:
+            if runtime_preparation:
+                # Preparation never starts a model request. Check the same
+                # optional transport owner before reserving a bounded retry.
+                from .codex_auth import native_api_transport
+                native_api_transport(self.controller.coordination_runtime_root,
+                    checked_session_home(self.controller.codex_home, session),
+                    consumer="worker" if session.get("project_context") is not None else "steward",
+                    model=session.get("requested_agent_model_id") or session.get("agent_model_id"))
+            if session.get("project_context") is not None:
+                # Resolve the existing project grant again; a project assistant
+                # has no manager portfolio scope to borrow.
+                self.controller.project_contexts.session_context(session)
+                return True
             scope = (self.controller.manager_scope_resolver(session)
                 if self.controller.manager_scope_resolver is not None else self.bindings.steward_scope(session))
             return bool(isinstance(scope, list) and self.controller.registry_path is not None
@@ -870,6 +892,16 @@ class ChatExternalConversations:
         # append each actual receipt/failure before the original worker replies.
         return {**response, "message": "原委派格式已复核，以下为实际提交回执；接收者结论仍待回传。"}
 
+    def _settled_native_turn_ids(self, session_id: str) -> set[str]:
+        """Correlate native history through canonical Core Turns, without adopting it."""
+        store = self.controller.store
+        ids = {item["turn_id"] for item in store.messages(session_id, strict=True)
+               if item.get("role") == "user" and item.get("turn_id")}
+        turns = [store.load_turn(session_id, value) for value in ids]
+        return {item["upstream_turn_id"] for item in turns if item
+                and item.get("status") in {"completed", "failed"}
+                and isinstance(item.get("upstream_turn_id"), str) and item["upstream_turn_id"]}
+
     def prepare_continuation_input(self, session: dict[str, Any], turn: dict[str, Any],
                                    native: Any, message: str) -> str:
         """Recheck reserved unfinished work at dispatch; keep the stored input intact."""
@@ -881,7 +913,8 @@ class ChatExternalConversations:
             return message
         proof = continuation.get("native_observation") or {}
         if (self.controller.store.queued_turns(session["session_id"])
-                or completed_work_readback(native, str(proof.get("turn_id") or "")) != proof):
+                or completed_work_readback(native, str(proof.get("turn_id") or ""),
+                    known_turn_ids=self._settled_native_turn_ids(session["session_id"])) != proof):
             raise CodexChatAgentError(
                 "The original unfinished-work inventory changed or newer input is waiting; continuation stopped.",
                 error_code="host_gate", gate=None,
@@ -1247,6 +1280,25 @@ class ChatExternalConversations:
     def pending(self) -> list[dict[str, Any]]:
         return [_read_json(path) for path in sorted(self.root.glob("*.json"))
                 if _REQUEST_JOURNAL_STEM.fullmatch(path.stem)]
+
+    def source_controls(self) -> list[dict[str, Any]]:
+        """Observe exact source-control fields without reparsing unchanged bodies.
+
+        Recovery/stop rules remain with their original typed owner and callers.
+        A new, replaced or modified journal is read again; pending() and exact
+        request reads still expose the complete current canonical records.
+        """
+        paths = (path for path in sorted(self.root.glob("*.json"))
+                 if _REQUEST_JOURNAL_STEM.fullmatch(path.stem))
+
+        def project(_path, row):
+            fields = ("binding_id", "source", "command", "created_at")
+            # The tolerant reader can return {} after transient IO failure.
+            # An incomplete read must not seed an unchanged-file observation.
+            return {key: row[key] for key in fields} if all(key in row for key in fields) else None
+
+        return [row for _path, row in self._source_control_discovery.rows(self.root, paths,
+            read=_read_json, project=project)]
 
     def read_request(self, request_ref: str) -> dict[str, Any]:
         return _read_json(self.root / f"{request_ref}.json")

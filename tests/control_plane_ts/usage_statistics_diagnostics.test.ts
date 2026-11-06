@@ -38,7 +38,7 @@ test("expanded contract rejects identity, raw errors, arbitrary fields and illeg
 test("new diagnostics flush once, preserve activity date, renew v4 notice and obey opt-out", async t => {
   const root = await mkdtemp(join(tmpdir(), "loopx-diagnostics-")); t.after(() => rm(root, { recursive: true, force: true }));
   const path = join(root, "state.json");
-  const ctx = { env: { LOOPX_USAGE_PING_ENDPOINT: "http://127.0.0.1:1/v1/ping" }, version: "1.2.3", python: "3.13", channel: "source", now: new Date("2026-10-01T00:02:00Z") };
+  const ctx = { env: { LOOPX_USAGE_PING: "1", LOOPX_USAGE_PING_ENDPOINT: "http://127.0.0.1:1/v1/ping" }, version: "1.2.3", python: "3.13", channel: "source", now: new Date("2026-10-01T00:02:00Z") };
   await configure(path, ctx, "enable");
   const old = JSON.parse(await readFile(path, "utf8")); old.notice.version = 4;
   old.diagnostics = [row]; await writeFile(path, JSON.stringify(old));
@@ -61,7 +61,7 @@ test("diagnostic diversity is bounded and stale activity cannot reach a later ba
   const root = await mkdtemp(join(tmpdir(), "loopx-diagnostic-capacity-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const path = join(root, "state.json");
-  const ctx = { env: {}, version: "1.2.3", python: "3.13", channel: "source", now: new Date("2026-09-30T12:00:00Z") };
+  const ctx = { env: { LOOPX_USAGE_PING: "1", LOOPX_USAGE_PING_ENDPOINT: "http://127.0.0.1:1/v1/ping" }, version: "1.2.3", python: "3.13", channel: "source", now: new Date("2026-09-30T12:00:00Z") };
   await configure(path, ctx, "enable");
   const state = JSON.parse(await readFile(path, "utf8"));
   const sent: unknown[] = [];

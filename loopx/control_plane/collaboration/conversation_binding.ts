@@ -630,6 +630,8 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
       || saved.project_ref !== selected.project_ref || (!steward && saved.grant !== selected.grant)
       || current.channel_id !== `${steward ? "manager.external.native" : "project.external"}.${selected.binding_id}.${saved.source_ref}`) return no;
   const failed = requireJsonObject(recovery.failed_turn, "original failed Turn");
+  const runtimePreparation = planRuntimePreparationRecovery(recovery, row, current, failed, version);
+  if (runtimePreparation !== null) return runtimePreparation;
   const preparation = steward ? planPreparationRecovery(recovery, row, current, failed, version) : null;
   if (preparation !== null) return preparation;
   // Once preparation has dispatched, a different terminal category must not
@@ -1031,7 +1033,7 @@ function nativeRecoveryCapacity(recovery: JsonObject, row: JsonObject, current: 
 
 /** A completed model Turn can explicitly report unfinished business. The
  * proposal alone grants nothing: only the original worker may reserve one
- * continuation after stable latest-native/source/grant/stop checks.
+ * continuation after stable correlated-native/source/grant/stop checks.
  */
 function unfinishedProjectWork(result: JsonObject): JsonObject | null {
   const raw = result.unfinished_work;
@@ -1076,7 +1078,8 @@ function planUnfinishedWork(recovery: JsonObject, row: JsonObject, current: Json
       admitted_turn_id: sessionIdentity(admitted.turn_id, "admitted unfinished work"), native_thread_ids: [],
       not_before: previous.not_before};
   }
-  if (current.active_turn_id != null || current.status !== "ready") return no;
+  if (current.active_turn_id != null || current.status !== "ready"
+      || recovery.queued_input_present !== false || recovery.later_equivalent_input_present !== false) return no;
   const now = Date.parse(String(recovery.observed_at)), ended = Date.parse(String(completed.completed_at));
   if (!Number.isFinite(now) || !Number.isFinite(ended) || now < ended + 60_000) return no;
   const native = sessionIdentity(current.upstream_thread_id, "original native thread");
@@ -1086,6 +1089,7 @@ function planUnfinishedWork(recovery: JsonObject, row: JsonObject, current: Json
   return {...planned, recovery_eligible: recovery.source_verified === true
     && observed.thread_id === native && observed.turn_id === completed.upstream_turn_id
     && observed.completed_work === true && observed.all_effects_settled === true
+    && typeof observed.native_inventory_sha256 === "string" && BARE_SHA256_PATTERN.test(observed.native_inventory_sha256)
     && matchesWork(observed.unfinished_work)};
 }
 
@@ -1141,8 +1145,8 @@ function planExhaustedStewardAnswer(recovery: JsonObject, row: JsonObject, curre
       && Number(item.manager_context_version) <= version)
     .map(item => sessionIdentity(item.thread_id, "original native thread"))];
   const priorNative = budget.native_observation as JsonObject | undefined;
-  const nativeThreads = [...new Set([...(typeof priorNative?.thread_id === "string" && threads.includes(priorNative.thread_id)
-    ? [priorNative.thread_id] : []), ...threads])];
+  const priorThreadId = priorNative?.thread_id;
+  const nativeThreads = [...new Set([...(typeof priorThreadId === "string" && threads.includes(priorThreadId) ? [priorThreadId] : []), ...threads])];
   const candidate = {...no, recovery_candidate: true, answer_review: true, read_only_review: true,
     client_turn_id: client, session_id: current.session_id, failed_turn_id: failed.turn_id,
     native_thread_ids: nativeThreads};
@@ -1276,6 +1280,79 @@ function legacyImagePreparation(recovery: JsonObject, failed: JsonObject): boole
     && failed.error === "attachments currently require the Codex Agent endpoint"
     && recovery.attachments_present === true && recovery.native_result_present === false
     && images != null && samePreparationImages(images.request, images.failed);
+}
+
+/** The queue's durable started_at checkpoint precedes every model dispatch.
+ * Exact queued/failed records with that checkpoint still null qualify a local
+ * adapter preparation failure, including the older misleading resume error.
+ * Unknown or started Turns never enter this path. Continuations share the
+ * existing three-attempt counter across quota/routing/preparation families.
+ */
+function planRuntimePreparationRecovery(recovery: JsonObject, row: JsonObject, current: JsonObject,
+  failed: JsonObject, version: number): JsonObject | null {
+  if (!["model_auth_unavailable", "resume_failed"].includes(String(failed.error_code))) return null;
+  const no = {operation: "admit_turn", recovery_candidate: false, recovery_eligible: false};
+  const expectedError = failed.error_code === "model_auth_unavailable"
+    ? "Native account API transport is unavailable." : "The previous Agent conversation could not be restored.";
+  if (current.agent_id !== "codex" || failed.session_id !== current.session_id || failed.turn_id !== row.turn_id
+      || failed.status !== "failed" || failed.error !== expectedError || failed.started_at !== null
+      || failed.first_event_at !== null || failed.response !== null || failed.upstream_turn_id !== null
+      || failed.delta_count !== 0 || failed.message !== row.message || failed.origin !== row.origin
+      || recovery.attachments_present !== false || recovery.steering_observed !== false
+      || recovery.native_observation != null || recovery.native_result_present !== false) return no;
+  const observed = recovery.preparation_observation == null ? null
+    : requireJsonObject(recovery.preparation_observation, "runtime preparation readback");
+  if (observed?.kind !== "core_runtime_preparation_failure" || observed.session_id !== failed.session_id
+      || observed.turn_id !== failed.turn_id || !Array.isArray(observed.events) || observed.events.length !== 2) return no;
+  const events = observed.events.map(value => requireJsonObject(value, "runtime preparation event"));
+  if (!events.every(item => typeof item.event_id === "string" && item.event_id.length > 0)
+      || events[0].event_id === events[1].event_id || events[0].kind !== "turn.queued"
+      || events[0].delivery_mode !== "session_queue" || events[1].kind !== "turn.failed"
+      || events[1].error_code !== failed.error_code || events[1].message !== expectedError) return no;
+  const original = `external-${ref(row.request_ref, "original request")}`;
+  const previous = row.context_recovery == null ? null : requireJsonObject(row.context_recovery, "runtime preparation reservation");
+  if (row.context_recovery_history != null && !Array.isArray(row.context_recovery_history)) return no;
+  const history = ((row.context_recovery_history ?? []) as unknown[])
+    .map(value => requireJsonObject(value, "runtime preparation lineage"));
+  const lineage = [...history, ...(previous ? [previous] : [])];
+  const counters = ["quota", "routing", "preparation"];
+  const count = (item: JsonObject): number => {
+    const kinds = counters.filter(kind => item[`${kind}_attempt`] != null);
+    if (kinds.length !== 1 || item.version !== version
+        || ["read_only_review", "metadata_review", "work_attempt"].some(key => item[key] != null)) return 0;
+    const attempt = item[`${kinds[0]}_attempt`];
+    return Number.isSafeInteger(attempt) && Number(attempt) >= 1 && Number(attempt) <= 3
+      && item.client_turn_id === `${original}-recovery-${version}-${kinds[0]}-${attempt}` ? Number(attempt) : 0;
+  };
+  if (lineage.some(item => !count(item))) return no;
+  const reserved = previous?.failed_turn_id === failed.turn_id;
+  if (reserved && previous?.preparation_attempt == null) return no;
+  const prior = reserved ? history : lineage;
+  if (prior.some((item, i) => i > 0 && count(item) <= count(prior[i - 1]))) return no;
+  const last = prior.at(-1);
+  if (failed.client_turn_id !== (last?.client_turn_id ?? original)) return no;
+  const attempt = last ? count(last) + 1 : 1;
+  if (attempt > 3 || reserved && previous?.preparation_attempt !== attempt) return no;
+  const client = `${original}-recovery-${version}-preparation-${attempt}`;
+  if (reserved && previous?.client_turn_id !== client) return no;
+  if (reserved && recovery.admitted_turn != null) {
+    const admitted = requireJsonObject(recovery.admitted_turn, "admitted runtime preparation Turn");
+    if (admitted.client_turn_id !== client || admitted.session_id !== current.session_id
+        || admitted.turn_id === failed.turn_id || admitted.message !== row.message || admitted.origin !== row.origin
+        || !Array.isArray(admitted.attachments ?? []) || (admitted.attachments as unknown[] | undefined)?.length) return no;
+    return {...no, recovery_candidate: true, recovery_eligible: recovery.source_verified === true,
+      client_turn_id: client, admitted_turn_id: sessionIdentity(admitted.turn_id, "admitted runtime preparation Turn"),
+      preparation_attempt: attempt, session_id: current.session_id, native_thread_ids: []};
+  }
+  if (current.active_turn_id != null || current.status !== "ready" || recovery.stop_observed !== false
+      || recovery.queued_input_present !== false || recovery.later_equivalent_input_present !== false) return no;
+  const now = Date.parse(String(recovery.observed_at)), completed = Date.parse(String(failed.completed_at));
+  const notBefore = completed + 60_000 * 2 ** (attempt - 1);
+  if (!Number.isFinite(now) || !Number.isFinite(completed) || now < notBefore) return no;
+  return {...no, recovery_candidate: true, recovery_eligible: recovery.source_verified === true
+    && recovery.preparation_scope_available === true, preparation_attempt: attempt,
+    not_before: new Date(notBefore).toISOString(), preparation_observation: observed,
+    client_turn_id: client, failed_turn_id: failed.turn_id, session_id: current.session_id, native_thread_ids: []};
 }
 
 function planPreparationRecovery(recovery: JsonObject, row: JsonObject, current: JsonObject,

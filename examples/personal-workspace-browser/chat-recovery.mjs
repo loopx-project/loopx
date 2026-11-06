@@ -8,6 +8,18 @@ export const chatRecoveryScenario = {
   async run({ browser, collectCoverage, url }) {
     const context = await openWorkspacePage(browser, url, { collectCoverage });
     const { api, checkpointCoverage, page } = context;
+    // An overview intentionally renders no pending reply. Wait on the native
+    // Session/message owner before sending the next ordinary question.
+    const backgroundReply = async prefix => {
+      const deadline = Date.now() + 10000;
+      while (Date.now() < deadline) {
+        const turn = api.turnRequests.findLast(row => row.message.includes(prefix));
+        if (turn && !page.__loopxRuntime.sessions.get(turn.sessionId)?.active_turn_id
+          && page.__loopxRuntime.messages.get(turn.sessionId)?.some(row => row.turn_id === turn.turnId && row.role !== "user")) return;
+        await page.waitForTimeout(50);
+      }
+      throw new Error(`Background reply did not complete: ${prefix}`);
+    };
     const failures = [];
     const notes = [];
     const observations = [];
@@ -50,30 +62,35 @@ export const chatRecoveryScenario = {
         await new Promise((resolveWait) => setTimeout(resolveWait, 50));
       }
       if (!api.turnRequests.some((turn) => turn.message.includes("汇总所有活跃 Goal 的最新进展与阻塞"))) throw new Error("Progress report shortcut did not send a useful scoped request");
+      await backgroundReply("汇总所有活跃 Goal");
       await page.locator(".personal-message-pending").waitFor({ state: "hidden" });
-      await page.locator(".personal-manager-conversation-tray").waitFor({ state: "visible" });
+      if (await page.locator(".personal-manager-conversation-tray").count()) throw new Error("A reply covered the manager overview");
       if (!(await page.locator(".personal-home-lanes").isVisible())) throw new Error("Manager send replaced the home lane overview");
       const managerUrlBefore = page.url();
       // This is a fresh question, not an instruction to the shortcut's active Turn.
       await page.getByLabel("向 LoopX 发送消息").fill("我现在该做什么？只读回答，不要创建或修改任何状态。");
       await page.getByRole("button", { name: "发送", exact: true }).click();
+      await backgroundReply("我现在该做什么？");
+      if (page.url() !== managerUrlBefore) throw new Error("A background reply navigated away from the overview");
+      if (!(await page.locator(".personal-home-lanes").isVisible())) throw new Error("A background reply hid the overview");
+      if (await page.locator(".personal-manager-conversation-tray").count()) throw new Error("A reply reopened a floating conversation");
+      await page.screenshot({path: resolve(outputDir, "manager-overview-after-reply.png"), animations: "disabled"});
+      await managerNavigation.getByRole("button", {name: "对话", exact: true}).click();
       await page.getByText("管家已读取当前授权范围的 Goal 证据。", { exact: true }).waitFor({ state: "visible" });
       // The steward answers as the LoopX Manager. The executor that served the
       // turn belongs to the machine-capability chip, so an answer must never be
       // labelled with the CLI brand the agent picker happens to hold.
       const answerIdentity = (
-        await page.locator(".personal-manager-conversation-tray article.is-assistant strong").last().innerText()
+        await page.locator(".personal-channel-timeline article.is-assistant header strong").last().innerText()
       ).trim();
       if (answerIdentity !== "LoopX 管家") {
         throw new Error(`Manager answer was labelled as its executor instead of the steward: ${answerIdentity}`);
       }
       if (!api.turnRequests.some((turn) => turn.message.startsWith("我现在该做什么？"))) throw new Error("Manager question bypassed the global runtime");
-      await page.getByText("查看完整对话", { exact: true }).waitFor({ state: "visible" });
-      if (page.url() !== managerUrlBefore) throw new Error(`Manager send navigated away from the overview: ${managerUrlBefore} -> ${page.url()}`);
-      const managerConversationType = await page.locator(".personal-manager-conversation-tray").evaluate((tray) => {
-        const message = getComputedStyle(tray.querySelector("article p, article .personal-md"));
-        const role = getComputedStyle(tray.querySelector("article > strong"));
-        const action = getComputedStyle(tray.querySelector(".personal-manager-conversation-link"));
+      const managerConversationType = await page.locator(".personal-channel-timeline").evaluate((timeline) => {
+        const message = getComputedStyle(timeline.querySelector("article.is-assistant p, article.is-assistant .personal-md"));
+        const role = getComputedStyle(timeline.querySelector("article.is-assistant header strong"));
+        const action = getComputedStyle(document.querySelector(".personal-goal-tabs button"));
         return {
           actionFontSize: Number.parseFloat(action.fontSize),
           messageFontSize: Number.parseFloat(message.fontSize),
@@ -85,15 +102,14 @@ export const chatRecoveryScenario = {
         || managerConversationType.messageLineHeight < 20
         || managerConversationType.roleFontSize < 12
         || managerConversationType.actionFontSize < 14) {
-        throw new Error(`Manager conversation receipt typography is below the readable UI scale: ${JSON.stringify(managerConversationType)}`);
+        throw new Error(`Manager conversation typography is below the readable UI scale: ${JSON.stringify(managerConversationType)}`);
       }
-      await page.screenshot({ path: resolve(outputDir, "manager-conversation-tray-compact.png"), fullPage: false, animations: "disabled" });
+      await page.screenshot({ path: resolve(outputDir, "manager-conversation-reading-desktop.png"), fullPage: false, animations: "disabled" });
       await page.setViewportSize({ width: 390, height: 844 });
-      const compactTrayOverflow = await page.locator(".personal-manager-conversation-tray").evaluate((tray) => tray.scrollWidth - tray.clientWidth);
-      if (compactTrayOverflow > 1) throw new Error(`Manager conversation receipt has ${compactTrayOverflow}px horizontal overflow at mobile width`);
-      await page.screenshot({ path: resolve(outputDir, "manager-conversation-tray-mobile.png"), fullPage: false, animations: "disabled" });
+      const conversationOverflow = await page.locator(".personal-channel-timeline").evaluate((timeline) => timeline.scrollWidth - timeline.clientWidth);
+      if (conversationOverflow > 1) throw new Error(`Manager conversation has ${conversationOverflow}px horizontal overflow at mobile width`);
+      await page.screenshot({ path: resolve(outputDir, "manager-conversation-reading-mobile.png"), fullPage: false, animations: "disabled" });
       await page.setViewportSize({ width: 1512, height: 982 });
-      await page.getByText("查看完整对话", { exact: true }).click();
       await page.getByRole("navigation", { name: "管家视图" }).waitFor({ state: "visible" });
       if (await page.locator(".personal-home-board").isVisible()) throw new Error("Full manager Chat left the Goal overview visible behind the conversation");
       if (await page.locator(".personal-manager-conversation-tray").count()) throw new Error("Full manager Chat kept the compact home tray visible");
@@ -224,7 +240,7 @@ export const chatRecoveryScenario = {
       await page.getByRole("button", { name: "总览", exact: true }).click();
       await page.locator(".personal-home-board").waitFor({ state: "visible" });
       if (await page.locator(".personal-manager-conversation-tray").count()) {
-        throw new Error("Manager conversation receipt stayed permanently visible after returning to the overview");
+        throw new Error("Manager conversation stayed permanently visible after returning to the overview");
       }
 
       await page.locator(".personal-composer-tools > summary").click();

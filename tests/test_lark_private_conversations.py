@@ -16,6 +16,7 @@ from loopx.capabilities.native_chat.conversation_bindings import ChatConversatio
 from loopx.capabilities.native_chat.external_conversations import ChatExternalConversations
 from loopx.extensions.lark.conversation_identity import identity_ref, lark_private_source, observe_lark_conversation_identity
 from loopx.extensions.lark.private_conversations import LarkPrivateConversations
+from loopx.extensions.lark.private_delivery_discovery import PrivateDeliveryDiscovery
 from loopx.extensions.lark.goal_topic_runtime import poll_lark_goal_topic_profile_once
 
 
@@ -181,15 +182,15 @@ def test_original_worker_continues_proven_unstarted_argon_quota_on_codex(tmp_pat
             return update_session(session_id, **changes)
         monkeypatch.setattr(store, "update_session", checked_update)
         if fault in {None, "later-source-after-discovery"}:
-            pending = transport.core.pending
+            source_controls = transport.core.source_controls
             scans = []
-            def counted_pending():
+            def counted_controls():
                 scans.append(True)
-                return pending()
-            monkeypatch.setattr(transport.core, "pending", counted_pending)
+                return source_controls()
+            monkeypatch.setattr(transport.core, "source_controls", counted_controls)
             discovery = transport.core.context_recovery_observer()
             assert discovery(ref) and discovery(ref)
-            assert len(scans) == 1  # One full source inventory per discovery pass.
+            assert len(scans) == 1  # One complete source-control view per discovery pass.
         if fault in {"stop-after-discovery", "source-changed-after-discovery"}:
             assert path in transport.pending_delivery_paths()
         if fault in {"stop", "stop-after-discovery"}:
@@ -1312,7 +1313,7 @@ def test_delivered_quota_failure_stays_pending_across_restart_without_replaying(
             # The typed owner can exclude completed/non-quota work without
             # scanning unrelated events or source-control journals.
             monkeypatch.setattr(store, "events_after", lambda *_: pytest.fail("not quota backlog"))
-            monkeypatch.setattr(transport.core, "pending", lambda: pytest.fail("not quota backlog"))
+            monkeypatch.setattr(transport.core, "source_controls", lambda: pytest.fail("not quota backlog"))
         assert transport.health()[row["binding_id"]]["pending_count"] == pending
         before = ordinary[4].read_bytes(), list(provider.writes)
         restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
@@ -1703,7 +1704,9 @@ def test_health_reads_source_controls_once_and_keeps_fresh_recovery(ordinary, mo
 
 
 @pytest.mark.parametrize("fault", [None, "changed-source", "revoked", "stop", "unknown-native",
-    "background", "later-user", "reservation-crash", "post-enqueue-crash", "queued-newer", "queued-input", "private-path", "still-incomplete", "cold-native", "dead-native", "foreign-native", "failed-effect"])
+    "background", "later-user", "completed-later", "equivalent-later", "later-failed-effect",
+    "settled-command", "later-settled-command", "unsettled-command",
+    "reservation-crash", "post-enqueue-crash", "queued-newer", "queued-items", "queued-input", "private-path", "still-incomplete", "cold-native", "dead-native", "foreign-native", "failed-effect"])
 def test_original_worker_continues_explicit_unfinished_project_work_once_after_restart(ordinary, monkeypatch, fault):  # noqa: F811
     """Reply-worker restart retains native ownership; native loss stays fenced."""
     from datetime import datetime, timedelta, timezone
@@ -1745,13 +1748,15 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
             {{"turnId": active_turn, "item": {{"id": "user", "type": "userMessage"}}}},
             {{"turnId": active_turn, "item": {{"id": "effect", "type": "fileChange", "status": "completed"}}}},
             {{"turnId": active_turn, "item": {{"id": "view", "type": "imageView", "path": str(artifact)}}}},
-            {{"turnId": active_turn, "item": {{"id": "answer", "type": "agentMessage", "phase": "final_answer", "text": response}}}}]}}))
+            {{"turnId": active_turn, "item": {{"id": "answer", "type": "agentMessage", "phase": "final_answer", "text": response}}}},
+            *previous.get("items", [])]}}))
 ''' + source[end:]
     start = source.index('    elif method == "thread/turns/list":')
     end = source.index('    else:\n        result = {}', start)
     source = source[:start] + f'''    elif method in {{"thread/turns/list", "thread/items/list"}}:
         snapshot = json.load(open({str(inventory)!r}))
-        result = {{"data": snapshot["turns" if method == "thread/turns/list" else "items"]}}
+        result = {{"data": snapshot["turns"] if method == "thread/turns/list" else
+            [row for row in snapshot["items"] if row["turnId"] == request["params"]["turnId"]]}}
     elif method == "thread/backgroundTerminals/list":
         if not loaded:
             print(json.dumps({{"id": request["id"], "error": {{"code": -32600, "message": "thread not found"}}}}), flush=True)
@@ -1775,6 +1780,31 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
     original_turn_bytes = store._turn_path(original["session_id"], original["turn_id"]).read_bytes()
     session_before = store.load_session(original["session_id"])
     Path(session_before["codex_home"]).mkdir(parents=True, exist_ok=True)
+    if fault in {"completed-later", "equivalent-later", "later-failed-effect", "later-settled-command"}:
+        message = event["content"] if fault == "equivalent-later" else "Newer follow-up: a different completed request."
+        later_event = provider.event("notes-app", "later-correlated", message)
+        transport.admit("notes-app", later_event)
+        later_ref = identity_ref(binding["provider_ref"], later_event["message_id"])
+        later = transport.core.read_request(later_ref)
+        later_turn = runtime.wait_for_turn(session_id=later["session_id"], turn_id=later["turn_id"], timeout_sec=10)
+        assert later_turn["status"] == "completed"
+        transport.reconcile_request(transport.root / (later_ref + ".json"))
+        if fault in {"later-failed-effect", "later-settled-command"}:
+            snapshot = json.loads(inventory.read_text())
+            effect = next(row["item"] for row in snapshot["items"] if row["turnId"] == later_turn["upstream_turn_id"]
+                and row["item"]["type"] == "fileChange")
+            effect["status"] = "failed"
+            if fault == "later-settled-command":
+                effect.update(type="commandExecution", exitCode=1, startedAtMs=1000,
+                    completedAtMs=1001, aggregatedOutput="Process exited with code 1.")
+            inventory.write_text(json.dumps(snapshot))
+    if fault in {"settled-command", "unsettled-command"}:
+        snapshot = json.loads(inventory.read_text())
+        snapshot["items"][1]["item"].update(type="commandExecution", status="failed", exitCode=1,
+            startedAtMs=1000, completedAtMs=1001, aggregatedOutput="Process exited with code 1.")
+        if fault == "unsettled-command":
+            snapshot["items"][1]["item"]["exitCode"] = None
+        inventory.write_text(json.dumps(snapshot))
     if fault == "cold-native":
         runtime.adapters.pop(original["session_id"]).close_session()
     elif fault == "dead-native":
@@ -1807,15 +1837,15 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
     def worker():
         return LarkPrivateConversations(controller=runtime, runtime_root=store.root.parent, runner=provider, cli_bin="lark-cli")
     selected = worker()
-    if fault in {"reservation-crash", "post-enqueue-crash", "queued-newer", "queued-input"}:
+    if fault in {"reservation-crash", "post-enqueue-crash", "queued-newer", "queued-items", "queued-input"}:
         enqueue = runtime.enqueue_turn
         resume = runtime.resume_session_queue
-        if fault in {"queued-newer", "queued-input"}:
+        if fault in {"queued-newer", "queued-items", "queued-input"}:
             # Hold dispatch before enqueue, rather than relying on a slow
             # adapter startup to let the newer-input fixture win a race.
             monkeypatch.setattr(runtime, "resume_session_queue", lambda **kwargs: None)
         def crash(**kwargs):
-            if fault in {"post-enqueue-crash", "queued-newer", "queued-input"}:
+            if fault in {"post-enqueue-crash", "queued-newer", "queued-items", "queued-input"}:
                 enqueue(**kwargs)
             raise OSError("synthetic continuation admission crash")
         monkeypatch.setattr(runtime, "enqueue_turn", crash)
@@ -1826,21 +1856,25 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
             snapshot = json.loads(inventory.read_text())
             snapshot["turns"].insert(0, {"id": "newer-after-reservation", "status": "completed"})
             inventory.write_text(json.dumps(snapshot))
+        if fault == "queued-items":
+            snapshot = json.loads(inventory.read_text())
+            snapshot["items"][1]["item"]["output"] = "Changed after admission"
+            inventory.write_text(json.dumps(snapshot))
         if fault == "queued-input":
             transport.admit("notes-app", provider.event("notes-app", "newer-input", "Newer follow-up: inspect this correction first."))
-        if fault in {"queued-newer", "queued-input"}:
+        if fault in {"queued-newer", "queued-items", "queued-input"}:
             monkeypatch.setattr(runtime, "resume_session_queue", resume)
         selected = worker()
     selected.reconcile()
     continued = selected.core.read_request(ref)
-    if fault in {"changed-source", "revoked", "stop", "unknown-native", "background", "later-user", "cold-native", "dead-native", "foreign-native", "failed-effect"}:
+    if fault in {"changed-source", "revoked", "stop", "unknown-native", "background", "later-user", "cold-native", "dead-native", "foreign-native", "failed-effect", "equivalent-later", "later-failed-effect", "unsettled-command"}:
         assert continued["turn_id"] == original["turn_id"] and not continued.get("context_recovery")
-        assert artifact.read_text() == "first\n"
+        assert artifact.read_text() == ("first\nremaining\n" if fault == "equivalent-later" else "first\n")
     else:
         assert continued["turn_id"] != original["turn_id"]
         assert continued["session_id"] == original["session_id"]
         assert continued["context_recovery"]["work_attempt"] == 1
-        interrupted = fault in {"queued-newer", "queued-input"}
+        interrupted = fault in {"queued-newer", "queued-items", "queued-input"}
         assert runtime.wait_for_turn(session_id=continued["session_id"], turn_id=continued["turn_id"], timeout_sec=10)["status"] == ("failed" if interrupted else "completed")
         if fault == "queued-input":
             queued = [item for item in selected.core.pending() if item["request_ref"] != ref and item.get("command") is None]
@@ -1860,7 +1894,7 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
         assert after["project_context"] == session_before["project_context"]
         assert after["upstream_thread_id"] == session_before["upstream_thread_id"]
         starts = [json.loads(line)["params"] for line in capture.read_text().splitlines() if json.loads(line).get("method") == "turn/start"]
-        assert len(starts) == (1 if fault == "queued-newer" else 2)
+        assert len(starts) == (1 if fault in {"queued-newer", "queued-items"} else 3 if fault in {"completed-later", "later-settled-command"} else 2)
         if not interrupted:
             assert "Do only the remaining authorized work" in starts[-1]["input"][0]["text"]
         if fault == "queued-input":
@@ -4961,6 +4995,111 @@ def test_slow_app_reaction_does_not_block_current_or_later_answers(ordinary, mon
     assert all(phase.get("verified") for phase in projection["deliveries"].values())
 
 
+def test_private_discovery_skips_unchanged_bodies_but_not_new_work_or_core_checks(tmp_path, monkeypatch):
+    from loopx.chat_store import _atomic_write_json
+    from loopx.extensions.lark import private_conversations as private
+
+    clock, checks, reads = [100.0], [], []
+    eligible = {"old": False}
+    transport = LarkPrivateConversations.__new__(LarkPrivateConversations)
+    transport.root = tmp_path
+    transport._delivery_discovery = PrivateDeliveryDiscovery(tmp_path)
+    transport._context_recovery_probe_at = {}
+    transport._web_projection_paths = lambda: []
+    transport.core = SimpleNamespace(context_recovery_observer=lambda: lambda ref:
+        checks.append(ref) or eligible[ref])
+    monkeypatch.setattr(private, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    read_json = private._read_json
+
+    def observed(path):
+        reads.append(path)
+        return read_json(path)
+
+    monkeypatch.setattr("loopx.extensions.lark.private_delivery_discovery._read_json", observed)
+    old, pending, new = (tmp_path / f"{name}.json" for name in ("old", "pending", "new"))
+    _atomic_write_json(old, {"status": "delivered", "request_ref": "old", "session_id": "session",
+        "turn_id": "failed", "event": {"chat_type": "p2p", "text": "private-body-marker" * 10000},
+        "deliveries": {"terminal": {"text": "private-body-marker" * 10000}}})
+    _atomic_write_json(pending, {"status": "pending"})
+    assert transport.pending_delivery_paths() == [pending]
+    reads.clear()
+    assert transport.pending_delivery_paths() == [pending] and reads == [pending]
+    assert "private-body-marker" not in repr(transport._delivery_discovery._completed)
+    _atomic_write_json(new, {"status": "pending"})
+    assert transport.pending_delivery_paths() == [new, pending]
+    clock[0] += 61
+    eligible["old"] = True
+    assert transport.pending_delivery_paths() == [new, old, pending]
+    clock[0] += 61
+    eligible["old"] = False  # A fresh Core decision wins over unchanged provider hints.
+    assert transport.pending_delivery_paths() == [new, pending]
+    assert checks == ["old", "old", "old"]
+    old.unlink()
+    assert transport.pending_delivery_paths() == [new, pending]
+    assert old not in transport._delivery_discovery._completed
+
+
+@pytest.mark.parametrize("replace", [False, True])
+def test_private_discovery_detects_same_size_updates_with_preserved_mtime(tmp_path, monkeypatch, replace):
+    import os
+    from loopx.chat_store import _atomic_write_json
+
+    transport = LarkPrivateConversations.__new__(LarkPrivateConversations)
+    transport.root = tmp_path
+    transport._delivery_discovery = PrivateDeliveryDiscovery(tmp_path)
+    transport._context_recovery_probe_at = {}
+    transport._web_projection_paths = lambda: []
+    transport.core = SimpleNamespace(context_recovery_observer=lambda: lambda _: False)
+    path = tmp_path / "original.json"
+    _atomic_write_json(path, {"status": "delivered"})
+    assert transport.pending_delivery_paths() == []
+    before = path.stat()
+    body = path.read_bytes().replace(b'delivered', b'uncertain')
+    if replace:
+        other = tmp_path / "replacement.tmp"
+        other.write_bytes(body)
+        os.utime(other, ns=(before.st_atime_ns, before.st_mtime_ns))
+        os.replace(other, path)
+    else:
+        path.write_bytes(body)
+        os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+    assert path.stat().st_size == before.st_size and path.stat().st_mtime_ns == before.st_mtime_ns
+    assert transport.pending_delivery_paths() == [path]
+    # Unknown read failures must remain visible rather than reuse an old
+    # delivered view or turn the request into an empty/successful queue.
+    def unavailable(_):
+        raise OSError("read unavailable")
+
+    monkeypatch.setattr("loopx.extensions.lark.private_delivery_discovery._read_json", unavailable)
+    with pytest.raises(OSError, match="read unavailable"):
+        transport.pending_delivery_paths()
+
+
+def test_private_discovery_does_not_cache_a_file_replaced_during_read(tmp_path, monkeypatch):
+    from loopx.chat_store import _atomic_write_json
+    from loopx.extensions.lark import private_conversations as private
+
+    transport = LarkPrivateConversations.__new__(LarkPrivateConversations)
+    transport.root = tmp_path
+    transport._delivery_discovery = PrivateDeliveryDiscovery(tmp_path)
+    transport._context_recovery_probe_at = {}
+    transport._web_projection_paths = lambda: []
+    transport.core = SimpleNamespace(context_recovery_observer=lambda: lambda _: False)
+    path = tmp_path / "original.json"
+    _atomic_write_json(path, {"status": "delivered"})
+    read_json = private._read_json
+
+    def replaced(path):
+        row = read_json(path)
+        _atomic_write_json(path, {"status": "pending"})
+        return row
+
+    monkeypatch.setattr("loopx.extensions.lark.private_delivery_discovery._read_json", replaced)
+    assert transport.pending_delivery_paths() == []
+    monkeypatch.setattr("loopx.extensions.lark.private_delivery_discovery._read_json", read_json)
+    assert transport.pending_delivery_paths() == [path]
+
+
 @pytest.mark.parametrize("background_slots", [0, 2])
 def test_private_recovery_backlog_uses_released_capacity_before_retry_delay(tmp_path, monkeypatch, background_slots):
     from loopx.extensions.lark import goal_topic_runtime_service as worker
@@ -4978,6 +5117,7 @@ def test_private_recovery_backlog_uses_released_capacity_before_retry_delay(tmp_
     native_root.mkdir()
     transport = LarkPrivateConversations.__new__(LarkPrivateConversations)
     transport.root = tmp_path
+    transport._delivery_discovery = PrivateDeliveryDiscovery(tmp_path)
     transport._context_recovery_probe_at = {}
     transport._web_projection_paths = lambda: []
     transport.reconcile_app_feedback = lambda: 0
@@ -5057,6 +5197,7 @@ def test_current_body_uses_next_slot_before_unattempted_recovery_backlog(tmp_pat
     slots = 4 - background_slots
     transport = LarkPrivateConversations.__new__(LarkPrivateConversations)
     transport.root = tmp_path
+    transport._delivery_discovery = PrivateDeliveryDiscovery(tmp_path)
     transport._context_recovery_probe_at = {}
     transport.core = SimpleNamespace(context_recovery_observer=lambda: lambda ref: True)
     transport.reconcile_app_feedback = lambda: 0
@@ -5129,6 +5270,7 @@ def test_private_recovery_discovery_keeps_negative_and_attempt_backoff(tmp_path,
     eligible = {"candidate": True, "ineligible": False}
     transport = LarkPrivateConversations.__new__(LarkPrivateConversations)
     transport.root = tmp_path
+    transport._delivery_discovery = PrivateDeliveryDiscovery(tmp_path)
     transport._context_recovery_probe_at = {}
     transport._web_projection_paths = lambda: []
     monkeypatch.setattr(private, "time", SimpleNamespace(monotonic=lambda: clock[0]))

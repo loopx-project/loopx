@@ -68,6 +68,9 @@ export function updateNativeContextLifecycle(request: JsonObject): JsonObject {
       delete state.candidate;
       delete state.pending;
       delete state.active_call;
+      delete state.consumed_pointers;
+      delete state.confirmed_read_sections;
+      delete state.section_reads;
       return state;
     }
     invalidate();

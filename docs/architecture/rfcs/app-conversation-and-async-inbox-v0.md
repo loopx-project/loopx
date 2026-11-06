@@ -1731,6 +1731,17 @@ The original failure and its delivery remain recorded; a qualified private
 steward notice describes conditional recovery rather than promising a replay.
 Unknown failures after native dispatch remain holds.
 
+Account transport preparation failures can also qualify for an original private
+project or Codex steward request. Core must retain exactly the Session-queue and
+failed events, with null durable `started_at` and `first_event_at` checkpoints,
+no native Turn/result, response, deltas or attachments, and unchanged input/origin.
+This includes the older exact `resume_failed` diagnostic emitted before the
+queue's first durable start checkpoint. Fresh source/grant and account transport
+checks precede admission; they start no model request. Preparation continues the
+existing quota/routing/preparation counter up to three, without resetting its
+backoff or history. A later dispatched failure cannot open another business
+retry family. The original failure and its delivered notice remain unchanged.
+
 Source verification accepts both ordinary text and text-only rich posts. A post
 must retain its original provider rendering, an explicit empty attachment
 inventory and the same admitted text after intake whitespace normalization.
@@ -1818,10 +1829,22 @@ steward, group, attached-host and attachment-bearing requests remain outside it.
 The existing original-source reply worker may reserve one continuation after
 60 seconds. Core revalidates the original owner/App/source, unchanged message,
 workspace grant and stop/correction state. Native readback must independently
-show that the exact latest Turn completed, its full item inventory is stable,
-every effect item completed, no background work remains, and the same final
-answer explicitly contains that report. A later native Turn, unknown item,
-failed/declined/live effect, edited source or revoked grant remains a hold.
+show that the exact original Turn completed, its full item inventory is stable,
+every effect item is settled, no background work remains, and the same final
+answer explicitly contains that report. Historical work may continue only when
+every later native Turn correlates to a settled canonical Core Turn and its full
+item inventory is independently stable with no unknown or unfinished effects.
+The proof pins a digest of these inventories; a later equivalent source submission,
+foreign native input, unknown item, unsettled/declined/live effect, edited source or
+revoked grant remains a hold. Native loss remains a hold: a cold client cannot
+certify another process's background effects by resuming the thread.
+
+A failed native command can be settled without having succeeded: the provider
+must retain its ordinary nonzero process exit, ordered start/end timestamps and
+output. Missing exits, timeout/signal exits and failed file-change or MCP effects
+remain holds. This distinction does not certify a business outcome or authorize
+repeating the failed command; the worker still verifies existing artifacts and
+performs only the remaining work under the original settled report and grant.
 
 The original Session queue and deterministic `work-1` reservation own execution;
 restart adopts an already committed Turn instead of dispatching it again. The
@@ -1921,3 +1944,26 @@ Reservation/enqueue crashes adopt the same queued Turn. A failed, partial or
 unknown review stays pending and cannot become another review or business retry.
 Other malformed actions and completed Turns without a recovered native result
 remain explicit holds; this path is not a generic action or execution replayer.
+
+### File-backed idle recovery observations
+
+Repeated recovery checks must not reparse every historical Turn and source body
+for each old request. The File Chat provider retains only validated terminal-Turn
+identity/status and the source-control fields used by the existing stop/new and
+later-input checks. Reuse requires an unchanged device, inode, nanosecond mtime,
+ctime and size, checked before and after the original read. Changed or unreadable
+files use the original reader; nonterminal Turns are always read in full. Deleted
+entries are pruned, concurrent callers receive independent metadata, and a read
+racing a replacement cannot seed a reusable observation.
+Windows keeps the original fresh-read path because its Python stat ctime can
+represent creation time rather than a usable change stamp; see the
+[Python stat time fields](https://docs.python.org/3.12/library/os.html#os.stat_result.st_ctime_ns).
+The private-reply journal observer shares the same change-token primitive while
+retaining its own legacy-repair projection and original effect checks.
+
+These observations are neither recovery decisions nor grants. Exact requests,
+selected Turns, current bindings, native effects and typed admission remain fresh.
+Source qualification compares the same File history and complete recovery plans,
+including newly queued input, strict read failures, stop/new changes and replaced
+files with preserved mtime. Installed responsiveness, provider/model availability
+and actual original-audience replies remain separate acceptance obligations.

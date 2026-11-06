@@ -84,6 +84,37 @@ test("creation rejects terminal first-Turn readback without a Host start", () =>
     "readback_verified");
 });
 
+test("creation completion keeps the original write basis and leaves dispatched legacy Goals alone", () => {
+  const steps = {workspace_validated: {outcome: "workspace_validated", workspace_digest: "a".repeat(64)},
+    goal_bootstrapped: {outcome: "goal_bootstrapped", goal_id: "report"},
+    agent_bound: {outcome: "agent_bound", goal_id: "report", agent_id: "codex"},
+    todos_created: {outcome: "todos_created", todo_ids: ["intro"]}};
+  const proposal = {proposal_id: "creation", expected_state_fingerprint: "registry",
+    action_kind: "goal.create", permission_classification: "durable_write", status: "failed",
+    normalized_parameters: {goal_id: "report", title: "Report", agent_id: "codex",
+      completion_criteria: "Retain the appendix", initial_todos: ["Write the introduction"]}, checkpoint: {steps}};
+  const declaration = compileActionReviewPlan(proposal).creationOutcome!;
+  assert.equal(declaration.refinement.requirements[0].description, "Retain the appendix");
+  assert.deepEqual(declaration.refinement.todo_ids, ["intro"]);
+  const prepared = {...steps, goal_completion_prepared: {outcome: "goal_completion_prepared", goal_id: "report",
+    operation_id: declaration.operationId, provider_revision: "original-revision"}};
+  assert.deepEqual(compileActionReviewPlan({...proposal, checkpoint: {steps: prepared}}).creationProgress?.completionBasis,
+    {operationId: declaration.operationId, providerRevision: "original-revision"});
+  const session = {outcome: "first_session_opened", session_id: "original-session"};
+  const legacy = compileActionReviewPlan({...proposal, checkpoint: {steps: {...steps, first_session_opened: session}}});
+  assert.equal(legacy.creationOutcome, undefined);
+  assert.equal(legacy.creationProgress?.sessionId, "original-session");
+  for (const invalid of [
+    {...prepared, goal_completion_prepared: {...prepared.goal_completion_prepared, goal_id: "foreign"}},
+    {...prepared, goal_completion_prepared: {...prepared.goal_completion_prepared, operation_id: "other"}},
+    {...steps, goal_completion_recorded: {outcome: "goal_completion_recorded", goal_id: "report",
+      operation_id: declaration.operationId, provider_revision: "new"}},
+    {...prepared, first_session_opened: session},
+  ]) {
+    assert.equal(compileActionReviewPlan({...proposal, checkpoint: {steps: invalid}}).creationProgress, undefined);
+  }
+});
+
 test("canonical update recovery includes User completion without changing generic action authority", () => {
   const proposal = {proposal_id: "reviewed", expected_state_fingerprint: "review-basis",
     action_kind: "todo.update", status: "failed", normalized_parameters: {operation: "edit"},

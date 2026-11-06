@@ -1,5 +1,8 @@
 # Auto-Research Replan And Multi-Round Demo Bad Case
 
+> Historical incident: the tmux auto-research demo has been retired. Commands and
+> code references below describe the original incident, not current entrypoints.
+
 Date: 2026-07-05
 
 Audience: LoopX auto-research owners, quota/status maintainers, todo/replan

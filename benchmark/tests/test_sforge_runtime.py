@@ -130,8 +130,8 @@ def test_invalid_worker_inputs_fail_before_install(monkeypatch):
     config = SForgeConfig(agent_model="fixture-model", agent_effort="xhigh")
     with pytest.raises(ValueError, match="Unknown"):
         SForgeWorker(config, profile="unknown", cwd="/task")
-    with pytest.raises(ValueError, match="160s"):
-        SForgeWorker(config, profile="single", cwd="/task", timeout_seconds=160)
+    with pytest.raises(ValueError, match="positive"):
+        SForgeWorker(config, profile="single", cwd="/task", timeout_seconds=0)
     monkeypatch.delenv("CODEX_AUTH_JSON_PATH", raising=False)
     with pytest.raises(ValueError, match="credential"):
         SForgeWorker(config, profile="single", cwd="/task")
@@ -386,8 +386,8 @@ def test_native_goal_continue_is_a_native_goal_opt_in(tmp_path, monkeypatch, ena
 
 
 @pytest.mark.parametrize("profile,total,expected", [
-    ("native-goal", 64800, 64640), ("native-goal", 1800, 1640),
-    ("heartbeat-resume", 64800, 64640), ("heartbeat-explore", 64800, 64640),
+    ("native-goal", 64800, 64800), ("native-goal", 1800, 1800),
+    ("heartbeat-resume", 140, 140), ("heartbeat-explore", 64800, 64800),
 ])
 @pytest.mark.parametrize("turns", [None, 3])
 def test_native_goal_and_heartbeat_use_trial_budget_without_independent_wake_limit(
@@ -410,7 +410,7 @@ def test_native_goal_and_heartbeat_use_trial_budget_without_independent_wake_lim
                           replan_after_turns=turns)
     worker.install_stop_hook(None, None, tmp_path, None)
     env = worker.runtime._worker_env(cwd="/task")
-    assert float(env["LOOPX_CODEX_TURN_TIMEOUT_SEC"]) == expected
+    assert "LOOPX_CODEX_TURN_TIMEOUT_SEC" not in env
     assert worker.runtime.scheduler_timeout == total
     expected_cadence = ({"replan_after_effective_turns": turns or 6}
                         if profile.startswith("heartbeat-") else
@@ -1072,7 +1072,7 @@ def test_sforge_planning_has_no_independent_cap_or_extra_trial_budget(tmp_path, 
         profile=profile, cwd="/task", timeout_seconds=1800)
     worker.install_stop_hook(None, None, tmp_path, None)
     assert worker.runtime.scheduler_timeout == 1800
-    assert worker.turn_timeout == 1640
+    assert worker.turn_timeout == 1800
     receipt = json.loads((tmp_path / "worker-profile.json").read_text())
     assert receipt["planning_timeout_seconds"] is None
     assert receipt["timeout_seconds"] == 1800

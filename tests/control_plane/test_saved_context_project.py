@@ -13,7 +13,7 @@ from tests.control_plane.codex_checkpoint_fixture import reference_metadata_orac
 
 
 @pytest.mark.parametrize("failure", [None, "digest", "goal", "agent", "turn", "symlink", "object"])
-@pytest.mark.parametrize("setting", ["auto", "off"])
+@pytest.mark.parametrize("setting", [None, "auto", "off"])
 def test_saved_projection_checks_original_before_any_publication(tmp_path, failure, setting):
     original = {"ok": True, "goal_id": "saved-goal", "agent_identity": {"agent_id": "saved-agent"},
         "heartbeat_receipt": {"turn_instance_id": "saved-turn"}, "requirement": "保留完整要求🙂" * 100}
@@ -27,8 +27,9 @@ def test_saved_projection_checks_original_before_any_publication(tmp_path, failu
         path.rename(source)
         path.symlink_to(source)
     args = ["quota", "context-project", "--capture-file", str(path), "--capture-sha256", digest,
-        "--goal-id", "saved-goal", "--agent-id", "saved-agent", "--turn-instance-id", "saved-turn",
-        "--context-delivery", setting]
+        "--goal-id", "saved-goal", "--agent-id", "saved-agent", "--turn-instance-id", "saved-turn"]
+    if setting is not None:
+        args.extend(("--context-delivery", setting))
     for name in ("digest", "goal", "agent", "turn"):
         if failure == name:
             option = {"digest": "--capture-sha256", "goal": "--goal-id", "agent": "--agent-id", "turn": "--turn-instance-id"}[name]
@@ -529,6 +530,7 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
     from loopx.control_plane.quota.turn_envelope import prepare_context_delivery, restore_context_delivery
     from tests.control_plane.codex_checkpoint_fixture import (
         last_context_page, local_inference_provider, native_process_continuation,
+        selected_context_values,
     )
     from tests.control_plane.test_codex_context_boundary import _app_server, _configure_provider, _native_fixture, _input_text
     from tests.control_plane.test_codex_context_capture import _delivered
@@ -638,7 +640,6 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                 initial_content[name] += page["content"].encode()
                 assert len(initial_content[name]) == (page["total_bytes"] if page["eof"] else page["next_offset"])
                 if page["eof"]:
-                    from tests.control_plane.codex_checkpoint_fixture import selected_context_values
                     assert selected_context_values(initial_content[name].decode())["/goal_id"] == GOAL_ID
                     reading_initial = False
                 else:
@@ -674,7 +675,10 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                     assert "--initial-read" in argv
                     if progressive:
                         command = shlex.join([word for word in argv if word != "--initial-read"] + [
-                            "--select", "/goal_id", "--select", "/heartbeat_receipt"])
+                            "--select", "/goal_id", "--select", "/heartbeat_receipt",
+                            "--select", "/interaction_contract/cli_channel/selection_command",
+                            "--select", "/action_portfolio/suggested_actions/0/todo_id",
+                            "--select", "/action_portfolio/suggested_actions/1/todo_id"])
                     command += " --max-page-output-bytes 32000"
                 else:
                     source, raw = sources[0 if phase == "cold" else 1]
@@ -698,7 +702,7 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                     navigation = page["navigation"]
                     if progressive:
                         assert page["eof"]
-                        values = {row["pointer"]: row["value"] for row in json.loads(page["content"])["selections"]}
+                        values = selected_context_values(page["content"])
                         assert values["/goal_id"] == GOAL_ID and values["/heartbeat_receipt"]["turn_instance_id"] == actual_turn
                 descriptor = machine_reference_oracle(navigation)
                 # A selectively read large capture cannot become a retained
@@ -765,7 +769,7 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                 page = last_context_page(request, allow_selection=progressive)
                 assert page and page["ok"]
                 if progressive:
-                    values = {item["pointer"]: item["value"] for item in json.loads(page["content"])["selections"]}
+                    values = selected_context_values(page["content"])
                     assert values["/goal_id"] == GOAL_ID
                     assert values["/heartbeat_receipt"]["turn_instance_id"] == (
                         actual_turn if benchmark else "saved-native-turn")
@@ -1011,7 +1015,7 @@ def test_native_discovery_keeps_plugins_out_of_probe_without_changing_solver(tmp
 
 
 @pytest.mark.parametrize("setting", [None, "off"])
-def test_saved_projection_default_and_explicit_off_ignore_available_native_cache(tmp_path, monkeypatch, setting):
+def test_saved_projection_default_delta_off_ignores_available_native_cache(tmp_path, monkeypatch, setting):
     from loopx.cli import build_parser
     from loopx.cli_commands.quota_capture import project_saved_context_capture
     from loopx.control_plane.turn_driver import codex_context
@@ -1021,7 +1025,7 @@ def test_saved_projection_default_and_explicit_off_ignore_available_native_cache
         "heartbeat_receipt": {"turn_instance_id": "t"}}).encode()
     path.write_bytes(raw)
     def unexpected(*args, **kwargs):
-        pytest.fail(f"{setting or 'default'} saved presentation must not inspect/create native state")
+        pytest.fail("stateless/disabled presentation must not inspect/create native state")
     monkeypatch.setattr(codex_context, "codex_context_directory", unexpected)
     argv = ["quota", "context-project", "--capture-file", str(path),
         "--capture-sha256", hashlib.sha256(raw).hexdigest(), "--goal-id", "g", "--agent-id", "a",

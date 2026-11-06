@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from functools import cached_property
 import os
 import json
 from pathlib import Path
@@ -9,6 +10,7 @@ import uuid
 from typing import Any
 from .chat import require_matching_message_replay, require_matching_replay
 from .file_lock import exclusive_file_lock
+from .capabilities.native_chat.file_discovery import FileChatDiscovery
 
 
 SESSION_QUEUE_MAX_PENDING = 20
@@ -69,6 +71,12 @@ def chat_runtime_activation_state(runtime_root: Path) -> dict[str, int]:
 
 
 class ChatIngressStore:
+    @cached_property
+    def _terminal_turn_discovery(self) -> FileChatDiscovery:
+        # File queue discovery owns this per-store hint. Concurrent first use
+        # may build two empty observers; neither holds execution authority.
+        return FileChatDiscovery()
+
     def runtime_activation_lock(self):
         return chat_runtime_activation_lock(self.root.parent)
 
@@ -81,9 +89,8 @@ class ChatIngressStore:
         active_turn_id = str(session.get("active_turn_id") or "")
         turns_dir = self._session_dir(session_id) / "turns"
         rows: list[dict[str, Any]] = []
-        for path in turns_dir.glob("*.json") if turns_dir.is_dir() else []:
-            if path.name.endswith(".events.json"):
-                continue
+
+        def read(path):
             if strict:
                 try:
                     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -100,6 +107,18 @@ class ChatIngressStore:
                     raise OSError("Queued Turn state is invalid")
             else:
                 payload = _read_json(path)
+            return payload
+
+        def terminal(path, payload):
+            if (payload.get("schema_version") == CHAT_TURN_SCHEMA_VERSION
+                    and payload.get("session_id") == session_id and payload.get("turn_id") == path.stem
+                    and isinstance(payload.get("status"), str)
+                    and payload.get("status") in TERMINAL_TURN_STATES):
+                return {key: payload[key] for key in ("schema_version", "session_id", "turn_id", "status")}
+            return None
+
+        paths = (path for path in turns_dir.glob("*.json") if not path.name.endswith(".events.json"))
+        for path, payload in self._terminal_turn_discovery.rows(turns_dir, paths, read=read, project=terminal):
             if (
                 payload.get("schema_version") == CHAT_TURN_SCHEMA_VERSION
                 and payload.get("status") == "queued"

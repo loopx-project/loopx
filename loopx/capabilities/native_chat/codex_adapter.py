@@ -6,6 +6,7 @@ here; the Chat controller continues to own Session/Turn admission and effects.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import json
 import logging
 import os
@@ -269,8 +270,25 @@ def failed_request_readback(session: CodexChatAgentSession, turn_id: str) -> dic
         return None
 
 
-def completed_work_readback(session: CodexChatAgentSession, turn_id: str) -> dict[str, Any] | None:
-    """Read a latest, stable completed inventory with an explicit unfinished report.
+def _settled_work_effect(item: dict[str, Any]) -> bool:
+    """A recorded process exit can settle a command without making it succeed.
+
+    This is native DTO evidence only. The original worker's explicit settled
+    report, live background inventory and Core continuation checks still apply.
+    Missing exits, timeouts/signals and failed non-process effects stay unknown.
+    """
+    if item.get("status") == "completed":
+        return True
+    code, started, ended = item.get("exitCode"), item.get("startedAtMs"), item.get("completedAtMs")
+    return (item.get("type") == "commandExecution" and item.get("status") == "failed"
+            and type(code) is int and 0 < code < 128 and code not in {124, 125}
+            and type(started) is int and type(ended) is int and 0 < started <= ended
+            and isinstance(item.get("aggregatedOutput"), str))
+
+
+def completed_work_readback(session: CodexChatAgentSession, turn_id: str, *,
+                            known_turn_ids: set[str] | None = None) -> dict[str, Any] | None:
+    """Read stable settled work, including history correlated by its Core owner.
 
     This proves settled native items, not the safety of repeating their effects.
     Core owns the original source, grant, bounded continuation and stop checks.
@@ -286,12 +304,16 @@ def completed_work_readback(session: CodexChatAgentSession, turn_id: str) -> dic
 
         inventory = turns()
         ids = [item.get("id") for item in inventory]
-        if (not ids or ids[0] != turn_id or inventory[0].get("status") != "completed"
+        target = next((item for item in inventory if item.get("id") == turn_id), None)
+        if (target is None or target.get("status") != "completed"
                 or any(not isinstance(value, str) or not value for value in ids)
                 or len(set(ids)) != len(ids)
                 or any(item.get("status") not in {"completed", "failed", "interrupted"} for item in inventory)
                 or session._background_terminals(deadline)):
             return None
+        later = ids[:ids.index(turn_id)]
+        if any(value not in (known_turn_ids or set()) for value in later):
+            return None  # A foreign native input may cancel or supersede the old request.
         items = list(session._control_items("thread/items/list", {"turnId": turn_id}, deadline))
         seen: set[str] = set()
         users = 0
@@ -311,8 +333,8 @@ def completed_work_readback(session: CodexChatAgentSession, turn_id: str) -> dic
                 elif item.get("phase") != "commentary":
                     return None
             elif kind in {"commandExecution", "fileChange", "mcpToolCall"}:
-                if item.get("status") != "completed":
-                    return None  # Declined/failed/live/unknown effects cannot request writable continuation.
+                if not _settled_work_effect(item):
+                    return None  # Declined/live/unobserved effects cannot request writable continuation.
             elif kind not in {"reasoning", "webSearch", "imageView", "contextCompaction"}:
                 return None
         if (users != 1 or len(finals) != 1 or turns() != inventory
@@ -322,8 +344,35 @@ def completed_work_readback(session: CodexChatAgentSession, turn_id: str) -> dic
         unfinished = parse_agent_response(finals[0], protected_paths=[session.work_dir]).get("unfinished_work")
         if unfinished is None:
             return None
+        later_items = {}
+        for value in later:
+            rows = list(session._control_items("thread/items/list", {"turnId": value}, deadline))
+            if any(not isinstance(row, dict) or not isinstance(row.get("item"), dict) for row in rows):
+                return None
+            item_ids = [row.get("item", {}).get("id") for row in rows]
+            if (not rows or any(row.get("turnId") != value for row in rows)
+                    or any(not isinstance(item_id, str) or not item_id for item_id in item_ids)
+                    or len(set(item_ids)) != len(item_ids)
+                    or sum(row["item"].get("type") == "userMessage" for row in rows) != 1):
+                return None
+            for row in rows:
+                item = row["item"]
+                if (item.get("type") not in {"userMessage", "agentMessage", "commandExecution", "fileChange",
+                        "mcpToolCall", "reasoning", "webSearch", "imageView", "contextCompaction"}
+                        or item.get("type") == "agentMessage" and item.get("phase") not in {"commentary", "final_answer"}
+                        or item.get("type") in {"commandExecution", "fileChange", "mcpToolCall"}
+                        and not _settled_work_effect(item)):
+                    return None
+            later_items[value] = rows
+        if (any(list(session._control_items("thread/items/list", {"turnId": value}, deadline)) != rows
+                for value, rows in later_items.items())
+                or turns() != inventory or session._background_terminals(deadline)):
+            return None
+        digest = hashlib.sha256(json.dumps([inventory, items, later_items],
+            sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         return {"thread_id": session.thread_id, "turn_id": turn_id,
-                "completed_work": True, "all_effects_settled": True, "unfinished_work": unfinished}
+                "completed_work": True, "all_effects_settled": True, "unfinished_work": unfinished,
+                "native_inventory_sha256": digest}
     except (CodexChatAgentError, OSError, TypeError, ValueError):
         return None
 
@@ -384,7 +433,8 @@ class CodexAppServerAdapter:
     session: CodexChatAgentSession
     goal_driver: CodexGoalDriver | None = None
 
-    def completed_work_observation(self, *, thread_ids: list[str], turn_id: str) -> dict[str, Any] | None:
+    def completed_work_observation(self, *, thread_ids: list[str], turn_id: str,
+                                   known_turn_ids: set[str] | None = None) -> dict[str, Any] | None:
         """Read live effects through the adapter that owns the original thread.
 
         A cold app-server can read persisted items, but cannot inventory another
@@ -393,7 +443,7 @@ class CodexAppServerAdapter:
         """
         if self.upstream_thread_id not in thread_ids or not self.healthcheck():
             return None
-        return completed_work_readback(self.session, turn_id)
+        return completed_work_readback(self.session, turn_id, known_turn_ids=known_turn_ids)
 
     @staticmethod
     def failed_request_observation(*, codex_bin: str, codex_home: Path,

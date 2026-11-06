@@ -33,6 +33,7 @@ from .inbox_reactions import (_reconcile_outbound_input_reactions,
                              mark_lark_event_inbox_processing, mark_lark_event_inbox_received)
 from .outbound import present_lark_conversation_text as _presentation_text
 from .private_images import private_message_caption, private_message_images
+from .private_delivery_discovery import PrivateDeliveryDiscovery
 from .return_files import uploaded_chat_images, verify_chat_images
 from .private_progress import (ACTIVITY_UPDATE_INTERVAL_SEC, UPDATE_INTERVAL_SEC, legacy_recovery_repairs,
                                presentation_phase, presentation_stream, project_progress)
@@ -171,6 +172,7 @@ class LarkPrivateConversations:
         self.reaction_feedback = reaction_feedback
         self.root = controller.store.root / "lark-private-deliveries"
         self._context_recovery_probe_at: dict[Path, float] = {}
+        self._delivery_discovery = PrivateDeliveryDiscovery(self.root)
         self._web_projection_scan_at = 0.0
         self._web_projection_snapshots: dict[str, tuple[int, int]] = {}
         from .owner_attention import LarkOwnerAttention
@@ -1309,8 +1311,7 @@ class LarkPrivateConversations:
         """The durable transport store is the queue; no in-memory admission."""
         paths = []
         recovery_candidate = self.core.context_recovery_observer()
-        for path in sorted(self.root.glob("*.json")):
-            row = _read_json(path)
+        for path, row, repairs in self._delivery_discovery.rows():
             if row["status"] != "delivered":
                 paths.append(path)
             elif (row.get("session_id") and row.get("turn_id")
@@ -1319,7 +1320,7 @@ class LarkPrivateConversations:
                 # The canonical request, provider effect inventory and source
                 # are independently re-read by recover_failed_request.
                 self._context_recovery_probe_at[path] = time.monotonic() + 60
-                if legacy_recovery_repairs(row) or recovery_candidate(row["request_ref"]):
+                if repairs or recovery_candidate(row["request_ref"]):
                     paths.append(path)
         return [*paths, *self._web_projection_paths()]
 
@@ -1344,22 +1345,26 @@ class LarkPrivateConversations:
             self._web_projection_scan_at = time.monotonic() + 5
             enabled = {row["binding_id"] for row in self.bindings.read()["bindings"]
                        if row.get("enabled") is True and row.get("audience", "owner") == "owner"}
-            sources: dict[str, dict[str, Any]] = {}
-            for path in sorted(self.root.glob("*.json")):
-                row = _read_json(path)
+            sources: dict[str, Path] = {}
+            for path, row, _ in self._delivery_discovery.rows():
                 if (row.get("binding_id") in enabled and row.get("session_id")
                         and row.get("event", {}).get("chat_type") == "p2p"
                         and not row.get("agent_target") and row.get("status") in {"accepted", "delivered"}):
-                    sources.setdefault(row["session_id"], row)
+                    sources.setdefault(row["session_id"], path)
             store = self.core.controller.store
-            for sid, source in sources.items():
+            for sid, source_path in sources.items():
                 try:
                     stat = (store.sessions_root / sid / "messages.jsonl").stat()
                     snapshot = (stat.st_mtime_ns, stat.st_size)
-                    key = identity_ref(source["binding_id"], sid)
-                    path = root / f"{key}.json"
                     if self._web_projection_snapshots.get(sid) == snapshot:
                         continue
+                    source = _read_json(source_path)
+                    if (source.get("binding_id") not in enabled or source.get("session_id") != sid
+                            or source.get("event", {}).get("chat_type") != "p2p"
+                            or source.get("agent_target") or source.get("status") not in {"accepted", "delivered"}):
+                        continue
+                    key = identity_ref(source["binding_id"], sid)
+                    path = root / f"{key}.json"
                     messages = store.messages(sid)
                     web_turns = {message["turn_id"] for message in messages
                                  if message.get("role") == "user" and message.get("origin") == "web"}
@@ -1888,7 +1893,7 @@ class LarkPrivateConversations:
                                 for event in reversed(events) if event.get("kind") == "agent.phase"
                                 and event.get("payload", {}).get("method") == "error"), None)
                         preparation_recovery = (record["source"].get("private_human_message") is True
-                            and selected["binding"].get("context_kind") == "steward" and not native.get("agent_target"))
+                            and selected["binding"].get("context_kind") in {"project", "steward"} and not native.get("agent_target"))
                         response = manager_failure_reply(turn, retry_info=retry_info,
                             preparation_recovery=preparation_recovery)[1] + " 原会话已保留。"
                     else:
