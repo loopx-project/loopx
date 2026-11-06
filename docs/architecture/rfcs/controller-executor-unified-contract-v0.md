@@ -121,13 +121,28 @@ intentionally have no LoopX Core and must remain uncontaminated controls.
 
 ### C1 source audit: shared owners and the remaining split
 
+The current complete-source validator also delegates executable required-read
+checks to the existing interaction owner. Explicit command/order coordinates
+cannot disappear or introduce an unsupported execution order; prose-only and
+valid pending obligations remain intact. The same rule reaches quota, managed
+preview and actual Turn/Host planning without caller-specific decisions. An
+explicit direct complete carrier reaches its typed reader even when its version
+is unsupported. The [paired checkpoint](ledger/controller-executor-unified-contract-v0/2026-10-30-c1-source-convergence.md#executable-required-reads-and-native-runner-attribution)
+records counterexamples, compatibility, maintenance scope and the native-runner
+budget attribution. It does not waive the remaining budget gate, retire recorded
+readers or establish installed/model/outcome benefit.
+
 Bound native execution preparation retains the ordinary managed claim reference
 and captures its same-Turn ready decision before CLI compaction. The Host hands
 that source to the existing saved-capture presentation/reader owner, rather than
 discarding it and making the model evaluate another guard to obtain its current
-contract. Goal, Agent, Todo and Turn must match before publication. Required
-material reads, including an explicit complete Goal read, remain required; a
-ready receipt or saved file does not fulfill them. Optional presentation failure
+contract. Goal, Agent, Todo and Turn must match before publication. A qualified
+native recheck retains its enabled profile and uses the existing deferred
+presentation route; forcing it off would replace the complete composer's
+combined settlement with the older split plan. The saved-capture owner then
+presents the verified source once. Required material remains complete: consume
+the complete inline Goal or execute its declared read when it is not inline;
+a ready receipt or saved file does not fulfill that consumption. Optional presentation failure
 retains the original digest-bound recovery. Explicit off is inert, and an
 unbound request keeps its original readiness route without inventing a Turn.
 This is a bounded Host handoff repair, not C1 cutover, installed adoption or
@@ -190,6 +205,17 @@ This retires one duplicate rule, not the historical envelope format. Complete
 writer/consumer cutover and original-quota outcome/full-cost qualification remain
 open. The added bridge calls must be counted; code convergence alone is no
 evidence of lower cost.
+
+The current-main integration also checks the provenance of its qualification
+fixtures. `read_fixture_todos` previously seeded canonical authority from an
+attention summary, erasing an authored tail after 500 characters before capture.
+It now uses the existing full source parser and Todo normalizer. A real
+File/SQLite CLI case carries that tail through complete capture, a subprocess
+Host's artifact, independent validation, settlement and replay. Both original
+truncation failures remain evidence; this repairs the test input, not a runtime
+policy. Current size and compatibility failures remain open. Deterministic
+artifact agreement and measured CLI/RPC bytes do not qualify model comprehension,
+native accepted outcomes, total cost or the full C1 cutover.
 
 | Current source / obligation | Present envelope treatment | Required C1 disposition |
 | --- | --- | --- |
@@ -902,11 +928,27 @@ reject an unsupported inner version before Codex prompt execution or DSH runner
 loading, without spend. The complete-contract/context/DSH/stdio selection passes
 352 cases; TypeScript checking and focused lint pass. This qualifies these
 interaction semantics, not every required field or packaged-host adoption.
+Heartbeat templates now own the ordered settlement instruction; exact-Turn
+binding adds only its canonical source locator, instead of repeating the
+execution and no-static-reconstruction clauses. Thin prompts combine complete
+capture and required-context reads before action, while sharing the unchanged
+progress/outcome clauses. On the unchanged full-route fixture (320-character
+scope, explicit CLI and five capabilities), the unbound prompt falls from 4,981
+to 4,895 budget characters under the original 4,900 ceiling. The exact-Turn
+variant falls from 5,198 to 4,987 and still fails that ceiling. The padded-route
+negative remains rejected; no route, capability, fixture population or limit
+was shortened. The prompt/platform selection passes 115 checks with one skip.
+These are presentation and clause-retention results, not model adoption or cost
+benefit. Four other original CLI-budget failures remain open. Integration with
+opaque reader references also exposed two obsolete digest-field assertions;
+their File/SQLite consumers now read the pinned machine descriptor, preserve
+the original receipt and reject byte-changed captures without admission or spend.
 Remaining cache consistency investigation, other old reader expectations, staged instruction parity and
 actual optional/external consumers, version admission and packaged host
 continuity remain unfinished. Operation-SDK checks without an explicit native
 runtime are untested, not qualified. The default writer change remains
-unshipped; the PR is Draft for unfinished author work, not merely pending review. No model or cost benefit is
+unshipped. The candidate is a normal review proposal; whole-C1 adoption and
+original-quota net-cost qualification remain open. No model or whole-cost benefit is
 established. Historical effect decoding is temporary; it must not become a
 second permanent executable view.
 
@@ -926,6 +968,17 @@ design, not a claim that these paths have changed.
 | `turn_driver/decision_capture.py` and `cli_commands/quota_capture.py` | Reuse immutable capture, validated readers and full/delta delivery. Fresh delivery and saved-capture recovery must reconstruct the same contract; do not reuse a continuity baseline for a different projection merely because its Turn identity matches. |
 | `benchmark/runtime/worker.py`, `benchmark/runtime/sessions.py` and `scripts/external_scheduler_worker.py` | Migrate the product entry they actually invoke. Keep evaluation setup and outer wake ownership; do not add benchmark-only conversion or count a managed-host test as attached-host acceptance. |
 
+The proposal's [private-plan checkpoint](ledger/controller-executor-unified-contract-v0/2026-10-30-c1-source-convergence.md#current-private-plan-boundary)
+migrates the complete-source Turn writer and its capture, Host, CLI resume,
+native conversation, capability, child-result and journal consumers together.
+The [quota and managed-controller cutover](ledger/controller-executor-unified-contract-v0/2026-10-30-c1-source-convergence.md#current-quota-and-managed-controller-cutover)
+also removes normal presentation's v0 builder branch and the managed preview's
+transient v0 producer. Both current routes consume the existing complete-source
+owner; original-version readers remain explicit. A one-owner missing-material
+drill reaches both real CLI entries. This is an unmerged source proposal;
+installed adoption, remaining supported readers and original-quota accepted
+outcomes with complete costs still keep C1 open.
+
 Before replacing any seam, its implementation PR records source path, field or
 instruction clause, current readers, target owner, representation, recovery and
 retirement condition. Relocation must include reference resolution; an omitted
@@ -944,6 +997,22 @@ retain its historical decoder until that work and the supported recovery window
 are reconciled. Rollback likewise separates outstanding work from new admission.
 A version transition does not rewrite saved prompts, journals or source hashes
 as if they had always used the new contract.
+
+Code convergence is part of each migration slice, not only the final C9 cleanup.
+Both entrypoints must call the same semantic implementation for composition,
+reference validation, context reconstruction and settlement. Keep genuinely
+host-specific launch/observation mechanics in thin adapters; do not force their
+different lifecycles into a new general-purpose runner. The existing typed owners
+remain responsible for their respective decisions.
+
+For each slice, record the before/after callsites, shared owner, removed duplicate
+algorithm and remaining compatibility caller with its removal condition. Qualify
+both routes with the same independently authored semantic cases and their real
+transport/recovery tests. A wrapper that only delegates can be transitional;
+copying a rule into a newly named common module while leaving two implementations
+is not convergence. The next change to a shared rule should be made and tested in
+one owner and reach both routes. Do not make declining line counts an acceptance
+metric or remove unique host coverage to meet one.
 
 The first C1 PR must include the two production composition callsites above and
 at least one complete producer-to-final-input journey, with an explicit list of
@@ -1241,6 +1310,48 @@ identity use the existing projection-edit transport. This changes neither
 required-read obligations nor admission, settlement or the off path; it does
 not close C1/C2 adoption or establish model-outcome/full-cost benefit.
 
+Native quota emission and deferred saved-capture presentation now also obtain
+initial navigation from that same TypeScript invocation. Both actual callers
+reuse its invocation-local plan, bound to the published current capture; the
+standalone reader shares the same selection policy and decision-field owner.
+A changed file or a plan for another capture refuses before native publication.
+The shared private writer returns the digest of its exact published bytes, so
+capture, recovery and settlement callers no longer reopen a new file solely to
+hash it. Independent complete recovery files, original numeric/Unicode values,
+reader verification, current-before-optional publication and the off path remain.
+Historical projection-only callers keep a delegating compatibility API.
+
+A matched synthetic File/SQLite quota/read/work/check/settle/replay comparison
+includes preparation and the internal spend process. In the SQLite warm case,
+RPCs fall from 321 to 319, framed RPC bytes by about 3.16% and observed Python
+file-read bytes by about 31.5%; model-visible output remains 66,839 bytes.
+The IO observer now avoids counting the same fd-backed stream twice, and all
+compared CLI processes use one interpreter with verified source provenance.
+These are component results. The original quota current-step output is still
+34,736 versus 40,929 bytes, and both RPC traffic and combined observed Python
+read/write bytes remain higher overall. Native/kernel/provider IO, memory/CPU,
+latency and model outcomes are not qualified by these counts. C1 remains open;
+a smaller capture transport is not evidence of total net benefit.
+
+The request-scoped runtime adapter now shares exact `todo.context.page` results
+across quota, status and refresh callers. This handler remains the existing
+TypeScript pure lens over supplied records. Reuse ends with the existing pinned
+request scope, including copied-context retirement; inputs and outputs retain
+their JSON order/types, changed records miss, and callers receive independent
+mutable views. Encoded retained input/output is bounded by the existing request
+byte limit. Authority reads, clocks, writes and settlement are never reused;
+errors and oversized entries retain the ordinary path. No cross-Turn cache or
+model retention assumption is introduced.
+
+A separate matched File/SQLite cohort reduces warm RPCs from 319 to 284 and
+framed RPC bytes by about 5.4%, with unchanged model-visible output and the same
+independently checked synthetic artifact and single debit. It includes baseline
+preparation and internal child processes. Original-quota warm current-step output
+remains 34,298/34,628 versus 40,474/40,817 bytes (File/SQLite); framed traffic is
+still about 1.3% higher. This is transport work avoided, not a model-token,
+latency, memory, natural-outcome or overall net-benefit qualification. Historical
+cohorts and their failures remain separate; the C1 acceptance gap stays open.
+
 The existing initial reader also consumes complete acceptance navigation bound
 to the captured Goal/Agent/Todo and source revisions. Suggested outcome bodies
 reach the starting read, including peer dependencies; other outcomes remain
@@ -1263,6 +1374,84 @@ reordered material and unavailable predecessors; they do not establish natural
 model adoption. All-host defaults, other omitted material, trusted Host coverage,
 writer/reader cutover and §9's outcome/full-cost comparison remain open. Index
 overhead participates in the existing full-versus-folded byte guard.
+
+The C1 candidate's journal inspection, publication, settlement lookup and managed
+retry now consume a present complete contract through the same checked-source
+owner as Host dispatch. A changed source, unsupported version or self-consistent
+but divergent executor adapter blocks recovery/publication; it cannot select the
+historical decoder. Native file reads and Python transport retain the original
+sparse numeric spellings. The old adapter-only decoder remains for historical
+journals without a complete contract. This is a source-integrity repair with
+additional validation cost, not installed adoption, full reader retirement or
+the original-quota outcome/net-cost qualification.
+
+The candidate's external generic CLI stdin now uses the same complete-source
+Host request v1 as native model input. It removes the second executable
+envelope from that wire and preserves the original contract, capture readers,
+Turn key and result transport. The shared checked-source owner validates v1
+directly; native adapters share version decoding, and the DSH stdio consumer
+accepts v1 as well as historical v0. Missing/invalid source, mixed carriers and
+capture drift refuse without selecting the historical decoder. Ark and MemT
+distribution adapters also use the Core decoder through the
+existing supported Host seam; provider permissions, receipt recovery and exact
+memory-lifetime gates remain. Their matching-Core requirement is explicit.
+The private executor adapter and versioned historical journal readers remain until their
+own replacement is qualified. This source-level wire cutover requires external
+v0 adapters to migrate; it establishes neither installed adoption, original
+quota outcome/full-cost qualification nor model-retention benefit.
+
+The candidate's built-in Codex/DSH session-index lookup now reads identity from
+one checked complete source. Normal CLI planning, failed-session resolution and
+journal inspection no longer transport a second executor adapter for that read.
+The existing TypeScript identity owner and native session store retain the same
+Goal/Agent/Todo scope, namespace and lifetime checks. An explicitly supplied
+historical adapter still selects its existing decoder and consistency checks;
+malformed supplied sources never fall back. Host dispatch, injected callbacks
+and the private executor/journal adapter keep their separately qualified
+boundaries. This read-only caller replacement does not authorize a launch or
+qualify whole-C1 retirement, model adoption or original-quota full-cost benefit.
+
+The candidate's strict Codex result normalizer also reads material-result
+evidence applicability through the existing checked-source owner, for both the
+CLI and operation Host. A complete source cannot lose that obligation when
+its executor adapter is absent; malformed supplied sources do not fall back.
+The strict output schema keeps required nullable fields, stop results normalize
+null evidence to absence, and non-null evidence content remains the executor
+validator's responsibility. Historical requests without a complete source
+retain their original rule.
+This replaces one active metadata reader and adds a fresh source check after
+the provider; it does not qualify whole-C1 cutover or net-cost/model benefit.
+
+Operation Hosts also reuse that dispatch owner for preparation and normalized
+session lineage. Codex checks complete work and Goal delivery before native
+initialization, retaining a fresh prompt/schema check after startup. DSH reuses
+the lineage already checked in its preparation invocation instead of issuing
+another identity read. The optional projection metadata stays outside model
+input and persisted authority; callers that do not request it retain their
+existing projection. Historical codecs, session scope/lifetime, confirmation
+and consumption gates, and post-provider validation keep their owners. These
+caller changes require separate startup/refusal, native protocol and matched
+component-cost evidence; they do not close the remaining private-adapter cutover
+or establish original-quota outcome/full-cost benefit.
+
+The shared Turn Host-request producer now selects that same complete v1 input
+for built-in Hosts and injected callbacks as well as generic CLI stdin. It
+checks the private plan's source/adapter consistency before removing the second
+carrier. Original-capture publication preserves v1 and its immutable reader
+header; only an original historical observation can restore the old request
+codec. A quota capture without a journal key retains its original source-Turn
+reference; provided journal keys still match exactly, without a fabricated binding.
+Failed-session recovery checks the complete source/header and retains the
+existing native scope, action-hash number codec and scoped request/replan identity.
+Its complete-input `driver_lineage` reader now consumes the checked action facts
+directly, without regenerating a v0 adapter, cold reader commands or compaction
+diagnostics. Both readers share the same route and scoped-identity rules;
+historical envelopes retain their own version/signature proof and scalar codec.
+Private plans/journals still retain their adapter: retiring this recovery caller
+does not retire that writer or all Core adapters. Qualify actual dispatch,
+recovery/replay and source-check/derivation costs separately. Unchanged bridge
+traffic is not a measured latency gain; already-complete model input is not
+another compression gain or original-quota outcome qualification.
 
 C1's inventory is part of its usable replacement, not a standalone architecture
 framework. C3/C4/C5 can proceed independently once C1's contract is stable;
@@ -1402,3 +1591,16 @@ The directory is the index. A planning/source-inspection entry does not establis
 runtime delivery; live priorities and claims remain in the roadmap and canonical
 work. Keep historical entries append-only and refine the current normative plan
 here rather than treating a dated audit as a permanent execution queue.
+
+The [source-convergence checkpoint](ledger/controller-executor-unified-contract-v0/2026-10-30-c1-source-convergence.md)
+keeps the candidate's detailed chronology outside this normative plan. Integration
+preserves main's presentation/journal owners and shares numeric source identity
+and edit transport across acceptance, summaries, authoring and Vision. This does
+not qualify writer/consumer cutover, installed adoption or the original-quota
+accepted-outcome/full-cost comparison. Remaining reader retirement and negative
+cost observations keep C1 open.
+
+The ledger's native command-ownership increment adopts the existing combined
+refresh/spend owner and preserves three exact receipts on replay. Its smaller
+total stdout does not clear the recurring warm-input regression or increased
+transport/IO cost. Keep original-quota full-cost qualification open.

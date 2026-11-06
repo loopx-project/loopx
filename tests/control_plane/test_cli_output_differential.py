@@ -618,13 +618,21 @@ def test_host_safety_restoration_budget_is_one_time_bounded_and_prompt_only(
     )
     from loopx.control_plane.heartbeat.rules import HOST_LOOP_SAFETY_RULE
 
-    assert (
-        host_prompt_static_safety_revision(HOST_LOOP_SAFETY_RULE)
-        == "host_prompt_static_safety_v1"
+    # This allowance belongs to its original restoration, not whatever wording
+    # the current renderer emits. Equivalent compaction earns no new allowance.
+    restored_safety = (
+        "Follow user authority and repository rules. Protect credentials/private material; "
+        "publish public-safe evidence. Destructive Git/production requires explicit authorization. "
+        "Gate only the affected path; continue independent allowed work."
     )
     assert (
+        host_prompt_static_safety_revision(restored_safety)
+        == "host_prompt_static_safety_v1"
+    )
+    assert host_prompt_static_safety_revision(HOST_LOOP_SAFETY_RULE) is None
+    assert (
         host_prompt_static_safety_revision(
-            HOST_LOOP_SAFETY_RULE.replace(
+            restored_safety.replace(
                 "requires explicit authorization", "is always allowed"
             )
         )

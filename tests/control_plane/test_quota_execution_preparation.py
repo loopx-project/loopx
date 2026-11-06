@@ -25,6 +25,23 @@ TODO = "todo_execution_preparation"
 AGENT = "agent-a"
 
 
+@pytest.mark.parametrize("status", ["open", "deferred"])
+def test_explicit_non_delivery_obligation_does_not_prepare_selected_execution(monkeypatch, status):
+    from loopx.control_plane.quota import execution_preparation
+
+    def no_execution_read(**_):
+        pytest.fail("A planning operation must not consult the selected delivery Todo's lease")
+
+    monkeypatch.setattr(execution_preparation, "project_selected_todo_execution_preparation", no_execution_read)
+    obligation = {"must_attempt_work": True, "delivery_allowed": False}
+    payload = {"should_run": True, "selected_todo": {"todo_id": TODO, "status": status},
+        "execution_obligation": obligation}
+    apply_selected_todo_execution_preparation(payload, runtime_root=None, goal_id=GOAL,
+        agent_id=AGENT, obligation=obligation)
+    assert payload == {"should_run": True, "selected_todo": {"todo_id": TODO, "status": status},
+        "execution_obligation": {"must_attempt_work": True, "delivery_allowed": False}}
+
+
 def _todo() -> dict[str, object]:
     return {
         "schema_version": "todo_item_v0",
@@ -256,7 +273,7 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
     assert selected["/heartbeat_receipt"]["turn_instance_id"] == "preparation-turn"
     plan = selected["/interaction_contract/cli_channel"]["settlement_plan"]
     assert plan["identity"]["todo_id"] == TODO and plan["identity"]["turn_instance_id"] == "preparation-turn"
-    assert plan["schema_version"] == "quota_settlement_plan_v1"
+    assert plan["schema_version"] == "quota_settlement_plan_v2"
     sources = selected["/interaction_contract/agent_channel/work_context"]["sources"]
     task = next(item["content"]["todo"] for item in sources if item["source"] == "selected_todo")
     # The v0 owner may deduplicate short text already in selected_todo.

@@ -66,6 +66,12 @@ def turn_lane_agent_id(plan: Mapping[str, Any]) -> str:
     are exactly the overlap this module exists to refuse.
     """
 
+    from .driver import COMPLETE_TURN_PLAN_SCHEMA_VERSION, LOOPX_TURN_PLAN_SCHEMA_VERSION, turn_host_lineage
+
+    if plan.get("schema_version") == COMPLETE_TURN_PLAN_SCHEMA_VERSION or "work_contract" in plan:
+        return turn_host_lineage(plan)["agent_id"] or TURN_LANE_UNATTRIBUTED_AGENT
+    if plan.get("schema_version") not in (None, LOOPX_TURN_PLAN_SCHEMA_VERSION):
+        raise ValueError("unsupported Turn plan version")
     envelope = plan.get("turn_envelope")
     if isinstance(envelope, Mapping):
         agent_id = str(envelope.get("agent_id") or "").strip()

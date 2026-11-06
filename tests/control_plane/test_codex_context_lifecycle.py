@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shlex
 import os
 from pathlib import Path
 import subprocess
@@ -184,12 +185,12 @@ def test_lifecycle_invalidates_and_recovers_current_capture_without_bodies(tmp_p
     if event_name == "SessionStart":
         body = result["hookSpecificOutput"]["additionalContext"]
         assert first["recovery"]["sha256"] in body and "quota context-read" in body
-        # The shared selection advice adds about 400 characters to recovery,
-        # avoiding mandatory discovery and duplicate/oversized read batches.
-        # Preserve identity/retention clauses; this is a synthetic regression
-        # allowance, not permission to raise any host output/context limit.
+        # Async handle/error preservation adds 212 characters to the shared
+        # read guide. Retain the complete identity/retention clauses; this
+        # synthetic allowance does not raise any host output/context limit.
         assert "max_output_tokens=22000" in body and "max_output_tokens=24000" in body
-        assert payload["requirements"] not in body and len(body) < 3100
+        assert "session_id" in body and "write_stdin" in body and "functions.wait" in body
+        assert payload["requirements"] not in body and len(body) < 3350
     else:
         assert result == {}
     _, second = project(tmp_path, "two")
@@ -225,6 +226,71 @@ def deliver(root, event, pages):
     for page in pages:
         assert context.codex_context_hook(str(root), {**event, "hook_event_name": "PostToolUse",
             "tool_use_id": f"page-{page.get('offset')}", "tool_response": json.dumps(page)}) == {}
+
+
+def test_native_projection_reuses_planner_and_returns_exact_file_manifest(tmp_path, monkeypatch):
+    from loopx.cli_commands.quota_capture import native_context_capture_view
+    from loopx.control_plane.quota import turn_envelope
+
+    setup(tmp_path, monkeypatch)
+    operation = turn_envelope._turn_envelope_result
+    calls = []
+
+    def counted(name, **request):
+        calls.append(name)
+        return operation(name, **request)
+
+    monkeypatch.setattr(turn_envelope, "_turn_envelope_result", counted)
+    payload, wire = project(tmp_path)
+    # Main's typed transaction owns material planning and encoding together.
+    # Complete inputs use that same call without reviving a separate planner RPC.
+    assert calls == ["context_delivery"]
+    assert wire["mode"] == "full" and wire["context"] == payload
+    recovery = wire["recovery"]
+    original = Path(recovery["path"]).read_bytes()
+    view = native_context_capture_view(wire, Path(recovery["path"]).parent,
+        context_directory=str(tmp_path))
+    assert view["path"] == recovery["path"] and view["sha256"] == recovery["sha256"]
+    assert not (Path(view["path"]).parent / "delivery.json").exists()
+    assert Path(view["path"]).read_bytes() == original
+    assert "content" not in view and view["index_command"]
+    from loopx.cli import build_parser
+    from loopx.cli_commands.quota_capture import read_context_capture
+    page = read_context_capture(build_parser().parse_args(shlex.split(view["command"])[1:]))
+    assert json.loads(page["content"]) == payload and page["eof"] is True
+
+
+def test_material_projection_interruption_keeps_current_original_recovery(tmp_path, monkeypatch):
+    from loopx.control_plane.quota import turn_envelope
+
+    event = setup(tmp_path, monkeypatch)
+    _, old = project(tmp_path, "old")
+    deliver(tmp_path, event, read_pages(tmp_path, old))
+    assert "candidate" in context._state(tmp_path) and "pending" not in context._state(tmp_path)
+    operation = turn_envelope._turn_envelope_result
+    observed = []
+
+    class PlannerInterrupted(BaseException):
+        pass
+
+    def interrupt(name, **request):
+        if name == "context_delivery":
+            observed.append(context._state(tmp_path))
+            raise PlannerInterrupted()
+        return operation(name, **request)
+
+    monkeypatch.setattr(turn_envelope, "_turn_envelope_result", interrupt)
+    current = {"ok": True, "goal_id": "fixture", "requirements": "New current requirements after the prior delivery."}
+    with pytest.raises(PlannerInterrupted):
+        project(tmp_path, "current", payload=current)
+    expected = tmp_path / "current" / "projection.json"
+    assert observed[0]["recovery"]["path"] == str(expected)
+    assert observed[0]["pending"]["path"] == str(expected)
+    stored = context._state(tmp_path)
+    assert stored["recovery"]["path"] == str(expected)
+    assert stored["pending"]["path"] == str(expected)
+    assert json.loads(expected.read_bytes()) == current
+    assert stored["recovery"]["sha256"] != old["recovery"]["sha256"]
 
 
 def test_complete_reader_delivery_allows_delta_without_diagnostics_or_ack(tmp_path, monkeypatch):

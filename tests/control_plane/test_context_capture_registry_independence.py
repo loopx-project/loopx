@@ -15,7 +15,10 @@ from test_codex_context_lifecycle import project, setup
 
 
 @pytest.fixture
-def conflicting_defaults(tmp_path, monkeypatch):
+def conflicting_defaults(tmp_path, tmp_path_factory, monkeypatch):
+    assert all(root.is_relative_to(tmp_path_factory.getbasetemp())
+        for root in (paths.DEFAULT_RUNTIME_ROOT, paths.LEGACY_RUNTIME_ROOT)), (
+        "Default-route fixtures require the repository's isolated runtime fixtures before any write")
     monkeypatch.delenv("LOOPX_REGISTRY", raising=False)
     for root in (paths.DEFAULT_RUNTIME_ROOT, paths.LEGACY_RUNTIME_ROOT):
         marker = root / "owned-state" / "marker.json"
@@ -209,6 +212,11 @@ def test_replan_stages_read_original_authority_capture_without_registry(
                 assert page["next_offset"] == len(observed)
                 command = page["next_command"]
             guard = json.loads(observed)
+        # Complete should-run output retains its original packet. Exercise
+        # the supported historical staged-reader lens explicitly, rather
+        # than requiring ordinary v1 emission to rebuild that adapter.
+        from loopx.control_plane.quota.turn_envelope import _turn_envelope_result
+        staged = _turn_envelope_result("replan_cli_view", payload=source)["replan_action_packet"]
         missing = tmp_path / "unrelated-missing-registry.json"
 
         def snapshot():
@@ -228,7 +236,7 @@ def test_replan_stages_read_original_authority_capture_without_registry(
                     assert value["obligation_id"] == source["replan_action_packet"]["obligation_id"]
                     return value
 
-                review = read(guard["replan_action_packet"]["review"])
+                review = read(staged["review"])
                 writer = read(review["next"]["writeback"])
                 assert writer["context_id"] == review["context_id"]
                 assert writer["source_hash"] == review["source_hash"]
@@ -237,7 +245,7 @@ def test_replan_stages_read_original_authority_capture_without_registry(
                 assert len(index["outcomes"]) == 1
                 acceptance = read(index["read_action_template"].replace("{outcome_ref}", index["outcomes"][0]["outcome_ref"]))
                 assert acceptance["outcome"]["requirements"][0]["description"] == "Stop before publication."
-                explore = read(guard["replan_action_packet"]["review"].replace("--replan-stage review", "--replan-stage explore"))
+                explore = read(staged["review"].replace("--replan-stage review", "--replan-stage explore"))
                 assert explore["explore_basis"] == source["autonomous_replan_obligation"]["replan_context"].get("explore_basis")
         assert snapshot() == before, "captured readers cannot admit, settle, repair routes or rewrite authority"
         assert not missing.exists()

@@ -109,6 +109,14 @@ def _local_scheduler_directive(hint: dict[str, Any]) -> str:
 
 
 def parse_tick(payload: dict[str, Any]) -> TickDecision:
+    # Versioned source must pass the same semantic/integrity owner as managed
+    # hosts before scheduler or wake facts are used. Never reinterpret an
+    # unsupported or damaged complete contract as an unversioned legacy packet.
+    # Historical ordinary quota packets retain their existing compatibility path.
+    if "schema_version" in payload or "contract_binding" in payload:
+        from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+
+        assert_complete_turn_decision(payload)
     hint = _mapping(payload.get("scheduler_hint"))
     action = str(hint.get("action") or "").strip()
     cadence_class = str(hint.get("cadence_class") or "").strip()
