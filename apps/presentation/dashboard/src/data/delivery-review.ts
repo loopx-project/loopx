@@ -138,7 +138,7 @@ export function reviewNodeColumn(node: ReviewNode) {
 }
 
 type ConfiguredContract = GoalAcceptanceChecks;
-type ContractExportLabels = Record<"title" | "boundary" | "scope" | "selectedWork" | "allWork" | "source" | "revision" | "digest" | "objective" | "criteria"
+type ContractExportLabels = Record<"title" | "boundary" | "scope" | "goalOnly" | "selectedWork" | "allWork" | "source" | "revision" | "digest" | "objective" | "criteria"
   | "nonGoals" | "tasks" | "verification" | "unknown" | "noTasks" | "noCriteria" | "notApplicable"
   | "heldTasks" | "receipt" | "receiptNote" | "operation" | "verificationScope" | "allCriteria" | "passed" | "failed" | "exitCode"
   | "oracleChecker" | "oracleSourceDigest" | "oracleCheckedAt" | "oracleInputVersions" | "oracleOutputVersions", string> & {
@@ -236,7 +236,7 @@ export function deliveryReviewMarkdown(snapshot: DeliveryReviewSnapshot, labels:
   if (hasConfiguredGoalChecks(contract)) {
     const copy = labels.contract;
     rows.push("", `## ${copy.title}`, "", copy.boundary,
-      `${copy.scope}: ${contract.scope?.kind === "selected_work" ? copy.selectedWork : copy.allWork}`,
+      `${copy.scope}: ${contract.scope?.kind === "goal" ? copy.goalOnly : contract.scope?.kind === "selected_work" ? copy.selectedWork : copy.allWork}`,
       `${copy.source}: ${line(snapshot.goal_id)}`, `${copy.revision}: ${contract.revision}`, `${copy.digest}: ${line(contract.digest)}`,
       "", `### ${copy.objective}`, line(contract.objective || copy.unknown), "", `### ${copy.criteria}`);
     if (contract.non_goals.length) rows.push(`${copy.nonGoals}: ${line(contract.non_goals.join("; "))}`);
@@ -246,8 +246,8 @@ export function deliveryReviewMarkdown(snapshot: DeliveryReviewSnapshot, labels:
       if (criterion.oracle) rows.push(`  ${copy.oracleChecker}: ${line(criterion.oracle.source_id)} · ${copy.oracleState[criterion.oracle.state]}`,
         `  ${copy.oracleSourceDigest}: ${line(criterion.oracle.source_digest)}`);
     }
-    rows.push("", `### ${copy.tasks}`);
-    if (!contract.tasks.length) rows.push(copy.noTasks);
+    if (contract.tasks.length || contract.scope?.kind !== "goal") rows.push("", `### ${copy.tasks}`);
+    if (!contract.tasks.length && contract.scope?.kind !== "goal") rows.push(copy.noTasks);
     for (const task of contract.tasks) {
       rows.push(`- ${line(task.todo_id)}: ${copy.taskState[task.state]}`,
         `  ${copy.criteria}: ${line(task.criterion_ids.join(", ") || copy.unknown)}`);
