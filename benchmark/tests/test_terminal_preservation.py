@@ -1,0 +1,233 @@
+"""Failed native workers retain their last source, without granting recovery."""
+from __future__ import annotations
+
+import json
+import os
+from types import SimpleNamespace
+
+import pytest
+
+from benchmark.edgebench.terminal_capture import FailurePreservation, terminal_components
+from benchmark.tests import test_checkpoint_controller as native_fixtures
+from benchmark.tests import test_checkpoint_worker as docker_fixtures
+
+controllers = native_fixtures.controllers
+writer = docker_fixtures.writer
+
+
+def fixture_preservation(tmp_path, monkeypatch, fault=None):
+    calls = []
+    def close():
+        calls.append("close")
+        if fault == "barrier":
+            raise RuntimeError("private transport details")
+    supervisor = SimpleNamespace(destination=tmp_path, controller_file=tmp_path / "controller.json",
+        token="dummy-token", container=SimpleNamespace(id="a" * 64), close=close)
+    def capture(*args, **kwargs):
+        calls.append("capture")
+        if fault == "capture":
+            raise TimeoutError("dummy-token in remote message")
+        assert "handoff" not in json.loads(kwargs["request_file"].read_text())
+        return {"sha256": "b" * 64, "research_point_qualified": False}
+    monkeypatch.setattr("benchmark.edgebench.checkpoint_worker.capture_worker", capture)
+    return FailurePreservation(supervisor, [{"id": "workspace", "source_path": "/task"}],
+                               tmp_path / "terminal-preservation.json"), calls
+
+
+@pytest.mark.parametrize("fault", [None, "capture", "barrier"])
+def test_failed_capture_preserves_source_and_never_replays(tmp_path, monkeypatch, fault):
+    preservation, calls = fixture_preservation(tmp_path, monkeypatch, fault)
+    execution = {"exit_code": 2, "execution_started": True, "timed_out": False}
+    preservation.finish(execution)
+    preservation.finish(execution)
+    receipt = json.loads((tmp_path / "terminal-preservation.json").read_text())
+    assert calls == (["close"] if fault == "barrier" else ["close", "capture"])
+    assert receipt["execution"] == execution and receipt["restore_qualified"] is False
+    assert receipt["capture_succeeded"] is (fault is None)
+    assert preservation.retain_source and receipt["source_retained"] is None
+    assert "private" not in json.dumps(receipt)
+    box = SimpleNamespace(id="a" * 64, attrs={"State": {"Running": True, "Paused": False, "Restarting": False, "Pid": 17}})
+    box.reload = lambda: None
+    def stop(timeout):
+        assert timeout == 15
+        box.attrs["State"].update(Running=False, Pid=0)
+    box.stop = stop
+    preservation.stop_source(box)
+    assert json.loads((tmp_path / "terminal-preservation.json").read_text())["source_stopped"] is True
+
+
+@pytest.mark.parametrize("execution", [None, {"exit_code": 1, "execution_started": False}])
+def test_failed_setup_or_unknown_transport_does_not_invent_phase(tmp_path, monkeypatch, execution):
+    preservation, calls = fixture_preservation(tmp_path, monkeypatch)
+    preservation.finish(execution)
+    assert calls == ["close"] and preservation.retain_source
+    assert preservation.receipt["capture_attempted"] is False
+
+
+def test_success_retains_normal_cleanup_unless_writer_barrier_is_uncertain(tmp_path, monkeypatch):
+    for fault in [None, "barrier"]:
+        preservation, calls = fixture_preservation(tmp_path, monkeypatch, fault)
+        preservation.finish({"exit_code": 0, "execution_started": True, "timed_out": False})
+        assert preservation.retain_source is (fault == "barrier")
+        assert "capture" not in calls
+
+
+def test_component_declaration_captures_full_workspace_and_no_auth():
+    original = {"components": [{"id": "submitted", "source_path": "/task/solution.py"},
+                                {"id": "notes", "source_path": "/private-notes"}]}
+    components = terminal_components(original, "/task")
+    paths = [row["source_path"] for row in components]
+    assert "/task" in paths and "/task/solution.py" not in paths and "/private-notes" in paths
+    assert "/opt/loopx-benchmark/codex-home" not in paths
+    assert not any(path.endswith("auth.json") for path in paths)
+    assert original["components"][0]["source_path"] == "/task/solution.py"
+    with pytest.raises(ValueError, match="credential home"):
+        terminal_components({"components": [{"id": "unsafe", "source_path": "/opt/loopx-benchmark"}]}, "/task")
+    with pytest.raises(ValueError, match="credential home"):
+        terminal_components({"components": [{"id": "secret", "source_path": "/opt/loopx-benchmark/codex-home/auth.json"}]}, "/task")
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_backend_terminal_failure_replaces_remove_with_verified_stop(tmp_path, monkeypatch, failure):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from benchmark.runtime.sforge_backend import RecordingDockerBackend, DockerBackend
+    backend = object.__new__(RecordingDockerBackend)
+    events = []
+    preservation = SimpleNamespace(retain_source=True, stop_source=lambda raw: events.append("stop"))
+    def close():
+        if failure:
+            raise RuntimeError("uncertain observer barrier")
+    backend.checkpoint = SimpleNamespace(close=close, preservation=preservation)
+    backend.feedback = None
+    backend.log_dir = tmp_path
+    backend.research_sidecar = False
+    monkeypatch.setattr(backend, "copy_from_container", lambda *args: (_ for _ in ()).throw(OSError()))
+    monkeypatch.setattr(DockerBackend, "cleanup_container", lambda *args: events.append("remove"))
+    handle = SimpleNamespace(raw=SimpleNamespace(id="a" * 64))
+    if failure:
+        with pytest.raises(RuntimeError, match="uncertain"):
+            backend.cleanup_container(handle)
+    else:
+        backend.cleanup_container(handle)
+    assert events == ["stop", "stop"]
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_partial_observer_start_preserves_only_opted_in_failure(tmp_path, monkeypatch, enabled):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from benchmark.runtime.sforge_backend import RecordingDockerBackend, DockerBackend
+    events = []
+    class Observer:
+        preservation = SimpleNamespace(retain_source=False) if enabled else None
+        def start(self, container):
+            events.append("start")
+            raise OSError("private setup text")
+        def close(self):
+            events.append("close")
+        def finish_solver(self, execution):
+            events.append("finish")
+            assert execution == {"transport_error_kind": "OSError", "execution_started": None}
+    backend = RecordingDockerBackend(log_dir=tmp_path / "collected", logger=None,
+        oauth_proxy=True, checkpoint=Observer(), client=SimpleNamespace())
+    backend.execution_command = "solver"
+    monkeypatch.setattr(DockerBackend, "exec_run_with_timeout", lambda *args, **kwargs: pytest.fail("must not start solver"))
+    with pytest.raises(OSError, match="private setup"):
+        backend.exec_run_with_timeout(SimpleNamespace(raw="owned"), ["/bin/bash", "-c", "solver"])
+    assert events == (["start", "finish"] if enabled else ["start"])
+    assert (backend.execution_receipt is None) is not enabled
+
+
+def test_unknown_stop_state_does_not_claim_released_compute(tmp_path, monkeypatch):
+    preservation, _ = fixture_preservation(tmp_path, monkeypatch)
+    preservation.finish({"exit_code": 2, "execution_started": True})
+    box = SimpleNamespace(id="a" * 64, attrs={"State": {}}, reload=lambda: None)
+    with pytest.raises(RuntimeError, match="not confirmed stopped"):
+        preservation.stop_source(box)
+    assert preservation.receipt["source_stopped"] is False
+
+
+def test_receipt_disk_failure_still_arms_source_retention(tmp_path, monkeypatch):
+    preservation, calls = fixture_preservation(tmp_path, monkeypatch)
+    monkeypatch.setattr(preservation, "_write", lambda: (_ for _ in ()).throw(OSError("full")))
+    with pytest.raises(OSError):
+        preservation.finish({"exit_code": 2, "execution_started": True})
+    assert preservation.retain_source and calls == []
+
+
+@pytest.mark.parametrize("profile", ["official", "native-goal", "heartbeat-explore"])
+def test_cli_preservation_requires_full_native_controller_before_trial(tmp_path, profile):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from benchmark.edgebench.run import main
+    with pytest.raises(SystemExit) as error:
+        main(["--task", "fixture", "--tasks-dir", str(tmp_path), "--log-dir", str(tmp_path),
+              "--run-id", "fixture", "--worker", profile, "--model", "fixture", "--effort", "xhigh",
+              "--judge-url", "http://127.0.0.1:9999", "--preserve-failed-worker"])
+    assert error.value.code == 2 and not (tmp_path / "runs").exists()
+
+
+@pytest.mark.skipif(os.environ.get("LOOPX_EDGEBENCH_DOCKER_SMOKE") != "1",
+                    reason="Requires isolated Docker and native HTTP checkpoint provider")
+@pytest.mark.parametrize("capture_failure", [False, True])
+def test_real_failed_solver_preserves_tail_and_native_opportunity(controllers, writer, tmp_path, capture_failure):
+    from sforge.harness.backend.docker_backend import DockerContainerHandle
+    from benchmark.runtime.sforge_backend import RecordingDockerBackend
+    from benchmark.edgebench.checkpoint_supervisor import CheckpointSupervisor
+    from benchmark.tests.test_checkpoint_controller import register, submit
+    source, _, first, _, files, grades = controllers
+    container, _ = writer
+    token = register(source, first, submission_cooldown=3600)
+    assert submit(first, token, 7).status_code == 200
+    script = '''from pathlib import Path
+import sqlite3,time
+root=Path('/opt/loopx-benchmark'); control=root/'control'; control.mkdir(parents=True)
+(control/'phase-deadline').write_text(str(int(time.time())+600))
+(control/'registry.json').write_text('{"fixture":true}')
+(control/'scheduler-state.json').write_text('{"host_attempt":{"status":"failed"}}')
+(root/'state/runtime').mkdir(parents=True)
+(root/'state/runtime/goal.json').write_text('{"todo":"open"}')
+home=root/'codex-home'; (home/'sessions').mkdir(parents=True)
+(home/'sessions/tail.jsonl').write_text('{"status":"failed","turn":"latest"}\\n')
+(home/'config.toml').write_text('model="synthetic"\\n')
+(home/'auth.json').write_text('PRIVATE-DO-NOT-EXPORT')
+for name in ['state_5.sqlite','thread_history_1.sqlite']:
+ db=sqlite3.connect(home/name); db.execute('CREATE TABLE retained (turn TEXT)'); db.execute("INSERT INTO retained VALUES ('latest')"); db.commit(); db.close()
+Path('/logs/agent/wakes/latest').mkdir(parents=True)
+Path('/logs/agent/wakes/latest/receipt.json').write_text('{"ok":false}')
+Path('/data/candidate').write_text('newer than the last graded candidate')
+'''
+    assert container.exec_run(["python", "-c", script]).exit_code == 0
+    components = terminal_components({"components": []}, "/data")
+    if capture_failure:
+        components.append({"id": "missing", "source_path": "/missing-participant"})
+    supervisor = CheckpointSupervisor(files[0], tmp_path / "terminal-points",
+        retention_enabled=False, terminal_components=components,
+        terminal_receipt=tmp_path / "terminal-preservation.json")
+    backend = RecordingDockerBackend(log_dir=tmp_path / "collected", logger=None,
+                                     oauth_proxy=True, checkpoint=supervisor, client=container.client)
+    backend.bind_registration(token)
+    backend.execution_command = "exit 2"
+    handle = DockerContainerHandle(container)
+    result = backend.exec_run_with_timeout(handle, ["/bin/bash", "-c", "exit 2"], timeout=60)
+    assert result.exit_code == 2
+    backend.cleanup_container(handle)
+    container.reload()
+    assert not container.attrs["State"]["Running"] and container.attrs["State"]["Pid"] == 0
+    receipt = json.loads((tmp_path / "terminal-preservation.json").read_text())
+    assert receipt["source_retained"] and receipt["source_stopped"]
+    assert not receipt["restore_qualified"]
+    assert receipt["capture_succeeded"] is not capture_failure
+    assert len(grades) == 1  # Saving the tail did not create an evaluation opportunity.
+    if not capture_failure:
+        point = supervisor.destination / receipt["capture_id"]
+        manifest = json.loads((point / "checkpoint.json").read_text())
+        metadata = manifest["point_metadata"]["worker_file_snapshot"]
+        assert metadata["native_cursor_qualified"] is False
+        assert (point / "components/terminal_workspace/candidate").read_text() == 'newer than the last graded candidate'
+        capsule = point / "components" / metadata["native_capsule_component_id"]
+        native = json.loads((capsule / "checkpoint.json").read_text())["point_metadata"]["native_reference"]
+        assert native["opportunity"]["next_agent"] == 2
+        assert native["opportunity"]["remaining_cooldown_seconds"] > 3500
+        assert not list(point.rglob("auth.json"))

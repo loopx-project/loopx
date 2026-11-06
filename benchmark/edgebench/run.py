@@ -151,6 +151,8 @@ def main(argv=None):
                         help="Host-private native checkpoint controller; requires full fresh-replan handoff")
     parser.add_argument("--checkpoint-export-root", type=Path,
                         help="Existing physical host volume for full worker checkpoints; must preserve Linux filenames")
+    parser.add_argument("--preserve-failed-worker", action="store_true",
+                        help="Opt-in terminal joint capture and stopped-worker retention after a failed heartbeat execution; requires full controller capture")
     parser.add_argument("--checkpoint-request", type=Path,
                         help="Explicit host JSON declaration staged into a heartbeat worker; omitted disables capture")
     parser.add_argument("--restore-checkpoint", type=Path,
@@ -231,6 +233,10 @@ def main(argv=None):
         parser.error("controller file and full controller_handoff must be enabled together with native feedback")
     if (args.checkpoint_retention_policy is not None or args.no_checkpoint_retention) and not handoff:
         parser.error("Checkpoint retention requires the explicit native controller capture path")
+    if args.preserve_failed_worker and not handoff:
+        parser.error("Failed-worker preservation requires full native controller capture")
+    if args.preserve_failed_worker and args.eval_interval != 0:
+        parser.error("Failed-worker preservation requires agent-only native submissions")
     if args.checkpoint_export_root is not None:
         if not handoff:
             parser.error("Checkpoint export storage requires full controller capture")
@@ -405,9 +411,15 @@ def main(argv=None):
         from benchmark.edgebench.checkpoint_supervisor import CheckpointSupervisor
         destination = (args.checkpoint_export_root / args.run_id / args.task / "checkpoints"
                        if args.checkpoint_export_root is not None else trial / "checkpoints")
+        terminal = None
+        if args.preserve_failed_worker:
+            from benchmark.edgebench.terminal_capture import terminal_components
+            terminal = terminal_components(declaration, task.cwd)
         checkpoint = CheckpointSupervisor(args.checkpoint_controller_file, destination,
                                           retention_policy=args.checkpoint_retention_policy,
-                                          retention_enabled=not args.no_checkpoint_retention)
+                                          retention_enabled=not args.no_checkpoint_retention,
+                                          terminal_components=terminal,
+                                          terminal_receipt=(trial / "terminal-preservation.json") if terminal else None)
     backend = RecordingDockerBackend(log_dir=trial / "collected", logger=logger,
                                      oauth_proxy=bool(args.api_proxy_url or api_base_url),
                                      blind_api_endpoint=blind_endpoint, feedback=feedback,
@@ -475,6 +487,7 @@ def main(argv=None):
         **({"checkpoint_request_sha256": hashlib.sha256(checkpoint_request).hexdigest()}
            if checkpoint_request is not None else {}),
         **({"checkpoint_export_directory": str(checkpoint.destination)} if checkpoint is not None else {}),
+        **({"preserve_failed_worker": True} if args.preserve_failed_worker else {}),
     }
     receipt_path = trial / "runtime-receipt.json"
     receipt_path.write_text(json.dumps(receipt, indent=2))

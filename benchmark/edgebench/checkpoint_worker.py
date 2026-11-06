@@ -57,7 +57,10 @@ def qualify_export_storage(destination: Path) -> None:
 
 
 def _request(path: Path) -> dict:
-    value = json.loads(_physical(path).read_bytes())
+    return _validate_request(json.loads(_physical(path).read_bytes()))
+
+
+def _validate_request(value: dict) -> dict:
     if (not isinstance(value, dict) or
             set(value) not in ({"container_id", "components", "phase_deadline_path"},
                               {"container_id", "components", "phase_deadline_path", "handoff"}) or
