@@ -31,6 +31,7 @@ if TYPE_CHECKING:
 # and let the native compactor carry its own opaque state into the next prefix;
 # a single oversized injection can fail before automatic compaction can start.
 HISTORY_RESTORE_BATCH_BYTES = 128 * 1024
+_READ_ONLY_ITEM_TYPES = frozenset({"reasoning", "webSearch", "imageView", "contextCompaction"})
 
 
 @dataclass
@@ -335,7 +336,7 @@ def completed_work_readback(session: CodexChatAgentSession, turn_id: str, *,
             elif kind in {"commandExecution", "fileChange", "mcpToolCall"}:
                 if not _settled_work_effect(item):
                     return None  # Declined/live/unobserved effects cannot request writable continuation.
-            elif kind not in {"reasoning", "webSearch", "imageView", "contextCompaction"}:
+            elif kind not in _READ_ONLY_ITEM_TYPES:
                 return None
         if (users != 1 or len(finals) != 1 or turns() != inventory
                 or list(session._control_items("thread/items/list", {"turnId": turn_id}, deadline)) != items
@@ -357,8 +358,8 @@ def completed_work_readback(session: CodexChatAgentSession, turn_id: str, *,
                 return None
             for row in rows:
                 item = row["item"]
-                if (item.get("type") not in {"userMessage", "agentMessage", "commandExecution", "fileChange",
-                        "mcpToolCall", "reasoning", "webSearch", "imageView", "contextCompaction"}
+                if (item.get("type") not in _READ_ONLY_ITEM_TYPES | {"userMessage", "agentMessage",
+                        "commandExecution", "fileChange", "mcpToolCall"}
                         or item.get("type") == "agentMessage" and item.get("phase") not in {"commentary", "final_answer"}
                         or item.get("type") in {"commandExecution", "fileChange", "mcpToolCall"}
                         and not _settled_work_effect(item)):
@@ -417,7 +418,7 @@ def interrupted_result_readback(session: CodexChatAgentSession, turn_id: str) ->
                 if item.get("status") not in {"completed", "failed", "declined"}:
                     return None
                 effects += 1
-            elif kind not in {"reasoning", "webSearch", "contextCompaction"}:
+            elif kind not in _READ_ONLY_ITEM_TYPES:
                 return None
         if (users != 1 or not effects or turns() != inventory
                 or list(session._control_items("thread/items/list", {"turnId": turn_id}, deadline)) != items):
