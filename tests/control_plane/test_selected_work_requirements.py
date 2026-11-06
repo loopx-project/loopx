@@ -20,7 +20,7 @@ from loopx.control_plane.todos.goal_todo_projection import retained_todo_summary
 from loopx.control_plane.turn_driver.codex_cli import _prompt
 from loopx.control_plane.turn_driver.executor import build_loopx_turn_host_request
 from loopx.control_plane.turn_driver.host_candidate import extract_turn_authority, render_prompt
-from tests.control_plane.test_cli_output_budget import _read_current_quota_source
+from tests.control_plane.cli_output_fixture import read_cli_context_for_oracle
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -88,7 +88,7 @@ def test_inline_user_context_preserves_full_scoped_gates_without_granting_delive
             "--agent-id", "agent-a", "--context-delivery", "off", *extra,
             registry_path=registry, runtime_root=runtime)
         assert code == expected_exit, json.dumps(packet, indent=2)
-        return _read_current_quota_source(packet)
+        return json.loads(read_cli_context_for_oracle(json.dumps(packet))[0])
 
     if provider == "legacy":
         refused = guard(expected_exit=1)
@@ -207,7 +207,7 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
             "--agent-id", "agent-a", "--context-delivery", "off", *extra,
             registry_path=registry, runtime_root=runtime)
         assert code == 0, json.dumps(packet, indent=2)
-        packet = _read_current_quota_source(packet)
+        packet = json.loads(read_cli_context_for_oracle(json.dumps(packet))[0])
         assert packet["should_run"] is True, packet.get("reason")
         # The harness adds transport metadata outside the signed CLI stdout.
         packet.pop("_returncode", None)
@@ -233,7 +233,7 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
     }
     result = subprocess.run(["sh", "-c", script.replace("<current_time_iso>", "requirements-default-wake")],
         cwd=REPO, env=env, capture_output=True, text=True, check=True)
-    full = _read_current_quota_source(json.loads(result.stdout))
+    full = json.loads(read_cli_context_for_oracle(result.stdout)[0])
     assert full["should_run"] is True, full.get("reason")
     channel = full["interaction_contract"]["agent_channel"]
     assert channel["required_reads"] == []
@@ -449,7 +449,7 @@ def test_selected_todo_body_change_between_selection_and_readback_blocks_deliver
     )
     assert code == 0, json.dumps(packet, indent=2)
     assert changed
-    packet = _read_current_quota_source(packet)
+    packet = json.loads(read_cli_context_for_oracle(json.dumps(packet))[0])
     assert packet["selected_todo"]["todo_id"] == "todo_selected_work"
     selected_revision = projected_request["selected_todo"]["content_revision"]
     assert selected_revision
@@ -501,7 +501,7 @@ def test_short_selected_todo_deduplicates_body_but_keeps_canonical_note(
     }
     result = subprocess.run(["sh", "-c", script.replace("<current_time_iso>", "short-note-wake")],
         cwd=REPO, env=env, capture_output=True, text=True, check=True)
-    full = _read_current_quota_source(json.loads(result.stdout))
+    full = json.loads(read_cli_context_for_oracle(result.stdout)[0])
     channel = full["interaction_contract"]["agent_channel"]
     context = channel["work_context"]
     assert context["complete"] is True
@@ -521,7 +521,7 @@ def test_short_selected_todo_deduplicates_body_but_keeps_canonical_note(
         "--agent-id", "agent-a",  "--turn-envelope",
         registry_path=registry, runtime_root=runtime)
     assert code == 0 and turn["ok"], turn
-    turn = _read_current_quota_source(turn)
+    turn = json.loads(read_cli_context_for_oracle(json.dumps(turn))[0])
     turn_context = turn["interaction_contract"]["agent_channel"]["work_context"]
     assert turn_context["complete"] is True
     assert turn_context["selected_todo_ref"] == "selected_todo"

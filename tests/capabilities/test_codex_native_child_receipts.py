@@ -145,13 +145,8 @@ def test_complete_host_observes_children_without_reading_legacy_context(tmp_path
         host="codex-cli", execution_mode="isolated-headless", turn_instance_id=TURN)
     request = build_loopx_turn_host_request(plan)
 
-    class SignatureOnlyEnvelope(dict):
-        def get(self, key, default=None):
-            if key == "agent_context":
-                raise AssertionError("complete native observation read the historical context")
-            return super().get(key, default)
-
-    request["turn_envelope"] = SignatureOnlyEnvelope(request["turn_envelope"])
+    assert request["schema_version"] == "loopx_turn_host_request_v1"
+    assert "turn_envelope" not in request
     request["host_attempt"] = 1
     _admit(tmp_path)
     script = tmp_path / "host.py"
@@ -185,6 +180,19 @@ def test_complete_host_observes_children_without_reading_legacy_context(tmp_path
     tampered["work_contract"]["reason"] = "different source"
     with pytest.raises(RuntimeError, match="integrity mismatch"):
         codex_cli.run_codex_cli_host(tampered, runtime_root=tmp_path, project=tmp_path,
+            codex_bin=sys.executable)
+    assert launched == [True]
+    assert load_rollout_events(rollout_event_log_path(tmp_path, GOAL)) == events
+
+    # A historical-context trap cannot be attached to the current producer:
+    # its second carrier is retired. Challenge the same no-fallback boundary
+    # with an injected, contradictory capability instead; refuse before effects.
+    mixed = copy.deepcopy(request)
+    mixed["turn_envelope"] = {"agent_context": {"contributions": [
+        {"capability_id": "multi_subagent", "facts": {"max_children": 0 if enabled else 3}},
+    ]}}
+    with pytest.raises(ValueError, match="without an executor adapter"):
+        codex_cli.run_codex_cli_host(mixed, runtime_root=tmp_path, project=tmp_path,
             codex_bin=sys.executable)
     assert launched == [True]
     assert load_rollout_events(rollout_event_log_path(tmp_path, GOAL)) == events
