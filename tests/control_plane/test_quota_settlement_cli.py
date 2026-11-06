@@ -810,6 +810,9 @@ def test_gitless_goal_refresh_and_quota_spend_settle_end_to_end(
     monkeypatch.setenv("LOOPX_USAGE_PING_ENDPOINT", "http://127.0.0.1:1/v1/ping")
     for key in ("CI", "DO_NOT_TRACK", "LOOPX_USAGE_PING", "LOOPX_USAGE_POLICY"):
         monkeypatch.delenv(key, raising=False)
+    # Disposable transport qualification requires explicit collection and a
+    # numeric loopback endpoint; enabled state alone cannot bypass temp isolation.
+    monkeypatch.setenv("LOOPX_USAGE_PING", "1")
     usage_path = machine / "usage-ping.json"
     usage_ping.control("enable", usage_path)
     project, runtime, registry_path = _write_fixture(
