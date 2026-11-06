@@ -396,24 +396,14 @@ Budget exhaustion is distinct from task completion: this clock does not override
 provider failures, Stop, blocked planning, or a valid terminal LoopX decision.
 Campaign duration coverage must still classify an early exit as missing time.
 
-### Ongoing execution commitments in SForge
+### Optional native execution evidence
 
-EdgeBench native-feedback heartbeat trials bind their declared finite execution
-commitment by default, without a feature switch. The runner supplies the native
-task identity and records the requirement through Core's existing outcome and
-Goal-only check owners. Completing a local Todo remains valid; an unmet overall
-commitment follows the existing replan path. Stop, exhausted allowance and
-genuine blockers retain their existing authority. Official and Native Goal
-controls keep their existing completion behavior.
-
-This caller declaration is specific to an authorized trial. Ordinary Goals
-already retain declared outcome requirements by default, without executable
-checks or a new scope selection. Other SForge callers without the scoped native
-execution provider do not acquire a requirement from model text or a timeout.
-The check scope describes ownership; it is not an activation switch. Existing
-local check contracts and restored Goals are never silently converted.
-
-The native judge host must install the read-only provider before model entry:
+A benchmark host can expose finalized and live solver intervals through the
+existing campaign duration owner. This read-only provider does not declare
+Goal requirements, configure acceptance checks or decide whether to continue.
+The Agent owns semantic requirements in the shared first-planning checkpoint;
+independent executable checks remain optional. A maximum timeout alone never
+creates a minimum execution commitment.
 
 ```python
 from benchmark.edgebench.execution_commitment import (
@@ -422,7 +412,7 @@ from benchmark.edgebench.execution_commitment import (
 
 evidence = NativeExecutionEvidence(
     run_id=run_id, task_id=task_id, trial=trial,
-    target_seconds=timeout_seconds,
+    target_seconds=explicit_caller_target_seconds,
     runner_active=lambda: worker is not None and worker.poll() is None,
 )
 install_execution_commitment(
@@ -430,29 +420,16 @@ install_execution_commitment(
 )
 ```
 
-Installers on the same judge share one route. The native relay resolves the
-exact `(run_id, task_id)` pair; unrelated trials cannot observe each other's
-execution. Reinstalling the same observer is idempotent; replacing an existing
-observer for that pair is rejected. Registrations are local to each app.
-
 Use the native trial directory containing `solver_execution.json` and the exact
-worker process. The provider uses the campaign report's TypeScript duration
-owner; installation, grading and gaps between executions contribute no time.
-The original scoped feedback relay reveals only whether the commitment is
-fulfilled. It exposes neither a countdown nor another registration's state.
-An absent or unavailable provider fails the pre-model probe; it does not become
-an always-false check or silently fall back to a different execution policy.
-
-On restore, keep the original task identity. The runner compares
-the inherited acceptance document through the owner's read-only preview, without
-refining requirements, reconfiguring checks or resetting planning. A legacy
-Goal without that contract is rejected rather than rewritten. The native host
-supplies earlier finalized execution receipts as explicit `(Path, sha256)` pairs
-in `previous`; mismatched pins or unfinished intervals remain unknown. No new
-worker clock or additional checkpoint trigger is introduced. Other SForge
-callers without a declared native commitment retain ordinary trial behavior.
-The receiver preserves routing for the original scoped relay. A changed endpoint
-fails the inherited-document comparison rather than silently replacing the check.
+worker process. For continuation, supply finalized earlier receipts as explicit
+`(Path, sha256)` pairs in `previous`. Setup, grading and downtime contribute no
+execution credit; missing, altered or unfinished previous evidence stays unknown.
+The scoped feedback route resolves the exact `(run_id, task_id)` pair. Reinstalling
+the same observer is idempotent; replacing it is rejected. The command adapter
+`python -m benchmark.runtime.execution_commitment probe|check --task-id TASK`
+reads the explicitly selected native relay and rejects stale or malformed data.
+Apps without this extension and ordinary worker entry/restore behavior remain
+unchanged. No default semantic requirement or automatic check is installed.
 
 To compare entry policies, hold the execution mode, session policy, model,
 effort, tools, feedback and total budget fixed, and use separate trials:

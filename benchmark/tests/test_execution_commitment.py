@@ -137,31 +137,6 @@ def test_host_pinned_relay_survives_a_stale_inherited_service_environment(
     assert result.returncode == 0 and json.loads(result.stdout) == {"available": True}
 
 
-def test_task_workspace_cannot_replace_the_host_observer(native, monkeypatch, tmp_path):
-    pytest.importorskip("sforge")
-    pytest.importorskip("harbor")
-    from pathlib import Path
-    from benchmark.runtime import sforge
-
-    shadow = tmp_path / "benchmark"
-    shadow.mkdir()
-    (shadow / "__init__.py").write_text(
-        "raise AssertionError('task-local package replaced observer')"
-    )
-    monkeypatch.setattr(sforge, "_PYTHON", str(Path(sys.executable).parent.parent))
-    monkeypatch.setattr(sforge, "_SRC", str(Path(__file__).resolve().parents[2]))
-    worker = sforge.SForgeWorker.__new__(sforge.SForgeWorker)
-    worker.commitment_task_id = "synthetic-task"
-    worker.commitment_feedback_url = os.environ["SFORGE_FEEDBACK_URL"]
-    result = subprocess.run(
-        worker._execution_commitment_command("check"),
-        cwd=tmp_path,
-        capture_output=True,
-        text=True,
-        timeout=5,
-    )
-    assert result.returncode == 1
-    assert json.loads(result.stdout) == {"commitment_fulfilled": False}
 
 
 @pytest.mark.parametrize(
@@ -176,26 +151,3 @@ def test_task_workspace_cannot_replace_the_host_observer(native, monkeypatch, tm
 def test_unscoped_endpoints_are_rejected(monkeypatch, endpoint):
     monkeypatch.setenv("SFORGE_FEEDBACK_URL", endpoint)
     assert cli("probe").returncode == 1
-
-
-@pytest.mark.parametrize(
-    "profile,feedback",
-    [("official", "native"), ("native-goal", "native"), ("heartbeat-explore", "blind")],
-)
-def test_declared_commitment_preserves_controls_and_requires_native_provider(
-    monkeypatch, profile, feedback
-):
-    pytest.importorskip("sforge")
-    pytest.importorskip("harbor")
-    from sforge.harness.config import SForgeConfig
-    from benchmark.runtime.sforge import SForgeWorker
-
-    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-auth")
-    with pytest.raises(ValueError, match="native task identity"):
-        SForgeWorker(
-            SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
-            profile=profile,
-            cwd="/task",
-            feedback=feedback,
-            commitment_task_id="synthetic-task",
-        )

@@ -367,8 +367,6 @@ def main(argv=None):
                          context_delivery=args.context_delivery,
                          **({"provider_request_admission": True} if args.provider_request_admission else {}),
                          native_goal_continue=args.native_goal_continue,
-                         commitment_task_id=(args.task if args.worker.startswith("heartbeat-")
-                                             and args.feedback == "native" else None),
                          replan_after_turns=args.replan_after_turns,
                          replan_after_todos=args.replan_after_todos,
                          planning_horizon_goal=args.planning_horizon_goal,
@@ -459,8 +457,6 @@ def main(argv=None):
            if agent.replan_after_todos is not None else {}),
         **({"planning_horizon_goal": agent.planning_horizon_goal}
            if agent.planning_horizon_goal is not None else {}),
-        **({"execution_commitment_task_id": agent.commitment_task_id}
-           if agent.commitment_task_id is not None else {}),
         **({"stride_strategy": args.stride_strategy}
            if args.stride_strategy is not None else {}),
         **({"checkpoint_request_sha256": hashlib.sha256(checkpoint_request).hexdigest()}
