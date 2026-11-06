@@ -192,12 +192,13 @@ Paired diffs do not certify translation accuracy.
     settlement, and typed Effect Program foundations are shipped. Replan
     planning/ACK stays domain-local until a second real lifecycle justifies
     extraction.
-- [Controller / Executor Sessions and One Governed Work Contract v0](controller-executor-unified-contract-v0.md)
+- [Router–Controller–Worker Architecture and One Governed Work Contract v0](controller-executor-unified-contract-v0.md)
   ([中文版](controller-executor-unified-contract-v0.zh-CN.md))
   - **Delivery on `main`:** Design only; no unified schema or dual-session profile is implemented.
   - **Current boundary:** Replaces permanent quota/Turn packet views with one
-    contract including differential context; controller-only model access to
-    Core, natural-language executor work and runtime-owned identity/recovery.
+    contract including differential context; a steward router coordinates Agent
+    units, each binding a controller and worker with asynchronous interaction.
+    Existing Core/request/session owners retain authority, identity and recovery.
     C1–C9 connect concrete refactors, real host adoption and complete-cost
     qualification without changing defaults or launching experiments.
 - [TypeScript Control-Plane Migration v0](typescript-control-plane-migration-v0.md)

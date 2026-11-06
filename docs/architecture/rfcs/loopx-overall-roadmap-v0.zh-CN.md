@@ -143,8 +143,8 @@ assessment 中有证据绑定的研究综合分析接入指标 → 汇报 → �
 S2/S4/S6/S7/S11：用一份受治理工作 schema 替代 quota/Turn packet 格式选择。
 [双层交付设计](controller-executor-unified-contract-v0.zh-CN.md#差分上下文)以跨 Host 默认
 Progressive、仅已资格化 Host 独立 Delta auto，以及当前完整 capture 的未读发现为目标；
-保留显式 off 与分版本迁移。可选 controller 模型独自对接 Core，executor 接收自然语言工作
-和材料；身份、权限、恢复、结算仍归既有 host/Core owner。Session role、执行模式、
+保留显式 off 与分版本迁移。可选 controller 模型负责该单元的 Core 工作控制与结算；
+executor 接收自然语言工作和材料；身份、权限、恢复、结算仍归既有 host/Core owner。Session role、执行模式、
 唤醒来源和 benchmark 评估组保持正交。这是设计方向，不是已交付行为或成本收益证据。
 
 Controller 会话的[智能中介作用](controller-executor-unified-contract-v0.zh-CN.md#controller-的智能与语义压缩)
@@ -191,6 +191,18 @@ worker/settlement adapter 和有条件的旧路径退役。从全局成果与实
 实现。复用已有 owner，在真实调用方删除被替代的规则。核对也列出已经共享的代码，以及不能
 因外形相似就合并的不同生命周期。工作包是可认领切片，不是固定 PR 数量或 controller
 新前置条件；runtime 交付与资格仍未完成。
+
+[Router—Controller—Worker 扩展](controller-executor-unified-contract-v0.zh-CN.md#router-controller-worker)
+将管家定位为跨 Agent router，每个 controller + worker 沿用一个 Agent 绑定单元。
+Worker 长操作不能阻塞 controller 处理用户/router 输入；既有 Core、请求、会话、
+队列与返回 owner 保留 authority。Router 可用授权请求操作，不能替单元结算或复制预算。
+[当前源码核对](controller-executor-unified-contract-v0.zh-CN.md#current-delivery-audit)区分
+已共享 managed-operation、多接收方与 revision 机制，以及仍缺的双角色绑定/异步旅程。
+[依赖与交付切片](controller-executor-unified-contract-v0.zh-CN.md#delivery-path-from-current-state)
+复用 C1–C9：一个真实单元 → 忙时交互/纠偏/Stop → 两单元 router 采用 → 成果/成本与退役。
+这是所选 profile 的依赖，不是全局固定优先级，也不向在途 C1 追加 router 合入门。
+现有正确性修复与有真实 caller 的精简可独立推进；不新建 scheduler、消息总线或任务库。
+完整 schema cutover 与双会话尚未交付，默认仍不变。
 
 ### 研究与验收集成后的当前优先级
 
@@ -392,7 +404,6 @@ Muse 设计页在浏览器超时，其文章通过网页检索读取。本次调
 | 工程/采用 | 兼容与升级成功、模块/bridge 简化、复现时间、独立首次/重复使用、支持成本 | 发布 artifact 而非只验源码；公开脱敏案例、可追溯反馈；不凭安装数宣布 PMF |
 
 不预先发明未经测量的性能数字。每个实验/试点开始前，由对应 owner 固定目标阈值、基线、预算、停止条件与证据范围；结果出炉后改变阈值应作为新实验。G4 correctness 要求无重复受保护效果和过期/越权提交，性能/成本阈值另行测量资格化。
-
 
 ## 4. 全部 RFC 的落位与下一步
 
@@ -748,7 +759,6 @@ Goal 成果页可打开正文；原管家对话仅在已确认团队计划的回
 保留安装态既有设置及不可变旧失败；实际启用与核对效果后的原超时请求恢复
 仍是独立验收，不据此推断已重放。
 
-
 **S1/S5 注意力 checkpoint。** 本地管家/Goal Turn 无须 Lark 连接，即收到 canonical
 阻塞与具体用户请求。共用 TS 读模型合成同一 Todo 的阻塞/决策；正文 adapter 和
 阻塞收集服务本地与外部投递。这闭合 Turn preparation 的证据缺口；已有外发使用
@@ -757,7 +767,6 @@ Goal 成果页可打开正文；原管家对话仅在已确认团队计划的回
 继续承接实质变化 admission、既有预算内唤醒、语义汇总、已呈现/已读/恢复回执及
 独立授权的 sink 投递。宣称自动智能通知前，在原打包对话验收无 Channel 的阻塞、
 安全回退、用户决定与恢复旅程。
-
 
 - **Owner：** 管家 RFC M2/M3；从已有 `manager_context` request/tracking/return 迁移到单一 typed collaboration 事务，纳入 #4094 adapter。
 - **交付：** 交接保存目的、决策、约束、证据引用和期望回报；receiver 读取后自行 adopt/defer/reject/replan。用独立事实表示 accepted work、result committed、answer delivered；从已有 outbox 自动回传。
