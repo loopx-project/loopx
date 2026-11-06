@@ -69,7 +69,8 @@ def test_merged_wait_stays_ready_after_history_growth_and_restart(tmp_path, monk
     assert read()["resume_ready"] is True
     # Production status/attention/index and quota consume the same resume owner.
     status = cli("status", "--goal-id", "goal-a")
-    quota = cli("quota", "should-run", "--goal-id", "goal-a", "--agent-id", "agent-a")
+    quota = cli("quota", "should-run", "--goal-id", "goal-a", "--agent-id", "agent-a",
+        "--context-delivery", "off")
 
     def resume_rows(value):
         if isinstance(value, dict):

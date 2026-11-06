@@ -207,10 +207,18 @@ def validate_handoff_socket(value: str) -> Path:
     return path
 
 
+CODE_MODE_EXEC_RESULT_FORWARDER = "text(result.exit_code === 0 ? result.output : result)"
+CONTEXT_CAPTURE_CODE_MODE_GUIDANCE = (
+    "In code-mode, forward exec_command results with `" + CODE_MODE_EXEC_RESULT_FORWARDER + "`. "
+    "Keep a running command's session_id and finish it with write_stdin; "
+    "for a yielded functions.exec cell_id use functions.wait. "
+    "Running output or empty stdout does not prove completion; preserve failures. "
+)
+
 _CONTEXT_CAPTURE_PAGE_START = (
     "Follow next_command through eof and combine content in byte-offset order. "
-    "In code-mode, forward successful exec stdout directly with text(result.output); "
-    "retain errors. The reader verifies the original capture SHA-256; keep its returned digest and byte cursors. "
+    + CONTEXT_CAPTURE_CODE_MODE_GUIDANCE +
+    "The reader verifies the original capture SHA-256; keep its returned digest and byte cursors. "
     "Do not hash or retype the packet. "
 )
 _CONTEXT_CAPTURE_PAGE_END = (
@@ -251,8 +259,8 @@ CONTEXT_CAPTURE_PAGE_GUIDANCE = _CONTEXT_CAPTURE_PAGE_START + (
 ) + _CONTEXT_CAPTURE_PAGE_END
 CONTEXT_CAPTURE_READ_GUIDANCE = (
     "Follow next_command through eof and combine content in byte-offset order. "
-    "In code-mode, forward successful exec stdout directly with text(result.output); "
-    "retain errors. Small batches can save model round trips; start with at most two default pages "
+    + CONTEXT_CAPTURE_CODE_MODE_GUIDANCE +
+    "Small batches can save model round trips; start with at most two default pages "
     "and inspect every output. A host may truncate inside valid JSON or omit a whole output. "
     "Check each model-visible content's UTF-8 byte length against next_offset (total_bytes at eof), "
     "complete coverage and the original SHA-256. If incomplete, reread the affected range "

@@ -3,7 +3,7 @@ import {BARE_SHA256_PATTERN} from '../content_digest.ts';
 import type {TrajectoryToolContext} from './trajectory_assessment_types.ts';
 
 // Local observation buckets, not new execution or settlement vocabulary.
-function operation(argv: unknown): string | null {
+export function trajectoryLoopXOperation(argv: unknown): string | null {
   if (!Array.isArray(argv) || !argv.length || argv.some(v => typeof v !== 'string')) return null;
   const args = [...argv] as string[];
   const executable = args.shift()!.split('/').at(-1);
@@ -39,7 +39,7 @@ export function summarizeTrajectoryToolContext(value: unknown): TrajectoryToolCo
       previous = row.line;
       if (row.kind === 'call') {
         if (typeof row.call_id !== 'string' || !row.call_id || calls.has(row.call_id)) throw new Error();
-        calls.set(row.call_id, operation(row.argv));
+        calls.set(row.call_id, trajectoryLoopXOperation(row.argv));
       } else if (row.kind === 'unmeasured') unmeasured++;
       else if (row.kind === 'message') {
         total = count(total + count(row.bytes)); unmeasured = count(unmeasured + count(row.unmeasured_parts));

@@ -113,7 +113,10 @@ function QueuedMessage({sessionId, turn, index, targetTurnId, onChange, onInputC
   return <li onKeyDown={event => {
     if (composing.current || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
     if (event.key === "Escape" && !busy && !unresolved) {
-      event.preventDefault(); event.stopPropagation(); discard(); return;
+      event.preventDefault(); event.stopPropagation();
+      if (menu) {setMenu(false); menuButton.current?.focus();}
+      else discard();
+      return;
     }
     if (editing) {
       if (composerKeyAction({...event, isComposing: event.nativeEvent.isComposing, keyCode: event.nativeEvent.keyCode}, false) === "steer") {

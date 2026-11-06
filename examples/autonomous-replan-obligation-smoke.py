@@ -6,11 +6,13 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import shlex
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -48,7 +50,8 @@ def run_cli(
     if not USE_SUBPROCESS_CLI:
         stdout = io.StringIO()
         stderr = io.StringIO()
-        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        with patch.dict(os.environ, {"LOOPX_CONTEXT_DELIVERY": "off"}), \
+                contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             exit_code = loopx_cli.main(argv)
         if exit_code != 0:
             raise AssertionError(
@@ -66,6 +69,7 @@ def run_cli(
             capture_output=True,
             text=True,
             timeout=timeout,
+            env={**os.environ, "LOOPX_CONTEXT_DELIVERY": "off"},
         )
     except subprocess.TimeoutExpired as exc:
         raise AssertionError(
@@ -84,7 +88,8 @@ def run_cli_error(
     if not USE_SUBPROCESS_CLI:
         stdout = io.StringIO()
         stderr = io.StringIO()
-        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        with patch.dict(os.environ, {"LOOPX_CONTEXT_DELIVERY": "off"}), \
+                contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             exit_code = loopx_cli.main(argv)
         assert exit_code != 0, stdout.getvalue()
         return "\n".join((stderr.getvalue(), stdout.getvalue()))
@@ -96,6 +101,7 @@ def run_cli_error(
         capture_output=True,
         text=True,
         timeout=timeout,
+        env={**os.environ, "LOOPX_CONTEXT_DELIVERY": "off"},
     )
     assert result.returncode != 0, result.stdout
     return "\n".join((result.stderr, result.stdout))

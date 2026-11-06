@@ -100,22 +100,27 @@ def native_process_continuation(request, identity, *, code_mode=False):
         for part in reversed(parts):
             if not isinstance(part, str):
                 continue
+            pending_session = None
             try:
                 wrapper = json.loads(part)
+                if (isinstance(wrapper, dict) and type(wrapper.get("session_id")) is int
+                        and wrapper.get("exit_code") is None):
+                    pending_session = wrapper["session_id"]
                 if isinstance(wrapper, dict) and isinstance(wrapper.get("output"), str):
                     part = wrapper["output"]
             except ValueError:
                 pass
             match = re.search(r"(?m)^Process running with session ID (\d+)\s*$", part)
-            if match:
-                options = {"session_id": int(match[1]), "chars": "", "yield_time_ms": 1000,
+            if match or pending_session is not None:
+                options = {"session_id": int(match[1]) if match else pending_session, "chars": "", "yield_time_ms": 1000,
                            "max_output_tokens": 30000}
                 base = {"id": f"fc_process_{identity}", "call_id": f"call_process_{identity}"}
                 if code_mode:
+                    from loopx.control_plane.turn_driver.decision_capture import CODE_MODE_EXEC_RESULT_FORWARDER
                     options["max_output_tokens"] = 22000
                     return {**base, "type": "custom_tool_call", "name": "exec",
-                            "input": '// @exec: {"max_output_tokens":24000}\ntext((await tools.write_stdin('
-                                + json.dumps(options) + ')).output);'}
+                            "input": '// @exec: {"max_output_tokens":24000}\nconst result=await tools.write_stdin('
+                                + json.dumps(options) + ');' + CODE_MODE_EXEC_RESULT_FORWARDER + ';'}
                 return {**base, "type": "function_call", "name": "write_stdin", "arguments": json.dumps(options)}
         return None  # Never borrow a session from an older result.
     return None

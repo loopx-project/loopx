@@ -173,6 +173,21 @@ def test_goal_queue_input_http_with_canonical_goal_providers(ordinary, tmp_path,
     qid = queued["turn_id"]
     assert request(f"/api/chat/sessions/{sid}/queue")[0] == 200
     path = f"/api/chat/sessions/{sid}/queue/{qid}/input"
+    original_turn = store.load_turn(sid, qid)
+    original_messages = store.messages(sid)
+    original_events = store.events_after(sid, qid, None)
+    original_session = store.load_session(sid)
+    for index, action in enumerate([
+        None, False, 0, {}, [], ["edit"], ["cancel"], [["edit"]], {"toString": "edit"}, "unknown",
+    ]):
+        invalid = {"action": action, "operation_id": f"invalid-{index}", "expected_revision": 0}
+        response = request(path, invalid)
+        assert store.load_turn(sid, qid) == original_turn, response
+        assert store.messages(sid) == original_messages
+        assert store.events_after(sid, qid, None) == original_events
+        assert store.load_session(sid) == original_session
+        assert not capture.exists()
+        assert response[0] == 409, response
     assert request(path, queue_input_body())[0] == 200
     history = request(f"/api/chat/sessions/{sid}?turn_id={qid}&message_limit=200")[1]["messages"]
     assert history[0]["text"] == "Corrected queued input." and history[0]["queue_input_revision"] == 1
