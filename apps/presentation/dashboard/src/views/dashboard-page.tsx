@@ -127,6 +127,7 @@ import {
   type WorkspaceGoalArchiveLoadState,
   type WorkspaceActionPreviewRequest,
   type WorkspaceAgentTodo,
+  type WorkspaceAttention,
 } from "../features/personal-workspace/personal-workspace-model";
 import { monitorTodoReadback } from "../features/personal-workspace/monitor-readback";
 import { goalExecution, taskSessionStatus } from "../features/personal-workspace/goal-activity";
@@ -476,6 +477,8 @@ type PersonalGoalItem = {
   needsYou?: string | null;
   needsYouActionKind?: string | null;
   needsYouBlocking?: boolean;
+  reportReviewAttention?: WorkspaceAttention[];
+  reportReviewCount?: number;
   attentionSummary?: DigestAttentionSummary;
   needsYouTaskClass?: string | null;
   needsYouTodoId?: string | null;
@@ -688,6 +691,13 @@ function personalAgentCapability(agentId: string, adapterKind?: string | null) {
 
 function personalTodosForQueueItem(item: QueueItem, role: "user" | "agent") {
   const projectAsset = item.project_asset;
+  const queueGroup = role === "user" ? item.user_todos : item.agent_todos;
+  if (role === "user" && queueGroup?.items?.length) {
+    // The owner view needs the canonical bounded queue, not the 3-row project
+    // asset teaser. Both remain display projections; the full-source
+    // capability_actions summary carries counts beyond this list.
+    return queueGroup;
+  }
   return role === "user"
     ? todosFromProjectAssetSummary(projectAsset?.user_todos, item.user_todos, role)
     : todosFromProjectAssetSummary(projectAsset?.agent_todos, item.agent_todos, role);
@@ -1070,6 +1080,21 @@ function buildPersonalHomeModel(
     ];
     const agentRow = sortedGoalAgentRows[0];
     const goalAgentTodos = mergePersonalAgentTodos(personalAgentTodos(row), sortedGoalAgentRows, row);
+    const capabilityActions = row.queueItem?.user_todos?.capability_actions
+      ?? row.queueItem?.project_asset?.user_todos?.capability_actions;
+    const reportReviewGroup = capabilityActions?.groups.find(group => group.action_kind === "review_periodic_report");
+    const reportReviewAttention: WorkspaceAttention[] = (reportReviewGroup?.items ?? []).flatMap(todo => {
+      const todoId = todo.todo_id?.trim();
+      if (!todoId) return [];
+      return [{
+        blocking: false,
+        goalId: goal.id,
+        text: todo.text,
+        todoId,
+        updatedAt: todo.updated_at ?? null,
+        details: attentionDetails(todo),
+      }];
+    });
     const nextSentence = [
       agentTodoFacts.nextTodoText,
       row.queueItem?.recommended_action,
@@ -1118,6 +1143,8 @@ function buildPersonalHomeModel(
       needsYou,
       needsYouActionKind: needsYouTodo?.actionKind ?? null,
       needsYouBlocking: needsYouTodo?.blocking ?? false,
+      reportReviewAttention,
+      reportReviewCount: reportReviewGroup?.count ?? reportReviewAttention.length,
       attentionSummary: goal.activation_state === "stopped"
         ? { blocking: 0, optional: 0, coverage: "complete" } satisfies DigestAttentionSummary
         : attentionSummaries.get(goal.id),
@@ -1283,7 +1310,7 @@ function PersonalGoalHome({
   workBrowseSearch?: Record<string, unknown>;
   onWorkBrowseChange?: (patch: Partial<GoalWorkBrowseState>, source: string, replace?: boolean) => void;
   onSelectWorkSession: (sessionId: string, replace?: boolean) => void;
-  onSelectWorkAgent: (agentId: string | null) => void;
+  onSelectWorkAgent: (agentId: string | null, sessionId?: string) => void;
   onSelectTodo: (todoId: string | null) => void;
   onSelectView: (view: WorkspaceGoalTab) => void;
   onGoalActivationStateChange: (goalId: string, activationState: "active" | "stopped") => void;
@@ -3040,6 +3067,10 @@ function PersonalGoalHome({
     goals: normalizedModel.goals.map((goal) => ({
       ...goal,
       execution: goalExecution(goalSessionFacts, goal.goalId, goal.hostThreadActivity),
+      reportReviewAttention: goal.reportReviewAttention?.map(item => sourceAttention(
+        item, statusSourceControl.activeSource.statusUrl,
+        sourceIsReady && !progress?.errors[goal.goalId], goal.title,
+      )),
     })),
     userTodos: model.userTodos.map(attentionForWorkspace),
     attentionHistory: (model.attentionHistory ?? model.userTodos).map(attentionForWorkspace),
@@ -3941,10 +3972,10 @@ export function DashboardPage() {
             message: current.workSession === sessionId ? current.message : undefined} : current});
       }}
       selectedWorkAgentId={search.workAgent ?? null}
-      onSelectWorkAgent={(agentId) => {
+      onSelectWorkAgent={(agentId, sessionId) => {
         const goalId = search.goalId, statusUrl = search.statusUrl;
         void navigate({search: current => "goalId" in current && current.goalId === goalId && current.statusUrl === statusUrl
-          ? {...current, todo: undefined, workAgent: agentId ?? undefined, workSession: undefined, messageSession: undefined, message: undefined, view: agentId === null ? "overview" : "conversation"} : current});
+          ? {...current, todo: undefined, workAgent: agentId ?? undefined, workSession: sessionId, messageSession: undefined, message: undefined, view: agentId === null ? "overview" : "conversation"} : current});
       }}
       onSelectTodo={(todoId) => {
         const goalId = search.goalId, statusUrl = search.statusUrl;

@@ -1,6 +1,7 @@
 """The existing scheduler invocation shared by native benchmark transports."""
 
 import argparse
+from contextlib import ExitStack
 import hashlib
 import json
 import math
@@ -21,6 +22,84 @@ def phase_work_reserve(mode: str) -> int:
     return 0 if mode == "heartbeat" else PHASE_WORK_RESERVE_SECONDS
 
 
+def _physical_state(path: Path) -> Path:
+    if path.is_symlink() or path.resolve() != path:
+        raise ValueError("Scheduler phase state must be a physical path")
+    return path
+
+
+def _phase_states(root: Path) -> list[Path]:
+    states = [root, *sorted(root.parent.glob(f"{root.stem}.phase-*{root.suffix}"))]
+    return [_physical_state(path) for path in states if path.exists()]
+
+
+def _state_object(path: Path) -> dict | None:
+    try:
+        value = json.loads(path.read_text())
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _latest_phase_state(root: Path, states: list[Path]) -> Path:
+    """Follow explicit resume links, then use mtime only for legacy phase files."""
+    documents = {path: state for path in states if (state := _state_object(path)) is not None}
+    children: dict[Path, list[Path]] = {}
+    for path, state in documents.items():
+        parent = state.get("resume_from")
+        if not isinstance(parent, str):
+            continue
+        parent_path = Path(parent)
+        if (not parent_path.is_absolute() or parent_path.resolve() != parent_path
+                or parent_path not in documents):
+            continue
+        children.setdefault(parent_path, []).append(path)
+    current = root if root in documents else max(states, key=lambda path: path.stat().st_mtime_ns)
+    seen = set()
+    while current not in seen and children.get(current):
+        seen.add(current)
+        current = max(children[current], key=lambda path: path.stat().st_mtime_ns)
+    unreadable = [path for path in states if path not in documents]
+    if unreadable:
+        newest = max(unreadable, key=lambda path: path.stat().st_mtime_ns)
+        if newest.stat().st_mtime_ns > current.stat().st_mtime_ns:
+            current = newest  # Unreadable current evidence must be held, not skipped.
+    return current
+
+
+def _phase_receipt(state_file: Path, wake_log_dir: str | None) -> dict | None:
+    if wake_log_dir is None:
+        return None
+    # The scheduler writes its current stop after the worker receipt. Later
+    # phases share this log directory, so the state mtime remains the fence.
+    stop_time = state_file.stat().st_mtime_ns
+    receipts = []
+    for receipt in Path(wake_log_dir).glob("*/receipt.json"):
+        if receipt.is_symlink() or receipt.resolve() != receipt:
+            raise ValueError("Source wake receipt must be a physical file")
+        if receipt.stat().st_mtime_ns <= stop_time:
+            receipts.append(receipt)
+    if not receipts:
+        return None
+    latest = max(receipts, key=lambda item: item.stat().st_mtime_ns)
+    try:
+        value = json.loads(latest.read_text())
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _create_resume_state(target: Path, predecessor: Path) -> None:
+    if target.is_symlink():
+        raise ValueError("Resumed scheduler state must not be a symlink")
+    try:
+        with target.open("x", encoding="utf-8") as stream:
+            json.dump({"resume_from": str(predecessor)}, stream)
+    except FileExistsError:
+        return
+    target.chmod(0o600)
+
+
 def resume_state_file(state_file: str, *, phase_deadline: float, agent_id: str,
                       wake_log_dir: str | None = None) -> str:
     """Select a new transport phase only after an explicit budget continuation.
@@ -32,34 +111,45 @@ def resume_state_file(state_file: str, *, phase_deadline: float, agent_id: str,
     if (isinstance(phase_deadline, bool) or not isinstance(phase_deadline, (int, float))
             or not math.isfinite(phase_deadline) or phase_deadline <= time.time()):
         raise ValueError("Budget continuation requires an open finite phase deadline")
-    path = Path(state_file).absolute()
-    if path.resolve() != path or path.is_symlink():
-        raise ValueError("Scheduler phase state must be a physical path")
+    path = _physical_state(Path(state_file).absolute())
     from loopx.file_lock import try_exclusive_file_lock
     from scripts.external_scheduler_worker import HOST_LOCK_OPERATION, _host_attempt, _host_pending
 
-    with try_exclusive_file_lock(path, agent_id=agent_id, operation=HOST_LOCK_OPERATION) as held:
-        if held is None:
-            return str(path)  # The ordinary scheduler retains its mutex behavior.
-        try:
-            state = json.loads(path.read_text())
-        except FileNotFoundError:
+    with ExitStack() as locks:
+        # The root serializes phase selection. Locking the existing phase files
+        # as well keeps a running/failed phase from moving under that decision.
+        if locks.enter_context(try_exclusive_file_lock(
+                path, agent_id=agent_id, operation=HOST_LOCK_OPERATION)) is None:
             return str(path)
-        if not isinstance(state, dict):
-            raise ValueError("Scheduler phase state is invalid")
+        for phase in _phase_states(path):
+            if phase == path:
+                continue
+            if locks.enter_context(try_exclusive_file_lock(
+                    phase, agent_id=agent_id, operation=HOST_LOCK_OPERATION)) is None:
+                return str(phase)
+        states = _phase_states(path)
+        if not states:
+            return str(path)
+        predecessor = _latest_phase_state(path, states)
+        state = _state_object(predecessor)
+        if state is None:
+            return str(predecessor)
         prior = state.get("host_attempt")
         if not isinstance(prior, dict) or prior.get("status") != "stopped":
-            return str(path)
+            return str(predecessor)
         # Validate the captured record with its existing transport owner.
         scope = prior.get("scope")
         if not isinstance(scope, str) or not re.fullmatch(r"[0-9a-f]{64}", scope):
-            raise ValueError("Captured scheduler scope is invalid")
-        _host_attempt(state, scope)
+            return str(predecessor)
+        try:
+            _host_attempt(state, scope)
+        except (TypeError, ValueError):
+            return str(predecessor)
         if (prior.get("stop_exit_code") != BUDGET_EXHAUSTED_EXIT_CODE
-                or "host_failure" in prior or _host_pending(path) is None
+                or "host_failure" in prior or _host_pending(predecessor) is None
                 or state.get("last_wake_rc") != BUDGET_EXHAUSTED_EXIT_CODE
                 or state.get("last_wake_status") != "wake_requested_stop"):
-            return str(path)
+            return str(predecessor)
         # Only the immutable phase clock names the new state. Todo/reset-token
         # changes cannot clear a failure already recorded in this new phase.
         suffix = hashlib.sha256(float(phase_deadline).hex().encode()).hexdigest()[:20]
@@ -68,30 +158,16 @@ def resume_state_file(state_file: str, *, phase_deadline: float, agent_id: str,
             raise ValueError("Resumed scheduler state must not be a symlink")
         if target.exists():
             return str(target)  # Never replace a retry/failure in this phase.
-        if wake_log_dir is None:
-            return str(path)
         # Only a stop before native dispatch admits this shortcut. An
         # interrupted native Turn still needs its original recovery/settlement.
         # Restrict legacy receipt discovery to the source scheduler snapshot;
         # later phases share the log directory but cannot replace this proof.
-        stop_time = path.stat().st_mtime_ns
-        receipts = []
-        for receipt in Path(wake_log_dir).glob("*/receipt.json"):
-            if receipt.is_symlink() or receipt.resolve() != receipt:
-                raise ValueError("Source wake receipt must be a physical file")
-            if receipt.stat().st_mtime_ns <= stop_time:
-                receipts.append(receipt)
-        if not receipts:
-            return str(path)
-        latest = max(receipts, key=lambda item: item.stat().st_mtime_ns)
-        try:
-            result = json.loads(latest.read_text())
-        except (OSError, UnicodeError, json.JSONDecodeError):
-            return str(path)
+        result = _phase_receipt(predecessor, wake_log_dir)
         if (not isinstance(result, dict) or result.get("budget_exhausted") is not True
                 or result.get("host_invoked") is not False or result.get("mode") != "heartbeat"
                 or result.get("stage") != "execute"):
-            return str(path)
+            return str(predecessor)
+        _create_resume_state(target, predecessor)
         return str(target)
 
 

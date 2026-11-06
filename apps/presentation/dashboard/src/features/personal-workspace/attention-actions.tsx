@@ -15,7 +15,8 @@ export function AttentionActions({ item, readOnly, callbacks, fallbackAgentId }:
   callbacks: PersonalWorkspaceCallbacks;
   fallbackAgentId: string;
 }) {
-  const { t } = useWorkspaceI18n();
+  const { t, locale } = useWorkspaceI18n();
+  const reportReview = item.details?.reportReview === true;
   const [preview, setPreview] = useState<PreviewState>({ status: "idle" });
   const scope = JSON.stringify([item.sourceId ?? "", item.goalId, item.todoId]);
   const pendingRequest = useRef<{scope: string; token: object | null}>({scope, token: null});
@@ -83,7 +84,7 @@ export function AttentionActions({ item, readOnly, callbacks, fallbackAgentId }:
     ? <p className="personal-proposal-state is-error" role="alert"><X size={16} /><span>{t("drawer.attentionPreviewFailed", { error: preview.message })}</span></p>
     : pending ? <p className="personal-proposal-state" role="status">{t("drawer.attentionPreparing")}</p> : null;
   const reply = callbacks.onReplyToAttention
-    ? <button className="personal-secondary-action" onClick={() => callbacks.onReplyToAttention?.(item, "reply")} type="button"><MessageSquareReply size={16} />{t("drawer.attentionReply")}</button>
+    ? <button className="personal-secondary-action" onClick={() => callbacks.onReplyToAttention?.(item, "reply")} type="button"><MessageSquareReply size={16} />{reportReview ? (locale === "zh-CN" ? "提出反馈" : "Give feedback") : t("drawer.attentionReply")}</button>
     : null;
   const explain = (label: string) => callbacks.onExplainDecision
     ? <button onClick={() => void callbacks.onExplainDecision?.(item)} type="button"><MessageCircleQuestion size={16} />{label}</button>
@@ -110,9 +111,9 @@ export function AttentionActions({ item, readOnly, callbacks, fallbackAgentId }:
   }
   if (canHandleUserAction(item)) {
     return <>
-      <p className="personal-proposal-explainer">{t(item.details?.unblocksTodoId ? "drawer.userActionUnblocks" : "drawer.userActionReminder")}</p>
+      {!reportReview ? <p className="personal-proposal-explainer">{t(item.details?.unblocksTodoId ? "drawer.userActionUnblocks" : "drawer.userActionReminder")}</p> : null}
       <div className="personal-decision-bar" role="group" aria-label={t("drawer.userActionGroup")}>
-        <button className="personal-primary-action" disabled={pending} onClick={() => previewUserAction(item, "complete")} type="button"><Check size={17} />{t("drawer.userActionComplete")}</button>
+        <button className="personal-primary-action" disabled={pending} onClick={() => previewUserAction(item, "complete")} type="button"><Check size={17} />{reportReview ? (locale === "zh-CN" ? "验收这份材料" : "Accept this material") : t("drawer.userActionComplete")}</button>
         {reply}
       </div>
       {feedback}

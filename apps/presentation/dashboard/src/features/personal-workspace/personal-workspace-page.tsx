@@ -94,6 +94,7 @@ import { ManagerBrief } from "./manager-brief";
 // Loaded on demand: settings and their editors are a separate chunk that
 // arrives when the owner first opens Settings, not on every workspace visit.
 const ContentProductionResults = lazy(() => import("./content-production-results").then(module => ({default: module.ContentProductionResults})));
+const GoalReportReviews = lazy(() => import("./goal-report-reviews").then(module => ({default: module.GoalReportReviews})));
 
 const WorkspaceSettingsPage = lazy(() => import("./workspace-settings-page").then((module) => ({ default: module.WorkspaceSettingsPage })));
 import { UsageStatisticsNotice } from "./usage-statistics-notice";
@@ -325,6 +326,7 @@ function GoalOutputsView({
   localResults,
   researchApi,
   production,
+  reviewMaterials,
 }: {
   active: boolean;
   items: Array<Extract<WorkspaceTimelineItem, { kind: "output" }>>;
@@ -335,6 +337,7 @@ function GoalOutputsView({
   localResults: boolean;
   researchApi?: GoalResearchApi;
   production?: ReactNode;
+  reviewMaterials?: ReactNode;
 }) {
   const { locale, t } = useWorkspaceI18n();
   const [teamSnapshot, setTeamSnapshot] = useState<LoopXModeSnapshot | null>(null);
@@ -360,6 +363,7 @@ function GoalOutputsView({
     && teamSnapshot?.settings.agent_id && teamSnapshot?.settings.execution_config);
   return (
     <>
+      {reviewMaterials}
       {items.length > 0 || reportState?.loading || reportState?.error || !production ? <section className="personal-object-list personal-files-list" data-testid="personal-goal-outputs">
         <header><strong>{t("files.title")}</strong>{!teamConfigured && !production ? <span>{items.length}</span> : null}</header>
         {reportState?.loading ? (
@@ -978,6 +982,7 @@ export function PersonalWorkspacePage({
     setLocalView(view);
     callbacks.onSelectView?.(view);
   }
+  const [selectedReportReview, setSelectedReportReview] = useState<{goalId: string; todoId: string} | null>(null);
   const [actionDraft, setActionDraft] = useState<WorkspaceActionDraft | null>(null);
   const [loopxMode, setLoopxMode] = useState<LoopXModeSnapshot | null>(null);
   const [loopxDelivery, setLoopxDelivery] = useState<"queue" | "inbox" | "steer">("queue");
@@ -1097,22 +1102,38 @@ export function PersonalWorkspacePage({
     composerRef.current?.focus();
   }
   // A draft for another Goal waits until that Goal's composer is the visible one.
-  const [composerPrefill, setComposerPrefill] = useState<{ goalId: string; text: string } | null>(null);
+  const [composerPrefill, setComposerPrefill] = useState<{ goalId: string; text: string; workAgentId?: string; workSessionId?: string; statusUrl?: string } | null>(null);
   useEffect(() => {
     if (!composerPrefill || composerPrefill.goalId !== selectedGoalId) return;
+    if (composerPrefill.statusUrl && composerPrefill.statusUrl !== (statusSourceControl?.activeSource.statusUrl ?? "/status.json")) {
+      setComposerPrefill(null); return;
+    }
+    if (composerPrefill.workAgentId && (selectedWorkAgentId !== composerPrefill.workAgentId || !selectedWorkSessionId)) return;
+    if (composerPrefill.workSessionId && (selectedWorkSessionId !== composerPrefill.workSessionId
+        || !workspaceConversations?.managed || `managed:${workspaceConversations.managed.target.sessionId}` !== composerPrefill.workSessionId)) return;
     setComposerPrefill(null);
     suggestReply(composerPrefill.text);
-  }, [composerPrefill, selectedGoalId]);
+  }, [composerPrefill, selectedGoalId, selectedWorkAgentId, selectedWorkSessionId, conversationKey, statusSourceControl?.activeSource.statusUrl]);
   function draftAttentionMessage(attention: WorkspaceAttention, intent: "reply" | "explain") {
     // A display summary is not a usable reply context: it may cut through a URL.
     const task = attention.details?.requestText ?? attention.text;
     const key = intent === "reply" ? "drawer.attentionReplyPrefill"
       : attention.details?.interaction === "decision" ? "drawer.decisionExplainPrefill" : "drawer.attentionExplainPrefill";
+    const reportAgent = attention.details?.reportReview ? attention.details.createdBy ?? attention.details.boundAgent : null;
     if (attention.goalId !== selectedGoalId) selectGoal(attention.goalId, "chat");
-    openGoalConversation();
+    if (reportAgent && callbacks.onSelectWorkAgent) {
+      setLocalView("chat"); setActiveSessionRun(null);
+      callbacks.onSelectWorkAgent(reportAgent,
+        attention.details?.reportSessionId ? `managed:${attention.details.reportSessionId}` : undefined);
+    } else openGoalConversation();
     setSelection(null);
     const reference = attention.details?.todoIdentified ? `\n\nTodo: ${attention.todoId}` : "";
-    setComposerPrefill({ goalId: attention.goalId, text: t(key, { task }) + reference });
+    setComposerPrefill({ goalId: attention.goalId, text: t(key, { task }) + reference,
+      ...(reportAgent && callbacks.onSelectWorkAgent ? {
+        workAgentId: reportAgent,
+        workSessionId: attention.details?.reportSessionId ? `managed:${attention.details.reportSessionId}` : undefined,
+        statusUrl: statusSourceControl?.activeSource.statusUrl ?? "/status.json",
+      } : {}) });
   }
   // The steward prompt set is owned by the client model; the quick-prompt row
   // reuses it so one affordance answers "what now / what blocks / what is proven".
@@ -2308,6 +2329,13 @@ export function PersonalWorkspacePage({
     callbacks.onSelectGoal?.(goalId, view);
   }
 
+  function openAttention(item: WorkspaceAttention) {
+    if (item.details?.reportReview) {
+      setSelectedReportReview({goalId: item.goalId, todoId: item.todoId});
+      selectGoal(item.goalId, "files");
+    } else setSelection({kind: "attention", item});
+  }
+
   function selectAgent(agentId: string) {
     setLocalAgentId(agentId);
     callbacks.onSelectAgent?.(agentId);
@@ -2359,6 +2387,7 @@ export function PersonalWorkspacePage({
   }, [pendingNotificationItem, selectedGoalId]);
   function openAttentionFromNotification(item: WorkspaceAttention) {
     window.focus();
+    if (item.details?.reportReview) {openAttention(item); return;}
     if (item.goalId === selectedGoalId) { setSelection({ kind: "attention", item }); return; }
     setPendingNotificationItem(item);
     selectGoal(item.goalId, "overview");
@@ -2744,6 +2773,13 @@ export function PersonalWorkspacePage({
                     teamSessionId={!readOnly && selectedAgentId === "codex" ? conversationSessionId : undefined}
                     goalId={selectedGoal.goalId}
             localResults={!readOnly && active}
+            reviewMaterials={!readOnly && active ? <Suspense fallback={<p role="status">{locale === "zh-CN" ? "正在读取审阅材料…" : "Loading review materials…"}</p>}>
+              <GoalReportReviews key={JSON.stringify([seenStatusSource, selectedGoal.goalId])} goalId={selectedGoal.goalId} sourceId={seenStatusSource}
+                zh={locale === "zh-CN"} callbacks={effectiveDrawerCallbacks}
+                focusTodoId={selectedReportReview?.goalId === selectedGoal.goalId ? selectedReportReview.todoId : undefined}
+                onSelectionChange={(todoId) => setSelectedReportReview(todoId ? {goalId: selectedGoal.goalId, todoId} : null)}
+                refreshKey={JSON.stringify(model.userTodos.filter(item => item.goalId === selectedGoal.goalId))}/>
+            </Suspense> : undefined}
             researchApi={researchApi}
             production={active && !readOnly && selectedGoalTab === "files" ? <Suspense fallback={<p role="status">{locale === "zh-CN" ? "正在读取作品…" : "Loading artifacts…"}</p>}>
               <ContentProductionResults key={selectedGoal.goalId} goalId={selectedGoal.goalId} review={workspaceReview}
@@ -2959,7 +2995,7 @@ export function PersonalWorkspacePage({
                 }} />
               </GoalWorkBrowseProvider>
             ) : !managerChatOpen ? (
-              <ManagerHomeBoard goals={workspaceGoals} attention={model.userTodos} onSelectAttention={item => setSelection({kind: "attention", item})}
+              <ManagerHomeBoard goals={workspaceGoals} attention={model.userTodos} onSelectAttention={openAttention}
                 onRetry={() => void callbacks.onRefresh?.("missing")} onRetrySource={() => void refreshWorkspace()} onSelectGoal={selectGoal} systemHealth={model.systemHealth}
                 onboarding={model.onboarding} onRequestGoalCreate={readOnly ? undefined : requestGoalCreate} onSuggestRequest={readOnly ? undefined : suggestReply}
                 runtimeReadiness={readOnly ? undefined : runtimeReadiness} recheckingRuntimes={recheckingRuntimes} onRecheckRuntimes={callbacks.onRecheckRuntimes ? recheckRuntimes : undefined}

@@ -8,6 +8,7 @@ Guides are task-oriented paths for people starting or operating LoopX.
 - [Codex App 自动续跑体验指南](codex-app-autonomous-goal-experience.md)
 - [Understand, use and evaluate context delivery](context-delivery.md)
 - [理解、使用和验收上下文交付](context-delivery.zh-CN.md)
+- [审阅工作成果 / Review work materials](review-materials.md)
 - [Minimal custom runtime example](minimal-custom-runtime-example.md)
 - [Minimal custom runtime example (中文)](minimal-custom-runtime-example.zh-CN.md)
 - [Custom Agent runner integration](custom-agent-runner-integration.md)

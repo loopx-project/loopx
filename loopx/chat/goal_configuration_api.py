@@ -232,7 +232,7 @@ def _goal_capability_options(
         "local_authority_shadow": {"enabled"},
         "coordination_runtime_shadow": {"enabled"},
         "lark_kanban_heartbeat_sync": {"enabled"},
-        "periodic_report": {"enabled", "profile_preset", "route_ref", "timezone", "schedule", "task"},
+        "periodic_report": {"enabled", "profile_preset", "route_ref", "timezone", "schedule", "task", "review_required"},
         "reward_memory": {"config_path", "enabled_agents", "agent_id", "enabled"},
     }
     if capability_id not in allowed:

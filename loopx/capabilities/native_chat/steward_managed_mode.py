@@ -18,6 +18,15 @@ from ...control_plane.goals.activation import goal_is_stopped
 from ...file_lock import exclusive_file_lock
 
 
+def _registered_goal_identity(goal: dict[str, Any] | None) -> dict[str, Any] | None:
+    if goal is None:
+        return None
+    return {"goal_id": goal["id"], "goal_instance_id": goal.get("goal_instance_id"),
+            "workspace_path": str(Path(goal["repo"]).resolve()),
+            "creation_operation_id": goal.get("creation_operation_id"),
+            "registered_agents": registered_agent_ids_for_goal(goal)}
+
+
 class StewardManagedMode:
     def __init__(self, controller: Any, bindings: Any) -> None:
         self.controller, self.bindings = controller, bindings
@@ -55,13 +64,7 @@ class StewardManagedMode:
         return path.resolve()
 
     def _goal(self, goal_id: str) -> dict[str, Any] | None:
-        goal = load_goal_from_registry(self.controller.registry_path, goal_id)
-        if goal is None:
-            return None
-        return {"goal_id": goal["id"], "goal_instance_id": goal.get("goal_instance_id"),
-                "workspace_path": str(Path(goal["repo"]).resolve()),
-                "creation_operation_id": goal.get("creation_operation_id"),
-                "registered_agents": registered_agent_ids_for_goal(goal)}
+        return _registered_goal_identity(load_goal_from_registry(self.controller.registry_path, goal_id))
 
     def prepare(self, binding_id: str, *, session_id: str | None = None,
                 expected_plan_id: str | None = None, execute: bool = False) -> dict[str, Any]:
@@ -182,13 +185,21 @@ class ManagedTaskValidationUnavailable(ValueError):
 
 def managed_session_identity(controller: Any, *, goal_id: str, agent_id: str, workspace: Path,
                              session: dict[str, Any] | None = None) -> dict[str, Any]:
+    return registered_managed_session_identity(registry_path=controller.registry_path,
+        goal_id=goal_id, agent_id=agent_id, workspace=workspace, session=session)
+
+
+def registered_managed_session_identity(*, registry_path: Path, goal_id: str, agent_id: str,
+                                       session: dict[str, Any] | None = None,
+                                       workspace: Path | None = None) -> dict[str, Any]:
     """Observe existing registration; the typed owner admits the exact binding."""
     from .conversation_bindings import ChatConversationBindings
-    native_goal = load_goal_from_registry(controller.registry_path, goal_id)
+    native_goal = load_goal_from_registry(registry_path, goal_id)
+    goal = _registered_goal_identity(native_goal)
     return ChatConversationBindings._core("collaboration.session.managed_identity", {
-        "goal": StewardManagedMode(controller, None)._goal(goal_id),
+        "goal": goal,
         "goal_active": bool(native_goal and native_goal.get("status") == "active" and not goal_is_stopped(native_goal)),
-        "managed_agent_id": agent_id, "workspace_path": str(workspace.resolve()),
+        "managed_agent_id": agent_id, "workspace_path": str(workspace.resolve()) if workspace else (goal or {}).get("workspace_path"),
         **({"session": session} if session is not None else {})})
 
 
