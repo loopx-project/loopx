@@ -34,6 +34,49 @@ Keep the policy private (0600); do not commit it. A read grant without a sender
 grant is insufficient. This does not grant remote delivery, evidence reads,
 worker launch, Todo/lease changes or protected operations.
 
+### Readable answers and original-conversation returns
+
+The common authoring rule lives in
+[`conversation_answer_instruction`](../../presentation/answer_instruction.py).
+The manager objective, ordinary project Chat, CLI/MCP inbox reads and receiver
+result tool consume this source. Its brief guidance also reaches the peer-request
+and governed-delegation tool descriptions. Keep reader, language, corrections
+and result destination with the original work; do not maintain a second copy in
+a private manager configuration or an installed skill.
+The heartbeat hook's required Inbox read uses the same CLI entrypoint.
+
+The rule calls for a useful outcome first, explained terms and comparisons with
+units and direction. Full evidence, negative results, unknown costs and remaining
+obligations stay intact. Readability comes from explanation and organization,
+not a fixed answer length. The existing audience, ownership and operation grants
+still govern. These instructions guide the author; they do not prove model
+compliance or add another model call to rewrite a return.
+
+The TypeScript collaboration result owner marks newly published results with
+`return_format_version: 2`. Their original-conversation body starts with the
+complete authored answer, retains the typed `remaining_work` values as separate
+paragraphs, and puts phase/author/request provenance last. There is no language
+guessing or automatic translation. Compose both remaining-work values in the
+reader's language. They remain protocol data, not a Todo, wakeup or completion
+verdict.
+
+An existing result without this marker keeps its previous text layout, including
+on publication replay, transport verification and retry. Only an explicitly
+published later result adopts the new format. Unknown format versions fail
+closed; no old message is rewritten or resent to improve appearance. App and
+provider returns share the same complete body and original route. Source tests
+and packaged readback do not establish installation, model writing quality or
+live provider delivery; qualify those boundaries separately.
+
+The existing 20,000-Unicode-character result budget counts the selected format's
+complete answer and remainder. Legacy labels count only for legacy results.
+Compact observations retain the persisted format marker for publication replay
+and Inbox readback, including rejection of an unsupported version.
+
+Chat opens a completed return taller than its viewport at the beginning of the
+answer. Live output and explicit scrolling to the latest message keep their
+existing behavior; opening the complete answer remains a separate reading choice.
+
 ### Several recipients in one conversation Turn
 
 `context_handoff` retains the single-request object and also accepts an array

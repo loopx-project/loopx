@@ -356,7 +356,13 @@ def web_return(private_return):
 
 
 @pytest.mark.parametrize("long_result", [False, True])
-def test_web_result_adopts_original_mirror_and_recovers_readback_without_send(web_return, monkeypatch, long_result):
+@pytest.mark.parametrize("legacy_result", [False, True])
+def test_web_result_adopts_original_mirror_and_recovers_readback_without_send(
+        web_return, monkeypatch, long_result, legacy_result):
+    import threading
+    import time
+    from loopx.extensions.lark.goal_topic_runtime_service import LarkGoalTopicRuntimeService
+
     sender, session, turn, route, provider, transport, mirror, flush, request = web_return
     runtime, store = transport.core.controller, transport.core.controller.store
     capture = store.root.parent.parent / "requests.jsonl"
@@ -366,13 +372,62 @@ def test_web_result_adopts_original_mirror_and_recovers_readback_without_send(we
     body = ("完整结果与独立证据。\n" * 1200 if long_result else "Concrete original result.") + "UNIQUE_RESULT_END"
     report(sender.root, route["goal_id"], route["agent_id"], route["request_id"], "conclusion", body,
            remaining_work=remainder)
+    result_path = _root(sender.root) / "replies" / route["request_id"] / "conclusion.json"
+    published = _read_json(result_path)
+    assert published["return_format_version"] == 2
+    if legacy_result:
+        # Characterize an existing publication, never migrate a frozen receipt.
+        published.pop("return_format_version")
+        _atomic_write_json(result_path, published)
+    frozen_result = result_path.read_bytes()
+    provenance = f"协作回复 · {route['agent_id']} · 委托 {route['request_id'][:8]}"
+    if legacy_result:
+        expected = (f"{provenance}\n\n{body}\n\n仍需完成 / Remaining work: {remainder['summary']}"
+                    f"\n继续条件 / Continue when: {remainder['resume_when']}")
+    else:
+        expected = f"{body}\n\n{remainder['summary']}\n\n{remainder['resume_when']}\n\n{provenance}"
     writes = list(provider.writes)
     drain(sender.root, runtime.registry_path, store, sender)
     assert provider.writes == writes
     assert reply_status(sender.root, route)[0]["error"] == "initial_delivery_receipt_unavailable"
     message = next(item for item in store.messages(session["session_id"])
                    if item.get("origin") == "manager_followup" and item["turn_id"] == turn["turn_id"])
-    flush(message["message_id"])
+    assert message["text"] == expected
+    # Run the actual bounded body worker, including current-body discovery and
+    # prioritization, rather than manually flushing this message's outbox.
+    service = LarkGoalTopicRuntimeService(snapshot_provider=lambda: {}, runtime_root=transport.runtime_root,
+        runtime_controller=runtime, private_conversations=transport)
+    worker = threading.Thread(target=service._reconcile_private, daemon=True)
+    transport._web_projection_scan_at = 0
+    worker.start()
+    try:
+        deadline = time.monotonic() + 20
+        while not _read_json(mirror)["deliveries"].get("web." + message["message_id"], {}).get("verified"):
+            assert time.monotonic() < deadline, "Original result remained undelivered by the body worker"
+            time.sleep(.02)
+    finally:
+        service.close()
+        worker.join(10)
+    assert not worker.is_alive()
+    sent = provider.writes[len(writes):]
+    assert sent and all(profile == "steward-app" for profile, _ in sent)
+    # Compare all provider-visible parts, so a retained tail marker cannot hide
+    # a missing opening, reordered remainder or duplicate part.
+    parts = [text for _, text in sent]
+    if len(parts) > 1:
+        for index, text in enumerate(parts, 1):
+            marker = f"（{index}/{len(parts)}）\n\n"
+            assert text.startswith(marker)
+            parts[index - 1] = text[len(marker):]
+    remaining = f"**LoopX（App）**\n\n{expected}"
+    for index, text in enumerate(parts):
+        assert remaining.startswith(text)
+        remaining = remaining[len(text):]
+        if index < len(parts) - 1:
+            # Separate provider messages supply the paragraph boundary; the
+            # rich-post serializer removes trailing newlines from each part.
+            remaining = remaining.lstrip("\n")
+    assert remaining == ""
     original_mirror = mirror.read_bytes()
     phase = _read_json(mirror)["deliveries"]["web." + message["message_id"]]
     writes = list(provider.writes)
@@ -397,6 +452,7 @@ def test_web_result_adopts_original_mirror_and_recovers_readback_without_send(we
     status = reply_status(sender.root, route)[0]
     assert status["status"] == "delivered"
     assert provider.writes == writes and mirror.read_bytes() == original_mirror
+    assert result_path.read_bytes() == frozen_result
     assert capture.read_bytes() == starts
     assert store._turn_path(session["session_id"], turn["turn_id"]).read_bytes() == frozen_turn
     returned = [item for item in recovered.messages(session["session_id"])

@@ -77,6 +77,7 @@ from .control_plane.collaboration.peers import (
 )
 from .presentation.answer_instruction import (
     collaboration_answer_instruction,
+    collaboration_brief_instruction,
     conversation_answer_instruction,
 )
 
@@ -295,20 +296,20 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
             todo_ids or [], evidence_ids or [], caller_goal_ref=caller_goal_ref,
         )
 
-    @server.tool()
+    @server.tool(description=(
+        "Request same-Goal peer help/review with a collaboration_brief_v0 and stable retry id. "
+        "Brief fields: schema_version, purpose, context, constraints (strings), inputs "
+        "(relative ref, description, optional sha256), acceptance (nonempty strings), "
+        "return_requirement. Preserve relevant corrections and rejected approaches. "
+        "New review rounds use new operation ids. No worker is launched by this tool. "
+        + collaboration_brief_instruction()
+    ))
     def request_peer(
         peer_agent_id: str,
         operation_id: str,
         brief: dict,
         parent_request_id: str | None = None,
     ) -> dict:
-        """Request same-Goal peer help/review with a collaboration_brief_v0 and stable retry id.
-
-        Brief fields: schema_version, purpose, context, constraints (strings), inputs
-        (relative ref, description, optional sha256), acceptance (nonempty strings),
-        return_requirement. Preserve relevant corrections and rejected approaches.
-        New review rounds use new operation ids. No worker is launched by this tool.
-        """
         check_scope()
         return request(
             root,
@@ -1822,19 +1823,19 @@ def register_delegation_tools(server, delegations: Delegations) -> None:
         """
         return delegations.operations(limit=limit, cursor=cursor)
 
-    @server.tool()
+    @server.tool(description=(
+        "Start one bounded peer Turn. Reuse the same operation id after lost replies. "
+        "Supply brief with schema_version=collaboration_brief_v0, purpose, context, "
+        "constraints (strings), inputs (relative ref/description/optional sha256; "
+        "optional delegation={operation_id,ref,relation} requires sha256, an accepted "
+        "source owned by this requester and the matching receiver file; relation is "
+        "responds_to, revises or uses), acceptance (strings), return_requirement. "
+        "Work continues independently of this MCP conversation. Read its durable "
+        "operation later; do not repeat timed-out work. "
+        + collaboration_brief_instruction()
+    ))
     def start_delegation(binding_id: str, operation_id: str, brief: dict,
                          parent_request_id: str | None = None) -> dict:
-        """Start one bounded peer Turn. Reuse the same operation id after lost replies.
-
-        Supply brief with schema_version="collaboration_brief_v0", purpose, context,
-        constraints (strings), inputs (relative ref/description/optional sha256;
-        optional delegation={operation_id,ref,relation} requires sha256, an accepted
-        source owned by this requester and the matching receiver file; relation is
-        responds_to, revises or uses),
-        acceptance (strings), return_requirement. Work continues independently of this MCP
-        conversation. Read its durable operation later; do not repeat timed-out work.
-        """
         return delegations.start(binding_id, operation_id, brief, parent_request_id)
 
     @server.tool()

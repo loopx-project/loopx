@@ -148,7 +148,7 @@ function resultObservation(key: string, reply: JsonObject): JsonObject {
   if (/[\uD800-\uDFFF]/u.test(text)) fail("invalid reply text encoding");
   return {key, value: Object.fromEntries(["request_id", "goal_id", "agent_id", "source_id", "goal_ref", "phase",
     "decision", "result_key", "previous_result_key", "update_id", "attachments", "request_revision",
-    "request_revision_digest", "recipient", "requester", "remaining_work"].filter(field => Object.hasOwn(reply, field)).map(field => [field, reply[field]])),
+    "request_revision_digest", "recipient", "requester", "remaining_work", "return_format_version"].filter(field => Object.hasOwn(reply, field)).map(field => [field, reply[field]])),
   text_chars: [...text].length, text_sha256: createHash("sha256").update(text).digest("hex")};
 }
 function receiptState(root: string, row: JsonObject): JsonObject {

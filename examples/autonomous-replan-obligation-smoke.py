@@ -20,6 +20,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from loopx import cli as loopx_cli  # noqa: E402
 from loopx.control_plane.testing.canary_harness import import_fixture_authority  # noqa: E402
+from tests.control_plane.cli_output_fixture import read_cli_context_for_oracle  # noqa: E402
 
 
 GOAL_ID = "autonomous-replan-fixture"
@@ -58,7 +59,7 @@ def run_cli(
                 f"loopx fixture command failed with exit {exit_code}: {' '.join(args)}\n"
                 f"{stderr.getvalue().strip()}\n{stdout.getvalue().strip()}"
             )
-        return json.loads(stdout.getvalue())
+        return json.loads(read_cli_context_for_oracle(stdout.getvalue())[0])
 
     command = [sys.executable, "-m", "loopx.cli", *argv]
     try:
@@ -75,7 +76,7 @@ def run_cli(
         raise AssertionError(
             f"loopx fixture command timed out after {timeout}s: {' '.join(args)}"
         ) from exc
-    return json.loads(result.stdout)
+    return json.loads(read_cli_context_for_oracle(result.stdout)[0])
 
 
 def run_cli_error(

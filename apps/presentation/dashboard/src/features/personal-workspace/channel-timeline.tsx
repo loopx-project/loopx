@@ -202,11 +202,13 @@ export function ChannelTimeline({
     return (
       <article className={`personal-message is-${item.message.role}`} key={item.id}
         data-message-session={item.message.sourceSessionId} data-message-id={item.message.sourceMessageId}
+        data-returned-answer={item.message.role === "assistant" && !item.message.pending && item.message.returnDelivery ? true : undefined}
         ref={messageFocus && messageKey(item.message) === focusKey ? focusTarget : undefined}
         tabIndex={messageFocus && messageKey(item.message) === focusKey ? -1 : undefined}>
         {item.message.role !== "user" ? <span className="personal-message-avatar"><Bot size={17} /></span> : null}
         <div>
           <header><strong>{item.message.role === "user" ? item.message.agentLabel ?? t("common.you") : item.message.agentLabel ?? t("header.manager")}</strong>{item.message.time ? <time>{item.message.time}</time> : null}</header>
+          <ReturnDeliveryStatus delivery={item.message.returnDelivery} />
           {item.message.queueInputCancelled ? <span>{locale === "zh-CN" ? "已取消排队" : "Cancelled before starting"}</span> : null}
           {item.message.attachments?.length ? <div className="personal-message-images">{item.message.attachments.map((attachment) => isTextDocument(attachment.mimeType) ? <DocumentAttachment key={attachment.id} {...attachment} zh={locale === "zh-CN"}/> : <img alt={attachment.name} key={attachment.id} src={attachment.dataUrl} />)}</div> : null}
           {item.message.role === "user" ? <p>{item.message.text}</p> : item.message.text ? <HistoricalMessageText text={item.message.text}
@@ -222,7 +224,6 @@ export function ChannelTimeline({
           {item.message.role === "assistant" && !item.message.pending && item.message.goalDraft
             ? <GoalDraftCard draftId={`${item.message.sourceSessionId ?? ""}:${item.message.id}`} draft={item.message.goalDraft} onReview={onReviewGoalDraft} onSuggest={onSuggestReply}/> : null}
           <CollaborationCards request={item.message.collaboration} requests={item.message.collaborations} />
-              <ReturnDeliveryStatus delivery={item.message.returnDelivery} />
         </div>
       </article>
     );
