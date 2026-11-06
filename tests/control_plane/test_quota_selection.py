@@ -135,7 +135,7 @@ def test_large_history_completes_public_quota_through_vision_wait(tmp_path, monk
     before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-history")
     narrative = state.read_bytes()
     code, packet = run_json_cli_result("quota", "should-run", "--goal-id", "goal-history",
-        "--agent-id", "agent-b", registry_path=registry, runtime_root=runtime)
+        "--agent-id", "agent-b", "--context-delivery", "off", registry_path=registry, runtime_root=runtime)
     assert code == 0, packet
     assert packet["agent_todo_summary"]["total_count"] == 2501
     assert packet["selected_todo"]["todo_id"] == "todo_tail"
@@ -299,7 +299,7 @@ def test_public_quota_route_read_keeps_claim_exclusion_and_provider_unchanged(tm
     before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-route")
     narrative = state.read_bytes() if state.exists() else None
     code, packet = run_json_cli_result("quota", "should-run", "--goal-id", "goal-route", "--agent-id", "agent-b",
-        "--include-detail", "agent-todos",  registry_path=registry, runtime_root=runtime)
+        "--include-detail", "agent-todos", "--context-delivery", "off", registry_path=registry, runtime_root=runtime)
     assert code == 0, packet
     routes = packet["agent_todo_summary"]
     assert routes["route_continuation_replan_count"] == 4
@@ -357,7 +357,7 @@ def test_public_quota_keeps_gate_from_real_canonical_provider(tmp_path: Path, di
         state.write_text("# Stale projection\n## User Todo\n- [x] Old approval.\n")
     before = state.read_bytes() if state.exists() else None
     code, packet = run_json_cli_result("quota", "should-run", "--goal-id", "goal-scope",
-        "--agent-id", "agent-b",  registry_path=registry, runtime_root=runtime)
+        "--agent-id", "agent-b", "--context-delivery", "off", registry_path=registry, runtime_root=runtime)
     assert code == 0, packet
     assert packet["requires_user_action"] is True
     gates = packet["user_todo_summary"]["gate_open_items"]

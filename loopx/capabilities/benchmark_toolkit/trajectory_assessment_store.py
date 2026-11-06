@@ -261,6 +261,25 @@ def _usage_capture(
     }
 
 
+def compare_captured_usage(left: dict, right: dict) -> dict:
+    """Transport two already inspected, source-owned captures to the TS owner."""
+    captures = []
+    for pack in (left, right):
+        capture = {key: pack[key] for key in ("pack_id", "title", "scope")}
+        if pack.get("solver_usage"):
+            measured = pack["solver_usage"]
+            projection = measured["projection"]
+            observed = {key: projection[key] for key in (
+                "session_id", "method", "start", "end", "request_coverage", "loopx_input",
+            ) if key in projection}
+            if "loopx_requests" in projection:
+                observed["loopx_requests"] = {key: value for key, value in projection["loopx_requests"].items()
+                                             if key != "requests"}
+            capture["solver_usage"] = {**measured, "projection": observed}
+        captures.append(capture)
+    return effect_runtime_result("benchmark.trajectory.usage-comparison", {"left": captures[0], "right": captures[1]})
+
+
 def _captured_view(record: dict, field: str) -> dict | None:
     captured = record.get(field)
     if captured is None:
