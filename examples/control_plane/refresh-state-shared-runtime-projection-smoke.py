@@ -49,6 +49,7 @@ def run_cli(*args: str, cwd: Path, shared_runtime: Path) -> dict:
             **os.environ,
             "PYTHONPATH": str(REPO_ROOT),
             "LOOPX_RUNTIME_ROOT": str(shared_runtime),
+            "LOOPX_CONTEXT_DELIVERY": "off",
         },
     )
     assert result.returncode == 0, result.stdout + result.stderr
@@ -68,6 +69,7 @@ def run_cli_failure(*args: str, cwd: Path, shared_runtime: Path) -> dict:
             **os.environ,
             "PYTHONPATH": str(REPO_ROOT),
             "LOOPX_RUNTIME_ROOT": str(shared_runtime),
+            "LOOPX_CONTEXT_DELIVERY": "off",
         },
     )
     assert result.returncode != 0, result.stdout + result.stderr
