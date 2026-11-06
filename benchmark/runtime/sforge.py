@@ -515,8 +515,16 @@ class SForgeWorker(CodexAgent):
             # environment. Do not duplicate it in the logged shell command.
             env.pop("OPENAI_API_KEY", None)
         exports = " ".join(f"{key}={shlex.quote(value)}" for key, value in env.items())
+        # Run once at receiver execution entry, before its phase clock and
+        # scheduler. Do not turn route failures into an unknown native request
+        # or count setup failure against solver time. Custom API providers keep
+        # their own admission path; no observer runs on every heartbeat wake.
+        readiness = ""
+        if not self._config.agent_api_base_url:
+            readiness = (f"env {exports} {shlex.quote(f'{_PYTHON}/bin/python3')} "
+                         "-m benchmark.runtime.codex_readiness; ")
         return self._execution_command(
-            f"set -eu; {clock}"
+            f"set -eu; {readiness}{clock}"
             f"export LOOPX_PHASE_DEADLINE_EPOCH=$(cat {deadline}); "
             f"remaining=$(( LOOPX_PHASE_DEADLINE_EPOCH - $(date +%s) )); "
             f'if test "$remaining" -le 0; then test -f {started}; exit $?; fi; '

@@ -5,6 +5,16 @@ LHTB, SWE-Marathon and other Harbor tasks use
 `PYTHONPATH`. This research runner is not another installed product package.
 Native tasks, environment, phases, feedback, verifier and scores stay in Harbor.
 
+SForge LoopX workers using a native ChatGPT login check that login through the
+receiver's native app-server before entering the phase clock or scheduler. This
+one startup observation reads the account and usage route without requesting a
+credential refresh or invoking a model. An unavailable route exits with
+`native_receiver_unavailable`; repair the receiver's proxy/login and retry its
+ordinary entry. Existing phase deadlines, sessions, pending requests and retry
+limits are retained. This check does not recover an already dispatched failed
+Turn, extend its budget, select an account or authorize a retry. Official/plain
+workers and custom API routes keep their existing entry behavior.
+
 The shared adapter reads `PATH` from the task container before installing its
 isolated profile. Worker and login shells retain those task toolchain directories;
 LoopX modes prepend their staged Node and CLI. No operator-host PATH or other
@@ -61,6 +71,7 @@ owner requires `mode=heartbeat` and explicitly propagates `LOOPX_EXECUTION_MODE=
 and `LOOPX_CONTEXT_DELIVERY=on` into the native tool environment. Generic CLI
 without these worker declarations stays full. These are caller declarations,
 not host authentication or a new admission grant.
+
 It works with ordinary quota or the explicit TurnEnvelope view. The existing
 worker stages the product's generated lifecycle hooks (currently SessionStart,
 PreCompact, PostCompact, PostToolUse and Interrupt) in the trial's private Codex
