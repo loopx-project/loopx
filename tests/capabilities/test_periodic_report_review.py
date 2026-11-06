@@ -12,7 +12,7 @@ from tests.capabilities.test_periodic_report_bindings import _document
 from loopx.capabilities.periodic_report.bindings import build_periodic_report_generation_bundle
 from loopx.capabilities.periodic_report.review import request_report_review, read_report_review, report_review_inventory
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
-from loopx.control_plane.todos.mutation_api import update_goal_todo
+from loopx.control_plane.todos.mutation_api import add_goal_todo, update_goal_todo
 from loopx.presentation.renderers.periodic_report_html import render_periodic_report_html
 from loopx.presentation.renderers.periodic_report_markdown import render_periodic_report_markdown
 
@@ -61,13 +61,16 @@ def test_unconfigured_legacy_goal_stays_quiet_without_creating_material(tmp_path
     from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
     server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
     server.registry_path, server.runtime_root_override, server.verbose = registry, str(runtime), False
-    thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
     try:
         with urlopen(f"http://127.0.0.1:{server.server_port}/api/chat/report-reviews?goal_id=legacy") as response:
             unavailable = json.load(response)
         assert unavailable["available"] is False and unavailable["reason_code"] == "canonical_authority_required"
     finally:
-        server.shutdown(); server.server_close(); thread.join(timeout=5)
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
 
 
 @pytest.fixture(params=["file", "sqlite"])
@@ -105,6 +108,41 @@ def test_read_is_passive_replay_does_not_reopen_and_new_editions_require_review(
     peer = request_report_review(**review_goal, agent_id="peer", bundle=bundle, execute=True)
     assert len({first["todo_id"], next_edition["todo_id"], peer["todo_id"]}) == 3
     assert read_report_review(**review_goal, todo_id=next_edition["todo_id"])["review"]["status"] == "open"
+
+
+def test_home_summary_counts_reviews_before_generic_todo_caps(review_goal):
+    for index in range(7):
+        request_report_review(**review_goal, agent_id="researcher",
+            bundle=review_bundle(f"研究材料第 {index + 1} 版"), execute=True)
+    for index in range(3):
+        added = add_goal_todo(
+            registry_path=review_goal["registry_path"],
+            runtime_root_arg=str(review_goal["runtime_root"]),
+            goal_id="research",
+            agent_id="researcher",
+            role="user",
+            text=f"P0 owner action {index + 1}",
+            priority="P0",
+            task_class="user_action",
+            action_kind="manual_owner_action",
+        )
+        assert added["ok"], added
+    from loopx.status import collect_status
+    status = collect_status(
+        registry_path=review_goal["registry_path"],
+        runtime_root_override=str(review_goal["runtime_root"]),
+        goal_id="research",
+        limit=10,
+    )
+    goal = next(row for row in status["attention_queue"]["items"] if row["goal_id"] == "research")
+    for summary in (goal["user_todos"], goal["project_asset"]["user_todos"]):
+        actions = summary["capability_actions"]
+        assert actions["total_count"] == 7
+        review_group = next(group for group in actions["groups"]
+                            if group["action_kind"] == "review_periodic_report")
+        assert review_group["count"] == 7
+        assert len(review_group["items"]) == 3
+    assert len(goal["project_asset"]["user_todos"]["items"]) <= 3
 
 
 def test_public_cli_can_prepare_then_retry_one_review_request(review_goal, capsys):
@@ -193,9 +231,12 @@ def test_real_http_material_reader_is_same_origin_and_keeps_canonical_state(revi
     server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
     server.registry_path = review_goal["registry_path"]
     server.runtime_root_override = str(review_goal["runtime_root"])
-    server.selected_goal_id, server.scan_roots, server.limit = None, [], 10
+    server.selected_goal_id = None
+    server.scan_roots = []
+    server.limit = 10
     server.verbose = False
-    thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
     url = f"http://127.0.0.1:{server.server_port}/api/chat/report-reviews"
     try:
         with urlopen(url + "?goal_id=research") as response:
@@ -225,4 +266,6 @@ def test_real_http_material_reader_is_same_origin_and_keeps_canonical_state(revi
             assert stopped.value.code == 503
         assert report_review_inventory(**review_goal)[0]["status"] == "open"
     finally:
-        server.shutdown(); server.server_close(); thread.join(timeout=5)
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)

@@ -115,6 +115,17 @@ export const todoItemSchema = z.object({
   { path: ["todo_id"], message: "Todo without a source index requires todo_id" },
 );
 
+export const todoCapabilityActionsSchema = z.object({
+  schema_version: z.literal("todo_capability_actions_v0"),
+  total_count: z.number().int().nonnegative(),
+  groups: z.array(z.object({
+    action_kind: z.string().min(1),
+    count: z.number().int().nonnegative(),
+    latest_at: z.string().optional().nullable(),
+    items: z.array(todoItemSchema).max(3),
+  })).default([]),
+});
+
 export const todoGroupSchema = z.object({
   source_section: z.string().optional().nullable(),
   total_count: z.number().optional().default(0),
@@ -124,6 +135,7 @@ export const todoGroupSchema = z.object({
   items: z.array(todoItemSchema).optional().default([]),
   deferred_items: z.array(todoItemSchema).optional(),
   recent_completed_advancement_items: z.array(todoItemSchema).optional(),
+  capability_actions: todoCapabilityActionsSchema.optional(),
 });
 
 export const todoIndexItemSchema = todoItemSchema.safeExtend({
@@ -268,6 +280,7 @@ export const projectAssetTodoSummarySchema = z.object({
   next_index: z.number().optional().nullable(),
   items: z.array(todoItemSchema).optional().default([]),
   recent_completed_advancement_items: z.array(todoItemSchema).optional().default([]),
+  capability_actions: todoCapabilityActionsSchema.optional(),
 });
 
 export const dependencyBlockerSchema = z.object({

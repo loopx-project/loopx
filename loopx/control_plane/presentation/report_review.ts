@@ -2,15 +2,16 @@
 import type {JsonObject} from "../effect_program.ts";
 import {requireNonEmptyString} from "../runtime_decode.ts";
 import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
+import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 import {reportReviewDigest} from "./report_review_binding.ts";
 
 export function planReportReview(input: JsonObject): JsonObject {
   const digest = requireNonEmptyString(input.bundle_sha256, "bundle_sha256");
-  if (!/^[a-f0-9]{64}$/.test(digest)) throw new Error("Invalid report bundle digest");
+  if (!BARE_SHA256_PATTERN.test(digest)) throw new Error("Invalid report bundle digest");
   const goal = requireNonEmptyString(input.goal_id, "goal_id");
   const agent = requireNonEmptyString(input.agent_id, "agent_id");
   const title = requireNonEmptyString(input.title, "report title");
-  if (title.length > 200) throw new Error("Report title exceeds its existing limit");
+  if ([...title].length > 200) throw new Error("Report title exceeds its existing limit");
   const existing = input.todos == null ? [] : (projectReportReviews({goal_id: goal, todos: input.todos}).items as JsonObject[])
     .filter(row => row.bundle_sha256 === digest && row.created_by === agent);
   if (existing.length > 1) throw new Error("Ambiguous report review identity");

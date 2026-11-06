@@ -34,3 +34,10 @@ test("an exact producer's queued edition is replayed without interpreting a huma
   assert.equal(planReportReview({...input, agent_id: "peer", todos: [row]}).existing_todo_id, null);
   assert.throws(() => planReportReview({...input, todos: [row, {...row, todo_id: "todo_duplicate"}]}), /Ambiguous/);
 });
+
+test("the existing 200-code-point title limit counts Unicode code points, not UTF-16 units", () => {
+  for (const unit of ["a", "研", "🧪"]) {
+    assert.equal(planReportReview({...input, title: unit.repeat(200)}).text, unit.repeat(200));
+    assert.throws(() => planReportReview({...input, title: unit.repeat(201)}), /title exceeds/);
+  }
+});

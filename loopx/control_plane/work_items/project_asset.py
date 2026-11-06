@@ -627,6 +627,12 @@ def build_project_asset_todo_summary(
         "total": total_count,
         **metadata,
     }
+    capability_actions = todos.get("capability_actions")
+    if todo_role == "user" and isinstance(capability_actions, dict):
+        # Derived from the full canonical User Todo source before its generic
+        # display items are capped. This is a bounded projection, not another
+        # review or decision authority.
+        summary["capability_actions"] = dict(capability_actions)
     if todos.get("advancement_done_count") is not None:
         summary["advancement_done_count"] = todos.get("advancement_done_count")
     open_items = open_todo_items(todos, limit=item_limit)

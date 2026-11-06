@@ -12,7 +12,15 @@ import { recentCompletions } from "./recent-completions";
 
 const briefRowLimit = 3;
 
-type BriefRow = { goal: WorkspaceGoal; key: string; meta?: ReactNode; text: string; proposal?: WorkspaceActionPreview; attention?: WorkspaceAttention };
+type BriefRow = {
+  goal: WorkspaceGoal;
+  key: string;
+  meta?: ReactNode;
+  text: string;
+  proposal?: WorkspaceActionPreview;
+  attention?: WorkspaceAttention;
+  onSelect?: () => void;
+};
 
 function RunningMeta({ goal }: { goal: WorkspaceGoal }) {
   return <>{useExecutionDetail(goal.execution).join(" · ") || goal.title}</>;
@@ -39,7 +47,7 @@ function BriefTile({ count, empty, kind, live = false, onSelectGoal, onSelectOpe
         {(expanded ? rows : rows.slice(0, briefRowLimit)).map((row) => (
           <button className="personal-brief-row" key={row.key} data-operation-id={row.proposal?.previewId}
             data-attention-id={row.attention?.todoId} data-attention-source={row.attention?.sourceId}
-            onClick={() => row.proposal ? onSelectOperation?.(row.proposal)
+            onClick={() => row.onSelect ? row.onSelect() : row.proposal ? onSelectOperation?.(row.proposal)
               : row.attention && onSelectAttention ? onSelectAttention(row.attention) : onSelectGoal(row.goal.goalId)} type="button">
             {kind === "reviews" ? <FileText aria-hidden size={16}/> : kind === "completed" ? <span className="personal-brief-check"><Check size={12} /></span>
               : row.attention ? <Hand aria-hidden size={16}/> : <GoalIdentityMark goal={row.goal} />}
@@ -80,8 +88,35 @@ export function ManagerBrief({ goals, onSelectGoal, attention = [], onSelectAtte
     ].join(" · ")}];
   });
   const summarizedGoals = needs.filter(goal => !attentionRows.some(row => row.goal === goal));
-  const reviews = attentionRows.filter(row => row.attention?.details?.reportReview === true)
-    .map(row => ({...row, meta: [row.goal.title, row.attention?.details?.createdBy ?? row.attention?.details?.boundAgent].filter(Boolean).join(" · ")}));
+  const observedReviews = attentionRows.filter(row => row.attention?.details?.reportReview === true);
+  const reviews: BriefRow[] = [];
+  let reviewCount = 0;
+  for (const goal of active) {
+    const candidates = new Map<string, BriefRow>();
+    for (const attention of goal.reportReviewAttention ?? []) {
+      const key = JSON.stringify([attention.sourceId ?? "", attention.goalId, attention.decisionSource ?? "todo", attention.todoId]);
+      candidates.set(key, {goal, key, attention, text: attention.text});
+    }
+    for (const row of observedReviews.filter(candidate => candidate.goal === goal)) {
+      candidates.set(row.key, row);
+    }
+    const bounded = [...candidates.values()].map(row => ({
+      ...row,
+      meta: [goal.title, row.attention?.details?.createdBy ?? row.attention?.details?.boundAgent].filter(Boolean).join(" · "),
+    }));
+    const count = Math.max(goal.reportReviewCount ?? 0, bounded.length);
+    reviewCount += count;
+    if (count > bounded.length && bounded.length) {
+      reviews.push({
+        goal,
+        key: `report-directory:${goal.goalId}`,
+        text: locale === "zh-CN" ? `查看全部 ${count} 份待验收成果` : `View all ${count} results awaiting review`,
+        meta: goal.title,
+        onSelect: () => bounded[0]?.attention && onSelectAttention?.(bounded[0].attention),
+      });
+    }
+    reviews.push(...bounded);
+  }
   const otherAttention = attentionRows.filter(row => row.attention?.details?.reportReview !== true);
   const incomplete = goals.some(goal => goal.loadState);
   const operationRows: BriefRow[] = operations.flatMap(proposal => {
@@ -106,7 +141,7 @@ export function ManagerBrief({ goals, onSelectGoal, attention = [], onSelectAtte
     : executionPending ? t("brief.runningReading") : t("activity.executionUnknown");
   return (
     <section aria-label={t("brief.title")} className="personal-brief">
-      {reviews.length ? <BriefTile count={reviews.length} empty="" kind="reviews" onSelectGoal={onSelectGoal}
+      {reviewCount ? <BriefTile count={reviewCount} empty="" kind="reviews" onSelectGoal={onSelectGoal}
         onSelectAttention={onSelectAttention} rows={reviews} title={locale === "zh-CN" ? "待验收成果" : "Results awaiting review"} /> : null}
       <BriefTile count={otherAttention.length} empty={t("brief.needsEmpty")} kind="needs" onSelectGoal={onSelectGoal}
         onSelectAttention={onSelectAttention} rows={otherAttention} title={t("brief.needs")}

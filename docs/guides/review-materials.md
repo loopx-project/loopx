@@ -1,7 +1,9 @@
 # 审阅工作成果 / Review work materials
 
-材料准备好后，工作台的 **待验收成果** 显示尚待处理的材料数量和标题。
-点击一项，直接进入该 Goal 的 **成果** 页，打开对应版本。
+材料准备好后，工作台的 **待验收成果** 从完整 canonical User Todo 来源统计尚待处理的
+材料数量，并显示有界标题；这不受通用 Todo 列表的三条摘要限制。点击一项，直接进入
+该 Goal 的 **成果** 页，打开对应版本；材料多于首页标题数时，**查看全部** 进入同一 Goal
+的完整材料目录。
 
 ![工作台中独立的待验收成果入口](assets/review-materials/home.png)
 
@@ -48,9 +50,12 @@ loopx periodic-report request-review \
 
 ## English
 
-**Results awaiting review** on Home lists pending materials. Select a title to
-open its exact edition in the Goal's **Results** tab. Page and text views are
-available. **Give feedback** prepares a draft in the responsible Agent's work
+**Results awaiting review** on Home counts pending materials from the full
+canonical User Todo source and shows bounded titles, independently of the
+generic three-item Todo summary. Select a title to open its exact edition in the
+Goal's **Results** tab. When more materials exist than the shown titles,
+**View all** opens that Goal's complete material directory. Page and text views
+are available. **Give feedback** prepares a draft in the responsible Agent's work
 conversation; it does not send it. **Accept this material** uses the existing
 action preview and handles only that edition's User Todo, not Goal acceptance.
 Reading and refreshing never acknowledge a result. Revised editions have

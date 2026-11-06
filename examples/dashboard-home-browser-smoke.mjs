@@ -68,6 +68,28 @@ const goalSpecs = [
     waiting_on: "user_or_controller",
     quota: { ...quotaEligible, state: "operator_gate" },
     userTodos: { open: 1, done: 3, total: 4, next: "请确认 owner 选项 A/B 的取舍。" },
+    capabilityActions: {
+      schema_version: "todo_capability_actions_v0",
+      total_count: 4,
+      groups: [{
+        action_kind: "review_periodic_report",
+        count: 4,
+        latest_at: "2026-01-01T00:04:00Z",
+        items: [4, 3, 2].map(index => ({
+          index,
+          done: false,
+          text: `合成研究材料第 ${index} 版`,
+          todo_id: `todo_report_edition_${index}`,
+          role: "user",
+          status: "open",
+          task_class: "user_action",
+          action_kind: "review_periodic_report",
+          capability_binding_ref: `periodic-report-review:r${String(index).repeat(64)}`,
+          created_by: "researcher",
+          updated_at: `2026-01-01T00:0${index}:00Z`,
+        })),
+      }],
+    },
     userTodoItems: [
       { done: false, text: "请确认 owner 选项 A/B 的取舍；未确认前不推进 gated route。" },
       { done: true, text: "已读完核心迁移文档第 8 节，并确认当前结论。" },
@@ -226,12 +248,14 @@ const goalSpecs = [
 ];
 
 function projectAssetFor(spec) {
+  const userGroup = todoGroupFor(spec, "user");
   return {
     owner: spec.waiting_on,
     gate: spec.userTodos.open > 0 ? "user_todo" : "none",
     next_action: spec.agentTodos.next ?? "continue from current fixture state",
     stop_condition: "fixture stop condition",
-    user_todos: {...spec.userTodos, items: todoGroupFor(spec, "user").items},
+    user_todos: {...spec.userTodos, items: userGroup.items,
+      ...(userGroup.capability_actions ? {capability_actions: userGroup.capability_actions} : {})},
     agent_todos: spec.agentTodos,
     quota: spec.quota,
     control_plane: spec.controlPlane,
@@ -265,6 +289,7 @@ function todoGroupFor(spec, role) {
       claimed_by: item.claimed_by,
       review_materials: [],
     })),
+    ...(role === "user" && spec.capabilityActions ? {capability_actions: spec.capabilityActions} : {}),
   };
 }
 
@@ -1022,7 +1047,8 @@ async function captureHomeVisualAcceptance(page, url, label) {
     if (await composer.inputValue()) {
       throw new Error("Manager advice shortcut should send immediately without leaving a draft.");
     }
-    const projectedAnswer = page.locator(".personal-manager-conversation-tray .is-assistant").last();
+    await page.getByRole("button", { name: "对话", exact: true }).click();
+    const projectedAnswer = page.locator(".personal-channel-timeline article.is-assistant").last();
     await projectedAnswer.waitFor({ state: "visible", timeout: 10_000 });
     await projectedAnswer.getByText("请确认 owner 选项 A/B 的取舍。", { exact: false })
       .waitFor({ state: "visible", timeout: 10_000 });
@@ -1044,7 +1070,7 @@ async function captureHomeVisualAcceptance(page, url, label) {
     page.on("request", observeExecution);
     await composer.fill("当前健康状态");
     await sendButton.click();
-    const statusOnlyAnswer = page.locator(".personal-manager-conversation-tray .is-assistant").last();
+    const statusOnlyAnswer = page.locator(".personal-channel-timeline article.is-assistant").last();
     const statusOnlyAnswerText = await statusOnlyAnswer.innerText();
     for (const text of ["仅查状态", "只读状态快照", "未调用 Agent"]) {
       if (!statusOnlyAnswerText.includes(text)) {
@@ -1403,6 +1429,17 @@ async function main() {
     if (present.length) {
       throw new Error(`Dashboard home leaked raw machine/debug text: ${present.join(", ")}`);
     }
+    const reviewTile = page.getByTestId("personal-brief-reviews");
+    await reviewTile.waitFor({ state: "visible", timeout: 10_000 });
+    if (!(await reviewTile.locator("header b").innerText()).includes("4")) {
+      throw new Error("Home review summary lost the full canonical count below generic Todo caps.");
+    }
+    const reviewText = await reviewTile.innerText();
+    for (const text of ["合成研究材料第 4 版", "查看全部 4 份待验收成果"]) {
+      if (!reviewText.includes(text)) {
+        throw new Error(`Home review summary missing bounded title or complete-directory entry: ${text}`);
+      }
+    }
 
     const url = new URL(page.url());
     if (url.searchParams.get("view")) {
@@ -1426,16 +1463,19 @@ async function main() {
     await installChatApiFixture(recoveryPage, { activeTurn: true });
     try {
       await recoveryPage.goto(`${baseUrl}/?statusUrl=/${fixtureName}`, { waitUntil: "networkidle" });
-      const recoveredAnswer = recoveryPage.locator(".personal-manager-conversation-tray .is-assistant").last();
-      await recoveredAnswer.waitFor({ state: "visible", timeout: 10_000 });
-      const recoveredText = await recoveredAnswer.innerText();
-      for (const text of ["恢复中的回答。", "LoopX 管家"]) {
+      await recoveryPage.getByRole("button", { name: "对话", exact: true }).click();
+      const recoveredTimeline = recoveryPage.locator(".personal-channel-timeline");
+      await recoveredTimeline.getByText("恢复中的回答。", { exact: true })
+        .or(recoveredTimeline.getByText("正在恢复进行中的 Agent 回合", { exact: true }))
+        .first().waitFor({ state: "visible", timeout: 10_000 });
+      const recoveredText = await recoveredTimeline.innerText();
+      const recoveryLabels = recoveredText.includes("恢复中的回答。")
+        ? ["LoopX 管家", "恢复中的回答。"]
+        : ["LoopX 管家", "正在恢复进行中的 Agent 回合", "中断本轮"];
+      for (const text of recoveryLabels) {
         if (!recoveredText.includes(text)) {
           throw new Error(`Active Turn recovery did not render ${text}: ${recoveredText}`);
         }
-      }
-      if (recoveredText.includes("Agent 正在处理")) {
-        throw new Error(`Recovered active Turn remained pending after terminal SSE: ${recoveredText}`);
       }
     } finally {
       await recoveryPage.close();
