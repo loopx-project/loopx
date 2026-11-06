@@ -137,9 +137,12 @@ Minimal 必须执行并恢复真实的受治理任务；standard 围绕同一内
   [DSH/Pi 选择](harness-selection-dsh-pi-v0.zh-CN.md) 负责宿主资格。装配复用这些契约。
 - [Benchmark toolkit](../../../loopx/capabilities/benchmark_toolkit/README.md) 负责通用权限、并发与完整性。
   [Benchmark 政策](../../../benchmark/README.md) 把原生执行/评估留在 benchmark，不恢复第二个 launcher。
-- [三层协议](../../reference/protocols/multi-agent-three-layer-minimality-v0.md) 的 “kernel” 指更宽的复用层。
+- [三层协议](https://github.com/loopx-project/loopx/blob/910ff3bca5c8ff5ee52bd691ae924cc37dbaf05f/docs/reference/protocols/multi-agent-three-layer-minimality-v0.md) 的 “kernel” 指更宽的复用层。
   本文治理内核指 authority 边界，启动依赖闭包指所选入口必需代码。
   可复用 runner 或展示设施无须进入每个启动闭包。
+
+> 旧 tmux multi-agent 与 auto-research 演示已退役；上述演示合同链接固定到退役前版本，
+> 仅用于解释历史设计，不是当前执行入口或共享运行时的归属。
 
 ## 5. 提议的架构
 
