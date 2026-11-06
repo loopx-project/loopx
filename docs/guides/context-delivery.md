@@ -75,6 +75,14 @@ One shared preparation call does not prove that every final caller has migrated.
 | Saved-file delta | Verified immutable file versions with compatible identity | Model retention, comprehension or fresh permission |
 | Provider prompt cache | Provider-specific processing/billing reuse of input | Source correctness, task success or LoopX net savings |
 
+Replan authoring uses the same-response form: CLI display can reference the
+complete `vision_authoring` in a durable-writeback step. The existing TypeScript
+Turn owner chooses an exact owner and resolves it for ordinary and captured
+readers. Dangling references, reference chains, conflicting inline values and
+references to another kind of step are rejected. A small or different value
+stays inline. Sharing neither changes the original settlement identity nor
+establishes cross-Turn retention or net cost savings.
+
 Semantic summarization is another operation: it can change wording or meaning.
 The exact codec is not a semantic summary. A controller-authored brief remains
 a separate proposed workflow with its own retained-requirement and outcome

@@ -823,6 +823,7 @@ function replanView(request: JsonObject): JsonObject {
   } else {
     requireVisionAuditReferences(payload);
   }
+  replanAuthoringContract(payload);
   const packet = object(payload.replan_action_packet);
   const obligation = object(payload.autonomous_replan_obligation);
   const context = object(obligation.replan_context);
@@ -929,6 +930,7 @@ function replanView(request: JsonObject): JsonObject {
 function replanActionPacket(payload: JsonObject, reads = replanReadCommands(payload)): JsonObject | null {
   const source = object(payload.replan_action_packet);
   if (Object.keys(source).length === 0) return null;
+  const writeback = replanAuthoringContract(payload);
   if (reads) return {...compactFields(source, ["schema_version", "decision", "obligation_id", "required_outcome", "allowed_terminal"]),
     review: reads.review, writeback: reads.writeback,
     guidance: "Read review state and applicable acceptance/evidence; choose the next work, then follow review.next for Todo selection or writeback. Reads grant no authority and require no acknowledgement."};
@@ -939,7 +941,6 @@ function replanActionPacket(payload: JsonObject, reads = replanReadCommands(payl
   // The typed replan owner supplies bounded instructions; do not truncate their
   // authority/stop qualifiers through generic diagnostic compaction.
   if (Array.isArray(source.planning_guidance)) compact.planning_guidance = source.planning_guidance;
-  const writeback = replanAuthoringContract(payload);
   if (writeback.vision_authoring) compact.writeback_contract = writeback;
   return Object.keys(compact).length > 0 ? compact : null;
 }

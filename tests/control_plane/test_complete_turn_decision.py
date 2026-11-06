@@ -992,8 +992,7 @@ def test_real_structured_host_reads_same_complete_replan_source(tmp_path, monkey
     script = runner.read_text().replace("import json\n", "import json, shlex, subprocess\n")
     script = script.replace("    return json.dumps(candidate)",
         "    candidate.pop('work_evidence', None)\n    candidate.pop('validation_evidence', None)\n    return json.dumps(candidate)")
-    script = script.replace("    counter = root / 'host-count.txt'", """    prompt = kwargs["prompt"]
-    (root / "received.txt").write_text(prompt)
+    script = script.replace("    counter = root / 'host-count.txt'", """    (root / "received.txt").write_text(prompt)
     request, _ = json.JSONDecoder().raw_decode(prompt.split("Turn request:\n", 1)[1])
     for stage in ("review", "writeback"):
         result = subprocess.run(shlex.split(request["detail_ref"]["replan_action_packet"][stage]),

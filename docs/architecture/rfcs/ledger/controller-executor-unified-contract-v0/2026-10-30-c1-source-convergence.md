@@ -5,6 +5,28 @@
 - **Source:** original candidate `648104978fdd67176cccdbb765c5bc3f36bf2ca3`, integrated with target `e8f4c6f8125e3cc0ef912afac653d5542671392f`.
 - **Language mirror:** [中文版](2026-10-30-c1-source-convergence.zh-CN.md)
 
+## Current extraction: complete replan authoring
+
+Both author proposals integrate main `d0985c35aa`. [PR #8192](https://github.com/loopx-project/loopx/pull/8192)
+extracts C1's existing same-response authoring owner into main, removes Python's
+duplicate comparison and restores authoring for ordinary, staged and real CLI
+readers. All three complete-authoring oracles fail on original main `a9485073f2`
+and pass on the repair. Missing stride declarations still refuse semantic
+writeback; a Host reading the delivered contract can declare its decision and
+the following task consumes the independently validated plan. C1 retains its
+modern source/version checks before captured reads.
+
+The main repair passes 30 integrated source and 30 isolated-wheel cases;
+C1 passes 180 focused source, 96 TypeScript and 30 isolated-wheel cases.
+Canonical fixtures locate TypeScript from the loaded package. C1 fixtures use
+its actual structured Host prompt and versioned capture binding, rather than
+assuming an inline value or a historical digest. Earlier fixture failures remain
+recorded. The main repair's frozen standard mechanical checks pass, but the
+strict quality receipt remains missing. Independent review and whole C1 remain
+open. This repair adds one parent RPC in the frozen fixture (2 to 3, excluding
+the CLI child); it is not a net-efficiency result. Neither independent proposal
+has landed, so this checkpoint does not claim the parent has already shrunk.
+
 ## Latest field reuse: a main proposal shared with C1
 
 [PR #8186](https://github.com/loopx-project/loopx/pull/8186) isolates the native

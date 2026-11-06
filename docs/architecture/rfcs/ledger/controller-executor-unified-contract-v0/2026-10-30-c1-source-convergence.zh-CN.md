@@ -5,6 +5,22 @@
 - **来源：** 原候选 `648104978fdd67176cccdbb765c5bc3f36bf2ca3`，集成目标 `e8f4c6f8125e3cc0ef912afac653d5542671392f`。
 - **语言镜像：** [English](2026-10-30-c1-source-convergence.md)
 
+## 当前拆分：完整重规划 authoring
+
+两个作者提案均集成 main `d0985c35aa`。[PR #8192](https://github.com/loopx-project/loopx/pull/8192)
+把 C1 既有的同响应 authoring owner 独立提到 main，删除 Python 重复比较，恢复普通、
+staged 及真实 CLI 读取器的 authoring。三个完整正文断言在原 main `a9485073f2` 均失败，
+在修复后通过。缺少 stride 声明仍拒绝语义写回；Host 读取实际交付契约后可声明决策，
+后续任务消费经过独立验证的计划。C1 在读取捕获内容前保留现代源版本与绑定校验。
+
+main 修复的集成源码 30 项、隔离 wheel 30 项通过；C1 定向源码 180 项、TypeScript
+96 项、隔离 wheel 30 项通过。Canonical fixture 从实际加载的包定位 TypeScript；
+C1 fixture 使用实际结构化 Host prompt 和版本化 capture 绑定，不再假定正文内联或
+沿用历史 digest。先前夹具失败继续保留。main 修复的冻结 standard 机械检查通过，
+但严格质量收据仍缺失；独立评审及整体 C1 仍开放。此修复在冻结夹具中增加一次父
+RPC（2 到 3，未计 CLI 子进程），不是净效率结果。两个独立提案均未落地，不宣称父
+PR 已缩小。
+
 ## 最新字段复用：main 独立提案与 C1 同步
 
 [PR #8186](https://github.com/loopx-project/loopx/pull/8186) 将原生渐进 reader 修复
