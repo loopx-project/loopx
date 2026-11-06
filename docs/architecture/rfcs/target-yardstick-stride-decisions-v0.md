@@ -177,7 +177,11 @@ evaluator reference; they do not merge proxy and authoritative measurements.
 The original settlement supplies Goal/Agent/Todo/Turn identity. The existing run
 journal, Explore event log and additive Todo link own persistence and retry;
 there is no extra journal, metadata note, planner or mandatory writeback.
-A changed decision must cite the current same-Todo finding. Current context
+A changed decision must cite the current same-Todo finding; validation and append
+CAS use the same graph snapshot. An exact durable replay with an original commit
+strictly older than the current choice may restore its missing historical
+capture. This does not relax predecessor checks for equal-time or newer work,
+and attachment callers cannot supply the replay timestamp. Current context
 selects by original committed time, so late ingestion cannot replace a newer
 choice. Ordinary work preserves its original settlement type and never creates
 an obligation to satisfy Stride v2. Replans retain their existing v2 contract.

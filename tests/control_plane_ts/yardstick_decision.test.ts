@@ -53,6 +53,18 @@ test("a late replay cannot replace a newer committed choice; exact profiles sele
   assert.equal(Object.hasOwn(cue, "fidelity_validated"), false);
 });
 
+test("only strictly older committed replay preserves a stale predecessor as history", () => {
+  const params = {enabled: true, decision, binding, findings: [finding]};
+  assert.deepEqual(validateWorkYardstickContinuation({...params,
+    replay_committed_at: "2026-01-01T00:00:00.999999Z"}), {decision});
+  for (const time of [undefined, "invalid", finding.last_updated_at, "2026-01-01T00:00:01.000001Z"]) {
+    assert.throws(() => validateWorkYardstickContinuation({...params, replay_committed_at: time}), /basis changed/);
+  }
+  assert.throws(() => normalizeWorkYardstickDecision({...decision,
+    replay_committed_at: "2026-01-01T00:00:00Z"}), /unsupported/,
+    "The attachment cannot supply replay provenance");
+});
+
 test("one optional attachment reaches an ordinary task context without creating a planner or off-mode cue", () => {
   const result = normalizeExploreResultAttachment({attachment: {
     schema_version: "explore_result_attachment_v0", question: "Does the screen rank useful candidates?",

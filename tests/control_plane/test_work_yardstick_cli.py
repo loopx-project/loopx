@@ -186,10 +186,70 @@ def test_committed_pending_capture_recovers_after_disable_without_new_authority(
         rc = main(["--registry", str(path), "--runtime-root", str(runtime), "--format", "json", *command])
         failed = json.loads(capsys.readouterr().out)
     assert rc == 1 and failed["appended"] and failed["explore_result_delivery"]["primary_committed"]
+    run(project, runtime, path, "quota", "spend-slot", *binding(turn), "--slots", "1", "--source", "heartbeat", "--execute")
+    # Work continues while the old graph delivery is pending. Its later exact
+    # replay must retain history without replacing this newer target.
+    newer_source = tmp_path / "newer.json"
+    newer = attachment()
+    newer["work_yardstick_decision"]["target"]["summary"] = "Use the updated current target"
+    newer_source.write_text(json.dumps(newer))
+    latest = refresh(project, runtime, path, "turn-newer", newer_source)
+    assert latest["explore_result_delivery"]["ok"]
     config = json.loads(path.read_text())
     config["goals"][0]["execution_profile"]["yardstick_enabled"] = False
     path.write_text(json.dumps(config))
     recovered = run(project, runtime, path, *command)
     assert recovered["idempotent_replay"] and recovered["explore_result_delivery"]["ok"]
-    assert len(load_explore_result_events(explore_result_log_path(runtime, GOAL_ID))) == 2
+    assert len(load_explore_result_events(explore_result_log_path(runtime, GOAL_ID))) == 3
     assert "work_yardsticks" not in context(runtime, path)["graph"]
+    config["goals"][0]["execution_profile"]["yardstick_enabled"] = True
+    path.write_text(json.dumps(config))
+    cue = context(runtime, path)["graph"]["work_yardsticks"][0]
+    assert cue["source_finding_id"] == latest["explore_result_delivery"]["finding_id"]
+    assert cue["target"]["summary"] == "Use the updated current target"
+    # Exact replay is not permission to substitute an older timestamp or a
+    # different method into the canonical committed attachment.
+    changed = attachment()
+    changed["work_yardstick_decision"]["next_action"]["method_id"] = "method:substituted"
+    source.write_text(json.dumps(changed))
+    rc, rejected = _run_cli(path, runtime, *command, cwd=project)
+    assert rc == 1 and not rejected.get("explore_result_delivery", {}).get("ok"), rejected
+
+
+def test_predecessor_validation_and_append_cas_share_the_same_snapshot(tmp_path, monkeypatch):
+    from tests.control_plane.test_explore_result_writeback import fixture, payload
+    import loopx.capabilities.explore.result_writeback as writer
+    args = fixture(tmp_path)
+    config = json.loads(args["registry_path"].read_text())
+    config["goals"][0].setdefault("execution_profile", {})["yardstick_enabled"] = True
+    args["registry_path"].write_text(json.dumps(config))
+
+    def capture(turn, when):
+        value = payload()
+        value["generated_at"] = when
+        value["settlement_identity"]["effect_id"] = f"research:worker:{turn}"
+        value["explore_result"].update(evidence_refs=["result:reversal"], work_yardstick_decision=decision())
+        return value
+
+    first = capture("turn-one", "2026-01-02T00:00:00Z")
+    concurrent = capture("turn-two", "2026-01-01T00:00:00Z")
+    prepare = writer.prepare_result_attachment
+    inserted = False
+
+    def insert_after_validation(*a, **kw):
+        nonlocal inserted
+        result = prepare(*a, **kw)
+        if not inserted:
+            inserted = True
+            other = writer.deliver_result_attachment(payload=concurrent,
+                **{**args, "turn_instance_id": "turn-two"})
+            assert other["ok"], other
+        return result
+
+    with monkeypatch.context() as patch:
+        patch.setattr(writer, "prepare_result_attachment", insert_after_validation)
+        result = writer.deliver_result_attachment(payload=first, **args)
+    assert not result["ok"] and result["primary_committed"] and result["retryable"], result
+    assert "graph changed" in result["error"]
+    events = load_explore_result_events(explore_result_log_path(args["runtime_root"], args["goal_id"]))
+    assert len([row for row in events if row["event_kind"] == "finding"]) == 1

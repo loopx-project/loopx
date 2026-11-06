@@ -198,7 +198,8 @@ def prepare_result_attachment(
     agent_id,
     todo_id,
     turn_instance_id,
-    _committed_replay=False,
+    _replay_committed_at=None,
+    _current_events=None,
 ):
     """Validate before primary commit; this path never appends graph evidence."""
     result = normalize_result_attachment(attachment)
@@ -229,7 +230,7 @@ def prepare_result_attachment(
         recorded_at="2000-01-01T00:00:00Z",
         todo_id=todo_id, turn_instance_id=turn_instance_id,
     )
-    current_events = load_explore_result_events_strict(
+    current_events = _current_events if _current_events is not None else load_explore_result_events_strict(
         explore_result_log_path(runtime_root, goal_id), goal_id=goal_id
     )
     existing = build_explore_result_projection(current_events, goal_id=goal_id,
@@ -239,7 +240,8 @@ def prepare_result_attachment(
         effect_runtime_result("work_item.yardstick.continuation", {
             # Only replay of the original committed attachment may finish after
             # disable; it cannot grant a new capture or change its contents.
-            "enabled": _committed_replay or work_yardstick_enabled(goal, runtime_root),
+            "enabled": _replay_committed_at is not None or work_yardstick_enabled(goal, runtime_root),
+            "replay_committed_at": _replay_committed_at,
             "decision": result["work_yardstick_decision"], "evidence_refs": result["evidence_refs"],
             "binding": {"goal_id": goal_id, "agent_id": agent_id, "todo_id": todo_id},
             "findings": existing["findings"],
@@ -377,6 +379,12 @@ def deliver_result_attachment(
             result["graph"] = {"ok": True, "appended_event_count": 0,
                                "idempotent_replay": True}
         else:
+            # The continuation check, evolution plan and append CAS must use
+            # one snapshot. A second read after validation could silently admit
+            # a predecessor made stale by a concurrent same-work delivery.
+            current_events = load_explore_result_events_strict(
+                explore_result_log_path(runtime_root, goal_id), goal_id=goal_id
+            )
             attachment = prepare_result_attachment(
                 intent["payload"]["attachment"],
                 registry_path=registry_path,
@@ -385,10 +393,8 @@ def deliver_result_attachment(
                 agent_id=agent_id,
                 todo_id=todo_id,
                 turn_instance_id=turn_instance_id,
-                _committed_replay=payload.get("idempotent_replay") is True,
-            )
-            current_events = load_explore_result_events_strict(
-                explore_result_log_path(runtime_root, goal_id), goal_id=goal_id
+                _replay_committed_at=(committed_at if payload.get("idempotent_replay") is True else None),
+                _current_events=current_events,
             )
             evolves = _evolves_question(attachment)
             plan = (_evolution_plan(attachment,

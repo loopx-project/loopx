@@ -95,7 +95,16 @@ export function validateWorkYardstickContinuation(params: JsonObject): JsonObjec
   const binding = requireJsonObject(params.binding, "work binding");
   const decision = normalizeWorkYardstickDecision(params.decision, params.evidence_refs);
   const current = currentFinding((params.findings ?? []) as JsonObject[], binding);
-  if (decision.prior_finding_id !== (current?.finding_id ?? null)) throw new EffectRuntimeRequestError("yardstick basis changed; read the current same-Todo decision before revising it");
+  // Only the settlement adapter supplies the original timestamp of an exact
+  // committed replay. Preserve a strictly older missing capture as history;
+  // it cannot displace the current choice or admit a newer stale predecessor.
+  const replayTime = typeof params.replay_committed_at === "string"
+    ? parseTodoTimestampMicros(params.replay_committed_at) : null;
+  const currentTime = current ? parseTodoTimestampMicros(String(current.last_updated_at ?? "")) : null;
+  const historicalReplay = replayTime !== null && currentTime !== null && replayTime < currentTime;
+  if (decision.prior_finding_id !== (current?.finding_id ?? null) && !historicalReplay) {
+    throw new EffectRuntimeRequestError("yardstick basis changed; read the current same-Todo decision before revising it");
+  }
   return {decision};
 }
 export function projectWorkYardstickCue(params: JsonObject): JsonObject | null {
