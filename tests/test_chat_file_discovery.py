@@ -1,6 +1,7 @@
 """File-backed parity at the real queue/control readers, including invalidation."""
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -73,6 +74,15 @@ def test_new_queued_input_and_active_exclusion_stay_fresh(original_store):
     assert [t["turn_id"] for t in store.queued_turns(sid)] == [tid]
     store.update_session(sid, active_turn_id=tid)
     assert store.queued_turns(sid) == []
+
+
+def test_concurrent_first_queue_observations_do_not_change_selection(original_store):
+    store, sid = original_store
+    _turn(store, sid, "history", "completed")
+    tid = _turn(store, sid, "pending", "queued")
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        rows = list(pool.map(lambda _: store.queued_turns(sid, strict=True), range(2)))
+    assert [[turn["turn_id"] for turn in result] for result in rows] == [[tid], [tid]]
 
 
 @pytest.mark.parametrize("fault", ["malformed", "foreign-session", "invalid-status"])

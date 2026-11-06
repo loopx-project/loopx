@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from functools import cached_property
 import os
 import json
 from pathlib import Path
@@ -9,6 +10,7 @@ import uuid
 from typing import Any
 from .chat import require_matching_message_replay, require_matching_replay
 from .file_lock import exclusive_file_lock
+from .capabilities.native_chat.file_discovery import FileChatDiscovery
 
 
 SESSION_QUEUE_MAX_PENDING = 20
@@ -69,6 +71,12 @@ def chat_runtime_activation_state(runtime_root: Path) -> dict[str, int]:
 
 
 class ChatIngressStore:
+    @cached_property
+    def _terminal_turn_discovery(self) -> FileChatDiscovery:
+        # File queue discovery owns this per-store hint. Concurrent first use
+        # may build two empty observers; neither holds execution authority.
+        return FileChatDiscovery()
+
     def runtime_activation_lock(self):
         return chat_runtime_activation_lock(self.root.parent)
 
