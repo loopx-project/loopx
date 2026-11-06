@@ -303,7 +303,7 @@ export async function configureGoalAcceptance(store: AuthorityStore, value: Json
     // Historical receipts above remain replayable; new configurations must make
     // the blast radius explicit, including updates to legacy contracts.
     if (document.scope === undefined) return source(store, failure("goal_acceptance_scope_required",
-      "Select selected_work with todo_ids or explicitly choose all_advancement before configuring acceptance."));
+      "Select goal for Goal-only checks, selected_work with todo_ids, or all_advancement before configuring acceptance."));
     const todos = acceptanceTodos(head.head, String(request.goal_id));
     if (document.scope?.kind === "selected_work") for (const todoId of document.scope.todo_ids) {
       const todo = todos.get(todoId);
