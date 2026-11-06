@@ -39,8 +39,8 @@ from benchmark.runtime.sforge import (
 from benchmark.runtime.sforge_backend import RecordingDockerBackend
 from benchmark.runtime.source import archive_source, source_pins
 from benchmark.edgebench.prompts import (
-    blind_task_prompt, best_only_task_prompt, native_task_prompt, native_task_instructions,
-    checkpoint_research_instructions,
+    blind_task_prompt, best_only_task_prompt, native_task_instructions,
+    research_artifact_instructions,
 )
 from benchmark.edgebench.online_sampling import OnlineSampler
 from benchmark.edgebench.feedback import BestOnlyFeedback, FEEDBACK_MODES, validate_best_only
@@ -277,6 +277,13 @@ def main(argv=None):
                 archive_source(runner, pins[1], Path(directory) / "runner.tar", ("benchmark/runtime",))
     task_file = args.tasks_dir / f"{args.task}.json"
     task = make_task_spec(task_file, load_benchmark(args.tasks_dir))
+    research_sidecar = args.feedback == "native" and not task.game_mode
+    if research_sidecar:
+        from benchmark.runtime.research_artifacts import validate_research_scope, with_research_capture
+        validate_research_scope(task.cwd, task.submit_paths)
+        if checkpoint_request is not None:
+            declaration = with_research_capture(declaration)
+            checkpoint_request = json.dumps(declaration).encode("utf-8")
     blind_endpoint = None
     feedback_prompt = None
     workspace_instructions = None
@@ -300,14 +307,11 @@ def main(argv=None):
         native_policy = dict(submission_cooldown=args.submission_cooldown,
             eval_interval=args.eval_interval, internet=task.internet,
             selection=task.judge.selection, score_direction=task.judge.score_direction)
-        feedback_prompt = native_task_prompt(task.work.agent_query, task.submit_paths, **native_policy)
         workspace_instructions = native_task_instructions(task.submit_paths, **native_policy)
-        if checkpoint_request is not None:
-            research = checkpoint_research_instructions(declaration, task.cwd)
-            workspace_instructions += research
-            # Keep the exact policy prefix shared with AGENTS.md; the original
-            # task remains the separately owned Goal objective.
-            feedback_prompt = workspace_instructions + f"---\n\n{task.work.agent_query}\n"
+        workspace_instructions += research_artifact_instructions(checkpoint=checkpoint_request is not None)
+        # All native arms get the same storage policy. Checkpoint coverage is
+        # explicit; neither collection nor a sidecar changes native submissions.
+        feedback_prompt = workspace_instructions + f"---\n\n{task.work.agent_query}\n"
         task_objective = task.work.agent_query
     config = replace(
         load_config(),
@@ -344,7 +348,7 @@ def main(argv=None):
             args.restore_goal, args.restore_agent, args.restore_source_todo,
             int(time.time()) + args.timeout, args.replan_after_turns or 6,
             tuple(args.restore_research_component), args.restore_fresh_replan,
-            destination_config=args.restore_model_config)
+            destination_config=args.restore_model_config, research_sidecar=research_sidecar)
         metadata = candidate.verify(task.cwd)
         if args.restore_model_config is not None:
             from loopx.hosts.codex_checkpoint import checkpoint_destination_config
@@ -358,7 +362,7 @@ def main(argv=None):
         clock = attempt / "restored-phase-deadline"
         warm_start = candidate
     agent = SForgeWorker(config, profile=args.worker, cwd=task.cwd,
-                         warm_start=warm_start,
+                         warm_start=warm_start, research_sidecar=research_sidecar,
                          timeout_seconds=args.timeout, feedback_prompt=feedback_prompt, feedback=args.feedback,
                          workspace_instructions=workspace_instructions,
                          task_objective=task_objective,
@@ -403,6 +407,7 @@ def main(argv=None):
                                      oauth_proxy=bool(args.api_proxy_url or api_base_url),
                                      blind_api_endpoint=blind_endpoint, feedback=feedback,
                                      docker_host_bridge=args.docker_host_bridge,
+                                     research_sidecar=research_sidecar,
                                      **({"checkpoint": checkpoint} if checkpoint is not None else {}))
     for image in (task.work_image_key, task.judge_image_key):
         if not backend.image_exists(image):
