@@ -1562,11 +1562,16 @@ class ChatRuntimeController:
                     # An empty queue needs no provider preparation. Claim real
                     # work first, keeping the existing enqueue/retirement fence
                     # above and the Turn's execution/stop checks below.
+                    current = self.store.load_session(session_id)
+                    if current is None or current.get("active_turn_id") != turn_id:
+                        return
                     adapter = self._ensure_adapter(
-                        self.store.load_session(session_id) or refreshed,
+                        current,
                         work_dir=work_dir,
                         objective=objective,
                     )
+                    if (self.store.load_session(session_id) or {}).get("active_turn_id") != turn_id:
+                        return
                 except Exception as exc:
                     # The claimed request still owns a terminal outcome when
                     # workspace preparation or adapter restoration fails.
