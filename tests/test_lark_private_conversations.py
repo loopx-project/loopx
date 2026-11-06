@@ -1325,7 +1325,7 @@ def test_delivered_quota_failure_stays_pending_across_restart_without_replaying(
 
 
 @pytest.mark.parametrize("command", ["stop", "new"])
-@pytest.mark.parametrize("error_code", ["response_timeout", "upstream_transport_failure"])
+@pytest.mark.parametrize("error_code", ["response_timeout", "upstream_transport_failure", "context_window_exceeded"])
 def test_delivered_timeout_stays_pending_without_replaying_and_honors_stop(ordinary, monkeypatch, command, error_code):  # noqa: F811
     from loopx.chat_agent import CodexChatAgentError
     from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter

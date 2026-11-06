@@ -87,9 +87,10 @@ test("exhausted business quota permits one read-only answer, never a fresh busin
     {executor_configuration: {...configuration, configuration_revision: "changed"}},
     {metadata_capacity: {alternate_executor: {...capacity.alternate_executor, observed_at: at - 121}}},
     {metadata_capacity: {alternate_executor: {...capacity.alternate_executor, observed_at: at + 1}}},
-    ...[{thread_id: "foreign"}, {turn_id: "foreign"}, {only_original_user_item: false},
+    ...[{thread_id: "foreign"}, {thread_id: null}, {thread_id: 7}, {turn_id: "foreign"}, {only_original_user_item: false},
       {codex_error_info: "other"}].map(value => ({native_observation: {...proof, ...value}})),
     ...[{delta_count: 1}, {response: {}}, {status: "running"}, {message: "changed"},
+      {error_code: "context_window_exceeded"},
       {client_turn_id: "uncorrelated"}].map(value => ({failed_turn: {...failed, ...value}}))]) {
     assert.notEqual(planBoundConversationRequest({...packet,
       context_recovery: {...packet.context_recovery, ...change}}).recovery_eligible, true);
@@ -1466,7 +1467,7 @@ test("quota backlog projection retires explicit lifecycle stops, not unavailable
   }
 });
 
-for (const errorCode of ["response_timeout", "upstream_transport_failure",
+for (const errorCode of ["response_timeout", "upstream_transport_failure", "context_window_exceeded",
   "antigravity_rpc_error", "antigravity_transport_error", "antigravity_step_error", "runtime_error", "server_restarted"]) {
 test(`delivered ${errorCode} notices retain the exact failed request, including other executors`, () => {
   const request = {request_ref: "f".repeat(24), command: null, status: "accepted",

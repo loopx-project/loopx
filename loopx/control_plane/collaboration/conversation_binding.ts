@@ -509,7 +509,7 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
     return {pending: !returned && row.command === null && row.status === "accepted"
       && turn?.session_id === row.session_id && turn?.turn_id === row.turn_id
       && (expandedResult || metadataOwed || answerReviewOwed || unfinished || turn?.status === "failed"
-        && ["usage_limit_exceeded", "response_timeout", "upstream_transport_failure",
+        && ["usage_limit_exceeded", "response_timeout", "upstream_transport_failure", "context_window_exceeded",
           "antigravity_rpc_error", "antigravity_transport_error", "antigravity_step_error",
           "manager_authorization_unavailable", "runtime_error", "server_restarted"].includes(String(turn.error_code)))
       && !(current?.session_id === row.session_id && current?.status === "closed")
