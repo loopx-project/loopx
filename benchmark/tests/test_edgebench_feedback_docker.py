@@ -367,7 +367,10 @@ def test_sforge_trial_deadline_requires_execution_entry(tmp_path, agent_image, m
     async def installed(self, environment):
         pass
     monkeypatch.setattr(BenchmarkCodex, "install", installed)
-    worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
+    # Installation/login is outside this deadline oracle; use an explicit
+    # synthetic API route rather than invoking uninstalled native readiness.
+    worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh",
+                         agent_api_base_url="http://127.0.0.1:1/v1", agent_api_key="synthetic-local-only"),
                          profile="heartbeat-resume", cwd="/tmp", task_entry="loopx-planned")
     worker.install_stop_hook(None, None, tmp_path, None)
     worker.prepared = True
