@@ -185,6 +185,7 @@ def prepare_context_delivery(
     continuity: Mapping[str, Any] | None = None,
     surface: str = "work_context", native_projection: Mapping[str, Any] | None = None,
     consumed_pointers: Mapping[str, str] | None = None,
+    include_initial_read_plan: bool = False,
 ) -> dict[str, Any]:
     """Prepare under the Host's explicit continuity basis, not a model assertion.
 
@@ -195,12 +196,14 @@ def prepare_context_delivery(
     """
     from .cli_projection import _apply_context_projection_changes
 
-    source = dict(context=dict(context), scope=dict(scope), capture_id=capture_id, surface=surface,
+    source: dict[str, Any] = dict(context=dict(context), scope=dict(scope), capture_id=capture_id, surface=surface,
         baseline=dict(baseline) if baseline is not None else None,
         retained=dict(retained) if retained is not None else None,
         continuity=dict(continuity) if continuity is not None else None)
     if native_projection is not None:
         source["native_projection"] = dict(native_projection)
+        if include_initial_read_plan:
+            source["include_initial_read_plan"] = True
     if consumed_pointers is not None:
         source["consumed_pointers"] = dict(consumed_pointers)
     result = _turn_envelope_result("context_delivery", **source, source_edits=True)

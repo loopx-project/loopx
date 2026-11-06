@@ -64,14 +64,53 @@ def decision():
 
 def read_selection(command):
     words = shlex.split(command)
+    def option(name):
+        return words[words.index(name) + 1] if name in words else None
     selectors = [words[index + 1] for index, word in enumerate(words) if word == "--select"]
-    args = Namespace(capture_file=words[words.index("--capture-file") + 1],
-        capture_sha256=words[words.index("--capture-sha256") + 1], format="json", select=selectors or None,
+    args = Namespace(capture_file=option("--capture-file"), capture_sha256=option("--capture-sha256"),
+        reference_file=option("--reference-file"), format="json", select=selectors or None,
         initial_read="--initial-read" in words,
         offset=0, page_bytes=64000, max_page_output_bytes=64000)
     page = read_context_capture(args)
     assert page["ok"] and page["eof"]
     return page, selected_context_values(page["content"])
+
+
+def pinned_initial_view(payload, directory):
+    base = native_context_capture_view(payload, directory)
+    from loopx.control_plane.quota import turn_envelope
+
+    plan = turn_envelope._turn_envelope_result("context_select", context=payload, initial_read=True)
+    capture = {key: base["recovery"][key] for key in ("path", "sha256")}
+    return native_context_capture_view(payload, directory, captured_recovery=base["recovery"],
+        initial_read_plan={"initial": True, "plan": plan, "capture": capture})
+
+
+@pytest.mark.parametrize("required", [True, False])
+def test_initial_read_delivers_explicit_selection_only_at_its_gate(tmp_path, decision, required):
+    cli = decision["interaction_contract"]["cli_channel"]
+    route = {"schema_version": "action_selection_cli_command_v1", "route_prefix": "loopx --format json",
+             "command_args_template": "quota should-run --todo-id <todo-id> --turn-instance-id fixture-turn",
+             "candidate_discovery_args": "todo list --goal-id fixture --status open"}
+    policy = {"decision_owner": "agent", "suggestions_exhaustive": False}
+    candidates = [{"todo_id": "another", "text": "Verify a candidate."}]
+    cli.update(selection_required=required, next_cli_actions=[], selection_command=route,
+               selection_policy_ref="$.action_portfolio.selection_policy")
+    decision["action_portfolio"] = {"selection_policy": policy, "suggested_actions": candidates}
+    source = tmp_path / "decision.json"
+    source.write_bytes(json.dumps(decision).encode())
+    command = shlex.join(["loopx", "quota", "context-read", "--capture-file", str(source),
+                          "--capture-sha256", hashlib.sha256(source.read_bytes()).hexdigest(), "--initial-read"])
+    _, values = read_selection(command)
+    expected = {"/interaction_contract/cli_channel/selection_required": True,
+                "/interaction_contract/cli_channel/selection_command": route,
+                "/interaction_contract/cli_channel/selection_policy_ref": "$.action_portfolio.selection_policy",
+                "/action_portfolio/selection_policy": policy, "/action_portfolio/suggested_actions": candidates}
+    for pointer, value in expected.items():
+        if required:
+            assert values[pointer] == value
+        else:
+            assert pointer not in values
 
 
 def test_initial_read_keeps_supporting_index_obligations_and_recovers_its_full_list(tmp_path, decision):
@@ -114,6 +153,113 @@ def test_initial_read_keeps_supporting_index_obligations_and_recovers_its_full_l
     assert json.loads(detail["content"])["selections"][0]["value"] == pointers
     assert Path(view["recovery"]["path"]).read_bytes() == raw
     assert json.loads(raw) == decision
+
+
+@pytest.mark.parametrize("damage", [None, "foreign_plan", "changed_file"])
+def test_native_preparation_reuses_only_its_current_digest_bound_navigation(
+    tmp_path, monkeypatch, decision, damage,
+):
+    from loopx.control_plane.quota import turn_envelope
+    from loopx.control_plane.quota.error_codes import QuotaDecisionTransportError
+    from tests.control_plane.test_codex_context_lifecycle import setup
+
+    setup(tmp_path, monkeypatch)
+    decision["selected_todo"]["future_number"] = 10**45 + 17
+    capture = tmp_path / "current"
+    capture.mkdir(mode=0o700)
+    prepared = codex_context.prepare_codex_context(decision, directory=str(tmp_path), capture_directory=capture,
+        goal_id="fixture", agent_id="agent", surface="quota_packet", capture_id="current")
+    assert prepared.initial_read_plan is not None
+    source = Path(prepared.delivery["recovery"]["path"])
+    raw = source.read_bytes()
+    journal = (tmp_path / "session.json").read_bytes()
+    if damage == "foreign_plan":
+        prepared.initial_read_plan["capture"] = {"path": str(source), "sha256": "0" * 64}
+    elif damage == "changed_file":
+        source.write_bytes(raw + b" ")  # Decodes identically; original byte identity still changed.
+
+    request = turn_envelope._turn_envelope_result
+
+    def no_second_selection(operation, **kwargs):
+        assert operation != "context_select", "The producer already planned this same capture"
+        return request(operation, **kwargs)
+
+    with monkeypatch.context() as publication:
+        publication.setattr(turn_envelope, "_turn_envelope_result", no_second_selection)
+        if damage is not None:
+            with pytest.raises(QuotaDecisionTransportError):
+                native_context_capture_view(prepared.delivery, capture, context_directory=str(tmp_path),
+                    initial_read_plan=prepared.initial_read_plan)
+            assert (tmp_path / "session.json").read_bytes() == journal
+            return
+        view = native_context_capture_view(prepared.delivery, capture, context_directory=str(tmp_path),
+            initial_read_plan=prepared.initial_read_plan)
+    _, values = read_selection(model_context_reference(view)["first_read_command"])
+    assert values["/selected_todo"]["future_number"] == 10**45 + 17
+    assert values["/goal_boundary"] == decision["goal_boundary"]
+    assert source.read_bytes() == raw
+    assert "initial_read_plan" not in json.loads(raw)
+
+
+@pytest.mark.parametrize("opaque", [False, True])
+def test_prepared_initial_read_keeps_exact_body_without_retransmitting_unused_prose(
+    tmp_path, monkeypatch, decision, opaque,
+):
+    from loopx.control_plane.quota import turn_envelope
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    tmp_path.chmod(0o700)
+    decision["unselected_evidence"] = "Historical evidence remains available. " * 10000
+    decision["unselected_structure"] = {f"unread_branch_{index}": {"detail": index} for index in range(500)}
+    decision["selected_todo"]["future_number"] = 10**45 + 17
+    view = pinned_initial_view(decision, tmp_path)
+    raw = Path(view["recovery"]["path"]).read_bytes()
+    original = read_context_capture(Namespace(capture_file=view["recovery"]["path"],
+        capture_sha256=view["recovery"]["sha256"], format="json", initial_read=True,
+        offset=0, page_bytes=64000, max_page_output_bytes=64000))
+    assert original["ok"] and original["eof"]
+    observed = []
+    project = turn_envelope._turn_envelope_result
+
+    def observe(operation, **params):
+        if operation == "context_select":
+            if opaque:
+                assert not params.get("initial_read"), "The prepared cursor must retain its resolved addresses"
+            observed.append(json.dumps(params, ensure_ascii=False).encode())
+        return project(operation, **params)
+
+    monkeypatch.setattr(turn_envelope, "_turn_envelope_result", observe)
+    navigation = model_context_reference(view) if opaque else view
+    page, values = read_selection(navigation["first_read_command"])
+    assert page["content"] == original["content"]
+    assert values["/selected_todo"]["future_number"] == 10**45 + 17
+    assert len(observed) == 1
+    if opaque:
+        assert b"Historical evidence remains available." not in observed[0]
+        assert len(observed[0]) < len(raw) // 2
+    else:
+        assert b"Historical evidence remains available." in observed[0]
+    assert Path(view["recovery"]["path"]).read_bytes() == raw
+
+
+def test_initial_navigation_keeps_the_original_recipe_when_cursor_metadata_is_unwritable(
+    tmp_path, monkeypatch, decision,
+):
+    import errno
+    from loopx.cli_commands import quota_capture
+
+    def unavailable(*args, **kwargs):
+        raise OSError(errno.ENOSPC, "synthetic cursor metadata unavailable")
+
+    monkeypatch.setattr(quota_capture, "write_context_read_reference", unavailable)
+    view = native_context_capture_view(decision, tmp_path)
+    assert "first_read_reference" not in view
+    assert "--initial-read" in view["first_read_command"]
+    page, values = read_selection(view["first_read_command"])
+    assert page["ok"] and page["eof"]
+    assert values["/goal_boundary"] == decision["goal_boundary"]
+    assert values["/selected_todo"] == decision["selected_todo"]
 
 
 @pytest.mark.parametrize("output_limit", [8192, 64000])
@@ -632,8 +778,8 @@ def test_warm_delta_initial_read_uses_current_action_without_the_old_base(tmp_pa
         decision["effective_action"] = "normal_run" if marker == "before" else "autonomous_replan_required"
         decision["interaction_contract"]["agent_channel"].update(
             primary_action=f"Read {marker} action.", delivery_allowed=marker == "before")
-        wire = codex_context.project_codex_context(decision, directory=str(tmp_path), capture_directory=directory,
-            goal_id="fixture", agent_id="agent", surface="quota_packet", capture_id=name)
+        wire = codex_context.prepare_codex_context(decision, directory=str(tmp_path), capture_directory=directory,
+            goal_id="fixture", agent_id="agent", surface="quota_packet", capture_id=name).delivery
         view = native_context_capture_view(wire, directory, context_directory=str(tmp_path))
     assert view["mode"] == "delta" and "first_read_command" in view
     current = json.loads(Path(view["recovery"]["path"]).read_bytes())

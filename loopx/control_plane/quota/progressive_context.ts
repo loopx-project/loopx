@@ -1,15 +1,18 @@
+import {EffectiveAction} from "./effective_action.generated.ts";
 /** Model presentation: requirements stay inline, supporting material is
  * addressed in the immutable source. This plan changes no canonical state. */
 import {isDeepStrictEqual} from "node:util";
 import {visionAuthoringContract} from "../goals/vision_checkpoint.ts";
 import type {JsonObject} from "../effect_program.ts";
-import {jsonObject, requireJsonObject} from "../runtime_decode.ts";
+import {jsonObject, requireBoolean, requireJsonObject} from "../runtime_decode.ts";
 import {GOAL_OUTCOMES_SCHEMA, OUTCOME_CONTEXT_NAVIGATION_SCHEMA} from "../goals/outcome_requirements.ts";
 import {FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE} from "../work_items/interaction_contract.ts";
 import {quotaSummaryReferences, contextSourceIdentity, contextProjectionChanges,
   type ProjectionSourceValues} from "./diagnostic_projection.ts";
 import {encodeContextDelivery, fileNavigationPaths} from "./context_delivery.ts";
 import {createHash} from "node:crypto";
+
+import {capturedContextSelection} from "./context_selection.ts";
 
 type Path = (string | number)[];
 const pointer = (path: Path): string => path.length ? "/" + path.map(key =>
@@ -239,7 +242,10 @@ function nativeContextContinuity(codec: JsonObject): JsonObject {
 
 /** Plan and encode one native capture without sending its intermediate view
  * back through Python. Capture publication and native locking remain Host IO. */
-export function prepareProgressiveContextDelivery(request: JsonObject, legacyFields: readonly string[]): JsonObject {
+export function prepareProgressiveContextDelivery(request: JsonObject, legacyFields: readonly string[],
+    decisionFields: readonly string[]): JsonObject {
+  if (request.include_initial_read_plan !== undefined)
+    requireBoolean(request.include_initial_read_plan, "include_initial_read_plan");
   const sourceValues: ProjectionSourceValues = new WeakMap();
   const required = requiredNativeContext(request, sourceValues);
   const codec = nativeContextContinuity({...request, context: required.context,
@@ -247,7 +253,9 @@ export function prepareProgressiveContextDelivery(request: JsonObject, legacyFie
   const delivery = encodeContextDelivery(codec, legacyFields, sourceValues, fileNavigationPaths(required.context));
   const {operation: _operation, source_edits: _edits, source_number_tokens: _numbers, ...source} = request;
   return contextProjectionChanges(source, {context: required.context, delivery, projected: required.projected,
-    read_sections: inlineReadSections(request, required.context)}, sourceValues);
+    read_sections: inlineReadSections(request, required.context),
+    ...(request.include_initial_read_plan === true
+      ? {initial_read_plan: nativeContextReadPlan(required.context, decisionFields)} : {})}, sourceValues);
 }
 
 /** Stateless presentation uses the same plan without inventing a native session,
@@ -257,6 +265,14 @@ export function prepareProgressiveContext(request: JsonObject): JsonObject {
   const required = requiredNativeContext(request, values);
   const {operation: _operation, source_edits: _edits, source_number_tokens: _numbers, ...source} = request;
   return contextProjectionChanges(source, {context: required.context, projected: required.projected}, values);
+}
+
+/** Invocation-local navigation, not captured input or a read/retention receipt.
+ * Decision vocabulary comes from the same owner as standalone initial reads. */
+function nativeContextReadPlan(context: JsonObject, decisionFields: readonly string[]): JsonObject {
+  const pointers = initialContextReadPointers(context, decisionFields), initial = pointers.length > 0;
+  return {initial, plan: capturedContextSelection(initial ? {context, initial_read: true}
+    : {context, select: [""], list_fields: true}, pointers)};
 }
 
 export function initialContextReadPointers(context: JsonObject, decisionFields: readonly string[]): string[] {
@@ -275,6 +291,15 @@ export function initialContextReadPointers(context: JsonObject, decisionFields: 
     pointers.push("/" + path.map(key => String(key).replaceAll("~", "~0").replaceAll("/", "~1")).join("/"));
   };
   for (const field of decisionFields) include(field);
+  // A staged replan has already replaced inline acceptance with a pinned
+  // review reader. Deliver its first action and ordering without writeback.
+  const replan = object(context.replan_action_packet);
+  if (context.effective_action === EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED &&
+      replan?.schema_version === "replan_action_packet_v0" && replan.decision === "replan_required" &&
+      replan.settlement_only !== true && typeof replan.review === "string" && replan.review) {
+    include("replan_action_packet", "review");
+    include("replan_action_packet", "guidance");
+  }
   include("agent_lane_next_action", "next_step");
   include("agent_lane_next_action", "next_action_basis");
   include("interaction_contract", "user_channel");
@@ -356,6 +381,14 @@ export function initialContextReadPointers(context: JsonObject, decisionFields: 
   for (const field of ["execution_preparation", "next_cli_actions", "spend_allowed_now", "spend_after_validation", "spend_policy",
     "quota_spend_source", "delivery_workspace_causality", "vision_continuation_audit"])
     include("interaction_contract", "cli_channel", field);
+  // Explicit selection clears next_cli_actions. Deliver the owner's discovery
+  // and same-Turn binding recipe alongside its non-exhaustive suggestions.
+  if (object(interaction.cli_channel)?.selection_required === true) {
+    for (const field of ["selection_required", "selection_policy_ref", "selection_command"])
+      include("interaction_contract", "cli_channel", field);
+    include("action_portfolio", "selection_policy");
+    include("action_portfolio", "suggested_actions");
+  }
   const planPath = ["interaction_contract", "cli_channel", "settlement_plan"];
   const plan = object(object(interaction.cli_channel)?.settlement_plan);
   if (plan?.schema_version === "quota_settlement_plan_v1" && Array.isArray(plan.ordered_steps)) {

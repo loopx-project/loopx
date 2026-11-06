@@ -7,6 +7,7 @@ This neither proves retained model input nor grants execution authority.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from dataclasses import dataclass
 from collections.abc import Iterator, Mapping
 from typing import Any
 import json
@@ -603,10 +604,20 @@ def register_native_context_view(directory: str | None, view: dict[str, Any], *,
         _save(root, state)
 
 
-def project_codex_context(payload: dict[str, Any], *, directory: str | None, capture_directory: Path,
+@dataclass(frozen=True)
+class NativeContextPreparation:
+    """One invocation's wire and optional read plan; never native journal state."""
+
+    delivery: dict[str, Any]
+    initial_read_plan: dict[str, Any] | None = None
+
+
+def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, capture_directory: Path,
                           goal_id: str, agent_id: str, surface: str, capture_id: str,
                           continuity_generation: str | None = None,
-                          progressive_enabled: bool | None = None, hook_session: str | None = None) -> dict[str, Any]:
+                          include_initial_read_plan: bool = True,
+                          progressive_enabled: bool | None = None,
+                          hook_session: str | None = None) -> NativeContextPreparation:
     """Commit current recovery before optional projection or candidate updates.
 
     Serialization prevents invalidation from moving the epoch during preparation.
@@ -619,10 +630,11 @@ def project_codex_context(payload: dict[str, Any], *, directory: str | None, cap
 
     if directory is None:
         if not progressive_enabled:
-            return payload
+            return NativeContextPreparation(payload)
         from .decision_capture import capture_progressive_context
 
-        return capture_progressive_context(payload, directory=capture_directory, surface=surface)[0]
+        return NativeContextPreparation(capture_progressive_context(
+            payload, directory=capture_directory, surface=surface)[0])
     try:
         with _locked(directory) as root:
             recovery_committed = False
@@ -632,7 +644,7 @@ def project_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                 native_session = hook_session or os.environ.get("CODEX_THREAD_ID")
                 if (not isinstance(session, str) or not session
                         or (native_session and session != native_session)):
-                    return payload  # Do not replace a different native session's recovery.
+                    return NativeContextPreparation(payload)  # Do not replace a different native session's recovery.
                 # Native lifecycle events own workspace identity and epoch.
                 # A shell tool may run in another checkout without changing
                 # the host session or losing its previously delivered context.
@@ -676,6 +688,7 @@ def project_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                     transaction = prepare_context_delivery(payload, scope=scope, capture_id=capture_id,
                         surface=surface, baseline=request.get("baseline"),
                         retained=request.get("retained"), continuity=request.get("continuity"),
+                        include_initial_read_plan=include_initial_read_plan if progressive else False,
                         native_projection={
                             "path": recovery["path"], "sha256": recovery["sha256"],
                             "source_path": recovery["path"],
@@ -684,7 +697,7 @@ def project_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                                 + " --select '<supporting_material_pointer>/sources'",
                         } if progressive else None, consumed_pointers=state.get("consumed_pointers"))
                 except (EffectRuntimeRemoteError, EffectRuntimeStartupError):
-                    return payload
+                    return NativeContextPreparation(payload)
                 if progressive and transaction["projected"]:
                     recovery = capture_context_projection(transaction["context"], directory=capture_directory,
                         filename="required-context.json", read_guidance=CONTEXT_CAPTURE_PAGE_GUIDANCE)
@@ -705,11 +718,14 @@ def project_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                         full_read_sections=read_sections,
                         read_sections=read_sections if result["mode"] == "full" else {})
                     _save(root, state)
-                return result
+                read_plan = transaction.get("initial_read_plan")
+                if read_plan is not None:
+                    read_plan = {**read_plan, "capture": {key: recovery[key] for key in ("path", "sha256")}}
+                return NativeContextPreparation(result, read_plan)
             except (OSError, ValueError, KeyError, TypeError, RecursionError):
                 if not recovery_committed:
                     _discard_recovery(root)
-                return payload
+                return NativeContextPreparation(payload)
     except (OSError, ValueError, KeyError, TypeError, RecursionError) as exc:
         # No safe fallback if the old selector cannot be invalidated under lock.
         raise QuotaDecisionTransportError(
