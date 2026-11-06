@@ -10,9 +10,12 @@ export const conversationActivityScenario = {
   id: "conversation-activity",
   async run({ browser, collectCoverage, url }) {
     const streams = new Map();
+    const observations = [];
     const event = (sequence, kind, payload) => `id: ${sequence}\nevent: ${kind}\ndata: ${JSON.stringify({ event_id: String(sequence), sequence, kind, payload })}\n\n`;
     const server = createServer((request, response) => {
+      observations.push(request.url);
       response.writeHead(200, { "Content-Type": "text/event-stream", "Access-Control-Allow-Origin": "*", "Cache-Control": "no-cache" });
+      response.write(event(0, "turn.started", {}));
       response.write(event(1, "agent.phase", { label: "Agent 正在执行命令" }));
       response.write(event(2, "agent.phase", { label: "Agent 正在检索" }));
       response.write(event(3, "agent.phase", { label: "Agent 正在执行命令" }));
@@ -41,6 +44,7 @@ export const conversationActivityScenario = {
       };
       assert.equal(await page.getByRole("button", { name: "恢复未确认的追加指令", exact: true }).count(), 0, "A new conversation has no recovery control");
       const turn = await send("请检查当前任务状态，并说明下一步。");
+      await page.getByRole("status", {name: "正在回复", exact: true}).waitFor();
       const pending = page.locator(".personal-message").filter({ has: page.getByRole("button", { name: "中断本轮", exact: true }) });
       await page.clock.install();
       await page.clock.fastForward(25000);
@@ -51,11 +55,10 @@ export const conversationActivityScenario = {
       const elapsedBefore = await pending.locator(".personal-message-elapsed").textContent();
       await page.getByRole("navigation", { name: "管家视图" }).getByRole("button", { name: "总览", exact: true }).click();
       const tray = page.locator(".personal-manager-conversation-tray");
-      await tray.getByRole("button", { name: "中断本轮", exact: true }).waitFor();
-      assert.equal(await tray.locator(".personal-message-elapsed").textContent(), elapsedBefore, "view switch keeps request elapsed time");
-      await tray.locator(".personal-message-quiet").waitFor();
       await page.screenshot({ path: resolve(outputDir, "conversation-waiting-overview.png"), animations: "disabled" });
-      await tray.getByRole("button", { name: "查看完整对话", exact: true }).click();
+      assert.equal(await tray.count(), 0, "Background updates never cover the overview with a conversation");
+      assert.equal(await page.getByRole("status", {name: "正在回复", exact: true}).count(), 1, "Activity stays on the Chat entry");
+      await page.getByRole("navigation", { name: "管家视图" }).getByRole("button", { name: "对话", exact: true }).click();
       assert.equal(await pending.locator(".personal-message-elapsed").textContent(), elapsedBefore);
       await page.clock.resume();
       const adjustments = [];
@@ -105,10 +108,10 @@ export const conversationActivityScenario = {
       assert.equal(await composer.inputValue(), "先核对依赖，再继续当前任务。");
       await page.getByRole("navigation", { name: "管家视图" }).getByRole("button", { name: "总览", exact: true }).click();
       assert.equal(await composer.inputValue(), "先核对依赖，再继续当前任务。", "The same draft survives switching to the overview");
-      await tray.getByRole("button", { name: "调整本轮", exact: true }).click();
-      assert.equal(await composer.evaluate(node => node === document.activeElement), true, "Overview activity focuses the same input");
-      assert.equal(await tray.locator("textarea").count(), 0);
-      await tray.getByRole("button", { name: "查看完整对话", exact: true }).click();
+      assert.equal(await tray.count(), 0, "An uncertain steering receipt cannot recreate a floating conversation");
+      await page.getByRole("navigation", { name: "管家视图" }).getByRole("button", { name: "对话", exact: true }).click();
+      await pending.getByRole("button", { name: "调整本轮", exact: true }).click();
+      assert.equal(await composer.evaluate(node => node === document.activeElement), true, "Chat activity focuses the same input");
       await submit.click();
       await feedback.filter({ hasText: "回执不匹配" }).waitFor();
       await page.reload({ waitUntil: "domcontentloaded" });
@@ -198,6 +201,7 @@ export const conversationActivityScenario = {
       await pending.getByRole("button", { name: "中断本轮", exact: true }).click();
       await page.getByText("已中断。你可以在当前会话继续发送消息。", { exact: true }).waitFor();
       assert.equal(await page.locator(".personal-md").filter({ hasText: "已找到两个待处理项" }).count(), 1, "interruption preserves partial output");
+      await page.locator(".personal-chat-activity").waitFor({state: "hidden"});
       assert.deepEqual(api.interrupts.at(-1), { sessionId: turn.sessionId, turnId: turn.turnId });
       await page.screenshot({ path: resolve(outputDir, "conversation-activity-interrupted.png"), animations: "disabled" });
       await page.unroute("**/interrupt", rejectThenMismatch);
@@ -218,6 +222,7 @@ export const conversationActivityScenario = {
       });
       await page.getByRole("button", { name: "中断本轮", exact: true }).click();
       await page.getByText("检查完成，下一步已列出。", { exact: true }).waitFor();
+      await page.locator(".personal-chat-activity").waitFor({state: "hidden"});
       assert.equal(await page.getByRole("button", { name: "中断本轮", exact: true }).count(), 0);
       assert.equal(await composer.inputValue(), "保留我的未发送草稿。");
       assert.equal(await submit.isEnabled(), true, "An unsent draft becomes an explicit follow-up after completion");
@@ -230,7 +235,66 @@ export const conversationActivityScenario = {
       // The same interaction is present in Goal Chat, through the same timeline.
       await page.locator(".personal-goal-link").first().click();
       await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
+      // Native ordinary sends can be acknowledged as queued before starting.
+      // Their original observer must survive the asynchronous current-Turn read.
+      let pendingActiveRead;
+      await page.route("**/api/chat/sessions/*/turns", async route => {
+        const body = route.request().postDataJSON();
+        if (body.message !== "请检查这个 Goal 的当前状态。") return route.fallback();
+        const sessionId = new URL(route.request().url()).pathname.split("/").at(-2);
+        const turnId = `queued-start-${Date.now()}`;
+        const runtime = page.__loopxRuntime;
+        runtime.turnMessages.set(turnId, body.message);
+        runtime.sessions.set(sessionId, {...runtime.sessions.get(sessionId), active_turn_id: turnId, status: "busy"});
+        runtime.messages.get(sessionId).push({message_id: `${turnId}-user`, turn_id: turnId, role: "user", text: body.message});
+        api.turnRequests.push({message: body.message, sessionId, turnId});
+        let holdFirstRead = true;
+        await page.route(`**/api/chat/sessions/${sessionId}`, snapshot => {
+          if (holdFirstRead) { holdFirstRead = false; pendingActiveRead = snapshot; return; }
+          return snapshot.fallback();
+        });
+        await route.fulfill({status: 202, json: {ok: true, session_id: sessionId, turn_id: turnId,
+          created: true, status: "queued", events_url: `/events/${sessionId}/${turnId}`}});
+      });
       const goalTurn = await send("请检查这个 Goal 的当前状态。");
+      const goalTabs = page.getByRole("navigation", {name: "Goal 视图"});
+      for (const width of [1512, 390]) {
+        await page.setViewportSize({width, height: width === 390 ? 844 : 982});
+        for (const tab of ["概览", "任务", "研究", "成果"]) {
+          await goalTabs.getByRole("button", {name: tab, exact: true}).click();
+          assert.equal(await tray.count(), 0, `${tab} stays clear of background conversations`);
+          assert.equal(await page.getByRole("status", {name: "正在回复", exact: true}).count(), 1);
+          assert.equal(api.turnRequests.length, 3, "Navigation neither restarts nor cancels work");
+          await page.screenshot({path: resolve(outputDir, `conversation-background-${tab}-${width}.png`), animations: "disabled"});
+        }
+      }
+      await page.setViewportSize({width: 1512, height: 982});
+      await page.locator(".personal-goal-link").nth(1).click();
+      await page.locator(".personal-chat-activity").waitFor({state: "hidden"});
+      assert.equal(api.interrupts.length, 1, "Changing Goals does not interrupt the active conversation");
+      await page.locator(".personal-goal-link").first().click();
+      await page.getByRole("status", {name: "正在回复", exact: true}).waitFor();
+      await page.emulateMedia({reducedMotion: "reduce"});
+      assert.equal(await page.locator(".personal-chat-activity svg").evaluate(node => getComputedStyle(node).animationName), "none");
+      await page.emulateMedia({reducedMotion: "no-preference"});
+      await page.setViewportSize({width: 1512, height: 982});
+      await goalTabs.getByRole("button", {name: "对话", exact: true}).focus();
+      const resumedSession = page.waitForResponse(response => new URL(response.url()).pathname === "/api/chat/sessions"
+        && response.request().method() === "POST");
+      await page.keyboard.press("Enter");
+      await resumedSession;
+      await page.evaluate(() => new Promise(resolveFrame => requestAnimationFrame(() => requestAnimationFrame(resolveFrame))));
+      assert.equal(await goalTabs.getByRole("button", {name: "对话", exact: true}).getAttribute("aria-current"), "page");
+      await page.screenshot({path: resolve(outputDir, "conversation-observer-desktop.png"), animations: "disabled"});
+      await page.setViewportSize({width: 390, height: 844});
+      await page.screenshot({path: resolve(outputDir, "conversation-observer-narrow.png"), animations: "disabled"});
+      await page.setViewportSize({width: 1512, height: 982});
+      assert.equal(observations.filter(path => path === `/events/${goalTurn.sessionId}/${goalTurn.turnId}`).length, 1,
+        "Returning to Goal Chat preserves the original live observer instead of attaching a recovery stream");
+      assert.equal(await page.getByRole("button", {name: "调整本轮", exact: true}).count(), 1,
+        "The same running Session/Turn has one set of controls after navigation");
+      assert.ok(pendingActiveRead, "The queued-start confirmation remains outstanding during navigation");
+      await pendingActiveRead.fallback();
       await page.getByRole("button", { name: "调整本轮", exact: true }).click();
       assert.equal(await composer.inputValue(), "", "another conversation never inherits the old draft");
       await page.evaluate(({sessionId, turnId}) => {
@@ -280,7 +344,17 @@ export const conversationActivityScenario = {
       await page.evaluate(() => { delete window.sessionStorage.setItem; });
       await page.getByRole("button", { name: "中断本轮", exact: true }).click();
       await page.getByText("已中断。你可以在当前会话继续发送消息。", { exact: true }).waitFor();
+      await page.locator(".personal-chat-activity").waitFor({state: "hidden"});
       assert.deepEqual(api.interrupts.at(-1), { sessionId: goalTurn.sessionId, turnId: goalTurn.turnId });
+      page.__loopxRuntime.queuedTurns.set(goalTurn.sessionId, [{
+        turn_id: "waiting-for-host", created_at: "2026-08-13T01:00:01Z", origin: "web",
+        preview: "等待执行器接收的后续消息", character_count: 13, attachment_count: 0, steering: null,
+      }]);
+      await page.reload({waitUntil: "domcontentloaded"});
+      await page.getByRole("button", {name: "对话", exact: true}).click();
+      await page.getByRole("region", {name: "待处理消息", exact: true}).waitFor();
+      assert.equal(await page.locator(".personal-chat-activity").count(), 0, "A queued message alone is not active execution");
+      assert.equal(api.turnRequests.length, 3, "Queue readback does not start work");
       return { coverageEntries: context.coverageEntries, note: "Shared steward/Goal activity and steering: view/reload recovery without automatic dispatch, one composer, blocked storage, terminal draft isolation, interruption and completion races." };
     } finally {
       for (const response of streams.values()) response.destroy();

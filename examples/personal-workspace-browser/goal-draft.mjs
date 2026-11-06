@@ -11,6 +11,7 @@ export const goalDraftScenario = {
     const draft = {objective: "研究微软近三年的现金流", completion_criteria: "有公开来源的数据和可读报告", execution_boundary: "仅使用公开财报", question: "更想了解哪方面？", options: ["现金流趋势", "资本支出变化"]};
     api.answerForMessage = (message) => message === "解释一下 Goal 是什么" ? "Goal 保存目标和完成标准。" : {message: "先确认研究重点，再检查目标设置。", goal_draft: {...draft, ...(message.includes("资本支出") ? {completion_criteria: "重点比较资本支出，列出来源", question: "", options: []} : {})}};
     try {
+      await page.getByRole("navigation", {name: "管家视图"}).getByRole("button", {name: "对话", exact: true}).click();
       const composer = page.getByLabel("向 LoopX 发送消息");
       async function send(text) {
         await composer.fill(text);
@@ -32,7 +33,6 @@ export const goalDraftScenario = {
       assert.equal(api.durableWriteCount, writes);
       await send("重点比较资本支出，列出来源");
       await card.getByText("重点比较资本支出，列出来源", {exact: true}).waitFor();
-      await page.getByRole("button", {name: "查看完整对话", exact: true}).click();
       await page.reload({waitUntil: "networkidle"});
       await page.getByRole("navigation", {name: "管家视图"}).getByRole("button", {name: /^(Chat|对话)$/}).click();
       await card.getByText("重点比较资本支出，列出来源", {exact: true}).waitFor();
