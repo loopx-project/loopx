@@ -339,3 +339,12 @@ become a second source of score, integrity, or countability truth.
   only when a complete authorized post-run review observed no such transition;
   otherwise absence is `unknown`. Keep terminal settlement separate.
 - Do not send a repetitive user update when nothing material changed.
+
+For fixed-duration studies, use the campaign report's duration policy for **every
+declared arm**, including Official. At each terminal transition reconcile its
+active solver intervals and any maintained make-up obligation with the report.
+Only waive a short run when its arm is expressly allowed and its own audited Goal
+completed normally. Keep unknown duration pending evidence. Keep provider holds
+visible with the outstanding duration and the condition for resuming. Preserve
+session, scoring opportunities and cooldown when resuming; record fresh runs
+separately. A duration shortfall alone never authorizes overriding a stop.
