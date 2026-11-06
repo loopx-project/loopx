@@ -25,7 +25,7 @@ const known = (row: JsonObject, fields: string[]): boolean => Object.keys(row).e
 
 /** One registry for bodies eligible for observed reuse, regardless of whether
  * the reader delivered the body itself or packaged it in a complete parent. */
-function reusableFirstReadFields(context: JsonObject): {path: Path; freshKeys: string[]}[] {
+function reusableFirstReadFields(context: JsonObject): {path: Path; freshKeys: string[]; minimumBytes: number}[] {
   const base: Path = ["interaction_contract", "agent_channel", "work_context", "sources"];
   const sources = at(context, base);
   if (!Array.isArray(sources)) return [];
@@ -34,13 +34,34 @@ function reusableFirstReadFields(context: JsonObject): {path: Path; freshKeys: s
     if (!content) return [];
     const path = [...base, i, "content"];
     if (source?.kind === "agent_preferences")
-      return [{path, freshKeys: ["ok", "revision", "instruction"]}];
+      return [{path, freshKeys: ["ok", "revision", "instruction"], minimumBytes: MIN_REUSABLE_BODY_BYTES}];
     if (source?.source !== "goal_acceptance") return [];
     const outcomesPath = [...path, "goal_acceptance_contract", "outcome_requirements", "outcomes"];
     const outcomes = at(context, outcomesPath);
-    return Array.isArray(outcomes) ? outcomes.flatMap((outcome, index) =>
-      typeof jsonObject(outcome)?.id === "string"
-        ? [{path: [...outcomesPath, index], freshKeys: ["id", "revision"]}] : []) : [];
+    return Array.isArray(outcomes) ? outcomes.flatMap((value, index) => {
+      const outcome = jsonObject(value), path = [...outcomesPath, index];
+      if (typeof outcome?.id !== "string") return [];
+      const fields = [{path, freshKeys: ["id", "revision"], minimumBytes: MIN_REUSABLE_BODY_BYTES}];
+      // An appended criterion, revised review or supporting-material projection
+      // changes the outcome container, not every unchanged requirement body.
+      // Keep all other fields current, including unknown controls and order.
+      if (Array.isArray(outcome.requirements)) {
+        fields.push({path: [...path, "requirements"], freshKeys: [], minimumBytes: MIN_REUSABLE_BODY_BYTES});
+        outcome.requirements.forEach((value, i) => {
+          const requirement = jsonObject(value), body = [...path, "requirements", i, "description"];
+          if (typeof requirement?.id === "string" && typeof requirement.description === "string") {
+            const record = body.slice(0, -1);
+            // Prefer an exact complete criterion before splitting its metadata.
+            // Tiny bodies do not justify a digest and long-address journal row.
+            // Changed status, review or unknown controls invalidate the record;
+            // a large unchanged description can still be considered alone.
+            fields.push({path: record, freshKeys: ["id"], minimumBytes: MIN_REUSABLE_BODY_BYTES});
+            fields.push({path: body, freshKeys: [], minimumBytes: MIN_REUSABLE_BODY_BYTES});
+          }
+        });
+      }
+      return fields;
+    }) : [];
   });
 }
 
@@ -50,13 +71,36 @@ export function contextReadSectionDigests(request: JsonObject, paths: Path[]): J
   const context = requireJsonObject(request.context, "read section source");
   const identity = contextSourceIdentity(request, request.source_number_tokens);
   const selected = new Set(paths.map(pointer));
-  const covered = new Map(paths.map(path => [pointer(path), path]));
-  for (const {path} of reusableFirstReadFields(context))
-    if (paths.some(parent => pathStartsWith(path, parent))) covered.set(pointer(path), path);
-  return Object.fromEntries([...covered].flatMap(([address, path]) => {
+  const covered = new Map(paths.map(path => [pointer(path), {path, minimumBytes: MIN_REUSABLE_BODY_BYTES}]));
+  for (const field of reusableFirstReadFields(context))
+    if (paths.some(parent => pathStartsWith(field.path, parent))) covered.set(pointer(field.path), field);
+  const inherited = jsonObject(request.consumed_pointers), coverage = new Set(paths.map(pointer));
+  // The IO owner authenticates the reader's native observation. Recheck each
+  // inherited value against this exact source before combining it with the
+  // current literal selections. This is section coverage, never a full-input
+  // baseline. Without it, a partial read strands the next Turn on small fields
+  // even after every part of the revised outcome has actually been delivered.
+  if (inherited && Object.keys(inherited).length) {
+    for (const [address, expected] of Object.entries(inherited)) {
+      const read = capturedContextSelection({context, select: [address], recover_selection_errors: true});
+      if (read.rejected_selection) continue;
+      const path = (read.selections as {path: Path}[])[0].path;
+      if (createHash("sha256").update(identity(at(context, path), ["context", ...path])).digest("hex") === expected)
+        coverage.add(address);
+    }
+    const complete = (path: Path): boolean => {
+      if (path.map((_, i) => pointer(path.slice(0, i + 1))).concat([""]).some(parent => coverage.has(parent))) return true;
+      const value = at(context, path);
+      return value !== null && typeof value === "object" && Object.keys(value).length > 0
+        && Object.keys(value).every(key => complete([...path, Array.isArray(value) ? Number(key) : key]));
+    };
+    for (const field of reusableFirstReadFields(context))
+      if (complete(field.path)) covered.set(pointer(field.path), field);
+  }
+  return Object.fromEntries([...covered].flatMap(([address, {path, minimumBytes}]) => {
     const content = identity(at(context, path), ["context", ...path]);
     // Parent delivery must not multiply tiny bodies into a larger journal.
-    return selected.has(address) || Buffer.byteLength(content) >= MIN_REUSABLE_BODY_BYTES
+    return selected.has(address) || Buffer.byteLength(content) >= minimumBytes
       ? [[address, createHash("sha256").update(content).digest("hex")]] : [];
   }));
 }
@@ -68,28 +112,43 @@ function observedFirstRead(request: JsonObject, pointers: string[]): JsonObject 
   const seen = requireJsonObject(request.consumed_pointers, "observed sections");
   if (typeof jsonObject(context.selected_todo)?.todo_id !== "string") return undefined;
   const fields = new Map(reusableFirstReadFields(context).map(field => [pointer(field.path), field]));
+  const parents = new Set([...fields.values()].flatMap(({path}) => path.map((_, i) => pointer(path.slice(0, i)))));
   const identity = contextSourceIdentity(request, request.source_number_tokens);
   const reused: JsonObject = {};
   // Match semantic fields before the reader groups complete parents. Otherwise
   // selecting every outcome hides the individual unchanged bodies from reuse.
   const selections = capturedContextSelection({context, select: pointers,
     preserve_selection_order: true}).selections as {pointer: string; path: Path}[];
-  const current = selections.flatMap(row => {
+  const visit = (row: {pointer: string; path: Path}): typeof selections => {
     const {path, pointer: address} = row;
     const field = fields.get(address);
-    if (typeof seen[address] !== "string" || !field) return [row];
-    const body = jsonObject(at(context, path));
-    if (!body) return [row];
-    const content = identity(body, ["context", ...path]);
-    // A reference and its recovery instructions should cost less than the field.
-    if (Buffer.byteLength(content) < MIN_REUSABLE_BODY_BYTES || createHash("sha256").update(content).digest("hex") !== seen[address])
-      return [row];
-    reused[address] = seen[address];
-    return field.freshKeys.filter(key =>
-      Object.hasOwn(body, key)).map(key => ({pointer: address + "/" + key, path: [...path, key]}));
-  });
-  return Object.keys(reused).length ? {selections: capturedContextSelection({context, initial_read: true},
-    current.map(row => row.pointer)).selections, reused} : undefined;
+    const body = at(context, path);
+    if (typeof seen[address] === "string" && field) {
+      const content = identity(body, ["context", ...path]);
+      if (Buffer.byteLength(content) >= field.minimumBytes && createHash("sha256").update(content).digest("hex") === seen[address]) {
+        reused[address] = seen[address];
+        return field.freshKeys.filter(key => body !== null && typeof body === "object" &&
+          Object.hasOwn(body, key)).map(key => ({pointer: pointer([...path, key]), path: [...path, key]}));
+      }
+    }
+    if (!parents.has(address) || body === null || typeof body !== "object") return [row];
+    const before = Object.keys(reused).length;
+    const children = Object.keys(body).flatMap(key => {
+      const child = [...path, Array.isArray(body) ? Number(key) : key];
+      return visit({pointer: pointer(child), path: child});
+    });
+    return Object.keys(reused).length > before ? children : [row];
+  };
+  const current = selections.flatMap(visit);
+  if (!Object.keys(reused).length) return undefined;
+  const grouped = capturedContextSelection({context, initial_read: true}, current.map(row => row.pointer)).selections as typeof selections;
+  const original = capturedContextSelection({context, initial_read: true}, pointers).selections as typeof selections;
+  const bytes = (rows: typeof selections) => rows.reduce((total, row) => total + Buffer.byteLength(
+    JSON.stringify({pointer: row.pointer}).slice(0, -1) + ',"value":' + identity(at(context, row.path), ["context", ...row.path]) + '}'), 0);
+  // Splitting a container repeats addresses. Count those and the reuse index;
+  // retain a margin for the existing recovery guidance, or deliver it whole.
+  return bytes(grouped) + Buffer.byteLength(JSON.stringify(Object.keys(reused))) + MIN_REUSABLE_BODY_BYTES < bytes(original)
+    ? {selections: grouped, reused} : undefined;
 }
 
 function inlineReadSections(request: JsonObject, required: JsonObject): JsonObject {
