@@ -93,6 +93,42 @@ def test_native_execution_disposition_uses_real_docker_exit(tmp_path, agent_imag
         backend.client.close()
 
 
+def test_warm_research_policy_preserves_old_task_and_refuses_conflicting_override(
+        tmp_path, agent_image, monkeypatch):
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker, SForgeEnvironment
+    from benchmark.runtime.sforge_backend import RecordingDockerBackend
+    from benchmark.runtime.research_artifacts import RESEARCH_DIRECTORY
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-unused-credential")
+    worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
+        profile="heartbeat-explore", cwd="/task", research_sidecar=True)
+    backend = RecordingDockerBackend(log_dir=tmp_path / "collected",
+        logger=logging.getLogger("research-migration-smoke"), oauth_proxy=True)
+    handle = backend.create_container(agent_image.id, "research-migration-" + uuid.uuid4().hex[:10],
+                                      cpu_limit=1, mem_limit="256m")
+    backend.start_container(handle)
+    prior = "Original task acceptance.\n\n<!-- EdgeBench native feedback policy -->\n\nKeep notes in the workspace.\n"
+    try:
+        command = f"mkdir /task && printf %s {shlex.quote(prior)} > /task/AGENTS.md && chown -R agent:agent /task"
+        assert backend.exec_run(handle, ["sh", "-c", command], user="root").exit_code == 0
+        worker.environment = SForgeEnvironment(backend, handle)
+        worker.log_dir = tmp_path
+        worker._install_restored_research_instructions()
+        def read():
+            return backend.exec_run(handle, ["cat", "/task/AGENTS.md"], user="agent").output
+        after = read()
+        assert after.startswith(prior) and RESEARCH_DIRECTORY in after
+        assert "replace earlier workspace-storage guidance" in after
+        worker._install_restored_research_instructions()
+        assert read() == after
+        with pytest.raises(RuntimeError, match="conflicting or partial"):
+            worker._append_workspace_policy("<!-- EdgeBench restored research storage -->", "foreign override")
+        assert read() == after
+    finally:
+        backend.cleanup_container(handle)
+        backend.client.close()
+
+
 def test_host_bridge_pin_reaches_only_the_native_allowed_port(tmp_path, agent_image):
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from sforge.harness.network_isolation import build_allowed_endpoints
@@ -884,13 +920,13 @@ def test_checkpoint_storage_policy_is_installed_in_real_worker(tmp_path, agent_i
     from sforge.harness.config import SForgeConfig
     from benchmark.runtime.sforge import SForgeWorker, SForgeEnvironment
     from benchmark.runtime.sforge_backend import RecordingDockerBackend
-    from benchmark.edgebench.prompts import native_task_instructions, checkpoint_research_instructions
+    from benchmark.edgebench.prompts import native_task_instructions, research_artifact_instructions
     monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-unused-credential")
     request = {"destination": "/logs/agent/checkpoints", "point_metadata": {},
                "components": [{"id": "workspace", "source_path": "/task"}]}
     policy = native_task_instructions(["solver.py"], submission_cooldown=3600,
         eval_interval=0, internet=False, selection="score_first", score_direction="maximize")
-    policy += checkpoint_research_instructions(request, "/task")
+    policy += research_artifact_instructions(checkpoint=True)
     worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
         profile="heartbeat-explore", cwd="/task", checkpoint_request=json.dumps(request).encode(),
         workspace_instructions=policy, feedback_prompt=policy + "---\n\nOriginal acceptance.\n")
@@ -926,3 +962,47 @@ def test_checkpoint_storage_policy_is_installed_in_real_worker(tmp_path, agent_i
     finally:
         backend.cleanup_container(handle)
         backend.client.close()
+
+
+@pytest.mark.parametrize("profile", ["official", "native-goal", "heartbeat-resume", "heartbeat-explore"])
+def test_external_research_survives_collection_without_entering_native_submission(
+        tmp_path, agent_image, monkeypatch, profile):
+    from sforge.harness.config import SForgeConfig
+    from sforge.harness.run_agent import _extract_archive_from_container
+    from benchmark.runtime.sforge import SForgeWorker
+    from benchmark.runtime.sforge_backend import RecordingDockerBackend
+    from benchmark.runtime.research_artifacts import RESEARCH_DIRECTORY
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-unused-credential")
+    worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
+        profile=profile, cwd="/task", research_sidecar=True)
+    backend = RecordingDockerBackend(log_dir=tmp_path / "collected", research_sidecar=True,
+        logger=logging.getLogger("research-storage-smoke"), oauth_proxy=True)
+    handle = backend.create_container(agent_image.id, "research-storage-" + uuid.uuid4().hex[:10],
+                                      cpu_limit=1, mem_limit="256m")
+    backend.start_container(handle)
+    try:
+        assert backend.exec_run(handle, ["sh", "-c", "mkdir /task && chown agent:agent /task"],
+                                user="root").exit_code == 0
+        worker._install_research_directory(backend, handle, restored=False)
+        with pytest.raises(RuntimeError, match="conflicts"):
+            worker._install_research_directory(backend, handle, restored=False)
+        # Synthetic content is deliberately identical: packaging is location-
+        # based, never a hidden-word filter that could remove real candidate code.
+        payload = "candidate sentinel: FORBIDDEN_EXTERNAL_CALL"
+        for remote in ("/task/candidate.txt", RESEARCH_DIRECTORY + "/observations.json"):
+            command = f"printf %s {shlex.quote(payload)} > {shlex.quote(remote)}"
+            assert backend.exec_run(handle, ["sh", "-c", command], user="agent").exit_code == 0
+        task = SimpleNamespace(cwd="/task", submit_paths=["."], submit_exclude=[])
+        archive = _extract_archive_from_container(backend, handle, task)
+        with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as bundle:
+            names = bundle.getnames()
+            assert "./candidate.txt" in names
+            assert bundle.extractfile("./candidate.txt").read().decode() == payload
+            assert all("observations" not in name and "research" not in name for name in names)
+    finally:
+        backend.cleanup_container(handle)
+        backend.client.close()
+    collected = list((tmp_path / "collected/research").rglob("observations.json"))
+    assert len(collected) == 1 and collected[0].read_text() == payload
+    receipt = json.loads((tmp_path / "collected/artifact-collection.json").read_bytes())
+    assert {"artifact": "research", "collected": True} in receipt
