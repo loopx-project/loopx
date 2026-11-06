@@ -198,6 +198,7 @@ def _registry_git_probe(path: Path) -> dict[str, Any]:
     if root is None:
         return unavailable()
     inside = root.returncode == 0
+    tracking_available = True
     tracked = False
     ignored = False
     if inside:
@@ -208,11 +209,12 @@ def _registry_git_probe(path: Path) -> dict[str, Any]:
             rel_path = path.name
         tracked_result = run_git("ls-files", "--error-unmatch", "--", rel_path, cwd=root_path)
         ignored_result = run_git("check-ignore", "-q", "--", rel_path, cwd=root_path)
+        tracking_available = tracked_result is not None and tracked_result.returncode in (0, 1)
         tracked = tracked_result is not None and tracked_result.returncode == 0
         ignored = ignored_result is not None and ignored_result.returncode == 0
     return {
-        "available": True,
-        "probe_status": "ok",
+        "available": tracking_available,
+        "probe_status": "ok" if tracking_available else "git_unavailable",
         "inside_worktree": inside,
         "tracked": tracked,
         "ignored": ignored,

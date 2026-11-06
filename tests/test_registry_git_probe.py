@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import signal
 import subprocess
@@ -116,6 +117,38 @@ def test_registry_git_probe_reports_unavailable_without_git(
         "ignored": False,
         "worktree_root_recorded": False,
     }
+
+
+def test_registry_boundary_require_not_tracked_rejects_unreadable_index(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from loopx.cli import main
+
+    for variable in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE"):
+        monkeypatch.delenv(variable, raising=False)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    run_git(repo, "init", "--quiet")
+    registry = repo / ".loopx" / "registry.json"
+    registry.parent.mkdir()
+    registry.write_text('{"goals": []}\n', encoding="utf-8")
+    run_git(repo, "add", "--force", "--", ".loopx/registry.json")
+    bad_index = tmp_path / "bad-index"
+    bad_index.write_bytes(b"DIRC")
+    monkeypatch.setenv("GIT_INDEX_FILE", str(bad_index))
+
+    exit_code = main([
+        "--format", "json", "--registry", str(registry),
+        "--runtime-root", str(tmp_path / "runtime"), "registry-boundary", "--require-not-tracked",
+    ])
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 1, payload
+    assert payload["ok"] is False
+    assert payload["git"]["inside_worktree"] is True
+    assert payload["git"]["probe_status"] == "git_unavailable"
+    assert "tracked by Git" in payload["error"]
 
 
 @pytest.mark.skipif(os.name != "posix", reason="the probe's fake git is a POSIX shell script")
