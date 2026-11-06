@@ -886,6 +886,12 @@ receipt → observed work or actionable failure → readable answer in the same 
   summary through the shared activity contract; `rawThinking`, planner
   completion and tool completion remain separate, and final answers still
   replace the draft on the original source-bound post.
+- Ordinary Codex Chat explicitly requests a concise native reasoning summary
+  on each Turn, including resumed and restricted answer-review threads whose
+  inherited summary setting may be `none`. Execution hosts retain their own
+  summary configuration. Only actual upstream summaries enter the existing
+  activity projection; a model that emits none keeps coarse activity labels.
+  This requests no extra Turn and never exposes raw reasoning content.
 - Generate the visible answer once, then append a complete hidden review envelope
   with `message: ""`. The production parser reuses the preceding Markdown and
   applies the same redaction and typed metadata normalization. Legacy nonempty
