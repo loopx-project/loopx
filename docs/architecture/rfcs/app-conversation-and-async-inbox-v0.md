@@ -1835,6 +1835,15 @@ adopts the reserved review instead of granting another attempt. Missing native
 evidence or capacity remains pending. The failure notice describes this qualified
 recovery instead of giving every restart the same blanket no-replay message.
 
+This isolated answer review receives its complete original question and verified
+visible results at dispatch. It does not import or serially compact the unrelated
+conversation before it can answer. Core retains the full transcript, and ordinary
+conversation restoration continues to preserve that history.
+If restart happens after the queue claim but before native dispatch, the worker
+adopts that same unstarted Turn through ordinary preparation and execution
+fences. It does not wait forever for a queued Turn to become running by itself;
+unfinished managed acceptance and already-started work retain their own owners.
+
 ### Explicit unfinished work after a completed Turn
 
 A terminal model Turn is distinct from completed business work. A private

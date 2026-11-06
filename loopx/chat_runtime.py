@@ -949,7 +949,11 @@ class ChatRuntimeController:
                     else str(session["upstream_thread_id"])
                 ),
                 history=(
-                    history
+                    # This isolated review receives the complete original
+                    # request and verified results at dispatch. Importing the
+                    # whole conversation here needlessly compacts unrelated
+                    # history before an unanswered question can be reviewed.
+                    None if answer_fallback else history
                     if legacy_provider_context or legacy_manager_context or legacy_project_context
                     or session.get("agent_id")
                     in {"anthropic-api", "openai-api", MANAGED_TURN_HOST}
@@ -1497,6 +1501,7 @@ class ChatRuntimeController:
                     or session.get("session_mode") == CHAT_SESSION_MODE_ATTACHED
                 ):
                     return
+                turn = None
                 active_turn_id = str(session.get("active_turn_id") or "")
                 if active_turn_id:
                     try:
@@ -1506,30 +1511,40 @@ class ChatRuntimeController:
                         # non-executing lifecycle repair, never the old input.
                         self.closed.wait(0.25)
                         continue
-                    with self.lock:
-                        attached = self.adapters.get(session_id)
-                    if attached is None or not attached.healthcheck():
-                        try:
-                            self._ensure_adapter(
-                                session,
-                                work_dir=work_dir,
-                                objective=objective,
-                            )
-                        except Exception as exc:
-                            self._fail_queue_preparation(session_id, active_turn_id, exc)
-                        else:
-                            continue
                     active = self.store.load_turn(session_id, active_turn_id)
-                    if active and active.get("status") not in TERMINAL_TURN_STATES:
-                        self.closed.wait(0.05)
-                        continue
-                    self.store.release_active_turn(session_id, active_turn_id)
+                    if (active and active.get("status") == "queued" and "_acceptance" not in active
+                            and active.get("started_at") is None and active.get("upstream_turn_id") is None
+                            and active.get("delta_count") == 0):
+                        # A crash can leave the queue claim before native
+                        # dispatch. Keep that exact claim and pass through the
+                        # normal preparation and execution fences below.
+                        turn = active
+                    else:
+                        with self.lock:
+                            attached = self.adapters.get(session_id)
+                        if attached is None or not attached.healthcheck():
+                            try:
+                                self._ensure_adapter(
+                                    session,
+                                    work_dir=work_dir,
+                                    objective=objective,
+                                )
+                            except Exception as exc:
+                                self._fail_queue_preparation(session_id, active_turn_id, exc)
+                            else:
+                                continue
+                        active = self.store.load_turn(session_id, active_turn_id)
+                        if active and active.get("status") not in TERMINAL_TURN_STATES:
+                            self.closed.wait(0.05)
+                            continue
+                        self.store.release_active_turn(session_id, active_turn_id)
                 refreshed = self.store.load_session(session_id)
                 if refreshed is None:
                     return
                 with self.lock:
                     self.session_queue_wakeups.discard(session_id)
-                turn = self.store.claim_next_queued_turn(session_id)
+                if turn is None:
+                    turn = self.store.claim_next_queued_turn(session_id)
                 if turn is None:
                     with self.lock:
                         if session_id in self.session_queue_wakeups:
