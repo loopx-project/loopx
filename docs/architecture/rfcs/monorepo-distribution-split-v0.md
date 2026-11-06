@@ -852,19 +852,51 @@ this does not select a minimal preset or adopt D2/D5.
   threshold. Broker RSS observations and waited-child usage do not measure
   complete tree peaks, full wire/context bytes or model cost. The loading delta
   is small; long-horizon benefit and D6 qualification remain unproven.
-- **Validation limits:** the wider source selection records 596 passed and one
+- **Historical validation limits at `bc59a9ed4`:** the wider source selection records 596 passed and one
   failed preview cold-import test; the baseline independently fails the same
   test because `host_bridge_transport` eagerly imports
   `extensions.process_runtime`. Owner-scoped mypy with `--follow-imports=skip`
   reports the same 29 diagnostics at both revisions after line normalization;
   it is not the full configured mypy suite. Neither failure is waived or
-  relabeled as passing. The bridge's execution-only import is a separate
-  evidenced owner seam outside this proposal's runtime edit.
+  relabeled as passing. The process-helper seam below repairs that preview
+  failure in the same author proposal while retaining the type-check limitation.
 - **Remaining:** independent review, required validation and exact-head merge
   readiness still govern adoption. Opt-in minimal selection, D2/D5 decisions,
   full R0/V10/R1, hard-lease/context/model parity and split installation remain
   open; the separate #8011 status proposal retains its limits. No authority,
   provider, default, installed-host or release change is introduced.
+
+### 2026-11-06 — Preview process helpers remain with execution
+
+The follow-on runtime proposal `a44e27d96` repairs the unchanged preview import
+oracle. Deferring the bridge helpers first exposes a second eager import in
+`doctor_git`; both adapters now resolve the existing `process_runtime` owner
+at execution/cleanup or explicit import. Named/star imports, original function
+identity, static aliases, `dir()` and public patch points remain compatible.
+The TypeScript Host lifetime and process/permission decisions do not move.
+
+- **Observable result:** importing the preview command loads 337 LoopX modules
+  instead of 338 at `bc59a9ed4`, removing only `extensions.process_runtime`.
+  Successful real Git reads likewise leave cleanup unloaded. Actual generic-cli
+  execution still loads 533 modules in both arms because it needs those helpers.
+  This fixes a loading boundary; it establishes no speedup or long-horizon benefit.
+- **Real paths:** the same isolated SQLite harness passes ordinary completion,
+  typed-result interruption, original-journal recovery and committed replay at
+  both immutable runtime revisions. Artifacts remain identical; each fixture
+  has one host invocation/attempt, writeback and debit, with no replayed effect.
+  Both owned brokers stop with verified OS exit. Real bridge send/cancel,
+  backpressure, deadline and unconfirmed-cleanup cases retain their behavior;
+  real Git timeout/terminal cancellation retire the query's helpers. A cleanup
+  error retains the unknown diagnostic through the existing patch point.
+- **Limits:** seven Windows Job Object cases are skipped on macOS. One combined
+  validation attempt fails because the Git fixture's hook did not start within
+  its existing budget; the isolated Git selection subsequently passes without
+  changing that budget or oracle. Owner-scoped mypy checks all three touched
+  loading adapters and retains the same 29 diagnostics at base and proposal.
+  Full configured mypy, packaged/split installation, minimal selection, D2/D5,
+  complete R0/R1/V10, hard-lease/context/model parity and full-cost benefit remain
+  unqualified. Independent exact-head review and required validation still govern
+  adoption; the historical failures above remain historical failures.
 
 ## Appendix B: Decision log
 

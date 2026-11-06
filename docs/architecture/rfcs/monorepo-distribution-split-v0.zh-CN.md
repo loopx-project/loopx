@@ -621,16 +621,41 @@ builder，直到调用方选择 DSH 或显式请求既有 export。命名 import
   这些观察不证明延迟改善，也不建立回归阈值。broker RSS 观察及 wait 子进程的
   usage 不覆盖完整进程树峰值、完整 wire／context 字节或模型成本。加载变化较小，
   长程收益和 D6 资格仍未证明。
-- **验证限制：** 更广的源码选择为 596 个通过、一个 preview 冷 import 测试失败；
+- **`bc59a9ed4` 的历史验证限制：** 更广的源码选择为 596 个通过、一个 preview 冷 import 测试失败；
   基线独立出现同一失败，原因是 `host_bridge_transport` 提前导入
   `extensions.process_runtime`。owner 范围的 mypy 使用 `--follow-imports=skip`，
   两个版本在线号归一化后均报告相同 29 个诊断，不代表完整配置的 mypy 套件。
-  两项失败均不豁免、不改写为通过。bridge 仅供执行使用的 import 是另一个有证据
-  的 owner 接缝，超出本提案的 runtime 编辑范围。
+  两项失败均不豁免、不改写为通过。下述 process helper 接缝在同一作者提案中
+  修复 preview 失败，并保留类型检查限制。
 - **剩余：** 采纳仍受独立评审、必需验证和精确 head 的 merge readiness 治理。
   opt-in minimal 选择、D2/D5 决策、完整 R0/V10/R1、hard-lease／上下文／模型
   一致性和拆包安装仍未关闭；独立 status 提案 #8011 保留原限制。不改变权限、
   provider、默认值、已安装宿主或发布行为。
+
+### 2026-11-06 — Preview process helper 保留在执行路径
+
+后续 runtime 提案 `a44e27d96` 修复未改动的 preview import oracle。先延迟
+bridge helper 暴露了 `doctor_git` 的第二条 eager import；两个 adapter 现均在
+执行／清理或显式 import 时解析既有 `process_runtime` owner。命名／star import、
+原函数身份、静态 alias、`dir()` 和公开 patch 点均保留。TypeScript Host lifetime
+及进程／权限判定不迁移。
+
+- **可观察结果：** 导入 preview command 加载 337 个 LoopX 模块，`bc59a9ed4`
+  为 338，仅移出 `extensions.process_runtime`。真实 Git 成功读取同样不加载清理
+  helper。实际 generic-cli 执行仍需要这些 helper，两个版本均加载 533 个模块。
+  本片修复加载边界，不证明提速或长程收益。
+- **真实路径：** 同一个隔离 SQLite harness 在两个不可变 runtime 版本通过正常
+  完成、typed result 后中断、原 journal 恢复及 committed 重放。产物字节相同，
+  每个夹具仅一次宿主调用／attempt、writeback 和扣额，重放无重复效果。两个自有
+  broker 均停止并核验 OS 退出。真实 bridge send／cancel、背压、deadline 和清理
+  未确认分支保留行为；真实 Git 超时／终端取消退役查询自有 helper。清理错误通过
+  既有 patch 点保留 unknown 诊断。
+- **限制：** macOS 跳过七个 Windows Job Object 用例。一轮组合验证因 Git 夹具
+  hook 未在既有预算内启动而失败；随后隔离 Git 选择通过，未修改预算或 oracle。
+  owner 范围的 mypy 检查三个受影响加载 adapter，基线与提案仍有相同 29 个诊断。
+  完整配置 mypy、打包／拆包安装、minimal 选择、D2/D5、完整 R0/R1/V10、
+  hard-lease／上下文／模型一致性及完整成本收益仍未取得资格。采纳仍受独立精确
+  head 评审与必需验证治理；前述历史失败仍是历史失败。
 
 ## 附录 B：决策日志
 
