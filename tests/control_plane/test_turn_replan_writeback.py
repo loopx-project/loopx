@@ -50,16 +50,16 @@ def _fixture(tmp_path, monkeypatch, provider):
     return project, runtime, registry, state, turn
 
 
-def _runner(root, candidate, *, follow=False):
+def _runner(root, candidate, *, follow=False, reviewed=False):
     # Exercise semantic writeback after the existing execution-profile evidence
     # gate; the independent command below checks these actual Host artifacts.
     candidate = {**candidate, "work_evidence": ["artifact:answer.txt" if follow else "artifact:plan.json"],
                  "validation_evidence": ["check:independent-command"]}
     runner = root / ("follow.py" if follow else "host.py")
     runner.write_text(
-        "import json\nfrom pathlib import Path\n"
+        "import json, shlex, subprocess\nfrom pathlib import Path\n"
         f"candidate = {candidate!r}\n"
-        "def run_dsh_turn(*, workspace, **kwargs):\n"
+        "def run_dsh_turn(*, workspace, prompt, **kwargs):\n"
         "    root = Path(workspace)\n"
         "    counter = root / 'host-count.txt'\n"
         "    counter.write_text(str(int(counter.read_text()) + 1 if counter.exists() else 1))\n"
@@ -68,6 +68,27 @@ def _runner(root, candidate, *, follow=False):
             "    (root / 'answer.txt').write_text(str(sum(plan['inputs'])))\n"
             if follow else
             "    (root / 'plan.json').write_text(json.dumps({'inputs': [17, 25]}))\n"
+        )
+        + (
+            # Consume the structured authority actually delivered to this Host,
+            # including a required captured read; do not manufacture its refs.
+            "    authority, _ = json.JSONDecoder().raw_decode(prompt.split('Turn authority JSON:\\n', 1)[1])\n"
+            "    packet = authority['replan_action_packet']\n"
+            "    if 'stride_control' not in packet:\n"
+            "        packet = json.loads(subprocess.check_output(shlex.split(packet['writeback']), text=True))\n"
+            "    control = packet['stride_control']\n"
+            "    vision = json.loads(candidate['agent_vision_json'])\n"
+            "    decision = {**control['minimal_example'], 'basis': 'uncertain_evidence', 'action': 'verify',\n"
+            "        'axes': {\n"
+            "            'work_slice': {'plan': 'Validate the complete plan.', 'reason': 'The plan is new evidence.'},\n"
+            "            'route_distance': {'plan': 'Retain the current task and route.', 'reason': 'The original task remains applicable.'},\n"
+            "            'validation_scope': {'plan': 'Check the plan, then consume it.', 'reason': 'An artifact alone does not prove use.'}},\n"
+            "        'next_probe': {'scope': 'One plan and its consumer.', 'prediction': 'The retained task can use the plan.',\n"
+            "            'minimum_evidence': 'Independent validation and the consumer result.',\n"
+            "            'adoption_criterion': 'The original expected result is correct.', 'cost_bound': 'Two bounded fixture operations.'}}\n"
+            "    vision['stride_decision'] = decision\n"
+            "    candidate['agent_vision_json'] = json.dumps(vision)\n"
+            if reviewed else ""
         )
         + "    return json.dumps(candidate)\n",
         encoding="utf-8",
@@ -120,7 +141,8 @@ def test_semantic_refusal_preserves_task_context(tmp_path, monkeypatch, provider
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_accepted_replan_retains_context_and_drives_next_work(tmp_path, monkeypatch, provider):
+@pytest.mark.parametrize("reviewed", [False, True])
+def test_replan_retains_context_and_requires_shared_authoring(tmp_path, monkeypatch, provider, reviewed):
     project, runtime, registry, _state, turn = _fixture(tmp_path, monkeypatch, provider)
     before = _todo(registry, runtime)
     vision = {"schema_version": "goal_vision_replan_contract_v0", "state": "active",
@@ -133,8 +155,13 @@ def test_accepted_replan_retains_context_and_drives_next_work(tmp_path, monkeypa
     candidate = {"result_kind": "replan_required", "classification": "fixture_verified_plan",
         "summary": "A verified plan is ready.", "next_action": "Execute the verified plan.",
         "path_delta_mode": "material_replan", "agent_vision_json": json.dumps(vision)}
-    runner = _runner(tmp_path, candidate)
+    runner = _runner(tmp_path, candidate, reviewed=reviewed)
     rc, accepted = _run_turn(project, runtime, registry, runner, turn=turn)
+    if not reviewed:
+        assert rc == 1 and "stride_decision" in accepted["error"], accepted
+        assert _todo(registry, runtime) == before
+        assert _classification_count(runtime, "quota_slot_spent") == 0
+        return
     assert rc == 0 and accepted["status"] == "committed", accepted
     assert _todo(registry, runtime) == before
     rc, replay = _run_turn(project, runtime, registry, runner, resume=accepted["resume_turn_key"])
