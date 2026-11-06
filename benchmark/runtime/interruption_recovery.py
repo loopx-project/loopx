@@ -232,3 +232,91 @@ def read_interrupted_host(state: dict, *, state_file: Path, env: dict[str, str],
             "receipt_path": str(path), "receipt_sha256": hashlib.sha256(raw).hexdigest(),
             "source_phase_deadline_epoch": phase, "session_profile_digest": current.digest,
             "native": native}
+
+
+def read_failed_host(state: dict, *, state_file: Path, env: dict[str, str],
+                     wake_log_dir: str, source_state_sha256: str) -> dict:
+    """Qualify an explicit same-session retry of one returned quota failure.
+
+    The digest binds a caller's fresh repair/allowance decision to this exact
+    failed attempt, not to every subsequent failure. The ordinary scheduler and
+    Turn launch still own current Goal, Stop, work and budget admission.
+    """
+    from loopx.control_plane.turn_driver.host_failure import (
+        build_host_failure_record, explicit_host_failure_retry_available, normalize_host_failure_record,
+    )
+    from loopx.control_plane.turn_driver.codex_agent_session import CodexAgentSession
+    from loopx.hosts.codex_checkpoint import native_failed_turn
+    from .codex import process_environment
+    from .codex_readiness import require_native_receiver_allowance
+    from scripts.external_scheduler_worker import _host_pending
+
+    original_state = _physical_read(state_file)
+    if (env.get('LOOPX_EXECUTION_MODE') != 'heartbeat' or env.get('LOOPX_ITERATION_CONTEXT') != 'resume'
+            or not re.fullmatch(r'[a-f0-9]{64}', source_state_sha256)
+            or hashlib.sha256(original_state).hexdigest() != source_state_sha256
+            or _host_pending(state_file) is not True):
+        raise ValueError('Explicit Host recovery no longer names the original failed state')
+    prior = state.get('host_attempt', {})
+    failure = normalize_host_failure_record(prior.get('host_failure'))
+    if (prior.get('status') != 'failed' or failure['kind'] != 'quota_exhausted'
+            or state.get('last_wake_status') != 'wake_failed'
+            or type(state.get('last_wake_rc')) is not int or state['last_wake_rc'] != 1
+            or prior.get('session_id') is None
+            or not explicit_host_failure_retry_available(failure, retry_failed=True)):
+        raise ValueError('Original Host is not an explicitly repairable returned quota failure')
+    env = process_environment(Path(env['LOOPX_CODEX_HOME']), base=env)
+    attempt = prior.get('attempt_id', '')
+    legacy = bool(env.get('LOOPX_INTERRUPTED_SOURCE')) and not attempt
+    source = None
+    if legacy:
+        path, raw, receipt, source = _stopped_source(state_file, state, env, wake_log_dir)
+    else:
+        if not re.fullmatch(r'[0-9a-f]{32}', attempt):
+            raise ValueError('Failed Host attempt has no exact returned identity')
+        matches = []
+        for path in Path(wake_log_dir).absolute().glob('*/receipt.json'):
+            raw = _physical_read(path)
+            receipt = json.loads(raw)
+            if isinstance(receipt, dict) and receipt.get('host_attempt_id') == attempt:
+                matches.append((path, raw, receipt))
+        if len(matches) != 1:
+            raise ValueError('Failed Host must have one exact returned wake')
+        path, raw, receipt = matches[0]
+    if (receipt.get('turn_id') != path.parent.name or receipt.get('mode') != 'heartbeat'
+            or receipt.get('stage') != 'execute' or receipt.get('ok') is not False
+            or receipt.get('host_invoked') is not True or receipt.get('budget_exhausted')
+            or type(receipt.get('return_code')) is not int or receipt['return_code'] != 1
+            or normalize_host_failure_record(receipt.get('host_failure'))
+                != build_host_failure_record(failure['kind'], attempt=1)
+            or (not legacy and any(receipt.get(key) != env['LOOPX_' + key.upper()]
+                                   for key in ('goal_id', 'agent_id')))):
+        raise ValueError('Failed Host receipt differs from this lane and failure')
+    started, stopped = ((_number(source['process_started_at']), _number(source['process_stopped_at']))
+                        if legacy else _process_window(receipt))
+    phase = _number(float(source['source_phase_deadline_epoch'] if legacy else receipt['phase_deadline_epoch']))
+    if phase < started:
+        raise ValueError('Original failure phase predates its Host invocation')
+    session = receipt.get('session') or {}
+    current = CodexAgentSession(env, context='resume',
+        sandbox=env.get('LOOPX_CODEX_SANDBOX', 'danger-full-access'), receipt={})
+    with current.admission.launch_lifetime(operation='benchmark_failed_host_recovery'):
+        pass
+    if (session.get('binding_scope') != 'agent' or not current.binding
+            or not current.session_id or current.session_id != session.get('session_id')
+            or prior['session_id'] != current.session_id):
+        raise ValueError('Failed Host session binding changed')
+    native = native_failed_turn(env, current.session_id, failure_kind=failure['kind'],
+                               process_started_at=started, process_stopped_at=stopped)
+    allowance = require_native_receiver_allowance(env)
+    with current.admission.launch_lifetime(operation='benchmark_failed_host_recovery'):
+        pass
+    if _physical_read(path) != raw or _physical_read(state_file) != original_state:
+        raise ValueError('Original failure changed during recovery readback')
+    return {**({'source_container_id': source['container_id'],
+                'source_proof_sha256': hashlib.sha256(_physical_read(Path(env['LOOPX_INTERRUPTED_SOURCE']))).hexdigest()}
+               if legacy else {'host_attempt_id': attempt}),
+            'wake_turn_id': receipt['turn_id'], 'receipt_path': str(path),
+            'receipt_sha256': hashlib.sha256(raw).hexdigest(),
+            'source_phase_deadline_epoch': phase, 'session_profile_digest': current.digest,
+            'host_failure': failure, 'retry_failed': True, 'native': native, 'allowance': allowance}

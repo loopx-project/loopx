@@ -1480,3 +1480,54 @@ belongs in this infrastructure handoff, never a replacement solution Todo.
 Recovery settles process transport only. Preserved pending semantic replan
 attempts still require their original settlement owner; an interrupted replan
 is not silently declared complete or cleared to force dispatch.
+
+### Explicitly continue after native account allowance is repaired
+
+A hard native quota failure is still held by default. Repair or replenish the
+authorized experiment account through its existing provider and verify its fresh
+allowance before requesting another phase. This does not change the desktop
+login, waive a Stop, refill evaluator opportunities, or turn hard quota failures
+into automatic timed retries.
+
+For a retained complete worker, the same scheduler entrypoint accepts
+`--retry-failed-state-sha256 SHA256` naming the exact original scheduler file.
+Supply the independently admitted finite remainder in
+`LOOPX_PHASE_DEADLINE_EPOCH`, preserving the original phase clock and failed
+receipt. The caller must retain the workspace, Goal/SQLite, session, evaluator
+history and cooldown; this entrypoint cannot reconstruct missing source data.
+For example, after these provider and source checks:
+
+```sh
+python -m benchmark.runtime.scheduler \
+  --python /runtime/bin/python --source /runtime/source \
+  --state-file /runtime/control/scheduler-state.json --host-timeout 600 \
+  --retry-failed-state-sha256 EXACT_FAILED_STATE_SHA256
+```
+
+The recovery provider requires one returned `quota_exhausted` wake, its original
+session/profile binding, terminated native process group and a stable native
+`failed` tail with the corresponding structured quota error and no pending tool
+effects. Legacy workers can use the same stopped-container proof above, but only
+when the exact last returned failure, original session and complete unchanged
+filesystem are retained. Unknown errors, missing sessions and incomplete history
+remain held. The ordinary completed-checkpoint gate is unchanged; a failed native
+Turn is not rewritten or presented as completed.
+
+The shared Turn retry rule decides explicit-retry eligibility. A new append-only
+phase records the original failure, digest, native cursor and deadline, retains
+the Host attempt count and semantic replan records, and starts through normal
+Goal/Stop/session/work admission. Repeating the request selects that same phase,
+including any later failure; it cannot clear the failure or extend its deadline.
+A later explicit repair must bind that new failure separately. Existing operator
+and account authority remain required; a digest is provenance, not permission.
+
+The explicit failed-phase path additionally uses the installed optional native
+Codex provider's existing availability policy (`loopx-codex-provider-routing`).
+It reads `account/read(refreshToken=false)` and `account/rateLimits/read` in a
+fresh disposable inspection home before creating the phase. Missing provider
+support, unknown allowance, exhausted allowance or a changed Goal/session keep
+the original failure held. Only a bounded availability receipt is retained;
+no account response, login values or token is emitted. The ordinary startup
+probe and automatic retry path keep their previous behavior. This observation
+is not a reservation of future provider capacity; a later failure is retained
+and requires another explicit repair.
