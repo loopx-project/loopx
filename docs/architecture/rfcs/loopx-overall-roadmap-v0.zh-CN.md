@@ -197,11 +197,14 @@ worker/settlement adapter 和有条件的旧路径退役。从全局成果与实
 Worker 长操作不能阻塞 controller 处理用户/router 输入；既有 Core、请求、会话、
 队列与返回 owner 保留 authority。Router 可用授权请求操作，不能替单元结算或复制预算。
 [注意力与安全插队](controller-executor-unified-contract-v0.zh-CN.md#controller-attention-and-preemption)
-优先当前用户与阻塞 worker 的交互；后台汇报可让出，原 effect 对账与单一控制写入方仍保留。
+优先当前用户交互，再处理已就绪的 [controller—worker 主循环工作](controller-executor-unified-contract-v0.zh-CN.md#controller-worker-main-loop)，
+包括普通结果评估与反馈，不只阻塞求助。没有用户新消息时，有用的已准入工作仍经原结算与
+新准入持续推进；处理完输入返回这个循环，不默认恢复汇报。后台汇报可让出，原 effect
+对账与单一控制写入方仍保留。
 [当前源码核对](controller-executor-unified-contract-v0.zh-CN.md#current-delivery-audit)区分
 已共享 managed-operation、多接收方与 revision 机制，以及仍缺的双角色绑定/异步旅程。
 [依赖与交付切片](controller-executor-unified-contract-v0.zh-CN.md#delivery-path-from-current-state)
-复用 C1–C9：一个真实单元 → 忙时交互/纠偏/Stop → 两单元 router 采用 → 成果/成本与退役。
+复用 C1–C9：一个自主单元循环 → 忙时交互/纠偏/Stop → 两单元 router 采用 → 成果/成本与退役。
 这是所选 profile 的依赖，不是全局固定优先级，也不向在途 C1 追加 router 合入门。
 现有正确性修复与有真实 caller 的精简可独立推进；不新建 scheduler、消息总线或任务库。
 完整 schema cutover 与双会话尚未交付，默认仍不变。

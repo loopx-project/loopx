@@ -14,9 +14,10 @@
 
 ## Document map and maintenance contract
 
-**Target experience: a steward routes several Agents; each Agent's controller
-handles judgment and interaction while its worker executes. Users can converse,
-correct and stop during execution, and results return along the original request.**
+**Target experience: a steward routes several Agents; each Agent continuously
+closes the controller–worker loop of work selection, execution, evidence assessment
+and feedback. Users can converse, correct and stop during that loop, and results
+return along the original request.**
 This is a long-horizon architecture choice to qualify, not a claim of universal
 best practice.
 
@@ -49,6 +50,7 @@ flowchart TB
 | --- | --- |
 | Why split these roles, and what is missing? | Sections 1–4 and the [current source audit](#current-delivery-audit) |
 | How do the three layers and one Agent identity fit? | [System diagram](#system-topology), [binding unit](#agent-binding-unit) |
+| What keeps work advancing without another user message? | [Primary execution loop](#controller-worker-main-loop) |
 | How do conversation, Stop and recovery work during execution? | [Asynchronous sequence](#asynchronous-control), [attention / preemption](#controller-attention-and-preemption), [failure isolation](#router-failure-recovery) |
 | What gets delivered, validated and deleted? | [Dependencies and slices](#delivery-path-from-current-state), [product acceptance](#superagent-acceptance), sections 8–11 |
 | Where are C1 field, context, wire and baseline details? | [Technical annex](controller-executor-unified-contract-v0/contract-and-context.md) |
@@ -87,10 +89,11 @@ no runtime, changes no default and starts no experiment.
 5. Unification first qualifies the existing single-session path. Two-session
    execution remains opt-in until matched outcome and complete-cost evidence
    justifies adoption. This RFC launches no benchmark or privileged operation.
-6. While the executor works, the controller remains available to the user:
-   answer questions, proactively explain meaningful changes, present useful
-   artifacts and incorporate feedback into subsequent work. Qualify that
-   journey through C6/C8; session separation alone does not deliver it.
+6. The controller–worker execution loop is primary: assess ordinary results as
+   well as blockers, give feedback and continue useful admitted work without a
+   new user prompt. While the executor works, the controller also answers users,
+   incorporates corrections and presents useful artifacts. Reporting is a side
+   activity, not the loop's default destination. Qualify both through C6/C8.
 7. Make the steward the **router**: use existing semantic requests to coordinate
    several controller + worker binding units. Each retains one Agent identity;
    the router may use authorized request/route operations but cannot settle the
@@ -255,6 +258,63 @@ messages do not debit three business Turns, but all three model calls count in
 costs. Do not copy the team's resource allowance to every unit; the router adds
 no budget ledger.
 
+<a id="controller-worker-main-loop"></a>
+
+### The primary loop: select, execute, assess, feed back and continue
+
+**The controller is an active work partner, not only a help desk for a blocked
+worker or a reporting session.** An ordinary result, negative evidence or a
+ready continuation is work for the controller even when nobody sends a message.
+
+```mermaid
+flowchart TB
+  G[Current Goal, evidence and eligible work] --> C[Controller selects a useful work segment]
+  C --> A[Existing Core / runtime admits and binds execution]
+  A --> W[Worker executes autonomous tool / reasoning loop]
+  W --> E[Controller assesses findings and evidence]
+  E -->|Further work within the current grant| F[Feedback: continue, revise or request evidence]
+  F --> W
+  E -->|Governed work boundary reached| S[Validate and settle original identity]
+  S --> D[Fresh continuation decision]
+  D -->|Runnable work| G
+  D -->|Explicit wait / repair| H[Existing owner handles boundary]
+  H -->|Recorded trigger and fresh eligibility| G
+  D -->|Stop / terminal| Z[Stop at the proven scope]
+  U[User / router input] -.Update intent or request a response.-> C
+  E -.Useful evidence, optional reporting.-> R[Report / artifact return]
+```
+
+The arrows describe decisions, not one mandatory model call, new attempt or
+quota debit per arrow. Keep three existing boundaries distinct:
+
+| Loop | Who decides what | Boundary |
+| --- | --- | --- |
+| Worker reasoning ↔ tools | Worker chooses local methods within its task | No controller approval for each tool call; escalate material findings, questions or scope limits |
+| Controller ↔ worker | Controller compares evidence with the Goal, supplies feedback and selects the next useful segment | May span several exchanges within admitted work; feedback alone neither settles a Turn nor grants a new attempt |
+| Governed continuation across Turns | Existing Core/runtime validates original settlement and fresh admission | The model proposes work; the existing [Turn loop transition owner](../../reference/protocols/turn-loop-controller-v0.md) still decides legal continuation, waits and stops |
+
+Assessment is substantive: inspect evidence and unresolved acceptance, then
+continue the sound approach, correct it, request missing evidence or close the
+work. Do not rubber-stamp the worker's claim or force a strategy change merely
+to show activity. At a governed work boundary, validate and settle the original
+identity; use fresh admission for a subsequent Turn. Completing a segment, a Todo,
+a native model turn or a report does not by itself close the Goal. A genuine
+dependency, user-action, budget, stop or terminal condition remains effective;
+otherwise useful authorized work must not wait for the user to say “continue”.
+
+This logical loop is event-driven, not a blocking wait that occupies the
+controller session. Persist dispatch, observations, pending assessment and
+continuation through their existing owners. The host/runtime resumes eligible
+processing after a result or recorded wake; it does not keep a model polling.
+On recovery, reconcile the original attempt and unfinished decision/effect before
+continuing, without dispatching another worker merely to restart the loop.
+
+After handling a user/router input, **reselect from the current main-loop work**:
+an unevaluated result, owed feedback, eligible dispatch or settlement may be next.
+Do not blindly resume an old report. Reporting uses evidenced state in bounded
+opportunities while execution proceeds or the loop genuinely waits; it neither
+holds the main loop hostage nor becomes a requirement after every exchange.
+
 <a id="asynchronous-control"></a>
 
 ### Asynchronous control while the worker executes
@@ -297,7 +357,13 @@ sequenceDiagram
   C->>H: Safe correction bound to original attempt
   H->>W: Supported steer or next safe boundary
   W-->>C: Version-bound result and evidence
-  C->>K: Validate and settle original identity
+  C->>C: Assess result and unresolved work
+  opt More useful work within the current grant
+    C->>W: Feedback and next work segment via Host
+    W-->>C: Further findings and evidence
+  end
+  C->>K: At governed boundary, validate and settle original identity
+  K-->>C: Fresh continuation decision for the main loop
   K-->>R: Result through existing return route
   R-->>U: Conclusion, artifacts and remaining gaps
 ```
@@ -319,7 +385,7 @@ limits and waits, qualifying capacity per host instead of creating a message bus
 | In-scope correction | At the actual safe consumption boundary | Persist revision; observe adoption after supported steer; otherwise queue for the next boundary and say so |
 | Scope / acceptance change / conflicting requirements | Recheck work that depends on the change | Bind expected revision and use the original owner; neither last-message-wins nor router priority overrides a conflict |
 | Stop / revocation | Enter existing stop handling immediately | Do not wait for the controller model or ordinary progress reports; distinguish recorded request, Host interruption and actual stop, reconciling unknown effects |
-| Worker result / late event | No automatic new work | Check original request, attempt, generation and revision, then independently validate and settle; late evidence cannot complete another task |
+| Worker result / late event | Assessment resumes the main loop, not unconditional new execution | Check original request, attempt, generation and revision; evaluate evidence, feed back or validate/settle at the work boundary, then use fresh admission for the next Turn; late evidence cannot complete another task |
 
 ```mermaid
 flowchart LR
@@ -343,8 +409,8 @@ There is no implicit global message order across units.
 
 ### Controller attention: user intent first, interruption at safe boundaries
 
-**Default attention order: current user interaction → execution-blocking worker
-interaction → ordinary router coordination → unsolicited reporting.** This is
+**Default attention order: current user interaction → ready controller–worker
+main-loop work → ordinary router coordination → unsolicited reporting.** This is
 selection within a unit's existing ingress, not a new global task scheduler or a
 license to override authority. Keep three questions separate: whose intent governs,
 which eligible input needs attention next, and which current operation can yield.
@@ -354,8 +420,8 @@ A higher-priority message does not automatically cancel a worker or a tool call.
 | --- | --- | --- |
 | Authorized Stop, revocation or an enforced budget/fence | Existing deterministic control path runs independently of ordinary model work | Record and interrupt/reconcile through the current owner; never wait behind report generation or for a model to infer Stop |
 | Current user instruction, correction or question | Foreground; address before autonomous coordination and reporting | A status question is not a direction change. A user-requested report is foreground work, unlike an unsolicited report |
-| Worker question, failure or result requiring a decision to continue/close work | Next; may interrupt background composition | Routine progress/logs do not get this treatment. Escalate needed user approval; do not invent it to unblock the worker |
-| Router's autonomous coordination and nonblocking worker information | Serve after foreground and blocking work, with bounded deferral | A verified relay of an original user request retains its origin and dependency; it is not demoted merely for passing through the router |
+| Main-loop dispatch, result assessment, feedback, continuation and settlement | Next; blocking worker exchanges take precedence within this work and may interrupt background composition | Ordinary results need assessment even without a help request. Routine progress/logs need no model wake unless they change a decision. Escalate required user approval without inventing it |
+| Router's autonomous coordination and nonblocking worker information | Serve after foreground and ready main-loop work, with bounded deferral | A verified relay of an original user request retains its origin and dependency; it is not demoted merely for passing through the router |
 | Unsolicited reports and optional housekeeping | Coalesce and run opportunistically in bounded slices | Refresh against current facts after interruption; do not send every obsolete draft |
 
 Explicit, applicable user intent governs conflicts with autonomous worker/router
@@ -411,25 +477,31 @@ sequenceDiagram
   participant I as Existing ingress / runtime
   participant C as Controller
   participant W as Worker
-  Note over C: Compose unsolicited report
-  W->>I: Question blocks original attempt
-  I->>I: Persist input, select blocking interaction
-  I-->>C: Yield report at supported safe boundary
-  C->>W: Resolve within existing scope
-  Note over W: Same attempt continues
+  C->>W: Dispatch admitted work via runtime
+  W->>W: Autonomous execution
+  W->>I: Ordinary result and evidence, no help request
+  I-->>C: Resume main-loop assessment
+  C->>C: Compare evidence and remaining acceptance
+  C->>W: Feedback and further work within current grant
+  Note over C,W: Worker continues while controller handles input
   U->>I: Correct a requirement
   I-->>C: User input ahead of ordinary router/report work
   C->>C: Assess revision and dependent work
   C-->>U: Explain adoption or actual pending boundary
   C->>W: Apply qualified correction at safe boundary
-  C->>C: Refresh report from current evidence when eligible
+  W->>I: Further evidence
+  I-->>C: Reselect pending main-loop work
+  C->>C: Assess, continue or close through existing Core
+  opt Reporting is eligible
+    C-->>U: Updated evidenced report
+  end
 ```
 
 Prevent both starvation and interruption storms. Batch compatible user corrections
 without losing their individual identities; coalesce supersedable progress, but
 retain questions, errors, results and settlement/recovery obligations. Bound each
-foreground service slice and reserve service opportunities for still-valid blocked
-work and owed returns; ageing can advance those obligations without overriding
+foreground service slice and reserve service opportunities for still-valid
+main-loop work and owed returns; ageing can advance those obligations without overriding
 Stop, explicit cancellation or intent. Optional stale reports can be superseded.
 If arrivals exceed capacity, show backpressure/deferred work and the actual blocker
 instead of promising an impossible latency bound. Do not repeatedly abort an
@@ -437,8 +509,8 @@ in-flight foreground response for every keystroke, or ask the user to tune prior
 numbers. Existing quota/stop rules still bound the work and all wasted/interrupted
 model calls count in complete cost.
 
-For the MVP, qualify stable selection plus yielding **background composition** on
-one real Host; do not build arbitrary preemptive tool scheduling. Extend existing
+For the MVP, qualify the autonomous main loop, stable selection and yielding
+**background composition** on one real Host; do not build arbitrary preemptive tool scheduling. Extend existing
 ingress/request/session facts only where the above origin, dependency and invocation
 fences are absent. The typed owner selects admissible input and protects commits;
 the controller assesses meaning. App/CLI and supported Lark readback distinguish
@@ -723,7 +795,9 @@ its existing independent claim/lease/handoff contract.
    generation, scope and budget. Record intent before invoking the executor.
 4. The executor works and returns observations/artifacts. Readback distinguishes
    delivery, execution, result availability, independent validation and accepted
-   writeback. Dialogue can span several exchanges without multiple quota debits.
+   writeback. The controller assesses ordinary results and gives feedback through
+   the [primary loop](#controller-worker-main-loop), not only in response to a
+   blocker. Dialogue can span several exchanges without multiple quota debits.
 5. The controller proposes acceptance or revision; the existing effect owner
    validates and settles the original Turn exactly once. A fresh decision then
    continues runnable work, waits on the recorded event/time or stops.
@@ -909,7 +983,7 @@ No model busy-polling loop or new recurring automation follows from this RFC.
 flowchart TB
   C1[C1/C2: unified single-session contract and context] --> U[C3-C6: one real dual-session unit]
   F[Existing request / managed-operation / Session owners] --> U
-  U --> I[C6/C8: converse, correct and Stop while worker is busy]
+  U --> I[C6/C8: autonomous work loop with conversation, correction and Stop]
   I --> R[C6/C8: router connects two independent units]
   I --> E[C7: unit outcomes and complete-cost comparison]
   R --> E
@@ -929,14 +1003,14 @@ numbers are not PR counts.
 | --- | --- | --- |
 | **C1/C2 — Finish existing contract cutover** | Converge #7430's source, consumer and recovery work; no router packet | Original single-session quota comparison, field/clause fidelity, real caller, off and recovery; remove each replaced format writer, retaining named historical decoders |
 | **C3/C4 — One binding unit** | Two roles in one Agent through current session/managed-operation owners; qualify one Host with isolation, observation and interruption | Two real sessions and independent context baselines; concurrent/restarted callers cannot overwrite bindings or let old generations write; remove replaced single-slot assumptions without another dual-session runtime |
-| **C5/C6.1/C8 — Conversation during execution** | Real long worker operation returns a handle; controller consumes user/worker input through request revisions, queue reservations, Stop and readback | Substantive response before worker completion, correction changes subsequent artifacts, attention/safe-preemption/fairness cases pass, cancellation need not await a model; replace that caller's whole-task blocking wait and duplicate classification, delivering the same App journey |
+| **C5/C6.1/C8 — Work loop with interaction during execution** | Real long worker operation returns a handle; controller consumes user/worker input through request revisions, queue reservations, Stop and readback | Ordinary result → assessment/feedback → further execution without a user wake; original settlement and fresh continuation; substantive response before worker completion, correction changes subsequent artifacts, attention/safe-preemption/fairness cases pass, cancellation need not await a model; replace that caller's whole-task blocking wait and duplicate classification, delivering the same App journey |
 | **C6.2/C8 — Router connects two units** | Steward adopts existing multi-recipient requests, original-audience returns and selected bindings; direct controller input uses the same revision entry | B progresses while A is busy; partial refusal does not rerun A; restart returns results to original audiences without expanding permissions/budgets; remove duplicate synthesis/routing branches |
 | **C7/C8 — Compare and adopt narrowly** | Match workload/Host across original single-session, unified single-session and dual-session arms; separate additional multi-unit coordination arm | Comparable-budget outcomes and complete costs, response/correction/stop latency and human intervention; retain small-task counterexamples and model/Host boundaries. Qualify packaged App/CLI and supported Lark failure/recovery separately |
 | **C9 — Named retirement and default decision** | Retire each replacement with caller, historical-reader window and rollback evidence; decide adoption for qualified workloads/profiles | No second decision/task/budget ledger; original attempts reconcile after new admission closes; retain qualified single-session use, without treating fewer lines or more sessions as benefit |
 
 The recommended next implementation decision is to align in-flight C1 with current
 session ownership, select a Host that actually supports nonblocking worker
-observation, tool isolation and Stop, and deliver a reviewable “one unit +
+observation, tool isolation and Stop, and deliver a reviewable “one autonomous unit loop +
 interaction during execution” slice. The steward's existing multi-recipient chain
 then adopts it. Binding/recovery simplifications that improve current callers may
 land first without waiting for all of C1. A global scheduler, generic message
@@ -955,15 +1029,17 @@ jointly bound that claim:
 
 | Case | Independent oracle / comparison |
 | --- | --- |
+| No user/router messages after initial authorization | Ordinary worker findings lead to controller assessment, useful feedback and another admitted work segment without a help request or human wake. Verify changed artifacts and independent acceptance, not message counts; negative evidence changes the next decision when warranted. Settle original work once and continue under fresh admission; an evidenced wait/stop remains valid |
+| User question interrupts assessment or next dispatch | Answer, then select still-valid pending main-loop work from current facts. No lost result or stalled continuation, no automatic return to reporting and no replacement worker just to answer. Newly admitted segments retain their own identity |
 | Busy worker + user question + new router input | Substantive response before worker completion, both control inputs recorded, original worker-attempt count unchanged. Measure arrival→processing→response, not just queue ACK |
 | Same revision sent directly and relayed, then conflicting independent revisions | Same identity is not applied twice; different sources retain versions and handling reasons; actual subsequent artifacts obey effective requirements |
 | Two independent units + one refusal/disconnection | Unaffected unit continues; refusal/unknown visible, retry does not repeat successful effects, resources are not multiplied per unit |
 | Controller/router restart, reordered/duplicate results, lost settlement response | Recover original attempt, input and receipts; no duplicate execution/debit; old generations and late results cannot take over new work |
 | Stop/revocation with a full queue or unavailable model | Existing Host/Core stop remains reachable; acknowledgment and actual stop are distinct, unknown external effects still require reconciliation |
-| Unsolicited report + blocked worker, then user correction | Yield background composition and unblock; user correction precedes dependent new effects; original worker attempt is unchanged and report resumes from current facts. Recover already-sent/uncertain delivery without duplicate sends |
+| Unsolicited report + blocked worker, then user correction | Yield background composition and unblock; user correction precedes dependent new effects; the original worker is not restarted merely for interruption. Reselect main-loop work, updating the report only when eligible. Recover already-sent/uncertain delivery without duplicate sends |
 | Progress flood, router-relayed user request, equal-priority and reordered input | Preserve user provenance and required dependencies across transport; ordinary progress/self-declared urgency does not preempt; retain equal-attention FIFO and revision causality, including across restart |
 | Noncancellable operation / late model output races user input | Original effect completes/reconciles, old invocation's new tool proposals do not execute; no duplicate effects, actual wait/unsupported preemption readable, no concurrent replacement control writer |
-| Sustained foreground input and repeated interruptions | Under declared capacity, foreground stays responsive and valid blocked work/owed returns do not starve; measure service latency, worker wait, oldest deferral and cancelled/repeated tokens. Overload is explicit backpressure; Stop does not queue |
+| Sustained foreground input and repeated interruptions | Under declared capacity, foreground stays responsive and valid main-loop work/owed returns do not starve; measure service latency, worker wait, oldest deferral and cancelled/repeated tokens. Overload is explicit backpressure; Stop does not queue |
 | Simple and long tasks under comparable acceptance | Compare full model/tool/recovery/reporting costs, omitted constraints, verified outcomes, correction rework and human attention. Single-session may win small tasks; faster interaction is not faster total completion |
 
 Reuse semantic oracles through the full chain on isolated real File/SQLite and the
@@ -987,7 +1063,7 @@ are stable design references, not claims that a canonical Todo is complete.
 | **C3 — Session binding and native lifecycle; C1** | Session/runtime owner: extend existing binding for role/generation; reuse native create/resume/observe/interrupt and ordered queues | Two roles cannot overwrite the Agent native ID, cross-read baselines or race execution; recovery observes existing attempts before retry; disable new role admission to roll back |
 | **C4 — Shared governed lifecycle; C1** | Effect/Turn owner + outer worker adapters: converge duplicated prepare/dispatch/observe/validate/writeback/settle orchestration around existing typed operations and receipts | App/Turn/external worker agree on admission, original result and single debit under partial failure; scheduler effects retain their true host owner; switch callers back only after receipt reconciliation |
 | **C5 — Replan and result authoring boundary; C1** | Goal/Vision and interaction owners: expose current facts and typed controller operations; remove ordinary executor obligations to manufacture Core writeback fields in the two-session profile | Fact-first decision preserves default/stride policy differences, all evidence and required validation; invalid proposed writes reject; single-session authoring remains qualified during rollout |
-| **C6 — Controller/executor exchange; C2–C5** | Manager/request + host owners: reuse versioned semantic requests and result return; replace schema-constrained executor work with natural-language work/material exchange; keep user interaction available during execution | Complete sources, local autonomy, Core isolation, corrective exchange, actual feedback adoption through ordered revisions and independently accepted outcome; busy, conflict, stop and late-result cases in §9; return new work to qualified single-session profile on rollback |
+| **C6 — Controller/executor exchange; C2–C5** | Manager/request + host owners: reuse versioned semantic requests and result return; replace schema-constrained executor work with natural-language work/material exchange; keep user interaction available during execution | Complete sources, local autonomy, Core isolation, ordinary result → assessment → feedback → further work without human prompting, actual feedback adoption through ordered revisions, original settlement/fresh continuation and independently accepted outcome; busy, conflict, stop and late-result cases in §9; return new work to qualified single-session profile on rollback |
 | **C7 — Benchmark reuse and full-cost attribution; C4/C6** | Benchmark toolkit/execution owner: thin adapters select the same product profiles; consolidate duplicated launch/session settings and track both sessions without changing frozen trials | Native/plain controls unchanged; matched-arm configuration/replay and complete cost coverage; no jobs launched merely by merging helpers |
 | **C8 — Product configuration and operational readback; C3/C6** | Existing App/settings/Chat projections: one effective configuration owner, role-aware activity, failure/recovery, proactive evidence-based reports, task-appropriate rich views, feedback/readback, Stop and artifact return | Packaged managed and supported attached heartbeat journeys from §9, including unavailable host, late results, quiet/deduplicated reports, accessible fallback, audience denial and recovery; installed qualification separate; no new packet-format toggle |
 | **C9 — Retire old paths and qualify adoption; C1–C8** | Contract/runtime maintainers: remove superseded producers, format switches, duplicated prompts and tests; update protocols, guides and RFC delivery facts | Caller/field/decoder retirement inventory, historical replay and rollback evidence; App + benchmark acceptance and matched benefit before any default promotion |

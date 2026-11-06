@@ -259,11 +259,15 @@ Agent binding unit. A long worker operation must not block controller input from
 the user/router; existing Core, request, session, queue and return owners retain
 authority. Authorized router request operations cannot settle unit work or copy
 budgets. [Attention and safe preemption](controller-executor-unified-contract-v0.md#controller-attention-and-preemption)
-prioritize current user interaction and blocked workers; background reports yield
-while original-effect recovery and one control writer remain intact. The [current source audit](controller-executor-unified-contract-v0.md#current-delivery-audit)
+prioritize current user interaction, then ready [controller–worker main-loop work](controller-executor-unified-contract-v0.md#controller-worker-main-loop),
+including ordinary result assessment and feedback, not only blocked-worker help.
+Without another user message, useful admitted work continues through original
+settlement and fresh admission; input handling returns to that loop rather than
+automatically resuming a report. Background reports yield while original-effect
+recovery and one control writer remain intact. The [current source audit](controller-executor-unified-contract-v0.md#current-delivery-audit)
 separates shared managed operations, multi-recipient requests and revisions from
 the missing role pair and asynchronous journey. The [delivery slices](controller-executor-unified-contract-v0.md#delivery-path-from-current-state)
-reuse C1–C9: one real unit → busy-time interaction/correction/Stop → router adoption
+reuse C1–C9: one autonomous unit loop → busy-time interaction/correction/Stop → router adoption
 of two units → outcome/cost qualification and retirement. These are selected-profile
 dependencies, not fixed global priority or additional router merge gates on C1.
 Existing correctness repairs and simplification with real callers can land
