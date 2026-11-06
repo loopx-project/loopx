@@ -6,21 +6,21 @@ import { isAbsolute } from "node:path";
 import { delegationRuntimeFacts, selectDelegationBinding } from "./collaboration/delegation.ts";
 
 export const subagentContextProvider: AgentContextProvider = {
-  hookId: "multi_subagent.coordinator", capabilityId: "multi_subagent", revision: "v6",
+  hookId: "multi_subagent.coordinator", capabilityId: "multi_subagent", revision: "v7",
   phases: AGENT_CONTEXT_PHASES,
   produce(input, config) {
     const guidance = {
       before_plan: [
-        "Prefer bounded independent delegation; max_children is a configured ceiling, not live availability. Admit native children incrementally, avoid duplicate reads, and keep one parent question.",
+        "Delegate coherent independent outcomes, not isolated calls; leave method choices to the child. max_children is a ceiling, not a target or live availability. Admit incrementally, avoid duplicate reads, and keep useful parent work.",
         "Host-native child work uses loopx native-child record/read for bounded Turn receipts; these calls do not start Turns or spend quota.",
-        "Choose independent work from current routes and user preferences. Runtime availability is not entrypoint admission; inspect bound delegation. Peer-activation blocks do not assess native children or delegation. Do not relaunch every route on every heartbeat.",
+        "Choose authorized routes under user preferences. Host-native tools need no delegation binding. For bound delegation, inspect the selected binding; runtime availability is not admission. Peer-activation blocks assess neither route. Do not relaunch all routes each heartbeat.",
       ],
       before_delegate: [
-        "Give each child a bounded question, sources, read/write limits, expected evidence and stopping condition; identify dependencies and the coordinator's concurrent question.",
-        "For an authorized route, use its binding entrypoint and recheck the chosen runtime, execution profile and budget. Never silently substitute a runtime/model; record the selection reason and stable operation id. Report each native decision or bounded skip; missing reports stay unknown.",
+        "Give each child a coherent question, acceptance, sources, read/write limits and stopping condition; leave room to investigate and challenge the hypothesis. Identify dependencies and concurrent parent work.",
+        "Use authorized host-native tools directly; only bound delegation needs its binding entrypoint and runtime/profile/budget preflight. Preserve user model preferences; never silently substitute runtime/model. Record selection reason and stable operation id; report native decisions or skips, leaving missing reports unknown.",
       ],
       after_delegate_result: [
-        "Check returned sources, omissions and contradictions against the question. Record native child result and parent review separately, then reconcile fresh Turn receipts and bound delegation receipts; missing or rejected receipts do not establish completed work.",
+        "Check returned sources, omissions and contradictions against acceptance. Record native result and parent review separately; reconcile fresh receipts for the route actually used. Missing or rejected receipts do not establish completed work.",
         "On typed agent_thread_limit_reached, stop same-Turn spawn/followup retries, mark unlaunched work incomplete, and continue useful parent work.",
         "Verify decisive sources and record accept/defer/reject with reasons. Link accepted evidence to the deliverable and run parent validation before writeback; opinions are not independent evidence.",
       ],
