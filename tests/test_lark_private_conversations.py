@@ -16,6 +16,7 @@ from loopx.capabilities.native_chat.conversation_bindings import ChatConversatio
 from loopx.capabilities.native_chat.external_conversations import ChatExternalConversations
 from loopx.extensions.lark.conversation_identity import identity_ref, lark_private_source, observe_lark_conversation_identity
 from loopx.extensions.lark.private_conversations import LarkPrivateConversations
+from loopx.extensions.lark.private_delivery_discovery import PrivateDeliveryDiscovery
 from loopx.extensions.lark.goal_topic_runtime import poll_lark_goal_topic_profile_once
 
 
@@ -181,15 +182,15 @@ def test_original_worker_continues_proven_unstarted_argon_quota_on_codex(tmp_pat
             return update_session(session_id, **changes)
         monkeypatch.setattr(store, "update_session", checked_update)
         if fault in {None, "later-source-after-discovery"}:
-            pending = transport.core.pending
+            source_controls = transport.core.source_controls
             scans = []
-            def counted_pending():
+            def counted_controls():
                 scans.append(True)
-                return pending()
-            monkeypatch.setattr(transport.core, "pending", counted_pending)
+                return source_controls()
+            monkeypatch.setattr(transport.core, "source_controls", counted_controls)
             discovery = transport.core.context_recovery_observer()
             assert discovery(ref) and discovery(ref)
-            assert len(scans) == 1  # One full source inventory per discovery pass.
+            assert len(scans) == 1  # One complete source-control view per discovery pass.
         if fault in {"stop-after-discovery", "source-changed-after-discovery"}:
             assert path in transport.pending_delivery_paths()
         if fault in {"stop", "stop-after-discovery"}:
@@ -1312,7 +1313,7 @@ def test_delivered_quota_failure_stays_pending_across_restart_without_replaying(
             # The typed owner can exclude completed/non-quota work without
             # scanning unrelated events or source-control journals.
             monkeypatch.setattr(store, "events_after", lambda *_: pytest.fail("not quota backlog"))
-            monkeypatch.setattr(transport.core, "pending", lambda: pytest.fail("not quota backlog"))
+            monkeypatch.setattr(transport.core, "source_controls", lambda: pytest.fail("not quota backlog"))
         assert transport.health()[row["binding_id"]]["pending_count"] == pending
         before = ordinary[4].read_bytes(), list(provider.writes)
         restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
@@ -1325,7 +1326,7 @@ def test_delivered_quota_failure_stays_pending_across_restart_without_replaying(
 
 
 @pytest.mark.parametrize("command", ["stop", "new"])
-@pytest.mark.parametrize("error_code", ["response_timeout", "upstream_transport_failure"])
+@pytest.mark.parametrize("error_code", ["response_timeout", "upstream_transport_failure", "context_window_exceeded"])
 def test_delivered_timeout_stays_pending_without_replaying_and_honors_stop(ordinary, monkeypatch, command, error_code):  # noqa: F811
     from loopx.chat_agent import CodexChatAgentError
     from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter
@@ -4961,6 +4962,111 @@ def test_slow_app_reaction_does_not_block_current_or_later_answers(ordinary, mon
     assert all(phase.get("verified") for phase in projection["deliveries"].values())
 
 
+def test_private_discovery_skips_unchanged_bodies_but_not_new_work_or_core_checks(tmp_path, monkeypatch):
+    from loopx.chat_store import _atomic_write_json
+    from loopx.extensions.lark import private_conversations as private
+
+    clock, checks, reads = [100.0], [], []
+    eligible = {"old": False}
+    transport = LarkPrivateConversations.__new__(LarkPrivateConversations)
+    transport.root = tmp_path
+    transport._delivery_discovery = PrivateDeliveryDiscovery(tmp_path)
+    transport._context_recovery_probe_at = {}
+    transport._web_projection_paths = lambda: []
+    transport.core = SimpleNamespace(context_recovery_observer=lambda: lambda ref:
+        checks.append(ref) or eligible[ref])
+    monkeypatch.setattr(private, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    read_json = private._read_json
+
+    def observed(path):
+        reads.append(path)
+        return read_json(path)
+
+    monkeypatch.setattr("loopx.extensions.lark.private_delivery_discovery._read_json", observed)
+    old, pending, new = (tmp_path / f"{name}.json" for name in ("old", "pending", "new"))
+    _atomic_write_json(old, {"status": "delivered", "request_ref": "old", "session_id": "session",
+        "turn_id": "failed", "event": {"chat_type": "p2p", "text": "private-body-marker" * 10000},
+        "deliveries": {"terminal": {"text": "private-body-marker" * 10000}}})
+    _atomic_write_json(pending, {"status": "pending"})
+    assert transport.pending_delivery_paths() == [pending]
+    reads.clear()
+    assert transport.pending_delivery_paths() == [pending] and reads == [pending]
+    assert "private-body-marker" not in repr(transport._delivery_discovery._completed)
+    _atomic_write_json(new, {"status": "pending"})
+    assert transport.pending_delivery_paths() == [new, pending]
+    clock[0] += 61
+    eligible["old"] = True
+    assert transport.pending_delivery_paths() == [new, old, pending]
+    clock[0] += 61
+    eligible["old"] = False  # A fresh Core decision wins over unchanged provider hints.
+    assert transport.pending_delivery_paths() == [new, pending]
+    assert checks == ["old", "old", "old"]
+    old.unlink()
+    assert transport.pending_delivery_paths() == [new, pending]
+    assert old not in transport._delivery_discovery._completed
+
+
+@pytest.mark.parametrize("replace", [False, True])
+def test_private_discovery_detects_same_size_updates_with_preserved_mtime(tmp_path, monkeypatch, replace):
+    import os
+    from loopx.chat_store import _atomic_write_json
+
+    transport = LarkPrivateConversations.__new__(LarkPrivateConversations)
+    transport.root = tmp_path
+    transport._delivery_discovery = PrivateDeliveryDiscovery(tmp_path)
+    transport._context_recovery_probe_at = {}
+    transport._web_projection_paths = lambda: []
+    transport.core = SimpleNamespace(context_recovery_observer=lambda: lambda _: False)
+    path = tmp_path / "original.json"
+    _atomic_write_json(path, {"status": "delivered"})
+    assert transport.pending_delivery_paths() == []
+    before = path.stat()
+    body = path.read_bytes().replace(b'delivered', b'uncertain')
+    if replace:
+        other = tmp_path / "replacement.tmp"
+        other.write_bytes(body)
+        os.utime(other, ns=(before.st_atime_ns, before.st_mtime_ns))
+        os.replace(other, path)
+    else:
+        path.write_bytes(body)
+        os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+    assert path.stat().st_size == before.st_size and path.stat().st_mtime_ns == before.st_mtime_ns
+    assert transport.pending_delivery_paths() == [path]
+    # Unknown read failures must remain visible rather than reuse an old
+    # delivered view or turn the request into an empty/successful queue.
+    def unavailable(_):
+        raise OSError("read unavailable")
+
+    monkeypatch.setattr("loopx.extensions.lark.private_delivery_discovery._read_json", unavailable)
+    with pytest.raises(OSError, match="read unavailable"):
+        transport.pending_delivery_paths()
+
+
+def test_private_discovery_does_not_cache_a_file_replaced_during_read(tmp_path, monkeypatch):
+    from loopx.chat_store import _atomic_write_json
+    from loopx.extensions.lark import private_conversations as private
+
+    transport = LarkPrivateConversations.__new__(LarkPrivateConversations)
+    transport.root = tmp_path
+    transport._delivery_discovery = PrivateDeliveryDiscovery(tmp_path)
+    transport._context_recovery_probe_at = {}
+    transport._web_projection_paths = lambda: []
+    transport.core = SimpleNamespace(context_recovery_observer=lambda: lambda _: False)
+    path = tmp_path / "original.json"
+    _atomic_write_json(path, {"status": "delivered"})
+    read_json = private._read_json
+
+    def replaced(path):
+        row = read_json(path)
+        _atomic_write_json(path, {"status": "pending"})
+        return row
+
+    monkeypatch.setattr("loopx.extensions.lark.private_delivery_discovery._read_json", replaced)
+    assert transport.pending_delivery_paths() == []
+    monkeypatch.setattr("loopx.extensions.lark.private_delivery_discovery._read_json", read_json)
+    assert transport.pending_delivery_paths() == [path]
+
+
 @pytest.mark.parametrize("background_slots", [0, 2])
 def test_private_recovery_backlog_uses_released_capacity_before_retry_delay(tmp_path, monkeypatch, background_slots):
     from loopx.extensions.lark import goal_topic_runtime_service as worker
@@ -4978,6 +5084,7 @@ def test_private_recovery_backlog_uses_released_capacity_before_retry_delay(tmp_
     native_root.mkdir()
     transport = LarkPrivateConversations.__new__(LarkPrivateConversations)
     transport.root = tmp_path
+    transport._delivery_discovery = PrivateDeliveryDiscovery(tmp_path)
     transport._context_recovery_probe_at = {}
     transport._web_projection_paths = lambda: []
     transport.reconcile_app_feedback = lambda: 0
@@ -5057,6 +5164,7 @@ def test_current_body_uses_next_slot_before_unattempted_recovery_backlog(tmp_pat
     slots = 4 - background_slots
     transport = LarkPrivateConversations.__new__(LarkPrivateConversations)
     transport.root = tmp_path
+    transport._delivery_discovery = PrivateDeliveryDiscovery(tmp_path)
     transport._context_recovery_probe_at = {}
     transport.core = SimpleNamespace(context_recovery_observer=lambda: lambda ref: True)
     transport.reconcile_app_feedback = lambda: 0
@@ -5129,6 +5237,7 @@ def test_private_recovery_discovery_keeps_negative_and_attempt_backoff(tmp_path,
     eligible = {"candidate": True, "ineligible": False}
     transport = LarkPrivateConversations.__new__(LarkPrivateConversations)
     transport.root = tmp_path
+    transport._delivery_discovery = PrivateDeliveryDiscovery(tmp_path)
     transport._context_recovery_probe_at = {}
     transport._web_projection_paths = lambda: []
     monkeypatch.setattr(private, "time", SimpleNamespace(monotonic=lambda: clock[0]))

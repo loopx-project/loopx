@@ -187,8 +187,8 @@ format choices. Its [two-layer delivery design](controller-executor-unified-cont
 targets cross-host Progressive by default, independent Delta auto only on
 qualified hosts, and unread-material discovery from the current complete capture;
 explicit off and versioned migration remain protected. The optional
-controller model alone talks to Core; the executor receives natural-language
-work and materials, while existing host/Core owners retain identity, permissions,
+controller model owns its unit’s model-facing Core work control and settlement;
+the executor receives natural-language work and materials, while existing host/Core owners retain identity, permissions,
 recovery and settlement. Session roles, execution modes, wake sources and
 benchmark arms remain separate axes. This is design direction, not shipped
 behavior or evidence of lower cost.
@@ -252,6 +252,27 @@ owners and delete replaced rules in real callers. The audit also
 records already-shared code and distinct lifecycles that must not be merged by
 appearance. Packages are claimable slices, not a fixed PR count or new controller
 prerequisites; runtime delivery and qualification remain open.
+
+The [Router–Controller–Worker extension](controller-executor-unified-contract-v0.md#router-controller-worker)
+makes the steward a cross-Agent router while each controller + worker retains one
+Agent binding unit. A long worker operation must not block controller input from
+the user/router; existing Core, request, session, queue and return owners retain
+authority. Authorized router request operations cannot settle unit work or copy
+budgets. [Attention and safe preemption](controller-executor-unified-contract-v0.md#controller-attention-and-preemption)
+prioritize current user interaction, then ready [controller–worker main-loop work](controller-executor-unified-contract-v0.md#controller-worker-main-loop),
+including ordinary result assessment and feedback, not only blocked-worker help.
+Without another user message, useful admitted work continues through original
+settlement and fresh admission; input handling returns to that loop rather than
+automatically resuming a report. Background reports yield while original-effect
+recovery and one control writer remain intact. The [current source audit](controller-executor-unified-contract-v0.md#current-delivery-audit)
+separates shared managed operations, multi-recipient requests and revisions from
+the missing role pair and asynchronous journey. The [delivery slices](controller-executor-unified-contract-v0.md#delivery-path-from-current-state)
+reuse C1–C9: one autonomous unit loop → busy-time interaction/correction/Stop → router adoption
+of two units → outcome/cost qualification and retirement. These are selected-profile
+dependencies, not fixed global priority or additional router merge gates on C1.
+Existing correctness repairs and simplification with real callers can land
+independently; no new scheduler, message bus or task store. Full schema cutover and
+dual sessions remain undelivered, with unchanged defaults.
 
 ### Current priorities after research and acceptance integration
 
@@ -523,7 +544,6 @@ projection, optional sink work, and result delivery. Keep the required
 authority and privacy checks; optimize repeated reads only with equivalent
 positive, negative, retry, and stale-generation outcomes. A fast sink no-op
 is not evidence that long-history status and quota admission meet G4 SLOs.
-
 
 ## 4. Every RFC: Ownership and Next Step
 
@@ -1007,7 +1027,6 @@ configuration tests qualify this slice. Existing installed settings and immutabl
 old failures are retained; installed activation and effect-aware recovery of an
 original timed-out request remain separate acceptance, not inferred replay.
 
-
 **Bound-conversation status presentation.** The shared display renderer leads
 with canonical execution/recovery state, project and queue/permission facts;
 the Lark adapter reserves full commands and diagnostics for help, retaining a
@@ -1361,7 +1380,7 @@ bytes under shared locks; Python retains filesystem transport. Regular retained
 lease history remains witnessed without granting a live lease. This closes a
 bounded source-inventory gap; complete cold-source import, original-operation
 recovery, packaged App adoption and the reversible developer trial remain on
-the [existing migration/release path](../../reference/local-authority-provider-selection.md#proposed-compatibility-cutoff-and-release-sequence).
+the [existing migration/release path](../../reference/local-authority-provider-selection.md#20-compatibility-cutoff-and-release-sequence).
 
 审核源准入拒绝不支持的租约 JSON 文件名、非普通文件和链接子目录，不再静默漏读
 或跟随链接。既有 TS coordination owner 在共享锁内核对原始字节；Python 保留

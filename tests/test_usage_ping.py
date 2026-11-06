@@ -69,6 +69,8 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(usage_ping, 'select_default_runtime_root', lambda: tmp_path)
     for key in ('CI', 'DO_NOT_TRACK', 'LOOPX_USAGE_PING', 'LOOPX_USAGE_POLICY'):
         monkeypatch.delenv(key, raising=False)
+    # Explicit transport qualifications may send only to a numeric loopback collector.
+    monkeypatch.setenv('LOOPX_USAGE_PING', '1')
     monkeypatch.setenv('LOOPX_USAGE_PING_ENDPOINT', 'http://127.0.0.1:1/v1/ping')
     return tmp_path
 

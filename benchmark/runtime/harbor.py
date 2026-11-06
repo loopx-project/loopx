@@ -23,6 +23,7 @@ from loopx.control_plane.goals.goal_vision_policy import DEFAULT_PLANNING_HORIZO
 from .codex_offline import MODEL_CATALOG_REMOTE, CodexOffline, stage_portable_python
 from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution, turn_envelope_receipt
 from .layout import _ROOT, _SRC, _CONTROL, _CODEX_HOME, _REGISTRY, _LOOPX_RUNTIME
+from .scheduler import phase_work_reserve
 
 
 _PYTHON = f"{_ROOT}/python"
@@ -94,7 +95,7 @@ class BenchmarkCodex(CodexOffline):
             execution_mode,
             iteration_context,
             codex_sandbox,
-            float(scheduler_timeout_sec) - 160 if turn_timeout_sec is None else float(turn_timeout_sec),
+            None if turn_timeout_sec is None else float(turn_timeout_sec),
             validation_command if validation_command is not None else (),
             task_entry,
             turn_envelope,
@@ -110,7 +111,9 @@ class BenchmarkCodex(CodexOffline):
                 "Remove planning_timeout_sec; planning shares scheduler_timeout_sec with execution"
             )
         self.scheduler_timeout = int(scheduler_timeout_sec)
-        if self.scheduler_timeout <= self.execution.timeout_seconds + 150:
+        if self.scheduler_timeout <= 0:
+            raise ValueError("scheduler timeout must be positive")
+        if self.execution.timeout_seconds is not None and self.scheduler_timeout <= self.execution.timeout_seconds + 150:
             raise ValueError(
                 "scheduler timeout must exceed turn timeout plus cleanup allowance"
             )
@@ -645,7 +648,8 @@ class BenchmarkCodex(CodexOffline):
                 "LOOPX_VALIDATION_COMMAND_JSON": json.dumps(
                     self.execution.validation_command
                 ),
-                "LOOPX_CODEX_TURN_TIMEOUT_SEC": str(self.execution.timeout_seconds),
+                **({"LOOPX_CODEX_TURN_TIMEOUT_SEC": str(self.execution.timeout_seconds)}
+                   if self.execution.timeout_seconds is not None else {}),
                 "CODEX_BIN": "/usr/local/bin/codex",
                 "MODEL_NAME": (self.model_name or "").split("/", 1)[-1],
                 "REASONING_EFFORT": str(
@@ -811,7 +815,7 @@ class BenchmarkCodex(CodexOffline):
             if self.execution.task_entry == "loopx-planned":
                 result_path = f"{_CONTROL}/planning-phase-{self._phase_number:03d}.json"
                 remaining = int(deadline - time.monotonic())
-                if remaining <= 160:
+                if remaining <= phase_work_reserve(self.execution.mode):
                     raise TimeoutError("Task budget exhausted before planning")
                 await self.exec_as_agent(
                     environment,
@@ -834,13 +838,14 @@ class BenchmarkCodex(CodexOffline):
                 if entry["status"] == "blocked":
                     return
             remaining = int(deadline - time.monotonic())
-            if remaining <= 160:
+            reserve = phase_work_reserve(self.execution.mode)
+            if remaining <= reserve:
                 raise TimeoutError("Task budget exhausted before execution handoff")
-            # Planning consumes the phase budget, including when the host later resumes.
-            # Keep ten seconds for scheduler startup before the worker checks
-            # its execution window plus the existing 150-second settlement reserve.
-            host_timeout = min(self.execution.timeout_seconds, remaining - 160)
-            env["LOOPX_CODEX_TURN_TIMEOUT_SEC"] = str(host_timeout)
+            # Planning, admission and work share one absolute phase clock.
+            host_timeout = remaining - reserve
+            if self.execution.timeout_seconds is not None:
+                host_timeout = min(self.execution.timeout_seconds, host_timeout)
+                env["LOOPX_CODEX_TURN_TIMEOUT_SEC"] = str(host_timeout)
             from .scheduler import worker_command
 
             command = worker_command(

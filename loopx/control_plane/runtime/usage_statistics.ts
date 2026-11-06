@@ -18,6 +18,7 @@ import type { CycleObservation } from "./usage_statistics_cycles.ts";
 import { recordInstallation, installationPreview } from "./usage_statistics_installation.ts";
 import { validInstallationUsage } from "./usage_statistics_installation_contract.ts";
 import type { InstallationUsage, ProfileFeature } from "./usage_statistics_installation_contract.ts";
+import { temporaryUsageEnvironment } from "./usage_statistics_environment.ts";
 
 export const STATE_SCHEMA = "loopx_usage_ping_state_v1";
 export const DEFAULT_ENDPOINT = "https://loopx-usage-collector.huangrt01.workers.dev/v1/ping";
@@ -50,14 +51,14 @@ function notice(ctx: Context): Notice {
 function sameNotice(state: State, ctx: Context): boolean {
   return JSON.stringify(state.notice) === JSON.stringify(notice(ctx));
 }
-function automaticNoticeRequired(state: State, ctx: Context): boolean {
+function automaticNoticeRequired(state: State, ctx: Context, path: string): boolean {
   // New installations and expanded disclosures may use notice-before-default-on.
   // A changed recipient or policy still needs the owner's explicit choice.
-  return blockedBy(state, ctx) === "notice_required"
+  return blockedBy(state, ctx, path) === "notice_required"
     && (!state.notice || (state.notice.version !== NOTICE_VERSION
       && state.notice.endpoint === endpoint(ctx.env) && state.notice.policy === notice(ctx).policy));
 }
-export function blockedBy(state: State, ctx: Context): string | null {
+export function blockedBy(state: State, ctx: Context, path: string): string | null {
   const env = ctx.env;
   if (["0", "false", "no", "off"].includes((env.LOOPX_USAGE_PING ?? "").trim().toLowerCase())) return "LOOPX_USAGE_PING";
   if (!["", "0"].includes((env.DO_NOT_TRACK ?? "").trim())) return "DO_NOT_TRACK";
@@ -67,6 +68,11 @@ export function blockedBy(state: State, ctx: Context): string | null {
   if (!["opt_out", "consent_required"].includes(policy)) return "invalid_policy";
   if (policy === "consent_required" && state.consent !== "enabled") return "consent_required";
   if (!endpoint(env)) return "invalid_endpoint";
+  // An explicit local transport qualification may use disposable state. This
+  // cannot authorize a remote recipient or override CI / opt-out / consent.
+  const localQualification = env.LOOPX_USAGE_PING === "1"
+    && ["127.0.0.1", "[::1]"].includes(new URL(endpoint(env)).hostname);
+  if (!localQualification && temporaryUsageEnvironment(path, env)) return "temporary_path";
   if (!sameNotice(state, ctx)) return "notice_required";
   return null;
 }
@@ -116,11 +122,11 @@ function ping(state: State, ctx: Context): Ping | null {
 }
 export async function inspect(path: string, ctx: Context) {
   const state = await load(path);
-  const blocked = blockedBy(state, ctx);
+  const blocked = blockedBy(state, ctx, path);
   return { schema: "loopx_usage_ping_status_v1", consent: state.consent, sending: blocked === null,
     blocked_by: blocked, endpoint: endpoint(ctx.env) || null, policy: notice(ctx).policy,
     notice: notice(ctx), notice_required: !sameNotice(state, ctx),
-    automatic_notice_required: automaticNoticeRequired(state, ctx), last_sent_day: state.last_sent_day ?? null,
+    automatic_notice_required: automaticNoticeRequired(state, ctx, path), last_sent_day: state.last_sent_day ?? null,
     next_payload: state.consent === "disabled" ? null : ping(state, ctx),
     aggregate_preview: state.consent === "disabled" || !state.counters?.length ? null : { schema: AGGREGATE_SCHEMA, counters: state.counters },
     diagnostic_preview: state.consent === "disabled" || !state.diagnostics?.length ? null : { schema: DIAGNOSTIC_SCHEMA, counters: state.diagnostics },
@@ -168,7 +174,7 @@ export async function configure(path: string, ctx: Context, action: "enable" | "
       return;
     }
     if (action === "acknowledge" && JSON.stringify(expectedNotice) !== JSON.stringify(notice(ctx))) throw new Error("usage_notice_changed");
-    if (action === "acknowledge" && !automaticNoticeRequired(state, ctx)) return;
+    if (action === "acknowledge" && !automaticNoticeRequired(state, ctx, path)) return;
     if (action === "enable") state.consent = "enabled";
     if (state.notice && !sameNotice(state, ctx)) {
       state.counters = [];
@@ -208,7 +214,7 @@ export async function observe(path: string, ctx: Context, generation: string, co
   const now = (ctx.now ?? new Date()).getTime();
   const allowed = await withFileMutationLock(path, async () => {
     const state = await load(path);
-    const blocked = blockedBy(state, ctx);
+    const blocked = blockedBy(state, ctx, path);
     if (blocked || !generation || generation !== state.generation) return false;
     if (state.day && state.day > today) return false;
     if (state.aggregate_last_attempt_ms !== undefined && now < state.aggregate_last_attempt_ms) return false;
@@ -291,7 +297,7 @@ export async function observe(path: string, ctx: Context, generation: string, co
       if (url.endsWith("/goals") || url.endsWith("/installation")) {
         await withFileMutationLock(path, async () => {
           const current = await load(path);
-          if (!blockedBy(current, ctx) && current.generation === generation) request = send(url, payload).catch(() => 0);
+          if (!blockedBy(current, ctx, path) && current.generation === generation) request = send(url, payload).catch(() => 0);
         }, 250);
       }
       if (!request) break;
@@ -300,7 +306,7 @@ export async function observe(path: string, ctx: Context, generation: string, co
       if (url.endsWith("/ping") && accepted) sent = true;
       await withFileMutationLock(path, async () => {
         const latest = await load(path);
-        if (latest.generation !== generation || blockedBy(latest, ctx)) return;
+        if (latest.generation !== generation || blockedBy(latest, ctx, path)) return;
         if (url.endsWith("/ping") && accepted) latest.last_sent_day = today;
         const delivery: Delivery = { day: today,
           channel: url.endsWith("/ping") ? "heartbeat" : url.endsWith("/aggregate") ? "cli" : url.endsWith("/installation") ? "installation" : "goal",

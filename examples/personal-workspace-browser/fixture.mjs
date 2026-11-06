@@ -1012,6 +1012,10 @@ export async function installApi(page, { fixturePort = port, goalSubagentConfigu
       } });
       return;
     }
+    if (url.pathname === "/api/chat/report-reviews") {
+      await route.fulfill({json: {ok: true, available: true, items: [], total: 0, next_cursor: null}});
+      return;
+    }
     if (url.pathname === "/api/chat/completed-todos") {
       const total = url.searchParams.get("goal_id") === "progress-projection" ? 4087 : 0;
       const offset = Number(url.searchParams.get("cursor") || 0);

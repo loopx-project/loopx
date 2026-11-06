@@ -172,6 +172,21 @@ test("only an unbound pending automatic dated successor carries a scheduled rech
   }
 });
 
+test("a scoped Todo clock survives missing Vision but cannot override a bound Turn or another owner", () => {
+  const input = datedWait();
+  const wait = input.vision_wait_state as JsonObject;
+  const todo = {todo_id: wait.selected_todo_id, status: wait.selected_todo_status,
+    claimed_by: input.agent_id, resume_when: wait.resume_when, resume_condition: wait.resume_condition};
+  const scoped = {...input, vision_wait_state: null, scope_wait_todo: todo};
+  assert.equal(projectSchedulerArbitration(scoped).scheduled_recheck_after_seconds, 1800);
+  for (const patch of [{scope_wait_todo: {...todo, claimed_by: "other-agent"}},
+    {scope_wait_todo: {...todo, status: "done"}}, {scope_wait_todo: {...todo, resume_condition: null}},
+    {heartbeat_receipt: {status: "pending"}}, {heartbeat_receipt: {status: "committed", settlement_identity: {}}},
+    facts("user_gate", true, false, false, false), facts("terminal_no_followup", false, false, false, true)]) {
+    assert.equal(projectSchedulerArbitration({...scoped, ...patch}).scheduled_recheck_after_seconds, undefined);
+  }
+});
+
 test("unproven waits cannot relax finite scheduler supervision", () => {
   const input = datedWait();
   const wait = input.vision_wait_state as JsonObject;

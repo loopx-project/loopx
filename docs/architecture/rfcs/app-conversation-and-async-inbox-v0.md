@@ -1693,9 +1693,24 @@ Session authority, queue, worker or feature toggle is introduced.
 A delivered failure notice is not a completed business request. The existing
 private reply scanner now discovers eligible unfinished ordinary Codex steward
 requests after the legacy manager-context migration. Context version 21 restores
-the complete visible user/assistant history once in native persisted history;
-the old upstream identity remains recorded, and native Goal/attached executions
-are not replaced by this migration.
+the complete visible user/assistant history in native persisted history. Large
+restores use bounded UTF-8 prefixes, with native compaction between them before
+the next prefix or user request. A scheduling acknowledgement is insufficient:
+the matching compaction item and successful terminal native Turn must finish.
+Small restores and resumed threads retain their existing path. Core's visible
+transcript is unchanged; the native compactor owns its condensed model context.
+An unknown, failed or interrupted compaction closes the new adapter before its
+binding is published, without replaying injection or starting business work.
+The old upstream identity remains recorded, and native Goal/attached executions
+are not replaced by this migration. Prefix compaction incurs model work; source
+and protocol tests alone do not certify live summary quality or its cost. This
+changes neither the context-version token nor existing recovery budgets.
+Restoration rechecks the original source binding, configuration and Goal guard
+while waiting. Queued Stop and idle managed Close publish their existing store
+transitions before waiting for adapter cleanup, so silent compaction cannot
+hide cancellation or reopen a closed Session.
+All prefixes share the configured hard Turn time budget; it is not renewed for
+each compaction.
 
 Discovery uses the local enabled binding and the same typed candidate planner,
 without provider identity IO for every historical failure. This is a queue hint;
@@ -1906,3 +1921,26 @@ Reservation/enqueue crashes adopt the same queued Turn. A failed, partial or
 unknown review stays pending and cannot become another review or business retry.
 Other malformed actions and completed Turns without a recovered native result
 remain explicit holds; this path is not a generic action or execution replayer.
+
+### File-backed idle recovery observations
+
+Repeated recovery checks must not reparse every historical Turn and source body
+for each old request. The File Chat provider retains only validated terminal-Turn
+identity/status and the source-control fields used by the existing stop/new and
+later-input checks. Reuse requires an unchanged device, inode, nanosecond mtime,
+ctime and size, checked before and after the original read. Changed or unreadable
+files use the original reader; nonterminal Turns are always read in full. Deleted
+entries are pruned, concurrent callers receive independent metadata, and a read
+racing a replacement cannot seed a reusable observation.
+Windows keeps the original fresh-read path because its Python stat ctime can
+represent creation time rather than a usable change stamp; see the
+[Python stat time fields](https://docs.python.org/3.12/library/os.html#os.stat_result.st_ctime_ns).
+The private-reply journal observer shares the same change-token primitive while
+retaining its own legacy-repair projection and original effect checks.
+
+These observations are neither recovery decisions nor grants. Exact requests,
+selected Turns, current bindings, native effects and typed admission remain fresh.
+Source qualification compares the same File history and complete recovery plans,
+including newly queued input, strict read failures, stop/new changes and replaced
+files with preserved mtime. Installed responsiveness, provider/model availability
+and actual original-audience replies remain separate acceptance obligations.

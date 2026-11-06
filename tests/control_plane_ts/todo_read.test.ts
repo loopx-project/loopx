@@ -57,6 +57,38 @@ test("current acceptance checks survive full-source reads and selection without 
   assert.deepEqual((summaries.agent_todos as JsonObject).goal_acceptance_contract, acceptance);
 });
 
+test("user summaries keep capability action counts and bounded titles beyond Todo display caps", async () => {
+  const reviews = Array.from({length: 5}, (_, index) => row(`todo_report_${index}`, {
+    index,
+    role: "user",
+    source_section: "User Todo",
+    task_class: "user_action",
+    action_kind: "review_periodic_report",
+    capability_binding_ref: `periodic-report-review:r${String(index).repeat(64)}`,
+    text: `Report edition ${index}`,
+    created_by: "report-agent",
+    updated_at: `2026-11-0${index + 1}T00:00:00Z`,
+  }));
+  const result = await group([...reviews,
+    row("todo_unbound_action", {index: 6, role: "user", task_class: "user_action", action_kind: "review_periodic_report"}),
+    row("todo_done_review", {index: 7, role: "user", task_class: "user_action", status: "done", done: true,
+      action_kind: "review_periodic_report", capability_binding_ref: `periodic-report-review:r${"f".repeat(64)}`}),
+  ], {role: "user", source_section: "User Todo", item_limit: 1});
+  const summary = result.summary as JsonObject;
+  assert.equal((summary.items as unknown[]).length, 1);
+  const actions = summary.capability_actions as JsonObject;
+  assert.equal(actions.schema_version, "todo_capability_actions_v0");
+  assert.equal(actions.total_count, 5);
+  const [reportGroup] = actions.groups as JsonObject[];
+  assert.equal(reportGroup!.action_kind, "review_periodic_report");
+  assert.equal(reportGroup!.count, 5);
+  assert.deepEqual((reportGroup!.items as JsonObject[]).map(item => item.todo_id),
+    ["todo_report_4", "todo_report_3", "todo_report_2"]);
+  assert.ok((reportGroup!.items as JsonObject[]).every(item =>
+    item.role === "user" && item.task_class === "user_action" &&
+    String(item.capability_binding_ref).startsWith("periodic-report-review:r")));
+});
+
 for (const provider of ["file", "sqlite"] as const) {
   test(`${provider} full read keeps archived dependencies and fresh provider results without Markdown`, async t => {
     const root = await mkdtemp(join(tmpdir(), "loopx-todo-read-"));

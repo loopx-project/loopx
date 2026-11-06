@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, urlparse
 from ..paths import resolve_runtime_root
 from ..capabilities.native_chat.project_context import coordination_runtime_root
 from ..status_server import is_loopback_host
+from ..presentation.report_reviews_api import ReportReviewsRequestMixin
 
 
 def _goal_result_candidates(*, runtime_root, goal_id):
@@ -121,7 +122,23 @@ class CompletedTodoPages:
             }
 
 
-class CompletedTodoRequestMixin:
+class CompletedTodoRequestMixin(ReportReviewsRequestMixin):
+    def _dispatch_goal_result_read(self, path: str) -> bool:
+        """Route sibling result readers; each retains its own scope and readback."""
+        parts = path.strip("/").split("/")
+        if len(parts) not in (3, 4) or parts[:2] != ["api", "chat"]:
+            return False
+        readers = {"goal-results": (self._goal_results, self._goal_result),
+                   "report-reviews": (self._report_reviews, self._report_reviews)}
+        reader = readers.get(parts[2])
+        if reader is None:
+            return False
+        if len(parts) == 3:
+            reader[0]()
+        else:
+            reader[1](parts[3])
+        return True
+
     def _goal_result_scope(self, goal_id):
         if not is_loopback_host(str(self.server.server_address[0])):
             self._send_error("Goal results require a loopback LoopX Chat server.", status=403)

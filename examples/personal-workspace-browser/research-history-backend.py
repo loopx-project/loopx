@@ -161,7 +161,7 @@ def main():
                         if "pack_id" in query:
                             record = next((item for item in capture["analysis_readbacks"].values()
                                 if query == parse_qs(urlparse(item["request_path"]).query)), None)
-                        if record and query.get("pack_id", [record["response"]["pack"]["pack_id"]]) == [record["response"]["pack"]["pack_id"]]:
+                        if record and ("compare_pack_id" in query or query.get("pack_id", [record["response"]["pack"]["pack_id"]]) == [record["response"]["pack"]["pack_id"]]):
                             return self._send_json(record["response"])
                     elif path == "/api/chat/research-analysis/citation":
                         metrics["citation_reads"] += 1

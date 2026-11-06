@@ -14,6 +14,12 @@ import time
 # Private process transport between the benchmark wake and its shell scheduler.
 # The benchmark worker remains the owner of phase-budget exhaustion.
 BUDGET_EXHAUSTED_EXIT_CODE = 75
+PHASE_WORK_RESERVE_SECONDS = 160
+
+
+def phase_work_reserve(mode: str) -> int:
+    """Heartbeat cleanup must not consume the remaining solver allowance."""
+    return 0 if mode == "heartbeat" else PHASE_WORK_RESERVE_SECONDS
 
 
 def _physical_state(path: Path) -> Path:

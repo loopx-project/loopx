@@ -127,6 +127,7 @@ import {
   type WorkspaceGoalArchiveLoadState,
   type WorkspaceActionPreviewRequest,
   type WorkspaceAgentTodo,
+  type WorkspaceAttention,
 } from "../features/personal-workspace/personal-workspace-model";
 import { monitorTodoReadback } from "../features/personal-workspace/monitor-readback";
 import { goalExecution, taskSessionStatus } from "../features/personal-workspace/goal-activity";
@@ -476,6 +477,8 @@ type PersonalGoalItem = {
   needsYou?: string | null;
   needsYouActionKind?: string | null;
   needsYouBlocking?: boolean;
+  reportReviewAttention?: WorkspaceAttention[];
+  reportReviewCount?: number;
   attentionSummary?: DigestAttentionSummary;
   needsYouTaskClass?: string | null;
   needsYouTodoId?: string | null;
@@ -688,6 +691,13 @@ function personalAgentCapability(agentId: string, adapterKind?: string | null) {
 
 function personalTodosForQueueItem(item: QueueItem, role: "user" | "agent") {
   const projectAsset = item.project_asset;
+  const queueGroup = role === "user" ? item.user_todos : item.agent_todos;
+  if (role === "user" && queueGroup?.items?.length) {
+    // The owner view needs the canonical bounded queue, not the 3-row project
+    // asset teaser. Both remain display projections; the full-source
+    // capability_actions summary carries counts beyond this list.
+    return queueGroup;
+  }
   return role === "user"
     ? todosFromProjectAssetSummary(projectAsset?.user_todos, item.user_todos, role)
     : todosFromProjectAssetSummary(projectAsset?.agent_todos, item.agent_todos, role);
@@ -1070,6 +1080,21 @@ function buildPersonalHomeModel(
     ];
     const agentRow = sortedGoalAgentRows[0];
     const goalAgentTodos = mergePersonalAgentTodos(personalAgentTodos(row), sortedGoalAgentRows, row);
+    const capabilityActions = row.queueItem?.user_todos?.capability_actions
+      ?? row.queueItem?.project_asset?.user_todos?.capability_actions;
+    const reportReviewGroup = capabilityActions?.groups.find(group => group.action_kind === "review_periodic_report");
+    const reportReviewAttention: WorkspaceAttention[] = (reportReviewGroup?.items ?? []).flatMap(todo => {
+      const todoId = todo.todo_id?.trim();
+      if (!todoId) return [];
+      return [{
+        blocking: false,
+        goalId: goal.id,
+        text: todo.text,
+        todoId,
+        updatedAt: todo.updated_at ?? null,
+        details: attentionDetails(todo),
+      }];
+    });
     const nextSentence = [
       agentTodoFacts.nextTodoText,
       row.queueItem?.recommended_action,
@@ -1118,6 +1143,8 @@ function buildPersonalHomeModel(
       needsYou,
       needsYouActionKind: needsYouTodo?.actionKind ?? null,
       needsYouBlocking: needsYouTodo?.blocking ?? false,
+      reportReviewAttention,
+      reportReviewCount: reportReviewGroup?.count ?? reportReviewAttention.length,
       attentionSummary: goal.activation_state === "stopped"
         ? { blocking: 0, optional: 0, coverage: "complete" } satisfies DigestAttentionSummary
         : attentionSummaries.get(goal.id),
@@ -1283,7 +1310,7 @@ function PersonalGoalHome({
   workBrowseSearch?: Record<string, unknown>;
   onWorkBrowseChange?: (patch: Partial<GoalWorkBrowseState>, source: string, replace?: boolean) => void;
   onSelectWorkSession: (sessionId: string, replace?: boolean) => void;
-  onSelectWorkAgent: (agentId: string | null) => void;
+  onSelectWorkAgent: (agentId: string | null, sessionId?: string) => void;
   onSelectTodo: (todoId: string | null) => void;
   onSelectView: (view: WorkspaceGoalTab) => void;
   onGoalActivationStateChange: (goalId: string, activationState: "active" | "stopped") => void;
@@ -1526,7 +1553,7 @@ function PersonalGoalHome({
   const pendingTurnAdmissions = useRef(new Map<string, AbortController>());
   const preparationControllers = useRef(new Map<string, AbortController>());
   const interruptedTurnIds = useRef(new Set<string>());
-  const recoveringTurnKeys = useRef(new Map<string, AbortController>());
+  const turnObservers = useRef(new Map<string, AbortController>());
   // A running Turn a 409 reported, keyed by context: its pending reply holds
   // the composer closed until the recovery effect adopts it or an
   // authoritative Session read finds no such Turn, so the handoff never leaves
@@ -1833,6 +1860,8 @@ function PersonalGoalHome({
           setManagerRuntime(created.session.manager_runtime);
         }
         recordSessionAdmission(targetContextId, created.session);
+        const observedSessionId = targetContext.kind === "bound" || targetContext.kind === "managed"
+          ? targetContext.sessionId : sessionIds.current.get(sessionKey);
         sessionIds.current.set(sessionKey, created.session_id);
         const activeSnapshot = history.snapshots.find(
           (snapshot) => snapshot.session.session_id === created.session_id,
@@ -1848,19 +1877,31 @@ function PersonalGoalHome({
         newSessionRequired.current.delete(sessionKey);
         if (!activeTurnId) return;
         // A source index can observe the Turn this very composer is already
-        // streaming. Exact contexts already key ownership by their Session;
-        // keep that live observer instead of replacing its controls and reply.
+        // streaming. Preserve its observer in every conversation kind, using
+        // the Session known before this read replaced the cached admission.
         // The history may discover our native Turn before the original ACK
         // supplies its id. Its in-flight admission still owns observation.
-        if ((targetContext.kind === "bound" || targetContext.kind === "managed")
-          && targetContext.sessionId === created.session_id
-          && (pendingTurnAdmissions.current.get(targetContextId)?.signal.aborted === false
-            || (activeTurnIds.current.get(targetContextId) === activeTurnId
-              && streamControllers.current.get(targetContextId)?.signal.aborted === false))) return;
+        if (observedSessionId === created.session_id
+          && pendingTurnAdmissions.current.get(targetContextId)?.signal.aborted === false) return;
         const recoveryKey = `${created.session_id}:${activeTurnId}`;
-        if (recoveringTurnKeys.current.has(recoveryKey)) return;
+        const existingObserver = turnObservers.current.get(recoveryKey);
+        if (existingObserver && !existingObserver.signal.aborted) {
+          // The Session may confirm a queued Turn started before its stream
+          // reports that start. Adopt its controls and row, not another stream.
+          activeTurnIds.current.set(targetContextId, activeTurnId);
+          streamControllers.current.set(targetContextId, existingObserver);
+          setMessagesByContext(current => {
+            const rows = current[targetContextId] ?? [];
+            if (!rows.some(row => row.role === "assistant" && row.queued
+              && row.sourceSessionId === created.session_id && row.sourceTurnId === activeTurnId)) return current;
+            return {...current, [targetContextId]: rows.map(row => row.role === "assistant" && row.queued
+              && row.sourceSessionId === created.session_id && row.sourceTurnId === activeTurnId
+              ? {...row, queued: false, pending: true, endedAt: undefined, startedAt: Date.now()} : row)};
+          });
+          return;
+        }
         const observer = new AbortController();
-        recoveringTurnKeys.current.set(recoveryKey, observer);
+        turnObservers.current.set(recoveryKey, observer);
         activeTurnIds.current.set(targetContextId, activeTurnId);
         recordRuntimeBinding(targetContextId, {
           agentId: selectedAgent.agentId,
@@ -1889,8 +1930,8 @@ function PersonalGoalHome({
           text: "",
         });
         const releaseObservation = () => {
-          if (recoveringTurnKeys.current.get(recoveryKey) === observer) {
-            recoveringTurnKeys.current.delete(recoveryKey);
+          if (turnObservers.current.get(recoveryKey) === observer) {
+            turnObservers.current.delete(recoveryKey);
           }
           // A late completion may still project its draft after navigation.
           // It no longer owns the display or controls of a replacement observer.
@@ -2454,6 +2495,9 @@ function PersonalGoalHome({
           }));
         },
         onPhase: (phase: string, turnId: string) => {
+          // Queued admission also owns an observer. A later native start may
+          // precede the Session read that confirms which Turn owns controls.
+          if (streamController) turnObservers.current.set(`${sessionId}:${turnId}`, streamController);
           if (pendingTurnAdmissions.current.get(targetContextId) === streamController) pendingTurnAdmissions.current.delete(targetContextId);
           if (submittedTurnId !== turnId) updateConversationMessage(targetContextId, userMessageId, {
             sourceTurnId: turnId, sourceSessionId: sessionId,
@@ -2693,6 +2737,8 @@ function PersonalGoalHome({
         && payloadError.turn_replay_safe === true)) throw error;
     } finally {
       streamEnded = true;
+      const observationKey = `${submittedSessionId}:${submittedTurnId}`;
+      if (turnObservers.current.get(observationKey) === streamController) turnObservers.current.delete(observationKey);
       if (pendingTurnAdmissions.current.get(targetContextId) === streamController) pendingTurnAdmissions.current.delete(targetContextId);
       // A handed-off Turn is still running: its ownership stays for the
       // recovery that adopts it or the read that finds it ended.
@@ -3021,6 +3067,10 @@ function PersonalGoalHome({
     goals: normalizedModel.goals.map((goal) => ({
       ...goal,
       execution: goalExecution(goalSessionFacts, goal.goalId, goal.hostThreadActivity),
+      reportReviewAttention: goal.reportReviewAttention?.map(item => sourceAttention(
+        item, statusSourceControl.activeSource.statusUrl,
+        sourceIsReady && !progress?.errors[goal.goalId], goal.title,
+      )),
     })),
     userTodos: model.userTodos.map(attentionForWorkspace),
     attentionHistory: (model.attentionHistory ?? model.userTodos).map(attentionForWorkspace),
@@ -3030,10 +3080,19 @@ function PersonalGoalHome({
     },
     timeline: workspaceTimeline,
   };
+  // Navigation may leave an Agent's exact Session while its existing stream
+  // continues. Project that observed Turn within its Goal, without another read.
+  const observedConversationRunning = Object.entries(runtimeBindings).some(([key, binding]) => {
+    if (binding.status !== "running" || !binding.turnId) return false;
+    const target = conversationContextOfKey(key);
+    return selectedGoal ? (target.kind === "goal" || target.kind === "managed") && target.goalId === selectedGoal.goalId
+      : key === contextId;
+  });
   return (
     <div className={theme === "dark" ? "dark" : ""} data-testid="personal-goal-home">
       <PersonalWorkspacePage
         typedActionsRevision={typedActionsRevision}
+        observedConversationRunning={observedConversationRunning}
         workspaceConversations={{ ...workspaceProjects, selectedRef: selectedWorkspaceRef, onSelect: onSelectWorkspace,
           onOpenOriginal: onOpenOriginalConversation,
           entryGate: appEntryBlocked ? {unavailable: appEntry.unavailable, retry: appEntry.retry} : undefined, managed: managedTarget ? {target: managedTarget, ...managedConversation} : undefined, bound: boundConversation ? { target: boundConversation, ...originalConversation } : undefined }}
@@ -3913,10 +3972,10 @@ export function DashboardPage() {
             message: current.workSession === sessionId ? current.message : undefined} : current});
       }}
       selectedWorkAgentId={search.workAgent ?? null}
-      onSelectWorkAgent={(agentId) => {
+      onSelectWorkAgent={(agentId, sessionId) => {
         const goalId = search.goalId, statusUrl = search.statusUrl;
         void navigate({search: current => "goalId" in current && current.goalId === goalId && current.statusUrl === statusUrl
-          ? {...current, todo: undefined, workAgent: agentId ?? undefined, workSession: undefined, messageSession: undefined, message: undefined, view: agentId === null ? "overview" : "conversation"} : current});
+          ? {...current, todo: undefined, workAgent: agentId ?? undefined, workSession: sessionId, messageSession: undefined, message: undefined, view: agentId === null ? "overview" : "conversation"} : current});
       }}
       onSelectTodo={(todoId) => {
         const goalId = search.goalId, statusUrl = search.statusUrl;

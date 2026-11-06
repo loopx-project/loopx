@@ -204,9 +204,12 @@ def test_public_quota_reader_preserves_long_goal_and_is_read_only(tmp_path, prov
     state.write_text(state.read_text() + "\n## Constraints\n\n" + stop)
     import_fixture_authority(registry, probe.GOAL_ID, provider=provider)
     command = probe._surface_commands(project=project, runtime=runtime, registry_path=registry,
-        state_file=state, output_format="json")["quota_should_run"]
+        state_file=state, output_format="json", context_delivery="on")["quota_should_run"]
+    command += ["--codex-app", "--turn-instance-id", "public-reader",
+        "--codex-context-root", str(tmp_path),
+        "--decision-output-root", str(tmp_path)]
     code, navigation = probe._invoke_cli(command)
-    assert code == 0
+    assert code == 0, navigation
     assert json.loads(navigation)["schema_version"] == "context_capture_navigation_v1"
     events = rollout_event_log_path(runtime, probe.GOAL_ID)
     before = events.read_bytes()

@@ -96,6 +96,21 @@ def _launchctl(*args: str) -> None:
         raise RuntimeError("service_runtime_alignment_failed")
 
 
+def _wait_unloaded(label: str) -> None:
+    # bootout can return before launchd removes the job. Loading its replacement
+    # immediately can fail in both the forward handoff and rollback. Keep the
+    # ingress fence until the original manager proves the label is gone.
+    deadline = time.monotonic() + 5
+    while True:
+        result = subprocess.run(["launchctl", "print", label],
+            capture_output=True, timeout=5)
+        if result.returncode == 113:  # launchd: service not found
+            return
+        if result.returncode or time.monotonic() >= deadline:
+            raise RuntimeError("service_runtime_alignment_failed")
+        time.sleep(0.05)
+
+
 def has_runtime_binding() -> bool:
     for kind in ("status", "chat"):
         path = Path.home() / "Library/LaunchAgents" / f"com.loopx.{kind}.plist"
@@ -240,9 +255,11 @@ def _recover_alignment(journal: Path) -> None:
         try:
             for path in loaded:
                 _launchctl("bootout", f"{domain}/{path.stem}")
+                _wait_unloaded(f"{domain}/{path.stem}")
             for path, content in originals.items():
                 write_bytes_atomic(path, content, preserve_mode=True, fsync_directory=True)
             for path in originals:
+                _wait_unloaded(f"{domain}/{path.stem}")
                 _launchctl("bootstrap", domain, str(path))
         except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
             raise RuntimeError("service_runtime_rollback_failed") from exc
@@ -253,6 +270,10 @@ def _align_managed_runtime(executable: str, journal: Path) -> dict:
     target = Path(executable)
     if not target.is_absolute() or not target.is_file() or not os.access(target, os.X_OK):
         raise ValueError("service_runtime_unverified")
+    # Bind the executable qualified below, not a mutable installer alias. The
+    # same CLI symlink can name a new release while both services still run the
+    # old one; unchanged launcher bytes must not suppress that handoff.
+    target = target.resolve(strict=True)
     environment = {k: v for k, v in os.environ.items()
         if k not in {"LOOPX_PYTHON", "PYTHONPATH", "LOOPX_RELEASE_ROOT"}}
     doctor = subprocess.run([str(target), "--format", "json", "doctor", "--installation-only"],
@@ -312,6 +333,7 @@ def _align_managed_runtime(executable: str, journal: Path) -> dict:
             for plist in updates:
                 _launchctl("bootout", f"{domain}/{plist.stem}")
                 stopped.append(plist)
+                _wait_unloaded(f"{domain}/{plist.stem}")
             for plist, content in updates.items():
                 if plist.read_bytes() != originals[plist]:
                     raise RuntimeError("service_runtime_route_unverified")
@@ -327,11 +349,13 @@ def _align_managed_runtime(executable: str, journal: Path) -> dict:
             try:
                 for plist in restarted:
                     _launchctl("bootout", f"{domain}/{plist.stem}")
+                    _wait_unloaded(f"{domain}/{plist.stem}")
                 for plist in written:
                     if plist.read_bytes() != updates[plist]:
                         raise RuntimeError("service_runtime_route_unverified")
                     write_bytes_atomic(plist, originals[plist], preserve_mode=True, fsync_directory=True)
                 for plist in stopped:
+                    _wait_unloaded(f"{domain}/{plist.stem}")
                     _launchctl("bootstrap", domain, str(plist))
             except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
                 raise RuntimeError("service_runtime_rollback_failed") from exc

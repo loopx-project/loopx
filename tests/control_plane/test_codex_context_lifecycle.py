@@ -164,9 +164,9 @@ def project(root, capture_id="one", *, payload=None, generation=None):
     directory.mkdir(mode=0o700)
     if payload is None:
         payload = {"ok": True, "goal_id": "fixture", "requirements": "Preserve final stop condition."}
-    result = context.project_codex_context(payload, directory=str(root), capture_directory=directory,
+    result = context.prepare_codex_context(payload, directory=str(root), capture_directory=directory,
         goal_id="fixture", agent_id="agent", surface="quota_packet", capture_id=capture_id,
-        continuity_generation=generation)
+        continuity_generation=generation).delivery
     return payload, result
 
 
@@ -184,12 +184,12 @@ def test_lifecycle_invalidates_and_recovers_current_capture_without_bodies(tmp_p
     if event_name == "SessionStart":
         body = result["hookSpecificOutput"]["additionalContext"]
         assert first["recovery"]["sha256"] in body and "quota context-read" in body
-        # The shared selection advice adds about 400 characters to recovery,
-        # avoiding mandatory discovery and duplicate/oversized read batches.
-        # Preserve identity/retention clauses; this is a synthetic regression
-        # allowance, not permission to raise any host output/context limit.
+        # Async handle/error preservation adds 212 characters to the shared
+        # read guide. Retain the complete identity/retention clauses; this
+        # synthetic allowance does not raise any host output/context limit.
         assert "max_output_tokens=22000" in body and "max_output_tokens=24000" in body
-        assert payload["requirements"] not in body and len(body) < 3100
+        assert "session_id" in body and "write_stdin" in body and "functions.wait" in body
+        assert payload["requirements"] not in body and len(body) < 3350
     else:
         assert result == {}
     _, second = project(tmp_path, "two")
@@ -325,13 +325,13 @@ def test_command_workdir_preserves_native_session_delta_and_recovery(tmp_path, m
     script = """
 import json, sys
 from pathlib import Path
-from loopx.control_plane.turn_driver.codex_context import project_codex_context
+from loopx.control_plane.turn_driver.codex_context import prepare_codex_context
 root = Path(sys.argv[1])
 capture = root / 'two'
 capture.mkdir(mode=0o700)
-print(json.dumps(project_codex_context(json.load(sys.stdin), directory=str(root),
+print(json.dumps(prepare_codex_context(json.load(sys.stdin), directory=str(root),
     capture_directory=capture, goal_id='fixture', agent_id='agent',
-    surface='quota_packet', capture_id='two')))
+    surface='quota_packet', capture_id='two').delivery))
 """
     result = subprocess.run([sys.executable, "-c", script, str(tmp_path)],
         input=json.dumps(payload), text=True, capture_output=True,
