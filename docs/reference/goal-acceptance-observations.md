@@ -75,6 +75,21 @@ check consumes real status collection over a disposable synthetic Goal; set
 
 ## Default supporting outcomes
 
+The shared `/loopx` and `todo plan` first-planning contract asks the Agent to
+declare source-grounded overall requirements through `goal-acceptance refine`,
+link the actual task Todos and read the declaration back. The caller supplies
+the original task and execution facts; it does not write the Agent's semantic
+requirements. Reuse the same outcome on continuation. Unchanged requirements
+need no rewrite, and independent executable checks remain optional.
+
+An open-ended objective remains open-ended. A maximum timeout is an upper
+bound, not an instruction to use every remaining minute. Local Todo completion
+leaves unmet overall requirements with the existing frontier/replan owner;
+real Stop, budget, refusal and waiting conditions still apply. Benchmark's
+`loopx-planned` ready handoff checks the canonical Agent-owned work links.
+Blocked planning can return its actual blocker without fabricating a declaration.
+The structural readback proves persistence, not model comprehension or task success.
+
 Goal Overview shows supporting outcomes recorded by a bound Agent: original
 objective, cumulative requirements, linked work, sources and separate Agent
 review/check results. The local owner can **Add a requirement** and read the
