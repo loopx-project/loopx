@@ -106,7 +106,9 @@ def prepare_stopped_recovery(client, *, container_id: str, declaration: dict,
                                        'files': file_inventory(member), 'directory': member.is_dir()})
         state_raw = copied['scheduler_state'].read_bytes()
         state = json.loads(state_raw)
-        if (state.get('host_attempt', {}).get('status') != 'started'
+        prior = state.get('host_attempt', {})
+        failed = prior.get('status') == 'failed'
+        if (prior.get('status') not in {'started', 'failed'}
                 or json.loads(copied['host_pending'].read_bytes()) != {'pending': True}):
             raise ValueError('Stopped legacy recovery requires the original unresolved Host attempt')
         wake = copied['wake_log_dir'] / declaration['wake_turn_id'] / 'receipt.json'
@@ -114,16 +116,38 @@ def prepare_stopped_recovery(client, *, container_id: str, declaration: dict,
         receipt = json.loads(raw)
         candidates = [p for p in copied['wake_log_dir'].glob('*/receipt.json')
                       if p.stat().st_mtime > copied['scheduler_state'].stat().st_mtime]
+        if failed:
+            from loopx.control_plane.turn_driver.host_failure import build_host_failure_record, normalize_host_failure_record
+
+            failure = normalize_host_failure_record(prior.get('host_failure'))
+            if (failure['kind'] != 'quota_exhausted' or prior.get('session_id') is None
+                    or failure['attempt'] != prior.get('attempt')
+                    or state.get('last_wake_status') != 'wake_failed'
+                    or type(state.get('last_wake_rc')) is not int or state['last_wake_rc'] != 1
+                    or normalize_host_failure_record(receipt.get('host_failure'))
+                        != build_host_failure_record(failure['kind'], attempt=1)
+                    or receipt.get('session', {}).get('session_id') != prior['session_id']
+                    or receipt.get('session', {}).get('binding_scope') != 'agent'
+                    or type(receipt.get('return_code')) is not int or receipt['return_code'] != 1
+                    or receipt.get('budget_exhausted')):
+                raise ValueError('Stopped source lacks its exact returned quota failure')
+            # A returned failure is committed after its receipt. Do not borrow
+            # an earlier or later wake, or treat an uncertain started attempt as returned.
+            all_receipts = list(copied['wake_log_dir'].glob('*/receipt.json'))
+            newest = max((p.stat().st_mtime for p in all_receipts), default=0)
+            if candidates or [p for p in all_receipts if p.stat().st_mtime == newest] != [wake]:
+                raise ValueError('Stopped failure is not the last returned wake')
+            candidates = [wake]
         if candidates != [wake]:
             raise ValueError('Stopped source has no unique returned wake after its Host attempt')
         if (receipt.get('turn_id') != declaration['wake_turn_id'] or receipt.get('host_invoked') is not True
-                or receipt.get('budget_exhausted') is not True or receipt.get('mode') != 'heartbeat'
+                or (not failed and receipt.get('budget_exhausted') is not True) or receipt.get('mode') != 'heartbeat'
                 or receipt.get('stage') != 'execute' or receipt.get('ok') is not False
-                or 'host_failure' in receipt):
+                or (not failed and 'host_failure' in receipt)):
             raise ValueError('Stopped source lacks an exact interrupted budget receipt')
         start = int(declaration['wake_turn_id'].split('-')[1]) / 1_000_000_000
         phase = float(copied['phase_clock'].read_text())
-        if not start <= phase <= finished:
+        if not math.isfinite(phase) or not start <= min(phase, finished) or (not failed and phase > finished):
             raise ValueError('Stopped source phase did not expire during the original wake')
         result = {'container_id': box.id, 'source_state': before, 'declaration': declaration,
                   'components': components, 'scheduler_state_sha256': hashlib.sha256(state_raw).hexdigest(),
