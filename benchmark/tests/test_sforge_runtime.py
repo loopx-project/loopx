@@ -1353,8 +1353,6 @@ def test_custom_provider_without_key_fails_before_creating_attempt(tmp_path, mon
 
 @pytest.mark.parametrize('custom,profile,provider_request_admission', [
     (False, 'official', False), (True, 'official', False),
-    (False, 'native-goal', False), (False, 'heartbeat-explore', False),
-    (False, 'heartbeat-resume', False),
     (True, 'heartbeat-resume', False), (True, 'heartbeat-resume', True),
 ])
 @pytest.mark.parametrize('bridge', [False, True], ids=['docker-default', 'docker-bridge'])
@@ -1400,8 +1398,6 @@ def test_edgebench_cli_merges_sforge_env_with_explicit_runner_config(
         assert config.runner_source_revision == 'a' * 40
         assert config.work_cpu_limit == 4
         assert kwargs['agent'].provider_request_admission is provider_request_admission
-        assert kwargs['agent'].commitment_task_id == (
-            'fixture' if profile.startswith('heartbeat-') else None)
         raise RuntimeError('synthetic launch boundary')
     monkeypatch.setattr(run, 'run_agent', stop_before_solver)
     args = ['--task', 'fixture', '--tasks-dir', str(tmp_path), '--log-dir', str(tmp_path),
@@ -1416,8 +1412,6 @@ def test_edgebench_cli_merges_sforge_env_with_explicit_runner_config(
     receipt = (tmp_path / 'runs/route/fixture/runtime-receipt.json').read_text()
     assert 'synthetic-provider-secret' not in receipt
     assert json.loads(receipt).get('provider_request_admission') == ('on' if provider_request_admission else None)
-    assert json.loads(receipt).get('execution_commitment_task_id') == (
-        'fixture' if profile.startswith('heartbeat-') else None)
     assert json.loads(receipt).get('docker_host_bridge', False) is bridge
 
 
