@@ -20,6 +20,176 @@ from loopx.extensions.lark.private_delivery_discovery import PrivateDeliveryDisc
 from loopx.extensions.lark.goal_topic_runtime import poll_lark_goal_topic_profile_once
 
 
+@pytest.mark.parametrize("fault", [None, "original-worker", "formatted-time", "uncaptured-stop", "project-source", "busy", "stop", "before-session", "source-change", "queue-crash", "reservation-crash", "ordinary-capture", "background", "background-unavailable", "native-active", "revoked"])
+def test_uncaptured_history_has_one_answer_only_review_not_a_business_replay(tmp_path, monkeypatch, fault):
+    from datetime import timedelta, timezone
+    from test_native_steward_private import steward, finish
+    from loopx.capabilities.native_chat import external_conversations
+
+    fixture = steward.__wrapped__(tmp_path)
+    store, runtime, provider, transport, binding, capture, workspace = next(fixture)
+    from pathlib import Path
+    peer = Path(runtime.codex_bin)
+    peer.write_text(peer.read_text().replace('result = {"thread": {"id": "durable-thread"}}',
+        'result = {"thread": {"id": "durable-thread"}, '
+        '"activePermissionProfile": {"id": request["params"].get("permissions")}, '
+        '"runtimeWorkspaceRoots": [request["params"]["cwd"]]}').replace(
+        '    elif method == "turn/start":',
+        '    elif method == "thread/turns/list":\n'
+        f'        result = {{"data": [{{"id": "original-native", "status": {("inProgress" if fault == "native-active" else "completed")!r}}}], "nextCursor": None}}\n'
+        '    elif method == "thread/backgroundTerminals/list":\n        result = {"data": [], "nextCursor": None}\n'
+        '    elif method == "turn/start":'))
+    try:
+        seed = provider.event("steward-app", "history-seed", "Explain this workspace")
+        assert transport.admit("steward-app", seed)["status"] == "durably_accepted"
+        first = transport.core.pending()[0]
+        assert finish(runtime, first)["status"] == "completed"
+        transport.reconcile()
+        session = store.load_session(first["session_id"])
+        stamp = datetime.now(timezone.utc)
+        source_time = (datetime.fromisoformat(session["created_at"]) - timedelta(seconds=1)
+                       if fault == "before-session" else stamp)
+        event = provider.event("steward-app", "missing-original-question", "Explain the existing result; do not execute it again")
+        event["create_time"] = str(int(source_time.timestamp() * 1000))
+        provider.messages[event["message_id"]]["create_time"] = event["create_time"]
+        if fault == "formatted-time":
+            def formatted(args, cwd=None, timeout=None):
+                result = provider(args, cwd, timeout)
+                payload = json.loads(result["stdout"])
+                if "+messages-mget" in args or "+chat-messages-list" in args:
+                    for item in payload.get("data", {}).get("items", payload.get("data", {}).get("messages", [])):
+                        item["create_time"] = datetime.fromtimestamp(int(item["create_time"]) / 1000, timezone.utc).strftime("%Y-%m-%d %H:%M")
+                elif "api" in args and "GET" in args:
+                    payload.pop("code", None)
+                    payload["ok"] = True
+                return {**result, "stdout": json.dumps(payload)}
+            monkeypatch.setattr(transport, "runner", formatted)
+        clock = stamp + timedelta(seconds=61)
+        class ReviewClock(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return clock
+        monkeypatch.setattr(external_conversations, "datetime", ReviewClock)
+        before = [json.loads(line) for line in capture.read_text().splitlines()]
+        if fault == "project-source":
+            project = provider.event("notes-app", "not-a-historical-steward", "Explain this workspace")
+            assert transport.admit("notes-app", project, history_review=True)["status"] == "history_answer_held"
+            assert len(transport.core.pending()) == 1
+            return
+        if fault == "busy":
+            live = provider.event("steward-app", "live-before-history", "wait for interrupt")
+            transport.admit("steward-app", live)
+            active = next(item for item in transport.core.pending() if item["message"] == live["content"])
+            deadline = time.monotonic() + 5
+            while store.load_turn(active["session_id"], active["turn_id"])["status"] != "running":
+                assert time.monotonic() < deadline
+                time.sleep(.01)
+            size = len(capture.read_text().splitlines())
+            assert transport.admit("steward-app", event, history_review=True)["status"] == "history_answer_held"
+            later = [json.loads(line) for line in capture.read_text().splitlines()[size:]]
+            assert not any(item["method"] in {"thread/turns/list", "thread/backgroundTerminals/list"} for item in later)
+            assert store.load_turn(active["session_id"], active["turn_id"])["status"] == "running"
+            return
+        if fault == "stop":
+            transport.admit("steward-app", provider.event("steward-app", "history-stop", "/stop"))
+        elif fault == "revoked":
+            transport.bindings.disconnect(binding["binding_id"], expected_revision=transport.bindings.read()["revision"])
+        elif fault in {"background", "background-unavailable"}:
+            original_adapter = runtime.adapters[first["session_id"]]
+            def background(_deadline):
+                if fault == "background-unavailable":
+                    raise RuntimeError("synthetic unavailable original inventory")
+                return [{"itemId": "original-command", "processId": "original-process"}]
+            monkeypatch.setattr(original_adapter.session, "_background_terminals", background)
+        elif fault == "ordinary-capture":
+            transport.admit("steward-app", event)
+            row = next(row for row in transport.core.pending() if row["message"] == event["content"])
+            assert finish(runtime, row)["status"] == "completed"
+            before = [json.loads(line) for line in capture.read_text().splitlines()]
+        elif fault == "source-change":
+            read = transport._source_message
+            def changed(*args, **kwargs):
+                value = read(*args, **kwargs)
+                provider.messages[event["message_id"]]["content"] = "Edited after the first verification"
+                return value
+            monkeypatch.setattr(transport, "_source_message", changed)
+        elif fault in {"queue-crash", "reservation-crash"}:
+            enqueue = runtime.enqueue_turn
+            def committed_then_crashed(**kwargs):
+                if fault == "queue-crash":
+                    enqueue(**kwargs)
+                monkeypatch.setattr(runtime, "enqueue_turn", enqueue)
+                raise OSError("synthetic lost queue acknowledgement")
+            monkeypatch.setattr(runtime, "enqueue_turn", committed_then_crashed)
+        if fault in {"queue-crash", "reservation-crash"}:
+            with pytest.raises(OSError, match="lost queue acknowledgement"):
+                transport.admit("steward-app", event, history_review=True)
+            pending = next(row for row in transport.core.pending() if row.get("capture_origin") == "provider_history")
+            transport.core.recover(request_ref=pending["request_ref"])
+            with pytest.raises(ValueError, match="original provider preflight"):
+                transport.core.admit(binding_id=binding["binding_id"], source=pending["source"],
+                    request_ref=pending["request_ref"], message=pending["message"])
+            if fault == "reservation-crash":
+                import loopx.chat_manager as manager
+                monkeypatch.setattr(manager, "MANAGER_CONTEXT_VERSION", 23)
+            transport.admit("steward-app", event, history_review=True)
+        elif fault in {"original-worker", "formatted-time", "uncaptured-stop"}:
+            from loopx.extensions.lark import private_ingress
+            monkeypatch.setattr(private_ingress, "time", SimpleNamespace(time=lambda: clock.timestamp()))
+            if fault == "uncaptured-stop":
+                stop = provider.event("steward-app", "uncaptured-history-stop", "/stop")
+                provider.messages[stop["message_id"]]["create_time"] = str(int((stamp + timedelta(seconds=1)).timestamp() * 1000))
+            getattr(transport, "observe_ingress", transport.ingress.observe)()
+            if fault == "uncaptured-stop":
+                assert len(transport.core.pending()) == 1
+                assert not any(row.get("capture_origin") == "provider_history" for row in transport.core.pending())
+                return
+            assert len(transport.core.pending()) == 2
+        else:
+            admitted = transport.admit("steward-app", event, history_review=True)
+            if fault in {"stop", "before-session", "source-change", "ordinary-capture", "background", "background-unavailable", "native-active", "revoked"}:
+                assert admitted["status"] != "durably_accepted"
+                assert [json.loads(line) for line in capture.read_text().splitlines()
+                        if json.loads(line)["method"] == "turn/start"] == [row for row in before if row["method"] == "turn/start"]
+                if fault in {"background", "background-unavailable"}:
+                    assert original_adapter.healthcheck() and runtime.adapters[first["session_id"]] is original_adapter
+                return
+            assert admitted["status"] == "durably_accepted"
+        row = next(row for row in transport.core.pending() if row.get("capture_origin") == "provider_history")
+        result = finish(runtime, row)
+        assert result["status"] == "completed", result
+        assert row["context_recovery"]["failed_turn_id"] is None
+        assert row["context_recovery"]["native_observation"] is None
+        assert row["session_id"] == first["session_id"]
+        assert transport.reconcile() == 1
+        saved = json.loads((transport.root / f"{row['request_ref']}.json").read_text())
+        terminal = saved["deliveries"]["terminal.recovery.history.answer.1"]
+        assert terminal["verified"] and terminal["text"] == result["response"]["message"]
+        wire = [json.loads(line) for line in capture.read_text().splitlines()][len(before):]
+        starts = [row for row in wire if row["method"] == "turn/start"]
+        assert len(starts) == 1
+        threads = [row["params"] for row in wire if row["method"] == "thread/start"]
+        assert len(threads) == 1 and threads[0]["runtimeWorkspaceRoots"] == [str(workspace)]
+        assert threads[0]["permissions"] == "loopx_steward_host_read"
+        assert "past effects are unknown" in json.dumps(starts[0])
+        assert "Do not repeat or execute business operations" in json.dumps(starts[0])
+        assert not result["response"].get("proposals") and not result["response"].get("context_handoff")
+        assert transport.reconcile() == 0
+        assert not transport.core.context_recovery_candidate(row["request_ref"])
+        if fault == "original-worker":
+            getattr(transport, "observe_ingress", transport.ingress.observe)()
+            assert len(transport.core.pending()) == 2
+            assert sum(json.loads(line)["method"] == "turn/start" for line in capture.read_text().splitlines()) == 2
+            followup = provider.event("steward-app", "normal-after-history", "A new independent question")
+            assert transport.admit("steward-app", followup)["status"] == "durably_accepted"
+            normal = next(item for item in transport.core.pending() if item["message"] == followup["content"])
+            assert normal["session_id"] == first["session_id"] and not normal.get("context_recovery")
+            assert finish(runtime, normal)["status"] == "completed"
+            assert store.load_session(normal["session_id"])["answer_review"] is False
+    finally:
+        fixture.close()
+
+
 @pytest.mark.parametrize("fault", [None, "admission-crash", "source-image", "source-caption", "saved-image", "extra-native-event", "revoked", "stop"])
 def test_original_post_image_preflight_recovery_keeps_images_source_and_failed_turn(tmp_path, monkeypatch, fault):
     from test_native_steward_private import steward, finish
@@ -341,11 +511,10 @@ class Provider:
                     message["body"] = {"content": json.dumps({"text": message.pop("content")})}
             data = {"code": 0, "data": {"items": messages}}
         elif "+messages-mget" in args:
-            ref = args[args.index("--message-ids") + 1]
-            message = self.messages[ref]
-            if not self.verify_replies and ref.startswith("om_out_"):
-                message = {**message, "body": {"content": json.dumps({"text": "not yet visible"})}}
-            data = {"ok": True, "data": {"items": [message]}}
+            refs = args[args.index("--message-ids") + 1].split(",")
+            messages = [self.messages[ref] if self.verify_replies or not ref.startswith("om_out_") else
+                {**self.messages[ref], "body": {"content": json.dumps({"text": "not yet visible"})}} for ref in refs]
+            data = {"ok": True, "data": {"items": messages}}
         elif "+messages-edit" in args:
             ref = args[args.index("--message-id") + 1]
             content = args[args.index("--content") + 1]

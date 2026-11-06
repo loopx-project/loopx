@@ -15,6 +15,39 @@ const row = {schema_version: "loopx_chat_conversation_binding_v0", binding_id: "
   grant: "workspace_read", enabled: true};
 const observation = {transport_ref: row.transport_ref, provider_ref: row.provider_ref,
   operator_ref: row.operator_ref, verified: true};
+
+test("uncaptured provider history can reserve only one same-owner read-only answer", () => {
+  const source = {source_ref: "e".repeat(24), sender_ref: row.operator_ref, private_human_message: true};
+  const binding = {...row, context_kind: "steward", grant: "portfolio_read"};
+  const context = {...source, binding_id: row.binding_id, provider_ref: row.provider_ref, operator_ref: row.operator_ref};
+  const packet = {request: {request_ref: "f".repeat(24), binding_id: row.binding_id, source,
+      message: "Explain the existing result", command: null, status: "prepared"}, binding,
+    current_session: {session_id: "original", agent_id: "codex", status: "ready", active_turn_id: null,
+      steward_context: context, created_at: "2026-01-01T00:00:00Z"},
+    history_answer_review: {version: 22, source_verified: true, queue_empty: true, adapter_replaceable: true, stop_observed: false,
+      source_created_at: "2026-01-01T00:01:00Z", observed_at: "2026-01-01T00:02:00Z"}};
+  const plan = planBoundConversationRequest(packet);
+  assert.equal(plan.operation, "admit_history_answer");
+  assert.equal(plan.client_turn_id, `external-${"f".repeat(24)}-recovery-22-review-1`);
+  assert.equal(plan.work_attempt, undefined);
+  for (const mutate of [
+    (p: typeof packet) => {p.binding.context_kind = "project";},
+    (p: typeof packet) => {p.binding.grant = "workspace_write";},
+    (p: typeof packet) => {p.request.source.sender_ref = "a".repeat(24);},
+    (p: typeof packet) => {p.current_session.steward_context.source_ref = "a".repeat(24);},
+    (p: typeof packet) => {p.current_session.agent_id = "antigravity";},
+    (p: typeof packet) => {p.history_answer_review.stop_observed = true;},
+    (p: typeof packet) => {p.history_answer_review.queue_empty = false;},
+    (p: typeof packet) => {p.history_answer_review.adapter_replaceable = false;},
+    (p: typeof packet) => {p.history_answer_review.source_verified = false;},
+    (p: typeof packet) => {p.history_answer_review.source_created_at = "2025-12-31T23:59:00Z";},
+    (p: typeof packet) => {p.request.message = "/stop";},
+  ]) {
+    const negative = structuredClone(packet);
+    mutate(negative);
+    assert.equal(planBoundConversationRequest(negative).operation, "hold_history_answer");
+  }
+});
 const current = {schema_version: "loopx_chat_conversation_bindings_v0", revision: 0, bindings: []};
 const request = {current, expected_revision: 0, operation: "configure", binding: row, observation,
   available_projects: [project]};
