@@ -2801,3 +2801,31 @@ One source-stable four-module regression cohort passed all 247 cases, covering
 the real Turn driver, the active portfolio sources, the retained historical
 corpus and replan Host-context projections. This is a separate current caller
 qualification, not an extension of the earlier 357-case or installed run.
+
+### Installed native lifecycle after main integration
+
+Integration `5091fb82a9` adopts main `9d276f6cb9`'s original-context answer
+repair. One source-stable cohort of the native Turn Host and private-conversation
+modules passed all 466 cases. After rebuilding and verifying the Chat bundle,
+the same two modules ran against an isolated installed package with unchanged
+fixtures, real File/SQLite state, native protocol and HTTP, original sessions,
+independent Task validation, source/permission refusal and recovery. The model
+and external provider remain synthetic; this is no longer an import-only native
+check, but it does not qualify an active App or live-model adoption.
+
+The first installed cohort recorded 459 passes and seven preparation failures:
+the seven explicitly activated account-routing cases lacked their separately
+distributed optional package. After installing its same-commit 0.15.3 wheel, a
+new complete cohort passed all 466, without combining partial reruns. The first
+failures and 61 audit-helper deprecation warnings remain recorded; the helper's
+keyword argument was corrected separately from product code.
+
+All 1,815 packaged Core Python/TS files and the optional distribution's 24 files
+match committed and installed bytes. The existing private fault-process test
+driver is outside this wheel qualification. Across 48 observed Python processes,
+1,228 Core modules, seven optional-provider modules and four observed subprocess
+source paths came from the installed distributions, with no checkout Core or
+provider imports. Fixtures and installed sources stayed unchanged. Default
+17-root Mypy and the integrated conversation-binding TS module's 60 tests passed.
+Earlier 357/247-case and PostgreSQL evidence retain their own versions; these
+synthetic correctness and provenance checks do not establish full-cost benefit.
