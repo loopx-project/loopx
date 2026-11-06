@@ -125,10 +125,11 @@ function RetainedImprovement({native, zh, onCitation}: {native: NonNullable<Rese
   const outcomes = native.projection, improvement = outcomes.retained_improvement;
   if (!improvement) return null;
   const format = (value: number) => formatNativeMeasurement(value, zh, true);
-  const label = zh ? "已采用成果增量" : "Retained improvement";
+  const label = zh ? "声明的保留增量" : "Declared retained change";
   return <section className="research-retained-improvement" aria-label={label}>
     <div className="research-progress-title"><h4>{label}</h4><ContextHelp label={zh ? "成果增量说明" : "About retained improvement"}>
-      <p>{zh ? "固定基线与实际保留结果的原生指标差值，正数表示改善。越低越好的指标反向计算；回退到基线为零，缺少基线或保留证据为未知。" : "Native change from a fixed baseline to the actually retained result. Positive means improvement; lower-is-better metrics reverse the subtraction. Returning to baseline is zero; missing baseline or retention evidence is unknown."}</p>
+      <p>{zh ? "按来源声明的固定基线与保留结果计算原生指标差值，正数表示改善。越低越好的指标反向计算；回退到基线为零，缺少基线或保留证据为未知。" : "Native change between the source-declared fixed baseline and retained result. Positive means improvement; lower-is-better metrics reverse the subtraction. Returning to baseline is zero; missing baseline or retention evidence is unknown."}</p>
+      <p>{zh ? "引用绑定不证明实际文件采用或比较条件已独立核验；最佳轮次不能替代保留证据。" : "Citation binding does not independently verify artifact adoption or comparable conditions; a best round cannot establish retention."}</p>
       <p>{zh ? "只代表所选比较，不是 LoopX 的独立贡献或原目标已达成；不能跨题、跨单位或重叠窗口相加。展开数值可看原文。" : "This comparison alone does not establish LoopX's causal contribution or objective completion. Do not sum across tasks, units or overlapping windows. Expand the value for original evidence."}</p>
     </ContextHelp></div>
     {native.applicability === "historical" ? <p className="research-progress-warning" role="status">{zh ? "历史捕获 · 当前结果未核验" : "Historical capture · current result unverified"}</p> : null}
@@ -136,7 +137,7 @@ function RetainedImprovement({native, zh, onCitation}: {native: NonNullable<Rese
       <strong data-retained-improvement>{improvement.value === null ? "—" : format(improvement.value)}</strong>
       <span>{improvement.value === null ? (zh ? "未知" : "Unknown") : outcomes.metric.unit}</span><ChevronDown size={14} aria-hidden/>
     </summary><dl>
-      {([[improvement.baseline, zh ? "比较基线" : "Comparison baseline"], [outcomes.retained, zh ? "实际保留" : "Actually retained"]] as const).map(([point, title]) => <div key={title}><dt>{title}</dt><dd>{point ? <button type="button" onClick={event => onCitation(point.citation, event.currentTarget)}>{String(point.value)} · {point.candidate_ref}<ArrowUpRight size={13} aria-hidden/></button> : (zh ? "未知" : "Unknown")}</dd></div>)}
+      {([[improvement.baseline, zh ? "比较基线" : "Comparison baseline"], [outcomes.retained, zh ? "声明保留" : "Declared retained result"]] as const).map(([point, title]) => <div key={title}><dt>{title}</dt><dd>{point ? <button type="button" onClick={event => onCitation(point.citation, event.currentTarget)}>{String(point.value)} · {point.candidate_ref}<ArrowUpRight size={13} aria-hidden/></button> : (zh ? "未知" : "Unknown")}</dd></div>)}
       <div><dt>{zh ? "保留依据" : "Retention evidence"}</dt><dd>{improvement.retention_citation ? <button type="button" onClick={event => onCitation(improvement.retention_citation!, event.currentTarget)}>{zh ? "查看原文" : "Read original evidence"}<ArrowUpRight size={13} aria-hidden/></button> : (zh ? "未采集" : "Uncaptured")}</dd></div>
       <div><dt>{zh ? "最后候选差值" : "Final candidate change"}</dt><dd>{improvement.final_candidate_delta === null ? (zh ? "未知" : "Unknown") : `${format(improvement.final_candidate_delta)} ${outcomes.metric.unit}`} · {zh ? "不代表已采用收益" : "not realized retention"}</dd></div>
     </dl></details>
@@ -147,7 +148,7 @@ function NativeResults({native, zh, onCitation}: {native: ResearchProgressPack["
   const outcomes = native?.projection;
   if (!native || !outcomes) return <ContextHelp label={zh ? "原生测量未采集" : "Native measurements not captured"} icon={CircleHelp}><p className="research-native-empty">{zh ? "原生测量 · 未采集" : "Native measurements · not captured"}</p></ContextHelp>;
   const historical = native.applicability === "historical";
-  const points = [["best_valid", "窗口内最佳有效值", "Best valid in capture"], ["initial", "首次提交", "Initial submission"], ["final_valid", "最后有效提交", "Final valid submission"], ["retained", "原生保留结果", "Native retained result"]] as const;
+  const points = [["best_valid", "窗口内最佳有效值", "Best valid in capture"], ["initial", "首次提交", "Initial submission"], ["final_valid", "最后有效提交", "Final valid submission"], ["retained", "来源声明的保留结果", "Source-declared retained result"]] as const;
   // The real Ad capture has distinct best/final values that both round to
   // 4.965E10. Keep the compact notation, increasing precision only until the
   // distinct scientific measurements remain distinguishable (up to double precision).

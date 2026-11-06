@@ -799,11 +799,13 @@ Omitting `comparison` preserves the previous projection shape and does not
 invent a baseline from the first/best result. Native-only registration still
 does not execute an analysis or alter its key.
 
-The Goal shows one compact **Retained improvement / 已采用成果增量** value before
+The Goal shows one compact **Declared retained change / 声明的保留增量** value before
 the process judgments. Hover, keyboard focus or tap explains the metric;
 expansion exposes both measured endpoints, retention evidence and candidate
 change. Historical/unreadable provenance remains visible. The value describes
-the declared native comparison, not objective completion, a general utility
+the source-declared native comparison. Citation binding does not independently
+verify actual artifact adoption or comparable evaluation conditions; a best
+round alone cannot establish retention. This is not objective completion, a general utility
 score, matched LoopX uplift or causal attribution. Do not add across tasks,
 units, overlapping windows or inherited results. Displayed precision is rounded;
 original endpoint values remain readable in their citations. Pack selection
