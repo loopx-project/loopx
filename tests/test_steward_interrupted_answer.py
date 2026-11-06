@@ -15,6 +15,127 @@ from loopx.capabilities.native_chat import external_conversations
 from loopx.extensions.lark.conversation_identity import identity_ref
 
 
+@pytest.mark.parametrize("fault", [None, "stop", "source-changed", "unknown-native", "no-capacity", "native-changed", "review-action", "post-enqueue-crash"])
+def test_restarted_codex_steward_gets_one_original_read_only_answer(steward, monkeypatch, fault):
+    from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter
+    from loopx.chat_agent import CodexChatAgentError
+    from loopx.extensions.lark.private_conversations import LarkPrivateConversations
+
+    store, runtime, provider, transport, binding, capture, workspace = steward
+    fake = Path(runtime.codex_bin)
+    code = fake.read_text().replace('result = {"thread": {"id": "durable-thread"}}', '''result = {"thread": {"id": "durable-thread"}, "model": "gpt-6.1-sol"}
+        permissions = request.get("params", {}).get("permissions")
+        if permissions:
+            result.update(activePermissionProfile={"id": permissions}, runtimeWorkspaceRoots=[request["params"]["cwd"]])''')
+    if fault == "review-action":
+        start = code.index("        response = 'Visible runtime response.")
+        end = code.index('        print(json.dumps({"method": "item/agentMessage/delta"', start)
+        reply = '<loopx-review-json>' + json.dumps({"message": "Forbidden repeat",
+            "unfinished_work": {"remaining": "Repeat business", "dependency": "owner", "effects_settled": True}}) + '</loopx-review-json>'
+        code = code[:start] + f"        response = {reply!r}\n" + code[end:]
+    fake.write_text(code)
+    artifact = workspace / "original-output.txt"
+    start_turn = CodexAppServerAdapter.start_turn
+
+    def restart_after_output(adapter, message, sink, **kwargs):
+        if adapter.session.answer_review:
+            return start_turn(adapter, message, sink, **kwargs)
+        def observed(kind, payload):
+            sink(kind, payload)
+            if kind == "answer.delta":
+                artifact.write_text("Original effect, do not repeat")
+                raise CodexChatAgentError("Synthetic service loss after output", error_code="server_restarted", gate=None)
+        return start_turn(adapter, message, observed, **kwargs)
+
+    monkeypatch.setattr(CodexAppServerAdapter, "start_turn", restart_after_output)
+    event = provider.event("steward-app", "restart-original-question", "Explain the existing change")
+    transport.admit("steward-app", event)
+    ref = identity_ref(binding["provider_ref"], event["message_id"])
+    original = transport.core.read_request(ref)
+    failed = runtime.wait_for_turn(session_id=original["session_id"], turn_id=original["turn_id"], timeout_sec=15)
+    assert failed["status"] == "failed" and failed["error_code"] == "server_restarted" and failed["delta_count"] > 0
+    path = transport.root / f"{ref}.json"
+    transport.reconcile_request(path)
+    failure_bytes = store._turn_path(original["session_id"], original["turn_id"]).read_bytes()
+    notice = deepcopy(json.loads(path.read_text())["deliveries"])
+    class Ahead(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return super().now(tz) + timedelta(seconds=600)
+    monkeypatch.setattr(external_conversations, "datetime", Ahead)
+    import loopx.chat_manager as manager_module
+    import loopx.chat_runtime as runtime_module
+    from test_chat_manager_model_adoption import configure
+    configure(runtime.coordination_runtime_root, model=None, effort=None, endpoint="antigravity", policy="flexible")
+    allocation = manager_module.manager_executor_allocation(runtime,
+        endpoint_capabilities=[{"agent_id": "codex", "available": True}, {"agent_id": "antigravity", "available": False}])
+    def route(*_args, **_kwargs):
+        return None if fault == "no-capacity" else {"allocation": allocation, "blocked_primary": None,
+            "observed_at": time.time()}
+    monkeypatch.setattr(manager_module, "manager_session_quota_route", lambda *_args, **_kwargs:
+        None if fault == "no-capacity" else {"allocation": allocation, "blocked_primary": None,
+            "observed_at": Ahead.now().timestamp()})
+    monkeypatch.setattr(runtime_module, "manager_session_quota_route", route)
+    probes = []
+    def observe(**kwargs):
+        assert kwargs.get("read_only_review") is True
+        probes.append(kwargs)
+        if fault == "unknown-native":
+            return None
+        changed = fault == "native-changed" and bool((transport.core.read_request(ref).get("context_recovery") or {}).get("answer_review"))
+        return {"thread_id": "durable-thread", "turn_id": failed["upstream_turn_id"],
+            "read_only_review": True, "no_final_answer": True, "effects_observed": True,
+            "native_inventory_sha256": ("2" if changed else "1") * 64}
+    monkeypatch.setattr(CodexAppServerAdapter, "failed_request_observation", staticmethod(observe))
+    if fault == "stop":
+        store.append_event(original["session_id"], original["turn_id"], kind="turn.interrupt_requested", payload={})
+    elif fault == "source-changed":
+        provider.messages[event["message_id"]]["content"] = "Revised original source"
+    restarted = LarkPrivateConversations(controller=runtime, runtime_root=store.root.parent,
+        runner=provider, cli_bin="lark-cli")
+    if fault == "post-enqueue-crash":
+        enqueue = runtime.enqueue_turn
+        def crash(**kwargs):
+            enqueue(**kwargs)
+            raise OSError("synthetic unknown admission response")
+        monkeypatch.setattr(runtime, "enqueue_turn", crash)
+        with pytest.raises(OSError, match="unknown admission response"):
+            restarted.reconcile_request(path)
+        monkeypatch.setattr(runtime, "enqueue_turn", enqueue)
+    restarted.reconcile_request(path)
+    current = restarted.core.read_request(ref)
+    if fault in {"stop", "source-changed", "unknown-native", "no-capacity"}:
+        assert current["turn_id"] == original["turn_id"] and not current.get("context_recovery")
+    else:
+        recovery = current["context_recovery"]
+        assert recovery["answer_review"] is True and recovery["read_only_review"] is True
+        assert not any(recovery.get(key) for key in ["work_attempt", "quota_attempt", "routing_attempt"])
+        done = runtime.wait_for_turn(session_id=current["session_id"], turn_id=current["turn_id"], timeout_sec=15)
+        assert done["status"] == ("failed" if fault in {"native-changed", "review-action"} else "completed"), done
+        restarted.reconcile_request(path)
+        delivered = json.loads(path.read_text())
+        terminal = delivered["deliveries"]["terminal.recovery.22.review.1"]
+        assert terminal["verified"]
+        actual = provider.messages[terminal["attempt"]["message_ref"]]
+        assert actual["chat_id"] == event["chat_id"] and actual["sender"]["id"] == provider.profile_apps["steward-app"]
+        assert json.loads(actual["body"]["content"])["zh_cn"]["content"][0][0]["text"] == terminal["text"]
+        assert delivered["deliveries"]["terminal"] == notice["terminal"]
+        calls = [json.loads(line) for line in capture.read_text().splitlines()]
+        review_threads = [c for c in calls if c["method"] == "thread/start" and c["params"].get("permissions")]
+        assert len(review_threads) == 1
+        opened = review_threads[0]["params"]
+        assert opened["config"]["features"]["apply_patch_freeform"] is False
+        assert opened["config"]["features"]["apps"] is False
+        assert opened["config"]["permissions"][opened["permissions"]]["network"]["enabled"] is False
+        assert [t["name"] for t in opened["dynamicTools"]] == ["loopx_manager_read"]
+        assert not any(c["method"] == "thread/resume" for c in calls), "unknown old business must not be resumed"
+        writes = list(provider.writes)
+        restarted.reconcile_request(path)
+        assert provider.writes == writes
+    assert store._turn_path(original["session_id"], original["turn_id"]).read_bytes() == failure_bytes
+    assert artifact.read_text() == "Original effect, do not repeat"
+
+
 @pytest.mark.parametrize("fault", [None, "stop", "source-changed", "revoked", "unknown-native", "native-changed", "no-capacity", "review-gate", "review-action", "post-enqueue-crash"])
 def test_exhausted_quota_gets_one_restricted_original_answer(steward, monkeypatch, fault):
     from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter

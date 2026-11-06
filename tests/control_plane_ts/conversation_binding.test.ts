@@ -19,6 +19,65 @@ const current = {schema_version: "loopx_chat_conversation_bindings_v0", revision
 const request = {current, expected_revision: 0, operation: "configure", binding: row, observation,
   available_projects: [project]};
 
+test("a restarted Codex steward retains one restricted answer instead of replaying business", () => {
+  const selected = {...row, context_kind: "steward", grant: "portfolio_read", goal_ids: []};
+  const configured = planConversationBinding({...request, binding: selected}).state;
+  const source = {source_ref: "e".repeat(24), sender_ref: row.operator_ref, private_human_message: true};
+  const context = resolveBoundConversation({current: configured, binding_id: row.binding_id,
+    observation, available_projects: [project], ...source}).context;
+  const ref = "f".repeat(24), message = "Explain the existing results";
+  const session = {session_id: "original", goal_id: "loopx-manager", agent_id: "codex", upstream_mode: "chat",
+    status: "ready", active_turn_id: null, upstream_thread_id: "native", steward_context: context,
+    channel_id: `manager.external.native.${row.binding_id}.${source.source_ref}`};
+  const failed = {session_id: "original", turn_id: "failed", client_turn_id: `external-${ref}`,
+    message, origin: "lark", status: "failed", error_code: "server_restarted", response: null,
+    delta_count: 1, upstream_turn_id: "interrupted", completed_at: "2026-01-01T00:00:00Z"};
+  const proof = {thread_id: "native", turn_id: "interrupted", read_only_review: true,
+    no_final_answer: true, effects_observed: true, native_inventory_sha256: "1".repeat(64)};
+  const allocation = {schema_version: "manager_executor_allocation_v0", selection_policy: "flexible",
+    configured_endpoint: "antigravity", executor_endpoint: "codex", allocation_reason: "flexible_availability_fallback",
+    configuration_revision: "current-pool", available: true, eligible_endpoints: ["antigravity", "codex"]};
+  const configuration = {status: "ready", selection_policy: "flexible", executor_endpoint: "antigravity",
+    eligible_endpoints: ["antigravity", "codex"], configuration_revision: "current-pool"};
+  const packet = {request: {request_ref: ref, command: null, status: "accepted", delivery_verified: true,
+    message, origin: "lark", binding_id: row.binding_id, session_id: "original", turn_id: "failed", source},
+    binding: selected, current_session: session, context_recovery: {version: 22, failed_turn: failed,
+      observed_at: "2026-01-01T00:10:00Z", source_verified: true, steering_observed: false,
+      stop_observed: false, attachments_present: false, queued_input_present: false, native_observation: proof,
+      metadata_capacity: {alternate_executor: {allocation, observed_at: Date.parse("2026-01-01T00:10:00Z") / 1000}},
+      executor_configuration: configuration}};
+  const plan = planBoundConversationRequest(packet);
+  assert.equal(plan.recovery_eligible, true);
+  assert.equal(plan.answer_review, true);
+  assert.equal(plan.read_only_review, true);
+  assert.equal(plan.answer_executor, "codex");
+  assert.equal(plan.work_attempt, undefined);
+  assert.equal(plan.quota_attempt, undefined);
+  assert.equal(plan.client_turn_id, `external-${ref}-recovery-22-review-1`);
+  for (const change of [{source_verified: false}, {stop_observed: true}, {steering_observed: true},
+    {attachments_present: true}, {observed_at: "2026-01-01T00:00:59Z"}, {metadata_capacity: null},
+    ...[{thread_id: "foreign"}, {turn_id: "other"}, {no_final_answer: false},
+      {effects_observed: false}, {read_only_review: false}, {native_inventory_sha256: undefined}]
+      .map(value => ({native_observation: {...proof, ...value}})),
+    ...[{delta_count: 0}, {client_turn_id: "foreign"}, {message: "changed"}, {origin: "web"},
+      {response: {}}, {error_code: "runtime_error"}].map(value => ({failed_turn: {...failed, ...value}}))]) {
+    assert.notEqual(planBoundConversationRequest({...packet,
+      context_recovery: {...packet.context_recovery, ...change}}).recovery_eligible, true);
+  }
+  assert.notEqual(planBoundConversationRequest({...packet,
+    current_session: {...session, status: "busy", active_turn_id: "later"}}).recovery_eligible, true);
+  const previous = {version: 22, failed_turn_id: "failed", client_turn_id: plan.client_turn_id,
+    answer_review: true, read_only_review: true};
+  const admitted = {session_id: "original", turn_id: "review", client_turn_id: plan.client_turn_id,
+    message, origin: "lark"};
+  const reserved = {...packet, request: {...packet.request, context_recovery: previous},
+    context_recovery: {...packet.context_recovery, admitted_turn: admitted}};
+  assert.equal(planBoundConversationRequest(reserved).admitted_turn_id, "review");
+  assert.equal(planBoundConversationRequest({...reserved, request: {...reserved.request, turn_id: "review"},
+    context_recovery: {...reserved.context_recovery, admitted_turn: null,
+      failed_turn: {...failed, turn_id: "review", client_turn_id: plan.client_turn_id}}}).recovery_candidate, false);
+});
+
 test("an original project account-preparation failure shares its existing recovery budget", () => {
   const configured = planConversationBinding(request).state;
   const source = {source_ref: "e".repeat(24), sender_ref: row.operator_ref, private_human_message: true};

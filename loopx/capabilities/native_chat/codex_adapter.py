@@ -413,7 +413,7 @@ def interrupted_result_readback(session: CodexChatAgentSession, turn_id: str) ->
             elif kind == "agentMessage":
                 if item.get("phase") != "commentary":
                     return None
-            elif kind in {"commandExecution", "fileChange", "mcpToolCall"}:
+            elif kind in {"commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall"}:
                 if item.get("status") not in {"completed", "failed", "declined"}:
                     return None
                 effects += 1
@@ -423,7 +423,10 @@ def interrupted_result_readback(session: CodexChatAgentSession, turn_id: str) ->
                 or list(session._control_items("thread/items/list", {"turnId": turn_id}, deadline)) != items):
             return None
         return {"thread_id": session.thread_id, "turn_id": turn_id, "read_only_review": True,
-                "no_final_answer": True, "effects_observed": True}
+                "no_final_answer": True, "effects_observed": True,
+                "native_inventory_sha256": hashlib.sha256(json.dumps([
+                    next(row for row in inventory if row["id"] == turn_id), items],
+                    sort_keys=True, separators=(",", ":")).encode()).hexdigest()}
     except (CodexChatAgentError, OSError, TypeError, ValueError):
         return None
 
