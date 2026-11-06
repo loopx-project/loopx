@@ -4,8 +4,19 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Iterator
 from copy import deepcopy
 from pathlib import Path
+import sys
 from threading import Lock
 from typing import Any
+
+
+def file_change_fingerprint(path: Path) -> tuple[int, ...] | None:
+    """A local mutation token, or no reuse when the platform lacks one."""
+    # Windows stat ctime can be creation time, not a mutation stamp. Keep
+    # the original fresh reader there rather than trusting an mtime match.
+    if sys.platform == "win32":
+        return None
+    stat = path.stat()
+    return stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size
 
 
 class FileChatDiscovery:
@@ -20,11 +31,6 @@ class FileChatDiscovery:
         self._lock = Lock()
         self._directories: dict[Path, dict[Path, tuple[tuple[int, ...], dict[str, Any]]]] = {}
 
-    @staticmethod
-    def _fingerprint(path: Path) -> tuple[int, ...]:
-        stat = path.stat()
-        return stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size
-
     def rows(self, directory: Path, paths: Iterable[Path], *,
              read: Callable[[Path], dict[str, Any]],
              project: Callable[[Path, dict[str, Any]], dict[str, Any] | None],
@@ -35,7 +41,7 @@ class FileChatDiscovery:
         for path in paths:
             seen.add(path)
             try:
-                before = self._fingerprint(path)
+                before = file_change_fingerprint(path)
             except OSError:
                 before = None
             with self._lock:
@@ -51,7 +57,7 @@ class FileChatDiscovery:
             view = project(path, value)
             if before is not None and view is not None:
                 try:
-                    unchanged = self._fingerprint(path) == before
+                    unchanged = file_change_fingerprint(path) == before
                 except OSError:
                     unchanged = False
                 if unchanged:

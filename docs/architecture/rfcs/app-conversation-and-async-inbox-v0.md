@@ -1932,6 +1932,11 @@ ctime and size, checked before and after the original read. Changed or unreadabl
 files use the original reader; nonterminal Turns are always read in full. Deleted
 entries are pruned, concurrent callers receive independent metadata, and a read
 racing a replacement cannot seed a reusable observation.
+Windows keeps the original fresh-read path because its Python stat ctime can
+represent creation time rather than a usable change stamp; see the
+[Python stat time fields](https://docs.python.org/3.12/library/os.html#os.stat_result.st_ctime_ns).
+The private-reply journal observer shares the same change-token primitive while
+retaining its own legacy-repair projection and original effect checks.
 
 These observations are neither recovery decisions nor grants. Exact requests,
 selected Turns, current bindings, native effects and typed admission remain fresh.

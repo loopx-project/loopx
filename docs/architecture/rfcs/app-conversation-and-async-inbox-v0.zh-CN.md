@@ -1268,6 +1268,10 @@ completed Turn 继续明确保留，本路径不提供通用动作或执行重�
 来源控制字段。复用要求 device、inode、纳秒 mtime、ctime 和文件大小均未改变，
 并在原读取前后核对。变化或不可读的文件仍走原 reader；非终态 Turn 每次读取
 完整正文。删除项清理、并发调用返回独立元数据，读取期间发生替换时不保存可复用观测。
+Windows 的 Python stat ctime 可能代表创建时间，不能作为可靠的变化标识，因此
+继续走原来的新鲜读取路径，见
+[Python stat 时间字段说明](https://docs.python.org/3.12/library/os.html#os.stat_result.st_ctime_ns)。
+私聊回复 journal 的观测复用同一个变化标识实现，仍保留自身的旧修复投影和原效果核验。
 
 这些观测不是恢复决定或授权。精确请求、选中的 Turn、当前 binding、原生效果及
 typed 准入仍保持新鲜读取。源码资格以同一份 File 历史和完整恢复计划做对照，

@@ -202,3 +202,45 @@ def test_unavailable_stat_uses_original_reader_instead_of_saved_view(tmp_path, m
     path.unlink()
     with pytest.raises(FileNotFoundError):
         observe()
+
+
+def test_windows_creation_clock_does_not_hide_same_size_preserved_stamp_stop(tmp_path, monkeypatch):
+    import loopx.capabilities.native_chat.file_discovery as discovery_module
+
+    core = _core(tmp_path)
+    source = {"source_ref": "original", "sender_ref": "owner"}
+    first = {"binding_id": "binding", "source": source, "command": None,
+             "created_at": "2026-01-01T00:00:00+00:00", "padding": "aa"}
+    path = core.root / ("a" * 24 + ".json")
+    before = json.dumps(first)
+    path.write_text(before)
+    stamp, original_stat = path.stat(), Path.stat
+    # Simulate Windows' creation clock and an in-place, same-size rewrite that
+    # preserves mtime. Other filesystem operations retain their actual stat.
+    monkeypatch.setattr(discovery_module, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(Path, "stat", lambda p, *a, **k: stamp if p == path else original_stat(p, *a, **k))
+    assert core.source_controls()[0]["command"] is None
+    after = json.dumps({**first, "command": "stop", "padding": ""})
+    assert len(before.encode()) == len(after.encode())
+    path.write_text(after)
+    os.utime(path, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+    row = {"binding_id": "binding", "source": source, "created_at": first["created_at"]}
+    assert core._source_stop_observed(row, {"status": "failed"}, [])
+
+
+def test_private_reply_discovery_uses_the_same_windows_fresh_read_fallback(tmp_path, monkeypatch):
+    import loopx.capabilities.native_chat.file_discovery as discovery_module
+    from loopx.extensions.lark.private_delivery_discovery import PrivateDeliveryDiscovery
+
+    path = tmp_path / ("a" * 24 + ".json")
+    row = {"status": "delivered", "request_ref": "a" * 24, "binding_id": "binding",
+           "session_id": "session", "turn_id": "turn", "event": {"chat_type": "p2p"}}
+    path.write_text(json.dumps(row))
+    stamp, original_stat = path.stat(), Path.stat
+    monkeypatch.setattr(discovery_module, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(Path, "stat", lambda p, *a, **k: stamp if p == path else original_stat(p, *a, **k))
+    discovery = PrivateDeliveryDiscovery(tmp_path)
+    assert list(discovery.rows())[0][1]["binding_id"] == "binding"
+    path.write_text(json.dumps({**row, "binding_id": "changed"}))
+    os.utime(path, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+    assert list(discovery.rows())[0][1]["binding_id"] == "changed"
