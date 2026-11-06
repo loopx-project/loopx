@@ -95,6 +95,44 @@ def test_pair_adopts_target_without_changing_routes_or_cli_and_is_idempotent(man
     assert calls == []
 
 
+def test_mutable_cli_alias_cannot_hide_a_new_runtime_from_the_pair(managed):
+    _, agents, target, loaded, calls, _ = managed
+    alias = target.parent.parent / "installed alias" / "loopx"
+    alias.parent.mkdir()
+    alias.symlink_to(target)
+    for path in agents.glob("*.plist"):
+        payload = _retarget(plistlib.loads(path.read_bytes()), str(alias), sys.executable)
+        path.write_bytes(plistlib.dumps(payload))
+        loaded[path.stem] = payload
+    original_routes = {label: managed_runtime._launcher(payload)[0][1:] for label, payload in loaded.items()}
+
+    result = align_managed_runtime(str(alias))
+
+    assert result["readiness_verified"] is True
+    assert calls == [("bootout", "com.loopx.status"), ("bootout", "com.loopx.chat"),
+        ("bootstrap", "com.loopx.status"), ("bootstrap", "com.loopx.chat")]
+    for label, payload in loaded.items():
+        executable, *args = managed_runtime._launcher(payload)[0]
+        assert executable == str(target.resolve())
+        assert args == original_routes[label]
+    assert alias.is_symlink() and alias.resolve() == target.resolve()
+    calls.clear()
+    assert align_managed_runtime(str(alias))["restarted_services"] == []
+    assert calls == []
+
+
+def test_relative_alias_does_not_gain_activation_authority(managed, monkeypatch):
+    _, agents, target, loaded, calls, _ = managed
+    alias = target.parent.parent / "relative-alias"
+    alias.symlink_to(target)
+    before = {path: path.read_bytes() for path in agents.glob("*.plist")}
+    monkeypatch.chdir(alias.parent)
+    with pytest.raises(ValueError, match="service_runtime_unverified"):
+        align_managed_runtime(alias.name)
+    assert not calls and len(loaded) == 2
+    assert {path: path.read_bytes() for path in before} == before
+
+
 @pytest.mark.parametrize("rollback", [False, True])
 def test_async_bootout_finishes_before_replacement_or_rollback(managed, monkeypatch, rollback):
     _, agents, target, loaded, _, _ = managed
@@ -343,9 +381,13 @@ def test_damaged_handoff_stops_before_any_service_mutation(managed, saved, monke
 def test_cli_update_moves_bound_pair_and_still_restarts_other_services(managed, monkeypatch):
     _, agents, target, loaded, calls, _ = managed
     align_managed_runtime(str(target))
+    replacement = target.parent.parent / "next release" / "loopx"
+    replacement.parent.mkdir()
+    replacement.write_text(target.read_text().replace("new-revision", "next-revision"))
+    replacement.chmod(0o700)
     installed = agents.parents[1] / ".local/bin/loopx"
     installed.parent.mkdir(parents=True)
-    installed.symlink_to(target)
+    installed.symlink_to(replacement)
     other = agents / "com.loopx.project.status.plist"
     other.write_bytes(plistlib.dumps({"Label": other.stem, "ProgramArguments": ["/project/loopx", "serve-status"]}))
     loaded[other.stem] = plistlib.loads(other.read_bytes())
@@ -358,7 +400,7 @@ def test_cli_update_moves_bound_pair_and_still_restarts_other_services(managed, 
     assert calls[-1] == ("kickstart", other.stem)
     assert loaded[other.stem]["ProgramArguments"] == ["/project/loopx", "serve-status"]
     for kind in ("status", "chat"):
-        assert str(installed) in loaded[f"com.loopx.{kind}"]["ProgramArguments"][2]
+        assert str(replacement.resolve()) in loaded[f"com.loopx.{kind}"]["ProgramArguments"][2]
 
 
 @pytest.mark.parametrize("shell", ["exec /old/loopx $(touch /tmp/no)",
