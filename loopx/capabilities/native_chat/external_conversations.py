@@ -1259,9 +1259,15 @@ class ChatExternalConversations:
         """
         paths = (path for path in sorted(self.root.glob("*.json"))
                  if _REQUEST_JOURNAL_STEM.fullmatch(path.stem))
+
+        def project(_path, row):
+            fields = ("binding_id", "source", "command", "created_at")
+            # The tolerant reader can return {} after transient IO failure.
+            # An incomplete read must not seed an unchanged-file observation.
+            return {key: row[key] for key in fields} if all(key in row for key in fields) else None
+
         return [row for _path, row in self._source_control_discovery.rows(self.root, paths,
-            read=_read_json, project=lambda _path, row: {
-                key: row[key] for key in ("binding_id", "source", "command", "created_at") if key in row})]
+            read=_read_json, project=project)]
 
     def read_request(self, request_ref: str) -> dict[str, Any]:
         return _read_json(self.root / f"{request_ref}.json")

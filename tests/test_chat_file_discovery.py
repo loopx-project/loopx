@@ -168,6 +168,27 @@ def test_changed_during_read_is_not_saved_as_an_unchanged_hint(tmp_path):
     assert len(reads) == 2
 
 
+def test_transient_empty_read_cannot_hide_an_unchanged_stop(tmp_path, monkeypatch):
+    import loopx.capabilities.native_chat.external_conversations as module
+
+    core = _core(tmp_path)
+    source = {"source_ref": "original", "sender_ref": "owner"}
+    control = {"binding_id": "binding", "source": source, "command": "stop",
+               "created_at": "2026-01-01T00:00:00+00:00"}
+    _atomic_write_json(core.root / ("a" * 24 + ".json"), control)
+    original, reads = module._read_json, []
+
+    def read(path):
+        reads.append(path)
+        return {} if len(reads) == 1 else original(path)
+
+    monkeypatch.setattr(module, "_read_json", read)
+    assert core.source_controls() == [{}]
+    # No file write or timestamp change between the failed and healthy reads.
+    assert core.source_controls() == [control]
+    assert len(reads) == 2
+
+
 def test_unavailable_stat_uses_original_reader_instead_of_saved_view(tmp_path, monkeypatch):
     path = tmp_path / "journal.json"
     path.write_text('{"value":1}')
