@@ -221,7 +221,7 @@ def register_quota_command(
     from ..control_plane.turn_driver.codex_context import CONTEXT_DELIVERY_SETTINGS, DELTA_DELIVERY_SETTINGS
 
     quota_parser.add_argument("--context-delivery", choices=CONTEXT_DELIVERY_SETTINGS,
-        help="Auto defaults to progressive current-context reads on every host, with Delta on supported continuity hosts. Explicit off keeps the original inline path. Legacy on uses existing host declarations: "
+        help="Auto defaults to progressive current-context reads on every host, with Delta on supported continuity hosts. Off alone keeps full delivery. Pair off with --delta-delivery auto to compare complete documents. Legacy on uses existing host declarations: "
              "Codex App heartbeat/resume/recovery (--codex-app), or the Codex benchmark heartbeat worker "
              "(generic_cli plus its explicit heartbeat worker settings). On rejects missing, contradictory or unsupported modes. "
              "Enabled supported calls choose private context/capture paths automatically unless overridden. A directory alone never enables it; declarations are not retention proof.")
@@ -239,10 +239,10 @@ def register_quota_command(
              "context-config renders native configuration for the exact Goal/Agent; no host configuration, trust, guard or spend are changed.")
     quota_parser.add_argument("--capture-sha256", help="For context-read/context-project: exact SHA-256 supplied with the capture reference.")
     quota_parser.add_argument("--initial-read", action="store_true",
-        help="For JSON context-read: read current controls, task text and source navigation from a recognized capture. "
+        help="For JSON context-read or enabled native context-project: read current controls, task text and source navigation from a recognized capture. "
              "Detailed criteria and operation contracts remain required before dependent work. Start at offset zero; follow next_command for continuation.")
     quota_parser.add_argument("--select", action="append",
-        help="For context-read: repeat an exact RFC 6901 JSON pointer to read a batch from the original capture. "
+        help="For context-read or enabled native JSON context-project: repeat an exact RFC 6901 JSON pointer to read a batch from the original capture. "
              "Selected detail pages never acknowledge full-context retention; omit for unchanged full capture reads.")
     quota_parser.add_argument("--list", dest="list_fields", action="store_true",
         help="For context-read: list immediate fields at the selected pointers (root by default), "

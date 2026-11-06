@@ -282,7 +282,8 @@ export function MachineConfigurationSettings({ section, onChanged }: {
   async function setContextDelivery(mode: "off" | "on" | "auto", key: "mode" | "delta_delivery" = "mode") {
     if (busy || !editorAvailable || selected?.capability_id !== "context_delivery" || !selected.machine_namespace) return;
     const namespace = selected.machine_namespace;
-    const configuration = {...selected.default, ...selectedCurrent, [key]: mode};
+    const configuration: Record<string, unknown> = {...selected.default, ...selectedCurrent,
+      schema_version: selected.default?.schema_version ?? selectedCurrent?.schema_version, [key]: mode};
     const generation = editorGeneration.current;
     setBusy("apply"); setError(null); setNotice(null);
     try {
@@ -295,7 +296,8 @@ export function MachineConfigurationSettings({ section, onChanged }: {
       if (generation !== editorGeneration.current) return;
       setInspection(next);
       setReadbackPending(null);
-      if (next.machine_configuration?.namespaces[namespace]?.[key] !== mode) {
+      const saved = next.machine_configuration?.namespaces[namespace];
+      if (saved?.mode !== configuration.mode || saved?.delta_delivery !== configuration.delta_delivery) {
         throw new Error(locale === "zh-CN" ? "保存后的配置已变化，请刷新后重试。" : "The saved configuration changed. Refresh and retry.");
       }
       const targetLabel = key === "delta_delivery"

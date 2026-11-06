@@ -871,7 +871,8 @@ def test_harbor_default_execution_budget_tracks_total_trial(tmp_path, total):
     from benchmark.runtime.harbor import BenchmarkCodex
     agent = BenchmarkCodex(logs_dir=tmp_path, model_name="fixture",
                            scheduler_timeout_sec=total)
-    assert agent.execution.timeout_seconds == total - 160
+    assert agent.execution.timeout_seconds is None
+    assert "LOOPX_CODEX_TURN_TIMEOUT_SEC" not in agent._worker_env(cwd="/task")
     assert agent.scheduler_timeout == total
 
 
