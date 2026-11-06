@@ -58,6 +58,7 @@ def test_periodic_report_editor_is_shared_across_machine_and_goal_scopes() -> No
     assert editor["supported_scopes"] == ["machine", "goal"]
     assert [field["key"] for field in editor["fields"]] == [
         "enabled",
+        "review_required",
         "profile_preset",
         "route_ref",
         "timezone",

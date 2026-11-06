@@ -1707,7 +1707,6 @@ class ChatRequestHandler(
             GOAL_SOURCE_LINKS_PATH: self._goal_source_links,
             "/api/chat/todo/detail": self._todo_detail,
             "/api/chat/completed-todos": self._completed_todos,
-            "/api/chat/goal-results": self._goal_results,
             "/api/chat/explore-results": self._explore_results,
             RESEARCH_ANALYSIS_PATH: self._research_analysis_read,
             RESEARCH_ANALYSIS_PATH + "/citation": self._research_analysis_read,
@@ -1729,9 +1728,8 @@ class ChatRequestHandler(
         }
         if path in get_dispatch:
             return get_dispatch[path]()
-        result_parts = path.strip("/").split("/")
-        if len(result_parts) == 4 and result_parts[:3] == ["api", "chat", "goal-results"]:
-            return self._goal_result(result_parts[3])
+        if self._dispatch_goal_result_read(path):
+            return
         setup_parts = path.strip("/").split("/")
         if len(setup_parts) == 5 and setup_parts[:4] == ["api", "chat", "lark", "app-setups"]:
             return self._lark_setup_snapshot(setup_parts[4])

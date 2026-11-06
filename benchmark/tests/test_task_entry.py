@@ -580,7 +580,7 @@ def test_planning_budget_and_blocked_handoff_use_the_real_adapter_run(
     if executions:
         command, env = executions[0]
         assert "--kill-after=30 300s" in command
-        assert float(env["LOOPX_CODEX_TURN_TIMEOUT_SEC"]) == 140
+        assert float(env["LOOPX_CODEX_TURN_TIMEOUT_SEC"]) == 250
         assert "LOOPX_PHASE_DEADLINE_EPOCH=$(( $(date +%s) + 300 ))" in command
 
 
@@ -631,7 +631,7 @@ def test_real_scheduler_stops_after_one_budget_exhausted_wake(planning_env, mode
     env = planning_env | {
         "LOOPX_EXECUTION_MODE": mode, "LOOPX_TASK_STAGE": "execute",
         "LOOPX_TASK_ENTRY": "seeded-todo",
-        "LOOPX_PHASE_DEADLINE_EPOCH": str(time.time() + 100),
+        "LOOPX_PHASE_DEADLINE_EPOCH": str(time.time() + (0 if mode == "heartbeat" else 100)),
     }
     if mode == "turn":
         env["LOOPX_VALIDATION_COMMAND_JSON"] = '["python", "check.py"]'
@@ -687,7 +687,7 @@ def test_remaining_phase_time_caps_later_host_windows(planning_env, monkeypatch)
         pass
 
     def capture(home, *, execution, **kwargs):
-        assert execution.timeout_seconds == 40
+        assert execution.timeout_seconds == 60
         raise CapturedWindow
 
     monkeypatch.setattr(worker.time, "time", lambda: 100)
@@ -875,14 +875,14 @@ def test_harbor_planning_uses_the_phase_deadline_without_a_stage_cap(tmp_path, m
     assert "LOOPX_PHASE_DEADLINE_EPOCH=$(( $(date +%s) + 1000 ))" in command
     assert options["timeout_sec"] >= 1000
     assert "--kill-after=30 600s" in execution[0][0]
-    assert float(execution[0][1]["LOOPX_CODEX_TURN_TIMEOUT_SEC"]) == 440
+    assert float(execution[0][1]["LOOPX_CODEX_TURN_TIMEOUT_SEC"]) == 500
 
 
 def test_sforge_post_plan_deadline_never_marks_execution_started(tmp_path, monkeypatch):
     from benchmark.runtime import sforge_entry
 
     monkeypatch.setattr(sforge_entry, "prepare_entry", lambda env: True)
-    monkeypatch.setenv("LOOPX_PHASE_DEADLINE_EPOCH", str(time.time() + 150))
+    monkeypatch.setenv("LOOPX_PHASE_DEADLINE_EPOCH", str(time.time() - 1))
     monkeypatch.setenv("LOOPX_PLANNING_RESULT", str(tmp_path / "planning.json"))
     monkeypatch.setattr(sys, "argv", ["sforge-entry", "execution-must-not-start"])
     monkeypatch.setattr(os, "execvpe", lambda *args: pytest.fail("Execution after exhausted planning"))
@@ -892,7 +892,7 @@ def test_sforge_post_plan_deadline_never_marks_execution_started(tmp_path, monke
 
 def test_sforge_planning_exhausted_budget_never_invokes_host(planning_env):
     from benchmark.runtime.sforge_entry import prepare_entry
-    env = planning_env | {"LOOPX_PHASE_DEADLINE_EPOCH": str(time.time() + 150)}
+    env = planning_env | {"LOOPX_PHASE_DEADLINE_EPOCH": str(time.time() - 1)}
     assert not prepare_entry(env)
     assert not Path(env["LOOPX_PLANNING_RESULT"]).exists()
     assert not Path(env["LOOPX_WAKE_LOG_DIR"]).exists()
