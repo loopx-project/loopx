@@ -31,6 +31,33 @@ def test_user_request_creator_survives_summary_and_compact_workspace_projection(
     assert "created_by" not in project_asset_todo_summary(legacy, role="user")["items"][0]
 
 
+def test_project_asset_keeps_full_source_capability_actions_beyond_item_caps():
+    from loopx.control_plane.todos.todo_summary import project_asset_todo_summary
+
+    actions = {
+        "schema_version": "todo_capability_actions_v0",
+        "total_count": 7,
+        "groups": [{
+            "action_kind": "review_periodic_report",
+            "count": 7,
+            "latest_at": "2026-11-06T00:00:00Z",
+            "items": [{"todo_id": "todo_report_7", "text": "Edition 7", "role": "user",
+                       "task_class": "user_action", "action_kind": "review_periodic_report",
+                       "capability_binding_ref": "periodic-report-review:r" + "a" * 64}],
+        }],
+    }
+    summary = compact_todo_group(
+        [row(1, role="user", task_class="user_action")],
+        role="user",
+        source_section="User Todo",
+        item_limit=1,
+    )
+    summary["capability_actions"] = actions
+    compact = project_asset_todo_summary(summary, role="user", item_limit=1)
+    assert compact["capability_actions"] == actions
+    assert len(compact["items"]) == 1
+
+
 def test_summary_caps_do_not_change_work_counts_or_hide_a_peer():
     items = [row(i, claimed_by="agent-a" if i < 24 else "agent-b") for i in range(32)]
     result = summarize(items, item_limit=1)

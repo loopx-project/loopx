@@ -290,9 +290,13 @@ function planScope(command: string, role: string, taskClass: string | null, todo
   }
   if (role === "agent" && requestedBlocks) fail("blocks_agent is only valid for user gates; use excluded_agents for agent executor constraints");
   if (role === "user" && intent.claimed_by) fail("claimed_by is execution ownership for agent todos, not a user-todo binding; use --bound-agent or --goal-bound");
-  for (const field of ["task_repository", "task_domain", "capability_binding_ref"]) {
+  for (const field of ["task_repository", "task_domain"]) {
     if (intent[field] && role !== "agent") fail(`${field} is only valid for agent todos`);
   }
+  // A capability can bind an exact artifact to a human action. This reference
+  // is data, not blocking scope, approval authority or execution ownership.
+  if (intent.capability_binding_ref && role !== "agent" && taskClass !== "user_action")
+    fail("capability_binding_ref is only valid for agent or user_action todos");
   const creating = command === "create";
   let blocks = intent.clear_blocks_agent ? null : requestedBlocks || string(todo.blocks_agent, "blocks_agent");
   const global = intent.clear_global_gate
