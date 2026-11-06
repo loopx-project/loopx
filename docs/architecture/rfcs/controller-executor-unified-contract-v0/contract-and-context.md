@@ -549,12 +549,30 @@ are reconciled. Rollback likewise separates outstanding work from new admission.
 A version transition does not rewrite saved prompts, journals or source hashes
 as if they had always used the new contract.
 
-The first C1 PR must include the two production composition callsites above and
+The first cross-entrypoint C1 cutover must include the two production composition callsites above and
 at least one complete producer-to-final-input journey, with an explicit list of
 remaining readers. Qualifying that bounded slice does not enable the new writer
 for an unqualified host or close C1. The final cutover removes active format
 choice only after all supported readers qualify. Temporary decoders have named
 callers and removal conditions; they are not user-facing compatibility views.
+
+A Turn lifecycle extraction may be reviewed separately under the parent C1
+proposal when it includes planning, final Host input, capture publication,
+journal inspection, original-session recovery and settlement consumers together.
+The migrated Turn uses one complete source and its checked readers; the ordinary
+quota writer and thin-heartbeat presentation retain their existing contract in
+this staged boundary. Shared projection changes must preserve those unmigrated
+callers. The historical v0 decoder serves recorded plans, requests and journals;
+it cannot rescue an invalid supplied v1 source. Its removal still depends on
+reconciling outstanding work and the supported recovery window.
+
+This extraction is partial C1 delivery, not qualification of the cross-entrypoint
+cutover or a context/cost improvement. The parent retains ordinary quota and
+heartbeat migration, final-input/material-read coverage, all-host configuration,
+and the original single-session outcome and complete-cost comparison. Review
+must include matched baseline/head real-provider outcomes, rejection sensitivity
+and packaged recovery. Adoption reduces the parent's diff only after the slice
+lands on main and main is integrated into the parent; opening a PR does not.
 
 For each normal, selection, replan, wait, recovery and capability-off fixture,
 check independently authored obligations at **three boundaries**: composed

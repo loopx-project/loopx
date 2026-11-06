@@ -19,8 +19,13 @@ memory setting.
 
 ## Prerequisites and licensing
 
-Use LoopX 2.1.0+ with its supported `extensions.turn_host` seam, Python
-3.11+, and a separately operated Nano SGLang service. See the upstream
+Use Python 3.11+ and install both packages from the same integrated LoopX 2.2
+checkout containing `extensions.turn_host.extract_turn_work_identity` and
+`assert_turn_host_request_version`. Complete-source Host request v1 and historical
+v0 share that decoder; exact Goal lifetime and memory/effect gates still apply.
+The version
+floor alone does not establish that an older wheel contains this shared contract.
+A separately operated Nano SGLang service is required. See the upstream
 [inference guide](https://github.com/MemTensor/MemT-1.0/blob/e75c13d090a6a9d34b29146d901bd84323185f24/inference/README.md)
 for GPU deployment. The local client needs matching tokenizer and configuration
 assets; it does not load model weights. This adapter supports Nano only.
@@ -96,8 +101,17 @@ authentication. Provider credentials and arbitrary parent environment values
 are not forwarded. This adapter is not an OS sandbox. Do not select a server
 that grants unrestricted effects based on model arguments or remembered text.
 
-For an existing registered Goal, Agent and eligible claimed Todo, use the
-normal Turn arguments and independent validator, with these explicit options:
+The integrated launch path is currently unqualified: executable legacy Goal
+registries do not supply the exact `goal_ref` required by this adapter, while
+`source_session_v1` is lifecycle-only and the generic Turn entrypoint rejects it.
+The adapter fails before provider IO when the reference is absent. Do not inject
+an instance identifier, relax that check or change registry profiles to work
+around it. The shared Goal/Turn owner must first provide admitted exact-lifetime
+identity through planning and recovery; see the
+[controller migration checkpoint](../../docs/architecture/rfcs/controller-executor-unified-contract-v0.md).
+
+The intended command shape, once that prerequisite is delivered and qualified,
+uses a registered Goal, Agent, eligible claimed Todo and independent validator:
 
 ```sh
 loopx turn run-once --goal-id demo --agent-id analyst --todo-id todo_demo \
@@ -106,9 +120,10 @@ loopx turn run-once --goal-id demo --agent-id analyst --todo-id todo_demo \
   --validation-command-json '["python3","/srv/operator/check_artifact.py"]'
 ```
 
-This previews the Turn. Supply an operator-authored validator that independently
-checks the real artifact, then add `--execute` to the reviewed command. Existing
-admission and permission requirements still apply. The adapter returns one
+This is a preview command, not evidence that the current integrated path works.
+After the exact-lifetime prerequisite is qualified, supply an operator-authored
+validator that independently checks the real artifact before adding `--execute`.
+Existing admission and permission requirements still apply. The adapter returns one
 `loopx_turn_result_v0` candidate; a successful model reply is not acceptance.
 Execution must start in the configured workspace; the normal Turn launcher sets
 that working directory. A mismatch fails before any provider calls.
