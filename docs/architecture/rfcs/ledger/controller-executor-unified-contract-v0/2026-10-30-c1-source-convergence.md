@@ -7,7 +7,8 @@
 
 ## Current dependency repair: source transport below the driver
 
-C1 integrates main `8eb707d47a4d`. Its configured Python check originally
+C1 integrates main `5a58635028fb`, including merged proposals #8192 and #8186.
+Its configured Python check originally
 reported 4,562 errors in 463 files: low-level capture and journal readers imported
 the driver/Host-result converter for thin source and identity helpers. Those
 seven helpers now use the existing `quota.turn_envelope` transport directly;
@@ -23,16 +24,23 @@ improve runtime performance. The broad source run records 627 passes, six
 fixture failures and four skips. A clean integrated baseline reproduces the
 same six failures: fixtures access a retired second `turn_envelope` carrier.
 Corrected fixtures exercise the current producer's missing-witness recovery and
-deliberately injected mixed authority; all 36 module cases pass. An earlier
-independent installed-wheel run passes 100 cases; final package validation of
-the corrected fixtures remains pending at this authoring checkpoint.
+deliberately injected mixed authority; all 36 module cases pass. The rebuilt
+independent wheel passes 136 cases across capture/Host, session/journal,
+authoring and completion paths. All 1,815 Python/TypeScript package sources
+match the candidate; 141 observed Python processes import from the installed
+package, without borrowing checkout source. The earlier 100-case package run
+and the six original fixture failures retain their own recorded identities.
+
+Before this dependency repair, integration reduces the parent diff from 201
+files (+18,429/−2,042 at `49a621c9b8` against main `546c08c0d3`) to 197 files
+(+17,928/−1,989 at `2fe98521f1` against main `5a58635028`). This is a limited
+reduction; a substantially smaller review boundary remains to be delivered.
 
 Independent review, quality/readiness, full provider coverage, natural adoption
 and whole C1 acceptance remain open. This repair does not establish a new
-efficiency result or significantly shrink the parent PR. Independent proposals
-#8192 and #8186 have since landed on main; integration and qualification of that
-new composition remain separate from the measurements above. Historical
-bilingual experiments stay together.
+efficiency result or qualify the whole parent PR. Historical bilingual
+experiments stay together, and earlier cost measurements retain their frozen
+base/head rather than becoming measurements of this integration.
 
 ## Previous extraction: complete replan authoring
 
