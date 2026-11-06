@@ -273,3 +273,67 @@ def test_progressive_cli_delivers_complete_acceptance_for_selection_and_replan(t
     assert outcome == expected["outcome_requirements"]["outcomes"][0]
     assert original["revision"] < outcome["revision"]
     assert run_reader(command)["outcome"] == original
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_inline_cli_delivers_complete_acceptance_for_selection_and_replan(tmp_path, monkeypatch, provider):
+    from test_replan_successor_guard_reentry import _fixture, AGENT, GOAL
+    monkeypatch.setenv("LOOPX_USAGE_PING", "0")
+    call, runtime, index = _fixture(tmp_path, monkeypatch, provider, future_monitor=False)
+    registry_path = tmp_path / "registry.json"
+    registry = json.loads(registry_path.read_text())
+    registry["goals"][0]["execution_profile"] = {"planning_horizon_goal": True}
+    registry_path.write_text(json.dumps(registry))
+    document = tmp_path / "requirements.json"
+    document.write_text(json.dumps({"outcome_id": "export", "owner_agent_id": AGENT,
+        "objective": "Deliver the complete export", "requirements": [
+            {"id": "content", "description": "Preserve every original section."},
+            {"id": "recovery", "description": "Keep the tail requirement and the publication stop."}],
+        "source": {"ref": "message:owner", "summary": "The owner requested a complete export."}}))
+    before = call("goal-acceptance", "inspect", "--goal-id", GOAL)
+    call("goal-acceptance", "refine", "--goal-id", GOAL, "--agent-id", AGENT,
+         "--document", str(document), "--expected-provider-revision", before["provider_revision"],
+         "--operation-id", "source-requirements", "--execute")
+    expected = call("goal-acceptance", "inspect", "--goal-id", GOAL)["goal_acceptance_contract"]
+    guard = call("quota", "should-run", "--codex-app", "--context-delivery", "off", "--goal-id", GOAL, "--agent-id", AGENT,
+                 "--turn-instance-id", "turn-acceptance-sharing")
+    assert guard["effective_action"] == "autonomous_replan_required"
+    ref = "$.interaction_contract.agent_channel.work_context.sources[0].content.goal_acceptance_contract"
+    assert guard["autonomous_replan_obligation"]["replan_context"]["core_goal"]["acceptance_contract_ref"] == ref
+    assert guard["agent_todo_summary"]["goal_acceptance_contract_ref"] == ref
+    assert guard["interaction_contract"]["agent_channel"]["work_context"]["sources"][0]["content"]["goal_acceptance_contract"] == expected
+    assert build_turn_envelope(guard)["action_signature"]["matches"] is True
+
+    # Normal selected delivery must use the exact inline acceptance read and
+    # relocate its reference when a host consumes the CLI as a TurnEnvelope.
+    index.write_text("")
+    added = call("todo", "add", "--goal-id", GOAL, "--role", "agent", "--claimed-by", AGENT,
+                 "--text", "Validate the complete export", "--task-class", "advancement_task",
+                 "--action-kind", "validate")
+    call("todo", "add", "--goal-id", GOAL, "--role", "agent", "--claimed-by", AGENT,
+         "--text", "Validate independent recovery", "--task-class", "advancement_task",
+         "--action-kind", "validate")
+    linked = json.loads(document.read_text())
+    linked["todo_ids"] = [added["todo_id"]]
+    document.write_text(json.dumps(linked))
+    revision = call("goal-acceptance", "inspect", "--goal-id", GOAL)["provider_revision"]
+    call("goal-acceptance", "refine", "--goal-id", GOAL, "--agent-id", AGENT,
+         "--document", str(document), "--expected-provider-revision", revision,
+         "--operation-id", "link-export", "--execute")
+    expected = call("goal-acceptance", "inspect", "--goal-id", GOAL)["goal_acceptance_contract"]
+    planning = call("quota", "should-run", "--codex-app", "--context-delivery", "off", "--goal-id", GOAL, "--agent-id", AGENT,
+                    "--turn-instance-id", "turn-export-planning")
+    assert planning["planning_horizon"]["core_goal"]["acceptance_contract"] == expected
+    assert planning["agent_todo_summary"]["goal_acceptance_contract_ref"] == "$.planning_horizon.core_goal.acceptance_contract"
+    selected = call("quota", "should-run", "--codex-app", "--context-delivery", "off", "--goal-id", GOAL, "--agent-id", AGENT,
+                    "--todo-id", added["todo_id"], "--turn-instance-id", "turn-export-delivery")
+    assert selected["normal_delivery_allowed"] is True
+    sources = selected["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+    source_index = next(i for i, row in enumerate(sources) if row["source"] == "goal_acceptance")
+    retained = sources[source_index]["content"]["goal_acceptance_contract"]
+    assert retained == expected
+    assert selected["agent_todo_summary"]["goal_acceptance_contract_ref"] == (
+        f"$.interaction_contract.agent_channel.work_context.sources[{source_index}].content.goal_acceptance_contract")
+    envelope = build_turn_envelope(selected)
+    assert envelope["work_context"]["sources"][source_index]["content"]["goal_acceptance_contract"] == expected
+    assert envelope["action_signature"]["matches"] is True
