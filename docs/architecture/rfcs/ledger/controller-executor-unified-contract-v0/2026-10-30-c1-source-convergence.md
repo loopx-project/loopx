@@ -5,6 +5,67 @@
 - **Source:** original candidate `648104978fdd67176cccdbb765c5bc3f36bf2ca3`, integrated with target `e8f4c6f8125e3cc0ef912afac653d5542671392f`.
 - **Language mirror:** [中文版](2026-10-30-c1-source-convergence.zh-CN.md)
 
+## Latest integration: incremental costs after field reuse reached main
+
+Measured product revision `b90e711cdb81` integrates main `d602248c5329`, including
+#8124's field reuse, Vision audit references, first-read consumers and Chat
+observation updates. C1 retains its complete-source validation in the shared
+TypeScript owner; native navigation and historical-source refusals remain on
+that same path. Later changes in this checkpoint are validation and documentation.
+Earlier versioned cohorts below remain historical evidence.
+
+The current matched engineering cohort uses the original synthetic three-step
+Task and two canonical acceptance groups. File/SQLite × cold/warm/recovery ×
+three repetitions gives 36 scenarios and 84 settled Turns. The 12 cold cases
+exercise one step; the other 24 complete the original Task with matching
+independently checked artifacts. Actual returned BODY is reconstructed through
+EOF, and each omitted outcome must equal both its current immutable source and
+its previously delivered value. Original settlement identities, three receipts,
+single debits and product-source stability are checked. Preparation and deliberate
+retry probes are counted separately; completed child costs are included once.
+
+| SQLite ordinary path, three-repeat mean | Adopted main | C1 | Change |
+| --- | ---: | ---: | ---: |
+| Warm step 2 BODY | 27,874 B | 27,159 B | −2.57% |
+| Complete three-step BODY | 102,836 B | 100,691 B | −2.09% |
+| Complete three-step stdout | 225,841 B | 184,316 B | −18.39% |
+| Complete three-step RPCs | 863 | 866 | +3 |
+| Complete three-step framed RPC bytes | 11,754,471 B | 11,852,055 B | +0.83% |
+| Observed Python regular-file read/write bytes | baseline | −10.39% / −13.83% | limited IO boundary |
+
+File has the same direction. Recovery first resends the complete current
+requirements; the three-step recovery BODY falls only 1.78%. The large savings
+against pre-field-reuse main are not C1's exclusive incremental benefit.
+
+A separate canonical-correction probe appends one criterion through the actual
+refine command, preserving the original criteria. Four File/SQLite cases complete
+12 Turns and four Tasks. Main conservatively rereads both outcomes; C1 reuses one
+unchanged outcome at step 2 and both at step 3. The new criterion remains visible.
+SQLite step-2 BODY is 52,169 → 32,905 B (−36.93%); complete-Task BODY is
+149,223 → 106,688 B (−28.50%), RPCs 867 → 870 and framed bytes −0.23%.
+This is one synthetic correction per provider/arm, not natural feedback adoption
+or a scientific outcome result.
+
+Final-source validation reconciles 1,065 passed / four skipped unique Python
+cases, including real native Codex with static loopback inference. The 112 native
+cases required focused rechecks after fixing fixture cursor planning, reading
+choices before selection, and isolating the eight-page stress loop from static
+resume qualification. Original failures remain recorded; this is grouped
+qualification, not one wholly passing native invocation. Full TypeScript has
+6,161 passed / 77 skipped; control-plane typechecking passes. The isolated wheel
+matches 1,809 packaged Python/TypeScript files, passes 24 source/default/off/recovery
+cases, and passes actual-client default Progressive and independent Delta checks
+with no source import contamination.
+
+Configured Python typing still fails with 4,814 diagnostics; the same configured
+17 roots pass on main. This hold is not waived by broader historical typing
+comparisons or the successful transport checks. PostgreSQL/full affected-provider
+qualification, independent review, exact-head readiness, installed adoption and
+whole-C1 acceptance remain open. BODY/stdout and Python IO are distinct metrics;
+Node/kernel/provider IO, model input/cache/output tokens, invoices and sustained
+latency are not qualified. No model/scientific run, live installation, CI query,
+manual workflow trigger or merge was performed for this engineering cohort.
+
 ## Current private-plan boundary
 
 New complete-source Turns now write `loopx_turn_plan_v1` with one original
