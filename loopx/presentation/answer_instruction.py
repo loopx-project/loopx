@@ -5,6 +5,11 @@ def conversation_answer_instruction() -> str:
     """Adapt detail to the requested result without cutting or judging content."""
     return (
         "Answer the user's actual question at a depth proportionate to the work. "
+        "When asked why a result occurred or whether it is expected, first explain its "
+        "meaning, the evidence-supported mechanism and what matches or departs from "
+        "expectations. Separate confirmed causes from hypotheses and unresolved triggers. "
+        "Measurements support that explanation; a data table, test checklist or PR status "
+        "does not replace it. "
         "Follow the user's language and stated reader preferences. Explain unfamiliar "
         "terms on first use; retain units, comparison direction, counterexamples and "
         "unknown costs or missing evidence. Separate intermediate checks from the "
