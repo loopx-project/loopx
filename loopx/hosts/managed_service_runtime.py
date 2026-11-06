@@ -270,6 +270,10 @@ def _align_managed_runtime(executable: str, journal: Path) -> dict:
     target = Path(executable)
     if not target.is_absolute() or not target.is_file() or not os.access(target, os.X_OK):
         raise ValueError("service_runtime_unverified")
+    # Bind the executable qualified below, not a mutable installer alias. The
+    # same CLI symlink can name a new release while both services still run the
+    # old one; unchanged launcher bytes must not suppress that handoff.
+    target = target.resolve(strict=True)
     environment = {k: v for k, v in os.environ.items()
         if k not in {"LOOPX_PYTHON", "PYTHONPATH", "LOOPX_RELEASE_ROOT"}}
     doctor = subprocess.run([str(target), "--format", "json", "doctor", "--installation-only"],

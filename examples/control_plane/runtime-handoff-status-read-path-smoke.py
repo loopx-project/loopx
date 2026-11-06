@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -46,6 +47,7 @@ def run_cli(
         cwd=REPO_ROOT,
         check=False,
         capture_output=True,
+        env={**os.environ, "LOOPX_CONTEXT_DELIVERY": "off"},
         text=True,
     )
     if result.returncode != 0:

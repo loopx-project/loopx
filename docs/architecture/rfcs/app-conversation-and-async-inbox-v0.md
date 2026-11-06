@@ -1693,9 +1693,24 @@ Session authority, queue, worker or feature toggle is introduced.
 A delivered failure notice is not a completed business request. The existing
 private reply scanner now discovers eligible unfinished ordinary Codex steward
 requests after the legacy manager-context migration. Context version 21 restores
-the complete visible user/assistant history once in native persisted history;
-the old upstream identity remains recorded, and native Goal/attached executions
-are not replaced by this migration.
+the complete visible user/assistant history in native persisted history. Large
+restores use bounded UTF-8 prefixes, with native compaction between them before
+the next prefix or user request. A scheduling acknowledgement is insufficient:
+the matching compaction item and successful terminal native Turn must finish.
+Small restores and resumed threads retain their existing path. Core's visible
+transcript is unchanged; the native compactor owns its condensed model context.
+An unknown, failed or interrupted compaction closes the new adapter before its
+binding is published, without replaying injection or starting business work.
+The old upstream identity remains recorded, and native Goal/attached executions
+are not replaced by this migration. Prefix compaction incurs model work; source
+and protocol tests alone do not certify live summary quality or its cost. This
+changes neither the context-version token nor existing recovery budgets.
+Restoration rechecks the original source binding, configuration and Goal guard
+while waiting. Queued Stop and idle managed Close publish their existing store
+transitions before waiting for adapter cleanup, so silent compaction cannot
+hide cancellation or reopen a closed Session.
+All prefixes share the configured hard Turn time budget; it is not renewed for
+each compaction.
 
 Discovery uses the local enabled binding and the same typed candidate planner,
 without provider identity IO for every historical failure. This is a queue hint;

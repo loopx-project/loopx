@@ -31,7 +31,7 @@ def isolated_effect(tmp_path: Path, monkeypatch):
     restart_effect_runtime()
 
 
-def fixture(root: Path, resume: str = FUTURE) -> tuple[Path, Path, Path]:
+def fixture(root: Path, resume: str = FUTURE, *, with_vision: bool = True) -> tuple[Path, Path, Path]:
     project, runtime = root / "project", root / "runtime"
     state = project / f".codex/goals/{GOAL}/ACTIVE_GOAL_STATE.md"
     state.parent.mkdir(parents=True)
@@ -58,6 +58,8 @@ def fixture(root: Path, resume: str = FUTURE) -> tuple[Path, Path, Path]:
                    "coordination": {"registered_agents": [AGENT], "agent_model": "peer_v1"},
                    "quota": {"compute": 1.0, "window_hours": 24, "allowed_slots": 20}}],
     }), encoding="utf-8")
+    if not with_vision:
+        return registry, runtime, state
     runs = runtime / f"goals/{GOAL}/runs"
     runs.mkdir(parents=True)
     run = {"goal_id": GOAL, "agent_id": AGENT,
@@ -290,6 +292,88 @@ def test_real_cli_worker_keeps_automatic_wait_alive_and_honors_explicit_stop(
     assert state.read_bytes() == original_state
     runs = [json.loads(line) for line in (runtime / f"goals/{GOAL}/runs/index.jsonl").read_text().splitlines()]
     assert not any(run.get("classification") in ("quota_monitor_poll", "quota_slot_spent") for run in runs)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_deferred_todo_without_vision_wakes_original_agent_at_deadline(tmp_path, isolated_effect, monkeypatch, provider):
+    from argparse import Namespace
+    from contextlib import redirect_stdout
+    from datetime import datetime, timedelta, timezone
+    from io import StringIO
+    from loopx import entrypoint
+    from loopx.control_plane.runtime import time as runtime_time
+
+    monkeypatch.syspath_prepend(str(REPO / "scripts"))
+    import external_scheduler_worker as worker
+
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    due = now + timedelta(hours=2, seconds=17)
+
+    class FixtureDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now.astimezone(tz) if tz else now.replace(tzinfo=None)
+
+    monkeypatch.setattr(runtime_time, "datetime", FixtureDatetime)
+    registry, runtime, state = fixture(tmp_path, f"resume_at:{due.isoformat()}", with_vision=False)
+    initialize_canonical_source_fixture(runtime, GOAL, state_path=state, provider=provider)
+    observations = []
+    wakes = []
+
+    def command(*args):
+        out = StringIO()
+        with redirect_stdout(out):
+            rc = entrypoint.main(["--format", "json", "--registry", str(registry),
+                                  "--runtime-root", str(runtime), *args])
+        data = json.loads(out.getvalue())
+        assert rc == 0, data
+        return data
+
+    def probe(argv, **kwargs):
+        guard = command(*argv[argv.index("quota"):])
+        if not observations:
+            # The managed runtime and CLI host consume the same scoped due time.
+            managed = command("quota", "should-run", "--goal-id", GOAL, "--agent-id", AGENT,
+                              "--runtime-profile", "ark_managed_agent_goal", "--context-delivery", "off")
+            continuation = managed["scheduler_hint"]["goal_runtime_continuation"]
+            assert continuation["disposition"] == "defer"
+            local = guard["scheduler_hint"]["cold_path_detail"]["local_scheduler"]
+            assert continuation["recheck_after_seconds"] == local["recheck_after_seconds"] == 7217
+        observations.append(guard)
+        return guard
+
+    def sleep(seconds):
+        nonlocal now
+        assert 0 < seconds <= (due - now).total_seconds()
+        now += timedelta(seconds=seconds)
+        assert len(observations) < 20
+
+    def wake(*args, **kwargs):
+        guard = observations[-1]
+        assert now == due and not wakes
+        assert guard["effective_action"] == "successor_replan_required"
+        assert guard["selected_todo"]["todo_id"] == TODO
+        assert guard["interaction_contract"]["agent_channel"]["delivery_allowed"] is False
+        updated = command("todo", "update", "--goal-id", GOAL, "--agent-id", AGENT,
+                          "--todo-id", TODO, "--status", "open", "--clear-resume-when",
+                          "--reason", "Scheduled condition satisfied")
+        assert updated.get("ok"), updated
+        readback = command("todo", "list", "--goal-id", GOAL, "--todo-id", TODO)
+        assert readback["todo"]["status"] == "open"
+        assert readback["todo"]["todo_id"] == TODO
+        wakes.append(TODO)
+        return worker.CappedProcessResult(75, b"", None)
+
+    monkeypatch.setattr(worker, "run_quota_should_run", probe)
+    monkeypatch.setattr(worker, "_run_wake", wake)
+    args = Namespace(cli_bin="loopx", registry=str(registry), runtime_root=str(runtime),
+                     runtime_profile="generic_cli", goal_id=GOAL, agent_id=AGENT,
+                     state_file=str(tmp_path / "worker.json"), once=False, wake_cmd="fixture",
+                     wake_stop_exit_code=75, error_backoff_seconds=5, quota_timeout_seconds=30,
+                     wake_timeout_seconds=None)
+    assert worker.run_worker(args, sleep=sleep) == 0
+    assert wakes == [TODO] and len(observations) > 3
+    assert all(not item["interaction_contract"]["agent_channel"]["must_attempt"] for item in observations[:-1])
 
 
 def test_independent_work_is_not_silenced_by_scheduled_wait(tmp_path, isolated_effect):

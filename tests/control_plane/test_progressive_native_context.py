@@ -220,10 +220,10 @@ def test_unknown_semantics_are_never_hidden(tmp_path, monkeypatch, change):
 def test_off_and_unsupported_surface_remain_exact(tmp_path, monkeypatch):
     setup(tmp_path, monkeypatch)
     original, unchanged = payload(), payload()
-    assert context.project_codex_context(original, directory=None, capture_directory=tmp_path,
-        goal_id="fixture", agent_id="agent", surface="quota_packet", capture_id="one") is original
-    wire = context.project_codex_context(original, directory=str(tmp_path), capture_directory=tmp_path,
-        goal_id="fixture", agent_id="agent", surface="turn_envelope", capture_id="one")
+    assert context.prepare_codex_context(original, directory=None, capture_directory=tmp_path,
+        goal_id="fixture", agent_id="agent", surface="quota_packet", capture_id="one").delivery is original
+    wire = context.prepare_codex_context(original, directory=str(tmp_path), capture_directory=tmp_path,
+        goal_id="fixture", agent_id="agent", surface="turn_envelope", capture_id="one").delivery
     assert wire["context"] == original == unchanged
     assert not (tmp_path / "required-context.json").exists()
 
@@ -253,8 +253,8 @@ def test_saved_cli_references_keep_tail_constraints_and_recover_without_detail_r
     path = tmp_path / "original.json"
     raw = json.dumps(original).encode()
     path.write_bytes(raw)
-    assert context.project_codex_context(original, directory=None, capture_directory=tmp_path,
-        goal_id="fixture", agent_id="agent", surface="quota_packet", capture_id="off") is original
+    assert context.prepare_codex_context(original, directory=None, capture_directory=tmp_path,
+        goal_id="fixture", agent_id="agent", surface="quota_packet", capture_id="off").delivery is original
     digest = hashlib.sha256(raw).hexdigest()
     registry, runtime = tmp_path / "no-registry.json", tmp_path / "no-runtime"
     command = ["quota", "context-project", "--capture-file", str(path), "--capture-sha256", digest,
@@ -335,6 +335,33 @@ def test_small_material_keeps_full_capture_when_the_detail_index_costs_more(tmp_
     assert wire["context"] == original
     assert Path(recovery["path"]).name == "projection.json"
     assert not Path(recovery["path"]).with_name("required-context.json").exists()
+
+
+def test_delta_only_retains_original_material_and_recovers_changes(tmp_path, monkeypatch):
+    from loopx.control_plane.quota.turn_envelope import restore_context_delivery
+
+    event = setup(tmp_path, monkeypatch)
+    previous = None
+    for turn, stop in enumerate(("Preserve scope.", "Stop now.")):
+        source = {**payload(), "stop": stop, "evidence": ["stable material " * 1000]}
+        capture = tmp_path / str(turn)
+        capture.mkdir(mode=0o700)
+        wire = context.prepare_codex_context(source, directory=str(tmp_path), capture_directory=capture,
+            goal_id="fixture", agent_id="agent", surface="quota_packet", capture_id=str(turn),
+            progressive_enabled=False).delivery
+        assert json.loads(Path(wire["recovery"]["path"]).read_bytes()) == source
+        from loopx.cli_commands.quota_capture import native_context_capture_view
+        view = native_context_capture_view(wire, capture, context_directory=str(tmp_path), progressive_enabled=False)
+        assert "first_read_command" not in view and "Follow next_command through eof" in view["instruction"]
+        if previous is None:
+            assert wire["mode"] == "full" and wire["context"] == source
+            previous = wire
+            deliver(tmp_path, event, read_pages(tmp_path, wire))
+        else:
+            assert wire["mode"] == "delta"
+            restored = restore_context_delivery(wire, baseline=previous, current={
+                "schema_version": wire["schema_version"], "mode": "full", "target": wire["target"], "context": source})
+            assert restored["mode"] == "delta" and restored["context"] == source
 
 
 def test_small_duplicate_rows_do_not_gain_reference_overhead(tmp_path, monkeypatch):

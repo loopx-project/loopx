@@ -194,7 +194,8 @@ def _mark_completed_capture_attempt(destination: Path, effect_id: str, request_s
     return _write_checkpoint_attempt(marker, value)
 
 
-def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: str) -> str:
+def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: str, *,
+                          guide_in_host: bool = False) -> str:
     """Preload the original guard once, then capture before invoking the model.
 
     The typed owner selects only an admitted replan identity. The prior wake's
@@ -230,7 +231,8 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
                "--runtime-profile", "generic_cli", "--turn-instance-id", receipt["turn_id"],
                "--available-capability", "shell", "--available-capability", "filesystem_write",
                "--decision-output-root", str(capture_root)]
-    if env.get("LOOPX_CONTEXT_DELIVERY") == "on" and env.get("LOOPX_CODEX_CONTEXT_DIR"):
+    native_context = env.get("LOOPX_CONTEXT_DELIVERY") == "on" and bool(env.get("LOOPX_CODEX_CONTEXT_DIR"))
+    if native_context:
         # Capture the complete Goal now, but let the actual native tool select
         # full/delta after SessionStart. Do not consume or invalidate continuity
         # while the Host is preparing a checkpoint outside the model session.
@@ -253,16 +255,26 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
     preflight_seen = guard_path.exists()
     guard_path.write_bytes(raw_guard)
     guard_path.chmod(0o600)
-    view_path = guard_path.with_name("checkpoint-start-view.json")
-    view_path.write_text(guard_run.stdout, encoding="utf-8")
-    view_path.chmod(0o600)
-    reading = (f"Read the complete CLI view at {view_path} before work, then follow its interaction_contract "
-        "and the next step in the replan review when present. ")
-    if env.get("LOOPX_CONTEXT_DELIVERY") == "on" and env.get("LOOPX_CODEX_CONTEXT_DIR"):
+    if native_context:
         from .context_delivery import preflight_context_instruction
 
-        reading = preflight_context_instruction(env, view_path,
-            hashlib.sha256(view_path.read_bytes()).hexdigest(), receipt["turn_id"])
+        # A repeated preflight can replace wake-level paths. Bind both native
+        # read commands to the exact CLI view of this particular guard.
+        view_bytes = guard_run.stdout.encode("utf-8")
+        source_path = captures[0]
+        if view_bytes != raw_guard:
+            source_path = capture_root / "checkpoint-start-view.json"
+            with source_path.open("xb") as stream:
+                os.fchmod(stream.fileno(), 0o600)
+                stream.write(view_bytes)
+        reading = preflight_context_instruction(env, source_path,
+            hashlib.sha256(view_bytes).hexdigest(), receipt["turn_id"], guide_in_host=guide_in_host)
+    else:
+        view_path = guard_path.with_name("checkpoint-start-view.json")
+        view_path.write_text(guard_run.stdout, encoding="utf-8")
+        view_path.chmod(0o600)
+        reading = (f"Read the complete CLI view at {view_path} before work, then follow its interaction_contract "
+            "and the next step in the replan review when present. ")
     preloaded_body = ("Host checkpoint preflight has already executed this wake's original quota guard once. "
         + reading +
         "Do not repeat the initial guard below; use its selection or recovery command when required.\n\n" + body)

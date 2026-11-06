@@ -282,6 +282,7 @@ export function createEffectRuntimeHandlers(
     ["agent.capability_gate.evaluate", lazyHandler(() => import("./agents/capability_gate.ts"), ({evaluateCapabilityGate}) => evaluateCapabilityGate)],
     ["agent.capability_memory", lazyHandler(() => import("./agents/capability_memory.ts"), ({agentCapabilityMemory}) => agentCapabilityMemory)],
     ["benchmark.trajectory.codex-usage", lazyHandler(() => import("./capabilities/trajectory_codex_usage.ts"), ({summarizeTrajectoryCodexUsage}) => summarizeTrajectoryCodexUsage)],
+    ["benchmark.trajectory.usage-comparison", lazyHandler(() => import("./capabilities/trajectory_usage_comparison.ts"), ({projectTrajectoryUsageComparison}) => projectTrajectoryUsageComparison)],
     ["benchmark.trajectory.prepare", lazyHandler(() => import("./capabilities/trajectory_assessment.ts"), ({prepareTrajectoryAssessment}) => prepareTrajectoryAssessment)],
     ["benchmark.trajectory.qualify", lazyHandler(() => import("./capabilities/trajectory_assessment.ts"), ({qualifyTrajectoryAssessment}) => qualifyTrajectoryAssessment)],
     ["benchmark.trajectory.continuation", lazyHandler(() => import("./capabilities/trajectory_assessment_continuation.ts"), ({compareTrajectoryAssessments}) => compareTrajectoryAssessments)],
