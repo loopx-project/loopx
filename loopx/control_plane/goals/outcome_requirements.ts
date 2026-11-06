@@ -238,6 +238,19 @@ export function projectGoalOutcomes(head: JsonObject, goalId: string, acceptance
     execution_authority_granted: false, goal_completion_assessed: false}, acceptance);
 }
 
+/** Structural first-plan readback, not evidence of comprehension or acceptance.
+ * This projection shares the exact canonical declaration/lifetime observation.
+ * Hosts check returned Todo ids against it without inventing semantic criteria. */
+export function outcomePlanningReadback(acceptance: JsonObject, agentId: string): JsonObject {
+  const declaration = acceptance.outcome_requirements as JsonObject | undefined;
+  const current = declaration?.current_lifetime === true;
+  const outcomes = current ? (declaration!.outcomes as JsonObject[])
+    .filter(outcome => outcome.owner_agent_id === agentId) : [];
+  return {agent_id: agentId, declaration_current: current && outcomes.length > 0,
+    outcome_ids: outcomes.map(outcome => outcome.id),
+    linked_todo_ids: [...new Set(outcomes.flatMap(outcome => outcome.todo_ids as string[]))]};
+}
+
 /** Suggest reading order from registered relationships, never reading obligations.
  * Use the complete canonical work snapshot and the existing relation owner;
  * the bounded planning horizon cannot establish this registered-relation closure.

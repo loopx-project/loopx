@@ -229,6 +229,20 @@ def planning_env(tmp_path):
 import json, os, pathlib, subprocess, sys
 print(json.dumps({"type": "thread.started", "thread_id": "planning-fixture-session"}), flush=True)
 packet = json.loads(sys.stdin.read().split("Host-supplied planning checkpoint:\\n", 1)[1])
+prefix = [os.environ["LOOPX_CLI"], "--format", "json", "--registry", os.environ["LOOPX_REGISTRY"],
+          "--runtime-root", os.environ["LOOPX_RUNTIME_ROOT"], "goal-acceptance"]
+route = ["--goal-id", "planning-goal", "--agent-id", "planner"]
+current = packet["goal_acceptance"]
+own = [o for o in current["goal_acceptance_contract"].get("outcome_requirements", {}).get("outcomes", []) if o["owner_agent_id"] == "planner"]
+refinement = pathlib.Path(os.environ["LOOPX_PLANNING_RESULT"]).with_name("agent-requirements.json")
+if not own:
+    document = {"outcome_id": "repair", "owner_agent_id": "planner", "objective": "Repair the failure and preserve a regression test.",
+                "requirements": [{"id": "repair", "description": "The failure is repaired and a regression test retained."}],
+                "source": {"ref": "user-task", "summary": packet["text"].strip()}}
+    refinement.write_text(json.dumps(document))
+    subprocess.run(prefix + ["refine"] + route + ["--document", str(refinement),
+                   "--expected-provider-revision", current["provider_revision"], "--operation-id", "planner-requirements", "--execute"],
+                   check=True, capture_output=True, text=True)
 command = [os.environ["LOOPX_CLI"], "--format", "json", "--registry", os.environ["LOOPX_REGISTRY"],
            "--runtime-root", os.environ["LOOPX_RUNTIME_ROOT"], "todo", "add", "--goal-id", "planning-goal",
            "--role", "agent", "--claimed-by", "planner",
@@ -239,6 +253,13 @@ if not packet["runnable_todo_ids"]:
     todo_id = written["todo_id"]
 else:
     todo_id = packet["runnable_todo_ids"][0]
+if not own or todo_id not in own[0]["todo_ids"]:
+    current = json.loads(subprocess.run(prefix + ["inspect"] + route, check=True, capture_output=True, text=True).stdout)
+    document = {"outcome_id": "repair", "todo_ids": [todo_id]}
+    refinement.write_text(json.dumps(document))
+    subprocess.run(prefix + ["refine"] + route + ["--document", str(refinement),
+                   "--expected-provider-revision", current["provider_revision"], "--operation-id", "planner-requirements-work", "--execute"],
+                   check=True, capture_output=True, text=True)
 result = {"input_digest": packet["input_digest"], "status": "ready", "todo_ids": [todo_id]}
 pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1]).write_text(json.dumps(result))
 pathlib.Path(os.environ["CODEX_HOME"], "seen-argv.json").write_text(json.dumps(sys.argv))
@@ -307,7 +328,8 @@ def test_prose_or_fabricated_todo_does_not_qualify_planning(planning_env):
     binary = Path(planning_env["CODEX_BIN"])
     binary.write_text(
         binary.read_text().replace(
-            '"todo_ids": [todo_id]', '"todo_ids": ["todo_fabricated"]'
+            '"status": "ready", "todo_ids": [todo_id]',
+            '"status": "ready", "todo_ids": ["todo_fabricated"]'
         )
     )
     with pytest.raises(ValueError, match="missing or unrelated"):
@@ -398,6 +420,10 @@ def test_plan_readback_rejects_stale_input_unclaimed_work_and_false_blockers():
         ],
         "runnable_todo_ids": ["todo_owned"],
         "blocking_todo_ids": ["todo_gate"],
+        "goal_acceptance": {"planning_requirements": {
+            "agent_id": "agent", "declaration_current": True,
+            "outcome_ids": ["repair"], "linked_todo_ids": ["todo_owned"],
+        }},
     }
     result = {"input_digest": "input-a", "status": "ready", "todo_ids": ["todo_owned"]}
     assert validate_plan_readback(result, packet, packet)["status"] == "ready"
@@ -415,6 +441,13 @@ def test_plan_readback_rejects_stale_input_unclaimed_work_and_false_blockers():
     ]:
         with pytest.raises(ValueError):
             validate_plan_readback(invalid, packet, packet)
+    for bad in ({}, {"declaration_current": False}, {"agent_id": "peer"}, {"linked_todo_ids": []}):
+        after = packet | {"goal_acceptance": {"planning_requirements": packet["goal_acceptance"]["planning_requirements"] | bad}}
+        if not bad:
+            after["goal_acceptance"] = {}
+        with pytest.raises(ValueError, match="canonical overall requirements"):
+            validate_plan_readback(result, packet, after)
+        assert validate_plan_readback(result | {"status": "blocked", "todo_ids": ["todo_gate"]}, packet, after)["status"] == "blocked"
 
 
 def test_planned_phase_preserves_waits_and_does_not_prewrite_a_todo(
