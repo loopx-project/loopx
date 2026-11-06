@@ -88,6 +88,7 @@ export const todoItemSchema = z.object({
   watch_only: z.union([z.boolean(), z.string()]).optional().nullable(),
   task_domain: z.string().optional().nullable(),
   action_kind: z.string().optional().nullable(),
+  capability_binding_ref: z.string().optional().nullable(),
   // Canonical author provenance, distinct from the Agent authorized to reply.
   created_by: z.string().optional().nullable(),
   claimed_by: z.string().optional().nullable(),

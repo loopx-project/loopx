@@ -1283,7 +1283,7 @@ function PersonalGoalHome({
   workBrowseSearch?: Record<string, unknown>;
   onWorkBrowseChange?: (patch: Partial<GoalWorkBrowseState>, source: string, replace?: boolean) => void;
   onSelectWorkSession: (sessionId: string, replace?: boolean) => void;
-  onSelectWorkAgent: (agentId: string | null) => void;
+  onSelectWorkAgent: (agentId: string | null, sessionId?: string) => void;
   onSelectTodo: (todoId: string | null) => void;
   onSelectView: (view: WorkspaceGoalTab) => void;
   onGoalActivationStateChange: (goalId: string, activationState: "active" | "stopped") => void;
@@ -3941,10 +3941,10 @@ export function DashboardPage() {
             message: current.workSession === sessionId ? current.message : undefined} : current});
       }}
       selectedWorkAgentId={search.workAgent ?? null}
-      onSelectWorkAgent={(agentId) => {
+      onSelectWorkAgent={(agentId, sessionId) => {
         const goalId = search.goalId, statusUrl = search.statusUrl;
         void navigate({search: current => "goalId" in current && current.goalId === goalId && current.statusUrl === statusUrl
-          ? {...current, todo: undefined, workAgent: agentId ?? undefined, workSession: undefined, messageSession: undefined, message: undefined, view: agentId === null ? "overview" : "conversation"} : current});
+          ? {...current, todo: undefined, workAgent: agentId ?? undefined, workSession: sessionId, messageSession: undefined, message: undefined, view: agentId === null ? "overview" : "conversation"} : current});
       }}
       onSelectTodo={(todoId) => {
         const goalId = search.goalId, statusUrl = search.statusUrl;

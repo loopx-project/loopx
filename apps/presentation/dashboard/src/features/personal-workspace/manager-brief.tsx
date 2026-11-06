@@ -1,5 +1,5 @@
 import {ContextHelp} from "./context-help";
-import {ArrowRight, Check, CircleHelp, Hand} from "lucide-react";
+import {ArrowRight, Check, CircleHelp, FileText, Hand} from "lucide-react";
 import {useState, type ReactNode} from "react";
 import { useWorkspaceI18n } from "./i18n";
 import type { WorkspaceActionPreview, WorkspaceAttention, WorkspaceGoal } from "./personal-workspace-model";
@@ -21,7 +21,7 @@ function RunningMeta({ goal }: { goal: WorkspaceGoal }) {
 function BriefTile({ count, empty, kind, live = false, onSelectGoal, onSelectOperation, onSelectAttention, rows, title, total }: {
   count: number;
   empty: string;
-  kind: "needs" | "needs-goals" | "confirmations" | "operations" | "running" | "claimed" | "completed";
+  kind: "needs" | "needs-goals" | "reviews" | "confirmations" | "operations" | "running" | "claimed" | "completed";
   live?: boolean;
   onSelectGoal: (goalId: string) => void;
   onSelectOperation?: (proposal: WorkspaceActionPreview) => void;
@@ -41,7 +41,7 @@ function BriefTile({ count, empty, kind, live = false, onSelectGoal, onSelectOpe
             data-attention-id={row.attention?.todoId} data-attention-source={row.attention?.sourceId}
             onClick={() => row.proposal ? onSelectOperation?.(row.proposal)
               : row.attention && onSelectAttention ? onSelectAttention(row.attention) : onSelectGoal(row.goal.goalId)} type="button">
-            {kind === "completed" ? <span className="personal-brief-check"><Check size={12} /></span>
+            {kind === "reviews" ? <FileText aria-hidden size={16}/> : kind === "completed" ? <span className="personal-brief-check"><Check size={12} /></span>
               : row.attention ? <Hand aria-hidden size={16}/> : <GoalIdentityMark goal={row.goal} />}
             <span><strong>{row.text}</strong><small>{row.meta ?? row.goal.title}</small></span>
             <ArrowRight aria-hidden size={14} />
@@ -61,7 +61,7 @@ export function ManagerBrief({ goals, onSelectGoal, attention = [], onSelectAtte
   operations?: WorkspaceActionPreview[]; onSelectOperation?: (proposal: WorkspaceActionPreview) => void;
   onViewAllOperations?: () => void;
 }) {
-  const { t } = useWorkspaceI18n();
+  const { t, locale } = useWorkspaceI18n();
   const active = goals.filter((goal) => goal.activationState === "active" && !goal.loadState);
   const needs = active.filter((goal) => workspaceHomeLaneForGoal(goal) === "needs_you");
   // Count only observed native items. A Goal digest is a different unit, and
@@ -80,6 +80,9 @@ export function ManagerBrief({ goals, onSelectGoal, attention = [], onSelectAtte
     ].join(" · ")}];
   });
   const summarizedGoals = needs.filter(goal => !attentionRows.some(row => row.goal === goal));
+  const reviews = attentionRows.filter(row => row.attention?.details?.reportReview === true)
+    .map(row => ({...row, meta: [row.goal.title, row.attention?.details?.createdBy ?? row.attention?.details?.boundAgent].filter(Boolean).join(" · ")}));
+  const otherAttention = attentionRows.filter(row => row.attention?.details?.reportReview !== true);
   const incomplete = goals.some(goal => goal.loadState);
   const operationRows: BriefRow[] = operations.flatMap(proposal => {
     const goal = goals.find(goal => goal.goalId === proposal.goalId && !goal.loadState);
@@ -103,9 +106,11 @@ export function ManagerBrief({ goals, onSelectGoal, attention = [], onSelectAtte
     : executionPending ? t("brief.runningReading") : t("activity.executionUnknown");
   return (
     <section aria-label={t("brief.title")} className="personal-brief">
-      <BriefTile count={attentionRows.length} empty={t("brief.needsEmpty")} kind="needs" onSelectGoal={onSelectGoal}
-        onSelectAttention={onSelectAttention} rows={attentionRows} title={t("brief.needs")}
-        total={incomplete ? t("brief.partialGoals") : attentionRows.length ? t("brief.affectedGoals", {count: new Set(attentionRows.map(row => row.goal.goalId)).size}) : null} />
+      {reviews.length ? <BriefTile count={reviews.length} empty="" kind="reviews" onSelectGoal={onSelectGoal}
+        onSelectAttention={onSelectAttention} rows={reviews} title={locale === "zh-CN" ? "待验收成果" : "Results awaiting review"} /> : null}
+      <BriefTile count={otherAttention.length} empty={t("brief.needsEmpty")} kind="needs" onSelectGoal={onSelectGoal}
+        onSelectAttention={onSelectAttention} rows={otherAttention} title={t("brief.needs")}
+        total={incomplete ? t("brief.partialGoals") : otherAttention.length ? t("brief.affectedGoals", {count: new Set(otherAttention.map(row => row.goal.goalId)).size}) : null} />
       {summarizedGoals.length ? <BriefTile count={summarizedGoals.length} empty="" kind="needs-goals" onSelectGoal={onSelectGoal}
         rows={summarizedGoals.map(goal => ({goal, key: goal.goalId, meta: goal.title, text: goal.needsYou ?? goal.nextSentence}))}
         title={t("brief.needsGoals")} /> : null}
