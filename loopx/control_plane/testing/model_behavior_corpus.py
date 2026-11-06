@@ -5,7 +5,11 @@ import random
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from ..quota.turn_envelope import build_turn_envelope
+from ..quota.turn_envelope import (
+    COMPLETE_TURN_DECISION_VERSION,
+    build_turn_envelope,
+    compose_turn_decision,
+)
 from .model_behavior_qualification import (
     MODEL_BEHAVIOR_HARD_INVARIANT_FIELDS,
     MODEL_BEHAVIOR_SEMANTIC_CONTRACT_FIELDS,
@@ -76,11 +80,11 @@ def _case(
         qualification_id=f"validate-{case_id}",
         arm="full_packet",
     )
-    normalized_candidate = copy.deepcopy(
-        dict(candidate_packet)
-        if candidate_packet is not None
-        else build_turn_envelope(normalized_full)
-    )
+    if candidate_packet is None:
+        candidate_packet = (normalized_full
+            if normalized_full.get("schema_version") == COMPLETE_TURN_DECISION_VERSION
+            else compose_turn_decision(normalized_full))
+    normalized_candidate = copy.deepcopy(dict(candidate_packet))
     build_model_behavior_actor_request(
         normalized_candidate,
         qualification_id=f"validate-{case_id}",
@@ -119,11 +123,15 @@ def build_model_behavior_corpus(
             ):
                 raise ValueError("state_matrix case must contain a patch object")
             name = str(item.get("name") or "")
+            full = _deep_merge(base_packet, item["patch"])
             cases.append(
                 _case(
                     case_id=f"matrix-{name}",
                     source_kind="state_matrix",
-                    full_packet=_deep_merge(base_packet, item["patch"]),
+                    full_packet=full,
+                    # This versioned matrix is a frozen v0 control, including
+                    # historical action aliases refused by the current owner.
+                    candidate_packet=build_turn_envelope(full),
                 )
             )
     for item in retained_packets:
@@ -150,17 +158,16 @@ def build_model_behavior_corpus(
         )
     for item in candidate_ablations:
         path = str(item.get("path") or "")
-        candidate = build_turn_envelope(base_packet)
-        _delete_path(candidate, path)
-        cases.append(
-            _case(
-                case_id=str(item.get("case_id") or ""),
-                source_kind="candidate_ablation",
-                full_packet=base_packet,
-                candidate_packet=candidate,
-                expected_outcome="fail_closed",
-            )
+        case = _case(
+            case_id=str(item.get("case_id") or ""),
+            source_kind="candidate_ablation",
+            full_packet=base_packet,
+            expected_outcome="fail_closed",
         )
+        # Validate the public-safe source first, then deliberately break its
+        # current binding. Pair preflight must refuse it without calling actors.
+        _delete_path(case["candidate_packet"], path)
+        cases.append(case)
     case_ids = [case["case_id"] for case in cases]
     if len(case_ids) != len(set(case_ids)):
         raise ValueError("corpus case_id values must be unique")

@@ -13,6 +13,7 @@ from ..scheduler.execution_context import (
 )
 
 TURN_ENVELOPE_SCHEMA_VERSION = "loopx_turn_envelope_v0"
+COMPLETE_TURN_DECISION_VERSION = "loopx_turn_envelope_v1"
 TURN_ENVELOPE_BUDGET_BYTES = 8_192
 CONTRACT_CAPSULE_SCHEMA_VERSION = "loopx_contract_capsule_v0"
 ACTION_SIGNATURE_SCHEMA_VERSION = "loopx_action_signature_v0"
@@ -34,7 +35,7 @@ def _turn_envelope_result(
 
     request = {"operation": operation, **params}
     payload = params.get("payload")
-    complete = isinstance(payload, Mapping) and payload.get("schema_version") == "loopx_turn_envelope_v1"
+    complete = isinstance(payload, Mapping) and payload.get("schema_version") == COMPLETE_TURN_DECISION_VERSION
     token_source = payload if isinstance(payload, Mapping) else params
     if complete or operation in {"reference_context",
             "compose_complete", "context_delivery", "context_recovery",
@@ -260,7 +261,7 @@ def _build_turn_projection(
     # A captured complete contract already records the original host binding.
     # Only transport that value when no caller override was supplied; TS checks
     # its integrity and rejects an explicit conflicting binding.
-    if scheduler_execution_context is None and payload.get("schema_version") == "loopx_turn_envelope_v1":
+    if scheduler_execution_context is None and payload.get("schema_version") == COMPLETE_TURN_DECISION_VERSION:
         binding = payload.get("contract_binding")
         scheduler_execution_args = binding.get("scheduler_execution_args") if isinstance(binding, Mapping) else None
     return _turn_envelope_result(

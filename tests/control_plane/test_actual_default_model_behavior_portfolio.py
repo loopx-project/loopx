@@ -18,7 +18,11 @@ from control_plane.quota_context_fixture import (
 from loopx.control_plane.quota.cli_projection import (
     compact_quota_should_run_cli_payload,
 )
-from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision, quota_action_signature_document
+from loopx.control_plane.quota.turn_envelope import (
+    COMPLETE_TURN_DECISION_VERSION,
+    assert_complete_turn_decision,
+    quota_action_signature_document,
+)
 from loopx.control_plane.scheduler.execution_context import (
     scheduler_execution_context_for_runtime_profile,
 )
@@ -1096,7 +1100,9 @@ def test_planning_horizon_preflight_rejects_missing_compact_projection(
     tmp_path: Path,
 ) -> None:
     sources, packets = _scenario_inputs(tmp_path)
-    packets["turn_planning_horizon_strategic_context"].pop("planning_horizon")
+    changed = deepcopy(sources["turn_planning_horizon_strategic_context"])
+    changed.pop("planning_horizon")
+    packets["turn_planning_horizon_strategic_context"] = compose_scenario_decision(changed)
     calls = 0
 
     def turn_actor(request: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -1125,7 +1131,8 @@ def test_planning_horizon_preflight_rejects_a_broken_middle_relation(
     tmp_path: Path,
 ) -> None:
     sources, packets = _scenario_inputs(tmp_path)
-    horizon = packets["turn_planning_horizon_strategic_context"]["planning_horizon"]
+    changed = deepcopy(sources["turn_planning_horizon_strategic_context"])
+    horizon = changed["planning_horizon"]
     horizon["relations"] = [
         relation
         for relation in horizon["relations"]
@@ -1134,6 +1141,7 @@ def test_planning_horizon_preflight_rejects_a_broken_middle_relation(
             and relation["relation"] == "successor"
         )
     ]
+    packets["turn_planning_horizon_strategic_context"] = compose_scenario_decision(changed)
     calls = 0
 
     def turn_actor(request: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -1162,19 +1170,19 @@ def test_planning_horizon_fixed_facts_oracle_rejects_shared_relation_drift(
     tmp_path: Path,
 ) -> None:
     sources, packets = _scenario_inputs(tmp_path)
-    for packet in (
-        sources["turn_planning_horizon_strategic_context"],
-        packets["turn_planning_horizon_strategic_context"],
-    ):
-        horizon = packet["planning_horizon"]
-        horizon["relations"] = [
-            relation
-            for relation in horizon["relations"]
-            if not (
-                relation["from_todo_id"] == "todo_runtime_admission"
-                and relation["relation"] == "successor"
-            )
-        ]
+    source = sources["turn_planning_horizon_strategic_context"]
+    horizon = source["planning_horizon"]
+    horizon["relations"] = [
+        relation
+        for relation in horizon["relations"]
+        if not (
+            relation["from_todo_id"] == "todo_runtime_admission"
+            and relation["relation"] == "successor"
+        )
+    ]
+    # A validly composed, mutually agreeing pair still fails the independent
+    # fixed strategic-chain oracle. Integrity rejection is tested separately.
+    packets["turn_planning_horizon_strategic_context"] = compose_scenario_decision(source)
     calls = 0
 
     def turn_actor(request: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -1541,10 +1549,13 @@ def test_portfolio_turn_actor_reads_actual_default_packet_without_semantic_echo(
     assert requests
     assert all(request["arm"] == "full_packet" for request in requests)
     assert all(request["packet"]["mode"] == "should-run" for request in requests)
-    assert all(
-        request["packet_schema_version"] == FULL_QUOTA_DECISION_PACKET_SCHEMA_VERSION
-        for request in requests
-    )
+    assert {request["packet_schema_version"] for request in requests} == {
+        COMPLETE_TURN_DECISION_VERSION, FULL_QUOTA_DECISION_PACKET_SCHEMA_VERSION,
+    }
+    assert all(request["packet_schema_version"] == (
+        COMPLETE_TURN_DECISION_VERSION if request["packet"].get("schema_version") == COMPLETE_TURN_DECISION_VERSION
+        else FULL_QUOTA_DECISION_PACKET_SCHEMA_VERSION
+    ) for request in requests)
     required_requests = [
         request for request in requests if request["semantic_contract_required"]
     ]
