@@ -78,9 +78,15 @@ export async function verifyWorkspaceLocales({ browser, url, installApi, outputD
     assert.equal(await statusOnly.getAttribute("aria-pressed"), "true");
     await page.getByLabel("Send a message to LoopX").fill("Show the current state.");
     await page.getByRole("button", { name: "Send", exact: true }).click();
-    await page.locator(".personal-manager-conversation-messages article.is-assistant > strong").getByText("Status only", { exact: true }).waitFor();
+    const managerViews = page.getByRole("navigation", { name: "Manager view", exact: true });
+    const overview = managerViews.getByRole("button", { name: "Overview", exact: true });
+    assert.equal(await overview.getAttribute("aria-current"), "page", "A reply preserves the selected overview");
+    assert.equal(await page.locator(".personal-manager-conversation-tray").count(), 0, "Status replies do not cover the overview");
+    await managerViews.getByRole("button", { name: "Chat", exact: true }).click();
+    await page.locator(".personal-channel-timeline article.is-assistant header strong").getByText("Status only", { exact: true }).waitFor();
     assert.equal(api.turnRequests.length, 0, "Localizing the status-only route must not start an Agent Turn");
     assert.ok(!(await page.locator("body").innerText()).includes("LoopX 状态投影"), "The status-only reply source follows the selected language");
+    await overview.click();
     await page.setViewportSize({ width: 390, height: 844 });
     await page.locator(".personal-channel-scroll").evaluate((element) => { element.scrollTop = 0; });
     const clippedStats = await page.locator(".personal-digest-stats span").evaluateAll((stats) =>
