@@ -81,6 +81,7 @@ _SELECTED_COMMANDS = _STATUS_COMMANDS | GLOBAL_READ_COMMANDS | PROJECT_LIFECYCLE
 	"goal-acceptance",
 	"host-mode-plan",
 	"capability",
+	"history",
 }
 # Existing CLI vocabulary; this set chooses loading, not operation authority.
 _CAPABILITY_DISCOVERY_COMMANDS = frozenset({"list", "show"})
@@ -416,6 +417,10 @@ def _build_selected_parser(command: str) -> LoopXArgumentParser:
 		from .cli_commands.capability import register_capability_commands
 
 		register_capability_commands(subparsers, add_subcommand_format)
+	elif command == "history":
+		from .cli_commands.history import register_history_command
+
+		register_history_command(subparsers)
 	else:  # pragma: no cover - caller guards the private interface
 		raise ValueError(f"unsupported selected command: {command}")
 	return parser
@@ -718,6 +723,14 @@ def _dispatch_selected(args: argparse.Namespace, raw_argv: list[str]) -> int:
 			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
 			output_format=output_format, print_payload=print_payload,
 		)
+	elif args.command == "history":
+		from .cli_commands.history import handle_history_command
+
+		# Direct full-CLI callers retain their original facade-bound handler.
+		result = handle_history_command(
+			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
+			print_payload=print_payload,
+		)
 	else:
 		result = dispatch_common_command(
 			args,
@@ -766,10 +779,16 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _run_command(command: str | None, raw_argv: list[str]) -> int:
+	if command == "history" and "loopx.cli" in sys.modules:
+		# An explicitly loaded facade keeps its existing handler/renderer bindings.
+		return _run_full_cli(raw_argv)
 	if command in _SELECTED_COMMANDS:
 		try:
 			args = _build_selected_parser(command).parse_args(raw_argv)
 		except _SelectedParseRejected:
+			return _run_full_cli(raw_argv)
+		if command == "history" and args.history_action is not None:
+			# Select ordinary reads; maintenance keeps its complete original route.
 			return _run_full_cli(raw_argv)
 		if command == "capability":
 			if args.capability_command not in _CAPABILITY_DISCOVERY_COMMANDS:
