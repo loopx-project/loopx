@@ -58,9 +58,10 @@ function inertReportHtml(content: string, zh: boolean): string {
   return "<!doctype html>" + document.documentElement.outerHTML;
 }
 
-export function GoalReportReviews({goalId, sourceId, zh, focusTodoId, refreshKey, callbacks, readOnly = false}: {
+export function GoalReportReviews({goalId, sourceId, zh, focusTodoId, refreshKey, callbacks, readOnly = false, onSelectionChange}: {
   goalId: string; sourceId?: string; zh: boolean; focusTodoId?: string; refreshKey: string;
   callbacks: PersonalWorkspaceCallbacks; readOnly?: boolean;
+  onSelectionChange?: (todoId?: string) => void;
 }) {
   const [rows, setRows] = useState<ReportReviewRow[]>([]);
   const [selected, setSelected] = useState<ReportReviewRead | null>(null);
@@ -75,6 +76,14 @@ export function GoalReportReviews({goalId, sourceId, zh, focusTodoId, refreshKey
   const selectedId = useRef<string | null>(focusTodoId ?? null);
   const focus = useResultCatalogFocus();
   const storageKey = JSON.stringify(["loopx-report-reading", sourceId ?? location.origin, goalId]);
+  function rememberSelection(todoId?: string) {
+    selectedId.current = todoId ?? null;
+    try {
+      if (todoId) sessionStorage.setItem(storageKey, todoId);
+      else sessionStorage.removeItem(storageKey);
+    } catch { /* Reading works without storage. */ }
+    onSelectionChange?.(todoId);
+  }
   useEffect(() => {
     const destination = JSON.stringify([storageKey, focusTodoId]);
     if (navigation.current !== destination) {
@@ -94,7 +103,7 @@ export function GoalReportReviews({goalId, sourceId, zh, focusTodoId, refreshKey
     if (value.goal_id !== goalId || value.review.todo_id !== todoId || value.todo.todo_id !== todoId)
       throw Error(zh ? "材料来源已变化" : "Material source changed");
     setSelected(value);
-    try {sessionStorage.setItem(storageKey, todoId);} catch { /* Reading works without storage. */ }
+    rememberSelection(todoId);
   }
   async function load(next?: string) {
     const current = ++generation.current;
@@ -116,8 +125,8 @@ export function GoalReportReviews({goalId, sourceId, zh, focusTodoId, refreshKey
   }
   async function select(row: ReportReviewRow) {
     const current = ++generation.current;
-    selectedId.current = row.todo_id; setReading(row.todo_id); setSelected(null); setTextOnly(false);
-    try {sessionStorage.setItem(storageKey, row.todo_id);} catch { /* Selection is optional. */ }
+    setReading(row.todo_id); setSelected(null); setTextOnly(false);
+    rememberSelection(row.todo_id);
     setBusy(true); setError(""); focus.reader();
     try {await read(row.todo_id, current);}
     catch {if (current === generation.current) setError(zh ? "原版本已不可读取，请重试。" : "The original edition cannot be read. Retry.");}
@@ -131,8 +140,8 @@ export function GoalReportReviews({goalId, sourceId, zh, focusTodoId, refreshKey
   const html = selected?.artifacts.find(item => item.renderer_id === "html_artifact_v0");
   const htmlView = useMemo(() => html ? inertReportHtml(html.content, zh) : "", [html?.content, zh]);
   function returnToCatalog() {
-    generation.current++; selectedId.current = null; setReading(null); setSelected(null); setBusy(false); setError("");
-    try {sessionStorage.removeItem(storageKey);} catch { /* Optional selection. */ }
+    generation.current++; setReading(null); setSelected(null); setBusy(false); setError("");
+    rememberSelection();
     if (reading) focus.row(reading);
   }
   const attention: WorkspaceAttention | null = selected ? {goalId, sourceId, todoId: selected.review.todo_id,

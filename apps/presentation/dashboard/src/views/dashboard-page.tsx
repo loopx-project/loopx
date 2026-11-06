@@ -3067,6 +3067,10 @@ function PersonalGoalHome({
     goals: normalizedModel.goals.map((goal) => ({
       ...goal,
       execution: goalExecution(goalSessionFacts, goal.goalId, goal.hostThreadActivity),
+      reportReviewAttention: goal.reportReviewAttention?.map(item => sourceAttention(
+        item, statusSourceControl.activeSource.statusUrl,
+        sourceIsReady && !progress?.errors[goal.goalId], goal.title,
+      )),
     })),
     userTodos: model.userTodos.map(attentionForWorkspace),
     attentionHistory: (model.attentionHistory ?? model.userTodos).map(attentionForWorkspace),

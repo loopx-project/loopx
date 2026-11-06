@@ -2777,6 +2777,7 @@ export function PersonalWorkspacePage({
               <GoalReportReviews key={JSON.stringify([seenStatusSource, selectedGoal.goalId])} goalId={selectedGoal.goalId} sourceId={seenStatusSource}
                 zh={locale === "zh-CN"} callbacks={effectiveDrawerCallbacks}
                 focusTodoId={selectedReportReview?.goalId === selectedGoal.goalId ? selectedReportReview.todoId : undefined}
+                onSelectionChange={(todoId) => setSelectedReportReview(todoId ? {goalId: selectedGoal.goalId, todoId} : null)}
                 refreshKey={JSON.stringify(model.userTodos.filter(item => item.goalId === selectedGoal.goalId))}/>
             </Suspense> : undefined}
             researchApi={researchApi}
