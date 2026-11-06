@@ -209,12 +209,15 @@ class ChatSessionStore(ChatIngressStore):
     """Filesystem store kept outside project and public LoopX run history."""
 
     def __init__(self, runtime_root: Path, *, startup_maintenance: bool = True) -> None:
+        from .capabilities.native_chat.file_discovery import FileChatDiscovery
+
         self.root = runtime_root.expanduser().resolve() / "chat"
         self.sessions_root = self.root / "sessions"
         self._session_lock_guard = threading.Lock()
         self._session_locks: WeakValueDictionary[str, threading.Lock] = WeakValueDictionary()
         self._event_lock = threading.RLock()
         self._event_cache = ChatEventCache(self._event_lock)
+        self._terminal_turn_discovery = FileChatDiscovery()
         self._event_pending: dict[tuple[str, str], list[tuple[dict[str, Any], str]]] = {}
         self._event_flush_locks: WeakValueDictionary[tuple[str, str], threading.Lock] = WeakValueDictionary()
         self.sessions_root.mkdir(parents=True, exist_ok=True, mode=0o700)

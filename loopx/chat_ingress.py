@@ -81,9 +81,8 @@ class ChatIngressStore:
         active_turn_id = str(session.get("active_turn_id") or "")
         turns_dir = self._session_dir(session_id) / "turns"
         rows: list[dict[str, Any]] = []
-        for path in turns_dir.glob("*.json") if turns_dir.is_dir() else []:
-            if path.name.endswith(".events.json"):
-                continue
+
+        def read(path):
             if strict:
                 try:
                     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -100,6 +99,18 @@ class ChatIngressStore:
                     raise OSError("Queued Turn state is invalid")
             else:
                 payload = _read_json(path)
+            return payload
+
+        def terminal(path, payload):
+            if (payload.get("schema_version") == CHAT_TURN_SCHEMA_VERSION
+                    and payload.get("session_id") == session_id and payload.get("turn_id") == path.stem
+                    and isinstance(payload.get("status"), str)
+                    and payload.get("status") in TERMINAL_TURN_STATES):
+                return {key: payload[key] for key in ("schema_version", "session_id", "turn_id", "status")}
+            return None
+
+        paths = (path for path in turns_dir.glob("*.json") if not path.name.endswith(".events.json"))
+        for path, payload in self._terminal_turn_discovery.rows(turns_dir, paths, read=read, project=terminal):
             if (
                 payload.get("schema_version") == CHAT_TURN_SCHEMA_VERSION
                 and payload.get("status") == "queued"

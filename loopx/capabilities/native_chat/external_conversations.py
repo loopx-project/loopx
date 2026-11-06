@@ -24,6 +24,7 @@ from ...control_plane.quota.automation_cadence_readback import (
 )
 from ...file_lock import exclusive_file_lock, try_exclusive_file_lock
 from .codex_context import checked_session_home
+from .file_discovery import FileChatDiscovery
 
 # Request journals are named by their 24-hex request_ref; lock metadata and
 # other siblings in this directory are not requests.
@@ -82,7 +83,7 @@ class _RecoveryDiscoveryReads:
 
     def source_controls(self) -> list[dict[str, Any]]:
         if self.controls is None:
-            self.controls = self.core.pending()
+            self.controls = self.core.source_controls()
         return self.controls
 
 
@@ -92,6 +93,7 @@ class ChatExternalConversations:
         self.bindings = controller.project_contexts.conversation_bindings
         self.bindings.controller = controller
         self.root = controller.store.root / "external-requests"
+        self._source_control_discovery = FileChatDiscovery()
         self.actions: Any | None = None
 
     def _context_recovery_plan(self, row: dict[str, Any], *,
@@ -182,7 +184,7 @@ class ChatExternalConversations:
                     and item.get("source") == row["source"] and item.get("command") is None
                     and datetime.fromisoformat(item["created_at"]) > datetime.fromisoformat(row["created_at"])
                     for item in (discovery_reads.source_controls() if discovery_reads is not None
-                                 else self.pending())) if turn.get("error_code") == "antigravity_step_error" else None,
+                                 else self.source_controls())) if turn.get("error_code") == "antigravity_step_error" else None,
                 "native_input": anchors[0] if len(anchors) == 1 else None,
                 "response_literal_open": bool(open_literal),
                 "metadata_capacity": metadata_capacity,
@@ -212,7 +214,7 @@ class ChatExternalConversations:
                 item.get("binding_id") == row["binding_id"] and item.get("source") == row["source"]
                 and item.get("command") in {"stop", "new"}
                 and datetime.fromisoformat(item["created_at"]) >= datetime.fromisoformat(row["created_at"])
-                for item in (source_controls or self.pending)())))
+                for item in (source_controls or self.source_controls)())))
 
     def quota_backlog_observer(self) -> Callable[[Sequence[dict[str, Any]]], list[bool]]:
         """Batch the existing typed projection; share controls only within this read."""
@@ -221,7 +223,7 @@ class ChatExternalConversations:
         def read_controls() -> list[dict[str, Any]]:
             nonlocal controls
             if controls is None:
-                controls = self.pending()
+                controls = self.source_controls()
             return controls
 
         def observe(rows: Sequence[dict[str, Any]]) -> list[bool]:
@@ -1247,6 +1249,19 @@ class ChatExternalConversations:
     def pending(self) -> list[dict[str, Any]]:
         return [_read_json(path) for path in sorted(self.root.glob("*.json"))
                 if _REQUEST_JOURNAL_STEM.fullmatch(path.stem)]
+
+    def source_controls(self) -> list[dict[str, Any]]:
+        """Observe exact source-control fields without reparsing unchanged bodies.
+
+        Recovery/stop rules remain with their original typed owner and callers.
+        A new, replaced or modified journal is read again; pending() and exact
+        request reads still expose the complete current canonical records.
+        """
+        paths = (path for path in sorted(self.root.glob("*.json"))
+                 if _REQUEST_JOURNAL_STEM.fullmatch(path.stem))
+        return [row for _path, row in self._source_control_discovery.rows(self.root, paths,
+            read=_read_json, project=lambda _path, row: {
+                key: row[key] for key in ("binding_id", "source", "command", "created_at") if key in row})]
 
     def read_request(self, request_ref: str) -> dict[str, Any]:
         return _read_json(self.root / f"{request_ref}.json")

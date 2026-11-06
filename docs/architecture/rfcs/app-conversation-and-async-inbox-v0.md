@@ -1921,3 +1921,21 @@ Reservation/enqueue crashes adopt the same queued Turn. A failed, partial or
 unknown review stays pending and cannot become another review or business retry.
 Other malformed actions and completed Turns without a recovered native result
 remain explicit holds; this path is not a generic action or execution replayer.
+
+### File-backed idle recovery observations
+
+Repeated recovery checks must not reparse every historical Turn and source body
+for each old request. The File Chat provider retains only validated terminal-Turn
+identity/status and the source-control fields used by the existing stop/new and
+later-input checks. Reuse requires an unchanged device, inode, nanosecond mtime,
+ctime and size, checked before and after the original read. Changed or unreadable
+files use the original reader; nonterminal Turns are always read in full. Deleted
+entries are pruned, concurrent callers receive independent metadata, and a read
+racing a replacement cannot seed a reusable observation.
+
+These observations are neither recovery decisions nor grants. Exact requests,
+selected Turns, current bindings, native effects and typed admission remain fresh.
+Source qualification compares the same File history and complete recovery plans,
+including newly queued input, strict read failures, stop/new changes and replaced
+files with preserved mtime. Installed responsiveness, provider/model availability
+and actual original-audience replies remain separate acceptance obligations.
