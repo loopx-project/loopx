@@ -120,7 +120,10 @@ def register_support_control_commands(
     registry_boundary_parser.add_argument(
         "--require-not-tracked",
         action="store_true",
-        help="Return non-zero if the registry is tracked while publication policy disallows pushing it.",
+        help=(
+            "For registries that cannot be pushed, return non-zero if tracked "
+            "or if Git cannot verify the tracking state."
+        ),
     )
     registry_boundary_parser.add_argument(
         "--require-gitignored",
@@ -309,14 +312,12 @@ def handle_support_control_command(
         if (
             args.require_not_tracked
             and payload.get("ok")
-            and git.get("tracked")
             and not payload.get("github_push_allowed")
+            and git.get("probe_status") == "git_unavailable"
+            and (git.get("inside_worktree") or git.get("worktree_discovery_unknown"))
         ):
-            payload = dict(payload)
             payload["ok"] = False
-            payload.setdefault("risks", []).append(
-                "registry_tracked_but_not_push_allowed"
-            )
+            payload["error"] = "Could not determine whether the registry is tracked by Git."
         if (
             args.require_gitignored
             and payload.get("ok")

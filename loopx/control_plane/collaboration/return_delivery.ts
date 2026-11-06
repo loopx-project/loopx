@@ -16,7 +16,7 @@ import { atomicWriteJson, withFileMutationLock } from "../effect_runtime_io.ts";
 import { parseTodoTimestampMicros } from "../runtime_timestamp.ts";
 import { decideCollaborationLifecycle } from "./goal_instance_lifecycle.ts";
 import { resolveConversationScope } from "./conversation_scope.ts";
-import { planCollaborationResult, collaborationResultDeliveryReady, collaborationResultText } from "./result_publication.ts";
+import { planCollaborationResult, collaborationResultDeliveryReady, collaborationResultText, usesReaderReturnFormat } from "./result_publication.ts";
 
 export const MANAGER_RETURN_DELIVERY_ATTEMPT_SCHEMA =
   "manager_return_delivery_attempt_v0";
@@ -436,7 +436,9 @@ async function prepareReturn(command: ReturnCommand, state: JsonObject): Promise
   const verify = priorStatus === "verification_required" || command.exact && state.attempt != null;
   const prefix = command.exact ? (reply.phase === "conclusion" ? "处理结论" : "处理进展")
     : (reply.phase === "conclusion" ? "协作回复" : "协作进展");
-  const text = `${prefix} · ${reply.agent_id} · 委托 ${String(reply.request_id).slice(0, 8)}\n\n${collaborationResultText(reply)}`;
+  const provenance = `${prefix} · ${reply.agent_id} · 委托 ${String(reply.request_id).slice(0, 8)}`;
+  const body = collaborationResultText(reply);
+  const text = usesReaderReturnFormat(reply) ? `${body}\n\n${provenance}` : `${provenance}\n\n${body}`;
 
   return returnResponse({ action: privateConversation ? "private" : verify ? "verify" : "send",
     text, message_id: returnMessageId(command), attempt: verify ? savedAttempt(state.attempt) : null, attachments: reply.attachments ?? [],

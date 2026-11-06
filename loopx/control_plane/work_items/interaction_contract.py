@@ -649,6 +649,30 @@ def interaction_next_cli_actions(
     )
 
 
+def _automation_prompt_upgrade_cli_actions(
+    payload: Mapping[str, object], *, command_prefix: str, goal_id: str,
+) -> list[str]:
+    """Render the existing prompt-upgrade commands without selecting work."""
+    automation_prompt_upgrade = (
+        cast(dict[str, Any], payload.get("automation_prompt_upgrade"))
+        if isinstance(payload.get("automation_prompt_upgrade"), dict)
+        else {}
+    )
+    actions = [
+        str(item.get("command") or "").strip()
+        for item in automation_prompt_upgrade.get("agent_example_commands") or []
+        if isinstance(item, dict)
+    ]
+    completion_command = str(
+        automation_prompt_upgrade.get("completion_command") or ""
+    ).strip()
+    if completion_command:
+        actions.append(completion_command)
+    return [action for action in actions if action] or [
+        f"{command_prefix} heartbeat-prompt --thin --goal-id {goal_id} --agent-id <registered-agent> --agent-scope '<scope>'",
+    ]
+
+
 def _admitted_interaction_next_cli_actions(
     payload: dict[str, Any],
     *,
@@ -779,24 +803,9 @@ def _admitted_interaction_next_cli_actions(
             "no quota spend until a due monitor, verified direct reply, or explicit work-mode change"
         ]
     if mode == "automation_prompt_upgrade":
-        automation_prompt_upgrade = (
-            cast(dict[str, Any], payload.get("automation_prompt_upgrade"))
-            if isinstance(payload.get("automation_prompt_upgrade"), dict)
-            else {}
+        return _automation_prompt_upgrade_cli_actions(
+            payload, command_prefix=command_prefix, goal_id=goal_id,
         )
-        actions = [
-            str(item.get("command") or "").strip()
-            for item in automation_prompt_upgrade.get("agent_example_commands") or []
-            if isinstance(item, dict)
-        ]
-        completion_command = str(
-            automation_prompt_upgrade.get("completion_command") or ""
-        ).strip()
-        if completion_command:
-            actions.append(completion_command)
-        return [action for action in actions if action] or [
-            f"{command_prefix} heartbeat-prompt --thin --goal-id {goal_id} --agent-id <registered-agent> --agent-scope '<scope>'",
-        ]
     if mode == "monitor_quiet_skip":
         if heartbeat_turn_receipt_enabled:
             return [typed_heartbeat_receipt_retry]
