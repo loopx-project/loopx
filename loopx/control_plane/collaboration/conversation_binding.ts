@@ -743,14 +743,14 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
   if ((previous?.read_only_review === true && previous.failed_turn_id !== row.turn_id)
       || (Array.isArray(row.context_recovery_history) && row.context_recovery_history.some(value =>
         requireJsonObject(value, "prior recovery").read_only_review === true))) return no;
+  if (failed.error_code === "server_restarted") {
+    return planResultReview(recovery, row, current, failed, previous, version);
+  }
   const exhaustedAnswer = steward && current.agent_id === "codex"
     ? planExhaustedStewardAnswer(recovery, row, current, failed, previous, version) : null;
   if (exhaustedAnswer !== null) return exhaustedAnswer;
   if (failed.status === "completed" && !steward) {
     return planUnfinishedWork(recovery, row, current, failed, previous, version);
-  }
-  if (!steward && failed.error_code === "server_restarted") {
-    return planResultReview(recovery, row, current, failed, previous, version);
   }
   if (failed.session_id !== current.session_id || failed.turn_id !== row.turn_id
       || failed.status !== "failed" || failed.delta_count !== 0 || failed.response !== null
@@ -1223,16 +1223,20 @@ function planInterruptedStewardAnswer(recovery: JsonObject, row: JsonObject, cur
   return {...capacity, recovery_eligible: capacity.recovery_eligible === true && capacity.answer_executor === "codex"};
 }
 
-/** Original project result reviews retain their workspace-only read policy. */
+/** Reuse the original queue for a restricted result review, never business replay. */
 function planResultReview(recovery: JsonObject, row: JsonObject, current: JsonObject,
   failed: JsonObject, previous: JsonObject | null, version: number): JsonObject {
   const no = {operation: "admit_turn", recovery_candidate: false, recovery_eligible: false};
+  const steward = current.steward_context != null;
+  const review = steward ? {answer_review: true, answer_executor: "codex"} : {};
   if (failed.session_id !== current.session_id || failed.turn_id !== row.turn_id
       || failed.status !== "failed" || failed.response !== null
       || !Number.isSafeInteger(failed.delta_count) || Number(failed.delta_count) <= 0
       || recovery.steering_observed !== false || recovery.stop_observed !== false
       || recovery.attachments_present !== false
-      || typeof failed.upstream_turn_id !== "string" || !failed.upstream_turn_id) return no;
+      || typeof failed.upstream_turn_id !== "string" || !failed.upstream_turn_id
+      || steward && (failed.client_turn_id !== `external-${row.request_ref}`
+        || failed.message !== row.message || failed.origin !== row.origin)) return no;
   const client = `external-${ref(row.request_ref, "original request")}-recovery-${version}-review-1`;
   if (previous?.read_only_review === true && (previous.failed_turn_id !== failed.turn_id
       || previous.version !== version || previous.client_turn_id !== client)) return no;
@@ -1242,7 +1246,7 @@ function planResultReview(recovery: JsonObject, row: JsonObject, current: JsonOb
         || admitted.turn_id === failed.turn_id || admitted.message !== row.message
         || admitted.origin !== row.origin || (admitted.attachments != null
           && (!Array.isArray(admitted.attachments) || admitted.attachments.length))) return no;
-    return {...no, recovery_candidate: true, recovery_eligible: recovery.source_verified === true,
+    return {...no, ...review, recovery_candidate: true, recovery_eligible: recovery.source_verified === true,
       read_only_review: true, client_turn_id: client, session_id: current.session_id,
       admitted_turn_id: sessionIdentity(admitted.turn_id, "admitted result review"), native_thread_ids: []};
   }
@@ -1250,15 +1254,20 @@ function planResultReview(recovery: JsonObject, row: JsonObject, current: JsonOb
   const now = Date.parse(String(recovery.observed_at)), completed = Date.parse(String(failed.completed_at));
   if (!Number.isFinite(now) || !Number.isFinite(completed) || now < completed + 60_000) return no;
   const native = sessionIdentity(current.upstream_thread_id, "original native thread");
-  const candidate = {...no, recovery_candidate: true, read_only_review: true,
+  const candidate = {...no, ...review, recovery_candidate: true, read_only_review: true,
     client_turn_id: client, session_id: current.session_id, failed_turn_id: failed.turn_id,
     native_thread_ids: [native]};
   if (recovery.native_observation == null) return candidate;
   const observed = requireJsonObject(recovery.native_observation, "interrupted result inventory");
-  return {...candidate, recovery_eligible: recovery.source_verified === true
+  const eligible = recovery.source_verified === true
     && observed.thread_id === native && observed.turn_id === failed.upstream_turn_id
     && observed.read_only_review === true && observed.no_final_answer === true
-    && observed.effects_observed === true};
+    && observed.effects_observed === true && (!steward
+      || typeof observed.native_inventory_sha256 === "string"
+        && BARE_SHA256_PATTERN.test(observed.native_inventory_sha256));
+  if (!eligible || !steward) return {...candidate, recovery_eligible: eligible};
+  const capacity = nativeRecoveryCapacity(recovery, row, current, candidate);
+  return {...capacity, recovery_eligible: capacity.recovery_eligible === true && capacity.answer_executor === "codex"};
 }
 
 /** A local manager-context failure precedes native dispatch. Only the Core's

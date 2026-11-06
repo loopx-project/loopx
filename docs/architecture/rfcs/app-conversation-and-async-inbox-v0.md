@@ -1816,6 +1816,25 @@ native inventory reads and crashes before admission, after enqueue and before
 transport synchronization. Synthetic model/provider journeys and read-only native
 observations do not certify live model completion or the wider conversation SLA.
 
+### A steward answer interrupted by service restart
+
+A Codex steward using the configured flexible allowance route can reserve one
+restricted answer review after `server_restarted`, even when tools already ran.
+The original reply worker must independently read a stable, complete interrupted
+native inventory with no final answer or live items. Native dynamic-tool calls
+are effect items too; a stable terminal inventory permits only this read-only
+review, never business replay. Its digest is rechecked before review execution.
+
+The same source, owner, grant, stop checks and `review-1` queue reservation apply.
+Fresh configured Codex capacity must verify before admission and again before
+dispatch. The new restricted thread retains only authorized manager reads; writes,
+network effects, handoffs and business continuation are disabled. It answers from
+existing evidence or gives a concrete partial answer. The original failed Turn
+and failure notice remain unchanged; restart or an uncertain enqueue response
+adopts the reserved review instead of granting another attempt. Missing native
+evidence or capacity remains pending. The failure notice describes this qualified
+recovery instead of giving every restart the same blanket no-replay message.
+
 ### Explicit unfinished work after a completed Turn
 
 A terminal model Turn is distinct from completed business work. A private
