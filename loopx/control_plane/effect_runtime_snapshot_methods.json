@@ -1,4 +1,6 @@
 [
+  "presentation.report_review.project",
+  "presentation.report_review.plan",
   "todo.read",
   "todo.quota_planning.project",
   "goal.vision_wait.project",

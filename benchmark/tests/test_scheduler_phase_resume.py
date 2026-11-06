@@ -13,13 +13,20 @@ from benchmark.runtime.scheduler import resume_state_file, worker_command
 
 
 def _stopped(path):
-    receipt = path.parent / "wakes" / "source" / "receipt.json"
-    receipt.parent.mkdir(parents=True)
+    receipt = path.parent / "wakes" / path.stem / "receipt.json"
+    receipt.parent.mkdir(parents=True, exist_ok=True)
     receipt.write_text(json.dumps(dict(budget_exhausted=True, host_invoked=False,
                                       mode="heartbeat", stage="execute")))
-    path.write_text(json.dumps(dict(host_attempt=dict(status="stopped", scope="a" * 64,
-        attempt=1, stop_exit_code=75), last_wake_rc=75, last_wake_status="wake_requested_stop")))
+    state = json.loads(path.read_text()) if path.exists() else {}
+    state.update(host_attempt=dict(status="stopped", scope="a" * 64,
+        attempt=1, stop_exit_code=75), last_wake_rc=75, last_wake_status="wake_requested_stop")
+    path.write_text(json.dumps(state))
     path.with_name(path.name + ".host-attempt").write_text('{"pending":false}')
+
+
+def _resume(path, end):
+    return Path(resume_state_file(str(path), phase_deadline=end, agent_id="agent",
+                                  wake_log_dir=str(path.parent / "wakes")))
 
 
 def test_budget_phase_retries_keep_the_same_state_and_original_receipts(tmp_path):
@@ -41,6 +48,59 @@ def test_budget_phase_retries_keep_the_same_state_and_original_receipts(tmp_path
     assert json.loads(Path(new).read_bytes())["host_attempt"]["status"] == "failed"
 
 
+def test_repeated_budget_stops_advance_from_the_actual_predecessor(tmp_path):
+    root = tmp_path / "scheduler.json"
+    _stopped(root)
+    second = _resume(root, time.time() + 1000)
+    _stopped(second)
+    third = _resume(root, time.time() + 2000)
+    assert third not in {root, second}
+    assert json.loads(third.read_text())["resume_from"] == str(second)
+
+
+@pytest.mark.parametrize("change", ["hard_failure", "unknown", "started", "unreadable", "interrupted"])
+def test_later_phase_cannot_skip_the_latest_host_attempt(tmp_path, change):
+    from loopx.control_plane.turn_driver.host_failure import build_host_failure_record
+
+    root = tmp_path / "scheduler.json"
+    _stopped(root)
+    second = _resume(root, time.time() + 1000)
+    _stopped(second)
+    state = json.loads(second.read_text())
+    if change == "hard_failure":
+        state["host_attempt"] = {
+            "scope": "a" * 64, "status": "failed", "attempt": 1,
+            "host_failure": build_host_failure_record("quota_exhausted", attempt=1),
+            "not_before": time.time() + 100,
+        }
+        state["last_wake_rc"] = 1
+        state["last_wake_status"] = "wake_failed"
+    elif change == "unknown":
+        state["host_attempt"] = {
+            "scope": "a" * 64, "status": "failed", "attempt": 1,
+            "host_failure": build_host_failure_record("unknown", attempt=1),
+            "not_before": time.time() + 100,
+        }
+        state["last_wake_rc"] = 1
+        state["last_wake_status"] = "wake_failed"
+    elif change == "started":
+        state["host_attempt"]["status"] = "started"
+    elif change == "unreadable":
+        second.write_text("broken-state")
+    else:
+        receipt = tmp_path / "wakes" / second.stem / "receipt.json"
+        receipt.write_text(json.dumps(dict(budget_exhausted=True, host_invoked=True,
+                                          mode="heartbeat", stage="execute")))
+        second.touch()
+    if change != "unreadable":
+        second.write_text(json.dumps(state))
+    before = second.read_bytes()
+    later = _resume(root, time.time() + 2000)
+    assert later == second
+    assert second.read_bytes() == before
+    assert not list(tmp_path.glob("scheduler.phase-*.json"))[1:]
+
+
 @pytest.mark.parametrize("change", ["started", "provider_failure", "other_stop", "interrupted", "unknown_witness"])
 def test_phase_continuation_does_not_clear_host_recovery_or_other_stops(tmp_path, change):
     old = tmp_path / "scheduler.json"
@@ -53,7 +113,7 @@ def test_phase_continuation_does_not_clear_host_recovery_or_other_stops(tmp_path
     elif change == "other_stop":
         state["host_attempt"]["stop_exit_code"] = 76
     elif change == "interrupted":
-        receipt = tmp_path / "wakes" / "source" / "receipt.json"
+        receipt = tmp_path / "wakes" / old.stem / "receipt.json"
         receipt.write_text(json.dumps(dict(budget_exhausted=True, host_invoked=True,
                                           mode="heartbeat", stage="execute")))
         # The stopped transport snapshot follows this interrupted receipt.
