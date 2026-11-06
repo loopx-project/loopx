@@ -228,6 +228,50 @@ function canonicalHash(value: unknown): string {
   return `sha256:${createHash("sha256").update(JSON.stringify(canonicalValue(value)), "utf8").digest("hex")}`;
 }
 
+function replanAuthoringContract(payload: JsonObject): JsonObject {
+  const contract = object(object(payload.replan_action_packet).writeback_contract);
+  if (!Object.hasOwn(contract, "vision_authoring_ref")) return contract;
+  const reference = contract.vision_authoring_ref;
+  const match = typeof reference === "string"
+    ? /^\$\.interaction_contract\.cli_channel\.settlement_plan\.ordered_steps\[(0|[1-9]\d*)\]\.vision_authoring$/.exec(reference) : null;
+  const steps = object(object(object(payload.interaction_contract).cli_channel).settlement_plan).ordered_steps;
+  const step = object(match && Array.isArray(steps) ? steps[Number(match[1])] : null);
+  if (Object.hasOwn(contract, "vision_authoring") || step.kind !== "durable_writeback" ||
+      Object.hasOwn(step, "vision_authoring_ref") || !Object.keys(object(step.vision_authoring)).length) {
+    throw new EffectRuntimeRequestError("Replan authoring reference must resolve to one complete inline durable-writeback owner");
+  }
+  delete contract.vision_authoring_ref;
+  return {...contract, vision_authoring: step.vision_authoring};
+}
+
+function referenceReplanAuthoring(payload: JsonObject,
+    identity = contextSourceIdentity(payload)): JsonObject {
+  const packet = object(payload.replan_action_packet);
+  const contract = object(packet.writeback_contract);
+  if (Object.hasOwn(contract, "vision_authoring_ref")) {
+    replanAuthoringContract(payload);
+    return payload;
+  }
+  const authoring = object(contract.vision_authoring);
+  const steps = object(object(object(payload.interaction_contract).cli_channel).settlement_plan).ordered_steps;
+  if (!Object.keys(authoring).length || !Array.isArray(steps)) return payload;
+  const encoded = JSON.stringify(canonicalValue(authoring));
+  const source = identity(authoring, ["replan_action_packet", "writeback_contract", "vision_authoring"]);
+  const index = steps.findIndex((value, index) => {
+    const step = object(value);
+    return step.kind === "durable_writeback" && !Object.hasOwn(step, "vision_authoring_ref") &&
+      jsonObject(step.vision_authoring) !== null &&
+      identity(step.vision_authoring, ["interaction_contract", "cli_channel", "settlement_plan",
+        "ordered_steps", index, "vision_authoring"]) === source;
+  });
+  if (index < 0) return payload;
+  const reference = `$.interaction_contract.cli_channel.settlement_plan.ordered_steps[${index}].vision_authoring`;
+  if (Buffer.byteLength(encoded, "utf8") <= Buffer.byteLength(reference, "utf8") + 8) return payload;
+  delete contract.vision_authoring;
+  return {...payload, replan_action_packet: {...packet, writeback_contract: {
+    ...contract, vision_authoring_ref: reference}}};
+}
+
 function resolveExploreGuidance(payload: JsonObject, context: JsonObject): JsonObject {
   if (!Array.isArray(context.sources)) return context;
   const steps = object(object(object(payload.interaction_contract).cli_channel).settlement_plan).ordered_steps;
@@ -647,6 +691,7 @@ function replanView(request: JsonObject): JsonObject {
     throw new EffectRuntimeRequestError("Replan read requires the original successful decision and matching source hash");
   }
   requireVisionAuditReferences(payload);
+  replanAuthoringContract(payload);
   const packet = object(payload.replan_action_packet);
   const obligation = object(payload.autonomous_replan_obligation);
   const context = object(obligation.replan_context);
@@ -675,7 +720,7 @@ function replanView(request: JsonObject): JsonObject {
     // The current nested review syntax belongs to authoring, not duplicate
     // decision evidence. Top-level required_fields cannot describe that shape.
     for (const key of ["decision_followthrough", "explore_basis", "decision_value_review"]) delete stride[key];
-    const contract = {...object(packet.writeback_contract)};
+    const contract = replanAuthoringContract(payload);
     if (contract.vision_authoring) {
       const authoring = {...object(contract.vision_authoring)};
       delete authoring.minimal_example;
@@ -760,6 +805,7 @@ function replanView(request: JsonObject): JsonObject {
 function replanActionPacket(payload: JsonObject, reads = replanReadCommands(payload)): JsonObject | null {
   const source = object(payload.replan_action_packet);
   if (Object.keys(source).length === 0) return null;
+  const writeback = replanAuthoringContract(payload);
   if (reads) return {...compactFields(source, ["schema_version", "decision", "obligation_id", "required_outcome", "allowed_terminal"]),
     review: reads.review, writeback: reads.writeback,
     guidance: "Read review state and applicable acceptance/evidence; choose the next work, then follow review.next for Todo selection or writeback. Reads grant no authority and require no acknowledgement."};
@@ -770,7 +816,6 @@ function replanActionPacket(payload: JsonObject, reads = replanReadCommands(payl
   // The typed replan owner supplies bounded instructions; do not truncate their
   // authority/stop qualifiers through generic diagnostic compaction.
   if (Array.isArray(source.planning_guidance)) compact.planning_guidance = source.planning_guidance;
-  const writeback = object(source.writeback_contract);
   if (writeback.vision_authoring) compact.writeback_contract = writeback;
   return Object.keys(compact).length > 0 ? compact : null;
 }
@@ -1597,6 +1642,11 @@ function capturedDecisionSelection(request: JsonObject): JsonObject {
 export function evaluateTurnEnvelope(value: unknown): JsonObject {
   const request = requireJsonObject(value, "turn envelope request");
   const operation = request.operation;
+  if (operation === "reference_replan_authoring") {
+    const source = requireJsonObject(request.payload, "authoring sharing source");
+    return contextProjectionChanges(source, referenceReplanAuthoring(source,
+      contextSourceIdentity(source, request.source_number_tokens)));
+  }
   if (operation === "replan_view") return replanView(request);
   if (operation === "context_select") return capturedDecisionSelection(request);
   if (operation === "replan_cli_view") {

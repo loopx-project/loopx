@@ -62,6 +62,12 @@ flowchart TD
 | 保存文件差分 | 身份兼容、经过校验的不可变文件版本 | 模型保留、理解或新鲜权限 |
 | Provider prompt cache | Provider 自己的输入处理／计费复用 | 来源正确、任务成功或 LoopX 净收益 |
 
+重规划 authoring 使用同响应引用：CLI 展示可指向 durable-writeback 步骤中完整的
+`vision_authoring`。现有 TypeScript Turn owner 选择精确一致的正文，并为普通及捕获
+读取器展开它。悬空引用、引用链、与引用冲突的内联值，以及指向其他种类步骤的引用
+都必须拒绝；很小或不同的值保持内联。共享不改变原结算身份，也不证明跨 Turn 保留
+或整体成本节省。
+
 语义摘要是另一种操作，会改变措辞，可能改变含义。精确 codec 不做语义摘要。
 Controller 编写 brief 仍是单独提议的工作流，须验收保留要求与实际成果；更短的文字或
 provider cache 命中都不能替它通过。

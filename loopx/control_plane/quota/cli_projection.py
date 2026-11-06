@@ -94,16 +94,6 @@ _RETAINED_MONITOR_POLL_FOLLOW_UP_SUMMARY_FIELDS = (
 )
 
 
-def _json_content_key(value: Any) -> str:
-    """Compare original JSON values for sharing, including types and signed zero.
-
-    This is local serialization IO, not another quota or context-selection rule.
-    Python equality merges booleans with integers and integral floats; those
-    distinct source facts must not borrow each other's in-response owner.
-    """
-    return json.dumps(value, sort_keys=True, ensure_ascii=False, allow_nan=False)
-
-
 def _compact_monitor_poll_interaction_contract(
     contract: Any,
 ) -> dict[str, Any] | None:
@@ -251,44 +241,28 @@ def _compact_vision_continuation_audit(
 def _reference_inline_replan_authoring(
     packet: dict[str, Any], *, payload: dict[str, Any]
 ) -> dict[str, Any]:
-    """Reference an identical executable input already present in this response."""
+    """Legacy display metadata around the shared complete authoring owner."""
+    from .turn_envelope import _turn_envelope_result
 
     writeback = packet.get("writeback_contract")
-    if not isinstance(writeback, dict) or not isinstance(
-        writeback.get("vision_authoring"), dict
-    ):
+    if not isinstance(writeback, dict) or not {"vision_authoring", "vision_authoring_ref"}.intersection(writeback):
         return packet
     interaction = payload.get("interaction_contract")
-    cli = interaction.get("cli_channel") if isinstance(interaction, dict) else None
-    plan = cli.get("settlement_plan") if isinstance(cli, dict) else None
-    steps = plan.get("ordered_steps") if isinstance(plan, dict) else None
-    if not isinstance(steps, list):
+    channel = interaction.get("cli_channel") if isinstance(interaction, dict) else None
+    plan = channel.get("settlement_plan") if isinstance(channel, dict) else None
+    source = {"replan_action_packet": packet,
+              "interaction_contract": {"cli_channel": {"settlement_plan": plan}}}
+    result = _turn_envelope_result("reference_replan_authoring", payload=source)
+    shared = _apply_context_projection_changes(source, result)["replan_action_packet"]
+    if shared == packet:
         return packet
-    authoring_key = _json_content_key(writeback["vision_authoring"])
-    index = next(
-        (index for index, step in enumerate(steps)
-         if isinstance(step, dict) and step.get("kind") == "durable_writeback"
-         and _json_content_key(step.get("vision_authoring")) == authoring_key),
-        None,
-    )
-    if index is None:
-        return packet
-    reference = (
-        "$.interaction_contract.cli_channel.settlement_plan.ordered_steps"
-        f"[{index}].vision_authoring"
-    )
-    compact_writeback = dict(writeback)
-    compact_writeback.pop("vision_authoring")
-    compact_writeback["vision_authoring_ref"] = reference
-    compact = dict(packet)
-    compact["writeback_contract"] = compact_writeback
-    compact["payload_compaction"] = {
+    reference = shared["writeback_contract"]["vision_authoring_ref"]
+    return {**shared, "payload_compaction": {
         "schema_version": QUOTA_CLI_REPLAN_ACTION_COMPACTION_SCHEMA_VERSION,
         "mode": "compact_hot_path",
         "compacted_fields": ["writeback_contract.vision_authoring"],
         "projection_ref": reference,
-    }
-    return compact
+    }}
 
 
 def _deduplicate_next_action_warning(
