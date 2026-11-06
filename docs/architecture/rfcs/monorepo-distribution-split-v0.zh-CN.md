@@ -657,6 +657,75 @@ bridge helper 暴露了 `doctor_git` 的第二条 eager import；两个 adapter 
   hard-lease／上下文／模型一致性及完整成本收益仍未取得资格。采纳仍受独立精确
   head 评审与必需验证治理；前述历史失败仍是历史失败。
 
+### 2026-11-06 — 成对成本实验仍未取得资格
+
+`a9485073f` 对比 `86d9c542d` 的有界实验产生了有用的负面证据，未证明可归因的
+提速。实验在冻结的 20 分钟采样墙钟上限结束，共有 499 个通过语义断言的观察：
+八个源码组各完成 30 对；wheel 的 JSON version 完成九对，另有一个未配对的候选
+观察，其余 wheel 组未采样。原标准和全部观察均保留；上限触发及未完成组不改写为
+资格通过。随后集成的目标 `cd677182c` 不在这组不可变版本的测量中。
+
+环境为 macOS arm64、CPython 3.13.5、Node 26.0.0，真实 backend 是 Node owner
+的 SQLite 3.53.1。源码和隔离的单体 `loopx` 2.2.0 wheel 环境具有相同的 57 个
+依赖版本，并核验实际 import 来源。公开入口依次运行 JSON version、所选
+`performance-diagnosis` help、status、quota admission 和确定性 generic-cli
+任务，复用既有 `_write_live_fixture(provider="sqlite")` owner。顺序冻结为源码
+先于 wheel、上述命令顺序、冷路径先于暖路径，每对交替基线／候选顺序。每个任务
+使用新的合成状态。冷路径为新 Python 进程加已退役的自有 broker；暖路径为新
+Python 进程加保留的 broker。文件系统缓存未受控、禁止写入字节码，不声明冷磁盘。
+
+**缓存限制：** 既有字节码未归一化。后续盘点发现源码组 LoopX `.pyc` 数为
+7 对 1,241，依赖 `.pyc` 数为 2 对 344。两个版本的 JSON version 均加载
+1,157 个 LoopX 模块，父进程 read-open census 为 2,402 对 1,253。因此不能把
+源码观察到的下降归因于五个模块的加载变化；下表仅描述这些缓存条件。
+
+| 源码操作 | Broker 条件 | 基线秒数，中位数 / p95 | 候选秒数，中位数 / p95 |
+| --- | --- | --- | --- |
+| JSON version | 无 | 3.092 / 3.394 | 1.707 / 2.110 |
+| 所选 help | 无 | 0.093 / 0.174 | 0.101 / 0.165 |
+| Status | 冷 | 2.104 / 2.437 | 1.832 / 2.074 |
+| Status | 暖 | 1.304 / 1.422 | 0.985 / 1.115 |
+| Quota admission | 冷 | 2.481 / 2.720 | 2.029 / 2.331 |
+| Quota admission | 暖 | 1.785 / 1.881 | 1.313 / 1.460 |
+| Generic-cli 任务 | 冷 | 3.910 / 4.158 | 3.446 / 3.803 |
+| Generic-cli 任务 | 暖 | 2.837 / 3.025 | 2.424 / 2.635 |
+
+- **覆盖的成本：** 冷任务 target 和已 wait 后代的 CPU 中位数／p95 为
+  1.769 / 1.832 对 1.283 / 1.388 秒，其最大 RSS 为 79.2 / 87.4 对
+  75.5 / 78.7 MiB。独立 broker CPU 为 0.720 / 0.780 对 0.735 / 0.800 秒，
+  结束时 RSS 为 126.6 / 129.7 对 128.3 / 133.5 MiB；不代表并发进程树峰值或
+  完整 CPU 账本。五个操作的输出分别保持 81、325、21,829、23,795、3,557 字节。
+  宿主一分钟 load 范围为 5.00–14.42；这是具名环境的观察。
+- **独立 instrumentation：** 源码和 wheel 的任务加载仍为 538 → 533。
+  冷任务父进程 read/write-open 为源码 2,179/284 → 1,643/284、wheel
+  2,184/284 → 2,173/284。四个 capture 各有 238 次本地 IPC 连接；覆盖的 socket
+  send/receive 字节为源码 895,335/391,794 与 895,339/391,794，两个 wheel 均为
+  894,790/391,543，仅覆盖已观察的 Python socket，不覆盖全部 context、transport
+  或后代 I/O。独立源码冷任务 audit 的父进程／已 wait 子进程 CPU 为
+  1.234/0.560 → 0.802/0.582 秒，最大 RSS 为 88.7/75.3 → 63.4/75.4 MiB；
+  这些 instrumentation 样本不作为计时证据。既有 performance-diagnosis recipe 分别检查 Pyinstrument 和实际
+  Node worker CPU profile。父进程等待、workspace capture 和读取，以及 worker
+  启动／退役仍是调查线索；profile elapsed／idle 权重不进入计时表。完整 JSON
+  version 走 full parser/export graph，`--version` 仅加载两个 LoopX 模块。
+- **语义回读：** 所有已采样任务通过独立断言，产物为相同的八个整数平方。源码和
+  wheel 在两个版本均通过正常 committed 重放、typed result 落盘后中断、原
+  journal 恢复及重放。每个被接受的夹具仅一次宿主 attempt／调用、writeback 和
+  扣额，重放不重复效果。移除最后一个平方值使四个独立 validator 均拒绝，只有
+  一次 dispatch、零 writeback／扣额。自有 broker 结束后核验 OS PID 退出。
+  一个 seed shutdown 起初选到不同 interpreter alias 的 fingerprint；保留该失败，
+  随后通过核验过的自有 locator 恢复，未触及宿主状态。
+- **完整成本限制及下一步：** setup／编排为 888 秒，包含 194 秒夹具准备和
+  98 秒成功 preflight；失败的 bundle build、调用及 preflight 尝试仍为失败。
+  20 分钟墙钟上限内，采样 target elapsed 总计 1,001 秒。独立语义验证耗时
+  39 秒；产物拒绝及诊断／清理恢复 184 秒；instrumented census 为 108 秒，
+  任务／version profiling 为 58/20 秒。后续撰写／工具／模型成本、完整
+  native／thread 工作及进程树峰值仍未完整覆盖。两个 wheel 均有
+  1,997 个文件、压缩体积约 8.9 MiB，不代表拆包安装资格。下一轮成本实验必须
+  对齐字节码条件，并在冻结前根据实际准备／调用成本选定可完成的代表性
+  source/wheel corpus；进一步加载修改等待该对照。R0/V10、R1/minimal、D2/D5/D6、
+  I3/D3、模型／上下文／hard-lease 和安装缺口保留既有 owner／gate，本 checkpoint
+  不关闭其中任何一项。
+
 ## 附录 B：决策日志
 
 | 日期 | 决策 | 负责人 / 批准 | 备选 | 变更的规范章节 |
@@ -673,6 +742,7 @@ bridge helper 暴露了 `doctor_git` 的第二条 eager import；两个 adapter 
 | E4 | 所选 CLI 加载接缝 | `9cae3b28939f72fa4aadab5cfe49e19bcbdab372` | 第 4 节链接的入口/CLI | 源码审计 | 无新性能测量 |
 | E5 | DSH 装配范例 | 固定上游 commit | [`minimal.patch.yml`](https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/bundle/web-app/presets/minimal.patch.yml)、[`standard.patch.yml`](https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/bundle/web-app/presets/standard.patch.yml)、[`sdk-minimal`](https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/bundle/sdk-minimal/README.md) | 源码审计 | 共享预设装配与自包含 SDK bundle；不代表 LoopX 宿主资格或权限建议 |
 | E6 | Pi core/上下文范例 | 固定上游 commit | [`agent` core](https://github.com/badlogic/pi-mono/blob/f14813e96510a7cf7562a120e809c6a134af073d/packages/agent/README.md) | 源码审计 | Agent/tool/event core，以及 `transformContext`、`convertToLlm`、`prepareRequest`、`finishTurn` 接缝；无 LoopX authority 或性能声明 |
+| E7 | 有界成对成本实验 | `a9485073f` / `86d9c542d`；上述具名环境 | 上述成对成本 checkpoint；既有入口／SQLite 夹具及 performance-diagnosis owner | 499 个观察；源码组完整，wheel 不完整；缓存归因未取得资格 | 仅公开安全汇总；不证明提速、完整 V10、拆包安装或模型成本 |
 
 ## 附录 D：被拒绝或被取代的备选
 

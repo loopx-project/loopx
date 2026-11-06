@@ -898,6 +898,93 @@ The TypeScript Host lifetime and process/permission decisions do not move.
   unqualified. Independent exact-head review and required validation still govern
   adoption; the historical failures above remain historical failures.
 
+### 2026-11-06 — Paired cost campaign remains unqualified
+
+The bounded campaign at `a9485073f` versus `86d9c542d` produces useful negative
+evidence, not an attributable speedup. It ends at the frozen 20-minute sampling
+wall limit with 499 accepted observations: eight source groups have 30 pairs
+each; wheel JSON-version has nine pairs and one unmatched candidate observation.
+The other wheel groups were not sampled. The original criteria and every
+observation remain retained; neither the cap nor the incomplete groups become
+a passing qualification. Later integration of target `cd677182c` is outside
+these immutable measurements.
+
+The experiment uses macOS arm64, CPython 3.13.5, Node 26.0.0 and the real
+Node-owned SQLite 3.53.1 backend. Source and disposable monolithic `loopx` 2.2.0
+wheel environments have the same 57 dependency versions and verified import
+provenance. The public entrypoint exercises JSON version, selected
+`performance-diagnosis` help, status, quota admission and deterministic
+generic-cli work on the existing `_write_live_fixture(provider="sqlite")` owner.
+Order is fixed: source before wheel, that command order, cold before warm,
+alternating baseline/candidate order by pair. Each task has fresh synthetic
+state. Cold uses a fresh Python process and retired owned broker; warm uses a
+fresh Python process and retained broker. Filesystem caches are uncontrolled
+and bytecode writes are disabled; this is not a cold-disk claim.
+
+**Cache limitation:** existing bytecode was not normalized. A subsequent
+inventory finds 7 versus 1,241 LoopX `.pyc` files and 2 versus 344 dependency
+`.pyc` files in the source arms. JSON version loads the same 1,157 LoopX modules
+at both revisions; its parent read-open census is 2,402 versus 1,253. This
+invalidates attribution of the observed source reductions to the five-module
+loading change. The numbers below describe these cache conditions only.
+
+| Source operation | Broker condition | Baseline seconds, median / p95 | Candidate seconds, median / p95 |
+| --- | --- | --- | --- |
+| JSON version | absent | 3.092 / 3.394 | 1.707 / 2.110 |
+| Selected help | absent | 0.093 / 0.174 | 0.101 / 0.165 |
+| Status | cold | 2.104 / 2.437 | 1.832 / 2.074 |
+| Status | warm | 1.304 / 1.422 | 0.985 / 1.115 |
+| Quota admission | cold | 2.481 / 2.720 | 2.029 / 2.331 |
+| Quota admission | warm | 1.785 / 1.881 | 1.313 / 1.460 |
+| Generic-cli task | cold | 3.910 / 4.158 | 3.446 / 3.803 |
+| Generic-cli task | warm | 2.837 / 3.025 | 2.424 / 2.635 |
+
+- **Covered costs:** cold task CPU for the target and waited descendants is
+  1.769 / 1.832 versus 1.283 / 1.388 seconds, median / p95; their maximum RSS
+  is 79.2 / 87.4 versus 75.5 / 78.7 MiB. Separate broker CPU is 0.720 / 0.780
+  versus 0.735 / 0.800 seconds, with end RSS 126.6 / 129.7 versus
+  128.3 / 133.5 MiB. These are not a concurrent tree peak or complete CPU ledger.
+  Outputs remain 81, 325, 21,829, 23,795 and 3,557 bytes for the five operations.
+  One-minute host load ranges from 5.00 to 14.42; this is a named-host observation.
+- **Separate instrumentation:** task loading remains 538 → 533 in source and
+  wheel. Cold task parent read/write-open counts are 2,179/284 → 1,643/284 in
+  source and 2,184/284 → 2,173/284 in wheel. All four captures make 238 local
+  IPC connections; covered socket send/receive bytes are 895,335/391,794 and
+  895,339/391,794 in source, 894,790/391,543 in both wheels. These cover the
+  observed Python sockets, not all context, transport or descendant I/O.
+  A separate source cold-task audit records parent/waited-child CPU
+  1.234/0.560 → 0.802/0.582 seconds and maximum RSS
+  88.7/75.3 → 63.4/75.4 MiB; these instrumented samples are not timing evidence.
+  The existing performance-diagnosis recipes inspect separate Pyinstrument
+  and actual Node-worker CPU profiles. Parent waits, workspace capture and
+  reads, and worker startup/retirement remain investigation leads; profile
+  elapsed/idle weights do not enter the timing table. Full JSON version uses
+  the full parser/export graph, while `--version` loads two LoopX modules.
+- **Semantic readback:** all sampled tasks independently accept the same eight
+  squared integers. Source and wheel at both revisions pass ordinary committed
+  replay, interruption after typed-result persistence, original-journal resume
+  and replay. Each accepted fixture has one host attempt/invocation, writeback
+  and debit; replay repeats none. Dropping the last square makes all four
+  independent validators reject, with one dispatch and zero writebacks/debits.
+  Owned brokers finish with OS PID-exit readback. One seed shutdown initially
+  targets a different interpreter-alias fingerprint; its failure is retained
+  and recovery uses the verified owned locator, without touching host state.
+- **Complete-cost limits and next work:** setup/orchestration is 888 seconds,
+  including 194 seconds of fixture preparation and a 98-second successful
+  preflight; unsuccessful bundle-build, invocation and preflight attempts remain
+  failures. Sampling target elapsed totals 1,001 seconds inside the 20-minute
+  wall cap. Separate semantic validation takes 39 seconds; artifact rejection
+  plus diagnosis/cleanup recovery takes 184 seconds; the instrumented census
+  takes 108 seconds, and task/version profiling 58/20 seconds. Subsequent
+  authoring/tool/model costs, complete native/thread work and full-tree peaks
+  remain incompletely covered. Both wheels contain 1,997 files and
+  approximately 8.9 MiB compressed; no split install is qualified. The next
+  cost experiment must match bytecode conditions and choose a feasible
+  representative source/wheel corpus from measured setup and invocation costs
+  before freezing it. Further loading edits await that comparison. R0/V10,
+  R1/minimal, D2/D5/D6, I3/D3, model/context/hard-lease and installation gaps
+  retain their existing owners and gates; this checkpoint closes none of them.
+
 ## Appendix B: Decision log
 
 | Date | Decision | Owner / approval | Alternatives | Normative sections changed |
@@ -914,6 +1001,7 @@ The TypeScript Host lifetime and process/permission decisions do not move.
 | E4 | Selected CLI loading seam | `9cae3b28939f72fa4aadab5cfe49e19bcbdab372` | Linked entrypoint/CLI in Section 4 | Source-audited | No new timing claim |
 | E5 | DSH composition example | Pinned upstream commit | [`minimal.patch.yml`](https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/bundle/web-app/presets/minimal.patch.yml), [`standard.patch.yml`](https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/bundle/web-app/presets/standard.patch.yml), [`sdk-minimal`](https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/bundle/sdk-minimal/README.md) | Source-audited | Shared preset composition and a self-contained SDK bundle; not a LoopX host qualification or permission recommendation |
 | E6 | Pi core/context example | Pinned upstream commit | [`agent` core](https://github.com/badlogic/pi-mono/blob/f14813e96510a7cf7562a120e809c6a134af073d/packages/agent/README.md) | Source-audited | Agent/tool/event core with `transformContext`, `convertToLlm`, `prepareRequest` and `finishTurn` seams; no LoopX authority or performance claim |
+| E7 | Bounded paired cost campaign | `a9485073f` / `86d9c542d`; named environment above | Paired cost checkpoint above; existing entrypoint/SQLite fixture and performance-diagnosis owners | 499 observations; source groups complete, wheel incomplete; cache attribution unqualified | Aggregate public-safe evidence only; no speedup, full V10, split-install or model-cost qualification |
 
 ## Appendix D: Rejected or superseded alternatives
 
