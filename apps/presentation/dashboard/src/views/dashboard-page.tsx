@@ -1526,7 +1526,7 @@ function PersonalGoalHome({
   const pendingTurnAdmissions = useRef(new Map<string, AbortController>());
   const preparationControllers = useRef(new Map<string, AbortController>());
   const interruptedTurnIds = useRef(new Set<string>());
-  const recoveringTurnKeys = useRef(new Map<string, AbortController>());
+  const turnObservers = useRef(new Map<string, AbortController>());
   // A running Turn a 409 reported, keyed by context: its pending reply holds
   // the composer closed until the recovery effect adopts it or an
   // authoritative Session read finds no such Turn, so the handoff never leaves
@@ -1833,6 +1833,8 @@ function PersonalGoalHome({
           setManagerRuntime(created.session.manager_runtime);
         }
         recordSessionAdmission(targetContextId, created.session);
+        const observedSessionId = targetContext.kind === "bound" || targetContext.kind === "managed"
+          ? targetContext.sessionId : sessionIds.current.get(sessionKey);
         sessionIds.current.set(sessionKey, created.session_id);
         const activeSnapshot = history.snapshots.find(
           (snapshot) => snapshot.session.session_id === created.session_id,
@@ -1848,19 +1850,16 @@ function PersonalGoalHome({
         newSessionRequired.current.delete(sessionKey);
         if (!activeTurnId) return;
         // A source index can observe the Turn this very composer is already
-        // streaming. Exact contexts already key ownership by their Session;
-        // keep that live observer instead of replacing its controls and reply.
+        // streaming. Preserve its observer in every conversation kind, using
+        // the Session known before this read replaced the cached admission.
         // The history may discover our native Turn before the original ACK
         // supplies its id. Its in-flight admission still owns observation.
-        if ((targetContext.kind === "bound" || targetContext.kind === "managed")
-          && targetContext.sessionId === created.session_id
-          && (pendingTurnAdmissions.current.get(targetContextId)?.signal.aborted === false
-            || (activeTurnIds.current.get(targetContextId) === activeTurnId
-              && streamControllers.current.get(targetContextId)?.signal.aborted === false))) return;
+        if (observedSessionId === created.session_id
+          && pendingTurnAdmissions.current.get(targetContextId)?.signal.aborted === false) return;
         const recoveryKey = `${created.session_id}:${activeTurnId}`;
-        if (recoveringTurnKeys.current.has(recoveryKey)) return;
+        if (turnObservers.current.get(recoveryKey)?.signal.aborted === false) return;
         const observer = new AbortController();
-        recoveringTurnKeys.current.set(recoveryKey, observer);
+        turnObservers.current.set(recoveryKey, observer);
         activeTurnIds.current.set(targetContextId, activeTurnId);
         recordRuntimeBinding(targetContextId, {
           agentId: selectedAgent.agentId,
@@ -1889,8 +1888,8 @@ function PersonalGoalHome({
           text: "",
         });
         const releaseObservation = () => {
-          if (recoveringTurnKeys.current.get(recoveryKey) === observer) {
-            recoveringTurnKeys.current.delete(recoveryKey);
+          if (turnObservers.current.get(recoveryKey) === observer) {
+            turnObservers.current.delete(recoveryKey);
           }
           // A late completion may still project its draft after navigation.
           // It no longer owns the display or controls of a replacement observer.
@@ -2454,6 +2453,9 @@ function PersonalGoalHome({
           }));
         },
         onPhase: (phase: string, turnId: string) => {
+          // Queued admission also owns an observer. A later native start may
+          // precede the Session read that confirms which Turn owns controls.
+          if (streamController) turnObservers.current.set(`${sessionId}:${turnId}`, streamController);
           if (pendingTurnAdmissions.current.get(targetContextId) === streamController) pendingTurnAdmissions.current.delete(targetContextId);
           if (submittedTurnId !== turnId) updateConversationMessage(targetContextId, userMessageId, {
             sourceTurnId: turnId, sourceSessionId: sessionId,
@@ -2693,6 +2695,8 @@ function PersonalGoalHome({
         && payloadError.turn_replay_safe === true)) throw error;
     } finally {
       streamEnded = true;
+      const observationKey = `${submittedSessionId}:${submittedTurnId}`;
+      if (turnObservers.current.get(observationKey) === streamController) turnObservers.current.delete(observationKey);
       if (pendingTurnAdmissions.current.get(targetContextId) === streamController) pendingTurnAdmissions.current.delete(targetContextId);
       // A handed-off Turn is still running: its ownership stays for the
       // recovery that adopts it or the read that finds it ended.

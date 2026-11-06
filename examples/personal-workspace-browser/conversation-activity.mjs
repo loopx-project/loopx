@@ -10,9 +10,12 @@ export const conversationActivityScenario = {
   id: "conversation-activity",
   async run({ browser, collectCoverage, url }) {
     const streams = new Map();
+    const observations = [];
     const event = (sequence, kind, payload) => `id: ${sequence}\nevent: ${kind}\ndata: ${JSON.stringify({ event_id: String(sequence), sequence, kind, payload })}\n\n`;
     const server = createServer((request, response) => {
+      observations.push(request.url);
       response.writeHead(200, { "Content-Type": "text/event-stream", "Access-Control-Allow-Origin": "*", "Cache-Control": "no-cache" });
+      response.write(event(0, "turn.started", {}));
       response.write(event(1, "agent.phase", { label: "Agent 正在执行命令" }));
       response.write(event(2, "agent.phase", { label: "Agent 正在检索" }));
       response.write(event(3, "agent.phase", { label: "Agent 正在执行命令" }));
@@ -232,6 +235,27 @@ export const conversationActivityScenario = {
       // The same interaction is present in Goal Chat, through the same timeline.
       await page.locator(".personal-goal-link").first().click();
       await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
+      // Native ordinary sends can be acknowledged as queued before starting.
+      // Their original observer must survive the asynchronous current-Turn read.
+      let pendingActiveRead;
+      await page.route("**/api/chat/sessions/*/turns", async route => {
+        const body = route.request().postDataJSON();
+        if (body.message !== "请检查这个 Goal 的当前状态。") return route.fallback();
+        const sessionId = new URL(route.request().url()).pathname.split("/").at(-2);
+        const turnId = `queued-start-${Date.now()}`;
+        const runtime = page.__loopxRuntime;
+        runtime.turnMessages.set(turnId, body.message);
+        runtime.sessions.set(sessionId, {...runtime.sessions.get(sessionId), active_turn_id: turnId, status: "busy"});
+        runtime.messages.get(sessionId).push({message_id: `${turnId}-user`, turn_id: turnId, role: "user", text: body.message});
+        api.turnRequests.push({message: body.message, sessionId, turnId});
+        let holdFirstRead = true;
+        await page.route(`**/api/chat/sessions/${sessionId}`, snapshot => {
+          if (holdFirstRead) { holdFirstRead = false; pendingActiveRead = snapshot; return; }
+          return snapshot.fallback();
+        });
+        await route.fulfill({status: 202, json: {ok: true, session_id: sessionId, turn_id: turnId,
+          created: true, status: "queued", events_url: `/events/${sessionId}/${turnId}`}});
+      });
       const goalTurn = await send("请检查这个 Goal 的当前状态。");
       const goalTabs = page.getByRole("navigation", {name: "Goal 视图"});
       for (const width of [1512, 390]) {
@@ -255,8 +279,22 @@ export const conversationActivityScenario = {
       await page.emulateMedia({reducedMotion: "no-preference"});
       await page.setViewportSize({width: 1512, height: 982});
       await goalTabs.getByRole("button", {name: "对话", exact: true}).focus();
+      const resumedSession = page.waitForResponse(response => new URL(response.url()).pathname === "/api/chat/sessions"
+        && response.request().method() === "POST");
       await page.keyboard.press("Enter");
+      await resumedSession;
+      await page.evaluate(() => new Promise(resolveFrame => requestAnimationFrame(() => requestAnimationFrame(resolveFrame))));
       assert.equal(await goalTabs.getByRole("button", {name: "对话", exact: true}).getAttribute("aria-current"), "page");
+      await page.screenshot({path: resolve(outputDir, "conversation-observer-desktop.png"), animations: "disabled"});
+      await page.setViewportSize({width: 390, height: 844});
+      await page.screenshot({path: resolve(outputDir, "conversation-observer-narrow.png"), animations: "disabled"});
+      await page.setViewportSize({width: 1512, height: 982});
+      assert.equal(observations.filter(path => path === `/events/${goalTurn.sessionId}/${goalTurn.turnId}`).length, 1,
+        "Returning to Goal Chat preserves the original live observer instead of attaching a recovery stream");
+      assert.equal(await page.getByRole("button", {name: "调整本轮", exact: true}).count(), 1,
+        "The same running Session/Turn has one set of controls after navigation");
+      assert.ok(pendingActiveRead, "The queued-start confirmation remains outstanding during navigation");
+      await pendingActiveRead.fallback();
       await page.getByRole("button", { name: "调整本轮", exact: true }).click();
       assert.equal(await composer.inputValue(), "", "another conversation never inherits the old draft");
       await page.evaluate(({sessionId, turnId}) => {
