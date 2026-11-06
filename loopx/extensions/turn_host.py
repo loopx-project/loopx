@@ -13,14 +13,16 @@ from ..control_plane.effect_runtime import _node_executable
 from ..control_plane.goals.goal_ref_validation import exact_goal_ref
 from ..control_plane.turn_driver.executor import validate_loopx_turn_host_result
 from ..control_plane.turn_driver.host_candidate import (
+    assert_turn_host_request_version,
     build_result,
     extract_turn_authority,
+    extract_turn_work_identity,
     parse_model_json,
     render_prompt,
 )
 
 __all__ = [
-    "build_result", "exact_goal_ref", "extract_turn_authority", "parse_model_json",
+    "assert_turn_host_request_version", "build_result", "exact_goal_ref", "extract_turn_authority", "extract_turn_work_identity", "parse_model_json",
     "render_prompt", "supervised_stdio_command", "validate_loopx_turn_host_result",
 ]
 

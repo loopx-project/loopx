@@ -9,6 +9,8 @@ from urllib.parse import quote
 import pytest
 
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+from loopx.control_plane.quota.turn_envelope import build_turn_envelope
+from loopx.control_plane.scheduler.execution_context import scheduler_execution_context_for_runtime_profile
 from loopx.control_plane.turn_driver.host_candidate import extract_turn_authority, render_prompt
 from tests.control_plane.canonical_authority_fixture import (
     initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos,
@@ -48,12 +50,16 @@ def test_authored_requirements_survive_capture_projection_and_host(tmp_path, mon
             '--todo-id', TODO_ID, '--turn-instance-id', TURN_ID, '--codex-app',
             '--available-capability', 'shell', '--available-capability', 'filesystem_read']
     capture = tmp_path / 'original-context'
-    code, envelope = _run_cli(registry, runtime, *args, '--turn-envelope',
+    code, emitted = _run_cli(registry, runtime, *args, '--turn-envelope',
                               '--decision-output-dir', str(capture))
-    assert code == 0, envelope
+    assert code == 0, emitted
     saved = capture / 'decision.json'
     original_bytes = saved.read_bytes()
     full = json.loads(original_bytes)
+    # New CLI emission is the complete contract. Exercise the retained internal
+    # adapter explicitly; it is no longer a competing CLI output format.
+    envelope = build_turn_envelope(full, captured_decision_path=str(saved),
+        scheduler_execution_context=scheduler_execution_context_for_runtime_profile('codex_app_heartbeat'))
     source_context = full['interaction_contract']['agent_channel']['work_context']
     assert source_context['complete'] is True
     assert source_context['instruction']  # Non-vacuous instruction transport.
@@ -152,8 +158,8 @@ def test_authored_requirements_survive_capture_projection_and_host(tmp_path, mon
 
 
 @pytest.mark.parametrize('provider', ['file', 'sqlite'])
-@pytest.mark.parametrize('declaration', ['envelope', 'signature', 'coverage'])
-def test_real_turn_refuses_unsupported_consumer_version_before_launch(tmp_path, monkeypatch, provider, declaration):
+@pytest.mark.parametrize('declaration', ['source_version', 'hash_codec', 'read_order'])
+def test_real_turn_refuses_unsupported_current_source_before_launch(tmp_path, monkeypatch, provider, declaration):
     import contextlib
     import io
     import sys
@@ -163,19 +169,26 @@ def test_real_turn_refuses_unsupported_consumer_version_before_launch(tmp_path, 
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_live_fixture(tmp_path, provider=provider)
-    original_builder = turn.build_turn_envelope
+    from tests.control_plane.test_complete_turn_decision import _resign_contract
+
+    original_builder = turn.compose_turn_decision
     observed = []
 
     def incompatible_writer(*args, **kwargs):
         packet = original_builder(*args, **kwargs)
-        if declaration == 'envelope':
+        if declaration == 'source_version':
             packet['schema_version'] = 'unsupported_work_contract'
+        elif declaration == 'hash_codec':
+            packet['contract_binding']['hash_codec'] = 'unsupported_source_codec'
         else:
-            packet['action_signature']['schema_version' if declaration == 'signature' else 'coverage'] = 'unsupported_required_semantics'
+            packet['interaction_contract']['agent_channel'].setdefault('required_reads', []).append(
+                {'command': "cat -- 'required material.md'", 'ordering': 'after_spend'})
+            # Reach semantic validation with independently correct source hashes.
+            packet, _ = _resign_contract(packet)
         observed.append(copy.deepcopy(packet))
         return packet
 
-    monkeypatch.setattr(turn, 'build_turn_envelope', incompatible_writer)
+    monkeypatch.setattr(turn, 'compose_turn_decision', incompatible_writer)
     marker = project / 'host-started'
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
@@ -187,8 +200,10 @@ def test_real_turn_refuses_unsupported_consumer_version_before_launch(tmp_path, 
     result = json.loads(output.getvalue())
     assert observed and code != 0, result
     assert not marker.exists()
-    assert 'unsupported TurnEnvelope' in result['error'], result
-    assert 'compatible consumer' in result['error'], result
+    expected = {'source_version': 'unsupported complete Turn decision version',
+                'hash_codec': 'unsupported complete Turn decision hash codec',
+                'read_order': 'required read ordering'}[declaration]
+    assert expected in result['error'], result
     # Generic CLI error effects are unknown; the marker and ledger independently
     # prove this pre-dispatch refusal, without interpreting null as false.
     assert _spend_run_count(runtime) == 0

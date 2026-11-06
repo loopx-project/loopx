@@ -110,6 +110,86 @@ def test_feature_off_has_no_observer_and_reports_cannot_attest_reviews(tmp_path:
             execute=True, _host_observed=True)
 
 
+@pytest.mark.parametrize("enabled", [False, True])
+def test_complete_host_observes_children_without_reading_legacy_context(tmp_path, monkeypatch, enabled):
+    import copy
+    from hashlib import sha256
+    import sys
+    from loopx.control_plane.quota.turn_envelope import compose_turn_decision, build_turn_envelope
+    from loopx.control_plane.turn_driver import codex_cli
+    from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
+    from loopx.control_plane.turn_driver.executor import build_loopx_turn_host_request
+    from tests.test_turn_envelope import _full_decision
+
+    source = _full_decision()
+    source["goal_id"] = GOAL
+    source["agent_identity"]["agent_id"] = AGENT
+    source["selected_todo"].update(todo_id="todo_native_1", claimed_by=AGENT)
+    channel = source["interaction_contract"]["agent_channel"]
+    goal = tmp_path / "goal.md"
+    goal.write_text("Observe disposable host events; no external model.\n")
+    # Fulfill the existing Goal read with its actual file and full revision;
+    # metadata alone must not get this fixture past Host dispatch.
+    channel["required_reads"] = [read for read in channel["required_reads"]
+        if read.get("source") not in {"goal_state", "selected_todo"}]
+    channel["work_context"] = {"complete": True, "selected_todo_text_verified": True,
+        "sources": [{"source": "goal_state", "content": {"full_source": True,
+                        "state_file": str(goal), "text": goal.read_text(),
+                        "revision": "sha256:" + sha256(goal.read_bytes()).hexdigest()}},
+                    {"source": "selected_todo", "content": {"todo": source["selected_todo"]}}]}
+    if enabled:
+        source["interaction_contract"]["agent_context"] = {"contributions": [
+            {"capability_id": "multi_subagent", "facts": {"max_children": 3}}]}
+    contract = compose_turn_decision(source)
+    plan = build_loopx_turn_plan(build_turn_envelope(contract), work_contract=contract,
+        host="codex-cli", execution_mode="isolated-headless", turn_instance_id=TURN)
+    request = build_loopx_turn_host_request(plan)
+
+    class SignatureOnlyEnvelope(dict):
+        def get(self, key, default=None):
+            if key == "agent_context":
+                raise AssertionError("complete native observation read the historical context")
+            return super().get(key, default)
+
+    request["turn_envelope"] = SignatureOnlyEnvelope(request["turn_envelope"])
+    request["host_attempt"] = 1
+    _admit(tmp_path)
+    script = tmp_path / "host.py"
+    script.write_text("import json,sys\nfrom pathlib import Path\n"
+        "sys.stdin.read()\n"
+        "print(json.dumps({'type':'thread.started','thread_id':'parent-1'}),flush=True)\n"
+        f"for item in {_turn()['items']!r}:\n"
+        " print(json.dumps({'type':'item.completed','item':item}),flush=True)\n"
+        "Path(sys.argv[1]).write_text(json.dumps({'parent_work':'preserved'}))\n")
+    launched = []
+
+    def command(**kwargs):
+        launched.append(True)
+        return [sys.executable, str(script), str(kwargs["output_path"])]
+
+    monkeypatch.setattr(codex_cli, "_codex_command", command)
+    assert codex_cli.run_codex_cli_host(request, runtime_root=tmp_path, project=tmp_path,
+        codex_bin=sys.executable) == {"parent_work": "preserved"}
+    activity = load_native_child_activity(tmp_path, goal_id=GOAL, agent_id=AGENT,
+        turn_instance_id=TURN, configured_limit=3)
+    assert activity["host_attested"] is enabled
+    assert activity["launched_count"] == int(enabled)
+    assert activity["parent_accepted_count"] == 0
+    events = load_rollout_events(rollout_event_log_path(tmp_path, GOAL))
+    assert "private child" not in json.dumps(events)
+    assert not any(event["event_kind"] == "quota_spend" for event in events)
+
+    # The native adapter does not grant authority. Corrupting the supplied
+    # complete source must still stop before another process or receipt.
+    tampered = copy.deepcopy(request)
+    tampered["work_contract"]["reason"] = "different source"
+    with pytest.raises(RuntimeError, match="integrity mismatch"):
+        codex_cli.run_codex_cli_host(tampered, runtime_root=tmp_path, project=tmp_path,
+            codex_bin=sys.executable)
+    assert launched == [True]
+    assert load_rollout_events(rollout_event_log_path(tmp_path, GOAL)) == events
+
+
 def test_cli_host_collects_native_items_before_returning_parent_result(tmp_path: Path, monkeypatch):
     import sys
     from loopx.control_plane.turn_driver import codex_cli

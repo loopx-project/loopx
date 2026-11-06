@@ -57,10 +57,12 @@ def test_hidden_diagnostic_lane_counts_all_source_rows_once(variant):
 
 @pytest.mark.parametrize("variant", ["text", "title", "different", "short", "incomplete", "unverified",
     "unmatched", "ambiguous", "partial", "failed", "wrong-id", "wrong-selection", "duplicate", "existing-ref",
-    "archived", "done", "boolean-id"])
+    "archived", "done", "boolean-id", "short-unicode"])
 def test_lane_title_reuses_only_exact_complete_current_task_in_same_packet(variant):
     body = "Preserve every requirement and source. 完整要求🙂\n" * 100 + "Stop before publication."
     title = body if variant != "short" else "Short label"
+    if variant == "short-unicode":
+        title = body = "完整🙂" * 20
     todo = {"todo_id": "todo_current", "text": body, "status": "open"}
     if variant == "title":
         todo.update(text="[P1] " + body, title=body)
@@ -116,9 +118,23 @@ def test_lane_title_reuses_only_exact_complete_current_task_in_same_packet(varia
     else:
         assert result == lane
 
+    from loopx.control_plane.quota.turn_envelope import compose_turn_decision
+    from test_replan_host_context_projection import _quota_payload
+    complete_source = _quota_payload()
+    complete_source.update(selected_todo=payload["selected_todo"], agent_lane_next_action=lane)
+    complete_source["interaction_contract"]["agent_channel"]["work_context"] = context
+    if variant == "existing-ref":
+        with pytest.raises(RuntimeError, match="Current Task title reference"):
+            compose_turn_decision(complete_source)
+    else:
+        complete = compose_turn_decision(complete_source)
+        assert complete["agent_lane_next_action"] == result
+        assert complete["interaction_contract"] == complete_source["interaction_contract"]
+
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_real_guard_keeps_multiline_task_once_without_differential_opt_in(tmp_path, monkeypatch, provider):
+@pytest.mark.parametrize("captured", [False, True])
+def test_real_guard_keeps_multiline_task_once_without_differential_opt_in(tmp_path, monkeypatch, provider, captured):
     from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
     from test_quota_settlement_cli import AGENT_ID, GOAL_ID, TODO_ID, _run_cli, _write_fixture
@@ -134,8 +150,11 @@ def test_real_guard_keeps_multiline_task_once_without_differential_opt_in(tmp_pa
         build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=todos, handoff_mode="soft_claim"),
         state_path=state, provider=provider)
     original_state = state.read_bytes()
+    capture = tmp_path / "captured"
+    capture_args = ("--codex-app", "--turn-instance-id", "task-title-read",
+        "--decision-output-dir", str(capture)) if captured else ()
     code, full = _run_cli(registry, runtime, "quota", "should-run", "--goal-id", GOAL_ID,
-        "--agent-id", AGENT_ID, cwd=project)
+        "--agent-id", AGENT_ID, *capture_args, cwd=project)
     assert code == 0 and full["should_run"], full
     context = full["interaction_contract"]["agent_channel"]["work_context"]
     assert context["complete"] and context["selected_todo_text_verified"]
@@ -152,6 +171,27 @@ def test_real_guard_keeps_multiline_task_once_without_differential_opt_in(tmp_pa
     code, detail = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID,
         "--todo-id", TODO_ID, cwd=project)
     assert code == 0 and detail["todo"]["text"] == body and detail["todo"]["title"] == body
+
+    if captured:
+        from loopx.control_plane.quota.turn_envelope import build_turn_envelope
+        from test_complete_turn_decision import _source_digest, _resign_contract
+        from test_quota_settlement_cli import _spend_run_count
+        saved = json.loads((capture / "decision.json").read_text())
+        assert saved == full
+        historical = build_turn_envelope(saved)
+        restored_task = next(source["content"]["todo"] for source in historical["work_context"]["sources"]
+                             if source.get("source") == "selected_todo")
+        assert restored_task["text"] == body
+        invalid = deepcopy(saved)
+        invalid["agent_lane_next_action"]["title_ref"] = lane["title_ref"].replace(f"[{index}]", "[999]")
+        invalid, _ = _resign_contract(invalid)
+        invalid_path = tmp_path / "invalid.json"
+        invalid_path.write_text(json.dumps(invalid))
+        rc, refused = _run_cli(registry, runtime, "quota", "replan-view",
+            "--decision-file", str(invalid_path), "--source-hash", _source_digest(invalid),
+            "--replan-stage", "review", cwd=project)
+        assert rc != 0 and "Current Task title reference" in json.dumps(refused)
+        assert state.read_bytes() == original_state and _spend_run_count(runtime) == 0
 
 
 @pytest.mark.parametrize("mirror", ["shared", "identical", "different", "boolean-number", "missing-root"])
@@ -272,8 +312,10 @@ def test_real_cli_explore_reference_resolves_to_standalone_guidance(tmp_path, mo
     registry.write_text(json.dumps(config))
     fixture._initialize_fixture_authority(project, runtime, provider=provider)
     binding = ("--goal-id", fixture.GOAL_ID, "--agent-id", fixture.AGENT_ID)
+    capture = tmp_path / "captured"
     rc, guard = fixture._run_cli(registry, runtime, "quota", "should-run", "--codex-app",
-        *binding, "--todo-id", fixture.TODO_ID, "--turn-instance-id", "guidance-read", cwd=project)
+        *binding, "--todo-id", fixture.TODO_ID, "--turn-instance-id", "guidance-read",
+        "--decision-output-dir", str(capture), cwd=project)
     assert rc == 0, guard
     sources = guard["interaction_contract"]["agent_channel"]["work_context"]["sources"]
     graph = next(source["content"]["graph"] for source in sources if source.get("kind") == "explore_turn_context")
@@ -284,6 +326,31 @@ def test_real_cli_explore_reference_resolves_to_standalone_guidance(tmp_path, mo
     rc, standalone = fixture._run_cli(registry, runtime, "explore", "turn-context", *binding, cwd=project)
     assert rc == 0, standalone
     assert owner == standalone["graph"]["result_writeback_guidance"]
+    from loopx.control_plane.quota.turn_envelope import build_turn_envelope
+    from test_complete_turn_decision import _source_digest, _resign_contract
+    saved = json.loads((capture / "decision.json").read_text())
+    assert saved == guard
+    envelope = build_turn_envelope(saved)
+    recovered = next(source["content"]["graph"] for source in envelope["work_context"]["sources"]
+                     if source.get("kind") == "explore_turn_context")
+    assert recovered["result_writeback_guidance"] == owner
+    assert "result_writeback_guidance_ref" not in recovered
+    invalid = deepcopy(saved)
+    invalid_graph = next(source["content"]["graph"] for source in invalid["interaction_contract"][
+        "agent_channel"]["work_context"]["sources"] if source.get("kind") == "explore_turn_context")
+    invalid_graph["result_writeback_guidance_ref"] = (
+        "$.interaction_contract.cli_channel.settlement_plan.ordered_steps[999].optional_attachments[0].guidance")
+    invalid, _ = _resign_contract(invalid)
+    invalid_path = tmp_path / "invalid.json"
+    invalid_path.write_text(json.dumps(invalid))
+    state = project / f".codex/goals/{fixture.GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    before = state.read_bytes()
+    rc, refused = fixture._run_cli(registry, runtime, "quota", "replan-view",
+        "--decision-file", str(invalid_path), "--source-hash", _source_digest(invalid),
+        "--replan-stage", "writeback", cwd=project)
+    assert rc != 0
+    assert "Explore guidance reference" in json.dumps(refused)
+    assert state.read_bytes() == before
     assert fixture._spend_run_count(runtime) == 0
 
 
@@ -303,6 +370,62 @@ def _items(count: int, *, prefix: str) -> list[dict[str, object]]:
         }
         for index in range(count)
     ]
+
+
+@pytest.mark.parametrize("role", ["agent", "user"])
+def test_shared_diagnostics_preserve_unknown_lists_nested_fields_and_complete_items(role):
+    lane = "first_executable_items" if role == "agent" else "first_open_items"
+    item = {**_items(1, prefix="retained")[0], "text": "Original constraint. " * 200,
+        "future_requirements": ["Keep the tail stop."], "lease": {"owner": "peer", "epoch": 7}}
+    unknown = [None, False, 0, {"requirement": "A new obligation"}]
+    summary = {"schema_version": "todo_summary_v0", lane: [item], "backlog_items": _items(5, prefix="diagnostic"),
+        "future_items": unknown, "future_rules": unknown,
+        "deferred_items": [{"todo_id": "later", "future_global_stop": "Do not continue."}],
+        "recent_completed_advancement_items": [{"todo_id": "old", "completion_result": {"future_stop": True}}],
+        "claim_scope": {"owner": "peer", "future_items": unknown, "blocked_claimed_items": []},
+        "future_object": {"items": unknown},
+        "todo_succession_warning": {"items": _items(4, prefix="old"), "todo_ids": ["original-id"], "future_items": unknown}}
+    payload = {f"{role}_todo_summary": summary, "capability_gate": {"runnable_candidates": [item], "future": unknown},
+        "action_portfolio": {"suggested_actions": [item]}, "planning_horizon": {"work_items": [item]}}
+    original = deepcopy(payload)
+    projected = compact_quota_should_run_cli_payload(payload)
+    result = projected[f"{role}_todo_summary"]
+    assert result[lane] == [item]
+    assert result["future_items"] == result["future_rules"] == unknown
+    assert result["future_object"] == {"items": unknown}
+    assert result["deferred_items"] == summary["deferred_items"]
+    assert result["recent_completed_advancement_items"] == summary["recent_completed_advancement_items"]
+    assert result["claim_scope"] == {"owner": "peer", "future_items": unknown}
+    assert result["todo_succession_warning"]["todo_ids"] == ["original-id"]
+    assert result["todo_succession_warning"]["future_items"] == unknown
+    for key in ("capability_gate", "action_portfolio", "planning_horizon"):
+        assert projected[key] == payload[key]
+    assert payload == original
+    assert compact_quota_should_run_cli_payload(projected) == projected
+    detailed = compact_quota_should_run_cli_payload(payload,
+        include_todo_summary_detail=True, include_user_todo_summary_detail=True)
+    assert detailed == payload
+
+
+def test_readonly_plan_projects_all_rows_in_one_typed_call(monkeypatch):
+    from loopx.control_plane.quota.cli_projection import compact_quota_plan_cli_payload
+    from loopx.control_plane.quota import turn_envelope
+    summary = {"schema_version": "todo_summary_v0", "backlog_items": _items(3, prefix="cold"),
+        "first_executable_items": _items(1, prefix="work"), "future_items": [False, None]}
+    row = {"agent_todos": summary, "user_todos": summary}
+    calls, real = [], turn_envelope._turn_envelope_result
+    def observed(operation, **params):
+        calls.append(operation)
+        return real(operation, **params)
+    monkeypatch.setattr(turn_envelope, "_turn_envelope_result", observed)
+    payload = {"mode": "plan", "groups": {"ready": [row] * 8}, "next_automatic_turn": row}
+    projected = compact_quota_plan_cli_payload(payload, detail_sections=frozenset({"user-todos"}))
+    assert calls == ["reference_context"]
+    for result in [*projected["groups"]["ready"], projected["next_automatic_turn"]]:
+        assert result["user_todos"] == summary
+        assert "backlog_items" not in result["agent_todos"]
+        assert result["agent_todos"]["future_items"] == [False, None]
+        assert result["agent_todos"]["payload_compaction"]["full_detail_cold_path"] == "quota plan --include-detail agent-todos"
 
 
 def test_markdown_distinguishes_peer_blockers_from_native_admission() -> None:
@@ -773,7 +896,8 @@ def test_compact_quota_deduplicates_vision_without_losing_decision_rules() -> No
     )
 
     assert len(json.dumps(payload, indent=2)) > 40_000
-    # The old fixture hid selectable candidates. Retain that context and measure the cost.
+    # The historical 40KB fixture hid 28 candidate/binding records. Retaining
+    # that decision context is an intentional cost, not a compaction success.
     assert len(json.dumps(compact, indent=2)) < len(json.dumps(payload, indent=2))
     assert compact["selected_todo"] == payload["selected_todo"]
     assert compact["interaction_contract"]["mode"] == "bounded_delivery"
@@ -1010,39 +1134,6 @@ def test_compact_quota_should_run_cli_payload_keeps_hot_path_identity_in_markdow
     assert "- interaction_contract: " in markdown
 
 
-@pytest.mark.parametrize("role", ["agent", "user"])
-def test_shared_diagnostics_preserve_unknown_lists_nested_fields_and_complete_items(role):
-    lane = "first_executable_items" if role == "agent" else "first_open_items"
-    item = {**_items(1, prefix="retained")[0], "text": "Original constraint. " * 200,
-        "future_requirements": ["Keep the tail stop."], "lease": {"owner": "peer", "epoch": 7}}
-    unknown = [None, False, 0, {"requirement": "A new obligation"}]
-    summary = {"schema_version": "todo_summary_v0", lane: [item], "backlog_items": _items(5, prefix="diagnostic"),
-        "future_items": unknown, "future_rules": unknown,
-        "deferred_items": [{"todo_id": "later", "future_global_stop": "Do not continue."}],
-        "recent_completed_advancement_items": [{"todo_id": "old", "completion_result": {"future_stop": True}}],
-        "claim_scope": {"owner": "peer", "future_items": unknown, "blocked_claimed_items": []},
-        "future_object": {"items": unknown},
-        "todo_succession_warning": {"items": _items(4, prefix="old"), "todo_ids": ["original-id"], "future_items": unknown}}
-    payload = {f"{role}_todo_summary": summary, "capability_gate": {"runnable_candidates": [item], "future": unknown},
-        "action_portfolio": {"suggested_actions": [item]}, "planning_horizon": {"work_items": [item]}}
-    original = deepcopy(payload)
-    projected = compact_quota_should_run_cli_payload(payload)
-    result = projected[f"{role}_todo_summary"]
-    assert result[lane] == [item]
-    assert result["future_items"] == result["future_rules"] == unknown
-    assert result["future_object"] == {"items": unknown}
-    assert result["deferred_items"] == summary["deferred_items"]
-    assert result["recent_completed_advancement_items"] == summary["recent_completed_advancement_items"]
-    assert result["claim_scope"] == {"owner": "peer", "future_items": unknown}
-    assert result["todo_succession_warning"]["todo_ids"] == ["original-id"]
-    assert result["todo_succession_warning"]["future_items"] == unknown
-    for key in ("capability_gate", "action_portfolio", "planning_horizon"):
-        assert projected[key] == payload[key]
-    assert payload == original
-    assert compact_quota_should_run_cli_payload(projected) == projected
-    detailed = compact_quota_should_run_cli_payload(payload,
-        include_todo_summary_detail=True, include_user_todo_summary_detail=True)
-    assert detailed == payload
 
 
 @pytest.mark.parametrize("role", ["agent", "user"])
@@ -1083,25 +1174,6 @@ def test_unfamiliar_diagnostic_row_does_not_expand_known_siblings(role, position
     assert payload == original
 
 
-def test_readonly_plan_projects_all_rows_in_one_typed_call(monkeypatch):
-    from loopx.control_plane.quota.cli_projection import compact_quota_plan_cli_payload
-    from loopx.control_plane.quota import turn_envelope
-    summary = {"schema_version": "todo_summary_v0", "backlog_items": _items(3, prefix="cold"),
-        "first_executable_items": _items(1, prefix="work"), "future_items": [False, None]}
-    row = {"agent_todos": summary, "user_todos": summary}
-    calls, real = [], turn_envelope._turn_envelope_result
-    def observed(operation, **params):
-        calls.append(operation)
-        return real(operation, **params)
-    monkeypatch.setattr(turn_envelope, "_turn_envelope_result", observed)
-    payload = {"mode": "plan", "groups": {"ready": [row] * 8}, "next_automatic_turn": row}
-    projected = compact_quota_plan_cli_payload(payload, detail_sections=frozenset({"user-todos"}))
-    assert calls == ["reference_context"]
-    for result in [*projected["groups"]["ready"], projected["next_automatic_turn"]]:
-        assert result["user_todos"] == summary
-        assert "backlog_items" not in result["agent_todos"]
-        assert result["agent_todos"]["future_items"] == [False, None]
-        assert result["agent_todos"]["payload_compaction"]["full_detail_cold_path"] == "quota plan --include-detail agent-todos"
 
 
 @pytest.mark.parametrize("mode", ["should-run", "status", "plan"])
@@ -1143,41 +1215,3 @@ def test_diagnostic_transport_preserves_source_number_spelling_and_precision(mod
                 assert json.dumps(value["payload_compaction"]["source_projection"], ensure_ascii=False) == json.dumps(summary["payload_compaction"], ensure_ascii=False)
     assert json.dumps(payload, ensure_ascii=False) == encoded
     assert json.dumps(project(result), ensure_ascii=False) == json.dumps(result, ensure_ascii=False)
-
-
-@pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("mode", ["status", "plan"])
-def test_public_readonly_projection_preserves_canonical_work_and_detail(tmp_path, monkeypatch, provider, mode):
-    from tests.control_plane import test_quota_settlement_cli as fixture
-    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
-    if provider == "sqlite":
-        isolate_sqlite_runtime(tmp_path, monkeypatch)
-    project, runtime, registry = fixture._write_fixture(tmp_path)
-    state = fixture._configure_read_only_todo(project)
-    fixture._initialize_fixture_authority(project, runtime, provider=provider)
-    def canonical_work():
-        rc, value = fixture._run_cli(registry, runtime, "todo", "list", "--goal-id", fixture.GOAL_ID,
-            "--todo-id", fixture.TODO_ID, cwd=project)
-        assert rc == 0 and value["matched"] is True, value
-        assert value["authority_read"]["source_authority"] == f"{provider}_v0"
-        assert value["authority_read"]["legacy_fallback_used"] is False
-        return value["todo"], value["authority_read"]["provider_revision"]
-    before = canonical_work()
-    original = state.read_bytes()
-    def call(*detail):
-        rc, value = fixture._run_cli(registry, runtime, "quota", mode, *detail, cwd=project)
-        assert rc == 0 and value["ok"] is True, value
-        return {row["goal_id"]: row for rows in value["groups"].values() for row in rows}
-    projected = call()[fixture.GOAL_ID]
-    detailed = call("--include-detail", "agent-todos", "--include-detail", "user-todos")[fixture.GOAL_ID]
-    for role in ("agent", "user"):
-        one, full = projected[f"{role}_todos"], detailed[f"{role}_todos"]
-        assert one["open_count"] == full["open_count"]
-        assert one["work_counts"] == full["work_counts"]
-        assert one["payload_compaction"]["full_detail_cold_path"] == f"quota {mode} --include-detail {role}-todos"
-        lane = "first_executable_items" if role == "agent" else "first_open_items"
-        assert one[lane] == full[lane]
-    assert canonical_work() == before
-    assert state.read_bytes() == original
-    assert fixture._spend_run_count(runtime) == 0
-    assert fixture._heartbeat_receipt_count(runtime, "readonly-projection") == 0

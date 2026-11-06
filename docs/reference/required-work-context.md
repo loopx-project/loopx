@@ -211,6 +211,10 @@ Its `context-read --initial-read` uses the same exact-address selector. New priv
 selection references pin the resolved addresses and complete selection digest;
 continuations use the existing explicit reader instead of rerunning initial
 navigation. A later navigation change cannot replace the saved selection.
+Initial navigation can replace fully selected children with their complete
+captured parent to avoid repeating addresses. An unselected child, including
+optional or unknown material, prevents that merge; selected facts and obligations
+stay identical. Explicit selectors and index entries keep their original addresses.
 Historical recipe-only references and explicit-file initial cursors still reject
 a changed selection digest; recover through the same original full-capture
 reference, without another admission or rewriting the saved descriptor. These
@@ -241,8 +245,8 @@ pointer order. Current controls, required sources and settlement obligations
 precede the complete unread-material index. A coalesced parent keeps
 its first selected child's position; explicit selectors retain canonical order.
 This reorders the same selected facts without reducing the total body or
-guaranteeing that all requirements fit one page. Earlier initial-selection
-digests still reject a changed profile; recover from the original full capture.
+guaranteeing that all requirements fit one page. Historical recipe-only references and raw initial cursors still reject a changed
+profile; recover from the original full capture.
 The concrete first read replaces the broad scalar preview and root index when it
 fits; unknown schemas or a tight reference budget keep generic discovery. A warm
 delta's existing `command` still reads its wire delta; its initial read and
@@ -417,6 +421,13 @@ retains its complete body and declaration. Todo-less reads and the explicit
 `goal-acceptance inspect` command keep their existing full inventory. This
 reduces repeated binding observations without treating a shorter context as
 acceptance, authority or a measured model benefit.
+
+The complete Turn contract stores equal, nonempty registered Todo-summary lanes
+once when a local reference is smaller. A `<lane>_ref` names a literal array in
+the same signed summary. Equality preserves array order, original numeric source
+identity, JSON types and unknown item fields. Resolve references before display
+caps; ambiguous, missing, chained or foreign targets are rejected. Counts,
+candidate collections, selection, authority and settlement retain their owners.
 
 For enabled native quota with selected work, the same acceptance snapshot may
 include `outcome_context` navigation. `suggested_outcome_ids` prioritizes work
@@ -672,6 +683,15 @@ The reference stays below 7900 serialized bytes (or the explicit smaller output
 ceiling); if metadata cannot fit, recovery retains the current capture. Reader
 pages remain independently bounded. A complete raw tool log is not proof that
 the Host retained the same bytes in model history.
+
+In a native progressive session, the initial read can reference a previously
+delivered preferences block or acceptance outcome. The first page lists those
+pointers in `previously_delivered_fields`. Their requirements still apply.
+Use `recovery.command --select <pointer>` for the current body when needed.
+Reuse requires complete observed tool delivery in the same task, session and
+epoch, and a matching digest of the current visible field. A revised field
+appears in full. Losing the observation restores the ordinary initial read.
+A saved delta on its own provides no evidence of model retention.
 
 Each progressive `context_details.source_path` names this Turn's complete immutable
 `projection.json`, including when a warm wire omits unchanged material. The current

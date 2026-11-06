@@ -1102,6 +1102,48 @@ identity use the existing projection-edit transport. This changes neither
 required-read obligations nor admission, settlement or the off path; it does
 not close C1/C2 adoption or establish model-outcome/full-cost benefit.
 
+Native quota emission and deferred saved-capture presentation now also obtain
+initial navigation from that same TypeScript invocation. Both actual callers
+reuse its invocation-local plan, bound to the published current capture; the
+standalone reader shares the same selection policy and decision-field owner.
+A changed file or a plan for another capture refuses before native publication.
+The shared private writer returns the digest of its exact published bytes, so
+capture, recovery and settlement callers no longer reopen a new file solely to
+hash it. Independent complete recovery files, original numeric/Unicode values,
+reader verification, current-before-optional publication and the off path remain.
+Historical projection-only callers keep a delegating compatibility API.
+
+A matched synthetic File/SQLite quota/read/work/check/settle/replay comparison
+includes preparation and the internal spend process. In the SQLite warm case,
+RPCs fall from 321 to 319, framed RPC bytes by about 3.16% and observed Python
+file-read bytes by about 31.5%; model-visible output remains 66,839 bytes.
+The IO observer now avoids counting the same fd-backed stream twice, and all
+compared CLI processes use one interpreter with verified source provenance.
+These are component results. The original quota current-step output is still
+34,736 versus 40,929 bytes, and both RPC traffic and combined observed Python
+read/write bytes remain higher overall. Native/kernel/provider IO, memory/CPU,
+latency and model outcomes are not qualified by these counts. C1 remains open;
+a smaller capture transport is not evidence of total net benefit.
+
+The request-scoped runtime adapter now shares exact `todo.context.page` results
+across quota, status and refresh callers. This handler remains the existing
+TypeScript pure lens over supplied records. Reuse ends with the existing pinned
+request scope, including copied-context retirement; inputs and outputs retain
+their JSON order/types, changed records miss, and callers receive independent
+mutable views. Encoded retained input/output is bounded by the existing request
+byte limit. Authority reads, clocks, writes and settlement are never reused;
+errors and oversized entries retain the ordinary path. No cross-Turn cache or
+model retention assumption is introduced.
+
+A separate matched File/SQLite cohort reduces warm RPCs from 319 to 284 and
+framed RPC bytes by about 5.4%, with unchanged model-visible output and the same
+independently checked synthetic artifact and single debit. It includes baseline
+preparation and internal child processes. Original-quota warm current-step output
+remains 34,298/34,628 versus 40,474/40,817 bytes (File/SQLite); framed traffic is
+still about 1.3% higher. This is transport work avoided, not a model-token,
+latency, memory, natural-outcome or overall net-benefit qualification. Historical
+cohorts and their failures remain separate; the C1 acceptance gap stays open.
+
 The existing initial reader also consumes complete acceptance navigation bound
 to the captured Goal/Agent/Todo and source revisions. Suggested outcome bodies
 reach the starting read, including peer dependencies; other outcomes remain
@@ -1124,6 +1166,84 @@ reordered material and unavailable predecessors; they do not establish natural
 model adoption. All-host defaults, other omitted material, trusted Host coverage,
 writer/reader cutover and §9's outcome/full-cost comparison remain open. Index
 overhead participates in the existing full-versus-folded byte guard.
+
+The C1 candidate's journal inspection, publication, settlement lookup and managed
+retry now consume a present complete contract through the same checked-source
+owner as Host dispatch. A changed source, unsupported version or self-consistent
+but divergent executor adapter blocks recovery/publication; it cannot select the
+historical decoder. Native file reads and Python transport retain the original
+sparse numeric spellings. The old adapter-only decoder remains for historical
+journals without a complete contract. This is a source-integrity repair with
+additional validation cost, not installed adoption, full reader retirement or
+the original-quota outcome/net-cost qualification.
+
+The candidate's external generic CLI stdin now uses the same complete-source
+Host request v1 as native model input. It removes the second executable
+envelope from that wire and preserves the original contract, capture readers,
+Turn key and result transport. The shared checked-source owner validates v1
+directly; native adapters share version decoding, and the DSH stdio consumer
+accepts v1 as well as historical v0. Missing/invalid source, mixed carriers and
+capture drift refuse without selecting the historical decoder. Ark and MemT
+distribution adapters also use the Core decoder through the
+existing supported Host seam; provider permissions, receipt recovery and exact
+memory-lifetime gates remain. Their matching-Core requirement is explicit.
+The private executor adapter and versioned historical journal readers remain until their
+own replacement is qualified. This source-level wire cutover requires external
+v0 adapters to migrate; it establishes neither installed adoption, original
+quota outcome/full-cost qualification nor model-retention benefit.
+
+The candidate's built-in Codex/DSH session-index lookup now reads identity from
+one checked complete source. Normal CLI planning, failed-session resolution and
+journal inspection no longer transport a second executor adapter for that read.
+The existing TypeScript identity owner and native session store retain the same
+Goal/Agent/Todo scope, namespace and lifetime checks. An explicitly supplied
+historical adapter still selects its existing decoder and consistency checks;
+malformed supplied sources never fall back. Host dispatch, injected callbacks
+and the private executor/journal adapter keep their separately qualified
+boundaries. This read-only caller replacement does not authorize a launch or
+qualify whole-C1 retirement, model adoption or original-quota full-cost benefit.
+
+The candidate's strict Codex result normalizer also reads material-result
+evidence applicability through the existing checked-source owner, for both the
+CLI and operation Host. A complete source cannot lose that obligation when
+its executor adapter is absent; malformed supplied sources do not fall back.
+The strict output schema keeps required nullable fields, stop results normalize
+null evidence to absence, and non-null evidence content remains the executor
+validator's responsibility. Historical requests without a complete source
+retain their original rule.
+This replaces one active metadata reader and adds a fresh source check after
+the provider; it does not qualify whole-C1 cutover or net-cost/model benefit.
+
+Operation Hosts also reuse that dispatch owner for preparation and normalized
+session lineage. Codex checks complete work and Goal delivery before native
+initialization, retaining a fresh prompt/schema check after startup. DSH reuses
+the lineage already checked in its preparation invocation instead of issuing
+another identity read. The optional projection metadata stays outside model
+input and persisted authority; callers that do not request it retain their
+existing projection. Historical codecs, session scope/lifetime, confirmation
+and consumption gates, and post-provider validation keep their owners. These
+caller changes require separate startup/refusal, native protocol and matched
+component-cost evidence; they do not close the remaining private-adapter cutover
+or establish original-quota outcome/full-cost benefit.
+
+The shared Turn Host-request producer now selects that same complete v1 input
+for built-in Hosts and injected callbacks as well as generic CLI stdin. It
+checks the private plan's source/adapter consistency before removing the second
+carrier. Original-capture publication preserves v1 and its immutable reader
+header; only an original historical observation can restore the old request
+codec. A quota capture without a journal key retains its original source-Turn
+reference; provided journal keys still match exactly, without a fabricated binding.
+Failed-session recovery checks the complete source/header and retains the
+existing native scope, action-hash number codec and scoped request/replan identity.
+Its complete-input `driver_lineage` reader now consumes the checked action facts
+directly, without regenerating a v0 adapter, cold reader commands or compaction
+diagnostics. Both readers share the same route and scoped-identity rules;
+historical envelopes retain their own version/signature proof and scalar codec.
+Private plans/journals still retain their adapter: retiring this recovery caller
+does not retire that writer or all Core adapters. Qualify actual dispatch,
+recovery/replay and source-check/derivation costs separately. Unchanged bridge
+traffic is not a measured latency gain; already-complete model input is not
+another compression gain or original-quota outcome qualification.
 
 C1's inventory is part of its usable replacement, not a standalone architecture
 framework. C3/C4/C5 can proceed independently once C1's contract is stable;
@@ -1273,3 +1393,16 @@ The directory is the index. A planning/source-inspection entry does not establis
 runtime delivery; live priorities and claims remain in the roadmap and canonical
 work. Keep historical entries append-only and refine the current normative plan
 here rather than treating a dated audit as a permanent execution queue.
+
+The [source-convergence checkpoint](ledger/controller-executor-unified-contract-v0/2026-10-30-c1-source-convergence.md)
+keeps the candidate's detailed chronology outside this normative plan. Integration
+preserves main's presentation/journal owners and shares numeric source identity
+and edit transport across acceptance, summaries, authoring and Vision. This does
+not qualify writer/consumer cutover, installed adoption or the original-quota
+accepted-outcome/full-cost comparison. Remaining reader retirement and negative
+cost observations keep C1 open.
+
+The ledger's native command-ownership increment adopts the existing combined
+refresh/spend owner and preserves three exact receipts on replay. Its smaller
+total stdout does not clear the recurring warm-input regression or increased
+transport/IO cost. Keep original-quota full-cost qualification open.

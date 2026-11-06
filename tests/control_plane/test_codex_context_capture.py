@@ -20,7 +20,7 @@ from canonical_authority_fixture import initialize_canonical_authority, isolate_
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.quota.turn_envelope import prepare_context_delivery, restore_context_delivery
 from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
-from test_quota_settlement_cli import AGENT_ID, GOAL_ID, TODO_ID, _spend_run_count, _write_fixture
+from test_quota_settlement_cli import AGENT_ID, GOAL_ID, TODO_ID, _run_cli, _spend_run_count, _write_fixture
 from tests.control_plane.codex_checkpoint_fixture import (
     local_inference_provider, delivered_context as _delivered, last_context_page as _last_page,
     reference_metadata_oracle,
@@ -601,7 +601,6 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
                 # checked first readback through the real CLI, rather than
                 # reusing a stale guard/Turn from resumed history to obtain an
                 # artificially eligible warm packet.
-                from test_quota_settlement_cli import _run_cli
                 expected = hashlib.sha256(read_paths["cold"].read_text().rstrip("\n").encode()).hexdigest()
                 assert stages["cold_readback_sha256"] == expected
                 artifact = project / "native-context-readback.txt"
@@ -701,7 +700,8 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
     projection = Path(wires["warm"]["recovery"]["path"])
     assert hashlib.sha256(projection.read_bytes()).hexdigest() == wires["warm"]["recovery"]["sha256"]
     current = prepare_context_delivery(json.loads(projection.read_bytes()), scope={k: wires["warm"]["target"][k] for k in ("goal_id", "agent_id", "session_id", "context_epoch")},
-        capture_id=wires["warm"]["target"]["capture_id"], surface=surface)
+        capture_id=wires["warm"]["target"]["capture_id"], surface="complete_turn")
+    assert current["target"] == wires["warm"]["target"]
     baseline = wires["cold"]
     if resumed and qualified_resume and not resume_loss:
         assert wires["warm"]["base"] == baseline["target"]
@@ -713,13 +713,17 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
         assert current["target"]["context_epoch"] != baseline["target"]["context_epoch"]
         baseline = prepare_context_delivery(baseline["context"], scope={
             k: current["target"][k] for k in ("goal_id", "agent_id", "session_id", "context_epoch")},
-            capture_id=baseline["target"]["capture_id"], surface=surface)
+            capture_id=baseline["target"]["capture_id"], surface="complete_turn")
         assert baseline["target"] == wires["warm"]["base"]
     restored = restore_context_delivery(wires["warm"], baseline=baseline, current=current)
     assert restored["context"] == current["context"] and restored["mode"] == wires["warm"]["mode"]
-    for document in (wires["cold"]["context"], current["context"]):
-        context = (document["work_context"] if surface == "turn_envelope" else
-                   document["interaction_contract"]["agent_channel"]["work_context"])
+    # Both CLI spellings now emit the same complete contract. Compare every
+    # reconstructed fact with its original capture, not two compact views.
+    for document, (_, raw) in zip((wires["cold"]["context"], current["context"]), snapshots, strict=True):
+        original = json.loads(raw)
+        assert document == original
+        assert document["schema_version"] == "loopx_turn_envelope_v1"
+        context = document["interaction_contract"]["agent_channel"]["work_context"]
         selected = next(source["content"]["todo"] for source in context["sources"]
                         if source["source"] == "selected_todo")
         assert selected["todo_id"] == TODO_ID and selected["text"] == body

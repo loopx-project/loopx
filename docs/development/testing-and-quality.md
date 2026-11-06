@@ -294,6 +294,20 @@ and the service admission suite against a disposable server, so the path stays
 qualified in CI as well as locally. If no safe real environment is available,
 hold delivery.
 
+Timeout recovery tests distinguish expiry before a Session event from expiry
+after an observed event. A short wall deadline alone establishes neither
+observation nor a resumable binding. A known-observed case may control only the
+supervisor clock after the real event reaches its output pipe, retaining actual
+spawn, parsing, cleanup and persistence. Keep a separate real-deadline case that
+cannot receive the event and rejects a fabricated binding. A fixture readiness
+watchdog does not qualify the runtime's wall deadline or explain an earlier
+failure whose event evidence is unavailable.
+
+超时恢复分别验证事件前到期和已观察到 Session 事件后到期。短墙钟时限不能证明事件
+已被观察或存在可恢复绑定。已知事件的用例可以只控制 supervisor 时钟，保留实际
+进程、管道、解析、清理和持久化；另用真实截止时间覆盖事件前超时并拒绝虚构绑定。
+fixture 就绪看门狗不认证运行时的墙钟时限，也不能解释已丢失事件证据的历史失败。
+
 重构交付前必须验证受影响的真实生产入口和真实后端。单测、mock 与内存 conformance
 不能替代这项证据。影响 PostgreSQL authority 时，配置指向隔离临时实例的
 `LOOPX_TEST_POSTGRES_URL`，运行 `npm run test:postgresql-authority-store`；跳过不算

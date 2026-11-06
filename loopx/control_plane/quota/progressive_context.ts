@@ -1,30 +1,93 @@
+import {EffectiveAction} from "./effective_action.generated.ts";
 /** Model presentation: requirements stay inline, supporting material is
  * addressed in the immutable source. This plan changes no canonical state. */
 import {isDeepStrictEqual} from "node:util";
 import {visionAuthoringContract} from "../goals/vision_checkpoint.ts";
 import type {JsonObject} from "../effect_program.ts";
-import {jsonObject, requireJsonObject} from "../runtime_decode.ts";
+import {jsonObject, requireBoolean, requireJsonObject} from "../runtime_decode.ts";
 import {GOAL_OUTCOMES_SCHEMA, OUTCOME_CONTEXT_NAVIGATION_SCHEMA} from "../goals/outcome_requirements.ts";
 import {FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE} from "../work_items/interaction_contract.ts";
 import {quotaSummaryReferences, contextSourceIdentity, contextProjectionChanges,
   type ProjectionSourceValues} from "./diagnostic_projection.ts";
 import {encodeContextDelivery, fileNavigationPaths} from "./context_delivery.ts";
 import {createHash} from "node:crypto";
+import {capturedContextSelection} from "./context_selection.ts";
 
 type Path = (string | number)[];
+const MIN_REUSABLE_BODY_BYTES = 1024;
 const pointer = (path: Path): string => path.length ? "/" + path.map(key =>
   String(key).replaceAll("~", "~0").replaceAll("/", "~1")).join("/") : "";
 const at = (root: unknown, path: Path): unknown => path.reduce<unknown>((row, key) =>
   Array.isArray(row) ? row[Number(key)] : jsonObject(row)?.[key], root);
 const known = (row: JsonObject, fields: string[]): boolean => Object.keys(row).every(key => fields.includes(key));
 
+/** One registry for bodies eligible for observed reuse, regardless of whether
+ * the reader delivered the body itself or packaged it in a complete parent. */
+function reusableFirstReadFields(context: JsonObject): {path: Path; freshKeys: string[]}[] {
+  const base: Path = ["interaction_contract", "agent_channel", "work_context", "sources"];
+  const sources = at(context, base);
+  if (!Array.isArray(sources)) return [];
+  return sources.flatMap((value, i) => {
+    const source = jsonObject(value), content = jsonObject(source?.content);
+    if (!content) return [];
+    const path = [...base, i, "content"];
+    if (source?.kind === "agent_preferences")
+      return [{path, freshKeys: ["ok", "revision", "instruction"]}];
+    if (source?.source !== "goal_acceptance") return [];
+    const outcomesPath = [...path, "goal_acceptance_contract", "outcome_requirements", "outcomes"];
+    const outcomes = at(context, outcomesPath);
+    return Array.isArray(outcomes) ? outcomes.flatMap((outcome, index) =>
+      typeof jsonObject(outcome)?.id === "string"
+        ? [{path: [...outcomesPath, index], freshKeys: ["id", "revision"]}] : []) : [];
+  });
+}
+
 /** Digests stay in the private observed-read journal, never repeated to the model.
  * The existing exact-source identity preserves non-JS numeric spellings. */
 export function contextReadSectionDigests(request: JsonObject, paths: Path[]): JsonObject {
   const context = requireJsonObject(request.context, "read section source");
   const identity = contextSourceIdentity(request, request.source_number_tokens);
-  return Object.fromEntries(paths.map(path => [pointer(path),
-    createHash("sha256").update(identity(at(context, path), ["context", ...path])).digest("hex")]));
+  const selected = new Set(paths.map(pointer));
+  const covered = new Map(paths.map(path => [pointer(path), path]));
+  for (const {path} of reusableFirstReadFields(context))
+    if (paths.some(parent => pathStartsWith(path, parent))) covered.set(pointer(path), path);
+  return Object.fromEntries([...covered].flatMap(([address, path]) => {
+    const content = identity(at(context, path), ["context", ...path]);
+    // Parent delivery must not multiply tiny bodies into a larger journal.
+    return selected.has(address) || Buffer.byteLength(content) >= MIN_REUSABLE_BODY_BYTES
+      ? [[address, createHash("sha256").update(content).digest("hex")]] : [];
+  }));
+}
+
+/** Only previously delivered supplementary bodies may use a reference. Current
+ * decisions, stops, selection, settlement and unknown source shapes stay inline. */
+function observedFirstRead(request: JsonObject, pointers: string[]): JsonObject | undefined {
+  const context = requireJsonObject(request.context, "current first read");
+  const seen = requireJsonObject(request.consumed_pointers, "observed sections");
+  if (typeof jsonObject(context.selected_todo)?.todo_id !== "string") return undefined;
+  const fields = new Map(reusableFirstReadFields(context).map(field => [pointer(field.path), field]));
+  const identity = contextSourceIdentity(request, request.source_number_tokens);
+  const reused: JsonObject = {};
+  // Match semantic fields before the reader groups complete parents. Otherwise
+  // selecting every outcome hides the individual unchanged bodies from reuse.
+  const selections = capturedContextSelection({context, select: pointers,
+    preserve_selection_order: true}).selections as {pointer: string; path: Path}[];
+  const current = selections.flatMap(row => {
+    const {path, pointer: address} = row;
+    const field = fields.get(address);
+    if (typeof seen[address] !== "string" || !field) return [row];
+    const body = jsonObject(at(context, path));
+    if (!body) return [row];
+    const content = identity(body, ["context", ...path]);
+    // A reference and its recovery instructions should cost less than the field.
+    if (Buffer.byteLength(content) < MIN_REUSABLE_BODY_BYTES || createHash("sha256").update(content).digest("hex") !== seen[address])
+      return [row];
+    reused[address] = seen[address];
+    return field.freshKeys.filter(key =>
+      Object.hasOwn(body, key)).map(key => ({pointer: address + "/" + key, path: [...path, key]}));
+  });
+  return Object.keys(reused).length ? {selections: capturedContextSelection({context, initial_read: true},
+    current.map(row => row.pointer)).selections, reused} : undefined;
 }
 
 function inlineReadSections(request: JsonObject, required: JsonObject): JsonObject {
@@ -121,12 +184,12 @@ export function progressiveContextPlan(request: JsonObject): JsonObject {
 
 const pathStartsWith = (path: Path, start: Path) => start.every((key, i) => path[i] === key);
 
-function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSourceValues):
+function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSourceValues,
+    plan = progressiveContextPlan({payload: request.context, surface: request.surface})):
     {context: JsonObject; tokens: [Path, string][]; projected: boolean} {
   const context = requireJsonObject(request.context, "current projection");
   const details = requireJsonObject(request.native_projection, "supporting material reference");
   const identity = contextSourceIdentity(request, request.source_number_tokens);
-  const plan = progressiveContextPlan({payload: context, surface: request.surface});
   const deferred = plan.deferred as JsonObject[], references = (plan.references ?? []) as JsonObject[];
   const instructions = plan.instructions as JsonObject[];
   const at = (root: unknown, path: Path): unknown => path.reduce<unknown>((row, key) =>
@@ -211,6 +274,14 @@ function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSour
         + "Uncertain or missing necessary facts must be recovered before dependent action; Agent review is not independent acceptance."};
     }
   }
+  // A signed source and its presentation have different content hashes even
+  // when the only edit is a same-view Todo reference. Keep an address for the
+  // original and include its cost when deciding whether the projection wins.
+  const signedSource = request.surface === "complete_turn";
+  const sourceNavigation = typeof details.command_template === "string"
+    ? {command_template: details.command_template} : {path: details.path, sha256: details.sha256};
+  if (signedSource && required !== context && required.context_details === undefined)
+    required.context_details = sourceNavigation;
   const remaining = tokens.filter(([path]) => !removed.some(start => pathStartsWith(path, start)));
   // Unchanged source spellings cancel. Removed registered records contain only
   // safe integral numbers; sparse tokens retain their original float spelling.
@@ -218,7 +289,21 @@ function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSour
     path[0] === "context" ? size + token.length - JSON.stringify(at(request, path)).length : size, 0);
   const projected = required !== context && Buffer.byteLength(JSON.stringify(required))
     - Buffer.byteLength(JSON.stringify(context)) + adjustment(remaining) - adjustment(tokens) < 0;
-  return {context: projected ? required : context, tokens: projected ? remaining : tokens, projected};
+  // A saved capture may predate the caller's native transport. Keep its signed
+  // source immutable; bind only this display recipe after the optional shrink
+  // decision, so caller options neither bypass source validation nor defeat its
+  // no-growth guard. The next invocation still runs the ordinary CLI guard.
+  const selectionPath = ["interaction_contract", "cli_channel", "selection_command", "command_args_template"];
+  const transport = details.selection_command_args_template;
+  const bindTransport = typeof transport === "string" && typeof at(context, selectionPath) === "string"
+    && transport !== at(context, selectionPath);
+  if (!projected) { required = context; copies.clear(); }
+  if (bindTransport) {
+    parent(selectionPath)[selectionPath.at(-1)!] = transport;
+    if (signedSource && required.context_details === undefined)
+      required.context_details = sourceNavigation;
+  }
+  return {context: required, tokens: projected ? remaining : tokens, projected: projected || bindTransport};
 }
 
 function nativeContextContinuity(codec: JsonObject): JsonObject {
@@ -239,24 +324,43 @@ function nativeContextContinuity(codec: JsonObject): JsonObject {
 
 /** Plan and encode one native capture without sending its intermediate view
  * back through Python. Capture publication and native locking remain Host IO. */
-export function prepareProgressiveContextDelivery(request: JsonObject, legacyFields: readonly string[]): JsonObject {
+export function prepareProgressiveContextDelivery(request: JsonObject, legacyFields: readonly string[],
+    decisionFields: readonly string[], plan?: JsonObject): JsonObject {
+  if (request.include_initial_read_plan !== undefined)
+    requireBoolean(request.include_initial_read_plan, "include_initial_read_plan");
   const sourceValues: ProjectionSourceValues = new WeakMap();
-  const required = requiredNativeContext(request, sourceValues);
+  const required = requiredNativeContext(request, sourceValues, plan);
   const codec = nativeContextContinuity({...request, context: required.context,
     ...(request.source_number_tokens === undefined ? {} : {source_number_tokens: required.tokens})});
   const delivery = encodeContextDelivery(codec, legacyFields, sourceValues, fileNavigationPaths(required.context));
+  const observe = request.observe_first_read === true && !!jsonObject(required.context.selected_todo)?.todo_id;
+  const navigation = request.include_initial_read_plan === true || observe
+    ? nativeContextReadPlan(required.context, decisionFields) : undefined;
+  const observed = observe && navigation?.initial
+    ? observedFirstRead(codec, initialContextReadPointers(required.context, decisionFields)) : undefined;
   const {operation: _operation, source_edits: _edits, source_number_tokens: _numbers, ...source} = request;
   return contextProjectionChanges(source, {context: required.context, delivery, projected: required.projected,
-    read_sections: inlineReadSections(request, required.context)}, sourceValues);
+    ...(observed ? {observed_first_read: observed} : {}),
+    read_sections: inlineReadSections(request, required.context),
+    ...(request.include_initial_read_plan === true
+      ? {initial_read_plan: navigation} : {})}, sourceValues);
 }
 
 /** Stateless presentation uses the same plan without inventing a native session,
  * retained baseline or admission identity. Hosts may add delta independently. */
-export function prepareProgressiveContext(request: JsonObject): JsonObject {
+export function prepareProgressiveContext(request: JsonObject, plan?: JsonObject): JsonObject {
   const values: ProjectionSourceValues = new WeakMap();
-  const required = requiredNativeContext(request, values);
+  const required = requiredNativeContext(request, values, plan);
   const {operation: _operation, source_edits: _edits, source_number_tokens: _numbers, ...source} = request;
   return contextProjectionChanges(source, {context: required.context, projected: required.projected}, values);
+}
+
+/** Invocation-local navigation, not captured input or a read/retention receipt.
+ * Decision vocabulary comes from the same owner as standalone initial reads. */
+function nativeContextReadPlan(context: JsonObject, decisionFields: readonly string[]): JsonObject {
+  const pointers = initialContextReadPointers(context, decisionFields), initial = pointers.length > 0;
+  return {initial, plan: capturedContextSelection(initial ? {context, initial_read: true}
+    : {context, select: [""], list_fields: true}, pointers)};
 }
 
 export function initialContextReadPointers(context: JsonObject, decisionFields: readonly string[]): string[] {
@@ -275,6 +379,36 @@ export function initialContextReadPointers(context: JsonObject, decisionFields: 
     pointers.push("/" + path.map(key => String(key).replaceAll("~", "~0").replaceAll("/", "~1")).join("/"));
   };
   for (const field of decisionFields) include(field);
+  // A staged replan has already replaced inline acceptance with a pinned
+  // review reader. Deliver its first action and ordering without writeback.
+  const replan = object(context.replan_action_packet);
+  if (context.effective_action === EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED &&
+      replan?.schema_version === "replan_action_packet_v0" && replan.decision === "replan_required" &&
+      replan.settlement_only !== true && typeof replan.review === "string" && replan.review) {
+    include("replan_action_packet", "review");
+    include("replan_action_packet", "guidance");
+  } else if (context.schema_version === "loopx_turn_envelope_v1" &&
+      context.effective_action === EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED && replan?.schema_version === "replan_action_packet_v0" &&
+      replan.decision === "replan_required" &&
+      replan.settlement_only !== true) {
+    // The complete contract already carries the review facts: use its own
+    // obligations and the indexed outcome paths below, without another writer.
+    for (const field of ["planning_guidance", "required_outcome", "allowed_terminal"])
+      include("replan_action_packet", field);
+    // An invalidated successor can reopen review under the same receipt. Show
+    // the current cause and basis before the agent chooses a writeback route.
+    const obligation = object(context.autonomous_replan_obligation);
+    const review = object(obligation?.replan_context);
+    if (obligation?.schema_version === "autonomous_replan_obligation_v0" &&
+        typeof replan.obligation_id === "string" && obligation.obligation_id === replan.obligation_id &&
+        review?.schema_version === "replan_context_v0" && review.obligation_id === replan.obligation_id) {
+      include("autonomous_replan_obligation", "obligation_id");
+      include("autonomous_replan_obligation", "stop_condition");
+      include("autonomous_replan_obligation", "replan_context", "context_id");
+      if (Array.isArray(obligation.triggers)) obligation.triggers.forEach((_trigger, index) =>
+        include("autonomous_replan_obligation", "triggers", index, "kind"));
+    }
+  }
   include("agent_lane_next_action", "next_step");
   include("agent_lane_next_action", "next_action_basis");
   include("interaction_contract", "user_channel");
@@ -356,9 +490,17 @@ export function initialContextReadPointers(context: JsonObject, decisionFields: 
   for (const field of ["execution_preparation", "next_cli_actions", "spend_allowed_now", "spend_after_validation", "spend_policy",
     "quota_spend_source", "delivery_workspace_causality", "vision_continuation_audit"])
     include("interaction_contract", "cli_channel", field);
+  // Explicit selection clears next_cli_actions. Deliver the owner's discovery
+  // and same-Turn binding recipe alongside its non-exhaustive suggestions.
+  if (object(interaction.cli_channel)?.selection_required === true) {
+    for (const field of ["selection_required", "selection_policy_ref", "selection_command"])
+      include("interaction_contract", "cli_channel", field);
+    include("action_portfolio", "selection_policy");
+    include("action_portfolio", "suggested_actions");
+  }
   const planPath = ["interaction_contract", "cli_channel", "settlement_plan"];
   const plan = object(object(interaction.cli_channel)?.settlement_plan);
-  if (plan?.schema_version === "quota_settlement_plan_v1" && Array.isArray(plan.ordered_steps)) {
+  if ((plan?.schema_version === "quota_settlement_plan_v1" || plan?.schema_version === "quota_settlement_plan_v2") && Array.isArray(plan.ordered_steps)) {
     for (const field of Object.keys(plan)) if (field !== "ordered_steps") include(...planPath, field);
     plan.ordered_steps.forEach((value, stepIndex) => {
       const step = object(value), stepPath = [...planPath, "ordered_steps", stepIndex];
@@ -403,6 +545,8 @@ export function initialContextReadPointers(context: JsonObject, decisionFields: 
       include("context_details", "unread_context_index", field);
     include("context_details", "instruction");
     include("context_details", "command_template");
+  } else if (details && known(details, ["command_template", "path", "sha256"])) {
+    include("context_details");
   } else include("context_details", "unread_context_index");
   return pointers;
 }

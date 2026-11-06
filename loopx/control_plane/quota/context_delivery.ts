@@ -1,6 +1,3 @@
-import {contextSourceIdentity, contextProjectionChanges, contextProjectionIdentity,
-  type ProjectionSourceValues} from "./diagnostic_projection.ts";
-import {completeGoalNarrative} from "../work_items/goal_context_source.ts";
 /** Presentation of immutable quota, Turn and work-context captures. No admission or state writes.
  * Confirmed final input and explicit native-hook continuity assumptions remain
  * distinct; successful capture handoff alone is never retained-input proof. */
@@ -9,6 +6,9 @@ import {jsonObject, requireJsonObject, requireNonEmptyString} from "../runtime_d
 import {canonicalAuthorityJson, canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
 import {reusableTurnContext} from "../capability_hooks.ts";
 import {COORDINATION_STATE_CONTRACT} from "../coordination/coordination_state_contract.generated.ts";
+import {contextSourceIdentity, contextProjectionChanges, contextProjectionIdentity,
+  type ProjectionSourceValues} from "./diagnostic_projection.ts";
+import {completeGoalNarrative} from "../work_items/goal_context_source.ts";
 
 const VERSION = "context_delivery_v1";
 const MAX_ANCESTRY = 32;
@@ -170,7 +170,7 @@ function splitContext(context: JsonObject, binding: JsonObject): Split {
 
 /** The projection surface is a transport binding, never a new admission mode.
  * Keep one exact codec for quota and Turn; source-only callers use the same codec. */
-const SURFACES = ["work_context", "quota_packet", "turn_envelope"] as const;
+const SURFACES = ["work_context", "quota_packet", "turn_envelope", "complete_turn"] as const;
 type Surface = typeof SURFACES[number];
 type Delta = {value: unknown} | {from: Path; edit?: Delta} | {changed?: Record<string, Delta>; values?: Record<string, unknown>; removed?: string[]}
   | {items: Record<string, Delta>; values?: Record<string, unknown>; length?: number};

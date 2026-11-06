@@ -279,12 +279,16 @@ class StewardTurnHost:
             if len(keys) != 1 or not isinstance(next(iter(keys)), str):
                 return None
             key = keys.pop()
+            from ...control_plane.effect_runtime import source_number_tokens
+
+            journal = load_turn_journal(turn_journal_path(reports.root, goal_id=actor["goal_id"], turn_key=key))
             # Transport canonical observations to the shared typed admission
             # owner. Neither a missing model event nor Python prose decides.
             proof["probe"] = {"turn": probe_turn,
                 "inspection": inspect_loopx_turn_journal(reports.root, goal_id=actor["goal_id"],
                     agent_id=actor["agent_id"], turn_key=key),
-                "journal": load_turn_journal(turn_journal_path(reports.root, goal_id=actor["goal_id"], turn_key=key))}
+                "journal": journal,
+                "source_number_tokens": source_number_tokens((journal.get("plan") or {}).get("work_contract"))}
         return proof
 
     def _report_launch_recovery(self, original: dict[str, Any]) -> dict[str, Any] | None:
@@ -676,7 +680,10 @@ class StewardTurnHost:
 
         def session_binding(envelope: Mapping[str, Any]) -> dict[str, Any]:
             current()
-            if envelope.get("goal_id") != actor["goal_id"] or envelope.get("agent_id") != actor["agent_id"]:
+            identity = (envelope.get("agent_identity") if envelope.get("schema_version") == "loopx_turn_envelope_v1"
+                        else envelope)
+            if (envelope.get("goal_id") != actor["goal_id"] or not isinstance(identity, Mapping)
+                    or identity.get("agent_id") != actor["agent_id"]):
                 raise ValueError("native Turn belongs to another actor")
             return {"schema_version": "loopx_turn_session_binding_v0",
                 "goal_id": actor["goal_id"], "agent_id": actor["agent_id"]}
@@ -690,7 +697,8 @@ class StewardTurnHost:
                     "next_action": "Retain the original report; its native governance route is no longer admitted."})
             if managed_turn and not governance_work:
                 try:
-                    managed_turn.prepare_validation(request, native_request)
+                    managed_turn.prepare_validation(request, native_request,
+                        _checked_work_identity=authority.get("_work_identity"))
                 except ManagedTaskValidationUnavailable:
                     managed_turn.validation_unavailable = True
                     return build_result(native_request, {"result_kind": "user_action_required",
