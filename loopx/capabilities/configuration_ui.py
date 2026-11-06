@@ -151,6 +151,8 @@ def capability_configuration_editor(
             "writable_scopes": ["machine", "goal"],
             "fields": [
                 _field("enabled", "Enabled", "boolean"),
+                _field("review_required", "Request owner review", "boolean",
+                       description="For an original managed Session report, also put each edition in App results and keep a Home reminder until the owner handles its review."),
                 _field(
                     "profile_preset",
                     "Profile preset",

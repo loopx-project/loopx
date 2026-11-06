@@ -556,6 +556,13 @@ class ManagedSessionReports(StewardReports):
                 if not self.delivery_current(session_id, window):
                     return False
                 body = (folder / "report.md").read_text(encoding="utf-8")
+                config = configuration_summary(load_goal_from_registry(self.controller.registry_path, actor["goal_id"]))
+                if config and config.get("review_required") is True:
+                    from ..periodic_report.review import request_report_review
+                    request_report_review(registry_path=self.controller.registry_path, runtime_root=self.root,
+                        goal_id=actor["goal_id"], agent_id=actor["agent_id"], session_id=session_id,
+                        session_store=self.controller.store, execute=True,
+                        bundle=json.loads((folder / "generation-bundle.json").read_text(encoding="utf-8")))
                 message_id = "managed." + turn["turn_id"] + ".completed"
                 messages = self.controller.store.messages(session_id)
                 existing = next((row for row in messages if row["message_id"] == message_id), None)

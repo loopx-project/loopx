@@ -10,6 +10,12 @@ presentation, and destinations to profiles and adapters.
 | Protocol | [`periodic_report_v0`](../../../docs/reference/protocols/periodic-report-v0.md) |
 | Smokes | `python3 examples/periodic-report-smoke.py`, `periodic-report-profile-smoke.py`, `periodic-report-html-smoke.py`, `periodic-report-bindings-smoke.py`, and `openviking-periodic-report-extension-smoke.py` |
 
+Reports can explicitly request human review through `request-review`. The
+original managed Session calendar can opt in with `review_required: true`.
+Both use canonical User Todos for per-edition handling, with a Home reminder
+and a reader in App results. See [review work materials](../../../docs/guides/review-materials.md).
+Generation, reading, human handling and whole-Goal acceptance remain distinct.
+
 ## Generate this week's report
 
 In an active LoopX or Codex project session, ask the agent to **generate this
