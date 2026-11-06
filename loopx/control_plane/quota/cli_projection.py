@@ -23,9 +23,6 @@ QUOTA_CLI_VISION_COMPACTION_SCHEMA_VERSION = (
     "quota_cli_vision_continuation_compaction_v0"
 )
 QUOTA_CLI_VISION_DETAIL_COMMAND = "quota should-run --include-detail vision"
-QUOTA_CLI_REPLAN_ACTION_COMPACTION_SCHEMA_VERSION = (
-    "quota_cli_replan_action_compaction_v0"
-)
 QUOTA_CLI_MONITOR_POLL_DECISION_COMPACTION_SCHEMA_VERSION = (
     "quota_cli_monitor_poll_decision_compaction_v0"
 )
@@ -238,33 +235,6 @@ def _compact_vision_continuation_audit(
     return compact
 
 
-def _reference_inline_replan_authoring(
-    packet: dict[str, Any], *, payload: dict[str, Any]
-) -> dict[str, Any]:
-    """Legacy display metadata around the shared complete authoring owner."""
-    from .turn_envelope import _turn_envelope_result
-
-    writeback = packet.get("writeback_contract")
-    if not isinstance(writeback, dict) or not {"vision_authoring", "vision_authoring_ref"}.intersection(writeback):
-        return packet
-    interaction = payload.get("interaction_contract")
-    channel = interaction.get("cli_channel") if isinstance(interaction, dict) else None
-    plan = channel.get("settlement_plan") if isinstance(channel, dict) else None
-    source = {"replan_action_packet": packet,
-              "interaction_contract": {"cli_channel": {"settlement_plan": plan}}}
-    result = _turn_envelope_result("reference_replan_authoring", payload=source)
-    shared = _apply_context_projection_changes(source, result)["replan_action_packet"]
-    if shared == packet:
-        return packet
-    reference = shared["writeback_contract"]["vision_authoring_ref"]
-    return {**shared, "payload_compaction": {
-        "schema_version": QUOTA_CLI_REPLAN_ACTION_COMPACTION_SCHEMA_VERSION,
-        "mode": "compact_hot_path",
-        "compacted_fields": ["writeback_contract.vision_authoring"],
-        "projection_ref": reference,
-    }}
-
-
 def _deduplicate_next_action_warning(
     warning: dict[str, Any],
     *,
@@ -414,8 +384,9 @@ def _promote_interaction_contract(payload: dict[str, Any]) -> dict[str, Any]:
 
 def _reference_context(
     payload: dict[str, Any], *, task_title: bool = True, explore_guidance: bool = True,
-    vision_audit: bool = False,
-    goal_acceptance: bool = False, diagnostics: dict[str, Any] | None = None,
+    goal_acceptance: bool = False, vision_audit: bool = False,
+    replan_authoring: bool = False,
+    diagnostics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """One coarse transport call for the existing typed context owner."""
     contract = payload.get("interaction_contract")
@@ -439,7 +410,7 @@ def _reference_context(
             contains_contract(payload, "agent_todo_summary", "goal_acceptance_contract"),
         )
         goal_acceptance = sum(carriers) >= 2
-    if not (vision_audit or goal_acceptance or (sources and (task_title or explore_guidance))) and (
+    if not (vision_audit or goal_acceptance or replan_authoring or (sources and (task_title or explore_guidance))) and (
         diagnostics is None or (diagnostics.get("agent_detail") is True and diagnostics.get("user_detail") is True)
     ):
         return payload
@@ -452,6 +423,8 @@ def _reference_context(
         "todo_summary_projection",
         "interaction_contract", "agent_lane_next_action", "selected_todo",
     ) if key in payload}
+    if replan_authoring and "replan_action_packet" in payload:
+        source["replan_action_packet"] = payload["replan_action_packet"]
     if goal_acceptance:
         source.update({key: payload[key] for key in ("planning_horizon", "autonomous_replan_obligation") if key in payload})
     if isinstance(context, dict) and isinstance(context.get("sources"), list):
@@ -471,7 +444,9 @@ def _reference_context(
     result = _turn_envelope_result("reference_context", payload=source,
         task_title=task_title, explore_guidance=explore_guidance,
         **({"vision_audit": True} if vision_audit else {}),
-        goal_acceptance=goal_acceptance, **({"diagnostics": diagnostics} if diagnostics is not None else {}))
+        goal_acceptance=goal_acceptance,
+        **({"replan_authoring": True} if replan_authoring else {}),
+        **({"diagnostics": diagnostics} if diagnostics is not None else {}))
     return _apply_context_projection_changes(payload, result)
 
 
@@ -550,13 +525,9 @@ def compact_quota_should_run_cli_payload(
     vision_audit = payload.get("vision_continuation_audit")
     share_audit = not include_vision_detail and isinstance(vision_audit, dict)
     replan_action = payload.get("replan_action_packet")
-    if not include_vision_detail and isinstance(replan_action, dict):
-        compact_replan_action = _reference_inline_replan_authoring(
-            replan_action, payload=compact
-        )
-        if compact_replan_action is not replan_action:
-            compact = dict(compact)
-            compact["replan_action_packet"] = compact_replan_action
+    writeback = replan_action.get("writeback_contract") if isinstance(replan_action, dict) else None
+    share_authoring = (not include_vision_detail and isinstance(writeback, dict)
+        and bool({"vision_authoring", "vision_authoring_ref"}.intersection(writeback)))
     if not include_todo_summary_detail:
         warning = payload.get("next_action_projection_warning")
         if isinstance(warning, dict):
@@ -583,9 +554,9 @@ def compact_quota_should_run_cli_payload(
         agent_lane_next_action.pop("content_revision", None)
         compact["agent_lane_next_action"] = agent_lane_next_action
     compact = _reference_context(compact, task_title=not include_todo_summary_detail,
-        vision_audit=share_audit, explore_guidance=not include_vision_detail, goal_acceptance=True, diagnostics={
+        vision_audit=share_audit, replan_authoring=share_authoring, explore_guidance=not include_vision_detail, goal_acceptance=True, diagnostics={
             "agent_detail": include_todo_summary_detail, "user_detail": include_user_todo_summary_detail})
-    if share_audit:
+    if share_audit and isinstance(vision_audit, dict):
         compact = {**compact, "vision_continuation_audit": _compact_vision_continuation_audit(vision_audit)}
     return _promote_interaction_contract(
         _promote_runtime_capability_reentry(compact)

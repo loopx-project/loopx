@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from loopx.control_plane.quota.cli_projection import _reference_inline_replan_authoring
+from loopx.control_plane.quota.cli_projection import _reference_context
 from loopx.control_plane.quota.turn_envelope import (
     _turn_envelope_result, build_turn_envelope, compose_turn_decision,
     quota_action_signature_document, prepare_context_delivery, restore_context_delivery,
@@ -31,8 +31,7 @@ def packet():
 
 
 def legacy(source):
-    return {**source, "replan_action_packet": _reference_inline_replan_authoring(
-        source["replan_action_packet"], payload=source)}
+    return _reference_context(source, task_title=False, explore_guidance=False, replan_authoring=True)
 
 
 @pytest.fixture(params=[legacy, compose_turn_decision], ids=["legacy-display", "complete"])

@@ -36,6 +36,19 @@ function crowded() {
 const review = {outcome_id: "outcome-19", review: Array.from({length: 5}, (_, i) => ({id: `r${i}`,
   conclusion: "uncertain", evidence_refs: ["artifact:current-check"], note: "Independent acceptance is still pending."}))};
 
+test("a complete creation criterion fits without removing the declaration byte ceiling", () => {
+  const head = authorityProjectionFixture(goal, [], [], "native");
+  const declaration = {outcome_id: "approved", owner_agent_id: "author", objective: "Deliver the approved report",
+    requirements: [{id: "completion", description: "\u{1f4dd}".repeat(1000)}], source: {ref: "owner:creation", summary: "Approved criteria"}};
+  const accepted = refineGoalOutcome(head, goal, null, "author", declaration);
+  assert.equal(accepted.outcomes[0].requirements[0].description, declaration.requirements[0].description);
+  assert.throws(() => refineGoalOutcome(head, goal, null, "author", {...declaration,
+    requirements: [{id: "completion", description: "x".repeat(2001)}]}), /requirement description must be bounded/);
+  assert.throws(() => refineGoalOutcome(head, goal, null, "author", {...declaration,
+    requirements: Array.from({length: 32}, (_, i) => ({id: `r${i}`, description: "\u754c".repeat(2000)}))}), /declaration capacity exceeded/);
+  assert.equal(head.goal_outcomes, undefined, "rejected larger declarations never alter retained state");
+});
+
 test("a full retained declaration can receive a complete review without losing origins", () => {
   const head = crowded(), original = structuredClone(head);
   const state = refineGoalOutcome(head, goal, null, "author", review);

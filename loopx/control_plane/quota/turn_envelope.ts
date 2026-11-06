@@ -2137,11 +2137,6 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     const {decision, projection} = completeHostSource(request);
     return {goal_id: decision.goal_id ?? null, ...projection};
   }
-  if (operation === "reference_replan_authoring") {
-    const source = requireJsonObject(request.payload, "authoring sharing source");
-    return contextProjectionChanges(source, referenceReplanAuthoring(source,
-      contextSourceIdentity(source, request.source_number_tokens)));
-  }
   if (operation === "replan_view") return replanView(request);
   if (operation === "context_select") return capturedDecisionSelection(request);
   if (operation === "replan_cli_view") {
@@ -2268,6 +2263,17 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     if (jsonObject(request.diagnostics)) payload = projectQuotaDiagnostics(payload, request.diagnostics as JsonObject);
     if (request.goal_acceptance === true) payload = referenceGoalAcceptance(payload,
       contextSourceIdentity(source, request.source_number_tokens));
+    if (request.replan_authoring === true) {
+      const shared = referenceReplanAuthoring(payload, contextSourceIdentity(source, request.source_number_tokens));
+      if (shared !== payload) {
+        const packet = object(shared.replan_action_packet);
+        payload = {...shared, replan_action_packet: {...packet, payload_compaction: {
+          schema_version: "quota_cli_replan_action_compaction_v0", mode: "compact_hot_path",
+          compacted_fields: ["writeback_contract.vision_authoring"],
+          projection_ref: object(packet.writeback_contract).vision_authoring_ref,
+        }}};
+      }
+    }
     if (request.task_title === true) payload = referenceCurrentTaskTitle(payload);
     if (request.explore_guidance === true) payload = referenceExploreGuidance(payload);
     if (request.refresh_result === true) payload = referenceExploreResultDelivery(payload, request.source_number_tokens);

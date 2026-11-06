@@ -7,7 +7,7 @@ import sys
 
 import pytest
 
-from loopx.control_plane.quota.cli_projection import _reference_inline_replan_authoring
+from loopx.control_plane.quota.cli_projection import _reference_context
 from loopx.control_plane.quota.turn_envelope import (
     _turn_envelope_result, build_turn_envelope, prepare_context_delivery, restore_context_delivery,
 )
@@ -34,8 +34,38 @@ def packet():
 
 
 def shared_packet(source):
-    return {**source, "replan_action_packet": _reference_inline_replan_authoring(
-        source["replan_action_packet"], payload=source)}
+    return _reference_context(source, task_title=False, explore_guidance=False, replan_authoring=True)
+
+
+def test_cli_compaction_shares_authoring_in_one_runtime_call(monkeypatch):
+    from loopx.control_plane.quota import turn_envelope
+    from loopx.control_plane.quota.cli_projection import compact_quota_should_run_cli_payload
+
+    source, authoring = packet()
+    original = deepcopy(source)
+    calls = []
+    invoke = turn_envelope.effect_runtime_projection_result
+
+    def observed(name, request):
+        calls.append((name, request))
+        return invoke(name, request)
+
+    monkeypatch.setattr(turn_envelope, "effect_runtime_projection_result", observed)
+    compact = compact_quota_should_run_cli_payload(source)
+    projection_calls = len(calls)
+    assert source == original
+    assert build_turn_envelope(compact)["replan_action_packet"]["writeback_contract"]["vision_authoring"] == authoring
+    assert projection_calls == 1
+
+
+def test_explicit_vision_detail_keeps_authoring_inline():
+    from loopx.control_plane.quota.cli_projection import compact_quota_should_run_cli_payload
+
+    source, authoring = packet()
+    compact = compact_quota_should_run_cli_payload(source, include_vision_detail=True)
+    writeback = compact["replan_action_packet"]["writeback_contract"]
+    assert writeback["vision_authoring"] == authoring
+    assert "vision_authoring_ref" not in writeback
 
 
 def source_digest(source):

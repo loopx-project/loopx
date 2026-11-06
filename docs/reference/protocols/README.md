@@ -47,8 +47,6 @@ until their documented migration is qualified.
 - [`long_horizon_agent_state_protocol_v0`](long-horizon-agent-state-protocol-v0.md): Long-horizon agent state protocol v0
 - [`material_lifecycle_architecture_v0`](material-lifecycle-architecture-v0.md): Material lifecycle architecture v0
 - [`material_lifecycle_architecture_v0`](material-lifecycle-architecture-v0.zh-CN.md): Material lifecycle architecture v0 (中文)
-- [`multi_agent_three_layer_minimality_contract_v0`](multi-agent-three-layer-minimality-v0.md): Multi-agent three-layer minimality v0
-- [`multi_agent_visible_launcher_v0`](multi-agent-visible-launcher-v0.md): Multi-agent visible launcher v0
 - [`peer_agent_directory_v0`](peer-agent-directory-and-observation-v0.md): Peer agent directory, bounded observation and delivery v0
 - [`peer_agent_runtime_v1`](peer-agent-runtime-v1.md): Peer agent runtime v1
 - [`peer_supervisor_v0`](peer-supervisor-v0.md): Peer supervisor v0
@@ -81,10 +79,6 @@ until their documented migration is qualified.
 
 ## Domain Capabilities
 
-- [`auto_research_lane_contract_v1`](auto-research-lane-contract-v1.md): Auto-research lane contract v1
-- [`auto_research_role_profile_v0`](auto-research-role-profile-v0.md): Auto-research role profile v0
-- [`auto_research_role_state_machine_v0`](auto-research-role-state-machine-v0.md): Auto-research role state machine v0
-- [`decentralized_auto_research_state_v0`](decentralized-auto-research-state-v0.md): Decentralized auto-research state v0
 - [`content_ops_surface_v0`](content-ops-surface-v0.md): Content operations surface v0
 - [`cs_notes_explore_capability_map_v0`](cs-notes-explore-capability-map-v0.md): CS notes Explore capability map v0
 - [`issue_fix_acceptance_loop_v0`](issue-fix-acceptance-loop-v0.md): Issue-fix acceptance loop v0

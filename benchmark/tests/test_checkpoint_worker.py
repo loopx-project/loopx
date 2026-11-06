@@ -39,6 +39,8 @@ import time, sqlite3
 Path('/data').mkdir()
 Path('/phase').write_text(str(int(time.time())+7200))
 Path('/link').symlink_to('/data', target_is_directory=True)
+Path('/data/build-output').write_bytes(b'compiled artifact')
+Path('/data/build-alias').hardlink_to('/data/build-output')
 db=sqlite3.connect('/data/research.sqlite')
 db.execute('PRAGMA journal_mode=WAL')
 db.execute('PRAGMA wal_autocheckpoint=0')
@@ -386,6 +388,9 @@ def test_controller_cli_captures_frozen_worker_with_original_native_point(
     assert metadata["native_cursor_qualified"] is False and metadata["process_memory_captured"] is False
     assert metadata["native_capsule_component_id"] == "native_capsule_1"
     assert int((unit / "components/native_capsule/counter").read_text()) == observed[0]
+    copied = unit / "components/native_capsule"
+    assert (copied / "build-output").read_bytes() == (copied / "build-alias").read_bytes() == b"compiled artifact"
+    assert (copied / "build-output").stat().st_ino != (copied / "build-alias").stat().st_ino
     nested = unit / "components/native_capsule_1"
     capsule = json.loads((nested / "checkpoint.json").read_bytes())
     native = capsule["point_metadata"]["native_reference"]

@@ -1,5 +1,6 @@
 import type {DecisionOutcome, ResumeState} from "../todos/user_completion_types.js";
 import {BARE_SHA256_PATTERN} from "../content_digest.ts";
+import {goalCreationOutcome, type GoalCreationOutcome} from "../goals/creation_outcome.ts";
 
 export type ActionReviewIdentity = {
   schemaVersion: "action_review_plan_v0";
@@ -94,6 +95,7 @@ export type ActionReviewPlan = ActionReviewIdentity & ActionReviewState & {
   retryOriginal?: true;
   /** Recorded creation effects, not evidence of a completed Goal or model Turn. */
   creationProgress?: GoalCreationProgress;
+  creationOutcome?: GoalCreationOutcome;
 };
 
 export type GoalCreationProgress = {
@@ -101,6 +103,8 @@ export type GoalCreationProgress = {
   goalId?: string;
   agentId?: string;
   todoIds?: string[];
+  completionBasis?: {operationId: string; providerRevision: string};
+  completionRecorded?: true;
   sessionId?: string;
   firstTurn?: {sessionId: string; turnId: string};
 };
@@ -137,6 +141,22 @@ function goalCreationProgress(proposal: Record<string, unknown>): GoalCreationPr
         || !ids.every(id => textValue(id) !== null) || new Set(ids).size !== ids.length) return undefined;
     progress.todoIds = ids as string[];
   }
+  const completion = objectValue(steps?.goal_completion_prepared);
+  const recorded = objectValue(steps?.goal_completion_recorded);
+  if (steps?.goal_completion_prepared != null) {
+    const declaration = goalCreationOutcome(String(proposal.proposal_id), parameters!, progress.todoIds ?? []);
+    const providerRevision = textValue(completion?.provider_revision);
+    if (!progress.todoIds || !declaration || completion?.outcome !== "goal_completion_prepared"
+        || completion.goal_id !== goalId || completion.operation_id !== declaration.operationId || !providerRevision) return undefined;
+    progress.completionBasis = {operationId: declaration.operationId, providerRevision};
+  }
+  if (steps?.goal_completion_recorded != null) {
+    if (!progress.completionBasis || recorded?.outcome !== "goal_completion_recorded"
+        || recorded.goal_id !== goalId || recorded.operation_id !== progress.completionBasis.operationId
+        || !textValue(recorded.provider_revision)) return undefined;
+    progress.completionRecorded = true;
+  }
+  if ((session || turn) && progress.completionBasis && !progress.completionRecorded) return undefined;
   if (steps?.first_turn_started != null) {
     const sessionId = textValue(turn?.session_id), turnId = textValue(turn?.turn_id);
     if (!progress.agentId || !progress.todoIds || turn?.outcome !== "first_turn_started" || !sessionId || !turnId
@@ -502,6 +522,11 @@ export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number):
   const reviewCardFrame = compileReviewCardFrame(proposal);
   const decisionFrame = compileDecisionReviewFrame(proposal);
   const creationProgress = goalCreationProgress(proposal);
+  // Older already-dispatched creations retain their original semantics. A
+  // failed write retries its original CAS even after a response was lost.
+  const creationOutcome = creationProgress?.todoIds && (!creationProgress.sessionId && !creationProgress.firstTurn
+      || creationProgress.completionBasis)
+    ? goalCreationOutcome(identity.proposalId, objectValue(proposal.normalized_parameters) ?? {}, creationProgress.todoIds) : undefined;
   const finish = (state: ActionReviewState): ActionReviewPlan => ({
     ...identity,
     ...state,
@@ -509,6 +534,7 @@ export function compileActionReviewPlan(proposalValue: unknown, nowMs?: number):
     ...(reviewCardFrame ? { reviewCardFrame } : {}),
     ...(decisionFrame ? { decisionFrame } : {}),
     ...(creationProgress ? { creationProgress } : {}),
+    ...(creationOutcome ? { creationOutcome } : {}),
   });
   const held = (
     interaction: "gated" | "refresh" | "repair" | "pending" | "completed" | "inactive",

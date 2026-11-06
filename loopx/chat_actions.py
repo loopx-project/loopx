@@ -807,6 +807,32 @@ class ChatActionService(
             step="todos_created",
             receipt={"outcome": "todos_created", "todo_ids": todo_ids},
         )
+        completion_plan = effect_runtime_result("presentation.action_review_plan.compile", {
+            "proposal": self.store.load(proposal_id),
+        })
+        completion = completion_plan.get("creationOutcome")
+        completion_progress = completion_plan.get("creationProgress") or {}
+        if completion and not completion_progress.get("completionRecorded"):
+            from .control_plane.goals.acceptance import inspect_goal_acceptance, refine_goal_outcome
+
+            basis = completion_progress.get("completionBasis")
+            if basis is None:
+                current = inspect_goal_acceptance(registry_path=self.registry_path,
+                    runtime_root=str(runtime_root), goal_id=goal_id, agent_id=agent_id)
+                basis = {"providerRevision": current["provider_revision"], "operationId": completion["operationId"]}
+                # Persist the original CAS before sending the canonical write.
+                # An uncertain response must replay this request, not new intent.
+                self.store.save_checkpoint(proposal_id, step="goal_completion_prepared", receipt={
+                    "outcome": "goal_completion_prepared", "goal_id": goal_id,
+                    "operation_id": basis["operationId"], "provider_revision": basis["providerRevision"],
+                })
+            retained = refine_goal_outcome(registry_path=self.registry_path, runtime_root=str(runtime_root),
+                goal_id=goal_id, agent_id=agent_id, refinement=completion["refinement"],
+                operation_id=basis["operationId"], expected_provider_revision=basis["providerRevision"], execute=True)
+            self.store.save_checkpoint(proposal_id, step="goal_completion_recorded", receipt={
+                "outcome": "goal_completion_recorded", "goal_id": goal_id,
+                "operation_id": basis["operationId"], "provider_revision": retained["provider_revision"],
+            })
         projected = self._goal(goal_id)
         if agent_id and agent_id not in registered_agent_ids_for_goal(projected):
             raise ValueError(

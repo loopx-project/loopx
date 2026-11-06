@@ -191,8 +191,48 @@ def test_archive_rejects_unsafe_inventory_before_extracting_any_file(tmp_path, u
         if unsafe in {"symlink", "hardlink", "fifo"}:
             second.type = {"symlink": tarfile.SYMTYPE, "hardlink": tarfile.LNKTYPE,
                            "fifo": tarfile.FIFOTYPE}[unsafe]
-            second.linkname = "data/retained"
+            second.linkname = "../outside" if unsafe == "hardlink" else "data/retained"
         archive.addfile(second)
+    container, response = _tar_transport(raw.getvalue())
+    destination = tmp_path / "rejected"
+    with pytest.raises(ValueError, match="undeclared, linked or special"):
+        worker._archive(container, "/data", destination)
+    assert response.closed and not (destination / "data").exists()
+
+
+@pytest.mark.parametrize("forward", [False, True])
+def test_archive_materializes_internal_hardlinks_as_independent_regular_files(tmp_path, forward):
+    raw = io.BytesIO()
+    original, alias = tarfile.TarInfo("data/original"), tarfile.TarInfo("data/alias")
+    payload = b"committed build artifact\x00"
+    original.size, original.mode = len(payload), 0o640
+    alias.type, alias.linkname, alias.mode = tarfile.LNKTYPE, original.name, 0o600
+    with tarfile.open(fileobj=raw, mode="w") as archive:
+        for member in ([alias, original] if forward else [original, alias]):
+            archive.addfile(member, io.BytesIO(payload) if member.isfile() else None)
+    container, response = _tar_transport(raw.getvalue())
+    copied = worker._archive(container, "/data", tmp_path / "copy")
+    assert response.closed
+    assert (copied / "original").read_bytes() == (copied / "alias").read_bytes() == payload
+    assert (copied / "original").stat().st_mode & 0o777 == 0o640
+    assert (copied / "alias").stat().st_mode & 0o777 == 0o600
+    (copied / "alias").write_bytes(b"independent receiver edit")
+    assert (copied / "original").read_bytes() == payload
+
+
+@pytest.mark.parametrize("target", ["/data/original", "data/../original", "data/missing", "data", "data/alias"])
+def test_invalid_hardlink_target_is_rejected_before_extraction(tmp_path, target):
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode="w") as archive:
+        directory = tarfile.TarInfo("data")
+        directory.type = tarfile.DIRTYPE
+        archive.addfile(directory)
+        original = tarfile.TarInfo("data/original")
+        original.size = 4
+        archive.addfile(original, io.BytesIO(b"safe"))
+        alias = tarfile.TarInfo("data/alias")
+        alias.type, alias.linkname = tarfile.LNKTYPE, target
+        archive.addfile(alias)
     container, response = _tar_transport(raw.getvalue())
     destination = tmp_path / "rejected"
     with pytest.raises(ValueError, match="undeclared, linked or special"):

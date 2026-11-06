@@ -52,7 +52,9 @@ function unique(values: string[], label: string): void {requireValue(new Set(val
 function requirements(value: unknown): Requirement[] {
   const result = list(value, "requirements", 32).map(value => {
     const row = canonicalAuthorityObject(value, "requirement"); keys(row, ["id", "description"]);
-    return {id: id(row.id, "requirement id"), description: text(row.description, "requirement description")};
+    // Goal creation accepts 1,000 Unicode code points (up to 2,000 UTF-16
+    // units). Keep that reviewed text intact; aggregate byte limits still hold.
+    return {id: id(row.id, "requirement id"), description: text(row.description, "requirement description", 2000)};
   });
   unique(result.map(row => row.id), "requirements"); return result;
 }
