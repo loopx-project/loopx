@@ -1731,6 +1731,17 @@ The original failure and its delivery remain recorded; a qualified private
 steward notice describes conditional recovery rather than promising a replay.
 Unknown failures after native dispatch remain holds.
 
+Account transport preparation failures can also qualify for an original private
+project or Codex steward request. Core must retain exactly the Session-queue and
+failed events, with null durable `started_at` and `first_event_at` checkpoints,
+no native Turn/result, response, deltas or attachments, and unchanged input/origin.
+This includes the older exact `resume_failed` diagnostic emitted before the
+queue's first durable start checkpoint. Fresh source/grant and account transport
+checks precede admission; they start no model request. Preparation continues the
+existing quota/routing/preparation counter up to three, without resetting its
+backoff or history. A later dispatched failure cannot open another business
+retry family. The original failure and its delivered notice remain unchanged.
+
 Source verification accepts both ordinary text and text-only rich posts. A post
 must retain its original provider rendering, an explicit empty attachment
 inventory and the same admitted text after intake whitespace normalization.
@@ -1818,10 +1829,15 @@ steward, group, attached-host and attachment-bearing requests remain outside it.
 The existing original-source reply worker may reserve one continuation after
 60 seconds. Core revalidates the original owner/App/source, unchanged message,
 workspace grant and stop/correction state. Native readback must independently
-show that the exact latest Turn completed, its full item inventory is stable,
+show that the exact original Turn completed, its full item inventory is stable,
 every effect item completed, no background work remains, and the same final
-answer explicitly contains that report. A later native Turn, unknown item,
-failed/declined/live effect, edited source or revoked grant remains a hold.
+answer explicitly contains that report. Historical work may continue only when
+every later native Turn correlates to a settled canonical Core Turn and its full
+item inventory is independently stable with no unknown or unfinished effects.
+The proof pins a digest of these inventories; a later equivalent source submission,
+foreign native input, unknown item, failed/declined/live effect, edited source or
+revoked grant remains a hold. Native loss remains a hold: a cold client cannot
+certify another process's background effects by resuming the thread.
 
 The original Session queue and deterministic `work-1` reservation own execution;
 restart adopts an already committed Turn instead of dispatching it again. The
