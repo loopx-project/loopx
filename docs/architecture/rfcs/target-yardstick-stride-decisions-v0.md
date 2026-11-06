@@ -8,7 +8,7 @@
 - **Last normative revision:** 2026-11-05
 - **Implementation baseline:** `aa82591fb0a129f3ea9cc5e67343e742899c7ccd`
 - **Related contracts:** [Hierarchical stride](hierarchical-agent-stride-control-v0.md), [Research exploration](research-exploration-control-plane-v0.md), [Research measurement](long-horizon-harness-benchmark-research-program-v0.md), [Controller/executor composition](controller-executor-unified-contract-v0.md)
-- **Language mirror:** [中文版](target-yardstick-stride-decisions-v0.zh-CN.md)
+- **Semantic mirror:** [中文版](target-yardstick-stride-decisions-v0.zh-CN.md)
 
 ## Document map and maintenance contract
 

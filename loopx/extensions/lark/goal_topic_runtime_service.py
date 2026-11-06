@@ -176,7 +176,13 @@ class LarkGoalTopicRuntimeService:
                         and time.monotonic() >= reports_due and report_provider.pending())
                     if report_provider is not None and reports is None and time.monotonic() >= reports_due:
                         reports_due = time.monotonic() + 30
-                    for path in sorted(paths, key=lambda path: attempted.get(path, 0)):
+                    recovery_path = getattr(transport, "is_recovery_path", lambda path: False)
+                    # Fresh bodies take the next released slot ahead of old
+                    # recovery probes, including discoveries retained while
+                    # full. Attempts retain fairness within each class. This
+                    # local hint never admits/replays a request or skips its
+                    # original grant and provider-attempt checks.
+                    for path in sorted(paths, key=lambda path: (recovery_path(path), attempted.get(path, 0))):
                         if (len(pending) + int(feedback is not None) + int(reports is not None or reports_ready) + int(attention is not None or attention_ready)
                                 + int(ingress is not None or ingress_ready) >= 4 or self._closed.is_set()):
                             break

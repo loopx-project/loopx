@@ -132,8 +132,9 @@ class OpenAIKeys:
         state = self._load()
         ids = api_policy({"operation": "candidates", "now": self.owner.clock(), "model": model,
                           "keys": [{"id": row["id"], **{k: row.get("runtime", {}).get(k)
-                                   for k in ("blocked_until", "blocked_model")}} for row in state["keys"]]})
-        return [row for row in state["keys"] if row["id"] in ids]
+                                   for k in ("blocked_until", "blocked_model", "state", "observed_at")}} for row in state["keys"]]})
+        rows = {row["id"]: row for row in state["keys"]}
+        return [rows[key_id] for key_id in ids if key_id in rows]
 
     def record(self, key_id: str, *, status: int, code: str | None, model: str, headers: dict) -> dict:
         try:

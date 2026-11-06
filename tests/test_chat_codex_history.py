@@ -9,7 +9,7 @@ from loopx import chat_agent, chat_runtime
 from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter
 
 
-@pytest.mark.parametrize("fault", [None, "later-user", "live", "failed", "background", "unknown", "live-tool",
+@pytest.mark.parametrize("fault", [None, "image-view", "later-user", "live", "failed", "background", "unknown", "live-tool",
     "declined", "duplicate", "foreign", "second-user", "no-final", "legacy-prose", "moving-turn", "moving-items"])
 def test_completed_work_readback_requires_latest_stable_explicit_settled_inventory(fault):
     from loopx.chat import CHAT_REVIEW_OPEN_TAG, CHAT_REVIEW_CLOSE_TAG
@@ -34,6 +34,8 @@ def test_completed_work_readback_requires_latest_stable_explicit_settled_invento
         effect = {"id": "effect", "type": "fileChange", "status": "completed"}
         if fault == "unknown":
             effect["type"] = "futureEffect"
+        if fault == "image-view":
+            effect = {"id": "view", "type": "imageView", "path": "/synthetic/notes/figure.png"}
         if fault in {"live-tool", "declined"}:
             effect["status"] = "inProgress" if fault == "live-tool" else "declined"
         rows = [{"turnId": "original-turn", "item": {"id": "user", "type": "userMessage"}},
@@ -50,7 +52,7 @@ def test_completed_work_readback_requires_latest_stable_explicit_settled_invento
     native = SimpleNamespace(thread_id="native", work_dir=Path("/synthetic/notes"), response_timeout_sec=.1, _control_items=items,
         _background_terminals=lambda deadline: [{"processId": "live"}] if fault == "background" else [])
     proof = completed_work_readback(native, "original-turn")
-    if fault is None:
+    if fault in {None, "image-view"}:
         assert proof == {"thread_id": "native", "turn_id": "original-turn", "completed_work": True,
                          "all_effects_settled": True, "unfinished_work": work}
         assert counts == {"thread/turns/list": 2, "thread/items/list": 2}
@@ -133,6 +135,7 @@ def test_controller_keeps_history_out_of_repeated_codex_objective(monkeypatch, t
     monkeypatch.setattr(CodexAppServerAdapter, "start", lambda **kwargs: starts.append(kwargs) or sentinel)
     controller = SimpleNamespace(
         codex_bin="fixture", codex_home=tmp_path,
+        coordination_runtime_root=None,
         startup_timeout_sec=1, idle_timeout_sec=1, hard_timeout_sec=1,
         _session_objective=chat_runtime.ChatRuntimeController._session_objective,
     )

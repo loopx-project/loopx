@@ -509,7 +509,7 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
     return {pending: !returned && row.command === null && row.status === "accepted"
       && turn?.session_id === row.session_id && turn?.turn_id === row.turn_id
       && (expandedResult || metadataOwed || answerReviewOwed || unfinished || turn?.status === "failed"
-        && ["usage_limit_exceeded", "response_timeout", "upstream_transport_failure",
+        && ["usage_limit_exceeded", "response_timeout", "upstream_transport_failure", "context_window_exceeded",
           "antigravity_rpc_error", "antigravity_transport_error", "antigravity_step_error",
           "manager_authorization_unavailable", "runtime_error", "server_restarted"].includes(String(turn.error_code)))
       && !(current?.session_id === row.session_id && current?.status === "closed")
@@ -741,6 +741,9 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
   if ((previous?.read_only_review === true && previous.failed_turn_id !== row.turn_id)
       || (Array.isArray(row.context_recovery_history) && row.context_recovery_history.some(value =>
         requireJsonObject(value, "prior recovery").read_only_review === true))) return no;
+  const exhaustedAnswer = steward && current.agent_id === "codex"
+    ? planExhaustedStewardAnswer(recovery, row, current, failed, previous, version) : null;
+  if (exhaustedAnswer !== null) return exhaustedAnswer;
   if (failed.status === "completed" && !steward) {
     return planUnfinishedWork(recovery, row, current, failed, previous, version);
   }
@@ -1102,6 +1105,64 @@ function interruptedVisibleResult(value: unknown): boolean {
   }
   return typeof result.commandLine === "string" && result.commandLine.length > 0
     && Number.isSafeInteger(result.exitCode);
+}
+
+/** Exhausting business retries must not erase the original question. One
+ * separately sandboxed answer review can inspect existing results, never
+ * reopen the business budget. Its failed attempt is terminal too.
+ */
+function planExhaustedStewardAnswer(recovery: JsonObject, row: JsonObject, current: JsonObject,
+  failed: JsonObject, previous: JsonObject | null, version: number): JsonObject | null {
+  if (previous === null) return null;
+  const client = `external-${ref(row.request_ref, "original request")}-recovery-${version}-review-1`;
+  const reserved = previous?.answer_review === true && previous.read_only_review === true
+    && previous.failed_turn_id === failed.turn_id && previous.client_turn_id === client;
+  if (!reserved && previous?.quota_attempt !== 3) return null;
+  const no = {operation: "admit_turn", recovery_candidate: false, recovery_eligible: false};
+  const budget = reserved && Array.isArray(row.context_recovery_history)
+    ? row.context_recovery_history.at(-1) as JsonObject | undefined : previous;
+  if (current.steward_context == null || failed.session_id !== current.session_id || failed.turn_id !== row.turn_id
+      || failed.message !== row.message || failed.origin !== row.origin
+      || failed.status !== "failed" || failed.error_code !== "usage_limit_exceeded"
+      || failed.delta_count !== 0 || failed.response !== null || typeof failed.upstream_turn_id !== "string"
+      || !failed.upstream_turn_id || previous?.version !== version
+      || typeof current.upstream_thread_id !== "string" || !current.upstream_thread_id
+      || recovery.attachments_present !== false || recovery.steering_observed !== false
+      || recovery.stop_observed !== false
+      || budget?.quota_attempt !== 3 || budget.version !== version || budget.failed_turn_id === failed.turn_id
+      || budget.client_turn_id !== failed.client_turn_id
+      || failed.client_turn_id !== `external-${row.request_ref}-recovery-${version}-quota-3`
+      || ["metadata_review", "preparation_attempt", "routing_attempt", "work_attempt"].some(key => previous[key] != null)) return no;
+  const history = current.upstream_context_history ?? [];
+  if (!Array.isArray(history)) return no;
+  const threads = [current.upstream_thread_id, ...history.map(value => requireJsonObject(value, "native context provenance"))
+    .filter(item => (item.agent_id == null || item.agent_id === "codex")
+      && Number.isSafeInteger(item.manager_context_version) && Number(item.manager_context_version) >= 1
+      && Number(item.manager_context_version) <= version)
+    .map(item => sessionIdentity(item.thread_id, "original native thread"))];
+  const priorNative = budget.native_observation as JsonObject | undefined;
+  const nativeThreads = [...new Set([...(typeof priorNative?.thread_id === "string" && threads.includes(priorNative.thread_id)
+    ? [priorNative.thread_id] : []), ...threads])];
+  const candidate = {...no, recovery_candidate: true, answer_review: true, read_only_review: true,
+    client_turn_id: client, session_id: current.session_id, failed_turn_id: failed.turn_id,
+    native_thread_ids: nativeThreads};
+  if (reserved && recovery.admitted_turn != null) {
+    const admitted = requireJsonObject(recovery.admitted_turn, "admitted answer review");
+    if (admitted.client_turn_id !== client || admitted.session_id !== current.session_id
+        || admitted.turn_id === failed.turn_id || admitted.message !== row.message || admitted.origin !== row.origin
+        || !Array.isArray(admitted.attachments ?? []) || (admitted.attachments as unknown[] | undefined)?.length) return no;
+    return {...candidate, recovery_eligible: recovery.source_verified === true, answer_executor: "codex",
+      admitted_turn_id: sessionIdentity(admitted.turn_id, "answer review"), native_thread_ids: []};
+  }
+  const now = Date.parse(String(recovery.observed_at)), ended = Date.parse(String(failed.completed_at));
+  if (current.status !== "ready" || current.active_turn_id != null || recovery.queued_input_present !== false
+      || !Number.isFinite(now) || !Number.isFinite(ended) || now < ended + 60_000) return no;
+  if (recovery.native_observation == null) return candidate;
+  const proof = requireJsonObject(recovery.native_observation, "exhausted original request inventory");
+  if (typeof proof.thread_id !== "string" || !nativeThreads.includes(proof.thread_id) || proof.turn_id !== failed.upstream_turn_id
+      || proof.only_original_user_item !== true || proof.codex_error_info !== "usageLimitExceeded") return candidate;
+  const capacity = nativeRecoveryCapacity(recovery, row, current, candidate);
+  return {...capacity, recovery_eligible: capacity.recovery_eligible === true && capacity.answer_executor === "codex"};
 }
 
 /** Interrupted work may have effects. Never retry it. The original worker may
