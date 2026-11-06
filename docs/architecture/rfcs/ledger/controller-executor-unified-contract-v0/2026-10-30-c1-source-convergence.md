@@ -5,7 +5,64 @@
 - **Source:** original candidate `648104978fdd67176cccdbb765c5bc3f36bf2ca3`, integrated with target `e8f4c6f8125e3cc0ef912afac653d5542671392f`.
 - **Language mirror:** [中文版](2026-10-30-c1-source-convergence.zh-CN.md)
 
-## Latest integration: incremental costs after field reuse reached main
+## Latest field reuse: a main proposal shared with C1
+
+[PR #8186](https://github.com/loopx-project/loopx/pull/8186) isolates the native
+progressive reader repair at `9df99f042b5f`, based on main `62e234c93999`.
+C1 integrates that main at `2f1c91085` and the same repair at `dde48f084b`.
+The existing TypeScript owner now considers an exact requirement list, a large
+criterion, then its large description. Current changes and unknown controls
+invalidate their containing record; current revisions and complete recovery
+remain available. Complete current pages can combine with authenticated exact
+inherited sections for the next read, without becoming a full-input baseline.
+The native hook uses its already matched event session, rather than assuming
+it inherits a shell session environment. No new admission, model invocation,
+configuration or storage schema is introduced.
+
+The following is a **main base/head** comparison, not C1's incremental gain.
+One sample per File/SQLite, base/head and cold/warm/recovery/canonical-correction
+condition gives 16 scenarios and 40 Turns. Twelve scenarios complete the
+original synthetic three-step Task; four cold samples execute only its first
+step. Current/previously delivered requirements, full UTF-8 page coverage,
+independent artifacts, original identities, three receipts, single debits and
+replay are checked. Setup and retry probes remain separate, with completed
+child costs counted once. Product bytes at the committed head equal the
+measured source.
+
+| SQLite ordinary task | Main base | Proposed main repair | Change |
+| --- | ---: | ---: | ---: |
+| Warm three-step BODY | 147,059 B | 109,016 B | −25.87% |
+| Corrected three-step BODY | 147,793 B | 113,819 B | −22.99% |
+| Warm three-step stdout | 268,953 B | 230,730 B | −14.21% |
+| Warm / corrected RPCs | 863 / 867 | 863 / 867 | unchanged |
+| Warm / corrected framed RPC bytes | baseline | +2.42% / +0.98% | extra cost |
+
+File has the same direction. Cold and this recovery cohort's BODY are unchanged.
+Observed SQLite warm Python regular-file reads/writes increase 11.94%/19.06%;
+correction increases them 5.73%/3.31%. Node/kernel/provider and CLI-external
+fixture IO are not included. Single instrumented samples do not qualify stable
+latency, model retention, natural adoption, tokens/cache, bills or net benefit.
+The leaf-only prototype saved no representative task BODY; eagerly indexing
+small criteria raised IO substantially. Those negatives remain evidence, not
+passes attributed to the final repair.
+
+Source regressions cover changed text/status/unknown controls, low-value splits,
+partial and forged observations, compaction, off and exact recovery. The same
+new case fails on untouched main. Both source and isolated-package native paths
+exercise the existing owner; each actual Codex static-loopback journey takes
+ten requests, includes the subsequent whole-section reuse and restores full
+requirements on unverified resume. No paid model is used. C1's current configured
+mypy has 4,818 diagnostics; main's configured 17-file check passes. The earlier
+C1 count was 4,814 at another integration head; this is not a waiver or an
+attribution of the four additional diagnostics. Main standard premerge's six
+direct and fourteen selected checks pass mechanically, but its strict Goal
+quality receipt is missing. Independent review, CQR, unchanged-head readiness,
+maintainer merge authority and whole C1 qualification remain open. This proposal
+has not reduced the parent PR's size on main yet; that requires maintainer
+adoption of independently reviewable slices. Earlier bilingual experiments stay
+together below.
+
+## Previous integration: incremental costs after field reuse reached main
 
 Measured product revision `b90e711cdb81` integrates main `d602248c5329`, including
 #8124's field reuse, Vision audit references, first-read consumers and Chat
