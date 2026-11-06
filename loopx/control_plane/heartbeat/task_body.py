@@ -683,7 +683,12 @@ def render_thin_heartbeat_task_body(
 {scope_sentence}
 
 {HOST_LOOP_QUOTA_DISPATCH_RULE}
-Read full capture, work_context, required_reads before acting; keep capture/handoff flags on selection and same-Turn repair.
+Read work_context and required_reads before acting, including applicable goals, criteria,
+constraints and stops. Read only the original capture sections needed for selection,
+replan, missing/truncated content or commands and referenced details. Original-execution
+or lost-context recovery restores the complete original source and identity, not fresh admission.
+Preserve explicit full-read obligations and supplied capture/handoff flags on selection
+and same-Turn repair.
 {HEARTBEAT_TURN_BOOTSTRAP_RULE}
 ```sh
 {render_turn_bootstrap()}

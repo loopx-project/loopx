@@ -48,6 +48,35 @@ def test_heartbeat_prompt_mode_defaults_to_thin() -> None:
     assert heartbeat_prompt_mode(thin=True) == "thin"
 
 
+@pytest.mark.parametrize("app", [False, True])
+@pytest.mark.parametrize("context_off", [False, True])
+def test_thin_cli_keeps_dependency_reads_and_original_capture_recovery(tmp_path, app, context_off):
+    from loopx.control_plane.testing.canary_harness import run_json_cli_result, write_fixture_registry
+
+    state, registry, runtime = tmp_path / "goal.md", tmp_path / "registry.json", tmp_path / "runtime"
+    state.write_text("---\nstatus: active\n---\n# Goal\nReview evidence; no external actions.\n")
+    write_fixture_registry(project=tmp_path, runtime_root=runtime, registry_path=registry,
+        goal_id="read-scope-fixture", domain="software", adapter_kind="generic_project_goal_v0",
+        state_file=str(state), registered_agents=["worker-a"])
+    flags = (["--codex-app"] if app else []) + (["--context-delivery", "off"] if context_off else [])
+    code, payload = run_json_cli_result("heartbeat-prompt", "--goal-id", "read-scope-fixture",
+        "--agent-id", "worker-a", "--thin", *flags, registry_path=registry, runtime_root=runtime)
+    assert code == 0 and payload["ok"], payload
+    body = payload["task_body"]
+    assert "Read full capture, work_context, required_reads before acting" not in body
+    # The correction removes the ordinary whole-file obligation, preserving
+    # the positive read, control, conditional recovery and transport duties.
+    for obligation in (
+        "work_context and required_reads before acting", "goals, criteria",
+        "constraints and stops", "only the original capture sections needed", "selection", "replan", "missing/truncated",
+        "referenced details", "lost-context", "complete original source and identity",
+        "not fresh admission", "explicit full-read obligations", "capture/handoff flags",
+        "same-Turn repair", "settlement_plan.ordered_steps",
+    ):
+        assert obligation in body, obligation
+    assert payload["interface_budget"]["within_budget"] is True
+
+
 def test_prompt_budget_text_redacts_goal_and_active_state() -> None:
     rendered = prompt_budget_text(
         "goal loopx-meta at state file",
