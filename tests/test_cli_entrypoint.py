@@ -15,6 +15,32 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.mark.parametrize("module", ["loopx.entrypoint", "loopx.cli"])
+@pytest.mark.parametrize("command", ["auto-research", "multi-agent"])
+def test_retired_demo_commands_reject_execution_without_writing_state(
+    tmp_path: Path, module: str, command: str,
+) -> None:
+    registry, runtime = write_command_fixture(tmp_path)
+    before = {p.relative_to(tmp_path): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    result = run_cli_main(module, [
+        "--registry", str(registry), "--runtime-root", str(runtime),
+        command, "start" if command == "auto-research" else "launch", "--execute",
+    ], environment={"LOOPX_USAGE_PING": "0"})
+    assert result.returncode == 2, result.stderr
+    assert "invalid choice" in result.stderr and command in result.stderr
+    assert not result.stdout
+    assert {p.relative_to(tmp_path): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == before
+
+
+def test_command_reference_omits_retired_demo_launchers() -> None:
+    result = run_cli_main("loopx.entrypoint", ["commands", "--format", "json"])
+    assert result.returncode == 0, result.stderr
+    reference = json.loads(result.stdout)
+    assert reference["groups"]
+    assert "loopx auto-research" not in result.stdout
+    assert "loopx multi-agent" not in result.stdout
+
+
 def test_machine_json_keeps_values_capture_and_human_renderer(
     capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch,
 ) -> None:

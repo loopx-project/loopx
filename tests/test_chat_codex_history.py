@@ -7,8 +7,8 @@ import pytest
 
 from loopx import chat_agent, chat_runtime
 from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter
-from test_chat_manager_model_adoption import conversation, configure  # noqa: F401
-from test_native_steward_private import steward  # noqa: F401
+from test_chat_manager_model_adoption import conversation as conversation, configure
+from test_native_steward_private import steward as steward
 
 
 def test_source_revocation_during_history_compaction_preserves_original_audience(steward, monkeypatch):  # noqa: F811
