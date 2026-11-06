@@ -352,7 +352,7 @@ export function observeOutcomeRequirements(declaration: JsonObject, acceptance: 
     requirements: o.requirements.map(r => {
       const criteria = acceptance.outcome_id === undefined || acceptance.outcome_id === o.id ? allCriteria : [];
       const criterion = criteria.find(c => c.id === r.id && c.description === r.description);
-      const covered = o.todo_ids.length > 0 && o.todo_ids.every(key => tasks.some(t => t.todo_id === key && t.state === "ready" && (t.criterion_ids as string[]).includes(r.id)));
+      const covered = (acceptance.scope as JsonObject | undefined)?.kind === "goal" || o.todo_ids.length > 0 && o.todo_ids.every(key => tasks.some(t => t.todo_id === key && t.state === "ready" && (t.criterion_ids as string[]).includes(r.id)));
       const oracle = criterion?.oracle as JsonObject | undefined;
       const receipt = acceptance.verification as JsonObject | null | undefined;
       const ownResult = (receipt?.results as JsonObject[] | undefined)?.find(result => result.criterion_id === r.id);

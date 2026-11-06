@@ -359,13 +359,84 @@ state or force the agent active. An unresolved Turn must be recovered before
 another phase can replace its task input. These wait/recovery rules apply to
 both entry policies; they correct the earlier unconditional phase reset.
 Every scheduler wake caps its host timeout against the remaining phase budget
-before opening an execution. If only startup and settlement reserve remains,
-it records a budget-exhausted no-op without creating a pending Turn. In the
+before opening an execution. Heartbeat workers may use the entire positive
+remainder, including a continuation shorter than 160 seconds. Their bounded
+process cleanup is not a solver-time deduction. The adapters do not derive an
+independent wake limit from the initial trial budget; an explicitly supplied
+Harbor wake limit remains an independent limit and retains its failure semantics.
+Native Goal and managed-turn transports retain their existing reserve.
+When the applicable work allowance is exhausted, the worker records a
+budget-exhausted no-op without creating a pending Turn. In the
 heartbeat/turn scheduler path, that receipt exits the wake with code 75 and the
 configured shell worker stops normally. It does not re-admit empty wakes, mark
 the task complete or spend quota. Direct plain/native-Goal calls retain exit 0
 for normal budget exhaustion.
+
+An explicitly continued Harbor phase or SForge warm restore may select a new
+shell transport record after that budget stop. The retained worker receipt must
+prove the stop happened before native dispatch. The original stop record and IO
+witness remain intact; the finite phase deadline names the successor record, so
+retries in that same phase retain its failures. Missing proof, interrupted native
+work, provider failures and other stops keep the original recovery path. This
+does not reopen a terminal LoopX decision or change Goal/Agent, Todos, native
+conversation, scoring history or checkpoint frequency.
 The deadline uses the task environment's clock, including remote Harbor backends.
+Budget exhaustion is distinct from task completion: this clock does not override
+provider failures, Stop, blocked planning, or a valid terminal LoopX decision.
+Campaign duration coverage must still classify an early exit as missing time.
+
+### Ongoing execution commitments in SForge
+
+EdgeBench native-feedback heartbeat trials bind their declared finite execution
+commitment by default, without a feature switch. The runner supplies the native
+task identity and records the requirement through Core's existing outcome and
+Goal-only check owners. Completing a local Todo remains valid; an unmet overall
+commitment follows the existing replan path. Stop, exhausted allowance and
+genuine blockers retain their existing authority. Official and Native Goal
+controls keep their existing completion behavior.
+
+This caller declaration is specific to an authorized trial. Ordinary Goals
+already retain declared outcome requirements by default, without executable
+checks or a new scope selection. Other SForge callers without the scoped native
+execution provider do not acquire a requirement from model text or a timeout.
+The check scope describes ownership; it is not an activation switch. Existing
+local check contracts and restored Goals are never silently converted.
+
+The native judge host must install the read-only provider before model entry:
+
+```python
+from benchmark.edgebench.execution_commitment import (
+    NativeExecutionEvidence, install_execution_commitment,
+)
+
+evidence = NativeExecutionEvidence(
+    run_id=run_id, task_id=task_id, trial=trial,
+    target_seconds=timeout_seconds,
+    runner_active=lambda: worker is not None and worker.poll() is None,
+)
+install_execution_commitment(
+    app, run_id=run_id, task_id=task_id, observe=evidence.fulfilled,
+)
+```
+
+Use the native trial directory containing `solver_execution.json` and the exact
+worker process. The provider uses the campaign report's TypeScript duration
+owner; installation, grading and gaps between executions contribute no time.
+The original scoped feedback relay reveals only whether the commitment is
+fulfilled. It exposes neither a countdown nor another registration's state.
+An absent or unavailable provider fails the pre-model probe; it does not become
+an always-false check or silently fall back to a different execution policy.
+
+On restore, keep the original task identity. The runner compares
+the inherited acceptance document through the owner's read-only preview, without
+refining requirements, reconfiguring checks or resetting planning. A legacy
+Goal without that contract is rejected rather than rewritten. The native host
+supplies earlier finalized execution receipts as explicit `(Path, sha256)` pairs
+in `previous`; mismatched pins or unfinished intervals remain unknown. No new
+worker clock or additional checkpoint trigger is introduced. Other SForge
+callers without a declared native commitment retain ordinary trial behavior.
+The receiver preserves routing for the original scoped relay. A changed endpoint
+fails the inherited-document comparison rather than silently replacing the check.
 
 To compare entry policies, hold the execution mode, session policy, model,
 effort, tools, feedback and total budget fixed, and use separate trials:
