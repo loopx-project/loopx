@@ -34,20 +34,51 @@ Python 本地工作，本次为该阶段增加一次粗粒度运行时请求；�
 只有一次请求**。收益是目录规则收口及保留来源依据，代码迁移本身不能证明加速
 或整 Goal 成果改善。
 
-以下资格待最终集成候选的实测结果记录后确认：
+## 候选实测资格
 
-- 实际命令的固定时间 baseline/head 差分，保持旧字段、顺序、诊断及退出状态，
-  单独核对 envelope 增量。
-- File／SQLite 首末页、后页成员、未授权 claimant、显式 runtime root，以及
-  业务状态不变。
-- 过期、不可读、不完整、缺失及重放来源依据；独立变异必须能检出只按当前页
-  判断成员以及用当前时间刷新旧来源时间的错误。
-- 不借用源码 checkout 的干净 wheel／sdist 安装执行。
-- 同负载完整 CLI 冷／暖 p50、p95、运行时请求次数及输出体积；类型检查、
-  原生／Python 回归及必需的 premerge 检查。
+候选 `9d91c5bc178a0acddbbab3276b404b9d0ceada3f` 与上述固定基线比较。
+以下结果只覆盖本次有界合成 fixture，不代表通用性能保证或 T4 完成：
 
-此清单不表示测试已通过。补充结果时须保留失败和未测边界；既往 CLI 优化测量
-不能资格化本候选。本检查点不关闭 T4，也不改变发布资格。
+- 原生 TypeScript 测试 6,129 项通过、77 项跳过；focused Python 测试 33 项
+  通过。随机差分覆盖 160 个等价案例；仅以当前页判断成员、以当前时间刷新旧
+  观察时间这两种独立变异均被检出。
+- 八组实际 CLI baseline/head 配对覆盖 File／SQLite 首页、末页、越界 cursor
+  和未注册调用方，包括位于首页之外的注册调用方。旧字段、顺序、诊断及退出状态
+  一致，新增 envelope 单独核对。registry、Goal、canonical authority 和 fence
+  数据不变；SQLite 初次读取创建了空 WAL／SHM sidecar，因此不宣称零文件系统写入。
+- 独立 wheel／sdist 环境在 checkout 外通过 16 条安装态 console 命令，覆盖
+  两个 provider 和四种案例；确认导入自安装目录且运行时源码 hash 一致。
+  未执行最低 Node 版本或 Windows 资格验证。
+- Premerge 退出码为 0，并保留一项继承的 advisory。跳过项与 advisory 仍是
+  验收限制，不能算成额外通过的检查。
+
+### 完整命令成本
+
+测量环境为 Linux、Python 3.12.14、Node 24.22.1，使用相同的合成 28-Agent
+canonical File／SQLite fixture，工作集为空，显式指定 runtime root 并关闭
+usage telemetry。最终交替 baseline/head 的测量共 120 次命令执行：每个
+provider、每个版本各 20 次暖态和 10 次冷态。暖态为新 Python 进程复用运行中
+TS server；冷态为新 Python 进程及无 TS server 的隔离 runtime 目录；未清除
+操作系统文件缓存。计时包含整个子进程，小样本 p95 使用 nearest-rank 方法。
+
+| Provider／runtime | 基线 p50／p95（ms） | 候选 p50／p95（ms） |
+| --- | --- | --- |
+| File 暖态 | 348.85 / 397.95 | 348.14 / 380.69 |
+| File 冷态 | 949.17 / 986.70 | 950.08 / 1026.45 |
+| SQLite 暖态 | 342.77 / 396.21 | 338.94 / 373.52 |
+| SQLite 冷态 | 947.77 / 1020.42 | 953.57 / 1078.73 |
+
+每次测量的运行时请求数均从五次增至六次。首页 stdout 从 9,330 增至 11,384
+UTF-8 字节（增加 2,054，22.0%）。File 冷态 p95 增加 39.75 ms（4.0%），
+SQLite 增加 58.31 ms（5.7%）；较低的暖态样本不能证明加速或统计显著性。
+本记录量化新增 crossing 和 envelope 的成本，不授予延迟或发布资格；此前的
+CLI 优化结果不能资格化本候选。
+
+首轮配对尝试复用了长时间空闲的 runtime 目录，在目录执行前、未改动的
+`explore.configuration.goal` 调用中遇到一次 SQLite transport 失败，退出码为 1；
+确切根因尚未确认。该轮结果作为独立负面证据保留。随后使用全新隔离 runtime
+目录完整重跑，120 次测量全部通过且 fixture hash 不变，并非仅重试失败样本。
+长时间空闲 runtime 的可靠性仍未获资格确认。本检查点不关闭 T4，也不改变发布资格。
 
 ## Bridge 退出与回滚
 

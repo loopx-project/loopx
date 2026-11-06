@@ -44,24 +44,62 @@ CLI a one-request operation. Rule ownership and retained source evidence are
 the intended benefit; moving code alone is not evidence of a speedup or better
 whole-Goal outcomes.
 
-Qualification is pending until recorded against the final integrated candidate:
+## Measured candidate qualification
 
-- Fixed-time baseline/head comparison through the actual command, preserving
-  old fields, ordering, diagnostics and exit status, with envelope additions
-  checked separately.
-- File and SQLite first/last pages, later-page members, unauthorized claimants,
-  explicit runtime roots and unchanged business state.
-- Stale, unreadable, incomplete, missing and replayed source evidence;
-  independent mutations must detect page-only membership and refreshed old
-  source timestamps.
-- Clean wheel and sdist execution without borrowing the source checkout.
-- Matched whole-CLI cold/warm p50/p95, runtime request counts and output sizes;
-  type checking, native/Python regressions and required premerge checks.
+Candidate `9d91c5bc178a0acddbbab3276b404b9d0ceada3f` was checked against the
+fixed baseline above. The results below qualify this bounded synthetic fixture,
+not a universal performance guarantee or completion of T4:
 
-This checklist is not a passed-test claim. Preserve failures and unmeasured
-boundaries when adding results; earlier CLI optimization measurements do not
-qualify this candidate. This checkpoint does not close T4 or change release
-qualification.
+- Native TypeScript tests: 6,129 passed, 77 skipped; focused Python tests:
+  33 passed. Randomized comparison covered 160 parity cases. Both independent
+  mutations (page-only membership and refreshing old observation timestamps)
+  were caught.
+- Eight actual CLI baseline/head pairs covered File and SQLite first page,
+  last page, cursor past the end and unregistered caller, including a registered
+  caller beyond the first page. Existing fields, order, diagnostics and exit
+  status matched; the new envelope was checked separately. Registry, Goal,
+  canonical authority and fence data stayed unchanged. Initial SQLite reads
+  created empty WAL/SHM sidecars, so this is not a zero-filesystem-write claim.
+- Fresh wheel and sdist environments passed 16 installed console commands
+  across both providers and the four cases, outside the checkout with installed
+  import provenance and matching runtime-source hashes. Minimum-Node and
+  Windows qualification were not performed.
+- Premerge exited 0 with an inherited advisory. Skips and the advisory remain
+  limitations, not additional passed checks.
+
+### Whole-command cost
+
+Linux, Python 3.12.14 and Node 24.22.1 measurements used identical synthetic
+28-Agent canonical File/SQLite fixtures with an empty work set, explicit runtime
+roots and usage telemetry disabled. The final alternating baseline/head run
+contained 120 command executions: 20 warm and 10 cold samples per provider and
+version. Warm means a new Python process using a running TS server; cold means
+a new Python process and isolated runtime directory without a TS server. OS
+filesystem caches were not cleared. Times include the complete subprocess;
+p95 uses nearest rank on these small samples.
+
+| Provider/runtime | Baseline p50 / p95 (ms) | Candidate p50 / p95 (ms) |
+| --- | --- | --- |
+| File warm | 348.85 / 397.95 | 348.14 / 380.69 |
+| File cold | 949.17 / 986.70 | 950.08 / 1026.45 |
+| SQLite warm | 342.77 / 396.21 | 338.94 / 373.52 |
+| SQLite cold | 947.77 / 1020.42 | 953.57 / 1078.73 |
+
+Every measured command went from five to six runtime requests. First-page
+stdout grew from 9,330 to 11,384 UTF-8 bytes (+2,054; 22.0%). Cold p95 rose
+39.75 ms (4.0%) for File and 58.31 ms (5.7%) for SQLite; lower warm samples
+do not establish a speedup or statistical significance. This records the
+additional crossing and envelope cost, not a latency or release qualification.
+Earlier CLI optimization results do not qualify this candidate.
+
+The first paired attempt reused long-idle runtime directories and hit a SQLite
+transport failure in the unchanged `explore.configuration.goal` call before
+directory execution (exit 1). The underlying cause is not established. That
+attempt's results remain separate negative evidence. A complete rerun with fresh
+isolated runtime directories passed all 120 measurements with unchanged fixture
+hashes; it was not a selective retry of the failing sample. Long-idle runtime
+reliability remains unqualified. This checkpoint does not close T4 or change
+release qualification.
 
 ## Bridge exit and rollback
 
