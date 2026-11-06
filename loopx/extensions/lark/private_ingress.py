@@ -273,7 +273,7 @@ class PrivateIngressObserver:
                 continue
             try:
                 state = _observation(self._path(binding["binding_id"]))
-                if (state.get("status") != IngressObservationStatus.GAP.value
+                if (state.get("status") not in {IngressObservationStatus.GAP.value, IngressObservationStatus.VERIFIED.value}
                         or not state.get("history", {}).get("complete")
                         or time.time() - state.get("last_checked_at", 0) > 180
                         or time.time() - state.get("last_complete_at", 0) > 180):
@@ -297,9 +297,17 @@ class PrivateIngressObserver:
                 # being reclassified as history. The admission fence repeats
                 # the check, including after a process restart.
                 captured = {row["request_ref"] for row in self._records()}
+                # Discovery only: the typed Core owner independently qualifies
+                # any one-time correction of an old, delivered partial review.
+                legacy = {row["event"]["message_id"] for row in carriers
+                    if row.get("capture_origin") == "provider_history"
+                    and row.get("context_recovery", {}).get("history_review") is True
+                    and row["context_recovery"].get("context_version") is None
+                    and transport.core.history_answer_correction_candidate(row["request_ref"], binding)}
                 refs = [ref for ref in state.get("gaps", {})
                     if identity_ref(binding["provider_ref"], ref) not in captured
                     and not (transport.core.root / f"{identity_ref(binding['provider_ref'], ref)}.json").exists()]
+                refs = sorted(set(refs) | legacy)
                 if not refs or len(refs) > 64:
                     continue
                 result = call(transport.runner, lark_args(cli_bin=transport.cli_bin, profile=binding["transport_ref"],
@@ -339,7 +347,7 @@ class PrivateIngressObserver:
                         if command in {"stop", "new"}:
                             controls.append(int(item["create_time"]))
                 eligible = [row for row in sources if isinstance(row, dict)
-                    and not state["gaps"][row["message_id"]]["reply_observed"]
+                    and (row["message_id"] in legacy or not state["gaps"][row["message_id"]]["reply_observed"])
                     and row.get("deleted") is not True
                     and row.get("chat_id") == event["chat_id"] and isinstance(row.get("sender"), Mapping)
                     and row["sender"].get("id") == event["sender_id"]

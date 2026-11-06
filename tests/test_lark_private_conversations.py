@@ -20,6 +20,158 @@ from loopx.extensions.lark.private_delivery_discovery import PrivateDeliveryDisc
 from loopx.extensions.lark.goal_topic_runtime import poll_lark_goal_topic_profile_once
 
 
+def test_historical_context_is_explicitly_bounded_and_never_decodes_unread_attachments():
+    rows = [{"message_id": f"m-{i}", "created_at": f"2026-01-01T00:00:{i:02}+00:00",
+        "role": "agent", "text": f"Complete original answer {i}"} for i in range(14)]
+    rows[-1]["attachments"] = [{"data_url": "unread-image-bytes"}]
+    def messages(sid):
+        assert sid == "original-session"
+        return rows
+    reader = SimpleNamespace(controller=SimpleNamespace(store=SimpleNamespace(messages=messages)),
+        read_request=lambda _: {"source_created_at": "2026-01-01T00:00:30+00:00"})
+    view = ChatExternalConversations.history_answer_context(reader, {"session_id": "original-session"}, {"request_ref": "original"})
+    assert view["earlier_messages_omitted"] and view["available_core_messages"] == 14
+    assert len(view["messages"]) == 12 and view["messages"][-1]["text"] == rows[-1]["text"]
+    assert view["messages"][-1]["attachments_unread"] and "unread-image-bytes" not in json.dumps(view)
+    rows[-1]["text"] = "界" * 25_000
+    view = ChatExternalConversations.history_answer_context(reader, {"session_id": "original-session"}, {"request_ref": "original"})
+    assert view["messages"] == [] and "unavailable_reason" in view
+    rows[-1]["created_at"] = "2026-01-01T00:00:13"
+    with pytest.raises(ValueError, match="history time"):
+        ChatExternalConversations.history_answer_context(reader, {"session_id": "original-session"}, {"request_ref": "original"})
+
+
+@pytest.mark.parametrize("crash", [None, "before-queue", "after-queue", "stop", "revoked"])
+def test_history_answer_uses_original_context_and_original_worker_corrects_legacy_review(tmp_path, monkeypatch, crash):
+    """A later answer must not redefine an older 'those four' request."""
+    from datetime import timedelta, timezone
+    from pathlib import Path
+    from test_native_steward_private import steward, finish
+    from loopx import chat_store
+    from loopx.capabilities.native_chat import external_conversations
+
+    fixture = steward.__wrapped__(tmp_path)
+    store, runtime, provider, transport, binding, capture, _ = next(fixture)
+    peer = Path(runtime.codex_bin)
+    peer.write_text(peer.read_text().replace('result = {"thread": {"id": "durable-thread"}}',
+        'result = {"thread": {"id": "durable-thread"}, '
+        '"activePermissionProfile": {"id": request["params"].get("permissions")}, '
+        '"runtimeWorkspaceRoots": [request["params"]["cwd"]]}').replace(
+        '    elif method == "turn/start":',
+        '    elif method == "thread/turns/list":\n'
+        '        result = {"data": [{"id": "original-native", "status": "completed"}], "nextCursor": None}\n'
+        '    elif method == "thread/backgroundTerminals/list":\n        result = {"data": [], "nextCursor": None}\n'
+        '    elif method == "turn/start":'))
+    try:
+        transport.admit("steward-app", provider.event("steward-app", "context-seed", "Explain the current work"))
+        seed = transport.core.pending()[0]
+        assert finish(runtime, seed)["status"] == "completed"
+        transport.reconcile()
+        stamp = datetime.now(timezone.utc)
+        with monkeypatch.context() as clock:
+            clock.setattr(chat_store, "utc_now", lambda: (stamp - timedelta(seconds=1)).isoformat())
+            original = store.append_message(seed["session_id"], role="agent",
+                text="The four pending mechanisms are lifecycle, receiver returns, delivery reconciliation, and native context.")
+            clock.setattr(chat_store, "utc_now", lambda: (stamp + timedelta(seconds=1)).isoformat())
+            store.append_message(seed["session_id"], role="agent", text="UNRELATED LATER FOUR: colors, fonts, spacing, icons")
+        event = provider.event("steward-app", "original-context-followup", "Please implement those four.")
+        event["create_time"] = str(int(stamp.timestamp() * 1000))
+        provider.messages[event["message_id"]]["create_time"] = event["create_time"]
+        class ReviewClock(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return stamp + timedelta(seconds=61)
+        monkeypatch.setattr(external_conversations, "datetime", ReviewClock)
+        before = len(capture.read_text().splitlines())
+        assert transport.admit("steward-app", event, history_review=True)["status"] == "durably_accepted"
+        ref = identity_ref(binding["provider_ref"], event["message_id"])
+        first = transport.core.read_request(ref)
+        result = finish(runtime, first)
+        assert result["status"] == "completed", result
+        wire = [json.loads(line) for line in capture.read_text().splitlines()[before:]]
+        prompt = json.dumps([x for x in wire if x["method"] == "turn/start"])
+        assert original["text"] in prompt, "The answer needs the original antecedent, not a later native review"
+        assert "UNRELATED LATER FOUR" not in prompt
+        assert transport.reconcile() == 1
+        if crash is None:
+            # A newer, fully answered legacy review must not starve the older
+            # partial request. Neither delivery nor age makes it a candidate.
+            complete_event = provider.event("steward-app", "complete-later-review", "A self-contained question")
+            complete_event["create_time"] = str(int((stamp + timedelta(seconds=2)).timestamp() * 1000))
+            provider.messages[complete_event["message_id"]]["create_time"] = complete_event["create_time"]
+            assert transport.admit("steward-app", complete_event, history_review=True)["status"] == "durably_accepted"
+            complete_ref = identity_ref(binding["provider_ref"], complete_event["message_id"])
+            complete = transport.core.read_request(complete_ref)
+            assert finish(runtime, complete)["status"] == "completed"
+            assert transport.reconcile() == 1
+            for path in [transport.core.root / f"{complete_ref}.json", transport.root / f"{complete_ref}.json"]:
+                row = json.loads(path.read_text())
+                row["context_recovery"].pop("context_version", None)
+                path.write_text(json.dumps(row))
+        # Seed the actual released legacy shape: a terminal, delivered,
+        # action-free read-only review without original-context qualification.
+        result["response"]["gate"] = {"kind": "evidence_gap", "summary": "Implementation unverified", "next_action": ""}
+        store.update_turn(first["session_id"], first["turn_id"], response=result["response"])
+        for path in [transport.core.root / f"{ref}.json", transport.root / f"{ref}.json"]:
+            row = json.loads(path.read_text())
+            row["context_recovery"].pop("context_version", None)
+            path.write_text(json.dumps(row))
+        old_turn = store._turn_path(first["session_id"], first["turn_id"]).read_bytes()
+        before = len(capture.read_text().splitlines())
+        if crash in {"stop", "revoked"}:
+            if crash == "stop":
+                transport.admit("steward-app", provider.event("steward-app", "stop-before-context-correction", "/stop"))
+            else:
+                transport.bindings.disconnect(binding["binding_id"], expected_revision=transport.bindings.read()["revision"])
+            transport.observe_ingress()
+            assert transport.core.read_request(ref)["turn_id"] == first["turn_id"]
+            assert store._turn_path(first["session_id"], first["turn_id"]).read_bytes() == old_turn
+            assert not any(json.loads(line)["method"] == "turn/start" for line in capture.read_text().splitlines()[before:])
+            return
+        if crash:
+            enqueue = runtime.enqueue_turn
+            def interrupted(**kwargs):
+                if crash == "after-queue":
+                    enqueue(**kwargs)
+                monkeypatch.setattr(runtime, "enqueue_turn", enqueue)
+                raise OSError("synthetic correction acknowledgement lost")
+            monkeypatch.setattr(runtime, "enqueue_turn", interrupted)
+            transport.observe_ingress()
+            if crash == "after-queue":
+                # Completion may race a lost queue acknowledgement. The
+                # reserved child remains the same read-only work, even before
+                # the source journal adopts its new Turn id.
+                reserved = transport.core.read_request(ref)["context_recovery"]
+                queued = store.turn_for_client(first["session_id"], reserved["client_turn_id"])
+                assert finish(runtime, {"session_id": first["session_id"], "turn_id": queued["turn_id"]})["status"] == "completed"
+        transport.observe_ingress()
+        corrected = transport.core.read_request(ref)
+        assert corrected["turn_id"] != first["turn_id"]
+        assert corrected["context_recovery"]["previous_answer_turn_id"] == first["turn_id"]
+        assert corrected["context_recovery"]["failed_turn_id"] is None
+        assert corrected["context_recovery"]["version"] == first["context_recovery"]["version"] + 1
+        assert re.fullmatch(r"external-[a-f0-9]{24}-recovery-[1-9][0-9]*-review-1", corrected["context_recovery"]["client_turn_id"])
+        corrected_result = finish(runtime, corrected)
+        assert corrected_result["status"] == "completed"
+        assert corrected_result["response"]["gate"] is not None
+        assert transport.reconcile() == 1
+        record = json.loads((transport.root / f"{ref}.json").read_text())
+        assert record["deliveries"]["terminal.recovery.history.answer.1"]["verified"]
+        returned = record["deliveries"]["terminal.recovery.history.answer.2"]
+        assert returned["verified"] and returned["text"].startswith("更正之前的补答：")
+        wire = [json.loads(line) for line in capture.read_text().splitlines()[before:]]
+        assert sum(x["method"] == "thread/start" for x in wire) == 1
+        prompt = json.dumps([x for x in wire if x["method"] == "turn/start"])
+        assert original["text"] in prompt and "UNRELATED LATER FOUR" not in prompt
+        assert store._turn_path(first["session_id"], first["turn_id"]).read_bytes() == old_turn
+        count = len(capture.read_text().splitlines())
+        transport.observe_ingress()
+        transport.reconcile()
+        assert len(capture.read_text().splitlines()) == count
+    finally:
+        fixture.close()
+
+
 @pytest.mark.parametrize("fault", [None, "original-worker", "formatted-time", "uncaptured-stop", "project-source", "busy", "stop", "before-session", "source-change", "queue-crash", "reservation-crash", "ordinary-capture", "background", "background-unavailable", "native-active", "revoked"])
 def test_uncaptured_history_has_one_answer_only_review_not_a_business_replay(tmp_path, monkeypatch, fault):
     from datetime import timedelta, timezone
