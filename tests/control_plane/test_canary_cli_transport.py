@@ -100,3 +100,37 @@ def test_real_capture_cli_returns_the_same_wire_through_the_helper(tmp_path, mon
     assert observed == json.loads(direct.stdout)
     assert capture.read_bytes() == raw
     assert not registry.exists() and not runtime.exists()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("gate", ["ready", "user_gate", "zero_quota"])
+@pytest.mark.parametrize("parent_mode", ["on", "off"])
+@pytest.mark.parametrize("consumer", ["autonomous", "autonomous_subprocess", "shared_runtime"])
+def test_machine_smoke_calls_keep_core_gates_and_parent_context_mode(
+    tmp_path, monkeypatch, provider, gate, parent_mode, consumer,
+):
+    from tests.control_plane import test_quota_settlement_cli as fixture
+
+    project, runtime, registry = fixture._write_fixture(tmp_path)
+    if gate == "user_gate":
+        fixture._append_blocking_user_gate(project)
+    elif gate == "zero_quota":
+        source = json.loads(registry.read_text())
+        source["goals"][0]["quota"]["compute"] = 0
+        source["goals"][0]["quota"].pop("allowed_slots")
+        registry.write_text(json.dumps(source))
+    canary_harness.import_fixture_authority(registry, fixture.GOAL_ID, provider=provider)
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", parent_mode)
+    root = Path(__file__).resolve().parents[2]
+    arguments = ("quota", "should-run", "--goal-id", fixture.GOAL_ID,
+                 "--agent-id", fixture.AGENT_ID)
+    if consumer == "shared_runtime":
+        smoke = runpy.run_path(str(root / "examples/control_plane/refresh-state-shared-runtime-projection-smoke.py"))
+        observed = smoke["run_cli"]("--registry", str(registry), "--runtime-root", str(runtime),
+                                    *arguments, cwd=project, shared_runtime=runtime)
+    else:
+        smoke = runpy.run_path(str(root / "examples/autonomous-replan-obligation-smoke.py"))
+        smoke["run_cli"].__globals__["USE_SUBPROCESS_CLI"] = consumer == "autonomous_subprocess"
+        observed = smoke["run_cli"](*arguments, registry_path=registry, runtime=runtime)
+    assert observed["normal_delivery_allowed"] is (gate == "ready"), observed
+    assert os.environ["LOOPX_CONTEXT_DELIVERY"] == parent_mode

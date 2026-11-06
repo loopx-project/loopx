@@ -32,7 +32,7 @@ function mutation(value: unknown): JsonObject | null {
   if (value == null) return null;
   const row = requireJsonObject(value, "queue input receipt");
   requireNonEmptyString(row.operation_id, "queue input operation_id");
-  if (!["edit", "cancel"].includes(String(row.action)) ||
+  if ((row.action !== "edit" && row.action !== "cancel") ||
       !Number.isSafeInteger(row.expected_revision) || Number(row.expected_revision) < 0 ||
       row.input_revision !== Number(row.expected_revision) + 1 ||
       row.action === "edit" && typeof row.message !== "string") throw new Error("Invalid queue input receipt");
@@ -122,7 +122,7 @@ export function planQueuedChatMutation(input: JsonObject): JsonObject {
   const operationId = requireNonEmptyString(request.operation_id, "operation_id");
   if (operationId.length > 160 || !/^[A-Za-z0-9._-]+$/.test(operationId) ||
       !Number.isSafeInteger(request.expected_revision) || Number(request.expected_revision) < 0 ||
-      !["edit", "cancel"].includes(String(request.action)) ||
+      (request.action !== "edit" && request.action !== "cancel") ||
       Object.keys(request).some(key => !["operation_id", "expected_revision", "action", "message"].includes(key))) {
     throw new Error("Invalid queue input request");
   }
