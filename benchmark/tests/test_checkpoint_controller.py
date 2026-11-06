@@ -355,8 +355,9 @@ def test_host_phase_and_native_opportunities_continue_without_offline_refill(
     assert len(destination.state.judge.tokens) == 1 and len(grades) == 2
 
 
+@pytest.mark.parametrize("cap", [None, 600, 100000])
 def test_explicit_phase_extension_is_first_activation_bound_without_native_refill(
-        controllers, tmp_path, monkeypatch):
+        controllers, tmp_path, monkeypatch, cap):
     import requests
     source, destination, first, second, files, grades = controllers
     token = register(source, first, max_agent_submissions=3, submission_cooldown=3600)
@@ -371,11 +372,17 @@ def test_explicit_phase_extension_is_first_activation_bound_without_native_refil
     target = tmp_path / "continued-phase"
     started = time.time()
     result = transport.restore(files[1], root=unit, expected_sha256=point["sha256"],
-        run_id="extended-branch", phase_deadline_file=target, phase_extension_seconds=64800)
+        run_id="extended-branch", phase_deadline_file=target, phase_extension_seconds=64800,
+        phase_remaining_cap_seconds=cap)
     deadline = int(target.read_text())
-    assert started + retained + 64800 - 1 <= deadline <= time.time() + retained + 64800
+    allowance = retained + 64800 if cap is None else min(retained + 64800, cap)
+    assert started + allowance - 1 <= deadline <= time.time() + allowance
     binding = json.loads(target.with_name(target.name + ".restore.json").read_text())
     assert binding["binding"]["phase_extension_seconds"] == 64800
+    if cap is None:
+        assert "phase_remaining_cap_seconds" not in binding["binding"]
+    else:
+        assert binding["binding"]["phase_remaining_cap_seconds"] == cap
     history = requests.get(second + "/api/v1/history", params={"token": result["token"], "admin_secret": destination.state.judge.admin_secret}, timeout=5).json()
     assert history["agent_submissions"] == 1 and history["best_score"] == 7
     assert submit(second, result["token"], 8).status_code == 429
@@ -388,13 +395,18 @@ def test_explicit_phase_extension_is_first_activation_bound_without_native_refil
     monkeypatch.setattr(transport, "time", SimpleNamespace(time=lambda: clock))
     assert transport.restore(files[1], root=unit, expected_sha256=point["sha256"],
         run_id="extended-branch", phase_deadline_file=target, recover=True,
-        phase_extension_seconds=64800) == result
+        phase_extension_seconds=64800, phase_remaining_cap_seconds=cap) == result
     assert int(target.read_text()) == deadline and info["last_agent_submit_at"] == accepted_clock
     for changed in (0, 64801):
         with pytest.raises(ValueError, match="original activation"):
             transport.restore(files[1], root=unit, expected_sha256=point["sha256"],
                 run_id="extended-branch", phase_deadline_file=target, recover=True,
-                phase_extension_seconds=changed)
+                phase_extension_seconds=changed, phase_remaining_cap_seconds=cap)
+    for changed in ([600] if cap is None else [None, cap + 1]):
+        with pytest.raises(ValueError, match="original activation"):
+            transport.restore(files[1], root=unit, expected_sha256=point["sha256"],
+                run_id="extended-branch", phase_deadline_file=target, recover=True,
+                phase_extension_seconds=64800, phase_remaining_cap_seconds=changed)
     assert phase.read_bytes() == original and len(grades) == 1
     assert len(destination.state.judge.tokens) == 1
 
@@ -412,6 +424,69 @@ def test_phase_extension_requires_a_captured_clock_before_controller_access(tmp_
     with pytest.raises(ValueError, match="captured Host phase clock"):
         transport.restore(tmp_path / "absent-controller", root=tmp_path / "absent-point",
             expected_sha256="a" * 64, run_id="branch", phase_extension_seconds=64800)
+
+
+@pytest.mark.parametrize("cap", [-1, True, 1.5, float("nan"), float("inf"), 2 ** 53])
+def test_invalid_phase_cap_rejects_before_controller_access(tmp_path, cap):
+    with pytest.raises(ValueError, match="non-negative integer"):
+        transport.restore(tmp_path / "absent-controller", root=tmp_path / "absent-point",
+            expected_sha256="a" * 64, run_id="branch", phase_deadline_file=tmp_path / "phase",
+            phase_remaining_cap_seconds=cap)
+    assert not (tmp_path / "phase").exists()
+
+
+def test_phase_cap_requires_a_captured_clock_before_controller_access(tmp_path):
+    with pytest.raises(ValueError, match="captured Host phase clock"):
+        transport.restore(tmp_path / "absent-controller", root=tmp_path / "absent-point",
+            expected_sha256="a" * 64, run_id="branch", phase_remaining_cap_seconds=600)
+
+
+@pytest.mark.parametrize("cap", [0, transport.PHASE_WORK_RESERVE_SECONDS])
+def test_empty_capped_allowance_cannot_activate_native(controllers, tmp_path, cap):
+    source, destination, first, second, files, grades = controllers
+    token = register(source, first)
+    source_phase = tmp_path / "source-phase"
+    source_phase.write_text(f"{int(time.time()) + 7200}\n")
+    unit = tmp_path / "unit"
+    point = transport.capture(files[0], token=token, capture_id="d" * 32,
+                              destination=unit, phase_deadline_file=source_phase)
+    target = tmp_path / "phase"
+    with pytest.raises(ValueError, match="no work allowance"):
+        transport.restore(files[1], root=unit, expected_sha256=point["sha256"], run_id="branch",
+                          phase_deadline_file=target, phase_remaining_cap_seconds=cap)
+    assert not target.exists() and destination.state.judge.tokens == {} and grades == []
+
+
+def test_cli_cap_survives_lost_activation_without_refill(controllers, tmp_path, monkeypatch):
+    source, destination, first, second, files, grades = controllers
+    token = register(source, first)
+    source_phase = tmp_path / "source-phase"
+    source_phase.write_text(f"{int(time.time()) + 7200}\n")
+    unit = tmp_path / "unit"
+    point = transport.capture(files[0], token=token, capture_id="d" * 32,
+                              destination=unit, phase_deadline_file=source_phase)
+    target, result = tmp_path / "phase", tmp_path / "result"
+    args = ["--controller-file", str(files[1]), "restore", "--root", str(unit),
+            "--expected-sha256", point["sha256"], "--run-id", "branch", "--result-file", str(result),
+            "--phase-deadline-file", str(target), "--phase-remaining-cap-seconds", "600"]
+    post = transport._post
+    def lost(controller, route, body, timeout):
+        value = post(controller, route, body, timeout)
+        if route.endswith("/restore"):
+            raise TimeoutError("Lost committed activation")
+        return value
+    monkeypatch.setattr(transport, "_post", lost)
+    started = time.time()
+    with pytest.raises(TimeoutError):
+        transport.main(args)
+    binding = json.loads(target.with_name(target.name + ".restore.json").read_bytes())
+    deadline = binding["deadline_epoch"]
+    assert started + 599 <= deadline <= time.time() + 600
+    assert target.read_bytes() == b"" and result.read_bytes() == b""
+    monkeypatch.setattr(transport, "time", SimpleNamespace(time=lambda: started + 120))
+    transport.main(args + ["--recover"])
+    assert int(target.read_text()) == deadline and json.loads(result.read_bytes())["token"]
+    assert len(destination.state.judge.tokens) == 1 and grades == []
 
 
 @pytest.mark.parametrize("fault", ["missing_clock", "exhausted", "existing", "alias", "modified"])
