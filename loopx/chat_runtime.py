@@ -987,16 +987,18 @@ class ChatRuntimeController:
                 raise
         except Exception as exc:
             history_restore.finish()
-            configuration_error = isinstance(exc, CodexChatAgentError) and exc.error_code == "unsupported_configuration"
+            error_code = exc.error_code if isinstance(exc, CodexChatAgentError) else None
+            preserve_error = error_code == "model_auth_unavailable" or (
+                settings_changed and error_code == "unsupported_configuration")
             if not history_restore.invalidated:
                 with commit():
                     self.store.update_session(
                         session_id,
                         status="busy" if accepted_turn_id is not None else "ready" if settings_changed else "resume_failed",
                         active_turn_id=accepted_turn_id,
-                        last_error_code="unsupported_configuration" if settings_changed and configuration_error else "resume_failed",
+                        last_error_code=error_code if preserve_error else "resume_failed",
                     )
-            if settings_changed and configuration_error:
+            if preserve_error:
                 raise
             gate = exc.gate if isinstance(exc, CodexChatAgentError) else None
             raise CodexChatAgentError(
