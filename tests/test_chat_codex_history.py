@@ -131,6 +131,7 @@ def test_history_guard_rechecks_after_native_start_before_publishing(conversatio
 
 
 @pytest.mark.parametrize("fault", [None, "image-view", "known-later", "settled-command", "later-settled-command",
+    "later-image-view", "later-image-moved",
     "command-no-exit", "command-open", "command-invalid-clock", "command-signal", "command-timeout", "command-bool-exit",
     "command-no-output", "command-bool-clock", "command-zero-exit",
     "later-user", "later-failed-effect", "later-moving-items",
@@ -154,7 +155,7 @@ def test_completed_work_readback_requires_stable_correlated_settled_inventory(fa
         counts[method] += 1
         if method == "thread/turns/list":
             turns = [{"id": "original-turn", "status": "failed" if fault == "failed" else "completed"}]
-            if fault in {"known-later", "later-settled-command", "later-user", "later-failed-effect", "later-moving-items", "later-unknown", "live"} or fault == "moving-turn" and counts[method] > 1:
+            if fault in {"known-later", "later-settled-command", "later-image-view", "later-image-moved", "later-user", "later-failed-effect", "later-moving-items", "later-unknown", "live"} or fault == "moving-turn" and counts[method] > 1:
                 turns.insert(0, {"id": "later", "status": "inProgress" if fault == "live" else "completed"})
             if fault == "missing-original":
                 turns = [{"id": "later", "status": "completed"}]
@@ -169,6 +170,10 @@ def test_completed_work_readback_requires_stable_correlated_settled_inventory(fa
             if fault == "later-settled-command":
                 rows[1]["item"].update(type="commandExecution", status="failed", exitCode=1,
                     startedAtMs=1000, completedAtMs=1001, aggregatedOutput="Process exited with code 1.")
+            if fault in {"later-image-view", "later-image-moved"}:
+                rows.append({"turnId": "later", "item": {"id": "later-image", "type": "imageView",
+                    "path": "/synthetic/changed.png" if fault == "later-image-moved" and later_reads > 1
+                    else "/synthetic/figure.png"}})
             if fault == "later-unknown" or fault == "later-moving-items" and later_reads > 1:
                 rows.append({"turnId": "later", "item": {"id": "unknown", "type": "futureEffect"}})
             return iter(rows)
@@ -215,13 +220,13 @@ def test_completed_work_readback_requires_stable_correlated_settled_inventory(fa
     native = SimpleNamespace(thread_id="native", work_dir=Path("/synthetic/notes"), response_timeout_sec=.1, _control_items=items,
         _background_terminals=lambda deadline: [{"processId": "live"}] if fault == "background" else [])
     proof = completed_work_readback(native, "original-turn", known_turn_ids={"later"}
-        if fault in {"known-later", "later-settled-command", "later-failed-effect", "later-moving-items", "later-unknown"} else None)
-    if fault in {None, "image-view", "known-later", "settled-command", "later-settled-command"}:
+        if fault in {"known-later", "later-settled-command", "later-image-view", "later-image-moved", "later-failed-effect", "later-moving-items", "later-unknown"} else None)
+    if fault in {None, "image-view", "known-later", "settled-command", "later-settled-command", "later-image-view"}:
         digest = proof.pop("native_inventory_sha256")
         assert len(digest) == 64 and set(digest) <= set("0123456789abcdef")
         assert proof == {"thread_id": "native", "turn_id": "original-turn", "completed_work": True,
                          "all_effects_settled": True, "unfinished_work": work}
-        assert counts == {"thread/turns/list": 3, "thread/items/list": 4 if fault in {"known-later", "later-settled-command"} else 2}
+        assert counts == {"thread/turns/list": 3, "thread/items/list": 4 if fault in {"known-later", "later-settled-command", "later-image-view"} else 2}
     else:
         assert proof is None
     assert set(calls) <= {"thread/turns/list", "thread/items/list"}

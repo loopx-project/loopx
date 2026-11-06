@@ -1825,6 +1825,13 @@ native inventory with no final answer or live items. Native dynamic-tool calls
 are effect items too; a stable terminal inventory permits only this read-only
 review, never business replay. Its digest is rechecked before review execution.
 
+The provider recognizes the same passive native item types in this review and
+completed-work readback, including `imageView`. Reading an image neither makes
+the inventory unknown nor counts as a settled business effect. Image metadata
+remains bound to its original Turn and the stable full-inventory digest; changed,
+duplicate, foreign or unknown image item types still fail the existing checks.
+The original terminal-effect, no-final-answer and no-live-work requirements remain.
+
 The same source, owner, grant, stop checks and `review-1` queue reservation apply.
 Fresh configured Codex capacity must verify before admission and again before
 dispatch. The new restricted thread retains only authorized manager reads; writes,
