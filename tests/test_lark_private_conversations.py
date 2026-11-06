@@ -182,15 +182,15 @@ def test_original_worker_continues_proven_unstarted_argon_quota_on_codex(tmp_pat
             return update_session(session_id, **changes)
         monkeypatch.setattr(store, "update_session", checked_update)
         if fault in {None, "later-source-after-discovery"}:
-            pending = transport.core.pending
+            source_controls = transport.core.source_controls
             scans = []
-            def counted_pending():
+            def counted_controls():
                 scans.append(True)
-                return pending()
-            monkeypatch.setattr(transport.core, "pending", counted_pending)
+                return source_controls()
+            monkeypatch.setattr(transport.core, "source_controls", counted_controls)
             discovery = transport.core.context_recovery_observer()
             assert discovery(ref) and discovery(ref)
-            assert len(scans) == 1  # One full source inventory per discovery pass.
+            assert len(scans) == 1  # One complete source-control view per discovery pass.
         if fault in {"stop-after-discovery", "source-changed-after-discovery"}:
             assert path in transport.pending_delivery_paths()
         if fault in {"stop", "stop-after-discovery"}:
@@ -1313,7 +1313,7 @@ def test_delivered_quota_failure_stays_pending_across_restart_without_replaying(
             # The typed owner can exclude completed/non-quota work without
             # scanning unrelated events or source-control journals.
             monkeypatch.setattr(store, "events_after", lambda *_: pytest.fail("not quota backlog"))
-            monkeypatch.setattr(transport.core, "pending", lambda: pytest.fail("not quota backlog"))
+            monkeypatch.setattr(transport.core, "source_controls", lambda: pytest.fail("not quota backlog"))
         assert transport.health()[row["binding_id"]]["pending_count"] == pending
         before = ordinary[4].read_bytes(), list(provider.writes)
         restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,

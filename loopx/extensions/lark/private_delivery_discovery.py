@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from ...chat_store import _read_json
+from ...capabilities.native_chat.file_discovery import file_change_fingerprint
 from .private_progress import legacy_recovery_repairs
 
 
@@ -22,15 +23,11 @@ class PrivateDeliveryDiscovery:
         """
         seen = set()
 
-        def fingerprint(path: Path) -> tuple[int, ...]:
-            stat = path.stat()
-            return (stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size)
-
         for path in sorted(self.root.glob("*.json")):
             seen.add(path)
-            before = fingerprint(path)
+            before = file_change_fingerprint(path)
             saved = self._completed.get(path)
-            if saved is not None and saved[0] == before:
+            if before is not None and saved is not None and saved[0] == before:
                 yield path, saved[1], saved[2]
                 continue
             self._completed.pop(path, None)
@@ -42,7 +39,7 @@ class PrivateDeliveryDiscovery:
                         ("status", "request_ref", "binding_id", "session_id", "turn_id")}
                 view.update(agent_target=bool(row.get("agent_target")),
                             event={"chat_type": row.get("event", {}).get("chat_type")})
-                if fingerprint(path) == before:
+                if before is not None and file_change_fingerprint(path) == before:
                     self._completed[path] = (before, view, repairs)
                 row = view
             yield path, row, repairs
