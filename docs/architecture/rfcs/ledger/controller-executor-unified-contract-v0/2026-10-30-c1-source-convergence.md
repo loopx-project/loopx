@@ -51,7 +51,7 @@ partial and forged observations, compaction, off and exact recovery. The same
 new case fails on untouched main. Both source and isolated-package native paths
 exercise the existing owner; each actual Codex static-loopback journey takes
 ten requests, includes the subsequent whole-section reuse and restores full
-requirements on unverified resume. No paid model is used. C1's current configured
+requirements on unverified resume. No paid model is used. At the recorded `dde48f084b` integration, C1 configured
 mypy has 4,818 diagnostics; main's configured 17-file check passes. The earlier
 C1 count was 4,814 at another integration head; this is not a waiver or an
 attribution of the four additional diagnostics. Main standard premerge's six
@@ -61,6 +61,16 @@ maintainer merge authority and whole C1 qualification remain open. This proposal
 has not reduced the parent PR's size on main yet; that requires maintainer
 adoption of independently reviewable slices. Earlier bilingual experiments stay
 together below.
+
+The later author integration includes main `910ff3bca5`: main product
+`a8902b05b` and C1 product `7e52f3a1e`. The frozen cost table above is not
+relabelled as a measurement of this later composition. Focused real-entrypoint
+checks pass 102 cases on main and 104 on C1; each typed reader/report projection
+set passes 66 cases, with typecheck passing. Main configured mypy passes; C1 now
+reports 4,831 diagnostics in 485 files, without an attribution or waiver of the
+additional diagnostics. Standard premerge passes 6/14 direct/selected checks on
+main and 7/19 on C1 mechanically; both still lack the strict quality receipt,
+and C1 retains its manual review hold.
 
 ## Previous integration: incremental costs after field reuse reached main
 
