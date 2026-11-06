@@ -98,6 +98,10 @@ and natural native Goal completion retain their existing owners.
 已经启动过会话的旧创建记录保持原义，不自动迁移。停止、权限、预算、独立检查及
 原生 Goal 的自然结束规则保持有效。
 
+The first planning step reuses these existing creation requirements and links its
+actual work to them. It adds only missing source-grounded requirements; creating
+another outcome for unchanged completion criteria is not a prerequisite.
+
 The shared `/loopx` and `todo plan` first-planning contract asks the Agent to
 declare source-grounded overall requirements through `goal-acceptance refine`,
 link the actual task Todos and read the declaration back. The caller supplies

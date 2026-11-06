@@ -243,7 +243,7 @@ def append_todo_delta_render_line(
     requirements = raw_step.get("goal_requirements")
     if isinstance(requirements, Mapping):
         step_lines.append(
-            "   - overall requirements: declare before Todos, link actual ids, then read back; "
+            "   - overall requirements: reuse existing or declare missing requirements before Todos, link actual ids, then read back; "
             "use this checkpoint's goal_requirements commands in the JSON detail packet."
         )
     todo_delta = raw_step.get("todo_delta")
