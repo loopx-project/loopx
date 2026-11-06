@@ -10,7 +10,7 @@ import json
 import re
 import subprocess
 import time
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -33,6 +33,7 @@ from .inbox_reactions import (_reconcile_outbound_input_reactions,
                              mark_lark_event_inbox_processing, mark_lark_event_inbox_received)
 from .outbound import present_lark_conversation_text as _presentation_text
 from .private_images import private_message_caption, private_message_images
+from .private_delivery_discovery import PrivateDeliveryDiscovery
 from .return_files import uploaded_chat_images, verify_chat_images
 from .private_progress import (ACTIVITY_UPDATE_INTERVAL_SEC, UPDATE_INTERVAL_SEC, legacy_recovery_repairs,
                                presentation_phase, presentation_stream, project_progress)
@@ -171,7 +172,7 @@ class LarkPrivateConversations:
         self.reaction_feedback = reaction_feedback
         self.root = controller.store.root / "lark-private-deliveries"
         self._context_recovery_probe_at: dict[Path, float] = {}
-        self._delivery_discovery_cache: dict[Path, tuple[tuple[int, ...], dict[str, Any], bool]] = {}
+        self._delivery_discovery = PrivateDeliveryDiscovery(self.root)
         self._web_projection_scan_at = 0.0
         self._web_projection_snapshots: dict[str, tuple[int, int]] = {}
         from .owner_attention import LarkOwnerAttention
@@ -1305,51 +1306,12 @@ class LarkPrivateConversations:
             except (KeyError, ValueError, OSError):
                 return  # Unknown authority or provider effects stay pending.
 
-    def _delivery_discovery_rows(self) -> Iterator[tuple[Path, dict[str, Any], bool]]:
-        """Reuse only unchanged delivered-file hints, never bodies or authority.
-
-        Pending files stay fresh. A completed file's inode, timestamps and size
-        must match before its small routing view can be reused; reconciliation
-        still reads the complete journal and current Core/provider state.
-        """
-        cache = getattr(self, "_delivery_discovery_cache", None)
-        if cache is None:
-            self._delivery_discovery_cache = cache = {}
-        seen = set()
-
-        def fingerprint(path: Path) -> tuple[int, ...]:
-            stat = path.stat()
-            return (stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size)
-
-        for path in sorted(self.root.glob("*.json")):
-            seen.add(path)
-            before = fingerprint(path)
-            saved = cache.get(path)
-            if saved is not None and saved[0] == before:
-                yield path, saved[1], saved[2]
-                continue
-            cache.pop(path, None)
-            row = _read_json(path)
-            repairs = False
-            if row["status"] == "delivered":
-                repairs = bool(row.get("session_id") and row.get("turn_id") and legacy_recovery_repairs(row))
-                view = {key: row.get(key) for key in
-                        ("status", "request_ref", "binding_id", "session_id", "turn_id")}
-                view.update(agent_target=bool(row.get("agent_target")),
-                            event={"chat_type": row.get("event", {}).get("chat_type")})
-                if fingerprint(path) == before:
-                    cache[path] = (before, view, repairs)
-                row = view
-            yield path, row, repairs
-        for path in cache.keys() - seen:
-            del cache[path]
-
     @effect_runtime_request_scope()
     def pending_delivery_paths(self) -> list[Path]:
         """The durable transport store is the queue; no in-memory admission."""
         paths = []
         recovery_candidate = self.core.context_recovery_observer()
-        for path, row, repairs in self._delivery_discovery_rows():
+        for path, row, repairs in self._delivery_discovery.rows():
             if row["status"] != "delivered":
                 paths.append(path)
             elif (row.get("session_id") and row.get("turn_id")
@@ -1384,7 +1346,7 @@ class LarkPrivateConversations:
             enabled = {row["binding_id"] for row in self.bindings.read()["bindings"]
                        if row.get("enabled") is True and row.get("audience", "owner") == "owner"}
             sources: dict[str, Path] = {}
-            for path, row, _ in self._delivery_discovery_rows():
+            for path, row, _ in self._delivery_discovery.rows():
                 if (row.get("binding_id") in enabled and row.get("session_id")
                         and row.get("event", {}).get("chat_type") == "p2p"
                         and not row.get("agent_target") and row.get("status") in {"accepted", "delivered"}):
