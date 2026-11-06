@@ -1862,6 +1862,25 @@ their existing boundaries; history cannot turn into ordinary admission or a
 business retry. Existing evidence may answer a question directly; unknown past
 effects and missing business work remain explicit gaps.
 
+Each historical answer uses an isolated restricted native context rather than
+the preceding review's model history. Dispatch includes at most twelve complete
+messages from the same Core Session strictly before the original source time,
+explicitly labeled as an available Core prefix, not complete provider history.
+An input above 64 KiB retains an unavailable reason instead of cutting text.
+Later questions, reviews and current work records cannot supply an antecedent
+such as “above”. Only a completed, delivery-verified, action-free legacy
+read-only history review with an explicit remaining gate qualifies for one
+original-service context correction. The old Turn and reply receipts remain
+unchanged; the correction returns along the same source, adopting its reserved
+identity after a lost queue acknowledgement. Failed or unknown execution,
+ordinary business, complete answers, unverified delivery and already-qualified
+reviews do not qualify. Stop, revocation, busy queues and native background
+work retain their gates; correcting context does not complete the business.
+The correction advances only this request's reserved version and retains the
+existing read-only client suffix, so earlier answer-capable readers still
+recognize its restricted role. Correct original-context delivery requires the
+updated runtime; compatibility does not certify answer quality after downgrade.
+
 The provider inspects at most 64 unresolved originals as one complete source
 control inventory. Larger, incomplete or unreadable inventories remain pending;
 live captures take priority. Downgrading a store with these reservations to a

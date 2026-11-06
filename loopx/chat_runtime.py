@@ -860,6 +860,7 @@ class ChatRuntimeController:
                 current is not None
                 and current.healthcheck()
                 and not manager_profile_changed
+                and not recovery.get("history_review")
                 and not recovery.get("quota_attempt")
                 and not native_quota_refresh
                 and (native_account_epoch is None or getattr(current, "_native_account_epoch", None) == native_account_epoch)
