@@ -830,6 +830,107 @@ def test_warm_delta_initial_read_uses_current_action_without_the_old_base(tmp_pa
     assert not registry.exists() and not runtime.exists()
 
 
+@pytest.mark.parametrize("invalidate,retained", [("none", 7), ("compact", 7), ("partial", 7), ("off", 7), ("none", 1)])
+def test_native_first_read_reuses_requirement_bodies_after_canonical_correction(
+        tmp_path, monkeypatch, navigated_decision, invalidate, retained):
+    from test_codex_context_lifecycle import setup, deliver
+
+    event = setup(tmp_path, monkeypatch)
+    source = navigated_decision["interaction_contract"]["agent_channel"]["work_context"]["sources"][0]
+    content = source["content"]
+    outcome = content["goal_acceptance_contract"]["outcome_requirements"]["outcomes"][0]
+    outcome.update(objective="Preserve cumulative acceptance.", sources=[], requirements=[
+        {"id": f"criterion-{i}", "description": (f"Criterion {i}: preserve original requirements, cancellation, source and independent validation. " * 12),
+         "status": "unverified", "planning_satisfied": False} for i in range(8)])
+    prefix = "/interaction_contract/agent_channel/work_context/sources/0/content/goal_acceptance_contract/outcome_requirements/outcomes/0"
+
+    def navigation(name, enabled=True):
+        directory = tmp_path / name
+        directory.mkdir(mode=0o700)
+        prepared = codex_context.prepare_codex_context(navigated_decision, directory=str(tmp_path),
+            capture_directory=directory, goal_id="fixture", agent_id="agent", surface="quota_packet",
+            capture_id=name, progressive_enabled=enabled)
+        return model_context_reference(native_context_capture_view(prepared.delivery, directory,
+            context_directory=str(tmp_path), progressive_enabled=enabled,
+            initial_read_plan=prepared.initial_read_plan, max_page_output_bytes=6000))
+
+    def pages(command):
+        result = []
+        while command:
+            words = shlex.split(command)
+            page = json.loads(subprocess.check_output([sys.executable, "-m", "loopx.entrypoint", "--format", "json",
+                *words[words.index("quota"):]]))
+            assert page["ok"]
+            result.append(page)
+            command = page.get("next_command")
+        return result
+
+    first = pages(navigation("before")["first_read_command"])
+    assert len(first) > 1
+    deliver(tmp_path, event, first[1:] if invalidate == "partial" else first)
+    if invalidate == "compact":
+        codex_context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": "PostCompact"})
+    # A real canonical correction also changes metadata and may switch from a
+    # complete source to a smaller supporting-material projection. Neither is a
+    # change to the seven retained descriptions. Reviews and new controls are.
+    outcome["revision"] += 1
+    outcome["sources"] = [{"ref": "fixture:correction", "summary": "Supporting correction evidence. " * 600}]
+    outcome["requirements"][0]["description"] = "Revised cancellation: never publish the result."
+    outcome["requirements"][1]["status"] = "accepted"
+    outcome["requirements"][2]["new_control"] = "Read the current authorization before acting."
+    outcome["requirements"].append({"id": "new", "description": "A newly required independent check."})
+    if retained == 1:
+        for item in outcome["requirements"][2:8]:
+            item["description"] = "Revised requirement: " + item["description"]
+    current = navigation("after", invalidate != "off")
+    read = pages(current["first_read_command"] if invalidate != "off" else current["recovery"]["command"])
+    if invalidate == "off":
+        assert "first_read_command" not in current
+        assert json.loads("".join(page["content"] for page in read)) == navigated_decision
+        assert all("previously_delivered_fields" not in page for page in read)
+        return
+    body = "".join(page["content"] for page in read)
+    facts = selected_context_values(body)
+    assert facts[prefix + "/revision"] == 2
+    assert facts[prefix + "/requirements/0/description"] == outcome["requirements"][0]["description"]
+    assert facts[prefix + "/requirements/1/status"] == "accepted"
+    assert facts[prefix + "/requirements/2/new_control"] == outcome["requirements"][2]["new_control"]
+    assert facts[prefix + "/requirements/8"] == outcome["requirements"][8]
+    assert facts["/goal_boundary"] == navigated_decision["goal_boundary"]
+    if invalidate != "none" or retained == 1:
+        assert "previously_delivered_fields" not in read[0]
+        assert facts[prefix + "/requirements/1/description"] == outcome["requirements"][1]["description"]
+        return
+    expected = {prefix + f"/requirements/{i}/description" for i in (1, 2)} | {
+        prefix + f"/requirements/{i}" for i in range(3, 8)}
+    assert set(read[0]["previously_delivered_fields"]) >= expected
+    assert prefix + "/requirements/1/description" not in facts
+    cold = pages(current["recovery"]["command"] + " --initial-read")
+    assert len(body.encode()) < sum(len(page["content"].encode()) for page in cold)
+    recovered = pages(current["recovery"]["command"] + " --select " + prefix + "/requirements/1/description")
+    assert selected_context_values("".join(page["content"] for page in recovered))[
+        prefix + "/requirements/1/description"] == outcome["requirements"][1]["description"]
+    before = codex_context._state(tmp_path)["consumed_pointers"][prefix]
+    metadata = json.loads(Path(read[0]["reference_file"]).read_text())
+    metadata["observed_read"]["fields"][next(iter(metadata["observed_read"]["fields"]))] = "f" * 64
+    forged = tmp_path / "forged-reference.json"
+    forged.write_text(json.dumps(metadata))
+    forged.chmod(0o600)
+    deliver(tmp_path, event, [{**page, "reference_file": str(forged)} for page in read])
+    assert codex_context._state(tmp_path)["consumed_pointers"][prefix] == before
+    # Only complete current pages plus authenticated, exact inherited fields
+    # can qualify the revised parent. No full-input baseline is manufactured.
+    with monkeypatch.context() as hook_env:
+        hook_env.delenv("CODEX_THREAD_ID")
+        deliver(tmp_path, event, read[:-1])
+        assert codex_context._state(tmp_path)["consumed_pointers"][prefix] == before
+        deliver(tmp_path, event, read[-1:])
+    assert codex_context._state(tmp_path)["consumed_pointers"][prefix] != before
+    next_read = pages(navigation("continued")["first_read_command"])
+    assert prefix in next_read[0]["previously_delivered_fields"]
+    assert selected_context_values("".join(page["content"] for page in next_read))[prefix + "/revision"] == 2
+
+
 @pytest.mark.parametrize("invalidate", ["compact", "resume", "partial", "task_switch", "off"])
 @pytest.mark.parametrize("coalesced", [False, True])
 def test_native_first_read_reuses_only_observed_current_fields(tmp_path, monkeypatch, navigated_decision, invalidate, coalesced):

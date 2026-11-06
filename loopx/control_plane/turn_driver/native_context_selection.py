@@ -23,9 +23,11 @@ def verified_context_selection(state: dict[str, Any], page: dict[str, Any]) -> d
                   if isinstance(entry := state.get(key), dict)]
     reference_file = page.get("reference_file")
     selected = None
+    observation = None
     if isinstance(reference_file, str):
         _, metadata = read_context_read_reference(reference_file)
         selected = metadata.get("selection")
+        observation = metadata.get("observed_read")
         if not isinstance(selected, dict) or selected.get("list_fields") is not False:
             return None
         path, source_digest = metadata["path"], metadata["sha256"]
@@ -73,6 +75,15 @@ def verified_context_selection(state: dict[str, Any], page: dict[str, Any]) -> d
             or (page.get("eof") is False and (end >= total or page.get("next_offset") != end))
             or type(page.get("eof")) is not bool):
         return None
-    sections = _turn_envelope_result("context_read_sections", context=source, select=pointers)["sections"]
+    inherited = {}
+    if isinstance(observation, dict):
+        from .native_first_read import observation_current
+
+        # The hook already matched its event session/workspace to this journal.
+        # Native hook processes need not inherit the shell's CODEX_THREAD_ID.
+        if observation_current(observation, physical, source_digest, hook_session=state.get("session_id")):
+            inherited = observation["fields"]
+    sections = _turn_envelope_result("context_read_sections", context=source, select=pointers,
+        consumed_pointers=inherited)["sections"]
     return {**page, "schema_version": "context_capture_page_v1", "sha256": view_digest,
         "selected_pointers": pointers, "source_sha256": current["sha256"], "read_sections": sections}
