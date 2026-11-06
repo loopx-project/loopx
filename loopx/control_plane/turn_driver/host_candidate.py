@@ -12,7 +12,13 @@ from hashlib import sha256
 import json
 from typing import Any, cast
 
-from ..quota.turn_envelope import assert_turn_envelope_consumer_version, turn_envelope_action_signature_document
+from ..quota.turn_envelope import (
+    COMPLETE_TURN_HOST_REQUEST_SCHEMA as COMPLETE_TURN_HOST_REQUEST_SCHEMA,
+    LOOPX_TURN_HOST_REQUEST_SCHEMA as LOOPX_TURN_HOST_REQUEST_SCHEMA,
+    assert_turn_envelope_consumer_version, turn_envelope_action_signature_document,
+    captured_turn_host_input, complete_turn_host_source,
+    assert_turn_host_request_version as assert_turn_host_request_version,
+)
 from ..work_items.delivery_batch_scale import DELIVERY_BATCH_SCALE_CHOICES
 from ..work_items.delivery_outcome import DELIVERY_OUTCOME_CHOICES
 from .driver import selected_turn_todo
@@ -21,8 +27,6 @@ from .executor import (
     HOST_RESULT_EVIDENCE_LIMITS,
 )
 
-LOOPX_TURN_HOST_REQUEST_SCHEMA = "loopx_turn_host_request_v0"
-COMPLETE_TURN_HOST_REQUEST_SCHEMA = "loopx_turn_host_request_v1"
 LOOPX_TURN_RESULT_SCHEMA = "loopx_turn_result_v0"
 COMPLETED_PHASES = ["host_execute", "typed_result"]
 
@@ -65,35 +69,6 @@ def _canonical_hash(value: Any) -> str:
     return "sha256:" + sha256(encoded).hexdigest()
 
 
-def _complete_host_source(
-    request: Mapping[str, Any], *, operation: str = "host_context",
-    include_session_lineage: bool = False,
-) -> dict[str, Any] | None:
-    if "schema_version" in request:
-        assert_turn_host_request_version(request)
-    if "work_contract" not in request:
-        return None
-    from ..quota.turn_envelope import _turn_envelope_result
-
-    header = ({"complete_host_request": {key: request[key] for key in (
-        "schema_version", "turn_key", "source_decision_hash", "detail_ref",
-    ) if key in request}} if request.get("schema_version") == COMPLETE_TURN_HOST_REQUEST_SCHEMA else {})
-    return _turn_envelope_result(operation, payload=request["work_contract"],
-                                 envelope=_mapping(request.get("turn_envelope")), **header,
-                                 **({"include_session_lineage": True} if include_session_lineage else {}))
-
-
-def assert_turn_host_request_version(request: Mapping[str, Any]) -> None:
-    """Decode the two published Host transports; neither grants authority."""
-    version = request.get("schema_version")
-    if version not in (LOOPX_TURN_HOST_REQUEST_SCHEMA, COMPLETE_TURN_HOST_REQUEST_SCHEMA):
-        raise ValueError("unsupported LoopX Turn host request schema")
-    if version == COMPLETE_TURN_HOST_REQUEST_SCHEMA and (
-        "work_contract" not in request or "turn_envelope" in request
-    ):
-        raise ValueError("complete Host request requires work_contract without an executor adapter")
-
-
 def execution_profile_present(request: Mapping[str, Any]) -> bool:
     """Read result evidence applicability from the checked admitted source.
 
@@ -101,7 +76,7 @@ def execution_profile_present(request: Mapping[str, Any]) -> bool:
     supplied contract never falls back. Schema and candidate adapters share this
     read, while evidence content validation stays with the result executor.
     """
-    checked = _complete_host_source(request, operation="host_context")
+    checked = complete_turn_host_source(request, operation="host_context")
     if checked is not None:
         return cast(bool, checked["execution_profile_present"])
     envelope = _mapping(request.get("turn_envelope"))
@@ -117,9 +92,9 @@ def complete_host_input(request: Mapping[str, Any]) -> dict[str, Any] | None:
     compacts decision facts or derives a second model-facing authority view.
     Historical requests without a complete contract retain their old decoder.
     """
-    if _complete_host_source(request, operation="host_context") is None:
+    if complete_turn_host_source(request, operation="host_context") is None:
         return None
-    return _captured_model_input(request)
+    return captured_turn_host_input(request)
 
 
 def extract_turn_work_identity(request: Mapping[str, Any]) -> dict[str, Any]:
@@ -130,7 +105,7 @@ def extract_turn_work_identity(request: Mapping[str, Any]) -> dict[str, Any]:
     This read grants no tool or work permission.
     """
     try:
-        checked = _complete_host_source(request, operation="host_dispatch_context")
+        checked = complete_turn_host_source(request, operation="host_dispatch_context")
     except RuntimeError as exc:
         raise ValueError("complete Turn contract rejected") from exc
     if checked is not None:
@@ -145,34 +120,13 @@ def extract_turn_work_identity(request: Mapping[str, Any]) -> dict[str, Any]:
         "todo_id": selected.get("todo_id")}
 
 
-def _captured_model_input(request: Mapping[str, Any]) -> dict[str, Any]:
-    """Transport original-reader metadata after complete-source validation."""
-    envelope = _mapping(request.get("turn_envelope"))
-    model_input = {**{key: value for key, value in request.items() if key != "turn_envelope"},
-                   "schema_version": COMPLETE_TURN_HOST_REQUEST_SCHEMA}
-    detail = _mapping(envelope.get("detail_ref"))
-    captured = _mapping(detail.get("captured_decision"))
-    if captured:
-        model_input["source_decision_hash"] = _mapping(envelope.get("action_signature"))["source_decision_hash"]
-        model_input["detail_ref"] = {
-            "full_decision": detail["full_decision"],
-            "captured_decision": {**captured, "source_hash_ref": "$.source_decision_hash"},
-        }
-        readers = _mapping(detail.get("replan_action_packet"))
-        if readers.get("review"):
-            model_input["detail_ref"]["replan_action_packet"] = {
-                key: value for key, value in readers.items() if key in {"review", "writeback"}
-            }
-    return model_input
-
-
 def extract_turn_authority(
     request: Mapping[str, Any], *, include_session_lineage: bool = False,
 ) -> dict[str, Any]:
     """Use the complete source; decode the old layout for historical input only."""
 
     try:
-        checked = _complete_host_source(request, operation="host_dispatch_context",
+        checked = complete_turn_host_source(request, operation="host_dispatch_context",
                                         include_session_lineage=include_session_lineage)
     except RuntimeError as exc:
         raise ValueError("complete Turn contract rejected") from exc
@@ -188,7 +142,7 @@ def extract_turn_authority(
             "replan_action_packet": decision.get("replan_action_packet") if checked["replan_admitted"] else None,
             "_work_identity": dict(checked["work_identity"]),
             **({"_session_lineage": dict(checked["session_lineage"])} if include_session_lineage else {}),
-            "_model_input": _captured_model_input(request)}
+            "_model_input": captured_turn_host_input(request)}
 
     envelope = _mapping(request.get("turn_envelope"))
     signature = _mapping(envelope.get("action_signature"))

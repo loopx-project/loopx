@@ -985,18 +985,27 @@ provider 后校验保留原 owner。这些调用方修改须分别提供启动�
 成本收益。
 
 共享 Turn Host-request producer 现在也为内置 Host 和注入 callback 选择同一份完整
-v1 输入，与 generic CLI stdin 一致；移除第二 carrier 前先核 private plan 的来源／
-adapter 一致性。原始 capture 发布保持 v1 及不可变 reader header，只有原始历史
+v1 输入，与 generic CLI stdin 一致；先核 private plan 的来源／
+版本一致性，并在 dispatch 前拒绝第二 carrier。原始 capture 发布保持 v1 及不可变 reader header，只有原始历史
 observation 能恢复旧 request codec。没有 journal key 的 quota capture 保留原来源
 Turn 引用；已提供的 journal key 仍须精确匹配，不补造绑定。失败会话恢复检查完整
 来源／header，保留原生 scope、action-hash 数字 codec 和有作用域的 request/replan
 身份。完整输入的 `driver_lineage` reader 现在直接消费已校验的 action facts，不再
 重新生成 v0 adapter、cold reader 命令或 compaction 诊断。两种 reader 共享同一
 route 和 scoped-identity 规则；历史 envelope 保留自己的版本／签名证明与 scalar codec。
-private plan/journal 仍保留 adapter；退出这个恢复 caller 不等于退出该 writer 或全部
-Core adapter。实际 dispatch、恢复／重放和来源校验／派生成本分别验收；bridge 流量
+当前 v1 private plan/journal 保存完整契约及原始来源绑定，不再保存 executor adapter；
+历史 v0 journal 保留自己的 decoder。这不等于退出全部 Core adapter。
+实际 dispatch、恢复／重放和来源校验／派生成本分别验收；bridge 流量
 相同不代表测得延迟收益，原已完整的模型输入不再算一次压缩收益，也不建立原 quota
 成果资格。
+
+薄的来源 header、计划选择和 lineage 传输现归既有 `quota.turn_envelope` adapter。
+捕获、journal、lane 和身份读取器直接使用它，不再导入上层 driver 或 Host 结果转换器。
+已发布的 driver／Host 导出保留显式别名，三个旧私有 helper 实现删除；来源／版本拒绝、
+精确数字、历史恢复及只结算一次仍走原 TypeScript owner 和原 wire 版本。
+未改变严格配置和 import 跟随后，配置内 17 个 Python 检查入口在空缓存下通过。
+这只资格该配置边界，不表示修完全部被导入 Python 模块，也不建立运行性能、整体 C1
+或父 PR 已显著缩小的结论。
 
 C1 盘点是可用替换的一部分，不单独建设架构框架。C1 契约稳定后，C3/C4/C5 可以独立
 推进；C7 可以提前准备测量，但不能提前宣称双会话成果。实现 PR 列明替换的调用方、剩余

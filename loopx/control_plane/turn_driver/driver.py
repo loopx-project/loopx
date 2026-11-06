@@ -19,6 +19,12 @@ from .subagent_execution_topology import (
     build_subagent_execution_topology,
 )
 from ..quota.turn_envelope import (
+    COMPLETE_TURN_PLAN_SCHEMA_VERSION as COMPLETE_TURN_PLAN_SCHEMA_VERSION,
+    selected_turn_todo as selected_turn_todo,
+    read_turn_plan_work as read_turn_plan_work,
+    turn_host_lineage as turn_host_lineage,
+    LOOPX_TURN_PLAN_SCHEMA_VERSION as LOOPX_TURN_PLAN_SCHEMA_VERSION,
+    captured_turn_host_input, turn_plan_host_source,
     assert_turn_envelope_consumer_version,
     _turn_envelope_result,
     turn_envelope_scoped_settlement_identity,
@@ -29,8 +35,6 @@ from ..scheduler.execution_context import (
 from .transaction import build_loopx_turn_transaction_plan
 
 
-LOOPX_TURN_PLAN_SCHEMA_VERSION = "loopx_turn_plan_v0"
-COMPLETE_TURN_PLAN_SCHEMA_VERSION = "loopx_turn_plan_v1"
 LOOPX_TURN_SESSION_BINDING_SCHEMA_VERSION = "loopx_turn_session_binding_v0"
 LOOPX_ITERATION_CONTEXT_POLICY_SCHEMA_VERSION = (
     "loopx_iteration_context_policy_v0"
@@ -90,23 +94,6 @@ def _typed_route(envelope: Mapping[str, Any]) -> LoopXTurnRoute:
     )["route"])
 
 
-def selected_turn_todo(envelope: Mapping[str, Any]) -> dict[str, Any]:
-    """Transport historical selection to the shared work/settlement owner.
-
-    Only Python's original scalar codec remains here. Pure source edits retain
-    unknown fields and exact numbers without another JSON value decoder.
-    """
-    from ..quota.cli_projection import _apply_context_projection_changes
-
-    orchestration = _mapping(envelope.get("task_orchestration_contract"))
-    source = {"selected_todo": _mapping(_mapping(envelope.get("action")).get("selected_todo")),
-              "task_orchestration_contract": orchestration}
-    edits = _turn_envelope_result("selected_work_todo", payload=source,
-        historical_primary_text=str(orchestration.get("primary_todo_id") or "").strip())
-    selected: dict[str, Any] = _apply_context_projection_changes(source, edits)["selected_todo"]
-    return selected
-
-
 def captured_todo_text_sha256(
     envelope: Mapping[str, Any], *, todo_id: str,
     work_contract: object = _ABSENT_WORK_CONTRACT,
@@ -131,9 +118,9 @@ def read_turn_execution_context(
     """Read complete execution facts in one call; decode old journals as before."""
     if plan.get("schema_version") == COMPLETE_TURN_PLAN_SCHEMA_VERSION or "work_contract" in plan:
         try:
-            from .host_candidate import _complete_host_source
+            from ..quota.turn_envelope import complete_turn_host_source
 
-            result = _complete_host_source(_host_source_carriers(plan), operation="execution_context")
+            result = complete_turn_host_source(turn_plan_host_source(plan), operation="execution_context")
             assert result is not None
         except EffectRuntimeRejected as exc:
             raise ValueError(str(exc)) from exc
@@ -149,49 +136,6 @@ def read_turn_execution_context(
         "writeback": envelope.get("writeback") if isinstance(envelope.get("writeback"), dict) else {},
         "replan_guard_scoped": "replan_action_packet" in envelope,
         "replan_action_packet": envelope.get("replan_action_packet"),
-    }
-
-
-def _host_source_carriers(request: Mapping[str, Any]) -> Mapping[str, Any]:
-    # Result validation and completion also read the private plan. Its schema
-    # is not a model wire version; adapt only its existing source carriers.
-    if request.get("schema_version") == COMPLETE_TURN_PLAN_SCHEMA_VERSION:
-        if "work_contract" not in request or "turn_envelope" in request or "source_decision_hash" not in request:
-            raise ValueError("complete Turn plan requires one source without an executor adapter")
-        return {"schema_version": "loopx_turn_host_request_v1",
-                "turn_key": _mapping(request.get("transaction")).get("turn_key"),
-                **{key: request[key] for key in ("work_contract", "source_decision_hash", "detail_ref")
-                   if key in request}}
-    return ({key: request[key] for key in ("work_contract", "turn_envelope") if key in request}
-            if request.get("schema_version") == LOOPX_TURN_PLAN_SCHEMA_VERSION else request)
-
-
-def read_turn_plan_work(plan: Mapping[str, Any]) -> dict[str, Any]:
-    """Read checked execution facts; current plans never regenerate a v0 view."""
-    if plan.get("schema_version") == COMPLETE_TURN_PLAN_SCHEMA_VERSION or "work_contract" in plan:
-        from .host_candidate import _complete_host_source
-
-        result = _complete_host_source(_host_source_carriers(plan), operation="plan_work")
-        assert result is not None
-        return result
-    if plan.get("schema_version") not in (None, LOOPX_TURN_PLAN_SCHEMA_VERSION):
-        raise ValueError("unsupported Turn plan version")
-    return _mapping(plan.get("turn_envelope"))
-
-
-def turn_host_lineage(request: Mapping[str, Any]) -> dict[str, str]:
-    """Read identity from the complete owner, with historical request decoding."""
-    from .host_candidate import _complete_host_source
-
-    checked = _complete_host_source(_host_source_carriers(request), operation="complete_host_lineage")
-    if checked is not None:
-        return checked
-    envelope = _mapping(request.get("turn_envelope"))
-    todo = selected_turn_todo(envelope)
-    return {
-        "goal_id": str(envelope.get("goal_id") or "").strip(),
-        "agent_id": str(envelope.get("agent_id") or "").strip(),
-        "todo_id": str(todo.get("todo_id") or "").strip(),
     }
 
 
@@ -332,9 +276,9 @@ def reconcile_failed_turn_session_request(
 
     envelope = _mapping(request.get("turn_envelope"))
     try:
-        from .host_candidate import _complete_host_source
+        from ..quota.turn_envelope import complete_turn_host_source
 
-        projection = _complete_host_source(_host_source_carriers(request), operation="driver_lineage")
+        projection = complete_turn_host_source(turn_plan_host_source(request), operation="driver_lineage")
         if projection is None:
             projection = _turn_envelope_result(
                 "driver_lineage", envelope=envelope,
@@ -668,9 +612,7 @@ def build_loopx_turn_plan(
         if not source_only_input:
             # Older callers may already carry an original quota capture. Keep
             # its exact header without retaining that caller's second source.
-            from .host_candidate import _captured_model_input
-
-            header = _captured_model_input({"turn_envelope": supplied})
+            header = captured_turn_host_input({"turn_envelope": supplied})
             if "detail_ref" in header:
                 payload["detail_ref"] = header["detail_ref"]
     else:

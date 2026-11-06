@@ -328,12 +328,12 @@ def _checked_prompt_context(
     from ..quota.turn_envelope import assert_turn_envelope_consumer_version
 
     envelope = _mapping(request.get("turn_envelope"))
-    from .host_candidate import _complete_host_source
+    from ..quota.turn_envelope import complete_turn_host_source
 
     # The complete owner checks the adapter version, source and lineage in one
     # call. Keep the standalone version gate only for historical requests.
     try:
-        checked = _complete_host_source(request, operation="host_dispatch_context",
+        checked = complete_turn_host_source(request, operation="host_dispatch_context",
                                         include_session_lineage=include_session_lineage)
     except RuntimeError:
         # Preserve the historical diagnostic precedence for doubly malformed
@@ -360,10 +360,10 @@ def prepare_codex_cli_input(request: Mapping[str, Any]) -> tuple[str, dict[str, 
 
 def _render_prompt(request: Mapping[str, Any], *, checked: Mapping[str, Any] | None) -> str:
     from ..quota.turn_envelope import assert_turn_envelope_consumer_version
-    from .host_candidate import _captured_model_input
+    from ..quota.turn_envelope import captured_turn_host_input
 
     envelope = _mapping(request.get("turn_envelope"))
-    complete_input = _captured_model_input(request) if checked is not None else None
+    complete_input = captured_turn_host_input(request) if checked is not None else None
     complete = complete_input is not None
     if not complete:
         assert_turn_envelope_consumer_version(envelope)

@@ -1014,7 +1014,7 @@ def observe_subagent_host_result(
     reconciliation = reconcile_subagent_execution(topology, receipts)
     if reconciliation is not None:
         normalized["subagent_reconciliation"] = reconciliation
-        from .driver import read_turn_plan_work
+        from ..quota.turn_envelope import read_turn_plan_work
 
         context = envelope_agent_context(
             read_turn_plan_work(plan),

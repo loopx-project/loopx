@@ -223,7 +223,7 @@ def test_complete_todoless_scoped_recovery_preserves_its_original_identity(
 ):
     from loopx.control_plane.quota.settlement import build_turn_scoped_cli_settlement_plan
     from loopx.control_plane.turn_driver import codex_sessions
-    from loopx.control_plane.turn_driver.host_candidate import _complete_host_source
+    from loopx.control_plane.quota.turn_envelope import complete_turn_host_source
 
     _legacy, original = complete_host_request
     goal, agent, obligation = original["goal_id"], original["agent_identity"]["agent_id"], "replan-" + "a" * 16
@@ -252,7 +252,7 @@ def test_complete_todoless_scoped_recovery_preserves_its_original_identity(
     codex_sessions._store_codex_cli_session(runtime, lineage=turn_host_lineage(wire),
         session_scope="agent", session_id="original-replan-session")
     stored = {p: p.read_bytes() for p in runtime.rglob("*.json")}
-    assert _complete_host_source(wire, operation="driver_lineage")["scoped_settlement_identity"] == settlement["identity"]
+    assert complete_turn_host_source(wire, operation="driver_lineage")["scoped_settlement_identity"] == settlement["identity"]
     recovered = reconcile_failed_turn_session_request(wire, session_binding=binding)
     assert recovered["session"]["action"] == "resume"
     assert codex_sessions.select_codex_cli_session(runtime, lineage=turn_host_lineage(recovered),
@@ -264,7 +264,7 @@ def test_complete_todoless_scoped_recovery_preserves_its_original_identity(
 
 def test_complete_recovery_retains_the_original_number_codec_and_action_hash(complete_host_request):
     from loopx.control_plane.turn_driver.driver import _turn_lineage
-    from loopx.control_plane.turn_driver.host_candidate import _complete_host_source
+    from loopx.control_plane.quota.turn_envelope import complete_turn_host_source
 
     _legacy, original = complete_host_request
     source = deepcopy({key: value for key, value in original.items()
@@ -276,7 +276,7 @@ def test_complete_recovery_retains_the_original_number_codec_and_action_hash(com
     # The retained v0 codec is an independent numeric/hash oracle; the current
     # private plan intentionally has no such carrier.
     expected = _turn_lineage(build_turn_envelope(contract), work_contract=contract)
-    checked = _complete_host_source(request, operation="driver_lineage")
+    checked = complete_turn_host_source(request, operation="driver_lineage")
     assert _turn_lineage({}, work_contract=contract, projection=checked) == expected
 
 

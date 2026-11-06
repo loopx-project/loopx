@@ -129,7 +129,7 @@ def load_loopx_turn_plan_from_journal(
     )
     if transaction.get("turn_key") != turn_key or journal.get("turn_key") != turn_key:
         raise ValueError("LoopX Turn resume journal has mismatched turn lineage")
-    from .driver import COMPLETE_TURN_PLAN_SCHEMA_VERSION, turn_host_lineage
+    from ..quota.turn_envelope import COMPLETE_TURN_PLAN_SCHEMA_VERSION, turn_host_lineage
 
     if plan.get("schema_version") == COMPLETE_TURN_PLAN_SCHEMA_VERSION or "work_contract" in plan:
         # Recorded transitional plans must check their supplied complete source,

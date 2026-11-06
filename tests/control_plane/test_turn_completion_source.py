@@ -15,7 +15,6 @@ from loopx.cli import main
 from loopx.control_plane.turn_driver import executor
 from loopx.control_plane.turn_driver.driver import captured_todo_text_sha256
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
-from tests.control_plane import canonical_authority_fixture
 from tests.test_loopx_turn_driver import (
     _completion_host_and_validation_scripts,
     _turn_journal,
@@ -117,7 +116,7 @@ def test_context_witness_preserves_legacy_requests_and_markdown_obligations() ->
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("accepted_before_upgrade", [False, True])
-def test_native_legacy_turn_recovers_history_but_cannot_complete_without_source(
+def test_native_pre_witness_turn_recovers_history_but_cannot_complete_without_source(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     provider: str,
@@ -195,9 +194,13 @@ def test_native_legacy_turn_recovers_history_but_cannot_complete_without_source(
         return
     assert result["error"] == "Synthetic old-writer response loss", result
     journal = _turn_journal(runtime)
-    assert (
-        "text_source_verified"
-        not in journal["plan"]["turn_envelope"]["action"]["selected_todo"]
+    # A pre-witness source is independent of the private plan wire version.
+    # Today's producer records v1; explicit v0 journal recovery has its own
+    # File/SQLite matrix in test_complete_turn_journal.py.
+    assert journal["plan"]["schema_version"] == "loopx_turn_plan_v1"
+    assert "turn_envelope" not in journal["plan"]
+    assert "selected_todo_text_verified" not in (
+        journal["plan"]["work_contract"]["interaction_contract"]["agent_channel"]["work_context"]
     )
     resumed_code, resumed = _cli(
         [], *argv[:-1], "--resume-turn-key", str(journal["turn_key"]), "--execute"
@@ -471,10 +474,9 @@ def test_native_turn_recovers_accepted_completion_before_checking_new_text(
             # The public authoring path intentionally forbids replacing a done
             # task. Inject a later synthetic provider head in this disposable
             # store to challenge the recovery adapter, retaining its receipt.
-            module = (
-                Path(canonical_authority_fixture.__file__).resolve().parents[2]
-                / "loopx/control_plane/coordination"
-            )
+            import loopx
+
+            module = Path(loopx.__file__).resolve().parent / "control_plane/coordination"
             script = (
                 f"import {{openLocalAuthorityStore}} from {json.dumps((module / 'local_authority_provider.ts').as_uri())};"
                 f"import {{prepareCoordinationProjectionCommit}} from {json.dumps((module / 'coordination_projection.ts').as_uri())};"
@@ -546,7 +548,7 @@ def test_native_turn_recovers_accepted_completion_before_checking_new_text(
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("no_followup", [False, True])
-@pytest.mark.parametrize("replacement", ["source", "adapter"])
+@pytest.mark.parametrize("replacement", ["source", "mixed_adapter"])
 def test_native_completion_refuses_replaced_source_before_effects_then_recovers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     provider: str, no_followup: bool, replacement: str,
@@ -571,7 +573,12 @@ def test_native_completion_refuses_replaced_source_before_effects_then_recovers(
         if replacement == "source":
             changed["work_contract"]["reason"] = "Replaced after independent validation."
         else:
-            changed["turn_envelope"]["writeback"]["next_cli_actions"] = ["foreign effect"]
+            # The v1 writer has already retired this second carrier. Inject
+            # one deliberately so the actual settlement boundary must refuse
+            # mixed authority, rather than failing inside the fixture.
+            assert plan["schema_version"] == "loopx_turn_plan_v1"
+            assert "turn_envelope" not in plan
+            changed["turn_envelope"] = {"writeback": {"next_cli_actions": ["foreign effect"]}}
         return actual_stage(changed, *args, **kwargs)
 
     monkeypatch.setattr(executor, "_typed_settlement_stage", replace_after_execution)

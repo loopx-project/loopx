@@ -427,7 +427,8 @@ def _reference_context(
         source["replan_action_packet"] = payload["replan_action_packet"]
     if goal_acceptance:
         source.update({key: payload[key] for key in ("planning_horizon", "autonomous_replan_obligation") if key in payload})
-    if isinstance(context, dict) and isinstance(context.get("sources"), list):
+    if (isinstance(contract, dict) and isinstance(agent, dict)
+            and isinstance(context, dict) and isinstance(context.get("sources"), list)):
         # Edits address rows by their original index. An unrelated source has
         # no fields read by this projection; its complete body stays local.
         rows = [row if isinstance(row, dict) and (

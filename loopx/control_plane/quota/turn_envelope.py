@@ -48,6 +48,119 @@ def _turn_envelope_result(
     return dict(result)
 
 
+LOOPX_TURN_PLAN_SCHEMA_VERSION = "loopx_turn_plan_v0"
+COMPLETE_TURN_PLAN_SCHEMA_VERSION = "loopx_turn_plan_v1"
+LOOPX_TURN_HOST_REQUEST_SCHEMA = "loopx_turn_host_request_v0"
+COMPLETE_TURN_HOST_REQUEST_SCHEMA = "loopx_turn_host_request_v1"
+
+
+def _wire_mapping(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def turn_plan_host_source(request: Mapping[str, Any]) -> Mapping[str, Any]:
+    # Result validation and completion also read the private plan. Its schema
+    # is not a model wire version; adapt only its existing source carriers.
+    if request.get("schema_version") == COMPLETE_TURN_PLAN_SCHEMA_VERSION:
+        if "work_contract" not in request or "turn_envelope" in request or "source_decision_hash" not in request:
+            raise ValueError("complete Turn plan requires one source without an executor adapter")
+        return {"schema_version": "loopx_turn_host_request_v1",
+                "turn_key": _wire_mapping(request.get("transaction")).get("turn_key"),
+                **{key: request[key] for key in ("work_contract", "source_decision_hash", "detail_ref")
+                   if key in request}}
+    return ({key: request[key] for key in ("work_contract", "turn_envelope") if key in request}
+            if request.get("schema_version") == LOOPX_TURN_PLAN_SCHEMA_VERSION else request)
+
+
+def captured_turn_host_input(request: Mapping[str, Any]) -> dict[str, Any]:
+    """Transport original-reader metadata after complete-source validation."""
+    envelope = _wire_mapping(request.get("turn_envelope"))
+    model_input = {**{key: value for key, value in request.items() if key != "turn_envelope"},
+                   "schema_version": COMPLETE_TURN_HOST_REQUEST_SCHEMA}
+    detail = _wire_mapping(envelope.get("detail_ref"))
+    captured = _wire_mapping(detail.get("captured_decision"))
+    if captured:
+        model_input["source_decision_hash"] = _wire_mapping(envelope.get("action_signature"))["source_decision_hash"]
+        model_input["detail_ref"] = {
+            "full_decision": detail["full_decision"],
+            "captured_decision": {**captured, "source_hash_ref": "$.source_decision_hash"},
+        }
+        readers = _wire_mapping(detail.get("replan_action_packet"))
+        if readers.get("review"):
+            model_input["detail_ref"]["replan_action_packet"] = {
+                key: value for key, value in readers.items() if key in {"review", "writeback"}
+            }
+    return model_input
+
+
+def assert_turn_host_request_version(request: Mapping[str, Any]) -> None:
+    """Decode the two published Host transports; neither grants authority."""
+    version = request.get("schema_version")
+    if version not in (LOOPX_TURN_HOST_REQUEST_SCHEMA, COMPLETE_TURN_HOST_REQUEST_SCHEMA):
+        raise ValueError("unsupported LoopX Turn host request schema")
+    if version == COMPLETE_TURN_HOST_REQUEST_SCHEMA and (
+        "work_contract" not in request or "turn_envelope" in request
+    ):
+        raise ValueError("complete Host request requires work_contract without an executor adapter")
+
+
+def complete_turn_host_source(
+    request: Mapping[str, Any], *, operation: str = "host_context",
+    include_session_lineage: bool = False,
+) -> dict[str, Any] | None:
+    if "schema_version" in request:
+        assert_turn_host_request_version(request)
+    if "work_contract" not in request:
+        return None
+    header = ({"complete_host_request": {key: request[key] for key in (
+        "schema_version", "turn_key", "source_decision_hash", "detail_ref",
+    ) if key in request}} if request.get("schema_version") == COMPLETE_TURN_HOST_REQUEST_SCHEMA else {})
+    return _turn_envelope_result(operation, payload=request["work_contract"],
+                                 envelope=_wire_mapping(request.get("turn_envelope")), **header,
+                                 **({"include_session_lineage": True} if include_session_lineage else {}))
+
+
+def selected_turn_todo(envelope: Mapping[str, Any]) -> dict[str, Any]:
+    """Transport historical selection to the shared work/settlement owner.
+
+    Only Python's original scalar codec remains here. Pure source edits retain
+    unknown fields and exact numbers without another JSON value decoder.
+    """
+    from ..quota.cli_projection import _apply_context_projection_changes
+
+    orchestration = _wire_mapping(envelope.get("task_orchestration_contract"))
+    source = {"selected_todo": _wire_mapping(_wire_mapping(envelope.get("action")).get("selected_todo")),
+              "task_orchestration_contract": orchestration}
+    edits = _turn_envelope_result("selected_work_todo", payload=source,
+        historical_primary_text=str(orchestration.get("primary_todo_id") or "").strip())
+    selected: dict[str, Any] = _apply_context_projection_changes(source, edits)["selected_todo"]
+    return selected
+
+
+def read_turn_plan_work(plan: Mapping[str, Any]) -> dict[str, Any]:
+    """Read checked execution facts; current plans never regenerate a v0 view."""
+    if plan.get("schema_version") == COMPLETE_TURN_PLAN_SCHEMA_VERSION or "work_contract" in plan:
+        result = complete_turn_host_source(turn_plan_host_source(plan), operation="plan_work")
+        assert result is not None
+        return result
+    if plan.get("schema_version") not in (None, LOOPX_TURN_PLAN_SCHEMA_VERSION):
+        raise ValueError("unsupported Turn plan version")
+    return _wire_mapping(plan.get("turn_envelope"))
+
+
+def turn_host_lineage(request: Mapping[str, Any]) -> dict[str, str]:
+    """Read identity from the complete owner, with historical request decoding."""
+    checked = complete_turn_host_source(turn_plan_host_source(request), operation="complete_host_lineage")
+    if checked is not None:
+        return checked
+    envelope = _wire_mapping(request.get("turn_envelope"))
+    todo = selected_turn_todo(envelope)
+    return {
+        "goal_id": str(envelope.get("goal_id") or "").strip(),
+        "agent_id": str(envelope.get("agent_id") or "").strip(),
+        "todo_id": str(todo.get("todo_id") or "").strip(),
+    }
+
 
 def assert_turn_envelope_consumer_version(envelope: Mapping[str, Any]) -> None:
     """Use the typed wire-version gate before any Host consumes this packet."""

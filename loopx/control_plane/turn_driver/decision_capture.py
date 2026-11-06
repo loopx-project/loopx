@@ -136,10 +136,10 @@ class StagedTurnDecisionCapture:
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         """Install the published original input without changing recovery bindings."""
         plan = self.publish()
-        from .driver import COMPLETE_TURN_PLAN_SCHEMA_VERSION, _host_source_carriers
+        from ..quota.turn_envelope import COMPLETE_TURN_PLAN_SCHEMA_VERSION, turn_plan_host_source
 
         if plan.get("schema_version") == COMPLETE_TURN_PLAN_SCHEMA_VERSION:
-            bound_request = {**request, **_host_source_carriers(plan)}
+            bound_request = {**request, **turn_plan_host_source(plan)}
             bound_request.pop("turn_envelope", None)
             return plan, bound_request
         bound_request = {**request, "turn_envelope": plan["turn_envelope"]}
@@ -149,15 +149,15 @@ class StagedTurnDecisionCapture:
         else:
             # Only an original historical absence can clear the current input.
             bound_request.pop("work_contract", None)
-        from .host_candidate import COMPLETE_TURN_HOST_REQUEST_SCHEMA, _captured_model_input
+        from ..quota.turn_envelope import COMPLETE_TURN_HOST_REQUEST_SCHEMA, captured_turn_host_input
 
         if request.get("schema_version") == COMPLETE_TURN_HOST_REQUEST_SCHEMA:
             if "work_contract" in plan:
-                bound_request = _captured_model_input(bound_request)
+                bound_request = captured_turn_host_input(bound_request)
             else:
                 # The immutable original observation, not a bad current source,
                 # owns restoration of a historical request version.
-                from .host_candidate import LOOPX_TURN_HOST_REQUEST_SCHEMA
+                from ..quota.turn_envelope import LOOPX_TURN_HOST_REQUEST_SCHEMA
 
                 bound_request["schema_version"] = LOOPX_TURN_HOST_REQUEST_SCHEMA
                 bound_request.pop("source_decision_hash", None)
@@ -175,10 +175,10 @@ def stage_turn_decision_capture(
     observation cannot be reconstructed from today's guard. Already committed
     journals remain readable through ordinary no-effect replay.
     """
-    from .driver import COMPLETE_TURN_PLAN_SCHEMA_VERSION, _host_source_carriers
+    from ..quota.turn_envelope import COMPLETE_TURN_PLAN_SCHEMA_VERSION, turn_plan_host_source
 
     current = plan.get("schema_version") == COMPLETE_TURN_PLAN_SCHEMA_VERSION
-    envelope = _host_source_carriers(plan) if current else plan["turn_envelope"]
+    envelope = turn_plan_host_source(plan) if current else plan["turn_envelope"]
     transaction = plan["transaction"]
     path = journal_path.parent / "decisions" / journal_path.name
     capture = envelope.get("detail_ref", {}).get("captured_decision")

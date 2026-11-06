@@ -1228,8 +1228,8 @@ or establish original-quota outcome/full-cost benefit.
 
 The shared Turn Host-request producer now selects that same complete v1 input
 for built-in Hosts and injected callbacks as well as generic CLI stdin. It
-checks the private plan's source/adapter consistency before removing the second
-carrier. Original-capture publication preserves v1 and its immutable reader
+checks the private plan's source/version consistency and refuses a second
+carrier before dispatch. Original-capture publication preserves v1 and its immutable reader
 header; only an original historical observation can restore the old request
 codec. A quota capture without a journal key retains its original source-Turn
 reference; provided journal keys still match exactly, without a fabricated binding.
@@ -1239,11 +1239,23 @@ Its complete-input `driver_lineage` reader now consumes the checked action facts
 directly, without regenerating a v0 adapter, cold reader commands or compaction
 diagnostics. Both readers share the same route and scoped-identity rules;
 historical envelopes retain their own version/signature proof and scalar codec.
-Private plans/journals still retain their adapter: retiring this recovery caller
-does not retire that writer or all Core adapters. Qualify actual dispatch,
+Current v1 private plans/journals retain the complete contract and its original
+source binding, without an executor adapter; historical v0 journals retain their
+own decoder. This does not retire all Core adapters. Qualify actual dispatch,
 recovery/replay and source-check/derivation costs separately. Unchanged bridge
 traffic is not a measured latency gain; already-complete model input is not
 another compression gain or original-quota outcome qualification.
+
+Thin source-header, plan-selection and lineage transports now live in the
+existing `quota.turn_envelope` adapter. Capture, journal, lane and identity
+readers use that adapter directly, without importing the higher-level driver
+or Host-result converter. Published driver/Host exports remain explicit aliases;
+the three former private helper implementations are removed. Source/version
+refusal, exact numbers, historical recovery and once-only settlement still use
+the same TypeScript owner and wire versions. The configured 17-root Python
+typecheck passes with a fresh cache and unchanged strict/import settings. This
+qualifies that configured boundary, not every imported Python module, runtime
+performance, whole C1 or a significant reduction of the parent PR.
 
 C1's inventory is part of its usable replacement, not a standalone architecture
 framework. C3/C4/C5 can proceed independently once C1's contract is stable;

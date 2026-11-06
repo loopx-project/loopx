@@ -37,8 +37,9 @@ from .command_validation import (
     normalize_reward_memory_reflection_validation,
     reward_memory_reflection_digest,
 )
+from ..quota.turn_envelope import turn_plan_host_source
 from .driver import (
-    COMPLETE_TURN_PLAN_SCHEMA_VERSION, _host_source_carriers,
+    COMPLETE_TURN_PLAN_SCHEMA_VERSION,
     selected_turn_todo, turn_host_lineage,
 )
 from .decision_capture import stage_turn_decision_capture
@@ -180,7 +181,7 @@ def build_loopx_turn_host_request(plan: Mapping[str, Any]) -> dict[str, Any]:
     }
     if plan.get("schema_version") == COMPLETE_TURN_PLAN_SCHEMA_VERSION:
         request.pop("turn_envelope")
-        request.update(_host_source_carriers(plan))
+        request.update(turn_plan_host_source(plan))
     if "work_contract" in plan:
         # Presence selects the current reader, including malformed values.
         # The checked source below must refuse them, never select legacy input.
@@ -829,9 +830,9 @@ def _run_host(
     # Dispatch has checked the source and its internal effect adapter before
     # journal/cadence admission. External stdin gets the same single complete
     # input as native model prompts, not another executable authority carrier.
-    from .host_candidate import _captured_model_input
+    from ..quota.turn_envelope import captured_turn_host_input
 
-    host_input = _captured_model_input(request) if "work_contract" in request else request
+    host_input = captured_turn_host_input(request) if "work_contract" in request else request
     stdout: list[str] = []
     stderr_chars = 0
 
@@ -1652,13 +1653,13 @@ def run_loopx_turn_once(
             decision=decision_capture_payload, existing_journal=journal is not None,
         ) if require_decision_capture and needs_host else None
         if needs_host:
-            from .host_candidate import _complete_host_source
+            from ..quota.turn_envelope import complete_turn_host_source
 
             # Check the exact input selected for publication before reserving
             # an automatic start or writing a new journal/capture. A refusal
             # must not put otherwise eligible work into an interval wait.
             # Saved typed results retain their original finalization path.
-            _complete_host_source(
+            complete_turn_host_source(
                 build_loopx_turn_host_request(capture.plan) if capture is not None else request,
                 operation="host_dispatch_context",
             )

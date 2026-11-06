@@ -5,7 +5,36 @@
 - **Source:** original candidate `648104978fdd67176cccdbb765c5bc3f36bf2ca3`, integrated with target `e8f4c6f8125e3cc0ef912afac653d5542671392f`.
 - **Language mirror:** [中文版](2026-10-30-c1-source-convergence.zh-CN.md)
 
-## Current extraction: complete replan authoring
+## Current dependency repair: source transport below the driver
+
+C1 integrates main `8eb707d47a4d`. Its configured Python check originally
+reported 4,562 errors in 463 files: low-level capture and journal readers imported
+the driver/Host-result converter for thin source and identity helpers. Those
+seven helpers now use the existing `quota.turn_envelope` transport directly;
+three old private implementations are removed and published exports remain
+aliases. The TypeScript decision owner, wire versions, source refusals, exact
+numbers, historical recovery and once-only settlement are unchanged.
+
+The same configured 17 roots pass with incremental checking disabled and an
+isolated empty cache; strict settings and import following were not weakened.
+Full control-plane TypeScript checking also passes. This is a repaired import
+boundary, not a claim to fix typing in every formerly reachable module or to
+improve runtime performance. The broad source run records 627 passes, six
+fixture failures and four skips. A clean integrated baseline reproduces the
+same six failures: fixtures access a retired second `turn_envelope` carrier.
+Corrected fixtures exercise the current producer's missing-witness recovery and
+deliberately injected mixed authority; all 36 module cases pass. An earlier
+independent installed-wheel run passes 100 cases; final package validation of
+the corrected fixtures remains pending at this authoring checkpoint.
+
+Independent review, quality/readiness, full provider coverage, natural adoption
+and whole C1 acceptance remain open. This repair does not establish a new
+efficiency result or significantly shrink the parent PR. Independent proposals
+#8192 and #8186 have since landed on main; integration and qualification of that
+new composition remain separate from the measurements above. Historical
+bilingual experiments stay together.
+
+## Previous extraction: complete replan authoring
 
 Both author proposals integrate main `d0985c35aa`. [PR #8192](https://github.com/loopx-project/loopx/pull/8192)
 extracts C1's existing same-response authoring owner into main, removes Python's

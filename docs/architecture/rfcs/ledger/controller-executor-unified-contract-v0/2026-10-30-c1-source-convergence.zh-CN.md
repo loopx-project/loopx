@@ -5,7 +5,27 @@
 - **来源：** 原候选 `648104978fdd67176cccdbb765c5bc3f36bf2ca3`，集成目标 `e8f4c6f8125e3cc0ef912afac653d5542671392f`。
 - **语言镜像：** [English](2026-10-30-c1-source-convergence.md)
 
-## 当前拆分：完整重规划 authoring
+## 当前依赖修复：来源传输位于 driver 下层
+
+C1 集成 main `8eb707d47a4d`。配置内 Python 检查原先报 463 文件中的 4,562 条错误：
+低层捕获和 journal 读取器为薄的来源与身份 helper 导入了 driver／Host 结果转换器。
+这七个 helper 现直接使用既有 `quota.turn_envelope` 传输层；删除三个旧私有实现，
+已发布导出保留别名。TypeScript 决策 owner、wire 版本、来源拒绝、精确数字、
+历史恢复和只结算一次保持不变。
+
+同一配置的 17 个入口在禁用增量检查、隔离空缓存后通过，未放宽严格配置或 import
+跟随。完整控制面 TypeScript 检查也通过。这是依赖边界修复，不表示修完此前可达的
+全部模块类型，也不宣称运行性能收益。较广源码运行记录 627 通过、六个夹具失败、
+四个跳过；干净集成基线复现相同六个失败，均为夹具访问已退役的第二份
+`turn_envelope` carrier。修正后真正检验当前 producer 的缺 witness 恢复和故意注入
+混合 authority，模块 36 项全部通过。较早的独立安装 wheel 100 项通过；本作者检查点
+中，包含修正夹具的最终安装包验证仍待完成。
+
+独立评审、质量／readiness、完整 provider、自然采用和整体 C1 验收仍开放。
+本修复不建立新的效率结果，也未显著缩小父 PR。独立提案 #8192 和 #8186 随后已合入
+main；新组合的集成和验收与上文实测分列。历史双语实验继续整组保留。
+
+## 上一次拆分：完整重规划 authoring
 
 两个作者提案均集成 main `d0985c35aa`。[PR #8192](https://github.com/loopx-project/loopx/pull/8192)
 把 C1 既有的同响应 authoring owner 独立提到 main，删除 Python 重复比较，恢复普通、
