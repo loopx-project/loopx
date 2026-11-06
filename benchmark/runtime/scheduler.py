@@ -150,8 +150,11 @@ def resume_state_file(state_file: str, *, phase_deadline: float, agent_id: str,
         recovery = state.get("interruption_recovery")
         can_continue_stopped_phase = (isinstance(prior, dict) and prior.get("status") == "stopped"
                                       and prior.get("stop_exit_code") == BUDGET_EXHAUSTED_EXIT_CODE)
-        if (recovery is not None and state.get("recovery_handoff") != handoff
-                and (recovery.get("phase_deadline_epoch") == phase_deadline or not can_continue_stopped_phase)):
+        requested_suffix = hashlib.sha256(float(phase_deadline).hex().encode()).hexdigest()[:20]
+        same_phase = predecessor.name == f"{path.stem}.phase-{requested_suffix}{path.suffix}"
+        if ((recovery is not None or state.get("resume_from"))
+                and state.get("recovery_handoff") != handoff
+                and (same_phase or not can_continue_stopped_phase)):
             raise ValueError("Recovered phase handoff is immutable; preserve its exact input")
         if (recovery is not None and recovery.get("phase_deadline_epoch") != phase_deadline
                 and not (isinstance(prior, dict) and prior.get("status") == "stopped"
@@ -209,7 +212,7 @@ def resume_state_file(state_file: str, *, phase_deadline: float, agent_id: str,
                 or result.get("host_invoked") is not False or result.get("mode") != "heartbeat"
                 or result.get("stage") != "execute"):
             return str(predecessor)
-        _create_resume_state(target, predecessor)
+        _create_resume_state(target, predecessor, handoff=handoff)
         return str(target)
 
 

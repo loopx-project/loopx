@@ -211,3 +211,21 @@ def test_later_authorized_phase_can_bind_a_new_handoff_without_rewriting_prior(t
     selected = Path(resume_state_file(str(root),phase_deadline=deadline,agent_id='agent',wake_log_dir=str(tmp_path/'wakes'),env=env))
     assert selected != root and root.read_bytes() == old
     assert json.loads(selected.read_bytes())['recovery_handoff']['sha256'] == env['LOOPX_RECOVERY_HANDOFF_SHA256']
+
+
+def test_pre_dispatch_continuation_binds_and_replays_its_optional_handoff(tmp_path):
+    import hashlib
+    root = tmp_path / 'scheduler.json'
+    _stopped(root)
+    brief = tmp_path / 'handoff.json'
+    brief.write_text(json.dumps({'ok': True, 'handoff_text': 'Keep the original goal.'}))
+    env = dict(LOOPX_RECOVERY_HANDOFF=str(brief), LOOPX_RECOVERY_HANDOFF_SHA256=hashlib.sha256(brief.read_bytes()).hexdigest())
+    deadline = time.time() + 100
+    def select():
+        return Path(resume_state_file(str(root),phase_deadline=deadline,agent_id='agent',wake_log_dir=str(tmp_path/'wakes'),env=env))
+    phase = select()
+    assert json.loads(phase.read_bytes())['recovery_handoff']['sha256'] == env['LOOPX_RECOVERY_HANDOFF_SHA256']
+    assert select() == phase
+    brief.write_text(json.dumps({'ok': True, 'handoff_text': 'Different material.'}))
+    env['LOOPX_RECOVERY_HANDOFF_SHA256'] = hashlib.sha256(brief.read_bytes()).hexdigest()
+    with pytest.raises(ValueError, match='immutable'): select()
