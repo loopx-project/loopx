@@ -9,6 +9,9 @@ inspect the patch, and make a local commit. No remote repository is required.
 **Finish steps 1–4 first.** Steps 5–6 are optional extensions for recurring
 bug fixes or refactoring in your own repository.
 
+Already use Codex `/goal`? See [what to evaluate with LoopX](#when-to-use-loopx)
+before adding it to a longer job.
+
 You need Python 3.11+ for the exercise. To use LoopX, also install Node.js
 22.22.3+ (24 LTS recommended), LoopX, and an agent host you already use. The
 tests themselves need no third-party packages or model access.
@@ -223,6 +226,45 @@ The [continuous-refactoring example](long-running-coding-agents.md#example-keep-
 provides a complete task prompt and an example of what to compare before and
 after. Continue from the same Goal and its recorded evidence; each refactoring
 still needs a reviewable result and a stopping rule.
+
+<a id="when-to-use-loopx"></a>
+
+## If I already use Codex `/goal`, what should I try with LoopX?
+
+[OpenAI documents native Goal](https://developers.openai.com/cookbook/examples/codex/using_goals_in_codex)
+as durable state within a thread, with completion, budget and continuation
+controls. LoopX adds a project work record of accepted requirements, Todos,
+ownership, decisions and evidence that connected sessions and Agents can share.
+In Codex CLI, it still uses native `/goal` to drive continuation, as described
+in step 2. You can start with one Agent; adding another host or Agent requires
+its own setup. Check whether the retained work actually informs later actions.
+
+Choose a real job where you need to inspect that continuity:
+
+| Job | A concrete change during the work | What to inspect before accepting it |
+| --- | --- | --- |
+| Keep finding and fixing bugs in one module | You add a compatibility constraint after several repairs | The existing LoopX Goal retains the new constraint, earlier valid requirements and evidence; the next repair follows them |
+| Work through a PR review queue | A PR changes its head, or one merge needs your decision | Findings identify the reviewed revision; that decision holds the affected merge while independent authorized reviews can continue |
+| Supervise a longer research effort | An experiment fails or new evidence challenges the current approach | Failed and uncertain results remain available; the Agent explains why it changes or continues the approach, and records the resulting outcome and cost |
+
+For the recurring job in step 5, try a natural follow-up in the **same Goal**:
+
+```text
+For future repairs, leave each patch uncommitted until I review it.
+Keep the other accepted requirements and existing results. Before continuing,
+show where this correction is retained and which next action changes.
+```
+
+Inspect the retained work and the next actual patch. An acknowledgement or a
+Todo being marked done does not show that the correction was followed. You
+should not need to maintain a second goal document yourself.
+
+The creator's [reported uses](https://x.com/huangruiteng/status/2118539848235803121)
+include research supervision, PR review, product iteration and refactoring.
+These are use cases, not a controlled performance comparison. If your current
+Goal workflow already delivers what you need, keep it. LoopX adds state,
+validation and continuation work with their own costs; this small exercise
+does not establish a quality or efficiency advantage over native Goal.
 
 ## Setup effort, ongoing cost, and limits
 
