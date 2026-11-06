@@ -735,10 +735,15 @@ export outcome/digest, preservation time and confirmed stopped-container state.
 The file export explicitly remains **unqualified for restoration**: a failed native
 Turn is not a completed conversation checkpoint. Both successful and failed exports
 retain the original stopped container until an operator separately qualifies a
-receiver or authorizes disposal. Compute is stopped before diagnostic collection;
+receiver or authorizes disposal. Compute is stopped before returning to provider final-archive extraction or
+grading drain, and cleanup verifies that stop again;
 a stop failure is reported without deleting the source. Missing participants, full
 storage or an uncertain writer barrier cannot fall through to force-removal.
 The provider still performs its ordinary network/proxy cleanup and grader drain.
+Its best-effort final submission archive may be absent because its extraction
+requires a running container; latest files remain in the stopped source and, on
+successful export, the terminal point. Native graded history/results remain
+independent and are not discarded with that optional archive.
 
 Inspect this receipt, the exported manifest and the exact retained container before
 planning recovery. Do not restart it, treat a file digest as receiver adoption, or

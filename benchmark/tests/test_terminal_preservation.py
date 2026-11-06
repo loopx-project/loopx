@@ -21,8 +21,10 @@ def fixture_preservation(tmp_path, monkeypatch, fault=None):
         calls.append("close")
         if fault == "barrier":
             raise RuntimeError("private transport details")
+    container = SimpleNamespace(id="a" * 64, attrs={"State": {
+        "Running": False, "Paused": False, "Restarting": False, "Pid": 0}}, reload=lambda: None)
     supervisor = SimpleNamespace(destination=tmp_path, controller_file=tmp_path / "controller.json",
-        token="dummy-token", container=SimpleNamespace(id="a" * 64), close=close)
+        token="dummy-token", container=container, close=close)
     def capture(*args, **kwargs):
         calls.append("capture")
         if fault == "capture":
@@ -44,7 +46,7 @@ def test_failed_capture_preserves_source_and_never_replays(tmp_path, monkeypatch
     assert calls == (["close"] if fault == "barrier" else ["close", "capture"])
     assert receipt["execution"] == execution and receipt["restore_qualified"] is False
     assert receipt["capture_succeeded"] is (fault is None)
-    assert preservation.retain_source and receipt["source_retained"] is None
+    assert preservation.retain_source and receipt["source_retained"] is True
     assert "private" not in json.dumps(receipt)
     box = SimpleNamespace(id="a" * 64, attrs={"State": {"Running": True, "Paused": False, "Restarting": False, "Pid": 17}})
     box.reload = lambda: None
@@ -171,15 +173,19 @@ def test_cli_preservation_requires_full_native_controller_before_trial(tmp_path,
 @pytest.mark.skipif(os.environ.get("LOOPX_EDGEBENCH_DOCKER_SMOKE") != "1",
                     reason="Requires isolated Docker and native HTTP checkpoint provider")
 @pytest.mark.parametrize("capture_failure", [False, True])
-def test_real_failed_solver_preserves_tail_and_native_opportunity(controllers, writer, tmp_path, capture_failure):
+def test_real_failed_solver_preserves_tail_and_native_opportunity(controllers, writer, tmp_path, monkeypatch, capture_failure):
     from sforge.harness.backend.docker_backend import DockerContainerHandle
     from benchmark.runtime.sforge_backend import RecordingDockerBackend
     from benchmark.edgebench.checkpoint_supervisor import CheckpointSupervisor
-    from benchmark.tests.test_checkpoint_controller import register, submit
+    from benchmark.tests.test_checkpoint_controller import submit
+    from sforge.harness.agent import Agent
+    from sforge.harness.benchmark import load_benchmark
+    from sforge.harness.task_spec import make_task_spec
+    from dataclasses import replace
+    import importlib
+    native_runner = importlib.import_module("sforge.harness.run_agent")
     source, _, first, _, files, grades = controllers
     container, _ = writer
-    token = register(source, first, submission_cooldown=3600)
-    assert submit(first, token, 7).status_code == 200
     script = '''from pathlib import Path
 import sqlite3,time
 root=Path('/opt/loopx-benchmark'); control=root/'control'; control.mkdir(parents=True)
@@ -205,14 +211,45 @@ Path('/data/candidate').write_text('newer than the last graded candidate')
     supervisor = CheckpointSupervisor(files[0], tmp_path / "terminal-points",
         retention_enabled=False, terminal_components=components,
         terminal_receipt=tmp_path / "terminal-preservation.json")
-    backend = RecordingDockerBackend(log_dir=tmp_path / "collected", logger=None,
+    config = source.state.judge.config
+    trial = config.log_dir / "runs/source/fixture"
+    backend = RecordingDockerBackend(log_dir=trial / "collected", logger=None,
                                      oauth_proxy=True, checkpoint=supervisor, client=container.client)
-    backend.bind_registration(token)
     backend.execution_command = "exit 2"
     handle = DockerContainerHandle(container)
-    result = backend.exec_run_with_timeout(handle, ["/bin/bash", "-c", "exit 2"], timeout=60)
-    assert result.exit_code == 2
-    backend.cleanup_container(handle)
+    # Only setup uses a precreated test-owned box. Keep the production solver,
+    # final-archive exception handling, HTTP drain, result publication and cleanup.
+    monkeypatch.setattr(backend, "image_exists", lambda image: True)
+    monkeypatch.setattr(backend, "remove_container_by_name", lambda name: None)
+    monkeypatch.setattr(backend, "create_container", lambda *args, **kwargs: handle)
+    monkeypatch.setattr(backend, "start_container", lambda handle: None)
+    monkeypatch.setattr(native_runner, "_install_tools", lambda *args, **kwargs: None)
+    monkeypatch.setattr("sforge.harness.network_isolation.cleanup_stale_chains", lambda *args: None)
+    original_drain = native_runner._wait_for_grading
+    drained = []
+    def drain(*args, **kwargs):
+        container.reload()
+        assert container.attrs["State"]["Running"] is False
+        value = original_drain(*args, **kwargs)
+        drained.append(value.status)
+        return value
+    monkeypatch.setattr(native_runner, "_wait_for_grading", drain)
+    class SyntheticAgent(Agent):
+        name, run_cmd, api_key_env = "fixture", "exit 2", "SYNTHETIC_API_KEY"
+        install_cmds = []
+    def registered(token):
+        backend.bind_registration(token)
+        assert submit(first, token, 7).status_code == 200
+    task = make_task_spec(config.tasks_dir / "fixture.json", load_benchmark(config.tasks_dir))
+    result = native_runner.run_agent(replace(task, cwd="/data", submit_paths=["candidate"]),
+        SyntheticAgent(config), config, backend, "source", timeout=60, judge_url=first,
+        eval_interval=0, disable_stop_hook=True, disable_auto_eval=True, disable_auto_resume=True,
+        internet=True, submission_cooldown=3600, host_registration_callback=registered)
+    assert result.solver_execution["segments"][0]["native_exit_code"] == 2
+    assert result.solver_execution["status"] == "nonzero_exit"
+    assert result.best_score == 7 and result.agent_submissions == 1
+    assert drained == ["complete"] and result.archive == b""
+    assert json.loads((trial / "run_history.json").read_text())["best_score"] == 7
     container.reload()
     assert not container.attrs["State"]["Running"] and container.attrs["State"]["Pid"] == 0
     receipt = json.loads((tmp_path / "terminal-preservation.json").read_text())

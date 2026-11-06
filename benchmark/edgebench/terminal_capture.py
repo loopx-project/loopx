@@ -104,8 +104,14 @@ class FailurePreservation:
             # No remote message, output, account information or token is retained.
             self.receipt["error_kind"] = type(error).__name__
         finally:
-            self.receipt["preservation_elapsed_seconds"] = time.monotonic() - started
-            self._write()
+            # Native final-archive extraction and grading drain occur before its
+            # cleanup callback. Stop here so orphaned work cannot run through
+            # that interval; later cleanup only verifies this same source.
+            try:
+                self.stop_source(supervisor.container)
+            finally:
+                self.receipt["preservation_elapsed_seconds"] = time.monotonic() - started
+                self._write()
 
     def stop_source(self, container):
         """Release compute, never remove the only source after an uncertain save."""
