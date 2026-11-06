@@ -8,6 +8,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import time
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,7 @@ from .event_inbox import (
     inspect_lark_event_inbox,
     load_lark_event_inbox_config,
 )
+from ..process_runtime import terminate_process_tree
 from .identity_shapes import LARK_CHAT_ID_PATTERN
 
 CONFIG_SCHEMA_VERSION_V0 = "lark_event_collector_config_v0"
@@ -47,26 +49,75 @@ Runner = Callable[..., subprocess.CompletedProcess[str]]
 GIT_PROBE_TIMEOUT_SECONDS = 5.0
 
 
-def _run_git_probe(root: Path, *arguments: str) -> subprocess.CompletedProcess[str] | None:
+def _retire_owned_probe(process: subprocess.Popen[str]) -> None:
+    """Stop this probe's own process group, then drop its pipes unread.
+
+    Git starts helpers of its own -- an fsmonitor hook is the common one on
+    ``ls-files`` -- inside the group it runs in, so ending only the Git process
+    leaves them behind for the next run to inherit. An inherited pipe also
+    outlives the leader, so the pipes are closed instead of drained.
+    """
+
+    try:
+        terminate_process_tree(process, grace_seconds=0.2)
+    except (OSError, RuntimeError):
+        pass
+    finally:
+        for stream in (process.stdout, process.stderr):
+            if stream is not None:
+                stream.close()
+        try:
+            process.wait(timeout=1.0)
+        except subprocess.TimeoutExpired:
+            pass
+
+
+def _git_deadline() -> float:
+    """The moment the whole admission check stops asking Git questions."""
+
+    return time.monotonic() + GIT_PROBE_TIMEOUT_SECONDS
+
+
+def _run_git_probe(
+    root: Path, *arguments: str, deadline: float | None = None
+) -> subprocess.CompletedProcess[str] | None:
     """Ask Git one ownership question, answering ``None`` when it cannot.
 
     No answer is not a "no" for this caller: acceptance needs proof that the
     config is ignored and untracked, so a probe that runs out of budget lands on
-    the refusing side instead of raising out of the command.
+    the refusing side instead of raising out of the command. The three
+    questions share one deadline, and a question asked after it has passed is
+    not started at all.
     """
 
+    budget = (
+        GIT_PROBE_TIMEOUT_SECONDS
+        if deadline is None
+        else deadline - time.monotonic()
+    )
+    if budget <= 0:
+        return None
+    argv = ["git", "-C", str(root), *arguments]
     try:
-        return subprocess.run(
-            ["git", "-C", str(root), *arguments],
+        process = subprocess.Popen(
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
             errors="replace",
-            capture_output=True,
-            check=False,
-            timeout=GIT_PROBE_TIMEOUT_SECONDS,
+            start_new_session=os.name == "posix",
         )
-    except (OSError, subprocess.SubprocessError):
+    except OSError:
         return None
+    try:
+        stdout, _stderr = process.communicate(timeout=budget)
+    except subprocess.TimeoutExpired:
+        _retire_owned_probe(process)
+        return None
+    return subprocess.CompletedProcess(
+        args=argv, returncode=process.returncode, stdout=stdout, stderr=""
+    )
 
 
 def _project_config_path(project: str | Path, raw: str | Path) -> Path:
@@ -78,7 +129,8 @@ def _project_config_path(project: str | Path, raw: str | Path) -> Path:
         relative = path.relative_to(root)
     except ValueError as exc:
         raise ValueError("lark collector config must stay inside the project") from exc
-    git_probe = _run_git_probe(root, "rev-parse", "--show-toplevel")
+    deadline = _git_deadline()
+    git_probe = _run_git_probe(root, "rev-parse", "--show-toplevel", deadline=deadline)
     if git_probe is None:
         raise ValueError("lark collector config needs a Git answer the probe could not give")
     if git_probe.returncode != 0:
@@ -91,9 +143,17 @@ def _project_config_path(project: str | Path, raw: str | Path) -> Path:
                 "under .loopx/config in a non-Git project"
             )
         return path
-    tracked = _run_git_probe(root, "ls-files", "--error-unmatch", "--", str(relative))
-    ignored = _run_git_probe(root, "check-ignore", "--quiet", "--", str(relative))
-    if tracked is None or ignored is None:
+    tracked = _run_git_probe(
+        root, "ls-files", "--error-unmatch", "--", str(relative), deadline=deadline
+    )
+    if tracked is None:
+        # Acceptance already failed; asking the next question would only spend
+        # what is left of the same budget on the same hang.
+        raise ValueError("lark collector config needs a Git answer the probe could not give")
+    ignored = _run_git_probe(
+        root, "check-ignore", "--quiet", "--", str(relative), deadline=deadline
+    )
+    if ignored is None:
         raise ValueError("lark collector config needs a Git answer the probe could not give")
     if tracked.returncode == 0 or ignored.returncode != 0:
         raise ValueError("lark collector config must be ignored and untracked")
