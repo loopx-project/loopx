@@ -49,7 +49,7 @@ flowchart TB
 | --- | --- |
 | Why split these roles, and what is missing? | Sections 1–4 and the [current source audit](#current-delivery-audit) |
 | How do the three layers and one Agent identity fit? | [System diagram](#system-topology), [binding unit](#agent-binding-unit) |
-| How do conversation, Stop and recovery work during execution? | [Asynchronous sequence](#asynchronous-control), [failure isolation](#router-failure-recovery) |
+| How do conversation, Stop and recovery work during execution? | [Asynchronous sequence](#asynchronous-control), [attention / preemption](#controller-attention-and-preemption), [failure isolation](#router-failure-recovery) |
 | What gets delivered, validated and deleted? | [Dependencies and slices](#delivery-path-from-current-state), [product acceptance](#superagent-acceptance), sections 8–11 |
 | Where are C1 field, context, wire and baseline details? | [Technical annex](controller-executor-unified-contract-v0/contract-and-context.md) |
 
@@ -302,9 +302,10 @@ sequenceDiagram
   R-->>U: Conclusion, artifacts and remaining gaps
 ```
 
-User and router inputs in the diagram share the unit's ordered control queue; they
-do not create two controllers. Invoke the model when a question needs semantic
-interpretation; existing status can be shown directly through typed readback.
+User and router inputs share the unit's durable ordered ingress and one control
+writer. Processing order follows the attention and causality rules below, rather
+than an unconditional FIFO queue; there are not two controllers. Invoke the model
+when a question needs semantic interpretation; existing status can be shown directly through typed readback.
 Worker events reach existing observation/journal ownership before triggering
 processing. Recover disconnection by cursor and state reconciliation, not a one-shot
 in-memory callback. Deduplicate by work identity; coalesce progress, but never
@@ -337,6 +338,114 @@ The same revision sent directly or relayed by the router shares its original
 request/idempotency identity. Genuinely different requests retain their identities
 and coordinate through explicit version dependencies, not text deduplication.
 There is no implicit global message order across units.
+
+<a id="controller-attention-and-preemption"></a>
+
+### Controller attention: user intent first, interruption at safe boundaries
+
+**Default attention order: current user interaction → execution-blocking worker
+interaction → ordinary router coordination → unsolicited reporting.** This is
+selection within a unit's existing ingress, not a new global task scheduler or a
+license to override authority. Keep three questions separate: whose intent governs,
+which eligible input needs attention next, and which current operation can yield.
+A higher-priority message does not automatically cancel a worker or a tool call.
+
+| Input / need | Attention policy | Boundary |
+| --- | --- | --- |
+| Authorized Stop, revocation or an enforced budget/fence | Existing deterministic control path runs independently of ordinary model work | Record and interrupt/reconcile through the current owner; never wait behind report generation or for a model to infer Stop |
+| Current user instruction, correction or question | Foreground; address before autonomous coordination and reporting | A status question is not a direction change. A user-requested report is foreground work, unlike an unsolicited report |
+| Worker question, failure or result requiring a decision to continue/close work | Next; may interrupt background composition | Routine progress/logs do not get this treatment. Escalate needed user approval; do not invent it to unblock the worker |
+| Router's autonomous coordination and nonblocking worker information | Serve after foreground and blocking work, with bounded deferral | A verified relay of an original user request retains its origin and dependency; it is not demoted merely for passing through the router |
+| Unsolicited reports and optional housekeeping | Coalesce and run opportunistically in bounded slices | Refresh against current facts after interruption; do not send every obsolete draft |
+
+Explicit, applicable user intent governs conflicts with autonomous worker/router
+plans, within current authority and scope. Preserve older compatible requirements;
+a recent question does not supersede them. Rank using authenticated origin, original
+request/revision, current dependency and actual blocked state, never a sender's
+self-declared urgency or words such as “urgent” in source text. Unclassified input
+gets bounded assessment rather than a guessed permission change or silent drop.
+
+A required dependency may temporarily inherit the waiting foreground request's
+attention: if answering the user requires resolving a worker question, resolve that
+question first as part of serving the user. Record the existing request/dependency
+link and keep the inherited work bounded to that unblock; it gains no new authority
+and does not promote the worker's entire backlog. Apply the same rule to a necessary
+router dependency. Discover a cycle or missing permission as a blocker, not an
+excuse for endlessly escalating priorities.
+
+**Ordered ingress is not one global FIFO processing order.** Persist arrival and
+revision history unchanged; select among causally eligible pending inputs. Retain
+FIFO for equal attention and preserve per-request revision dependencies. A newer
+correction can invalidate an old draft, but its predecessor is recorded as
+superseded through the existing owner, not erased. A cancellation can invalidate
+pending dispatch immediately without first executing every earlier queued request.
+One controller commits decisions; priority never creates a second control writer.
+
+Preemption has three concrete forms:
+
+1. **Queued work:** select the higher-priority eligible input before starting an
+   unsent report. Keep original arrival/handling facts for recovery and readback.
+2. **Pure drafting / model reasoning:** yield cooperatively at a supported native
+   turn/tool boundary, or interrupt a cancellable model call. Retain a brief and
+   required evidence, not an assumed resumable model stack. Fence the old invocation
+   before another controls the same session; late output/tool proposals cannot
+   publish or mutate state. Recompose the report against current facts on resume.
+3. **An admitted tool/effect or atomic commit:** do not tear it down or infer rollback
+   from model interruption. Accept new input promptly; finish/recover the original
+   transaction or use its supported cancellation. Hold only dependent new effects
+   when an applicable change is pending; independent admitted work retains its
+   scope. Revalidate current revisions before subsequent dispatch/publication.
+
+“Interrupt reporting” therefore normally means interrupting the controller's
+composition, **not restarting or cancelling the business worker**. If a report send
+already happened or its delivery is uncertain, recover that original send before
+retrying; do not retract facts already observed or label a partial stream complete.
+Update visibly stale delivered material through the existing version/return owner.
+A Host without reliable interruption must bound controller slices and expose the
+actual wait; do not start concurrent calls in the same native controller session
+or claim prompt responsiveness for an uninterruptible long report.
+
+```mermaid
+sequenceDiagram
+  participant U as User
+  participant I as Existing ingress / runtime
+  participant C as Controller
+  participant W as Worker
+  Note over C: Compose unsolicited report
+  W->>I: Question blocks original attempt
+  I->>I: Persist input, select blocking interaction
+  I-->>C: Yield report at supported safe boundary
+  C->>W: Resolve within existing scope
+  Note over W: Same attempt continues
+  U->>I: Correct a requirement
+  I-->>C: User input ahead of ordinary router/report work
+  C->>C: Assess revision and dependent work
+  C-->>U: Explain adoption or actual pending boundary
+  C->>W: Apply qualified correction at safe boundary
+  C->>C: Refresh report from current evidence when eligible
+```
+
+Prevent both starvation and interruption storms. Batch compatible user corrections
+without losing their individual identities; coalesce supersedable progress, but
+retain questions, errors, results and settlement/recovery obligations. Bound each
+foreground service slice and reserve service opportunities for still-valid blocked
+work and owed returns; ageing can advance those obligations without overriding
+Stop, explicit cancellation or intent. Optional stale reports can be superseded.
+If arrivals exceed capacity, show backpressure/deferred work and the actual blocker
+instead of promising an impossible latency bound. Do not repeatedly abort an
+in-flight foreground response for every keystroke, or ask the user to tune priority
+numbers. Existing quota/stop rules still bound the work and all wasted/interrupted
+model calls count in complete cost.
+
+For the MVP, qualify stable selection plus yielding **background composition** on
+one real Host; do not build arbitrary preemptive tool scheduling. Extend existing
+ingress/request/session facts only where the above origin, dependency and invocation
+fences are absent. The typed owner selects admissible input and protects commits;
+the controller assesses meaning. App/CLI and supported Lark readback distinguish
+input received, handling, deferred/blocked and actual adoption without exposing a
+priority console. This policy belongs to the optional unit profile; do not silently
+reorder current single-session chat queues. C3/C6/C8 own implementation and the
+attention acceptance below; a prose prompt alone does not implement the policy.
 
 <a id="router-failure-recovery"></a>
 
@@ -657,7 +766,10 @@ or evidence of LoopX benefit:
 | [Anthropic: multi-agent research system](https://www.anthropic.com/research/multi-agent-research-system), 2025-06-13 | Independent contexts and handoffs suit decomposable long tasks; additional coordination and tokens belong in the value comparison | Parallel research gains do not establish cheaper coding or dual sessions; retain single-session and small-task counterexamples and complete costs |
 | [Temporal: Workflow message passing](https://docs.temporal.io/encyclopedia/workflow-message-passing) | Separate queries, asynchronous input and changes with a processing result; observe receipt separately from handling | No Temporal/second workflow engine, and Signal semantics are not LoopX acceptance receipts |
 | [Kubernetes: Controllers](https://kubernetes.io/docs/concepts/architecture/controller/) | Observe durable facts, request action and reconcile actual state; reconcile after restart rather than blindly replaying | LoopX's controller uses model judgment and business work is not always idempotently repeatable; deterministic admission and Host execution retain their owners |
+| [Akka: Mailboxes](https://doc.akka.io/libraries/akka-core/current/typed/mailboxes.html) and [sequential actor processing](https://doc.akka.io/libraries/akka-core/current/typed/actors.html) | Priority mailboxes can preserve equal-priority FIFO while a single consumer protects state; queue selection and in-flight handling are separate boundaries | No Akka dependency; mailbox priority does not guarantee model/tool preemption, and silent overflow loss is unsuitable here |
 | [A2A: Life of a Task](https://a2a-protocol.org/dev/topics/life-of-a-task/) (development version) | Distinguish conversation context, messages, tasks and versioned artifacts instead of making every message a new task | Do not copy its enums or terminal rules; retain LoopX request, work and effect identities. Protocol adapters need separate qualification |
+
+Async handlers must also account for state changes across waits; [Temporal’s TypeScript message-handling guidance](https://docs.temporal.io/develop/typescript/workflows/message-passing) informs concurrency coordination. Here the choice is one control commit owner and version rechecks, not assumed preemption of model calls or external effects.
 
 The choice is identity-bound asynchronous interaction with existing Core
 reconciliation, not an extra Agent layer for everything. Section 11's real outcomes
@@ -817,7 +929,7 @@ numbers are not PR counts.
 | --- | --- | --- |
 | **C1/C2 — Finish existing contract cutover** | Converge #7430's source, consumer and recovery work; no router packet | Original single-session quota comparison, field/clause fidelity, real caller, off and recovery; remove each replaced format writer, retaining named historical decoders |
 | **C3/C4 — One binding unit** | Two roles in one Agent through current session/managed-operation owners; qualify one Host with isolation, observation and interruption | Two real sessions and independent context baselines; concurrent/restarted callers cannot overwrite bindings or let old generations write; remove replaced single-slot assumptions without another dual-session runtime |
-| **C5/C6.1/C8 — Conversation during execution** | Real long worker operation returns a handle; controller consumes user/worker input through request revisions, queue reservations, Stop and readback | Substantive response before worker completion, correction changes subsequent artifacts, cancellation need not await a model; replace that caller's whole-task blocking wait and duplicate classification, delivering the same App journey |
+| **C5/C6.1/C8 — Conversation during execution** | Real long worker operation returns a handle; controller consumes user/worker input through request revisions, queue reservations, Stop and readback | Substantive response before worker completion, correction changes subsequent artifacts, attention/safe-preemption/fairness cases pass, cancellation need not await a model; replace that caller's whole-task blocking wait and duplicate classification, delivering the same App journey |
 | **C6.2/C8 — Router connects two units** | Steward adopts existing multi-recipient requests, original-audience returns and selected bindings; direct controller input uses the same revision entry | B progresses while A is busy; partial refusal does not rerun A; restart returns results to original audiences without expanding permissions/budgets; remove duplicate synthesis/routing branches |
 | **C7/C8 — Compare and adopt narrowly** | Match workload/Host across original single-session, unified single-session and dual-session arms; separate additional multi-unit coordination arm | Comparable-budget outcomes and complete costs, response/correction/stop latency and human intervention; retain small-task counterexamples and model/Host boundaries. Qualify packaged App/CLI and supported Lark failure/recovery separately |
 | **C9 — Named retirement and default decision** | Retire each replacement with caller, historical-reader window and rollback evidence; decide adoption for qualified workloads/profiles | No second decision/task/budget ledger; original attempts reconcile after new admission closes; retain qualified single-session use, without treating fewer lines or more sessions as benefit |
@@ -848,6 +960,10 @@ jointly bound that claim:
 | Two independent units + one refusal/disconnection | Unaffected unit continues; refusal/unknown visible, retry does not repeat successful effects, resources are not multiplied per unit |
 | Controller/router restart, reordered/duplicate results, lost settlement response | Recover original attempt, input and receipts; no duplicate execution/debit; old generations and late results cannot take over new work |
 | Stop/revocation with a full queue or unavailable model | Existing Host/Core stop remains reachable; acknowledgment and actual stop are distinct, unknown external effects still require reconciliation |
+| Unsolicited report + blocked worker, then user correction | Yield background composition and unblock; user correction precedes dependent new effects; original worker attempt is unchanged and report resumes from current facts. Recover already-sent/uncertain delivery without duplicate sends |
+| Progress flood, router-relayed user request, equal-priority and reordered input | Preserve user provenance and required dependencies across transport; ordinary progress/self-declared urgency does not preempt; retain equal-attention FIFO and revision causality, including across restart |
+| Noncancellable operation / late model output races user input | Original effect completes/reconciles, old invocation's new tool proposals do not execute; no duplicate effects, actual wait/unsupported preemption readable, no concurrent replacement control writer |
+| Sustained foreground input and repeated interruptions | Under declared capacity, foreground stays responsive and valid blocked work/owed returns do not starve; measure service latency, worker wait, oldest deferral and cancelled/repeated tokens. Overload is explicit backpressure; Stop does not queue |
 | Simple and long tasks under comparable acceptance | Compare full model/tool/recovery/reporting costs, omitted constraints, verified outcomes, correction rework and human attention. Single-session may win small tasks; faster interaction is not faster total completion |
 
 Reuse semantic oracles through the full chain on isolated real File/SQLite and the
@@ -1066,7 +1182,8 @@ not full RFC acceptance.
 4. **Asynchronous Host/queue capability mapping — C3/C6 owners, before the first
    unit rollout.** Name actual handle return, event recovery, role fences,
    live-steer/next-boundary delivery, Stop and tool-isolation support. Qualify
-   capacity and response objectives for that workload, not all Hosts by analogy.
+   capacity, attention selection, background yielding and response objectives for
+   that workload, not all Hosts by analogy.
 5. **Cross-unit budgets and original-audience synthesis — existing request/quota/
    product owners, before C6.2.** Map resource limits and return identities,
    partial failures and direct/relayed input deduplication. Extend missing typed

@@ -196,6 +196,8 @@ worker/settlement adapter 和有条件的旧路径退役。从全局成果与实
 将管家定位为跨 Agent router，每个 controller + worker 沿用一个 Agent 绑定单元。
 Worker 长操作不能阻塞 controller 处理用户/router 输入；既有 Core、请求、会话、
 队列与返回 owner 保留 authority。Router 可用授权请求操作，不能替单元结算或复制预算。
+[注意力与安全插队](controller-executor-unified-contract-v0.zh-CN.md#controller-attention-and-preemption)
+优先当前用户与阻塞 worker 的交互；后台汇报可让出，原 effect 对账与单一控制写入方仍保留。
 [当前源码核对](controller-executor-unified-contract-v0.zh-CN.md#current-delivery-audit)区分
 已共享 managed-operation、多接收方与 revision 机制，以及仍缺的双角色绑定/异步旅程。
 [依赖与交付切片](controller-executor-unified-contract-v0.zh-CN.md#delivery-path-from-current-state)

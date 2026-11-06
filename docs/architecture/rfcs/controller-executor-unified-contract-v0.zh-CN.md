@@ -47,7 +47,7 @@ flowchart TB
 | --- | --- |
 | 为什么这样拆、当前差距 | 第 1–4 节；[最新源码核对](#current-delivery-audit) |
 | 三层关系与一个 Agent 的身份 | [系统图](#system-topology)、[绑定单元](#agent-binding-unit) |
-| 干活时怎么交流、停止、恢复 | [异步时序](#asynchronous-control)、[故障隔离](#router-failure-recovery) |
+| 干活时怎么交流、停止、恢复 | [异步时序](#asynchronous-control)、[注意力与插队](#controller-attention-and-preemption)、[故障隔离](#router-failure-recovery) |
 | 怎么交付、验证和删代码 | [依赖与切片](#delivery-path-from-current-state)、[产品验收](#superagent-acceptance)、第 8–11 节 |
 | C1 字段、上下文、wire 与基线细节 | [技术附录](controller-executor-unified-contract-v0/contract-and-context.zh-CN.md) |
 
@@ -256,7 +256,8 @@ sequenceDiagram
   R-->>U: 结论、产物与剩余缺口
 ```
 
-图中用户与 router 的消息由同一单元控制队列有序处理，不会生成两个 controller。
+图中用户与 router 的消息进入同一单元的持久有序 ingress，仅一个控制写入方；处理顺序
+遵循下方注意力与因果规则，不是无条件 FIFO，也不会生成两个 controller。
 只在查询需要新的语义解释时调用模型；已有状态可由 typed readback 直接展示。
 Worker 的事件先落到既有观察/journal，再触发处理；断线靠游标和状态对账恢复，不能
 依赖一次内存 callback。按工作身份去重，进度可以合并，未处理的取消、修订、结果和
@@ -285,6 +286,91 @@ flowchart LR
 Host observation、验证和结算事实。**收到 ≠ 采用；投递 ≠ 执行；执行 ≠ 验收。**
 用户直达 controller 与经 router 转发的同一修订共用原请求/幂等身份；真正不同的请求
 保留各自身份，通过明确版本依赖协调，不用文本去重。跨单元没有隐含的全局消息顺序。
+
+<a id="controller-attention-and-preemption"></a>
+
+### Controller 注意力：用户意图优先，在安全边界插队
+
+**默认注意力顺序：当前用户交互 → 阻塞执行的 worker 交互 → 普通 router 协调 → 主动汇报。**
+这是单元既有 ingress 内的选择，不新建全局任务 scheduler，也不覆盖 authority。
+要分清三件事：谁的意图约束工作、下一个合格输入先处理谁、当前操作能否让出。
+消息优先级高，不意味着自动取消 worker 或工具调用。
+
+| 输入 / 需要 | 注意力规则 | 边界 |
+| --- | --- | --- |
+| 已授权 Stop、撤权、强制预算/fence | 既有确定性控制路径独立于普通模型工作处理 | 由原 owner 记录、中断/对账；不能排在汇报生成后，也不等模型推断 Stop |
+| 当前用户指令、纠偏、提问 | 前台，先于自主协调和汇报 | 问进度不等于改方向；用户明确索要的报告是前台工作，与自主汇报不同 |
+| Worker 需决策才能继续/收尾的问题、失败或结果 | 其次，可以打断后台内容生成 | 普通进度/日志不因此插队；缺用户批准就升级请求，不能为解除阻塞而虚构批准 |
+| Router 自主协调与非阻塞 worker 信息 | 在前台与阻塞工作之后处理，延后有界 | 可验证的原用户请求经 router 转达，保留来源和依赖，不因经过管家而降级 |
+| 主动汇报与可选维护 | 合并后按有界片段择机处理 | 被打断后按当前事实更新，不逐条发送已经过时的草稿 |
+
+显式且适用的用户意图在当前权限/范围内优先于 worker/router 的自主计划；保留与新意图
+相容的旧要求，不能把一句新提问当作全部替换。选择依据是已认证来源、原请求/revision、
+当前依赖与实际阻塞事实，不能靠发送者自报“紧急”或材料中的关键词取得优先级。
+未分类输入做有界判断，不猜权限变化，也不静默丢弃。
+
+必要依赖可以临时继承正在等待的前台请求的注意力：回答用户必须先解决 worker 的问题，
+就先解除这个阻塞，作为服务用户的一部分。沿用原请求/依赖关系，仅提升这段解阻工作，
+不扩权，也不把 worker 整个队列升为最高级。必要的 router 依赖同理。发现依赖环或缺权限
+应暴露真实阻塞，不能无限提高优先级掩盖它。
+
+**有序 ingress 不等于所有输入严格按 FIFO 处理。** 到达和修订历史照常持久化；从因果上
+已可处理的 pending 输入中选择。同等注意力保持 FIFO，同一请求的 revision 依赖保留。
+新纠偏可以使旧草稿失效，但前序要求经既有 owner 记录为被替代，不擦除历史。取消可以
+立即使待派发工作失效，无需先执行完它前面的全部请求。仍只有一个 controller 提交决策，
+不能靠插队生成第二个控制写入方。
+
+插队具体分三种：
+
+1. **尚未开始的工作**：先选择高优先级且合格的输入，再生成尚未发送的汇报；原到达与
+   处理事实保留，供恢复和回读。
+2. **纯草稿 / 模型推理**：在宿主支持的 native turn/tool 边界协作让出，或中断可取消的
+   模型调用。保留简要意图和必要证据，不假设模型调用栈可原样恢复。先 fence 旧 invocation，
+   再让另一次控制同一 session；迟到输出/工具提案不能发布或修改状态。恢复报告时按当前
+   事实重新组织。
+3. **已准入工具/effect 或原子提交**：不能强拆事务，也不能从“模型已中断”推出回滚成功。
+   新输入及时入账；原事务完成/恢复，或使用它实际支持的取消。适用的变化待处理时仅暂停
+   依赖它的新 effect，独立已准入工作保留原范围；后续派发/发布前重新核验 revision。
+
+因此“打断汇报”通常是打断 controller 的内容组织，**不重启或取消业务 worker**。
+若汇报已经发送或投递结果不明，先恢复原发送操作再重试；已被观察的内容不能假装不存在，
+部分流式内容不能标作完整报告。已经送达却过时的材料，由既有版本/返回 owner 更新。
+Host 不支持可靠中断时，应限制 controller 的单次片段并显示实际等待；不能并发调用
+同一个 native controller session，也不能把不可中断的长报告宣称为及时响应。
+
+```mermaid
+sequenceDiagram
+  participant U as 用户
+  participant I as 既有 ingress / runtime
+  participant C as Controller
+  participant W as Worker
+  Note over C: 正在组织主动汇报
+  W->>I: 原 attempt 等待一个问题的答复
+  I->>I: 持久化输入，选择阻塞交互
+  I-->>C: 在受支持的安全边界让出汇报
+  C->>W: 在现有范围内解答
+  Note over W: 原 attempt 继续执行
+  U->>I: 修正一项要求
+  I-->>C: 用户输入先于普通管家/汇报工作
+  C->>C: 判断 revision 与依赖工作
+  C-->>U: 说明采用或真实等待边界
+  C->>W: 在安全边界应用合格纠偏
+  C->>C: 再次合格时，按当前证据更新汇报
+```
+
+同时防止饿死与反复打断。相容的用户纠偏可以合批，但保留各自身份；可替代的进度可以
+合并，问题、错误、结果、结算/恢复义务必须保留。限制每段前台服务工作，给仍有效的阻塞
+任务与应返回结果保留处理机会；等待时间可提升这些义务的服务顺序，但不覆盖 Stop、显式
+取消或用户意图。可选旧汇报允许被替代。输入长期超过容量时，展示背压/延后与真实阻塞，
+不承诺做不到的时延。不要每次输入一个字就打断正在回答用户的调用，也不让用户调优先级
+数字。既有 quota/停止规则仍约束执行，浪费及被中断的模型调用都计入完整成本。
+
+MVP 先在一个真实 Host 验证稳定选择与**后台内容生成的让出**，不做任意工具任务抢占。
+来源、依赖、invocation fence 缺在哪里，就在既有 ingress/request/session owner 中补；
+typed owner 选择可处理输入并保护提交，controller 判断语义。App/CLI 与受支持 Lark
+区分已收、处理中、延后/阻塞、实际采用，无需增加优先级控制台。规则属于可选单元 profile，
+不能静默重排现有单会话 chat 队列。C3/C6/C8 承接实现及下方注意力验收，仅写进 prompt
+不算实现。
 
 <a id="router-failure-recovery"></a>
 
@@ -536,7 +622,10 @@ role 不是第二个并发业务 executor。Peer 或并行执行仍需既有独�
 | [Anthropic：多 Agent 研究系统](https://www.anthropic.com/research/multi-agent-research-system)，2025-06-13 | 独立上下文和任务交接适合可分解的长任务；需把额外协调和 token 纳入价值比较 | 研究任务的并行收益不证明代码任务或双会话一定更省；因此保留单会话、小任务反例和完整成本对照 |
 | [Temporal：Workflow message passing](https://docs.temporal.io/encyclopedia/workflow-message-passing) | 区分查询、异步输入与有处理结果的变更；把“消息已收”与“请求已处理”分开观察 | 不引入 Temporal/另一套 workflow engine，也不把 Signal 语义等同于 LoopX 验收回执 |
 | [Kubernetes：Controllers](https://kubernetes.io/docs/concepts/architecture/controller/) | 观察持久事实、提出行动、再核对实际状态；重启后对账而非盲重放 | LoopX controller 有模型判断，业务工作并非都可幂等重做；确定性准入和 Host 执行仍有各自 owner |
+| [Akka：Mailboxes](https://doc.akka.io/libraries/akka-core/current/typed/mailboxes.html) 与 [Actor 顺序处理](https://doc.akka.io/libraries/akka-core/current/typed/actors.html) | 有优先级的邮箱仍可保持同级 FIFO，单一消费者保护状态；队列顺序与正在执行的处理是两个边界 | 不引入 Akka；不把邮箱优先级当作抢占模型/工具的保证，也不采用满队列静默丢消息的行为 |
 | [A2A：Life of a Task](https://a2a-protocol.org/dev/topics/life-of-a-task/)（开发版） | 区分对话上下文、消息、任务和版本化产物，避免把每条消息都变成新工作 | 不直接复制其状态枚举或终态规则；LoopX 继续使用现有请求、工作与 effect 身份。协议适配另行资格化 |
+
+异步 handler 还需处理在等待点交错的状态变化；[Temporal 的 TS 消息处理说明](https://docs.temporal.io/develop/typescript/workflows/message-passing)提供并发协调的参考。这里采用单一控制提交与版本复核，不借此假设模型调用或外部 effect 可抢占。
 
 因此本提案选择“有身份的异步交互 + 现有 Core 对账”，不是“所有事情都增加一层 Agent”。
 三层拓扑是否优于现有单会话，需要第 11 节的真实成果与成本证据来回答。
@@ -666,7 +755,7 @@ flowchart TB
 | --- | --- | --- |
 | **C1/C2 — 完成现有契约切换** | 沿 #7430 的来源、consumer 与恢复工作收敛，不另写 router packet | 原单会话 quota 对照、字段/条款保真、真实 caller、off 与恢复；逐 caller 删除旧格式 writer，保留具名历史 decoder |
 | **C3/C4 — 一个绑定单元** | 在现有 session/managed-operation owner 中实现同一 Agent 两角色；先资格化一个支持隔离、观察和中断的 Host | 两个真实会话、独立上下文基线；并发/重启不覆盖绑定，旧 generation 不可写；删除被实际替换的单槽位假设，不另建双会话 runtime |
-| **C5/C6.1/C8 — 执行中的对话闭环** | 真实 worker 长操作返回 handle；controller 消费用户与 worker 输入；复用 request revision、queue reservation、Stop 与 readback | Worker 未完成时已有实质答复；纠偏改变后续产物；取消无需等模型；替换该 caller 的整项阻塞等待与重复状态分类，交付同一个 App 旅程 |
+| **C5/C6.1/C8 — 执行中的对话闭环** | 真实 worker 长操作返回 handle；controller 消费用户与 worker 输入；复用 request revision、queue reservation、Stop 与 readback | Worker 未完成时已有实质答复；纠偏改变后续产物；注意力/安全插队与防饿死场景通过；取消无需等模型；替换该 caller 的整项阻塞等待与重复状态分类，交付同一个 App 旅程 |
 | **C6.2/C8 — Router 接两个单元** | 管家使用既有多接收方、原受众返回与选择绑定；直达 controller 复用同一修订入口 | A 忙时 B 可独立推进；部分拒绝不重跑 A；router 重启后结果回原受众，跨单元权限和预算不扩大；删除重复汇总/路由分支 |
 | **C7/C8 — 比较与小范围采用** | 相同 workload/Host 下比较原单会话、统一单会话、双会话；额外单列多单元协调组 | 同预算成果与完整成本、响应/纠偏/停止时延、人工介入；小任务负例与模型/Host 边界公开。打包 App/CLI 与受支持 Lark 失败恢复分别验证 |
 | **C9 — 点名退役与默认决策** | 每条替换随 caller、历史读取窗口和回退证据删旧代码，采用决定按合格 workload/profile 范围作出 | 无第二套决策/任务/预算账本；新准入关闭后原 attempt 可对账；保留合格单会话，不以少代码或多会话数量证明收益 |
@@ -691,6 +780,10 @@ worker 非阻塞观察、工具隔离和 Stop 的 Host，形成“一个单元 +
 | 两单元独立执行 + 一个拒绝/失联 | 未受影响单元继续；拒绝/未知可见，重试不复写已成功效果，资源不被逐单元放大 |
 | Controller/Router 重启、乱序/重复结果、结算回复丢失 | 恢复原 attempt、输入和回执；不重复执行/扣额；旧 generation 和迟到结果不能接管新工作 |
 | 满队列或模型不可用时 Stop/撤权 | 已有 Host/Core 停止路径仍可达，确认与真实停止分开；未知外部效果仍待对账 |
+| 主动汇报中 worker 阻塞，随后用户纠偏 | 先让出后台汇报并解阻；用户纠偏先于依赖它的新 effect；原 worker attempt 不重启，报告按当前事实恢复；已发送/不确定投递不重复发送 |
+| 进度刷屏、router 转达用户请求、同级与乱序输入 | 用户来源与必要依赖不被传输路径降级；普通进度/自称紧急不插队；同级 FIFO、revision 因果保留；跨重启选择不丢原输入 |
+| 不可取消操作 / 旧模型迟到输出与用户输入竞态 | 原 effect 可完成/对账，旧 invocation 的新工具提案不执行；无重复效果，真实等待与无法抢占可读，controller 不中途另开并发写入方 |
+| 持续前台输入与重复打断 | 在声明容量下，前台可响应且仍有效的阻塞工作/应返回结果不被无限延后；统计服务时延、worker 等待、最长延后、取消/重做 token；过载显式背压，Stop 不排队 |
 | 同等验收下的简单任务与长程任务 | 比较完整模型/工具/恢复/汇报成本、约束遗漏、验证成果、纠偏返工和人工注意力。短任务允许单会话胜出；异步响应快不等于总完成更快 |
 
 复用已有语义 oracle，在真实隔离 File/SQLite 和所选原生 Host 上跑完整链，再资格化
@@ -855,8 +948,8 @@ C1/C2 组合/capture/最终输入工作与这些精简同属一个候选前沿�
    完整成果/成本证据支持决定前，profile 保持 opt-in。
 
 4. **异步宿主与队列能力映射——C3/C6 owner，在首个单元上线前。** 点名返回 handle、
-   事件恢复、role fence、live steer/下一边界、Stop 和工具隔离的实际支持范围；容量与
-   响应目标由该 workload 资格确定，不推测所有 Host 等价。
+   事件恢复、role fence、live steer/下一边界、Stop 和工具隔离的实际支持范围；容量、
+   注意力选择、后台生成让出与响应目标由该 workload 资格确定，不推测所有 Host 等价。
 5. **跨单元预算与原受众汇总——既有 request/quota/product owner，在 C6.2 前。**
    映射已有资源限制和返回身份，明确部分失败、用户直达与 router 转发的去重；缺少的
    typed 事实在原 owner 增补，不为 router 建第二台账。

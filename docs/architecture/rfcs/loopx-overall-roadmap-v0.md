@@ -258,7 +258,9 @@ makes the steward a cross-Agent router while each controller + worker retains on
 Agent binding unit. A long worker operation must not block controller input from
 the user/router; existing Core, request, session, queue and return owners retain
 authority. Authorized router request operations cannot settle unit work or copy
-budgets. The [current source audit](controller-executor-unified-contract-v0.md#current-delivery-audit)
+budgets. [Attention and safe preemption](controller-executor-unified-contract-v0.md#controller-attention-and-preemption)
+prioritize current user interaction and blocked workers; background reports yield
+while original-effect recovery and one control writer remain intact. The [current source audit](controller-executor-unified-contract-v0.md#current-delivery-audit)
 separates shared managed operations, multi-recipient requests and revisions from
 the missing role pair and asynchronous journey. The [delivery slices](controller-executor-unified-contract-v0.md#delivery-path-from-current-state)
 reuse C1–C9: one real unit → busy-time interaction/correction/Stop → router adoption
