@@ -989,6 +989,102 @@ loading change. The numbers below describe these cache conditions only.
   R1/minimal, D2/D5/D6, I3/D3, model/context/hard-lease and installation gaps
   retain their existing owners and gates; this checkpoint closes none of them.
 
+### 2026-11-06 — Matched-bytecode representative cost checkpoint
+
+A new frozen comparison of `546c08c0d3f22358ef09b13e69f7edaa806121b8`
+and `0df5ad7921faab3b9ab8ec809f2fd71060692cce` completes all six selected
+source/wheel groups, each with 30 interleaved pairs: 360 accepted observations
+in 948.573 seconds, within the unchanged 1,200-second sampling cap. E7 remains
+an incomplete, cache-confounded experiment; these are separate observations.
+The measured proposal includes target main through `546c08c0d`. Later target
+integration is outside this immutable cost comparison.
+
+The environment remains macOS arm64, CPython 3.13.5, Node 26.0.0 and real
+Node-owned SQLite 3.53.1. All four source/monolithic-wheel environments have
+verified provenance and identical 57 dependency versions. Before freezing,
+each arm compiles stdlib, dependencies and all 1,421 LoopX Python sources into
+an owned `PYTHONPYCACHEPREFIX`; timestamp-header inventories find no missing or
+invalid own/dependency caches. Relative source sets match within each
+distribution. Inventories and frozen harness hashes remain identical after
+sampling, recovery and profiles. Targets disable bytecode writes. Source runs
+before wheel, selected help before task, cold before warm; even pairs use
+baseline/candidate order and odd pairs reverse it. Every invocation has fresh
+Python; cold retires the owned broker and warm retains it. Disk cache remains
+uncontrolled. One-minute host load ranges from 8.35 to 88.73; retain every tail
+observation, without attributing the source cold p95 difference to the code.
+
+| Selected operation | Broker | Baseline seconds, median / p95 | Proposal seconds, median / p95 | Median paired proposal minus baseline, seconds |
+| --- | --- | --- | --- | --- |
+| Source help | absent | 0.136 / 0.193 | 0.138 / 0.168 | +0.0010 |
+| Source SQLite task | cold | 3.579 / 5.997 | 3.617 / 9.234 | -0.0195 |
+| Source SQLite task | warm | 2.673 / 3.019 | 2.657 / 2.979 | -0.0602 |
+| Wheel help | absent | 0.087 / 0.107 | 0.083 / 0.116 | -0.0033 |
+| Wheel SQLite task | cold | 3.722 / 4.266 | 3.663 / 4.430 | -0.0847 |
+| Wheel SQLite task | warm | 2.707 / 3.111 | 2.797 / 3.156 | -0.0457 |
+
+The p95 uses nearest rank. Median paired differences and differences of arm
+medians are different statistics. No material latency or CPU benefit is
+demonstrated: arm medians and tails have mixed directions, and task CPU remains
+similar. These data qualify the representative comparison's completion and
+semantic parity, not a speed threshold, full V10 or long-horizon benefit.
+
+| Task path | Target plus waited descendants CPU seconds, median (base → proposal) | Target/waited peak RSS MiB, median (base → proposal) | Owned broker CPU seconds, median (base → proposal) | Broker end RSS MiB, median / p95 (base → proposal) |
+| --- | --- | --- | --- | --- |
+| Source cold | 1.311 → 1.325 | 75.75 → 75.58 | 0.770 → 0.775 | 127.9 / 134.8 → 128.6 / 133.5 |
+| Source warm | 1.235 → 1.226 | 76.15 → 76.16 | 0.180 → 0.185 | 146.5 / 148.4 → 129.8 / 148.7 |
+| Wheel cold | 1.353 → 1.369 | 75.94 → 76.56 | 0.805 → 0.810 | 129.5 / 134.4 → 130.1 / 134.1 |
+| Wheel warm | 1.273 → 1.260 | 76.05 → 76.69 | 0.190 → 0.180 | 100.4 / 136.3 → 101.4 / 140.2 |
+
+These RSS observations are not concurrent process-tree peaks; warm broker
+end RSS also reflects its retained lifetime. Help target/waited median RSS is
+17.56–17.85 MiB and median CPU is 0.046–0.056 seconds. Uninstrumented stdout is
+325 bytes for help, 3,557 for source tasks and 3,550 for wheel tasks in both
+arms; stderr is empty. Target/waited block-I/O counters do not measure all
+broker/native I/O.
+
+Separate instrumentation confirms task loading 538 → 533 in both distributions,
+with only the previously named five DSH modules removed; help stays at 12.
+Parent read-open counts are source cold 1,680 → 1,675, source warm 1,269 → 1,264,
+wheel cold 1,683 → 1,677 and wheel warm 1,272 → 1,267. Task write-opens stay at
+284 cold and 279 warm, with 238 observed parent local socket connections.
+Covered task send/receive bytes range from 893,698–894,864 / 392,608–392,859;
+the source proposal removes five send bytes and wheel bytes are unchanged.
+Help opens 31 files in source and 32 in wheel, with no writes or socket traffic.
+Instrumented task parent CPU is 0.635–0.774 seconds and peak RSS 62.3–65.5 MiB;
+waited-child CPU is 0.528–0.573 seconds and peak RSS 76.1–78.6 MiB. These single
+captures are a census, separate from the repeated timing results.
+
+The same isolated real SQLite fixtures at all four variants pass ordinary
+committed replay, interruption immediately after typed-result persistence,
+original-journal recovery and committed replay. Independent squared-integer
+artifact/transition oracles retain identical artifact bytes and one host
+invocation/attempt, one writeback and one debit. Resume does not redispatch;
+replay repeats no effect. Removing the final square produces exit 1 / failed
+with one dispatch and zero writebacks/debits in every variant. All owned
+brokers have shutdown/OS-exit readback; no experimental broker remains live.
+
+Setup/orchestration costs 1,018.786 seconds, including overlapping build,
+installation, fixture and cache work; those phases must not be summed.
+The separate rejection phase costs 16.056 seconds, instrumentation 39.116 and
+eight parent/actual-Node profile captures 54.880. Recovery/replay target time
+is recorded separately; its complete orchestration cost remains uncovered.
+Existing `performance-diagnosis` recipes report workspace capture, journal
+checkpoints, Git probes and quota preparation among Python observations; Node
+profiles include startup, request dispatch, idle and retirement. Sampled stack
+weights are neither benchmark latency nor proof of a root cause; inclusive
+weights, warmup and retirement cannot be added as task savings. Full context
+and process-tree/native/thread/model costs remain unknown. Monolithic wheels
+remain approximately 8.9 MiB; this does not qualify split installation.
+
+**Evidence-conditioned next action:** retain the tested compatibility/loading
+seams, and stop expanding these helpers for an unproven speedup. Prioritize a
+bounded characterization of the existing full-parser/export closure or the
+measured workspace/journal/bridge owner, then require a new matched real-path
+comparison before adopting a performance change. This checkpoint creates no
+new owner, budget, preset or default. R0's complete census, R1/minimal,
+D2/D5/D6, I3/D3, hard-lease/context/model and split-install acceptance remain
+open; independent exact-head review and required validation govern adoption.
+
 ## Appendix B: Decision log
 
 | Date | Decision | Owner / approval | Alternatives | Normative sections changed |
@@ -1006,6 +1102,7 @@ loading change. The numbers below describe these cache conditions only.
 | E5 | DSH composition example | Pinned upstream commit | [`minimal.patch.yml`](https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/bundle/web-app/presets/minimal.patch.yml), [`standard.patch.yml`](https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/bundle/web-app/presets/standard.patch.yml), [`sdk-minimal`](https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/bundle/sdk-minimal/README.md) | Source-audited | Shared preset composition and a self-contained SDK bundle; not a LoopX host qualification or permission recommendation |
 | E6 | Pi core/context example | Pinned upstream commit | [`agent` core](https://github.com/badlogic/pi-mono/blob/f14813e96510a7cf7562a120e809c6a134af073d/packages/agent/README.md) | Source-audited | Agent/tool/event core with `transformContext`, `convertToLlm`, `prepareRequest` and `finishTurn` seams; no LoopX authority or performance claim |
 | E7 | Bounded paired cost campaign | `a9485073f` / `86d9c542d`; named environment above | Paired cost checkpoint above; existing entrypoint/SQLite fixture and performance-diagnosis owners | 499 observations; source groups complete, wheel incomplete; cache attribution unqualified | Aggregate public-safe evidence only; no speedup, full V10, split-install or model-cost qualification |
+| E8 | Matched-bytecode representative comparison | `546c08c0d` / `0df5ad792`; named environment above | Matched-bytecode checkpoint above; same CLI/SQLite and performance-diagnosis owners | Six groups × 30 pairs; 360 observations; parity/rejection and cache readback pass; no demonstrated material benefit | Aggregate public-safe evidence only; later integration, full V10, minimal, split install and model costs unqualified |
 
 ## Appendix D: Rejected or superseded alternatives
 
