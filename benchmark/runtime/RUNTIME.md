@@ -430,6 +430,11 @@ install_execution_commitment(
 )
 ```
 
+Installers on the same judge share one route. The native relay resolves the
+exact `(run_id, task_id)` pair; unrelated trials cannot observe each other's
+execution. Reinstalling the same observer is idempotent; replacing an existing
+observer for that pair is rejected. Registrations are local to each app.
+
 Use the native trial directory containing `solver_execution.json` and the exact
 worker process. The provider uses the campaign report's TypeScript duration
 owner; installation, grading and gaps between executions contribute no time.
