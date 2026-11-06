@@ -3049,10 +3049,19 @@ function PersonalGoalHome({
     },
     timeline: workspaceTimeline,
   };
+  // Navigation may leave an Agent's exact Session while its existing stream
+  // continues. Project that observed Turn within its Goal, without another read.
+  const observedConversationRunning = Object.entries(runtimeBindings).some(([key, binding]) => {
+    if (binding.status !== "running" || !binding.turnId) return false;
+    const target = conversationContextOfKey(key);
+    return selectedGoal ? (target.kind === "goal" || target.kind === "managed") && target.goalId === selectedGoal.goalId
+      : key === contextId;
+  });
   return (
     <div className={theme === "dark" ? "dark" : ""} data-testid="personal-goal-home">
       <PersonalWorkspacePage
         typedActionsRevision={typedActionsRevision}
+        observedConversationRunning={observedConversationRunning}
         workspaceConversations={{ ...workspaceProjects, selectedRef: selectedWorkspaceRef, onSelect: onSelectWorkspace,
           onOpenOriginal: onOpenOriginalConversation,
           entryGate: appEntryBlocked ? {unavailable: appEntry.unavailable, retry: appEntry.retry} : undefined, managed: managedTarget ? {target: managedTarget, ...managedConversation} : undefined, bound: boundConversation ? { target: boundConversation, ...originalConversation } : undefined }}

@@ -91,7 +91,30 @@ async function verifyManagedTurnObservers({page, origin, sessions, panel, choose
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
     await page.screenshot({path: resolve(outputDir, "managed-observer-narrow.png")});
     await assertSingleObserver(ownTurn, 1);
+    const managedUrl = page.url();
+    await composer.fill("Retain this original Session's unsent draft across work views.");
+    await page.setViewportSize({width: 1512, height: 982});
+    for (const view of ["概览", "任务", "研究", "成果"]) {
+      await page.getByRole("navigation", {name: "Goal 视图"}).getByRole("button", {name: view, exact: true}).click();
+      await page.getByRole("status", {name: "正在回复", exact: true}).waitFor();
+      assert.equal(await page.locator(".personal-manager-conversation-tray").count(), 0,
+        "An observed managed Turn stays on Chat without covering a reading view");
+    }
+    await page.setViewportSize({width: 390, height: 844});
+    assert.equal(await page.getByRole("status", {name: "正在回复", exact: true}).count(), 1);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+    await page.screenshot({path: resolve(outputDir, "managed-observer-background-narrow.png")});
+    await page.setViewportSize({width: 1512, height: 982});
+    await page.locator(".personal-manager-link").click();
+    assert.equal(await page.getByRole("status", {name: "正在回复", exact: true}).count(), 0,
+      "Another conversation never inherits the Goal's managed Turn activity");
+    for (let step = 0; step < 5; step += 1) await page.goBack();
+    await page.waitForURL(managedUrl);
+    await pending.waitFor();
+    assert.equal(await composer.inputValue(), "Retain this original Session's unsent draft across work views.");
+    await assertSingleObserver(ownTurn, 1);
     await interrupt(ownTurn);
+    await page.getByRole("status", {name: "正在回复", exact: true}).waitFor({state: "hidden"});
 
     // Start through the same real ingress while another Session is selected.
     // Entering the original must recover it without a composer-owned observer.

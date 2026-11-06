@@ -843,6 +843,7 @@ export function PersonalWorkspacePage({
   conversationSessionId,
   conversationHistoryState,
   conversationMessageFocus,
+  observedConversationRunning = false,
   workBrowseSearch,
   onWorkBrowseChange,
   agents = [{ agentId: "codex", available: true, capability: "代码与项目执行", label: "Codex" }],
@@ -879,6 +880,7 @@ export function PersonalWorkspacePage({
   conversationSessionId?: string;
   conversationHistoryState?: ConversationHistoryStatus;
   conversationMessageFocus?: {sessionId: string; messageId: string};
+  observedConversationRunning?: boolean;
   workBrowseSearch?: Record<string, unknown>;
   onWorkBrowseChange?: (patch: Partial<GoalWorkBrowseState>, source: string, replace?: boolean) => void;
   agents?: WorkspaceAgentOption[];
@@ -2803,7 +2805,7 @@ export function PersonalWorkspacePage({
               value: selectedWorkspaceRef ?? stewardScopeValue,
             } : null}
             workspaceGrantLabel={selectedWorkspaceRef ? t(workspaceUnavailable ? "workspace.grantRevoked" : selectedWorkspaceProject?.grant === "workspace_write" ? "workspace.grantWrite" : "workspace.grantRead") : null}
-            conversationRunning={Boolean((runningMessage && !runningMessage.queued) || loopxDeliveryOpen)}
+            conversationRunning={Boolean(observedConversationRunning || (runningMessage && !runningMessage.queued) || loopxDeliveryOpen)}
             managerChatOpen={managerChatOpen}
             managerChannelBinding={managerChannelBinding}
             managerRuntime={managerRuntime}
