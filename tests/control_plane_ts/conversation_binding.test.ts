@@ -799,7 +799,7 @@ for (const endpoint of ["codex", "antigravity", "kiro-cli"]) {
   });
 }
 
-test("unfinished completed work requires typed intent and latest settled native/source proof, once", () => {
+test("unfinished completed work requires typed intent and pinned settled native/source proof, once", () => {
   const configured = planConversationBinding(request).state;
   const source = {source_ref: "e".repeat(24), sender_ref: row.operator_ref, private_human_message: true};
   const context = resolveBoundConversation({current: configured, binding_id: row.binding_id,
@@ -812,18 +812,22 @@ test("unfinished completed work requires typed intent and latest settled native/
     upstream_thread_id: "native", active_turn_id: null, project_context: context,
     channel_id: `project.external.${row.binding_id}.${source.source_ref}`};
   const native = {thread_id: "native", turn_id: "native-partial", completed_work: true,
+    native_inventory_sha256: "a".repeat(64),
     all_effects_settled: true, unfinished_work: {effects_settled: true, dependency: work.dependency, remaining: work.remaining}};
   const packet = {request: {request_ref: "f".repeat(24), command: null, status: "accepted", delivery_verified: true,
     message: "Original request", origin: "lark", binding_id: row.binding_id, session_id: "original", turn_id: "partial", source},
     binding: row, current_session: session, context_recovery: {version: 21, failed_turn: completed,
       observed_at: "2026-01-01T00:10:00Z", steering_observed: false, stop_observed: false, attachments_present: false,
+      queued_input_present: false, later_equivalent_input_present: false,
       source_verified: true, native_observation: native}};
   const plan = planBoundConversationRequest(packet);
   assert.equal(plan.recovery_eligible, true);
   assert.equal(plan.work_attempt, 1);
   assert.ok(String(plan.client_turn_id).endsWith("-work-1"));
   for (const change of [{source_verified: false}, {steering_observed: true}, {stop_observed: true},
+    {queued_input_present: true}, {later_equivalent_input_present: true}, {later_equivalent_input_present: null},
     {attachments_present: true}, {observed_at: "2026-01-01T00:00:59Z"},
+    {native_observation: {...native, native_inventory_sha256: null}},
     {native_observation: {...native, all_effects_settled: false}},
     {native_observation: {...native, thread_id: "foreign"}},
     {native_observation: {...native, unfinished_work: {...work, remaining: "Another task"}}}]) {
