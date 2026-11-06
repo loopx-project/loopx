@@ -1,7 +1,7 @@
 import {useManagedConversation} from "../data/use-managed-conversation";
 import { normalizeGoalDraft, type GoalDraft } from "../../../../../loopx/control_plane/collaboration/goal_draft.js";
 import { withTurnActivity, type TurnStep } from "../data/turn-steps";
-import { conversationReturnSessions, conversationPendingReturnSessions, reconcileConversationHistory, reconcileConversationReturns } from "../data/conversation-returns";
+import { conversationReturnSessions, conversationPendingReturnSessions, reconcileConversationHistory } from "../data/conversation-returns";
 import { readConversationReturns, readTaskSessions } from "../data/conversation-return-observation";
 import { currentChannelSession, useConversationHistory } from "../data/use-conversation-history";
 import { useChatProjects } from "../data/use-chat-projects";
@@ -82,6 +82,7 @@ import {
   type ChatSessionSummary,
   type ChatImageAttachment,
   type ChatVisibleMessage,
+  mergeChatSessionMessages,
   type ManagerChannelBinding,
   type ManagerRuntimeSessionReadback,
   type AgentResponse,
@@ -1585,6 +1586,23 @@ function PersonalGoalHome({
     return target.kind === "managed" ? target.agentId : target.kind === "manager" ? t("header.manager") : goalFallback;
   };
 
+  function conversationHistoryMessage(targetContextId: string, message: ChatVisibleMessage, sessionLabel: string): PersonalManagerMessage {
+    return {
+      sourceMessageId: message.message_id, sourceSessionId: message.session_id,
+      sourceTurnId: message.turn_id ?? undefined, sourceCreatedAt: message.created_at,
+      goalDraft: normalizeGoalDraft(message.goal_draft),
+      agentLabel: message.role === "user" ? message.origin === "peer" ? (locale === "zh-CN" ? "协作者" : "Collaborator") : undefined
+        : message.origin === "manager_followup" ? "协作回执" : answerIdentityLabel(targetContextId, sessionLabel),
+      attachments: workspaceImageAttachments(message.attachments),
+      id: managerMessageId.current++, lines: [], role: message.role === "user" ? "user" : "assistant",
+      returnDelivery: message.return_delivery, collaboration: message.collaboration, collaborations: message.collaborations,
+      replyContext: message.reply_context, queueInputRevision: message.queue_input_revision, queueInputCancelled: message.queue_input_cancelled,
+      sourceLabel: message.role === "user" ? undefined : message.role === "error" ? "本地会话记录"
+        : targetContextId === "manager" ? `恢复的${t("header.manager")}会话` : `恢复的 ${sessionLabel} 会话`,
+      text: message.role === "user" ? message.reply_context?.source_text ?? message.text : visibleAgentMessage(message.text),
+    };
+  }
+
   useEffect(() => {
     const resolved = resolveLocalStatusUrl(
       statusSourceControl.activeSource.statusUrl,
@@ -1658,13 +1676,14 @@ function PersonalGoalHome({
               for (const [targetContextId, ids] of Object.entries(contexts)) {
                 if (!ids.includes(sessionId)) continue;
                 const previous = current[targetContextId] ?? [];
-                const updated = reconcileConversationReturns(previous, sessionId, snapshot.messages, (row) => ({
-                  id: managerMessageId.current++, sourceMessageId: row.message_id,
-                  sourceSessionId: sessionId, sourceCreatedAt: row.created_at,
-                  role: "assistant" as const,
-                  agentLabel: "协作回执", sourceLabel: "协作回执", text: visibleAgentMessage(row.text), lines: [],
-                  returnDelivery: row.return_delivery, collaboration: row.collaboration, collaborations: row.collaborations,
-                }));
+                // A terminal queue read can precede the final transcript write.
+                // The existing revision observer must also adopt later native
+                // rows after reload has retired their optimistic placeholders.
+                const messages = mergeChatSessionMessages([snapshot]);
+                const sessionLabel = runtimeAgents.find(agent => agent.agent_id === snapshot.session.agent_id)?.display_name
+                  ?? snapshot.session.agent_id;
+                const updated = reconcileConversationHistory(previous, messages,
+                  row => conversationHistoryMessage(targetContextId, row, sessionLabel));
                 if (updated !== previous) next = { ...next, [targetContextId]: updated };
               }
               return next;
@@ -1780,24 +1799,8 @@ function PersonalGoalHome({
       : conversationHistory.history.messages;
     const sessionLabels = new Map(conversationHistory.history.sessions.map(session => [session.session_id,
       runtimeAgents.find(agent => agent.agent_id === session.agent_id)?.display_name ?? session.agent_id]));
-    return reconcileConversationHistory(previous, messages, (message): PersonalManagerMessage => ({
-      sourceMessageId: message.message_id,
-      sourceSessionId: message.session_id,
-      sourceTurnId: message.turn_id ?? undefined,
-      sourceCreatedAt: message.created_at,
-      goalDraft: normalizeGoalDraft(message.goal_draft),
-      agentLabel: message.role === "user" ? message.origin === "peer" ? (locale === "zh-CN" ? "协作者" : "Collaborator") : undefined : message.origin === "manager_followup"
-        ? "协作回执" : answerIdentityLabel(contextId, sessionLabels.get(message.session_id ?? "") ?? selectedAgent.label),
-      attachments: workspaceImageAttachments(message.attachments),
-      id: managerMessageId.current++, lines: [],
-      role: message.role === "user" ? "user" : "assistant",
-      returnDelivery: message.return_delivery, collaboration: message.collaboration, collaborations: message.collaborations,
-      replyContext: message.reply_context,
-      queueInputRevision: message.queue_input_revision, queueInputCancelled: message.queue_input_cancelled,
-      sourceLabel: message.role === "user" ? undefined : message.role === "error" ? "本地会话记录"
-        : contextId === "manager" ? `恢复的${t("header.manager")}会话` : `恢复的 ${sessionLabels.get(message.session_id ?? "") ?? selectedAgent.label} 会话`,
-      text: message.role === "user" ? message.reply_context?.source_text ?? message.text : visibleAgentMessage(message.text),
-    }));
+    return reconcileConversationHistory(previous, messages,
+      message => conversationHistoryMessage(targetContextId, message, sessionLabels.get(message.session_id ?? "") ?? selectedAgent.label));
   };
   useEffect(() => {
     if (!conversationHistory.history) return;

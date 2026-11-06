@@ -261,9 +261,15 @@ export const attachedHostFollowUpScenario = {
       await page.reload();
       await page.locator(".personal-conversation-queue li").filter({hasText: "刷新后仍在原会话"}).waitFor();
       const recoveredReply = "刷新后快速完成的原队列回复。";
+      // The queue can become idle before the native transcript write is
+      // visible. Its later revision must recover an answer with no remaining
+      // queue transition, optimistic row, SSE or user navigation.
+      runtime.queuedTurns.set(attachedSessionId, []);
+      await page.reload();
+      await page.getByText(reply, {exact: true}).waitFor();
+      await page.locator(".personal-conversation-queue").waitFor({state: "hidden"});
       runtime.messages.get(attachedSessionId).push({message_id: "recovered-queued-answer", turn_id: "turn-queued-4",
         role: "agent", text: recoveredReply, created_at: "2026-08-13T01:00:05Z"});
-      runtime.queuedTurns.set(attachedSessionId, []);
       await page.getByText(recoveredReply, {exact: true}).waitFor({timeout: 15_000});
       if (await page.getByText(recoveredReply, {exact: true}).count() !== 1 || posts.length !== 4
           || await composer.inputValue() !== "刷新后仍保留的未发送草稿") {
