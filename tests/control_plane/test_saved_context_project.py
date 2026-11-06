@@ -13,7 +13,7 @@ from tests.control_plane.codex_checkpoint_fixture import reference_metadata_orac
 
 
 @pytest.mark.parametrize("failure", [None, "digest", "goal", "agent", "turn", "symlink", "object"])
-@pytest.mark.parametrize("setting", ["auto", "off"])
+@pytest.mark.parametrize("setting", [None, "auto", "off"])
 def test_saved_projection_checks_original_before_any_publication(tmp_path, failure, setting):
     original = {"ok": True, "goal_id": "saved-goal", "agent_identity": {"agent_id": "saved-agent"},
         "heartbeat_receipt": {"turn_instance_id": "saved-turn"}, "requirement": "保留完整要求🙂" * 100}
@@ -27,8 +27,9 @@ def test_saved_projection_checks_original_before_any_publication(tmp_path, failu
         path.rename(source)
         path.symlink_to(source)
     args = ["quota", "context-project", "--capture-file", str(path), "--capture-sha256", digest,
-        "--goal-id", "saved-goal", "--agent-id", "saved-agent", "--turn-instance-id", "saved-turn",
-        "--context-delivery", setting]
+        "--goal-id", "saved-goal", "--agent-id", "saved-agent", "--turn-instance-id", "saved-turn"]
+    if setting is not None:
+        args.extend(("--context-delivery", setting))
     for name in ("digest", "goal", "agent", "turn"):
         if failure == name:
             option = {"digest": "--capture-sha256", "goal": "--goal-id", "agent": "--agent-id", "turn": "--turn-instance-id"}[name]
@@ -1018,7 +1019,7 @@ def test_saved_projection_default_delta_off_ignores_available_native_cache(tmp_p
         "heartbeat_receipt": {"turn_instance_id": "t"}}).encode()
     path.write_bytes(raw)
     def unexpected(*args, **kwargs):
-        pytest.fail("default-off saved presentation must not inspect/create native state")
+        pytest.fail("stateless/disabled presentation must not inspect/create native state")
     monkeypatch.setattr(codex_context, "codex_context_directory", unexpected)
     argv = ["quota", "context-project", "--capture-file", str(path),
         "--capture-sha256", hashlib.sha256(raw).hexdigest(), "--goal-id", "g", "--agent-id", "a",
