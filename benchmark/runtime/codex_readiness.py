@@ -83,7 +83,7 @@ def _observe_once(env: dict[str, str], deadline: float) -> dict:
             native_env = {**env, "CODEX_HOME": str(observer)}
             timeout = _remaining(deadline)
             stage = "initialize"
-            with native_checkpoint_reader(native_env, timeout=timeout) as reader:
+            with native_checkpoint_reader(native_env, timeout=timeout, deadline=deadline) as reader:
                 def request(method, params):
                     reader.response_timeout_sec = _remaining(deadline)
                     return reader.request(method, params)

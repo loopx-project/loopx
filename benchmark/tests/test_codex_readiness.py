@@ -120,7 +120,7 @@ def test_observer_uses_receiver_home_and_one_total_io_budget(tmp_path, monkeypat
             return {"account": {"type": "chatgpt"}} if method == "account/read" else {"rateLimits": {}}
 
     @contextmanager
-    def observer(native_env, *, timeout):
+    def observer(native_env, *, timeout, deadline):
         observer_home = Path(native_env["CODEX_HOME"])
         assert observer_home != home
         assert (observer_home / "auth.json").read_bytes() == (home / "auth.json").read_bytes()
@@ -191,7 +191,7 @@ def test_total_deadline_cannot_be_reset_by_retry(tmp_path, monkeypatch, expire_a
             return {"account": {"type": "chatgpt"}} if method == "account/read" else {"rateLimits": {}}
 
     @contextmanager
-    def observer(native_env, *, timeout):
+    def observer(native_env, *, timeout, deadline):
         instances.append(native_env["CODEX_HOME"])
         if expire_at == "initialize":
             now[0] = 126
@@ -222,7 +222,7 @@ def test_retry_charges_cleanup_and_backoff_and_uses_a_fresh_home(tmp_path, monke
             return {"account": {"type": "chatgpt"}} if method == "account/read" else {"rateLimits": {}}
 
     @contextmanager
-    def observer(native_env, *, timeout):
+    def observer(native_env, *, timeout, deadline):
         instance = Path(native_env["CODEX_HOME"])
         assert instance != home
         assert not (instance / "prior-observer-write").exists()
@@ -242,6 +242,43 @@ def test_retry_charges_cleanup_and_backoff_and_uses_a_fresh_home(tmp_path, monke
     assert all(not instance.exists() for instance in instances)
     assert budgets == pytest.approx([25, 19.8])
     assert receipt["elapsed_seconds"] == pytest.approx(5.2)
+
+
+@pytest.mark.parametrize("expiry", ["spawn", "initialize"])
+def test_native_reader_rechecks_deadline_after_spawn_and_before_notify(tmp_path, monkeypatch, expiry):
+    from benchmark.runtime import codex_readiness
+    from loopx.control_plane.turn_driver import codex_stdio
+    env, _, _, _ = native_fixture(tmp_path, "success")
+    now = [100.0]
+    monkeypatch.setattr(codex_readiness.time, "monotonic", lambda: now[0])
+    calls = []
+
+    class Transport:
+        def __enter__(self):
+            return self
+        def __exit__(self, *_):
+            calls.append("closed")
+        def request(self, method, params):
+            calls.append((method, now[0], self.response_timeout_sec))
+            now[0] = 126
+            return {}
+        def notify(self, method, params):
+            calls.append(method)
+
+    def spawn(*args, **kwargs):
+        calls.append("spawn")
+        if expiry == "spawn":
+            now[0] = 126
+        return Transport()
+
+    monkeypatch.setattr(codex_stdio.StdioNativeGoalTransport, "spawn", spawn)
+    result = check_native_receiver(env)
+    assert result["ok"] is False
+    assert len(result["attempts"]) == 1
+    assert result["attempts"][0]["stage"] == "initialize"
+    assert result["attempts"][0]["error_kind"] == "timeout"
+    assert calls == (["spawn", "closed"] if expiry == "spawn" else [
+        "spawn", ("initialize", 100, 25), "closed"])
 
 
 def test_unknown_exception_and_local_configuration_fail_closed(tmp_path, monkeypatch):
