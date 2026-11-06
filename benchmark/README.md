@@ -1438,6 +1438,18 @@ inert proof in that same container's control directory; omitting it is read-only
 Neither form starts the container, restores scoring authority or calls a model.
 Keep exclusive ownership of the source during preparation and continuation.
 
+The legacy source may still say `started`, or may already record a returned
+`stopped` attempt with exit code 75. The latter requires the unique latest wake
+receipt at or before that scheduler snapshot, with `host_invoked=true`,
+`budget_exhausted=true` and `timed_out=true`, no failure, and the original agent
+session. It is not the pre-dispatch budget shortcut. Preparation preserves the
+returned stop rather than changing it to `started` or inventing an attempt ID;
+the receiver must still verify the original native interrupted tail and current
+Goal/session admission. A later or ambiguous wake keeps the source held.
+For a returned stop, the native window ends at the receipt's recorded second,
+not a later maintenance stop of the container. The original hard deadline stays
+intact even when an older worker reserved cleanup time before it.
+
 After independently restoring the original native evaluator's history,
 opportunities and actual cooldown, restart only the same inert container and
 pass its returned `installed_proof_path` as `LOOPX_INTERRUPTED_SOURCE` to the
