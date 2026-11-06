@@ -215,10 +215,14 @@ Runtime composition audit on `9cae3b28939f72fa4aadab5cfe49e19bcbdab372`:
 - [Benchmark toolkit](../../../loopx/capabilities/benchmark_toolkit/README.md)
   owns reusable permissions, concurrency and integrity. [Benchmark policy](../../../benchmark/README.md)
   keeps native execution/evaluation with the benchmark; no second launcher is restored.
-- The [three-layer protocol](../../reference/protocols/multi-agent-three-layer-minimality-v0.md)
+- The [three-layer protocol](https://github.com/loopx-project/loopx/blob/910ff3bca5c8ff5ee52bd691ae924cc37dbaf05f/docs/reference/protocols/multi-agent-three-layer-minimality-v0.md)
   uses “kernel” for a broader reusable layer. Here, governance kernel names the
   authority boundary and boot closure names a selected entrypoint's required code.
   A reusable runner or presentation facility need not enter every boot closure.
+
+> The tmux multi-agent and auto-research demos are retired. Demo-contract links
+> above are pinned to the pre-retirement revision for historical design context;
+> they do not describe current entrypoints or shared runtime ownership.
 
 ## 5. Proposed architecture
 

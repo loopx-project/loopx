@@ -776,12 +776,16 @@ entry must derive caller identity from a verified binding.
 
 Per-Agent readback uses `loopx shared-goal-alignment --goal-id <goal> --agent-id
 <agent>`, within its Stage 1/2 source-facts boundary. The plan receipt does not
-project that entire state. The [three-layer contract](../../reference/protocols/multi-agent-three-layer-minimality-v0.md)
-and [visible launcher](../../reference/protocols/multi-agent-visible-launcher-v0.md)
+project that entire state. The [three-layer contract](https://github.com/loopx-project/loopx/blob/910ff3bca5c8ff5ee52bd691ae924cc37dbaf05f/docs/reference/protocols/multi-agent-three-layer-minimality-v0.md)
+and [visible launcher](https://github.com/loopx-project/loopx/blob/910ff3bca5c8ff5ee52bd691ae924cc37dbaf05f/docs/reference/protocols/multi-agent-visible-launcher-v0.md)
 remain independent owners: user intent, preset procedure and kernel declarations
 join by Goal/Agent/Todo identity, not by creating another runner, pane owner,
 vision budget or evidence loop. Selecting an executor or storing credentials
 grants none of these effects.
+
+> The tmux multi-agent and auto-research demos are retired. Demo-contract links
+> above are pinned to the pre-retirement revision for historical design context;
+> they do not describe current entrypoints or shared runtime ownership.
 
 ## Steward Channel Readiness by Milestone (2026-09-16)
 
