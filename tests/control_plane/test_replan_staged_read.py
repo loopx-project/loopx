@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import shlex
 import os
@@ -10,6 +11,8 @@ import sys
 from pathlib import Path
 
 import pytest
+
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 
 from canonical_authority_fixture import isolate_sqlite_runtime
 from loopx.control_plane.effect_runtime import EffectRuntimeRejected, restart_effect_runtime
@@ -20,9 +23,6 @@ from loopx.control_plane.quota.turn_envelope import (
 from test_replan_host_context_projection import _quota_payload
 from test_replan_progress_native_cli import (
     AGENT, GOAL, TODO, TURN, call_progress_cli, make_progress_cli_fixture,
-)
-from tests.control_plane.codex_checkpoint_fixture import (
-    read_cli_policy_payload, reference_metadata_oracle,
 )
 
 
@@ -109,6 +109,7 @@ def test_pure_replan_does_not_advertise_unavailable_explore_attachment(tmp_path,
     try:
         entry = call("quota", "should-run", "--codex-app", "--goal-id", goal,
             "--agent-id", agent, "--turn-instance-id", turn, "--decision-output-dir", str(capture))
+        entry = read_cli_policy_payload(json.dumps(entry), returncode=0)
         source = json.loads((capture / "decision.json").read_bytes())
         raw_context = call("explore", "turn-context", "--goal-id", goal, "--agent-id", agent)
         original = raw_context["graph"]
@@ -287,17 +288,48 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
             else:
                 assert len(delivered) == 1 and delivered[0]["full_source"] is True
                 assert delivered[0]["text"] == fixture["state"].read_text()
-            # The optional full/delta transport must present the staged CLI
-            # view too. Its full recovery must not restore old inline hints.
+            # The complete-source checkpoint now starts with its pinned read,
+            # avoiding a presentation-only tool call before required context.
             command = body.split("```sh\n", 1)[1].split("\n```", 1)[0]
             projected = run(shlex.split(command), cwd=fixture["project"], env=env,
                 capture_output=True, text=True, timeout=60)
             assert projected.returncode == 0, projected.stdout
             presentation = json.loads(projected.stdout)
-            assert presentation["ok"] and presentation["mode"] == "full"
-            metadata = reference_metadata_oracle(presentation)
-            assert metadata["recovery"]["path"] == str(view_path)
-            assert read_cli_policy_payload(projected.stdout, returncode=projected.returncode) == source
+            assert presentation["ok"] and presentation["schema_version"] == "context_capture_selection_page_v1"
+            from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
+
+            reference = presentation["reference_file"]
+            _, metadata = read_context_read_reference(Path(reference))
+            assert metadata["path"] == str(view_path)
+            assert metadata["sha256"] == hashlib.sha256(view_path.read_bytes()).hexdigest()
+            chunks, offset = [], 0
+            while True:
+                assert presentation["offset"] == offset
+                assert presentation["reference_file"] == reference
+                chunks.append(presentation["content"])
+                offset += len(presentation["content"].encode())
+                if presentation["eof"]:
+                    assert offset == presentation["total_bytes"]
+                    break
+                projected = run(shlex.split(presentation["next_command"]), cwd=fixture["project"], env=env,
+                    capture_output=True, text=True, timeout=60)
+                assert projected.returncode == 0, projected.stdout
+                presentation = json.loads(projected.stdout)
+                assert presentation["ok"]
+            selected_body = "".join(chunks)
+            assert hashlib.sha256(selected_body.encode()).hexdigest() == metadata["selection"]["sha256"]
+            selected = json.loads(selected_body)
+            assert selected["schema_version"] == "context_capture_selection_v1"
+            pointers = [row["pointer"] for row in selected["selections"]]
+            for required in ["/goal_boundary", "/heartbeat_receipt", "/execution_obligation"]:
+                assert any(required == pointer or required.startswith(pointer + "/") or pointer == ""
+                           for pointer in pointers), (required, pointers)
+            for row in selected["selections"]:
+                expected = source
+                for token in row["pointer"].split("/")[1:]:
+                    token = token.replace("~1", "/").replace("~0", "~")
+                    expected = expected[int(token)] if isinstance(expected, list) else expected[token]
+                assert row["value"] == expected
         assert source["schema_version"] == "loopx_turn_envelope_v1"
         assert view == source  # The checkpoint sends one complete source, not a second fact lens.
         assert source["heartbeat_receipt"]["turn_instance_id"] == TURN

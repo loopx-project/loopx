@@ -256,6 +256,19 @@ evidence and the complete operation/settlement contract before depending on them
 The original SHA-bound full recovery remains available; a selected page's EOF
 does not prove complete source delivery, model retention or fresh authority.
 
+For a saved benchmark preflight, the ordinary wake prompt carries the command for
+the first page: native JSON `quota context-project --initial-read` publishes the
+saved decision and reads it in one call. Replace `--initial-read` with repeated
+`--select` for known fields. The output is a normal bounded reader page with its
+navigation attached. Follow `next_command` for remaining bytes or use
+`navigation.recovery.command` for other fields. If no output arrived, read the
+original digest-bound capture identified in the wake prompt. Neither retry
+requires another projection, guard, notification or model acknowledgement.
+
+中文：对于已保存的 benchmark 准入结果，唤醒正文直接给出首读命令。一次调用即可
+取得首屏；已知字段可改用多个 `--select`。续页和补读都沿原文件读取。如果没拿到
+任何输出，就用唤醒正文中的原文件及其摘要恢复，无须重做投影或准入。
+
 When the existing acceptance owner supplies complete `outcome_context`
 navigation matching this capture's Goal, Agent, selected Todo, outcome revision
 and provider revision, the initial read expands its suggested outcomes in full

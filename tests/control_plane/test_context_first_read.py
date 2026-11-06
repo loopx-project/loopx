@@ -76,6 +76,16 @@ def read_selection(command):
     return page, selected_context_values(page["content"])
 
 
+def pinned_initial_view(payload, directory):
+    base = native_context_capture_view(payload, directory)
+    from loopx.control_plane.quota import turn_envelope
+
+    plan = turn_envelope._turn_envelope_result("context_select", context=payload, initial_read=True)
+    capture = {key: base["recovery"][key] for key in ("path", "sha256")}
+    return native_context_capture_view(payload, directory, captured_recovery=base["recovery"],
+        initial_read_plan={"initial": True, "plan": plan, "capture": capture})
+
+
 @pytest.mark.parametrize("required", [True, False])
 def test_initial_read_delivers_explicit_selection_only_at_its_gate(tmp_path, decision, required):
     cli = decision["interaction_contract"]["cli_channel"]
@@ -143,6 +153,12 @@ def test_initial_read_keeps_supporting_index_obligations_and_recovers_its_full_l
     assert json.loads(detail["content"])["selections"][0]["value"] == pointers
     assert Path(view["recovery"]["path"]).read_bytes() == raw
     assert json.loads(raw) == decision
+
+
+
+
+
+
 @pytest.mark.parametrize("damage", [None, "foreign_plan", "changed_file"])
 def test_native_preparation_reuses_only_its_current_digest_bound_navigation(
     tmp_path, monkeypatch, decision, damage,
@@ -201,7 +217,7 @@ def test_prepared_initial_read_keeps_exact_body_without_retransmitting_unused_pr
     decision["unselected_evidence"] = "Historical evidence remains available. " * 10000
     decision["unselected_structure"] = {f"unread_branch_{index}": {"detail": index} for index in range(500)}
     decision["selected_todo"]["future_number"] = 10**45 + 17
-    view = native_context_capture_view(decision, tmp_path)
+    view = pinned_initial_view(decision, tmp_path)
     raw = Path(view["recovery"]["path"]).read_bytes()
     original = read_context_capture(Namespace(capture_file=view["recovery"]["path"],
         capture_sha256=view["recovery"]["sha256"], format="json", initial_read=True,
@@ -777,8 +793,8 @@ def test_warm_delta_initial_read_uses_current_action_without_the_old_base(tmp_pa
         decision["effective_action"] = "normal_run" if marker == "before" else "autonomous_replan_required"
         decision["interaction_contract"]["agent_channel"].update(
             primary_action=f"Read {marker} action.", delivery_allowed=marker == "before")
-        wire = codex_context.project_codex_context(decision, directory=str(tmp_path), capture_directory=directory,
-            goal_id="fixture", agent_id="agent", surface="quota_packet", capture_id=name)
+        wire = codex_context.prepare_codex_context(decision, directory=str(tmp_path), capture_directory=directory,
+            goal_id="fixture", agent_id="agent", surface="quota_packet", capture_id=name).delivery
         view = native_context_capture_view(wire, directory, context_directory=str(tmp_path))
     assert view["mode"] == "delta" and "first_read_command" in view
     current = json.loads(Path(view["recovery"]["path"]).read_bytes())
@@ -837,11 +853,11 @@ def test_native_first_read_reuses_only_observed_current_fields(tmp_path, monkeyp
     def navigation(capture, enabled=True):
         directory = tmp_path / capture
         directory.mkdir(mode=0o700)
-        wire = codex_context.project_codex_context(navigated_decision, directory=str(tmp_path),
+        prepared = codex_context.prepare_codex_context(navigated_decision, directory=str(tmp_path),
             capture_directory=directory, goal_id="fixture", agent_id="agent", surface="quota_packet",
             capture_id=capture, progressive_enabled=enabled)
-        view = native_context_capture_view(wire, tmp_path / capture, context_directory=str(tmp_path),
-            progressive_enabled=enabled, max_page_output_bytes=6000)
+        view = native_context_capture_view(prepared.delivery, directory, context_directory=str(tmp_path),
+            progressive_enabled=enabled, initial_read_plan=prepared.initial_read_plan, max_page_output_bytes=6000)
         return model_context_reference(view)
 
     def pages(command):

@@ -165,9 +165,9 @@ def project(root, capture_id="one", *, payload=None, generation=None):
     directory.mkdir(mode=0o700)
     if payload is None:
         payload = {"ok": True, "goal_id": "fixture", "requirements": "Preserve final stop condition."}
-    result = context.project_codex_context(payload, directory=str(root), capture_directory=directory,
+    result = context.prepare_codex_context(payload, directory=str(root), capture_directory=directory,
         goal_id="fixture", agent_id="agent", surface="quota_packet", capture_id=capture_id,
-        continuity_generation=generation)
+        continuity_generation=generation).delivery
     return payload, result
 
 
@@ -391,13 +391,13 @@ def test_command_workdir_preserves_native_session_delta_and_recovery(tmp_path, m
     script = """
 import json, sys
 from pathlib import Path
-from loopx.control_plane.turn_driver.codex_context import project_codex_context
+from loopx.control_plane.turn_driver.codex_context import prepare_codex_context
 root = Path(sys.argv[1])
 capture = root / 'two'
 capture.mkdir(mode=0o700)
-print(json.dumps(project_codex_context(json.load(sys.stdin), directory=str(root),
+print(json.dumps(prepare_codex_context(json.load(sys.stdin), directory=str(root),
     capture_directory=capture, goal_id='fixture', agent_id='agent',
-    surface='quota_packet', capture_id='two')))
+    surface='quota_packet', capture_id='two').delivery))
 """
     result = subprocess.run([sys.executable, "-c", script, str(tmp_path)],
         input=json.dumps(payload), text=True, capture_output=True,

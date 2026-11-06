@@ -23,12 +23,22 @@ def read(command, **overrides):
     return read_context_capture(args)
 
 
+def pinned_initial_view(payload, directory):
+    base = native_context_capture_view(payload, directory)
+    from loopx.control_plane.quota import turn_envelope
+
+    plan = turn_envelope._turn_envelope_result("context_select", context=payload, initial_read=True)
+    capture = {key: base["recovery"][key] for key in ("path", "sha256")}
+    return native_context_capture_view(payload, directory, captured_recovery=base["recovery"],
+        initial_read_plan={"initial": True, "plan": plan, "capture": capture})
+
+
 def fixture(tmp_path):
     payload = {"ok": True, "interaction_contract": {"schema_version": "loopx_interaction_contract_v0"},
         "goal_boundary": {"stop": "Do not extend the original budget."},
         "selected_todo": {"todo_id": "todo_fixture", "text": "Compare 原始条件。" * 900},
         "criterion": {"value": 9007199254740993, "stop": "No publication is authorized."}}
-    view = native_context_capture_view(payload, tmp_path)
+    view = pinned_initial_view(payload, tmp_path)
     return payload, view, model_context_reference(view)
 
 

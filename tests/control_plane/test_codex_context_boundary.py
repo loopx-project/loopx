@@ -183,13 +183,13 @@ def test_native_reader_requires_complete_hook_output_even_when_model_saw_page(tm
     publish = workspace / "publish.py"
     publish.write_text(
         "import json, pathlib, time, subprocess, shlex\n"
-        "from loopx.control_plane.turn_driver.codex_context import project_codex_context\n"
+        "from loopx.control_plane.turn_driver.codex_context import prepare_codex_context\n"
         "from loopx.cli_commands.quota_capture import native_context_capture_view\n"
         f"capture=pathlib.Path({str(capture)!r})\n"
         "body={'complete':True,'sources':[{'source':'selected_todo','content':{'todo':"
         "{'todo_id':'todo_fixture','text':'Preserve the original requirement. '*40,'status':'open'}}}]}\n"
-        f"full=project_codex_context(body,directory={str(root)!r},capture_directory=capture,"
-        "goal_id='fixture',agent_id='agent',surface='work_context',capture_id='fixture-capture')\n"
+        f"full=prepare_codex_context(body,directory={str(root)!r},capture_directory=capture,"
+        "goal_id='fixture',agent_id='agent',surface='work_context',capture_id='fixture-capture').delivery\n"
         f"view=native_context_capture_view(full,capture,context_directory={str(root)!r})\n"
         # Read the returned reference through its real command. The test still
         # needs an actual page in model input to isolate complete-hook coverage.
