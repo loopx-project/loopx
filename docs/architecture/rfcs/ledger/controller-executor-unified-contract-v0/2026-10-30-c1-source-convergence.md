@@ -2467,3 +2467,28 @@ its result does not attribute savings to field reuse. It validates the measured
 steps, not completion of the original three-step Task, natural model adoption or
 whole-C1 net benefit. Historical failures and the remaining reader, quality and
 independent-acceptance obligations remain open.
+
+### First-read convergence after main adoption
+
+The subsequent integration `339f01e08782` adopts main `39770a960483`, including
+the landed first-read producers/readers. The last `project_codex_context` test
+caller now uses `prepare_codex_context`; the unused Python wrapper is removed.
+Recorded source versions and journal recovery codecs retain their separate
+support obligations. Benchmark preflight tests follow the emitted first BODY
+through EOF, verify its reference/source/selection digests and required fields,
+and retain the complete original source instead of expecting a navigation reply.
+
+A fresh, source-stable 36-scenario cohort against that main retains the same
+synthetic Task, artifacts, single debits and cost boundaries. SQLite warm BODY
+is 24,016 → 23,285 bytes (−3.04%), CLI stdout 59,898 → 49,136 (−17.97%) and RPCs
+292 → 290. Framed RPC bytes **increase 2.93%**. Including preparation, stdout is
+117,466 → 95,041 (−19.09%), RPCs 582 → 578, framed bytes **increase 2.14%**, and
+observed Python reads/writes fall 9.12%/26.28%. These results supersede neither
+the preceding cohort nor natural-model qualification. The current-main native
+control still delivers 14,386 warm BODY bytes versus 2,583 with field reuse;
+that large-field component is absent from the lightweight quota fixture.
+
+Configured Python typing remains non-passing: the prior C1 has 4,809 diagnostics
+and this integration 4,814. The five additions are in unchanged main-owned
+modules, verified by identical Git objects; they are not waived. Reader exits,
+independent review, installed adoption and whole-C1 net benefit remain open.
