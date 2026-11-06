@@ -478,7 +478,7 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
         if host == "code_mode":
             pragma = ('// @exec: {"max_output_tokens":24000}\n' if automatic_output_budget else
                 '// @exec: {"max_output_tokens":12000}\n' if native_pragma else "")
-            if bounded_pages and native_read_batch > 1:
+            if bounded_pages and native_read_batch > 2:
                 # A smaller output budget can shorten any page. Follow each
                 # returned cursor inside the same bounded batch rather than
                 # leaving gaps between precomputed offsets.
