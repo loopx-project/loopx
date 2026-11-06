@@ -136,6 +136,25 @@ test("exhausted business quota permits one read-only answer, never a fresh busin
     "a later restricted answer must not strand the other exact historical failures");
   assert.notEqual(planBoundConversationRequest({...migrated, current_session: {...migrated.current_session,
     upstream_context_history: [{thread_id: "native", manager_context_version: 22, agent_id: "antigravity"}]}}).recovery_eligible, true);
+  const history = {...session, upstream_context_history: [{thread_id: "123", manager_context_version: 22}]};
+  for (const thread_id of [123, null, false, {}, [], "foreign"]) {
+    const prior = planBoundConversationRequest({...packet, current_session: history,
+      request: {...packet.request, context_recovery: {...previous, native_observation: {thread_id}}}});
+    assert.deepEqual(prior.native_thread_ids, ["native", "123"],
+      "an untrusted prior identity cannot reorder validated string identities");
+    const proof = planBoundConversationRequest({...packet, current_session: {...session, upstream_thread_id: "123"},
+      context_recovery: {...packet.context_recovery,
+        native_observation: {...packet.context_recovery.native_observation, thread_id}}});
+    assert.equal(proof.recovery_candidate, true);
+    assert.equal(proof.recovery_eligible, false, "a proof must match without identity coercion");
+  }
+  assert.deepEqual(planBoundConversationRequest({...packet, current_session: history,
+    request: {...packet.request, context_recovery: {...previous,
+      native_observation: {thread_id: "123"}}}}).native_thread_ids, ["123", "native"]);
+  assert.equal(planBoundConversationRequest({...packet,
+    current_session: {...session, upstream_thread_id: "123"},
+    context_recovery: {...packet.context_recovery, native_observation: {...proof, thread_id: "123"}}}).recovery_eligible, true,
+  "numeric-looking string identities remain valid");
   for (const change of [{source_verified: false}, {stop_observed: true}, {steering_observed: true},
     {attachments_present: true}, {queued_input_present: true}, {metadata_capacity: null},
     {executor_configuration: {...configuration, configuration_revision: "changed"}},
@@ -780,7 +799,7 @@ for (const endpoint of ["codex", "antigravity", "kiro-cli"]) {
   });
 }
 
-test("unfinished completed work requires typed intent and latest settled native/source proof, once", () => {
+test("unfinished completed work requires typed intent and pinned settled native/source proof, once", () => {
   const configured = planConversationBinding(request).state;
   const source = {source_ref: "e".repeat(24), sender_ref: row.operator_ref, private_human_message: true};
   const context = resolveBoundConversation({current: configured, binding_id: row.binding_id,
@@ -793,18 +812,22 @@ test("unfinished completed work requires typed intent and latest settled native/
     upstream_thread_id: "native", active_turn_id: null, project_context: context,
     channel_id: `project.external.${row.binding_id}.${source.source_ref}`};
   const native = {thread_id: "native", turn_id: "native-partial", completed_work: true,
+    native_inventory_sha256: "a".repeat(64),
     all_effects_settled: true, unfinished_work: {effects_settled: true, dependency: work.dependency, remaining: work.remaining}};
   const packet = {request: {request_ref: "f".repeat(24), command: null, status: "accepted", delivery_verified: true,
     message: "Original request", origin: "lark", binding_id: row.binding_id, session_id: "original", turn_id: "partial", source},
     binding: row, current_session: session, context_recovery: {version: 21, failed_turn: completed,
       observed_at: "2026-01-01T00:10:00Z", steering_observed: false, stop_observed: false, attachments_present: false,
+      queued_input_present: false, later_equivalent_input_present: false,
       source_verified: true, native_observation: native}};
   const plan = planBoundConversationRequest(packet);
   assert.equal(plan.recovery_eligible, true);
   assert.equal(plan.work_attempt, 1);
   assert.ok(String(plan.client_turn_id).endsWith("-work-1"));
   for (const change of [{source_verified: false}, {steering_observed: true}, {stop_observed: true},
+    {queued_input_present: true}, {later_equivalent_input_present: true}, {later_equivalent_input_present: null},
     {attachments_present: true}, {observed_at: "2026-01-01T00:00:59Z"},
+    {native_observation: {...native, native_inventory_sha256: null}},
     {native_observation: {...native, all_effects_settled: false}},
     {native_observation: {...native, thread_id: "foreign"}},
     {native_observation: {...native, unfinished_work: {...work, remaining: "Another task"}}}]) {
