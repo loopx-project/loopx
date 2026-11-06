@@ -114,7 +114,8 @@ def interrupted(*args):
         'items':[{'type':'commandExecution','status':'failed'}]}))
     sys.exit(130)
 signal.signal(signal.SIGINT,interrupted)
-sys.stdin.read()
+payload=sys.stdin.read()
+with pathlib.Path('native-inputs').open('a') as f:f.write(json.dumps(payload)+'\\n')
 if pathlib.Path('continue').exists():
     print(json.dumps({'type':'turn.completed'}),flush=True)
 else:
@@ -122,7 +123,8 @@ else:
 ''')
     entry = tmp_path / "worker-entry.py"
     entry.write_text("from benchmark.runtime import worker\n"
-                     "worker.heartbeat_body=lambda *a,**kw:'synthetic authorized work'\n"
+                     "from benchmark.runtime.interruption_recovery import recovery_handoff\n"
+                     "worker.heartbeat_body=lambda env,*a,**kw:'synthetic authorized work'+recovery_handoff(env)[1]\n"
                      "raise SystemExit(worker.main())\n")
     for key, value in env.items():
         monkeypatch.setenv(key, value)
@@ -163,6 +165,12 @@ else:
         second_receipt = receipts[0].parent.with_name("duplicate") / "receipt.json"
         second_receipt.parent.mkdir()
         second_receipt.write_bytes(receipts[0].read_bytes())
+    if fault is None:
+        import hashlib
+        brief = tmp_path / 'recovery-handoff.json'
+        brief.write_text(json.dumps({'ok': True, 'handoff_text': 'Retained submission old-7 is now restored-7; read the inherited history. Goal and opportunities are unchanged.'}))
+        monkeypatch.setenv('LOOPX_RECOVERY_HANDOFF', str(brief))
+        monkeypatch.setenv('LOOPX_RECOVERY_HANDOFF_SHA256', hashlib.sha256(brief.read_bytes()).hexdigest())
     new = resume_state_file(str(original), phase_deadline=deadline, agent_id=args.agent_id,
         wake_log_dir=env["LOOPX_WAKE_LOG_DIR"], env=dict(os.environ))
     if fault:
@@ -184,3 +192,56 @@ else:
     argv = [json.loads(line) for line in (project / "native-argv").read_text().splitlines()]
     assert len(argv) == 2 and "resume" in argv[1] and "original-native" in argv[1]
     assert original.read_bytes() == old_bytes and goal_state.read_bytes() == initial_goal
+    assert json.loads(Path(new).read_bytes())["recovery_handoff_delivered"] is True
+    assert scheduler_fixture.worker.run_worker(args) == 0
+    inputs = [json.loads(line) for line in (project / 'native-inputs').read_text().splitlines()]
+    assert len(inputs) == 3
+    assert 'restored-7' in inputs[1] and 'restored-7' not in inputs[2]
+
+
+
+def test_recovery_handoff_missing_changed_and_default_parity(tmp_path):
+    import hashlib
+    from benchmark.runtime.interruption_recovery import recovery_handoff
+    assert recovery_handoff({}) == (None, '')
+    path = tmp_path / 'handoff.json'
+    raw = json.dumps({'ok': True, 'handoff_text': 'Read retained history; no ownership change.'}).encode()
+    env = dict(LOOPX_RECOVERY_HANDOFF=str(path), LOOPX_RECOVERY_HANDOFF_SHA256=hashlib.sha256(raw).hexdigest())
+    with pytest.raises(FileNotFoundError): recovery_handoff(env)
+    path.write_bytes(raw)
+    first = recovery_handoff(env)
+    assert recovery_handoff(env) == first
+    path.write_bytes(raw + b' ')
+    with pytest.raises(ValueError, match='bytes changed'): recovery_handoff(env)
+    with pytest.raises(ValueError): recovery_handoff({'LOOPX_RECOVERY_HANDOFF': str(path)})
+
+
+@pytest.mark.parametrize('status', ['started', 'unknown', 'returned'])
+def test_new_transport_phase_does_not_clear_unsettled_semantic_replan(tmp_path, monkeypatch, status):
+    from tests.test_external_scheduler_worker import _guarded_host, worker
+    from tests.test_external_scheduler_replan_retry import _replan
+    from benchmark.runtime.scheduler import _create_resume_state
+    args, count = _guarded_host(tmp_path, kind='provider_capacity', recover_at=2)
+    args.once = True
+    monkeypatch.setattr(worker, 'run_quota_should_run', lambda *a, **kw: _replan(tmp_path))
+    assert worker.run_worker(args, clock=lambda: 1000.0) == 1
+    old = Path(args.state_file)
+    state = json.loads(old.read_bytes())
+    attempts = state['replan_attempts']
+    attempts[0]['status'] = status
+    target = tmp_path / 'continued.json'
+    _create_resume_state(target, old, recovered={'native': {'session_id': 'same-session'}},
+                         replan_attempts=attempts)
+    args.state_file = str(target)
+    assert worker.run_worker(args, clock=lambda: 1031.0) in (0, 2)
+    assert count.read_text() == '1'
+    assert json.loads(target.read_bytes())['replan_attempts'] == attempts
+
+
+@pytest.mark.skipif(not hasattr(os, 'mkfifo'), reason='FIFO boundary requires POSIX')
+def test_recovery_handoff_rejects_fifo_without_waiting_for_a_writer(tmp_path):
+    from benchmark.runtime.interruption_recovery import recovery_handoff
+    pipe = tmp_path / 'handoff.fifo'
+    os.mkfifo(pipe)
+    with pytest.raises(ValueError, match='regular file'):
+        recovery_handoff(dict(LOOPX_RECOVERY_HANDOFF=str(pipe), LOOPX_RECOVERY_HANDOFF_SHA256='a' * 64))

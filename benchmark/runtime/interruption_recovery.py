@@ -12,6 +12,30 @@ import math
 import os
 from pathlib import Path
 import re
+import stat
+
+
+def recovery_handoff(env: dict[str, str]) -> tuple[dict | None, str]:
+    """Read content through the existing handoff owner; never adopt ownership."""
+    path, digest = env.get('LOOPX_RECOVERY_HANDOFF'), env.get('LOOPX_RECOVERY_HANDOFF_SHA256')
+    if path is None and digest is None:
+        return None, ''
+    if not path or not re.fullmatch(r'[0-9a-f]{64}', digest or ''):
+        raise ValueError('Recovery handoff requires its exact path and digest')
+    source = Path(path)
+    if not source.is_absolute() or source.resolve() != source or source.is_symlink():
+        raise ValueError('Recovery handoff must be a physical absolute file')
+    # Reject special files before reading, including a raced FIFO replacement.
+    descriptor = os.open(source, os.O_RDONLY | getattr(os, 'O_NONBLOCK', 0) | getattr(os, 'O_NOFOLLOW', 0))
+    with os.fdopen(descriptor, 'rb') as stream:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            raise ValueError('Recovery handoff must be a regular file')
+        raw = stream.read(65537)
+    if len(raw) > 65536 or hashlib.sha256(raw).hexdigest() != digest:
+        raise ValueError('Recovery handoff bytes changed or exceed the transport bound')
+    from loopx.cli_commands.handoff_restore import restore_handoff_input
+    text = restore_handoff_input(raw.decode('utf-8'), input_format='json')
+    return {'path': path, 'sha256': digest}, text
 
 
 class ProcessObservers:
@@ -98,6 +122,12 @@ def _stopped_source(state_file: Path, state: dict, env: dict[str, str], wake_log
             or any(declaration.get(k) != v for k, v in expected.items())
             or hashlib.sha256(_physical_read(state_file)).hexdigest() != proof['scheduler_state_sha256']):
         raise ValueError('Stopped recovery proof differs from the original worker')
+    # Derive identity from the current UTS namespace, never a caller env value.
+    # The Docker producer only accepts the original default hostname. This
+    # prevents accidentally consuming copied evidence in a fresh worker; the
+    # trusted host/operator remains responsible for Docker namespace authority.
+    if os.name != 'posix' or os.uname().nodename != proof['container_id'][:12]:
+        raise ValueError('Stopped recovery is only valid in the original container namespace')
     required = set(source_paths(declaration).values())
     supplied = {part['source_path'] for part in proof['components']}
     if not required <= supplied or any(p not in required and not any(

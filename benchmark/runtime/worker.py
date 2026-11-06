@@ -126,7 +126,9 @@ def heartbeat_body(env: dict[str, str], turn_id: str, *, native_goal: bool,
     )
     from .research_probe import runtime_execution_guidance
 
-    return body + runtime_execution_guidance(env)
+    from .interruption_recovery import recovery_handoff
+    _, handoff = recovery_handoff(env)
+    return body + runtime_execution_guidance(env) + ("\nRecovery handoff (content only):\n" + handoff if handoff else "")
 
 
 @contextmanager
@@ -567,6 +569,10 @@ def run_once(env: dict[str, str]) -> dict:
         Path(env.get("LOOPX_RUNTIME_ROOT", str(home))) / "benchmark-pending-turn.json"
     )
     try:
+        from .interruption_recovery import recovery_handoff
+        handoff, _ = recovery_handoff(env)
+        if handoff is not None:
+            receipt["recovery_handoff_sha256"] = handoff["sha256"]
         if stage == "execute" and env.get("LOOPX_PHASE_DEADLINE_EPOCH"):
             remaining = float(env["LOOPX_PHASE_DEADLINE_EPOCH"]) - time.time()
             # Heartbeat work uses the whole remaining phase. Cleanup is bounded

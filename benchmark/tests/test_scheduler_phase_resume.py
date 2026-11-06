@@ -189,3 +189,25 @@ def test_only_explicit_continuation_wraps_the_existing_scheduler():
     assert continued[1:3] == ["-m", "benchmark.runtime.scheduler"]
     assert worker_command({**env, "LOOPX_EXECUTION_MODE": "native-goal"}, **options,
                           resume_budget_stop=True) == ["/python", "-m", "benchmark.runtime.worker"]
+
+
+def test_later_authorized_phase_can_bind_a_new_handoff_without_rewriting_prior(tmp_path, monkeypatch):
+    import hashlib
+    from benchmark.runtime import interruption_recovery
+    root = tmp_path / 'scheduler.json'
+    _stopped(root)
+    source = json.loads(root.read_bytes())
+    old_deadline = time.time() - 10
+    source.update(interruption_recovery={'phase_deadline_epoch': old_deadline},
+                  recovery_handoff={'path': '/old/handoff', 'sha256': 'a' * 64})
+    root.write_text(json.dumps(source))
+    old = root.read_bytes()
+    brief = tmp_path / 'new-handoff.json'
+    brief.write_text(json.dumps({'ok': True, 'handoff_text': 'New phase, same objective and opportunity.'}))
+    env = dict(LOOPX_RECOVERY_HANDOFF=str(brief), LOOPX_RECOVERY_HANDOFF_SHA256=hashlib.sha256(brief.read_bytes()).hexdigest())
+    monkeypatch.setattr(interruption_recovery, 'read_interrupted_host',
+        lambda *a, **kw: {'native': {'session_id': 'original'}})
+    deadline = time.time() + 100
+    selected = Path(resume_state_file(str(root),phase_deadline=deadline,agent_id='agent',wake_log_dir=str(tmp_path/'wakes'),env=env))
+    assert selected != root and root.read_bytes() == old
+    assert json.loads(selected.read_bytes())['recovery_handoff']['sha256'] == env['LOOPX_RECOVERY_HANDOFF_SHA256']

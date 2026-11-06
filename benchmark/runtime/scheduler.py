@@ -91,7 +91,7 @@ def _phase_receipt(state_file: Path, wake_log_dir: str | None) -> dict | None:
 
 
 def _create_resume_state(target: Path, predecessor: Path, *, recovered: dict | None = None,
-                         replan_attempts=None) -> None:
+                         replan_attempts=None, handoff: dict | None = None) -> None:
     if target.is_symlink():
         raise ValueError("Resumed scheduler state must not be a symlink")
     try:
@@ -101,6 +101,8 @@ def _create_resume_state(target: Path, predecessor: Path, *, recovered: dict | N
                 value.update(interruption_recovery=recovered,
                     recovered_session_id=recovered["native"]["session_id"],
                     replan_attempts=replan_attempts or [])
+            if handoff is not None:
+                value["recovery_handoff"] = handoff
             json.dump(value, stream)
             stream.flush()
             os.fsync(stream.fileno())
@@ -119,6 +121,8 @@ def resume_state_file(state_file: str, *, phase_deadline: float, agent_id: str,
     if (isinstance(phase_deadline, bool) or not isinstance(phase_deadline, (int, float))
             or not math.isfinite(phase_deadline) or phase_deadline <= time.time()):
         raise ValueError("Budget continuation requires an open finite phase deadline")
+    from .interruption_recovery import recovery_handoff
+    handoff, _ = recovery_handoff(env or {})
     path = _physical_state(Path(state_file).absolute())
     from loopx.file_lock import try_exclusive_file_lock
     from scripts.external_scheduler_worker import HOST_LOCK_OPERATION, _host_attempt, _host_pending
@@ -144,6 +148,11 @@ def resume_state_file(state_file: str, *, phase_deadline: float, agent_id: str,
             return str(predecessor)
         prior = state.get("host_attempt")
         recovery = state.get("interruption_recovery")
+        can_continue_stopped_phase = (isinstance(prior, dict) and prior.get("status") == "stopped"
+                                      and prior.get("stop_exit_code") == BUDGET_EXHAUSTED_EXIT_CODE)
+        if (recovery is not None and state.get("recovery_handoff") != handoff
+                and (recovery.get("phase_deadline_epoch") == phase_deadline or not can_continue_stopped_phase)):
+            raise ValueError("Recovered phase handoff is immutable; preserve its exact input")
         if (recovery is not None and recovery.get("phase_deadline_epoch") != phase_deadline
                 and not (isinstance(prior, dict) and prior.get("status") == "stopped"
                          and prior.get("stop_exit_code") == BUDGET_EXHAUSTED_EXIT_CODE)):
@@ -175,7 +184,7 @@ def resume_state_file(state_file: str, *, phase_deadline: float, agent_id: str,
             recovered.update(source_state_sha256=hashlib.sha256(predecessor.read_bytes()).hexdigest(),
                              phase_deadline_epoch=phase_deadline)
             _create_resume_state(target, predecessor, recovered=recovered,
-                                 replan_attempts=state.get("replan_attempts"))
+                                 replan_attempts=state.get("replan_attempts"), handoff=handoff)
             return str(target)
         if (prior.get("status") != "stopped"
                 or prior.get("stop_exit_code") != BUDGET_EXHAUSTED_EXIT_CODE

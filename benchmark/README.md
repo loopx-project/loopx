@@ -1437,3 +1437,27 @@ segment and new segment separately attributable, and verify actual model activit
 and native feedback after dispatch. Disposable tests exercise real Docker archive
 and proof installation; SQLite/process tests exercise interrupted work followed
 by the same session's next Turn without paid model calls.
+
+The legacy stopped-source path accepts only Docker's default container-ID hostname.
+The receiver derives the current UTS hostname independently and refuses copied
+proofs in a different worker, including custom-hostname sources. This is an
+accidental-cross-worker boundary under the trusted Docker operator, not a
+cryptographic defense against that operator spoofing hostnames. The installed
+proof initially has root ownership and mode `0600`; a non-root worker's operator
+must assign that one inert file to the original execution user before consumption.
+Only verified SQLite `-shm` companions are omitted as rebuildable indexes; arbitrary
+workspace files with that suffix remain protected.
+
+An explicitly continued phase can carry a hash-bound content handoff through
+`LOOPX_RECOVERY_HANDOFF` and `LOOPX_RECOVERY_HANDOFF_SHA256`. Use the existing
+`handoff restore --input FILE --format json` content envelope (`ok: true` and
+`handoff_text`), without ownership arguments. The normal heartbeat presents it;
+a successful same-session Host receipt confirms its digest and stops repeated
+presentation. An uncertain attempt retains the same input, and missing or changed
+bytes fail closed. A legitimate later budget phase can bind its own new handoff;
+the earlier phase and digest remain immutable. Native submission-ID remapping
+belongs in this infrastructure handoff, never a replacement solution Todo.
+
+Recovery settles process transport only. Preserved pending semantic replan
+attempts still require their original settlement owner; an interrupted replan
+is not silently declared complete or cleared to force dispatch.

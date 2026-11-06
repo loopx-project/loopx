@@ -28,7 +28,11 @@ def file_inventory(root: Path) -> list[dict]:
         if path.is_symlink():
             raise ValueError('Interrupted source inventory cannot contain symlinks')
         if path.name.endswith('-shm'):
-            continue  # SQLite rebuilds this reader-only index.
+            database = path.with_name(path.name[:-4])
+            if database.is_file() and not database.is_symlink():
+                with database.open('rb') as source:
+                    if source.read(16) == b'SQLite format 3\0':
+                        continue  # Only a SQLite participant's reader index is rebuilt.
         if path.is_file():
             h = hashlib.sha256()
             with path.open('rb') as stream:
@@ -77,6 +81,8 @@ def prepare_stopped_recovery(client, *, container_id: str, declaration: dict,
     # original install/run command. Actual restart remains the caller's action.
     if box.attrs['Config'].get('Entrypoint') or box.attrs['Config'].get('Cmd') != ['tail', '-f', '/dev/null']:
         raise ValueError('Original worker must have an inert restart command')
+    if box.attrs['Config'].get('Hostname') != box.id[:12]:
+        raise ValueError('Stopped recovery requires the original default Docker hostname')
     if box.attrs.get('Mounts'):
         raise ValueError('Stopped worker has externally writable mounts')
     finished = datetime.fromisoformat(before['FinishedAt'].replace('Z', '+00:00')).timestamp()
