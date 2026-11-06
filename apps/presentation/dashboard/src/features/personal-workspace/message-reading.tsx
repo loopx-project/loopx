@@ -3,6 +3,17 @@ import {MarkdownText} from "./markdown";
 import {markdownExcerpt} from "./markdown-blocks";
 import "./message-reading.css";
 
+/** A complete long return opens at its answer, without following or parsing prose. */
+export function returnedAnswerStart(scroller: HTMLElement): {key: string; top: number} | null {
+  // The timeline owns display order, including late history pages. Its typed
+  // return marker avoids inferring origin from message text or ID prefixes.
+  const row = Array.from(scroller.querySelectorAll<HTMLElement>(".personal-message")).at(-1);
+  if (row?.dataset.returnedAnswer !== "true" || !row.dataset.messageSession || !row.dataset.messageId
+      || row.getBoundingClientRect().height <= scroller.clientHeight) return null;
+  return {key: JSON.stringify([row.dataset.messageSession, row.dataset.messageId]),
+    top: Math.max(0, scroller.scrollTop + row.getBoundingClientRect().top - scroller.getBoundingClientRect().top)};
+}
+
 /** Folding is an explicit reading choice after the initial historical snapshot. */
 export function HistoricalMessageText({text, initiallyCollapsed, focused, zh, onRead}: {
   text: string;
