@@ -4961,6 +4961,109 @@ def test_slow_app_reaction_does_not_block_current_or_later_answers(ordinary, mon
     assert all(phase.get("verified") for phase in projection["deliveries"].values())
 
 
+def test_private_discovery_skips_unchanged_bodies_but_not_new_work_or_core_checks(tmp_path, monkeypatch):
+    from loopx.chat_store import _atomic_write_json
+    from loopx.extensions.lark import private_conversations as private
+
+    clock, checks, reads = [100.0], [], []
+    eligible = {"old": False}
+    transport = LarkPrivateConversations.__new__(LarkPrivateConversations)
+    transport.root = tmp_path
+    transport._context_recovery_probe_at = {}
+    transport._web_projection_paths = lambda: []
+    transport.core = SimpleNamespace(context_recovery_observer=lambda: lambda ref:
+        checks.append(ref) or eligible[ref])
+    monkeypatch.setattr(private, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    read_json = private._read_json
+
+    def observed(path):
+        reads.append(path)
+        return read_json(path)
+
+    monkeypatch.setattr(private, "_read_json", observed)
+    old, pending, new = (tmp_path / f"{name}.json" for name in ("old", "pending", "new"))
+    _atomic_write_json(old, {"status": "delivered", "request_ref": "old", "session_id": "session",
+        "turn_id": "failed", "event": {"chat_type": "p2p", "text": "private-body-marker" * 10000},
+        "deliveries": {"terminal": {"text": "private-body-marker" * 10000}}})
+    _atomic_write_json(pending, {"status": "pending"})
+    assert transport.pending_delivery_paths() == [pending]
+    reads.clear()
+    assert transport.pending_delivery_paths() == [pending] and reads == [pending]
+    assert "private-body-marker" not in repr(transport._delivery_discovery_cache)
+    _atomic_write_json(new, {"status": "pending"})
+    assert transport.pending_delivery_paths() == [new, pending]
+    clock[0] += 61
+    eligible["old"] = True
+    assert transport.pending_delivery_paths() == [new, old, pending]
+    clock[0] += 61
+    eligible["old"] = False  # A fresh Core decision wins over unchanged provider hints.
+    assert transport.pending_delivery_paths() == [new, pending]
+    assert checks == ["old", "old", "old"]
+    old.unlink()
+    assert transport.pending_delivery_paths() == [new, pending]
+    assert old not in transport._delivery_discovery_cache
+
+
+@pytest.mark.parametrize("replace", [False, True])
+def test_private_discovery_detects_same_size_updates_with_preserved_mtime(tmp_path, monkeypatch, replace):
+    import os
+    from loopx.chat_store import _atomic_write_json
+    from loopx.extensions.lark import private_conversations as private
+
+    transport = LarkPrivateConversations.__new__(LarkPrivateConversations)
+    transport.root = tmp_path
+    transport._context_recovery_probe_at = {}
+    transport._web_projection_paths = lambda: []
+    transport.core = SimpleNamespace(context_recovery_observer=lambda: lambda _: False)
+    path = tmp_path / "original.json"
+    _atomic_write_json(path, {"status": "delivered"})
+    assert transport.pending_delivery_paths() == []
+    before = path.stat()
+    body = path.read_bytes().replace(b'delivered', b'uncertain')
+    if replace:
+        other = tmp_path / "replacement.tmp"
+        other.write_bytes(body)
+        os.utime(other, ns=(before.st_atime_ns, before.st_mtime_ns))
+        os.replace(other, path)
+    else:
+        path.write_bytes(body)
+        os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+    assert path.stat().st_size == before.st_size and path.stat().st_mtime_ns == before.st_mtime_ns
+    assert transport.pending_delivery_paths() == [path]
+    # Unknown read failures must remain visible rather than reuse an old
+    # delivered view or turn the request into an empty/successful queue.
+    def unavailable(_):
+        raise OSError("read unavailable")
+
+    monkeypatch.setattr(private, "_read_json", unavailable)
+    with pytest.raises(OSError, match="read unavailable"):
+        transport.pending_delivery_paths()
+
+
+def test_private_discovery_does_not_cache_a_file_replaced_during_read(tmp_path, monkeypatch):
+    from loopx.chat_store import _atomic_write_json
+    from loopx.extensions.lark import private_conversations as private
+
+    transport = LarkPrivateConversations.__new__(LarkPrivateConversations)
+    transport.root = tmp_path
+    transport._context_recovery_probe_at = {}
+    transport._web_projection_paths = lambda: []
+    transport.core = SimpleNamespace(context_recovery_observer=lambda: lambda _: False)
+    path = tmp_path / "original.json"
+    _atomic_write_json(path, {"status": "delivered"})
+    read_json = private._read_json
+
+    def replaced(path):
+        row = read_json(path)
+        _atomic_write_json(path, {"status": "pending"})
+        return row
+
+    monkeypatch.setattr(private, "_read_json", replaced)
+    assert transport.pending_delivery_paths() == []
+    monkeypatch.setattr(private, "_read_json", read_json)
+    assert transport.pending_delivery_paths() == [path]
+
+
 @pytest.mark.parametrize("background_slots", [0, 2])
 def test_private_recovery_backlog_uses_released_capacity_before_retry_delay(tmp_path, monkeypatch, background_slots):
     from loopx.extensions.lark import goal_topic_runtime_service as worker
