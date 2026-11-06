@@ -11,6 +11,62 @@ from loopx.chat_agent import CodexChatAgentError
 from loopx.chat_store import _read_json
 
 
+@pytest.mark.parametrize("prior_dispatch", [None, "native-id", "started"])
+def test_restart_adopts_claimed_unstarted_queue_without_duplicate_dispatch(tmp_path, monkeypatch, prior_dispatch):
+    import queue
+    import threading
+    from types import SimpleNamespace
+    from loopx.chat_agent import CodexChatAgentSession
+    from loopx.chat_runtime import ChatRuntimeController, CodexAppServerAdapter
+    from loopx.chat_store import ChatSessionStore
+
+    store, sid, original_runtime = session_runtime(tmp_path)
+    original_runtime.close()
+    original, _ = store.create_queued_turn(sid, client_turn_id="claimed-before-crash",
+        message="The same original input", origin="web")
+    assert store.claim_next_queued_turn(sid)["turn_id"] == original["turn_id"]
+    assert store.load_turn(sid, original["turn_id"])["started_at"] is None
+    if prior_dispatch:
+        store.update_turn(sid, original["turn_id"], **(
+            {"upstream_turn_id": "unknown-native-dispatch"} if prior_dispatch == "native-id"
+            else {"started_at": "2026-01-01T00:00:00Z"}))
+    reopened = ChatSessionStore(tmp_path)
+    runtime = ChatRuntimeController(store=reopened, codex_bin="unused-test-codex")
+    native = CodexChatAgentSession(process=SimpleNamespace(poll=lambda: None),
+        messages=queue.Queue(), thread_id="public-thread", work_dir=tmp_path)
+    adapter = CodexAppServerAdapter(native)
+    sent = []
+    def write(packet):
+        assert packet["method"] == "turn/start"
+        sent.append(packet["params"])
+        native.messages.put({"id": packet["id"], "result": {"turn": {"id": "original-dispatch"}}})
+        native.messages.put({"method": "item/completed", "params": {"item": {
+            "type": "agentMessage", "phase": "final_answer", "text": "Recovered the original queue."}}})
+        native.messages.put({"method": "turn/completed", "params": {"turn": {"status": "completed"}}})
+    monkeypatch.setattr(native, "_write", write)
+    prepared = threading.Event()
+    def ensure(*_a, **_kw):
+        prepared.set()
+        return adapter
+    monkeypatch.setattr(runtime, "_ensure_adapter", ensure)
+    try:
+        runtime.resume_session_queue(session_id=sid, work_dir=tmp_path, objective="Original request")
+        if prior_dispatch:
+            assert prepared.wait(timeout=2)
+            current = reopened.load_turn(sid, original["turn_id"])
+            assert current["status"] == "queued" and not sent
+            assert current.get("upstream_turn_id") == ("unknown-native-dispatch" if prior_dispatch == "native-id" else None)
+            return
+        result = runtime.wait_for_turn(session_id=sid, turn_id=original["turn_id"], timeout_sec=3)
+        assert result["status"] == "completed"
+        assert len(sent) == 1 and sent[0]["input"][0]["text"].endswith(original["message"])
+        assert reopened.turn_for_client(sid, original["client_turn_id"])["turn_id"] == original["turn_id"]
+        assert len([e for e in reopened.events_after(sid, original["turn_id"], None)
+                    if e["kind"] == "turn.started"]) == 1
+    finally:
+        runtime.close()
+
+
 def test_account_preparation_keeps_its_error_before_native_dispatch(tmp_path, monkeypatch):
     store, sid, runtime = session_runtime(tmp_path)
 
