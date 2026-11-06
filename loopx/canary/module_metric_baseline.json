@@ -76,12 +76,12 @@
     "loopx/extensions/lark/presentation/explore_results.py": {
       "any_count": 68,
       "dict_any_count": 0,
-      "lines": 2276
+      "lines": 2310
     },
     "loopx/extensions/lark/presentation/kanban.py": {
-      "any_count": 95,
+      "any_count": 100,
       "dict_any_count": 0,
-      "lines": 2791
+      "lines": 2760
     },
     "loopx/heartbeat_prompt.py": {
       "any_count": 17,
