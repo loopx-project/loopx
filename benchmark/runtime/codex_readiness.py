@@ -9,31 +9,46 @@ from __future__ import annotations
 import json
 import os
 import time
+import shutil
+import tempfile
+from pathlib import Path
 
-from loopx.hosts.codex_checkpoint import native_checkpoint_reader
+from loopx.control_plane.turn_driver.codex_stdio import native_checkpoint_reader
 
 
 def check_native_receiver(env: dict[str, str]) -> None:
     # Match the account owner's existing observation budget. This limits only
     # this disposable observer, never the solver or an existing native Turn.
     deadline = time.monotonic() + 25
-    native_env = {**env, "CODEX_HOME": env["LOOPX_CODEX_HOME"]}
-    with native_checkpoint_reader(native_env, timeout=25) as reader:
-        def request(method, params):
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise TimeoutError("Native receiver observation expired")
-            reader.response_timeout_sec = remaining
-            return reader.request(method, params)
+    # Native app-server can install bundled skills even for account-only reads.
+    # Probe the selected login/config/workspace in a disposable inspection home;
+    # never create those files in the receiver before its fixed-input owner runs.
+    # This checks account transport, not a future model request or session store.
+    home = Path(env["LOOPX_CODEX_HOME"])
+    with tempfile.TemporaryDirectory(prefix="loopx-native-inspection-") as temporary:
+        observer = Path(temporary)
+        for name in ("auth.json", "config.toml"):
+            source = home / name
+            if source.is_file():
+                shutil.copyfile(source, observer / name)
+                (observer / name).chmod(0o600)
+        native_env = {**env, "CODEX_HOME": str(observer)}
+        with native_checkpoint_reader(native_env, timeout=25) as reader:
+            def request(method, params):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("Native receiver observation expired")
+                reader.response_timeout_sec = remaining
+                return reader.request(method, params)
 
-        # Native workspace routing can fail before a thread id is emitted.
-        # A host-side login-file/usage check cannot verify this receiver route.
-        account = request("account/read", {"refreshToken": False}).get("account")
-        if not isinstance(account, dict) or account.get("type") != "chatgpt":
-            raise ValueError("Native receiver has no ChatGPT account")
-        usage = request("account/rateLimits/read", {})
-        if not isinstance(usage, dict) or not usage:
-            raise ValueError("Native receiver usage route is unavailable")
+            # Exercise the selected native binary with the original workspace
+            # and copied login/config, rather than trusting login-file presence.
+            account = request("account/read", {"refreshToken": False}).get("account")
+            if not isinstance(account, dict) or account.get("type") != "chatgpt":
+                raise ValueError("Native receiver has no ChatGPT account")
+            usage = request("account/rateLimits/read", {})
+            if not isinstance(usage, dict) or not usage:
+                raise ValueError("Native receiver usage route is unavailable")
 
 
 def main() -> int:

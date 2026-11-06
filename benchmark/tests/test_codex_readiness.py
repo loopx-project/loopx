@@ -21,6 +21,8 @@ def native_fixture(tmp_path, mode):
 import json, os, sys
 for line in sys.stdin:
     packet = json.loads(line)
+    pathlib = __import__("pathlib")
+    pathlib.Path(os.environ["CODEX_HOME"], "skills", ".system").mkdir(parents=True, exist_ok=True)
     with open(os.environ["PROBE_TRACE"], "a") as stream:
         stream.write(json.dumps(packet) + "\\n")
     if "id" not in packet:
@@ -66,6 +68,7 @@ def test_cli_checks_receiver_without_model_or_state_mutation(tmp_path, failure):
     if "account/read" in methods:
         assert requests[methods.index("account/read")]["params"] == {"refreshToken": False}
     assert {p: p.read_bytes() for p in original} == original
+    assert not (home / "skills").exists()
     assert not (tmp_path / "phase-deadline").exists()
 
 
@@ -84,7 +87,9 @@ def test_observer_uses_receiver_home_and_one_total_io_budget(tmp_path, monkeypat
 
     @contextmanager
     def observer(native_env, *, timeout):
-        assert native_env["CODEX_HOME"] == str(home)
+        observer_home = __import__("pathlib").Path(native_env["CODEX_HOME"])
+        assert observer_home != home
+        assert (observer_home / "auth.json").read_bytes() == (home / "auth.json").read_bytes()
         assert timeout == 25
         yield Reader()
 
