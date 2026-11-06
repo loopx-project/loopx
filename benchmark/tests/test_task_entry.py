@@ -862,7 +862,7 @@ def test_shared_harbor_rejects_retired_planning_limit(tmp_path, legacy_limit):
     BenchmarkCodex(logs_dir=tmp_path, model_name="openai/fixture", planning_timeout_sec=None)
 
 
-@pytest.mark.parametrize("planning_elapsed", [400, 850])
+@pytest.mark.parametrize("planning_elapsed", [400, 850, 1000])
 def test_harbor_planning_uses_the_phase_deadline_without_a_stage_cap(tmp_path, monkeypatch, planning_elapsed):
     pytest.importorskip("harbor")
     from benchmark.runtime import harbor
@@ -895,7 +895,7 @@ def test_harbor_planning_uses_the_phase_deadline_without_a_stage_cap(tmp_path, m
     monkeypatch.setattr(agent, "exec_as_agent", execute)
     monkeypatch.setattr(agent, "_populate_context", lambda *args: None)
     invocation = agent.run("Synthetic task", SimpleNamespace(exec=result, is_mounted=True), SimpleNamespace())
-    if planning_elapsed == 850:
+    if planning_elapsed == 1000:
         with pytest.raises(TimeoutError, match="before execution handoff"):
             asyncio.run(invocation)
         assert len(planning) == 1 and not execution
@@ -907,8 +907,11 @@ def test_harbor_planning_uses_the_phase_deadline_without_a_stage_cap(tmp_path, m
     assert "LOOPX_PLANNING_TIMEOUT_SEC" not in env
     assert "LOOPX_PHASE_DEADLINE_EPOCH=$(( $(date +%s) + 1000 ))" in command
     assert options["timeout_sec"] >= 1000
-    assert "--kill-after=30 600s" in execution[0][0]
-    assert float(execution[0][1]["LOOPX_CODEX_TURN_TIMEOUT_SEC"]) == 500
+    remaining = 1000 - planning_elapsed
+    assert f"--kill-after=30 {remaining}s" in execution[0][0]
+    # A positive remainder below the retired reserve still belongs to the
+    # task; both the wrapper and native request must respect that same cap.
+    assert float(execution[0][1]["LOOPX_CODEX_TURN_TIMEOUT_SEC"]) == min(500, remaining)
 
 
 def test_sforge_post_plan_deadline_never_marks_execution_started(tmp_path, monkeypatch):
