@@ -32,20 +32,27 @@ def original_turn_reader(store: ChatSessionStore, session_id: str) -> Callable[[
     caller discards this locator after its read, including between pages.
     """
     turns_dir = store._session_dir(session_id) / "turns"
-    paths: dict[str, Path] = {}
+    paths: dict[str, Path | None] = {}
     for path in turns_dir.glob("*.json") if turns_dir.is_dir() else []:
         if path.name.endswith(".events.json"):
             continue
         client_id = _read_json(path).get("client_turn_id")
         if isinstance(client_id, str):
-            paths.setdefault(client_id, path)
+            # Directory order cannot identify the original of two retained
+            # Turns claiming the same client identity. Leave it unavailable.
+            paths[client_id] = path if client_id not in paths else None
 
     def read(client_turn_id: str) -> dict[str, Any] | None:
         path = paths.get(client_turn_id)
         if path is None:
             return None
         payload = _read_json(path)
-        return payload if payload.get("client_turn_id") == client_turn_id else None
+        return payload if (
+            payload.get("schema_version") == CHAT_TURN_SCHEMA_VERSION
+            and payload.get("session_id") == session_id
+            and payload.get("turn_id") == path.stem
+            and payload.get("client_turn_id") == client_turn_id
+        ) else None
 
     return read
 

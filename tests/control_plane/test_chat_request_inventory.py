@@ -253,6 +253,57 @@ def test_turn_locator_rereads_content_and_rejects_lost_identity(api):
     assert _inventory(api, route["session_id"])[1]["pending_count"] == 1
 
 
+@pytest.mark.parametrize("conflict", ["duplicate_client", "foreign_session", "foreign_turn", "unknown_schema"])
+def test_unproved_original_turn_is_withheld_without_hiding_other_requests(api, conflict):
+    import json
+
+    _, _, route = _source(api)
+    _, fixture, server = api
+    store = server.chat_store
+    session = store.load_session(route["session_id"])
+    other, _ = store.create_turn(session["session_id"], client_turn_id="unambiguous-source",
+        message="Check the other artifact", origin="web")
+    delivered = deliver(fixture["runtime"], fixture["registry"], session=session, turn=other,
+        request={"goal_id": fixture["ref"]["goal_id"], "agent_id": "agent-a"}, source_store=store)
+    store.update_turn(session["session_id"], other["turn_id"], status="completed",
+        response={"context_handoff_receipt": delivered})
+    store.finalize_managed_turn_completion(session["session_id"], other["turn_id"])
+    assert _inventory(api, session["session_id"])[1]["pending_count"] == 2
+
+    # Model retained historical corruption in this disposable Chat store only.
+    # A matching client identity cannot prove its schema, Session or Turn.
+    original = store.load_turn(session["session_id"], route["turn_id"])
+    original_path = store._turn_path(session["session_id"], route["turn_id"])
+    original_bytes = original_path.read_bytes()
+    damaged = store._turn_path(session["session_id"], "duplicate-source") if conflict == "duplicate_client" else original_path
+    patch = {"turn_id": "duplicate-source"} if conflict == "duplicate_client" else {
+        "foreign_session": {"session_id": "another-session"},
+        "foreign_turn": {"turn_id": "another-turn"},
+        "unknown_schema": {"schema_version": "unsupported-turn-schema"},
+    }[conflict]
+    damaged.write_text(json.dumps({**original, **patch}))
+    root = _root(fixture["runtime"])
+    before = {path: path.read_bytes() for path in root.rglob("*.json")}
+    turns_before = {path: path.read_bytes() for path in original_path.parent.glob("*.json")}
+    for query in ({}, {"view": "history"}, {"view": "history", "search": "Check the current contract"}):
+        code, value = _inventory(api, session["session_id"], **query)
+        assert code == 200, value
+        assert value["coverage"]["unreadable"] == 1, value
+        assert value["pending_count"] == 1, value
+        assert route["request_id"] not in {row["request_id"] for row in value["rows"]}
+        if "search" not in query:
+            assert [row["request_id"] for row in value["rows"]] == [delivered["request_id"]]
+    assert {path: path.read_bytes() for path in root.rglob("*.json")} == before
+    assert {path: path.read_bytes() for path in original_path.parent.glob("*.json")} == turns_before
+    if conflict == "duplicate_client":
+        damaged.unlink()
+    else:
+        original_path.write_bytes(original_bytes)
+    restored = _inventory(api, session["session_id"])[1]
+    assert restored["pending_count"] == 2 and restored["coverage"]["unreadable"] == 0
+    assert {row["request_id"] for row in restored["rows"]} == {route["request_id"], delivered["request_id"]}
+
+
 def test_refresh_window_preserves_full_pages_and_source_checks(api, monkeypatch):
     from loopx.presentation.request_control_api import RequestControlMixin
 

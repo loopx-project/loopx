@@ -135,6 +135,20 @@ for (const storage of ["file", "sqlite"]) {
     await fixture("continue"); await refresh.press("Enter"); await rows(61); await release();
     assert.equal(await status.count(), 0);
 
+    // Ambiguous original provenance must become partial coverage, never a
+    // directory-order choice. Other requests and exact storage recovery work.
+    await fixture("turn-identity-conflict"); await refresh.click(); await rows(60);
+    assert.equal(await original.count(), 0);
+    assert.equal(await dialog.getByRole("button", {name: "部分委派无法核验", exact: true}).count(), 1);
+    await page.setViewportSize({width: 1440, height: 1000});
+    await page.screenshot({path: resolve(output, `source-conflict-${storage}-desktop.png`)});
+    await page.setViewportSize({width: 390, height: 844});
+    assert.ok(await dialog.evaluate(node => node.scrollWidth <= node.clientWidth + 1));
+    await page.screenshot({path: resolve(output, `source-conflict-${storage}-narrow.png`)});
+    await fixture("turn-identity-recover"); await refresh.click(); await rows(61);
+    assert.deepEqual(await snapshot(), allRows);
+    assert.equal(await dialog.getByRole("button", {name: "部分委派无法核验", exact: true}).count(), 0);
+
     // Source loss still withholds content. Cancellation must not turn that
     // refusal into empty success or keep another source's previous records.
     await fixture("local-source-unavailable"); await refresh.click(); await dialog.getByRole("alert").waitFor();

@@ -8,6 +8,7 @@ deliver, source-unavailable, source-recover, local-source-unavailable,
 local-source-recover, history-corrupt/history-recover (--long-history only),
 report-partial, complete-partial, report-readable, hold, hold-window, continue, release, stop. Window faults/returns apply
 after the first page to challenge multi-window refresh readback.
+turn-identity-conflict/turn-identity-recover inject and remove one owned historical Turn conflict.
 """
 from __future__ import annotations
 
@@ -321,6 +322,14 @@ def main():
                     local_session_path.write_text("{invalid synthetic session", encoding="utf-8")
                 elif command == "local-source-recover":
                     local_session_path.write_bytes(local_session_bytes)
+                elif command == "turn-identity-conflict":
+                    original = store.turn_for_client(session["session_id"], "synthetic-0")
+                    duplicate = store._turn_path(session["session_id"], "ambiguous-source")
+                    if original is None or duplicate.exists():
+                        raise ValueError("Synthetic source conflict is already present or unavailable")
+                    duplicate.write_text(json.dumps({**original, "turn_id": "ambiguous-source"}))
+                elif command == "turn-identity-recover":
+                    store._turn_path(session["session_id"], "ambiguous-source").unlink()
                 elif command != "inspect":
                     raise ValueError("Unknown fixture command")
                 print(json.dumps({"event": command, "posts": server.posts, "inventory_reads": server.inventory_reads,
