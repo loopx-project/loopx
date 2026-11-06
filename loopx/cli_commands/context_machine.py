@@ -78,13 +78,14 @@ def apply_context_machine_options(
     No hook, trust, tracing or automation is installed.
     """
     explicit = getattr(args, "context_delivery", None)
-    if explicit == "off":
+    if explicit == "off" and getattr(args, "delta_delivery", None) != "auto":
         return
     args.context_delivery = explicit or "off"
     # Existing benchmark workers retain their explicit opt-out. A machine
     # default must not silently change a frozen worker's disabled transport.
     # An environment on alone still supplies no activation or host proof.
     if explicit is None and os.environ.get("LOOPX_CONTEXT_DELIVERY") == "off":
+        args.delta_delivery = "off"
         return
     command = getattr(args, "quota_command", None)
     if not heartbeat and command not in {"should-run", "context-config", "context-project", "context-hook", "context-read"}:
@@ -108,12 +109,18 @@ def apply_context_machine_options(
         if using_default:
             value = machine_registry.resolve("context_delivery").public_descriptor()["configuration_template"]
         if value["mode"] == "off":
-            return
+            from ..capabilities.machine_configuration.context_delivery import INDEPENDENT_CONTEXT_SCHEMA
+
+            if value["schema_version"] != INDEPENDENT_CONTEXT_SCHEMA:
+                args.delta_delivery = "off"
+                return
     # Presentation is host-neutral. Only Delta needs declared lifecycle
     # continuity. A read-only query must not manufacture an admitted Turn.
-    args.context_delivery = explicit or "auto"
+    args.context_delivery = explicit or ("auto" if value["mode"] == "on" else "off")
     if getattr(args, "delta_delivery", None) is None:
         args.delta_delivery = value.get("delta_delivery", "auto")
+    if args.context_delivery == "off" and args.delta_delivery == "off":
+        return
     if ((command == "should-run" and not (getattr(args, "turn_instance_id", None)
             or bool(getattr(args, "begin_turn", False)))) or os.name != "posix") and explicit != "on":
         args.delta_delivery = "off"
