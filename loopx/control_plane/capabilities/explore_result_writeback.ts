@@ -7,6 +7,7 @@ import {contextSourceIdentity} from "../quota/diagnostic_projection.ts";
 import {normalizeGoalPathDelta} from "../goals/vision_checkpoint.ts";
 import {normalizeExploreExecutionObservation} from "./explore_execution_observation.ts";
 import {isExploreEvidenceRef} from "./explore_evidence_ref.ts";
+import {normalizeWorkYardstickDecision} from "../work_items/yardstick_decision.ts";
 import {normalizeExploreMeasurements} from "./explore_measurements.ts";
 
 export const EXPLORE_RESULT_ATTACHMENT_SCHEMA = "explore_result_attachment_v0";
@@ -107,7 +108,7 @@ export function exploreResultWritebackAffordance(): JsonObject {
 }
 
 const FIELDS = ["schema_version", "node_id", "question", "applicability", "input_revision",
-  "observation", "interpretation", "status", "evidence_refs", "question_update", "relations", "execution_observation", "measurements", "measurement_context"];
+  "observation", "interpretation", "status", "evidence_refs", "question_update", "relations", "execution_observation", "measurements", "measurement_context", "work_yardstick_decision"];
 // Reuse the persisted Explore node/edge vocabulary, distinct from finding status.
 const QUESTION_STATUSES = ["open", "exploring", "blocked", "resolved", "dead_end"] as const;
 const RELATION_TYPES = ["subtopic_of", "depends_on", "answers", "supports", "refutes", "leads_to"] as const;
@@ -216,11 +217,12 @@ function normalizeAttachment(value: unknown, visionPacket?: unknown, linkedScope
     status: requireStringLiteral(row.status, ["tentative", "confirmed", "refuted"], "finding status"),
     evidence_refs: [...new Set(refs)], ...evolutionFields(row, node),
     ...(execution ? {execution_observation: execution} : {}),
-    ...(measurements ? {measurements} : {})};
+    ...(measurements ? {measurements} : {}),
+    ...(row.work_yardstick_decision !== undefined ? {work_yardstick_decision: normalizeWorkYardstickDecision(row.work_yardstick_decision, refs)} : {})};
 }
 /** Explicit reference, not inferred evidence. Preserve every route item verbatim. */
 function attachmentFromPathDelta(row: JsonObject, visionPacket: unknown, linkedScope: unknown): JsonObject {
-  const fields = ["schema_version", "node_id", "question", "applicability", "input_revision", "status", "evidence_refs", "question_update", "relations", "execution_observation", "measurements", "measurement_context"];
+  const fields = ["schema_version", "node_id", "question", "applicability", "input_revision", "status", "evidence_refs", "question_update", "relations", "execution_observation", "measurements", "measurement_context", "work_yardstick_decision"];
   if (Object.keys(row).some(key => !fields.includes(key))) {
     throw new EffectRuntimeRequestError("Explore path_delta attachment contains unknown fields");
   }

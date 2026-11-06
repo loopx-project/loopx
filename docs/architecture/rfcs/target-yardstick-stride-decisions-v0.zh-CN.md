@@ -1,11 +1,11 @@
 # RFC：Target、Yardstick 与 Stride 联合决策（v0）
 
-- **RFC 状态：** Accepted（合并后生效；本 PR 仍是提案）
+- **RFC 状态：** Accepted
 - **替代 / 关闭：** none
-- **交付成熟度：** Proposal
+- **交付成熟度：** M1 实现提案；M2/M3 未资格确认
 - **作者 / 归属：** LoopX maintainers
 - **创建日期：** 2026-11-05
-- **最近规范修订：** 2026-11-05
+- **最近规范修订：** 2026-11-07
 - **实现基线：** `aa82591fb0a129f3ea9cc5e67343e742899c7ccd`
 - **相关契约：** [分层 Stride](hierarchical-agent-stride-control-v0.zh-CN.md)、[研究探索](research-exploration-control-plane-v0.zh-CN.md)、[研究测量](long-horizon-harness-benchmark-research-program-v0.zh-CN.md)、[Controller/Executor 组合](controller-executor-unified-contract-v0.zh-CN.md)
 - **语义镜像（语言镜像）：** [English](target-yardstick-stride-decisions-v0.md)
@@ -16,7 +16,7 @@
 第 12 节列出尚待决定的实现选择。附录 A 标明来源及证据边界。
 合并只接受设计依据，不证明实现、部署、默认启用或效果收益。
 双语版本保持语义一致。后续执行证据沿用 RFC ledger 约定；改变设计时显式修订规范。
-本 PR 不交付运行时改动，也不启动实验。
+第 11 节记录有界 M1 实现边界；尚未证明长程效果收益，也不提升默认配置。
 
 ## 1. 决策摘要
 
@@ -130,8 +130,23 @@ replan 和普通 Turn adapter 组合它；Python adapter 不另写一套策略�
 
 入口绑定是 tagged union：**有 Todo 的工作 Turn**，或**真实 replan obligation**。
 拒绝混合/过期绑定。保留现有 replan decision reference，并通过同一 owner 添加普通工作引用形式。
-绝不为满足当前 regex 伪造 replan obligation。精确序列化/迁移属于 M1 设计，
-不能隐式放宽 v2。
+绝不为满足当前 regex 伪造 replan obligation。精确序列化采用下述追加的
+`work_yardstick_decision_v0` 附件，不能隐式放宽 v2。
+
+M1 在既有 `explore_result_attachment_v0` 中添加可选 `work_yardstick_decision`，
+也支持既有 path-delta authoring 适配。owner 为
+`control_plane/work_items/yardstick_decision.ts`。它记录有界 target 与验收来源引用、
+成果 measurement profile、可选 proxy profile、有来源的反证、下一方法/原因/成本边界
+及同 Todo 的前次 finding。Profile 复用 Explore 的精确指标、单位、方向、比较范围、
+输入版本和 evaluator 引用，不合并代理与权威测量。
+`authoritative` 表示 Agent 声明的成果 profile，不证明权威性已被验证。
+
+原 settlement 提供 Goal/Agent/Todo/Turn 身份。既有 run journal、Explore event log
+和 Todo 追加关联管理持久化与重试；不新建 journal、metadata note、planner 或必填写回。
+决策变化必须引用同 Todo 当前 finding；按原提交时间选择当前决策，迟到接收不能
+覆盖更新的选择。普通工作保留原 settlement 类型，不为 Stride v2 伪造 obligation；
+replan 沿用既有 v2 契约。省略附件保留当前决策；显式 `proxy: null` 选择直接评测，
+历史 profile 仍可读取。
 
 ### 5.3 Co-discovery：投资于组合
 
@@ -151,7 +166,9 @@ replan 和普通 Turn adapter 组合它；Python adapter 不另写一套策略�
 收窄/改变 target、直接评测。Untested 尺子可以支持有界探索，同时积累真实确认。
 容易测不是留在低收益方向的理由；找不到可靠尺子也不是空转的理由。
 
-试替代方案时保护有前景的 incumbent。切换明确改的是尺子、方向还是两者。
+保留有前景的 incumbent 可以提供同期对照或恢复点，不是通用终态交付要求。
+应服从实际验收：最高有效已见分数目标不要求最终工作区保留最佳候选，而交付物质量
+目标可能要求。切换明确改的是尺子、方向还是两者。
 只替换坏尺子通常属于 `verify`，不自动意味着研究机制发生 `switch`。
 
 ### 5.4 Fidelity 与重新验证
@@ -383,11 +400,34 @@ CLI、App、Lark 复用同一投影：当前方向、尺子或直接评测、fid
 M1/M2 是交付切片，不代表长程收益。复用既有 Stride/Explore owner 和下游调用方，
 采用后移除原型重复实现；不为凑齐里程碑加入 registry、第二个 journal 或假想 provider 抽象。
 
+### M1 实现 checkpoint
+
+`execution_profile.yardstick_enabled` 是既有 Goal 复盘/Stride capability 的独立、
+默认关闭设置。设备和 Goal 编辑器共用 owner，Goal 显式 false 优先。新 capture 需要
+Explore evidence 可用；开启该设置不启动工作或自动开启其他 capability。
+关闭后移除普通 Turn 的新增提示，并在主提交前拒绝新 capture；历史 finding
+及成功的精确重放仍可读。
+
+既有 Research finding reader 展示记录的目标、成果/代理指标、来源、下一步和成本边界。
+普通 task-scoped Explore context 只投影该 Todo 当前目标、下一选择短提示和反证引用。
+既有 question-scoped 扩读命令返回完整决策、精确 profile 的反馈和前次执行归属；
+默认投影不重复完整记录。
+反证要求在下一个具体选择处重新判断，不构成新的硬门、fidelity 认证、放松正确性约束的
+权限或每轮重规划指令。后续有意义的 capture 可复用 execution observation，把前次
+提议方法连到实际方法、候选和证据，也允许有据采用不同方法。
+
+源码验证包括真实隔离 SQLite CLI → 普通 guard → 具体合成产物/评估 → 同 Todo
+结果链、关闭时拒写/回读与恢复检查。确定性 actor 只证明通路和归属。
+打包配置旅程验证设备继承、Goal 覆盖与读取失败后的恢复；有密集内容的 Research reader
+在桌面和窄屏上验证原始 HTTP/SQLite 历史读回。Lark 复用 finding summary 投影，
+资格验证没有对外发送。真实模型采用、数值 fidelity profile、完整边际成本和匹配收益
+仍未测试；schema 存活和合成 followthrough 不能关闭 C13 或 M2/M3。
+
 ## 12. 待决事项
 
 | 决策 | Owner / 建议 | 需要的证据 / 截止边界 |
 | --- | --- | --- |
-| 精确附件 schema 和配置字段 | Work-items/cadence maintainer：追加 tagged work/replan binding，独立 opt-in，保留 v2。 | M1 实现前核对 producer/reader 及 C8–C12。 |
+| 附件与配置接缝 | Work-items 管理 `work_yardstick_decision_v0`，cadence 管理独立 `yardstick_enabled`，Explore 管理接收与回读；保留 replan v2。 | 实现提案保留 exact-head C8–C12 及打包 journey 证据。 |
 | 首个 fidelity profile/证据下限 | Measurement provider maintainer：先用于数值任务的排序 profile，不全局规定六状态。 | M2 前核对噪声、选择/重复检验风险及可负担真实确认。 |
 | 自动触发与 context 预算 | Stride/context maintainer：typed evidence delta 和 probe 到边界，不用 prose classifier 或每轮固定表格。 | M1/M2 实测完整路径开销和漏决策反例；M3 前固定阈值。 |
 | 默认推广 | Product owner：有配对证据前保持关闭。 | M3，包含回归、不确定性和实际用户流程。 |

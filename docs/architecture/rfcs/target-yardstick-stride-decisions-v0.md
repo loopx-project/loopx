@@ -1,11 +1,11 @@
 # RFC: Joint Target, Yardstick and Stride Decisions (v0)
 
-- **RFC status:** Accepted (effective on merge; this PR is a proposal)
+- **RFC status:** Accepted
 - **Supersedes / closes:** none
-- **Delivery maturity:** Proposal
+- **Delivery maturity:** M1 implementation proposal; M2/M3 unqualified
 - **Authors / owners:** LoopX maintainers
 - **Created:** 2026-11-05
-- **Last normative revision:** 2026-11-05
+- **Last normative revision:** 2026-11-07
 - **Implementation baseline:** `aa82591fb0a129f3ea9cc5e67343e742899c7ccd`
 - **Related contracts:** [Hierarchical stride](hierarchical-agent-stride-control-v0.md), [Research exploration](research-exploration-control-plane-v0.md), [Research measurement](long-horizon-harness-benchmark-research-program-v0.md), [Controller/executor composition](controller-executor-unified-contract-v0.md)
 - **Semantic mirror:** [中文版](target-yardstick-stride-decisions-v0.zh-CN.md)
@@ -18,7 +18,8 @@ Appendix A identifies sources and the limits of their evidence. Merge accepts a
 design basis, not implementation, deployment, a default change or measured benefit.
 Keep both language versions semantically synchronized. Later execution evidence
 belongs in the existing RFC ledger convention, with explicit normative revisions
-when a decision changes. No runtime changes or experiments are delivered here.
+when a decision changes. Section 11 records the bounded M1 implementation boundary;
+no long-horizon effectiveness gain or default promotion is established.
 
 ## 1. Decision summary
 
@@ -160,7 +161,28 @@ Two entry bindings are a tagged union: **work Turn with Todo** or **real replan
 obligation**. Reject mixed/stale bindings. Preserve existing replan decision
 references and add an ordinary-work reference form through the same owner;
 never synthesize a replan obligation to satisfy the current regex. Exact
-serialization/migration is an M1 design task, not an implicit v2 relaxation.
+serialization uses the additive `work_yardstick_decision_v0` attachment below,
+not an implicit v2 relaxation.
+
+The M1 attachment is optional `work_yardstick_decision` inside the existing
+`explore_result_attachment_v0` (including the existing path-delta authoring
+adapter). Its owner is `control_plane/work_items/yardstick_decision.ts`.
+It records a bounded target and acceptance-source reference, an outcome
+measurement profile, an optional proxy profile, source-linked counterevidence,
+next method/reason/cost bound and the prior same-Todo finding. Profiles reuse
+Explore's exact metric, unit, direction, comparison scope, input revision and
+evaluator reference; they do not merge proxy and authoritative measurements.
+`authoritative` names the Agent's declared outcome profile, not verified authority.
+
+The original settlement supplies Goal/Agent/Todo/Turn identity. The existing run
+journal, Explore event log and additive Todo link own persistence and retry;
+there is no extra journal, metadata note, planner or mandatory writeback.
+A changed decision must cite the current same-Todo finding. Current context
+selects by original committed time, so late ingestion cannot replace a newer
+choice. Ordinary work preserves its original settlement type and never creates
+an obligation to satisfy Stride v2. Replans retain their existing v2 contract.
+An absent attachment preserves the current decision; an explicit `proxy: null`
+chooses direct evaluation while historical profiles remain readable.
 
 ### 5.3 Co-discovery: invest in a pair
 
@@ -186,7 +208,10 @@ narrowing/changing target and direct evaluation. An untested proxy may support
 bounded exploration while confirmations accumulate. An easy proxy is not a reason
 to remain on a low-impact target; no reliable proxy is not a reason to idle.
 
-Retain a promising incumbent while testing alternatives. Switching must name
+Retaining a promising incumbent can provide a matched control or recovery point;
+it is not a universal final-delivery requirement. Follow the accepted outcome:
+a best-seen valid-score objective does not require the final workspace to contain
+the best candidate, whereas a deliverable-quality objective may. Switching must name
 what changes: only yardstick, only target, or both. Replacing a broken yardstick
 is usually `verify`; it is not automatically a mechanism-changing `switch`.
 
@@ -490,11 +515,44 @@ existing Stride/Explore owners and downstream callers; remove prototype
 duplicates when adopted. Do not add a registry, second journal or speculative
 provider abstraction to make these milestones appear complete.
 
+### M1 implementation checkpoint
+
+`execution_profile.yardstick_enabled` is an independent, default-off setting of
+the existing Goal review/stride capability. Machine and Goal editors share that
+owner; an explicit Goal false wins. Explore evidence must be available before a
+new capture; enabling this setting does not launch work or activate another
+capability. Disabling removes the extra ordinary-Turn cue and rejects new
+captures before primary commit, while historical findings and successful exact
+replays remain readable.
+
+The existing Research finding reader exposes the recorded target, outcome/proxy
+metrics, source, next action and cost bound. The ordinary task-scoped Explore
+context projects only that Todo's current target, a short next-choice cue and
+counterevidence references. Its existing question-scoped read command exposes
+the full decision, exact-profile feedback and prior execution attribution; the
+default projection does not repeat that full record.
+Counterevidence requests reassessment at the next concrete choice; it is not a
+new hard gate, fidelity certification, permission to waive correctness or an
+instruction to replan every Turn. At a later meaningful capture, existing
+execution observations can bind the predecessor's proposed method to the actual
+method, candidate and evidence, including a justified different method.
+
+Source validation includes a real isolated SQLite CLI → ordinary guard →
+concrete synthetic artifact/evaluation → same-Todo result journey, off-mode
+rejection/readback and recovery checks. Its deterministic actor demonstrates
+transport and attribution only. The packaged configuration journey qualifies
+machine inheritance, Goal overrides and failed-read recovery; the populated
+Research reader qualifies the original HTTP/SQLite history on desktop and narrow
+screens. Lark uses its existing finding-summary projection, with no external send
+in qualification. Actual model adoption, a numerical fidelity profile, complete
+marginal cost and matched benefit remain untested; schema survival and synthetic
+followthrough do not close C13 or M2/M3.
+
 ## 12. Open decisions
 
 | Decision | Owner / recommendation | Evidence needed / deadline |
 | --- | --- | --- |
-| Exact attachment schema and configuration field | Work-items and cadence maintainers: additive tagged work/replan binding, independent opt-in; preserve v2. | Producer/reader inventory and C8–C12 before M1 implementation. |
+| Attachment and configuration seam | Work-items owns `work_yardstick_decision_v0`; cadence owns independent `yardstick_enabled`; Explore owns ingestion and readback. Preserve replan v2. | Keep exact-head C8–C12 and packaged journey evidence with the implementation proposal. |
 | First fidelity profile and evidence floor | Measurement provider maintainer: rank-based profile for a numerical task; no universal six-state rule. | Noise, selection/re-testing risks and affordable true confirmations before M2. |
 | Automatic triggers and context budget | Stride/context maintainers: typed evidence deltas and reached probe conditions; no prose classifier or fixed per-Turn form. | Full-path overhead and missed-decision counterexamples in M1/M2; thresholds fixed before M3. |
 | Default promotion | Product owner: remain off until matched evidence justifies promotion. | M3 including regressions, uncertainty and actual user journey. |
