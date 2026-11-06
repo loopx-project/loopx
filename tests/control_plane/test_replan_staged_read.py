@@ -262,7 +262,7 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
             projected = run(shlex.split(command), cwd=fixture["project"], env=env,
                 capture_output=True, text=True, timeout=60)
             assert projected.returncode == 0, projected.stdout
-            presentation = json.loads(projected.stdout)
+            presentation = reference_metadata_oracle(json.loads(projected.stdout))
             assert presentation["ok"] and presentation["mode"] == "full"
             assert reference_metadata_oracle(presentation)["recovery"]["path"] == str(view_path)
             assert read_cli_policy_payload(projected.stdout, returncode=projected.returncode) == view
