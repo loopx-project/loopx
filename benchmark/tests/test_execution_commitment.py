@@ -182,7 +182,7 @@ def test_unscoped_endpoints_are_rejected(monkeypatch, endpoint):
     "profile,feedback",
     [("official", "native"), ("native-goal", "native"), ("heartbeat-explore", "blind")],
 )
-def test_opt_in_preserves_controls_and_requires_native_provider(
+def test_declared_commitment_preserves_controls_and_requires_native_provider(
     monkeypatch, profile, feedback
 ):
     pytest.importorskip("sforge")
@@ -197,6 +197,5 @@ def test_opt_in_preserves_controls_and_requires_native_provider(
             profile=profile,
             cwd="/task",
             feedback=feedback,
-            require_full_budget=True,
             commitment_task_id="synthetic-task",
         )

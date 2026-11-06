@@ -385,14 +385,22 @@ Budget exhaustion is distinct from task completion: this clock does not override
 provider failures, Stop, blocked planning, or a valid terminal LoopX decision.
 Campaign duration coverage must still classify an early exit as missing time.
 
-### Explicit ongoing execution commitments in SForge
+### Ongoing execution commitments in SForge
 
-For a heartbeat trial whose caller requires continued task work through the
-finite allowance, pass `--require-full-budget`. The runner records that outcome
-through Core's ordinary Goal-only acceptance scope. Completing a local Todo
-remains valid; an unmet overall commitment follows the existing replan path.
-Stop, exhausted allowance and genuine blockers retain their existing authority.
-Official and Native Goal controls reject this option and keep their defaults.
+EdgeBench native-feedback heartbeat trials bind their declared finite execution
+commitment by default, without a feature switch. The runner supplies the native
+task identity and records the requirement through Core's existing outcome and
+Goal-only check owners. Completing a local Todo remains valid; an unmet overall
+commitment follows the existing replan path. Stop, exhausted allowance and
+genuine blockers retain their existing authority. Official and Native Goal
+controls keep their existing completion behavior.
+
+This caller declaration is specific to an authorized trial. Ordinary Goals
+already retain declared outcome requirements by default, without executable
+checks or a new scope selection. Other SForge callers without the scoped native
+execution provider do not acquire a requirement from model text or a timeout.
+The check scope describes ownership; it is not an activation switch. Existing
+local check contracts and restored Goals are never silently converted.
 
 The native judge host must install the read-only provider before model entry:
 
@@ -419,14 +427,14 @@ fulfilled. It exposes neither a countdown nor another registration's state.
 An absent or unavailable provider fails the pre-model probe; it does not become
 an always-false check or silently fall back to a different execution policy.
 
-On restore, keep this option and the original task identity. The runner compares
+On restore, keep the original task identity. The runner compares
 the inherited acceptance document through the owner's read-only preview, without
 refining requirements, reconfiguring checks or resetting planning. A legacy
 Goal without that contract is rejected rather than rewritten. The native host
 supplies earlier finalized execution receipts as explicit `(Path, sha256)` pairs
 in `previous`; mismatched pins or unfinished intervals remain unknown. No new
-worker clock or additional checkpoint trigger is introduced. Omitting the option
-preserves ordinary trial behavior and installs no provider route automatically.
+worker clock or additional checkpoint trigger is introduced. Other SForge
+callers without a declared native commitment retain ordinary trial behavior.
 The receiver preserves routing for the original scoped relay. A changed endpoint
 fails the inherited-document comparison rather than silently replacing the check.
 

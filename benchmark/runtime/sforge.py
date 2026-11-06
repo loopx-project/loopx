@@ -95,7 +95,6 @@ class SForgeWorker(CodexAgent):
                  context_delivery: str | None = None,
                  provider_request_admission: bool = False,
                  native_goal_continue: bool = False,
-                 require_full_budget: bool = False,
                  commitment_task_id: str | None = None,
                  replan_after_turns: int | None = None,
                  replan_after_todos: int | None = None,
@@ -126,11 +125,10 @@ class SForgeWorker(CodexAgent):
             if (os.environ.get("CODEX_WIRE_API") or "responses") != "responses":
                 raise ValueError("provider_request_admission requires the Responses wire API")
         self.provider_request_admission = provider_request_admission
-        if type(require_full_budget) is not bool or (require_full_budget and (
+        if commitment_task_id is not None and (
                 not profile.startswith("heartbeat-") or feedback != "native"
-                or not isinstance(commitment_task_id, str) or not commitment_task_id.strip())):
-            raise ValueError("require_full_budget requires a heartbeat trial and its native task identity")
-        self.require_full_budget = require_full_budget
+                or not isinstance(commitment_task_id, str) or not commitment_task_id.strip()):
+            raise ValueError("Execution commitment requires a heartbeat trial and its native task identity")
         self.commitment_task_id = commitment_task_id
         if timeout_seconds <= 0:
             raise ValueError("Worker budget must be positive")
@@ -414,7 +412,8 @@ class SForgeWorker(CodexAgent):
             **({"provider_request_admission": "on"} if self.provider_request_admission else {}),
             **({"native_goal_continue": True} if self.native_goal_continue else {}),
             "outer_resume": self.resume_cmd is not None,
-            **({"require_full_budget": True} if self.require_full_budget else {}),
+            **({"execution_commitment_task_id": self.commitment_task_id}
+               if self.commitment_task_id is not None else {}),
             "explore_graph": self.profile == "heartbeat-explore",
             "explore_harness": self.profile == "heartbeat-explore",
             "feedback": self.feedback,
@@ -466,7 +465,7 @@ class SForgeWorker(CodexAgent):
                     asyncio.run(self.runtime._verify_phase_configuration(self.environment, cwd=self.cwd))
                 else:
                     asyncio.run(self.runtime._prepare_phase(self.environment, result.stdout, cwd=self.cwd))
-                if self.require_full_budget:
+                if self.commitment_task_id is not None:
                     asyncio.run(self._configure_execution_commitment())
                 if self.profile == "heartbeat-explore" and self.warm_start is None:
                     observed = asyncio.run(self.runtime._loopx(self.environment, [
@@ -496,7 +495,7 @@ class SForgeWorker(CodexAgent):
         if self.task_entry == "loopx-planned" and self.warm_start is None:
             env["LOOPX_PLANNING_RESULT"] = "/opt/loopx-benchmark/control/planning-phase-001.json"
             command = [f"{_PYTHON}/bin/python3", "-m", "benchmark.runtime.sforge_entry", *command]
-        if self.require_full_budget:
+        if self.commitment_task_id is not None:
             # Native SForge publishes its solver segment after command
             # preparation. Probe then, before the first model request.
             probe = self._execution_commitment_command("probe")
