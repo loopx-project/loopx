@@ -587,10 +587,11 @@ def _native_context_request(state: dict[str, Any], scope: dict[str, Any], captur
     return request
 
 
-def register_native_context_view(directory: str | None, view: dict[str, Any], *, hook_session: str | None = None) -> None:
+def register_native_context_view(directory: str | None, view: dict[str, Any], *,
+                                 hook_session: str | None = None) -> dict[str, Any] | None:
     """Bind the existing pending delivery to its actual paged wire, under lock."""
     if directory is None or not isinstance(view.get("target"), dict):
-        return
+        return None
     with _locked(directory) as root:
         state = _state(root)
         pending = state.get("pending")
@@ -601,6 +602,8 @@ def register_native_context_view(directory: str | None, view: dict[str, Any], *,
             ancestry=view.get("ancestry", 0),
             read_sections=pending.get("full_read_sections", {}) if view.get("mode") == "full" else {})
         _save(root, state)
+        observed = pending.get("observed_first_read")
+        return observed if isinstance(observed, dict) else None
 
 
 def project_codex_context(payload: dict[str, Any], *, directory: str | None, capture_directory: Path,
@@ -643,10 +646,13 @@ def project_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                 scope = dict(goal_id=goal_id, agent_id=agent_id, session_id=session, context_epoch=epoch)
                 if continuity_generation is not None:
                     scope["continuity_generation"] = continuity_generation
-                if state.get("read_scope") != scope:
+                selected = payload.get("selected_todo")
+                read_scope = {**scope, "surface": surface,
+                    "todo_id": selected.get("todo_id") if isinstance(selected, dict) else None}
+                if state.get("read_scope") != read_scope:
                     for key in ("consumed_pointers", "confirmed_read_sections", "section_reads"):
                         state.pop(key, None)
-                state["read_scope"] = scope
+                state["read_scope"] = read_scope
                 request = _native_context_request(state, scope, capture_id)
                 recovery = capture_context_projection(payload, directory=capture_directory,
                     read_guidance=CONTEXT_CAPTURE_PAGE_GUIDANCE)
@@ -682,7 +688,8 @@ def project_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                             "command_template": context_capture_read_command(Path(recovery["path"]), recovery["sha256"],
                                 page_bytes=page_bytes, max_page_output_bytes=output_bytes)
                                 + " --select '<supporting_material_pointer>/sources'",
-                        } if progressive else None, consumed_pointers=state.get("consumed_pointers"))
+                        } if progressive else None, consumed_pointers=state.get("consumed_pointers"),
+                        observe_first_read=progressive)
                 except (EffectRuntimeRemoteError, EffectRuntimeStartupError):
                     return payload
                 if progressive and transaction["projected"]:
@@ -704,6 +711,13 @@ def project_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                     state["pending"].update(target=result["target"], ancestry=result["ancestry"],
                         full_read_sections=read_sections,
                         read_sections=read_sections if result["mode"] == "full" else {})
+                    if plan := transaction.get("observed_first_read"):
+                        from .native_first_read import observed_first_read_reference
+
+                        reference = observed_first_read_reference(directory, result["target"], recovery,
+                            transaction["context"], plan)
+                        if reference is not None:
+                            state["pending"]["observed_first_read"] = reference
                     _save(root, state)
                 return result
             except (OSError, ValueError, KeyError, TypeError, RecursionError):

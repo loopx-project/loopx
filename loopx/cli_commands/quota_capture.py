@@ -205,6 +205,26 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
                     or not isinstance(pinned_selection["sha256"], str)
                     or BARE_SHA256_PATTERN.fullmatch(pinned_selection["sha256"]) is None):
                 raise ValueError("reader selection reference is incomplete or unsupported")
+            if observation := reference.get("observed_read"):
+                from ..control_plane.turn_driver.native_first_read import observation_current
+
+                if not observation_current(observation, path, digest):
+                    if offset:
+                        return {"ok": False, "reason": "Observed first-read scope changed during paging.",
+                            "recovery_command": context_capture_read_command(path, digest, initial_read=True,
+                                page_bytes=size, max_page_output_bytes=output_limit, reader_argv=reader_argv)}
+                    # Restart in the ordinary complete view of this same capture.
+                    # Subsequent pages must pin that view even if the journal changes.
+                    pinned_selection, initial_read = None, True
+                    try:
+                        reference_file = write_context_read_reference(path, digest)
+                    except OSError:
+                        reference_file = None
+                elif offset == 0:
+                    presentation = {**(presentation or {}), "previously_delivered_fields": list(observation["fields"]),
+                        "field_recovery": "These unchanged fields still apply. If needed or uncertain, append --select "
+                            "and the field pointer to recovery.command for its complete current body."}
+        if pinned_selection is not None:
             selectors, initial_read = pinned_selection["select"], pinned_selection["initial_read"]
             list_fields, list_depth = pinned_selection["list_fields"], pinned_selection["list_depth"]
             selection_digest = pinned_selection["sha256"]
@@ -331,9 +351,10 @@ def model_context_reference(view: dict[str, Any], *, reader_argv: list[str] | No
         result["continuity_basis"] = view["continuity_basis"]
     if "first_read_command" in view:
         recovery = view["recovery"]
+        first_reference = view.get("first_read_reference")
         result["first_read_command"] = context_capture_read_command(Path(recovery["path"]), recovery["sha256"],
-            page_bytes=page_bytes, max_page_output_bytes=output_bytes, initial_read=True,
-            reference_file=Path(result["recovery"]["reference_file"]), reader_argv=reader_argv)
+            page_bytes=page_bytes, max_page_output_bytes=output_bytes, initial_read=not first_reference,
+            reference_file=Path(first_reference or result["recovery"]["reference_file"]), reader_argv=reader_argv)
     result["instruction"] += (" Append --select '<pointer>' or --list to recovery.command for current fields. "
         "Reader references keep complete digests locally; the CLI checks them on every page. "
         "A reference or digest grants no authority or freshness.")
@@ -547,8 +568,14 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
         write_decision_capture(wire, projected)
     from ..control_plane.turn_driver.codex_context import register_native_context_view
 
-    register_native_context_view(context_directory,
+    observed = register_native_context_view(context_directory,
         {**result, "ancestry": ancestry}, hook_session=hook_session)
+    if (progressive_enabled and observed and "first_read_command" in result
+            and observed["pointer_bytes"] <= output_bytes // 4):
+        first = Path(observed["path"])
+        result["first_read_reference"] = str(first)
+        result["first_read_command"] = context_capture_read_command(Path(current["path"]), current["sha256"],
+            reference_file=first, page_bytes=page_bytes, max_page_output_bytes=output_bytes, reader_argv=reader_argv)
     return result
 
 

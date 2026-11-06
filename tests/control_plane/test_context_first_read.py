@@ -667,3 +667,91 @@ def test_warm_delta_initial_read_uses_current_action_without_the_old_base(tmp_pa
     failure = json.loads(failed.stdout)
     assert failed.returncode != 0 and not failure["ok"] and "content" not in failure
     assert not registry.exists() and not runtime.exists()
+
+
+@pytest.mark.parametrize("invalidate", ["compact", "resume", "partial", "task_switch", "off"])
+@pytest.mark.parametrize("coalesced", [False, True])
+def test_native_first_read_reuses_only_observed_current_fields(tmp_path, monkeypatch, navigated_decision, invalidate, coalesced):
+    from test_codex_context_lifecycle import setup, deliver
+
+    event = setup(tmp_path, monkeypatch)
+    source = navigated_decision["interaction_contract"]["agent_channel"]["work_context"]["sources"][0]
+    content = source["content"]
+    outcomes = content["goal_acceptance_contract"]["outcome_requirements"]["outcomes"]
+    if coalesced:
+        # All outcomes are relevant, so the reader may package them as one
+        # complete parent. Delivery still observes each complete outcome.
+        outcomes.pop()
+    for outcome in outcomes:
+        outcome["requirements"][0]["description"] *= 240
+    if coalesced:
+        outcomes.append({"id": "small", "owner_agent_id": "author", "revision": 1,
+            "requirements": [{"id": "short", "description": "Keep this short current fact."}]})
+        content["outcome_context"]["suggested_outcome_ids"].append("small")
+    prefix = "/interaction_contract/agent_channel/work_context/sources/0/content/goal_acceptance_contract/outcome_requirements/outcomes"
+    def navigation(capture, enabled=True):
+        directory = tmp_path / capture
+        directory.mkdir(mode=0o700)
+        wire = codex_context.project_codex_context(navigated_decision, directory=str(tmp_path),
+            capture_directory=directory, goal_id="fixture", agent_id="agent", surface="quota_packet",
+            capture_id=capture, progressive_enabled=enabled)
+        view = native_context_capture_view(wire, tmp_path / capture, context_directory=str(tmp_path),
+            progressive_enabled=enabled, max_page_output_bytes=6000)
+        return model_context_reference(view)
+
+    def pages(command):
+        found = []
+        while command:
+            words = shlex.split(command)
+            out = subprocess.check_output([sys.executable, "-m", "loopx.entrypoint", "--format", "json",
+                *words[words.index("quota"):]])
+            page = json.loads(out)
+            assert page["ok"], page
+            found.append(page)
+            command = page.get("next_command")
+        return found
+
+    def facts(pages):
+        return selected_context_values("".join(page["content"] for page in pages))
+
+    navigated_decision["goal_boundary"]["stop_condition"] = "Preserve every applicable stop. " * 220
+    first = pages(navigation("first")["first_read_command"])
+    assert len(first) > 1 and facts(first)[prefix + "/0"] == outcomes[0]
+    deliver(tmp_path, event, first[1:] if invalidate == "partial" else first)
+    if coalesced:
+        assert prefix + "/2" not in codex_context._state(tmp_path).get("consumed_pointers", {})
+    outcomes[1]["requirements"][0]["description"] = "Revised stop: require the audited result."
+    if invalidate == "task_switch":
+        navigated_decision["selected_todo"]["todo_id"] = content["outcome_context"]["todo_id"] = "todo_next"
+    second = navigation("next", invalidate != "off")
+    if invalidate == "off":
+        # Independent Delta does not enable Progressive navigation or observed
+        # field reuse. Its current recovery still contains every original field.
+        assert "first_read_command" not in second
+        assert "observed_first_read" not in codex_context._state(tmp_path)["pending"]
+        recovery = pages(second["recovery"]["command"])
+        assert all("previously_delivered_fields" not in page for page in recovery)
+        assert json.loads("".join(page["content"] for page in recovery)) == navigated_decision
+        return
+    warm = pages(second["first_read_command"])
+    observed = facts(warm)
+    assert observed[prefix + "/1"] == outcomes[1]
+    assert observed["/goal_boundary"] == navigated_decision["goal_boundary"]
+    if invalidate not in {"compact", "resume"}:
+        assert observed[prefix + "/0"] == outcomes[0]
+        assert "previously_delivered_fields" not in warm[0]
+        return
+    assert warm[0]["previously_delivered_fields"] == [prefix + "/0"]
+    assert observed[prefix + "/0/id"] == outcomes[0]["id"] and prefix + "/0" not in observed
+    assert facts(pages(second["recovery"]["command"] + " --select " + prefix + "/0"))[prefix + "/0"] == outcomes[0]
+    lifecycle = {"hook_event_name": "PostCompact"} if invalidate == "compact" else {"source": "resume"}
+    codex_context.codex_context_hook(str(tmp_path), {**event, **lifecycle})
+    assert len(warm) > 1
+    stale = subprocess.run(shlex.split(warm[0]["next_command"]), capture_output=True, text=True)
+    assert stale.returncode != 0
+    rejection = json.loads(stale.stdout)
+    assert "content" not in rejection
+    restarted = pages(rejection["recovery_command"])
+    assert facts(restarted)[prefix + "/0"] == outcomes[0]
+    recovered = pages(second["first_read_command"])
+    assert facts(recovered)[prefix + "/0"] == outcomes[0]
