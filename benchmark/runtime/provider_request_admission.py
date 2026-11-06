@@ -50,7 +50,8 @@ class ProviderRequestAdmission:
     """One immutable owner plus a one-shot process attachment."""
 
     def __init__(self, env, session_wake, receipt, wake, *, timeout=None, original_quota=None):
-        from .worker import PHASE_WORK_RESERVE_SECONDS, heartbeat_launch_check
+        from .scheduler import phase_work_reserve
+        from .worker import heartbeat_launch_check
 
         if session_wake is None or session_wake.admission is None:
             raise ValueError("provider request admission requires the original heartbeat session")
@@ -67,8 +68,9 @@ class ProviderRequestAdmission:
             epoch = float(captured_env["LOOPX_PHASE_DEADLINE_EPOCH"])
             if not math.isfinite(epoch):
                 raise ValueError("provider phase deadline must be finite")
+            reserve = phase_work_reserve(captured_env.get("LOOPX_EXECUTION_MODE", "heartbeat"))
             deadline = min(deadline,
-                time.monotonic() + epoch - PHASE_WORK_RESERVE_SECONDS - time.time())
+                time.monotonic() + epoch - reserve - time.time())
         self._invocation = _Invocation(
             session_wake.admission.with_launch_decision(check), captured_env["LOOPX_TURN"],
             session_wake.session_id, deadline)

@@ -359,13 +359,22 @@ state or force the agent active. An unresolved Turn must be recovered before
 another phase can replace its task input. These wait/recovery rules apply to
 both entry policies; they correct the earlier unconditional phase reset.
 Every scheduler wake caps its host timeout against the remaining phase budget
-before opening an execution. If only startup and settlement reserve remains,
-it records a budget-exhausted no-op without creating a pending Turn. In the
+before opening an execution. Heartbeat workers may use the entire positive
+remainder, including a continuation shorter than 160 seconds. Their bounded
+process cleanup is not a solver-time deduction. The adapters do not derive an
+independent wake limit from the initial trial budget; an explicitly supplied
+Harbor wake limit remains an independent limit and retains its failure semantics.
+Native Goal and managed-turn transports retain their existing reserve.
+When the applicable work allowance is exhausted, the worker records a
+budget-exhausted no-op without creating a pending Turn. In the
 heartbeat/turn scheduler path, that receipt exits the wake with code 75 and the
 configured shell worker stops normally. It does not re-admit empty wakes, mark
 the task complete or spend quota. Direct plain/native-Goal calls retain exit 0
 for normal budget exhaustion.
 The deadline uses the task environment's clock, including remote Harbor backends.
+Budget exhaustion is distinct from task completion: this clock does not override
+provider failures, Stop, blocked planning, or a valid terminal LoopX decision.
+Campaign duration coverage must still classify an early exit as missing time.
 
 To compare entry policies, hold the execution mode, session policy, model,
 effort, tools, feedback and total budget fixed, and use separate trials:
