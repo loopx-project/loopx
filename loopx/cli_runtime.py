@@ -776,9 +776,16 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _run_command(command: str | None, raw_argv: list[str]) -> int:
-	if command == "version" and "loopx.cli" in sys.modules:
-		# Explicit full-CLI callers retain its public registrar/handler patch points.
-		return _run_full_cli(raw_argv)
+	if command == "version":
+		version_exports = sys.modules.get("loopx.cli_commands")
+		# Inspect bound exports without triggering the lazy facade. Explicit
+		# package/full-CLI imports retain their registrar and handler patch points.
+		if "loopx.cli" in sys.modules or (
+			version_exports is not None
+			and ("handle_version_command" in vars(version_exports)
+				or "register_version_command" in vars(version_exports))
+		):
+			return _run_full_cli(raw_argv)
 	if command in _SELECTED_COMMANDS:
 		try:
 			args = _build_selected_parser(command).parse_args(raw_argv)

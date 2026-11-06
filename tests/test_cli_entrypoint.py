@@ -283,6 +283,29 @@ assert seen == ["version"]
     assert completed.returncode == 0, completed.stderr
 
 
+def test_version_command_retains_explicit_package_export_patch_points() -> None:
+    script = """
+from loopx import cli_commands
+from loopx.cli_commands import handle_version_command, register_version_command
+from loopx.entrypoint import main
+
+assert cli_commands.handle_version_command is handle_version_command
+seen = []
+def register(*args, **kwargs):
+    seen.append("register")
+    return register_version_command(*args, **kwargs)
+def patched(args, **kwargs):
+    seen.append(args.command)
+    return 37
+cli_commands.register_version_command = register
+cli_commands.handle_version_command = patched
+assert main(["version"]) == 37
+assert seen == ["register", "version"]
+"""
+    completed = run_isolated_script(script, environment={"LOOPX_USAGE_PING": "0"})
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_top_level_help_skips_full_cli_import() -> None:
 	script = """
 import contextlib
