@@ -2779,3 +2779,25 @@ v0 large-integer source mismatch remain recorded; the legacy positive control
 uses its original representable fixture, while current-format large integers
 remain checked. No active installation, live model run, whole-C1 acceptance,
 quality/readiness or net-benefit qualification follows from these results.
+
+The subsequent direct-writer audit found the public task-orchestration smoke
+still creating v0 input, and an unused scenario packet builder with no caller.
+The smoke now composes each host's complete source with its original scheduler
+context and reads back the final Codex and Claude Host requests. Both preserve
+the complete source and primary Task selection, alongside the existing child
+context and native-operation assertions. The unused builder is removed rather
+than replaced by another unused abstraction. The explicit versioned v0 state
+matrix and supported historical writer/reader remain. The audit of Python
+callers in product code and examples now finds only that historical matrix
+calling the retained writer; it does not certify dynamically constructed calls.
+
+The public smoke passed before and after migration. Default configured Mypy
+passed all 17 roots at the preceding `a706379f70` checkpoint and after this
+change; this updates the current typing qualification without rewriting the
+earlier 4,809/4,814 failures. These checks do not exercise real child creation,
+prove live-model adoption or qualify a new installed package.
+
+One source-stable four-module regression cohort passed all 247 cases, covering
+the real Turn driver, the active portfolio sources, the retained historical
+corpus and replan Host-context projections. This is a separate current caller
+qualification, not an extension of the earlier 357-case or installed run.

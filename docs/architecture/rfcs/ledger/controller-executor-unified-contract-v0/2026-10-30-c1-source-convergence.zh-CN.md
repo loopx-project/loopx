@@ -2068,3 +2068,18 @@ HTTP、拒绝与独立验收。main conversation-binding TypeScript 模块通过
 harness 准备失败和历史 v0 大整数来源不匹配均保留；旧格式正向对照回到原可表示
 fixture，当前格式的大整数检查仍保留。这些结果不构成活动安装、真实模型运行、
 整体 C1、质量/readiness 或净收益资格。
+
+后续直接 writer 审计发现，公开 task-orchestration smoke 仍生成 v0 输入，另有一个
+场景 packet builder 已无调用方。示例现以各自原 scheduler context 组合完整来源，
+并读回 Codex、Claude 的最终 Host 请求：完整来源、主 Task 选择及原有子任务
+上下文与原生操作断言均保留。闲置 builder 直接删除，不再添加无人调用的替代
+抽象。明确版本化的 v0 状态矩阵及受支持历史 writer/reader 继续保留；产品代码与
+示例中的 Python 直接调用审计只剩该历史矩阵调用旧 writer，不声称覆盖动态调用。
+
+公开示例在迁移前后均通过。默认配置的 Mypy 在前一 `a706379f70` 检查点及本次
+改动后均通过全部 17 个入口；这更新当前类型资格，不重写较早 4,809/4,814 的
+失败。这些检查没有执行真实子任务创建，不证明真实模型采用或新安装包资格。
+
+新的一次四模块回归全程源码稳定，247 项全部通过，覆盖真实 Turn driver、活动
+portfolio 来源、历史 corpus 及重规划 Host-context 投影。这是本次调用方资格，
+不与较早的 357 项或安装运行合并记账。
