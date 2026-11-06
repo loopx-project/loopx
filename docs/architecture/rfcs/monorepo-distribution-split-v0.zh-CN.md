@@ -596,6 +596,42 @@ R0 可以先于目录移动交付，但不代表内核合格。R3/R4 可选，�
   不关闭完整 R0/V10、M1、拆包安装、R1 managed minimal 或 D1–D7。不改变 preset、
   前端操作、权限或持久化状态；受保护执行仍由既有 owner 所有。
 
+### 2026-11-06 — 所选 Turn 宿主的加载接缝
+
+承接 [#8180](https://github.com/loopx-project/loopx/pull/8180) 的
+generic-cli/SQLite 候选，源码提案 `9b80cf7d6` 在 `turn_run_once` 延迟加载 DSH
+builder，直到调用方选择 DSH 或显式请求既有 export。命名 import、原 builder
+身份、静态类型、`dir()`、star import 与 CLI builder patch 点均保留。复用既有
+宿主／authority owner；这不选择 minimal preset，也不代表 D2/D5 已采纳。
+
+- **观察到的变化：** 真实 generic-cli/SQLite 任务路径加载 533 个 LoopX 模块，
+  基线 `62e234c93` 为 538。移出的五个模块是 `turn_dsh_host`、
+  `turn_driver.host_candidate`、`dsh_goal_mode` 及其 `host_failure_map`／
+  `turn_host_adapter`，没有新增模块。冷 import oracle 在基线失败、提案通过；
+  既有 DSH CLI 夹具还证明公开 builder patch 点被使用。
+- **真实路径一致性：** 同一个私有 harness 在两个版本的隔离 SQLite 夹具上运行
+  正常完成、typed host result 持久化后中断、原 journal 恢复及 committed 重放。
+  每个夹具最终仅一次宿主调用／attempt、一次 writeback 和一次扣额，重放不重复
+  效果。独立 argv 验收器接受字节相同的产物。每个版本使用隔离 native broker，
+  已核验停止与 OS 退出。这仍是确定性 transport 证据，不是模型宿主 V4 或正常
+  hard-lease V2 的资格。
+- **观察成本：** 每个版本一次正常插桩调用记录耗时 2.962 → 3.169 秒，父进程
+  CPU 0.737 → 0.775 秒、峰值 RSS 65.6 → 64.6 MiB；输出均为 3,474 字节。
+  已 wait 子进程的 CPU 为 0.567 → 0.599 秒。缓存、执行顺序与竞争工作未受控，
+  这些观察不证明延迟改善，也不建立回归阈值。broker RSS 观察及 wait 子进程的
+  usage 不覆盖完整进程树峰值、完整 wire／context 字节或模型成本。加载变化较小，
+  长程收益和 D6 资格仍未证明。
+- **验证限制：** 更广的源码选择为 596 个通过、一个 preview 冷 import 测试失败；
+  基线独立出现同一失败，原因是 `host_bridge_transport` 提前导入
+  `extensions.process_runtime`。owner 范围的 mypy 使用 `--follow-imports=skip`，
+  两个版本在线号归一化后均报告相同 29 个诊断，不代表完整配置的 mypy 套件。
+  两项失败均不豁免、不改写为通过。bridge 仅供执行使用的 import 是另一个有证据
+  的 owner 接缝，超出本提案的 runtime 编辑范围。
+- **剩余：** 采纳仍受独立评审、必需验证和精确 head 的 merge readiness 治理。
+  opt-in minimal 选择、D2/D5 决策、完整 R0/V10/R1、hard-lease／上下文／模型
+  一致性和拆包安装仍未关闭；独立 status 提案 #8011 保留原限制。不改变权限、
+  provider、默认值、已安装宿主或发布行为。
+
 ## 附录 B：决策日志
 
 | 日期 | 决策 | 负责人 / 批准 | 备选 | 变更的规范章节 |

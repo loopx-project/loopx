@@ -820,6 +820,52 @@ Approval needs a reviewed decision, not implementation progress or silence.
   installation, R1 managed minimal or D1–D7. No preset, frontend operation,
   permission or persisted state changes; protected execution keeps its owner.
 
+### 2026-11-06 — Selected Turn host loading seam
+
+Following the generic-cli/SQLite candidate in
+[#8180](https://github.com/loopx-project/loopx/pull/8180), the source proposal
+`9b80cf7d6` defers DSH builders at `turn_run_once` until a caller selects DSH
+or explicitly requests their established exports. Named imports, original
+builder identity, static types, `dir()`, star imports and the CLI's builder
+patch points remain available. The existing host/authority owners are reused;
+this does not select a minimal preset or adopt D2/D5.
+
+- **Observed delta:** the real generic-cli/SQLite task path loads 533 LoopX
+  modules instead of 538 at `62e234c93`. The five removed modules are
+  `turn_dsh_host`, `turn_driver.host_candidate`, `dsh_goal_mode` and its
+  `host_failure_map`/`turn_host_adapter`. No module is added. The cold-import
+  oracle fails at the baseline and passes at the proposal; the existing DSH
+  CLI fixture also proves the public builder patch point is used.
+- **Real-path parity:** the same private harness runs ordinary completion,
+  interruption after typed host-result persistence, original-journal resume
+  and committed replay on isolated SQLite fixtures at both revisions. Each
+  fixture ends with one host invocation/attempt, one writeback and one debit;
+  replay repeats none. Independent argv validators accept identical artifact
+  bytes. Each arm uses an isolated native broker whose shutdown and OS exit are
+  verified. This remains deterministic transport evidence, not model-host V4
+  or normal hard-lease V2 qualification.
+- **Observed costs:** one ordinary instrumented invocation per revision records
+  2.962 → 3.169 seconds, parent CPU 0.737 → 0.775 seconds and parent peak RSS
+  65.6 → 64.6 MiB; output remains 3,474 bytes. Waited-child CPU is
+  0.567 → 0.599 seconds. Cache, run order and competing work are not controlled;
+  these observations establish neither a latency improvement nor a regression
+  threshold. Broker RSS observations and waited-child usage do not measure
+  complete tree peaks, full wire/context bytes or model cost. The loading delta
+  is small; long-horizon benefit and D6 qualification remain unproven.
+- **Validation limits:** the wider source selection records 596 passed and one
+  failed preview cold-import test; the baseline independently fails the same
+  test because `host_bridge_transport` eagerly imports
+  `extensions.process_runtime`. Owner-scoped mypy with `--follow-imports=skip`
+  reports the same 29 diagnostics at both revisions after line normalization;
+  it is not the full configured mypy suite. Neither failure is waived or
+  relabeled as passing. The bridge's execution-only import is a separate
+  evidenced owner seam outside this proposal's runtime edit.
+- **Remaining:** independent review, required validation and exact-head merge
+  readiness still govern adoption. Opt-in minimal selection, D2/D5 decisions,
+  full R0/V10/R1, hard-lease/context/model parity and split installation remain
+  open; the separate #8011 status proposal retains its limits. No authority,
+  provider, default, installed-host or release change is introduced.
+
 ## Appendix B: Decision log
 
 | Date | Decision | Owner / approval | Alternatives | Normative sections changed |
