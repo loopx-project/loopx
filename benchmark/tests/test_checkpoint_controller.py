@@ -285,7 +285,9 @@ def host_phase_command(tmp_path, monkeypatch):
     worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh",
         agent_api_base_url="http://127.0.0.1:1/v1", agent_api_key="synthetic-local-only"),
         profile="heartbeat-resume", cwd="/task", timeout_seconds=43200, task_entry="seeded-todo")
-    worker.install_stop_hook(None, None, logs, None)
+    route = SimpleNamespace(exec_run=lambda *args, **kwargs:
+        SimpleNamespace(exit_code=0, output="http://127.0.0.1:1/v1"))
+    worker.install_stop_hook(route, None, logs, None)
     worker.prepared = True
     # The provider's own phase-file/admission shell executes. Its following
     # model command is excluded explicitly; candidate writing below is synthetic.

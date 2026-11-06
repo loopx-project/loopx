@@ -372,7 +372,9 @@ def test_sforge_trial_deadline_requires_execution_entry(tmp_path, agent_image, m
     worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh",
                          agent_api_base_url="http://127.0.0.1:1/v1", agent_api_key="synthetic-local-only"),
                          profile="heartbeat-resume", cwd="/tmp", task_entry="loopx-planned")
-    worker.install_stop_hook(None, None, tmp_path, None)
+    route = SimpleNamespace(exec_run=lambda *args, **kwargs:
+        SimpleNamespace(exit_code=0, output="http://127.0.0.1:1/v1"))
+    worker.install_stop_hook(route, None, tmp_path, None)
     worker.prepared = True
     # Substitute only the model transport; keep the production deadline shell.
     monkeypatch.setattr("benchmark.runtime.sforge.worker_command",
@@ -637,7 +639,7 @@ def test_native_judge_to_codex_complete_official_result_on_improvement(tmp_path,
             sampler.tick(history)
             current = sampler.inflight
             identifier = current["submission_id"]
-            wait_for(lambda: session.get(url + "/api/v1/result/" + identifier, timeout=5).json()["status"] == "completed")
+            wait_for(lambda: session.get(url + "/api/v1/result/" + identifier, params={"token": token}, timeout=5).json()["status"] == "completed")
             return current["round_id"]
 
         assert read_packet()["latest"] is None
@@ -662,7 +664,7 @@ def test_native_judge_to_codex_complete_official_result_on_improvement(tmp_path,
         packet = read_packet()
         assert packet["latest"]["snapshot_id"] == delivered[-1]
         assert "JUDGE_DIAGNOSTIC_SENTINEL" in json.dumps(packet)
-        official = session.get(url + "/api/v1/result/" + packet["latest"]["official_result"]["submission_id"], timeout=5).json()
+        official = session.get(url + "/api/v1/result/" + packet["latest"]["official_result"]["submission_id"], params={"token": token}, timeout=5).json()
         assert packet["latest"]["official_result"] == official
         assert packet["latest"]["evaluator"] == sampler.evaluators["fixture"]
         source = backend.exec_run(handle, ["tar", "-xzOf", packet["latest"]["source_archive"], "candidate.json"])
@@ -700,8 +702,8 @@ def test_native_judge_to_codex_complete_official_result_on_improvement(tmp_path,
         assert online(token, "capture-101").status_code == 503
         fast = online(second.json()["token"], "capture-1")
         fast.raise_for_status()
-        wait_for(lambda: session.get(url + "/api/v1/result/" + fast.json()["submission_id"], timeout=5).json()["status"] == "completed")
-        assert session.get(url + "/api/v1/result/" + slow.json()["submission_id"], timeout=5).json()["status"] == "running"
+        wait_for(lambda: session.get(url + "/api/v1/result/" + fast.json()["submission_id"], params={"token": second.json()["token"]}, timeout=5).json()["status"] == "completed")
+        assert session.get(url + "/api/v1/result/" + slow.json()["submission_id"], params={"token": token}, timeout=5).json()["status"] == "running"
         assert online(token, "capture-100", held=True).json() == slow.json()
         assert online(token, "capture-100", value=999).status_code == 409
         assert online(token, "capture-101", epoch="previous-process").status_code == 409
@@ -719,7 +721,7 @@ def test_native_judge_to_codex_complete_official_result_on_improvement(tmp_path,
         assert session.post(url + "/api/v1/register", json={"task_id": "fixture", "run_id": name + "-c",
             "admin_secret": secret, "max_agent_submissions": 0}).status_code == 503
         finish_held_grade.set()
-        wait_for(lambda: session.get(url + "/api/v1/result/" + slow.json()["submission_id"], timeout=5).json()["status"] == "completed")
+        wait_for(lambda: session.get(url + "/api/v1/result/" + slow.json()["submission_id"], params={"token": token}, timeout=5).json()["status"] == "completed")
         replacement = session.post(url + "/api/v1/register", json={"task_id": "fixture", "run_id": name + "-c",
             "admin_secret": secret, "max_agent_submissions": 0})
         replacement.raise_for_status()
