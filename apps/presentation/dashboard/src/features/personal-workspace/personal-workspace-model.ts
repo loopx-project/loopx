@@ -211,6 +211,9 @@ export type WorkspaceGoal = {
   latestActivity?: string;
   needsYou?: string | null;
   needsYouBlocking?: boolean;
+  /** Exact full-source capability-action count and bounded display rows. */
+  reportReviewAttention?: WorkspaceAttention[];
+  reportReviewCount?: number;
   attentionSummary?: DigestAttentionSummary;
   nextSentence: string;
   repository?: WorkspaceRepositoryContext;
@@ -636,7 +639,7 @@ export type PersonalWorkspaceCallbacks = {
   onSelectGoal?: (goalId: string | null, view: WorkspaceGoalTab) => void;
   onSelectTodo?: (todoId: string | null) => void;
   onSelectView?: (view: WorkspaceGoalTab) => void;
-  onSelectWorkAgent?: (agentId: string | null) => void;
+  onSelectWorkAgent?: (agentId: string | null, sessionId?: string) => void;
   onSelectWorkSession?: (sessionId: string, replace?: boolean) => void;
   onOpenNotificationSettings?: (goalId?: string) => void;
   onFetchNotificationTargets?: () => Promise<Array<{ enabled: boolean; provider: string; target_name: string }>>;
