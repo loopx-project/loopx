@@ -196,7 +196,7 @@ def prepare_context_delivery(
     """
     from .cli_projection import _apply_context_projection_changes
 
-    source = dict(context=dict(context), scope=dict(scope), capture_id=capture_id, surface=surface,
+    source: dict[str, Any] = dict(context=dict(context), scope=dict(scope), capture_id=capture_id, surface=surface,
         baseline=dict(baseline) if baseline is not None else None,
         retained=dict(retained) if retained is not None else None,
         continuity=dict(continuity) if continuity is not None else None)
