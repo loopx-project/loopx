@@ -60,7 +60,7 @@ def managed(tmp_path, monkeypatch):
         label = Path(args[-1]).stem if verb == "bootstrap" else args[-1].split("/")[-1]
         if verb == "print":
             text = "arguments = {\n" + "\n".join(loaded[label]["ProgramArguments"]) + "\n}\npid = 900\n" if label in loaded else ""
-            return subprocess.CompletedProcess(args, 0 if label in loaded else 1, text, "")
+            return subprocess.CompletedProcess(args, 0 if label in loaded else 113, text, "")
         calls.append((verb, label))
         if fail and (verb, label) == fail[0]:
             fail.pop(0)
@@ -93,6 +93,62 @@ def test_pair_adopts_target_without_changing_routes_or_cli_and_is_idempotent(man
     calls.clear()
     assert align_managed_runtime(str(target))["restarted_services"] == []
     assert calls == []
+
+
+@pytest.mark.parametrize("rollback", [False, True])
+def test_async_bootout_finishes_before_replacement_or_rollback(managed, monkeypatch, rollback):
+    _, agents, target, loaded, _, _ = managed
+    before = {p: p.read_bytes() for p in agents.glob("*.plist")}
+    run = subprocess.run
+    unloading = {}
+    observations = []
+
+    def launchctl(args, **kwargs):
+        if args[0] != "launchctl":
+            return run(args, **kwargs)
+        verb = args[1]
+        label = Path(args[-1]).stem if verb == "bootstrap" else args[-1].split("/")[-1]
+        if verb == "bootout":
+            payload = loaded[label]
+            result = run(args, **kwargs)
+            loaded[label] = payload
+            unloading[label] = 2
+            return result
+        if verb == "print" and label in unloading:
+            observations.append(label)
+            if unloading[label]:
+                unloading[label] -= 1
+            else:
+                unloading.pop(label)
+                loaded.pop(label)
+        if verb == "bootstrap" and label in loaded:
+            return subprocess.CompletedProcess(args, 5, b"", b"job still unloading")
+        return run(args, **kwargs)
+
+    monkeypatch.setattr(activation.subprocess, "run", launchctl)
+    if rollback:
+        def unavailable(*_):
+            raise RuntimeError("service_runtime_alignment_failed")
+        monkeypatch.setattr(managed_runtime, "_verify_services", unavailable)
+        with pytest.raises(RuntimeError, match="service_runtime_alignment_failed"):
+            align_managed_runtime(str(target))
+        assert {p: p.read_bytes() for p in before} == before
+        assert loaded == {p.stem: plistlib.loads(content) for p, content in before.items()}
+    else:
+        assert align_managed_runtime(str(target))["status"] == "aligned"
+    assert len(observations) == (12 if rollback else 6)
+    assert not unloading
+    assert not (agents / ".loopx-runtime-activation.json").exists()
+
+
+@pytest.mark.parametrize("returncode", [1, 0])
+def test_unload_requires_proved_absence_and_has_a_deadline(monkeypatch, returncode):
+    monkeypatch.setattr(activation.subprocess, "run",
+        lambda *a, **kw: subprocess.CompletedProcess(a, returncode, b"", b"unproved"))
+    clock = iter([0, 10])
+    monkeypatch.setattr(managed_runtime.time, "monotonic", lambda: next(clock))
+    with pytest.raises(RuntimeError, match="service_runtime_alignment_failed"):
+        managed_runtime._wait_unloaded("gui/1/com.loopx.chat")
 
 
 def test_pending_chat_prevents_both_service_changes(managed):
