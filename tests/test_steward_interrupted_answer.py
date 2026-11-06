@@ -58,6 +58,16 @@ def test_restarted_codex_steward_gets_one_original_read_only_answer(steward, mon
     transport.reconcile_request(path)
     failure_bytes = store._turn_path(original["session_id"], original["turn_id"]).read_bytes()
     notice = deepcopy(json.loads(path.read_text())["deliveries"])
+    history_marker = "Unrelated retained conversation. " * 5000
+    if fault is None:
+        store.append_message(original["session_id"], role="agent", text=history_marker,
+                             turn_id="unrelated-historical-turn")
+    start_adapter = runtime._start_adapter
+    def start_scoped_review(**kwargs):
+        if kwargs.get("answer_review_context") is not None:
+            assert kwargs["history"] is None, "a restricted answer must not import the whole conversation"
+        return start_adapter(**kwargs)
+    monkeypatch.setattr(runtime, "_start_adapter", start_scoped_review)
     class Ahead(datetime):
         @classmethod
         def now(cls, tz=None):
@@ -129,6 +139,11 @@ def test_restarted_codex_steward_gets_one_original_read_only_answer(steward, mon
         assert opened["config"]["permissions"][opened["permissions"]]["network"]["enabled"] is False
         assert [t["name"] for t in opened["dynamicTools"]] == ["loopx_manager_read"]
         assert not any(c["method"] == "thread/resume" for c in calls), "unknown old business must not be resumed"
+        assert not any(c["method"] in {"thread/inject_items", "thread/compact/start"} for c in calls)
+        if fault is None:
+            assert any(item["text"] == history_marker for item in store.messages(original["session_id"]))
+            review_inputs = [c["params"] for c in calls if c["method"] == "turn/start"]
+            assert original["message"] in json.dumps(review_inputs, ensure_ascii=False)
         writes = list(provider.writes)
         restarted.reconcile_request(path)
         assert provider.writes == writes
