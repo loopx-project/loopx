@@ -195,27 +195,23 @@ def _registry_git_probe(path: Path) -> dict[str, Any]:
         }
 
     root = run_git("rev-parse", "--show-toplevel")
-    if root is None:
-        return unavailable()
-    inside = root.returncode == 0
-    tracked = False
-    ignored = False
-    if inside:
-        root_path = Path(root.stdout.strip())
-        try:
-            rel_path = os.path.relpath(path.resolve(), root_path)
-        except (OSError, ValueError):
-            rel_path = path.name
-        tracked_result = run_git("ls-files", "--error-unmatch", "--", rel_path, cwd=root_path)
-        ignored_result = run_git("check-ignore", "-q", "--", rel_path, cwd=root_path)
-        tracked = tracked_result is not None and tracked_result.returncode == 0
-        ignored = ignored_result is not None and ignored_result.returncode == 0
+    if root is None or root.returncode != 0:
+        return {**unavailable(), "worktree_discovery_unknown": True}
+
+    root_path = Path(root.stdout.strip())
+    try:
+        rel_path = os.path.relpath(path.resolve(), root_path)
+    except (OSError, ValueError):
+        rel_path = path.name
+    tracked_result = run_git("ls-files", "--error-unmatch", "--", rel_path, cwd=root_path)
+    ignored_result = run_git("check-ignore", "-q", "--", rel_path, cwd=root_path)
+    tracking_available = tracked_result is not None and tracked_result.returncode in (0, 1)
     return {
-        "available": True,
-        "probe_status": "ok",
-        "inside_worktree": inside,
-        "tracked": tracked,
-        "ignored": ignored,
+        "available": tracking_available,
+        "probe_status": "ok" if tracking_available else "git_unavailable",
+        "inside_worktree": True,
+        "tracked": tracked_result is not None and tracked_result.returncode == 0,
+        "ignored": ignored_result is not None and ignored_result.returncode == 0,
         "worktree_root_recorded": False,
     }
 

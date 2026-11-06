@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
-from .doctor_git import git_metadata_for_root
+from .doctor_git import GitSourceState, git_source_metadata
 
 
 RELEASE_MANIFEST_SCHEMA_VERSION = "loopx_release_manifest_v0"
@@ -126,9 +126,13 @@ def _manifest_source_metadata(source_root: Path | None) -> dict[str, Any]:
 
 
 def _source_metadata(source_root: Path | None) -> dict[str, Any]:
-    git_metadata = git_metadata_for_root(source_root)
+    git_metadata, git_state = git_source_metadata(source_root)
     git_metadata.pop("root")
-    if any(git_metadata.get(key) is not None for key in ("git_commit", "git_ref", "git_dirty")):
+    if git_state is not GitSourceState.ABSENT:
+        # A checkout with a `.git` of its own is its own source of truth. When
+        # Git cannot answer this run, the `release.json` next to it describes an
+        # earlier install, so it must not be written back as this one: an
+        # unanswered read stays unknown instead of claiming the old commit.
         return {
             **git_metadata,
             "kind": None,

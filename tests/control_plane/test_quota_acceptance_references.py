@@ -192,7 +192,91 @@ def test_shared_acceptance_survives_delta_and_lost_baseline_recovery():
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_real_cli_reuses_complete_acceptance_for_selection_and_replan(tmp_path, monkeypatch, provider):
+def test_progressive_cli_delivers_complete_acceptance_for_selection_and_replan(tmp_path, monkeypatch, provider):
+    from test_replan_successor_guard_reentry import _fixture, AGENT, GOAL, ROOT
+    from tests.control_plane.codex_checkpoint_fixture import selected_context_values
+    from loopx.control_plane.testing.model_tool_behavior import execute_loopx_cli
+    monkeypatch.setenv("LOOPX_USAGE_PING", "0")
+    call, runtime, index = _fixture(tmp_path, monkeypatch, provider, future_monitor=False)
+    def run_reader(command):
+        return json.loads(execute_loopx_cli(command, source_root=ROOT, project_root=tmp_path / "project"))
+
+    def first_read(*args):
+        view = call("quota", "should-run", "--codex-app", "--context-delivery", "auto",
+                    "--goal-id", GOAL, "--agent-id", AGENT, *args)
+        assert view["schema_version"] == "context_capture_navigation_v1"
+        page = run_reader(view["first_read_command"])
+        chunks = bytearray()
+        while True:
+            assert page["ok"] and page["offset"] == len(chunks)
+            chunks.extend(page["content"].encode())
+            if page["eof"]:
+                assert len(chunks) == page["total_bytes"]
+                return selected_context_values(chunks)
+            page = run_reader(page["next_command"])
+
+    registry_path = tmp_path / "registry.json"
+    registry = json.loads(registry_path.read_text())
+    registry["goals"][0]["execution_profile"] = {"planning_horizon_goal": True}
+    registry_path.write_text(json.dumps(registry))
+    document = tmp_path / "requirements.json"
+    document.write_text(json.dumps({"outcome_id": "export", "owner_agent_id": AGENT,
+        "objective": "Deliver the complete export", "requirements": [
+            {"id": "content", "description": "Preserve every original section."},
+            {"id": "recovery", "description": "Keep the tail requirement and the publication stop."}],
+        "source": {"ref": "message:owner", "summary": "The owner requested a complete export."}}))
+    before = call("goal-acceptance", "inspect", "--goal-id", GOAL)
+    call("goal-acceptance", "refine", "--goal-id", GOAL, "--agent-id", AGENT,
+         "--document", str(document), "--expected-provider-revision", before["provider_revision"],
+         "--operation-id", "source-requirements", "--execute")
+    expected = call("goal-acceptance", "inspect", "--goal-id", GOAL)["goal_acceptance_contract"]
+    guard = first_read("--turn-instance-id", "turn-acceptance-sharing")
+    assert guard["/effective_action"] == "autonomous_replan_required"
+    assert guard["/normal_delivery_allowed"] is False
+    assert "/replan_action_packet/writeback" not in guard
+    review = run_reader(guard["/replan_action_packet/review"])
+    assert review["obligation_id"] == guard["/heartbeat_receipt/semantic_replan_obligation_id"]
+    acceptance = review["acceptance_index"]
+    row, = acceptance["outcomes"]
+    assert row["id"] == "export"
+    command = acceptance["read_action_template"].replace("{outcome_ref}", row["outcome_ref"])
+    original = expected["outcome_requirements"]["outcomes"][0]
+    assert run_reader(command)["outcome"] == original
+
+    # A later linked revision must reach the selected caller intact.
+    index.write_text("")
+    added = call("todo", "add", "--goal-id", GOAL, "--role", "agent", "--claimed-by", AGENT,
+                 "--text", "Validate the complete export", "--task-class", "advancement_task",
+                 "--action-kind", "validate")
+    call("todo", "add", "--goal-id", GOAL, "--role", "agent", "--claimed-by", AGENT,
+         "--text", "Validate independent recovery", "--task-class", "advancement_task",
+         "--action-kind", "validate")
+    linked = json.loads(document.read_text())
+    linked["todo_ids"] = [added["todo_id"]]
+    document.write_text(json.dumps(linked))
+    revision = call("goal-acceptance", "inspect", "--goal-id", GOAL)["provider_revision"]
+    call("goal-acceptance", "refine", "--goal-id", GOAL, "--agent-id", AGENT,
+         "--document", str(document), "--expected-provider-revision", revision,
+         "--operation-id", "link-export", "--execute")
+    expected = call("goal-acceptance", "inspect", "--goal-id", GOAL)["goal_acceptance_contract"]
+    planning = first_read("--turn-instance-id", "turn-export-planning")
+    assert planning["/interaction_contract/agent_channel/delivery_allowed"] is False
+    assert "/replan_action_packet/review" not in planning
+    selected = first_read("--todo-id", added["todo_id"], "--turn-instance-id", "turn-export-delivery")
+    assert selected["/normal_delivery_allowed"] is True
+    assert selected["/selected_todo/todo_id"] == added["todo_id"]
+    assert "/replan_action_packet/review" not in selected
+    sources = "/interaction_contract/agent_channel/work_context/sources/"
+    owner, = (path.removesuffix("/source") for path, value in selected.items()
+              if path.startswith(sources) and path.endswith("/source") and value == "goal_acceptance")
+    outcome = selected[owner + "/content/goal_acceptance_contract/outcome_requirements/outcomes/0"]
+    assert outcome == expected["outcome_requirements"]["outcomes"][0]
+    assert original["revision"] < outcome["revision"]
+    assert run_reader(command)["outcome"] == original
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_inline_cli_delivers_complete_acceptance_for_selection_and_replan(tmp_path, monkeypatch, provider):
     from test_replan_successor_guard_reentry import _fixture, AGENT, GOAL
     monkeypatch.setenv("LOOPX_USAGE_PING", "0")
     call, runtime, index = _fixture(tmp_path, monkeypatch, provider, future_monitor=False)

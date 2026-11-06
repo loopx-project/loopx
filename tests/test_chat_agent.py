@@ -771,6 +771,44 @@ def test_routing_timeout_recovery_requires_latest_user_only_stable_native_invent
         assert proof is None
 
 
+@pytest.mark.parametrize("fault", [None, "missing-item", "interrupted", "failed", "foreign-turn", "unknown-item", "tool", "ack-only"])
+def test_history_compaction_requires_its_native_item_and_terminal_turn(tmp_path, monkeypatch, fault):
+    session = chat_agent.CodexChatAgentSession(process=SimpleNamespace(poll=lambda: None),
+        messages=queue.Queue(), thread_id="history-thread", work_dir=tmp_path, response_timeout_sec=.02, idle_timeout_sec=.02)
+    calls = []
+    def write(packet):
+        calls.append(packet["method"])
+        assert packet["method"] == "thread/compact/start" and packet["params"] == {"threadId": "history-thread"}
+        session.messages.put({"id": packet["id"], "result": {}})
+        if fault == "ack-only":
+            return
+        rows = [
+            {"method": "turn/started", "params": {"threadId": "history-thread", "turn": {"id": "compact-turn"}}},
+            {"method": "item/started", "params": {"threadId": "history-thread", "turnId": "compact-turn",
+                "item": {"id": "compact-item", "type": "contextCompaction"}}},
+            {"method": "item/completed", "params": {"threadId": "history-thread", "turnId": "compact-turn",
+                "item": {"id": "compact-item", "type": "contextCompaction"}}},
+            {"method": "turn/completed", "params": {"threadId": "history-thread", "turn": {
+                "id": "compact-turn", "status": "interrupted" if fault == "interrupted" else "failed" if fault == "failed" else "completed",
+                "error": {"codexErrorInfo": "contextWindowExceeded"} if fault == "failed" else None}}},
+        ]
+        if fault == "missing-item":
+            rows.pop(2)
+        if fault == "foreign-turn":
+            rows[2]["params"]["turnId"] = "another-turn"
+        if fault in {"unknown-item", "tool"}:
+            rows[1]["params"]["item"]["type"] = "futureEffect" if fault == "unknown-item" else "commandExecution"
+        for event in rows:
+            session.messages.put(event)
+    monkeypatch.setattr(session, "_write", write)
+    if fault is None:
+        session.compact_history()
+    else:
+        with pytest.raises(chat_agent.CodexChatAgentError):
+            session.compact_history()
+    assert calls == ["thread/compact/start"]
+
+
 @pytest.mark.parametrize("fault", [None, "older", "host-other", "active", "tool", "answer", "correction",
     "foreign", "unknown", "changed-error", "policy", "usage", "unauthorized", "http401"])
 def test_historical_context_recovery_reads_only_proven_pre_execution_failure(tmp_path, monkeypatch, fault):

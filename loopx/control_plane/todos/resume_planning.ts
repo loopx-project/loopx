@@ -11,6 +11,8 @@ import {
   resumeConditionHasKnownPendingTarget,
 } from "./resume_condition.ts";
 
+import { automaticResumeFields, selectPendingResume } from "./automatic_resume.ts";
+
 export const RESUME_PLANNING_REQUEST = "todo_resume_planning_request_v0";
 export const REFERENCED_RESUME_PLANNING_REQUEST = "todo_resume_planning_request_v1";
 export const RESUME_PLANNING_RESULT = "todo_resume_planning_v0";
@@ -349,13 +351,17 @@ export function projectTodoResumePlanning(value: unknown): JsonObject {
   const resumeBlocked = blocked(sources.resume_blocked_items.length ? sources.resume_blocked_items
     : [...sources.items, ...sources.backlog_items, ...sources.first_open_items]);
   const monitorItems = monitorBlocked(resumeBlocked);
+  const waits = payloads(successorWaits(resumeBlocked, deferredItems, display.agent));
+  const pending = selectPendingResume(waits, display.agent).todo;
   return {
     schema_version: RESUME_PLANNING_RESULT,
     deferred_lanes: {...deferredVisibility(deferredItems, candidates, display), deferred_work_counts: counts},
     resume_blocked_lanes: blockedVisibility(resumeBlocked, monitorItems, display),
     capacity_fields: capacityFields,
     deferred_items: payloads(deferredItems), monitor_blocked_items: payloads(monitorItems),
-    blocked_successor_items: payloads(successorWaits(resumeBlocked, deferredItems, display.agent)),
+    blocked_successor_items: waits,
+    ...(pending ? {automatic_resume_todo: {todo_id: pending.todo_id, status: pending.status,
+      claimed_by: pending.claimed_by ?? null, ...automaticResumeFields(pending)}} : {}),
     dependency_cycle_replan: dependencyCycleReplan([...resumeBlocked, ...deferredItems], display.agent),
   };
 }

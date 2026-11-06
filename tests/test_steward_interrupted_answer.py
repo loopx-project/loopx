@@ -15,6 +15,122 @@ from loopx.capabilities.native_chat import external_conversations
 from loopx.extensions.lark.conversation_identity import identity_ref
 
 
+@pytest.mark.parametrize("fault", [None, "stop", "source-changed", "revoked", "unknown-native", "native-changed", "no-capacity", "review-gate", "review-action", "post-enqueue-crash"])
+def test_exhausted_quota_gets_one_restricted_original_answer(steward, monkeypatch, fault):
+    from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter
+    store, runtime, provider, transport, binding, capture, workspace = steward
+    fake = Path(runtime.codex_bin)
+    code = fake.read_text().replace('"codexErrorInfo": "cyberPolicy"', '"codexErrorInfo": "usageLimitExceeded"')
+    code = code.replace('if "typed terminal failure" in json.dumps(request.get("params") or {}):',
+        'if "typed terminal failure" in json.dumps(request.get("params") or {}) and "Core admitted ONE" not in json.dumps(request.get("params") or {}):')
+    code = code.replace('            print(json.dumps({"method": "item/agentMessage/delta", "params": {"threadId": "durable-thread", "turnId": active_turn, "delta": "Partial answer."}}), flush=True)\n', '')
+    code = code.replace('result = {"thread": {"id": "durable-thread"}}', '''result = {"thread": {"id": "durable-thread"}, "model": "gpt-6.1-sol"}
+        permissions = request.get("params", {}).get("permissions")
+        if permissions:
+            result.update(activePermissionProfile={"id": permissions}, runtimeWorkspaceRoots=[request["params"]["cwd"]])''')
+    if fault in {"review-gate", "review-action"}:
+        response = {"message": "Existing evidence provides a useful partial answer.", "proposals": [],
+            "gate": {"kind": "host_tool_gate", "summary": "Missing original evidence", "next_action": "Retain the original obligation"}}
+        if fault == "review-action":
+            response["gate"] = None
+            response["unfinished_work"] = {"remaining": "Forbidden business retry", "dependency": "original owner", "effects_settled": True}
+        start = code.index("        response = 'Visible runtime response.")
+        end = code.index('        print(json.dumps({"method": "item/agentMessage/delta"', start)
+        code = code[:start] + "        response = " + repr('<loopx-review-json>' + json.dumps(response) + '</loopx-review-json>') + "\n" + code[end:]
+    fake.write_text(code)
+    event = provider.event("steward-app", "exhausted-original-question", "typed terminal failure: Explain this change")
+    transport.admit("steward-app", event)
+    ref = identity_ref(binding["provider_ref"], event["message_id"])
+    path = transport.root / f"{ref}.json"
+    row = transport.core.read_request(ref)
+    failed = runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=15)
+    assert failed["status"] == "failed" and failed["delta_count"] == 0
+    transport.reconcile_request(path)
+    class Ahead(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return super().now(tz) + timedelta(seconds=600)
+    monkeypatch.setattr(external_conversations, "datetime", Ahead)
+    def observation(**kwargs):
+        return {"thread_id": "durable-thread", "turn_id": kwargs["turn_id"],
+            "only_original_user_item": fault != "unknown-native" and not (fault == "native-changed"
+                and (transport.core.read_request(ref).get("context_recovery") or {}).get("answer_review")),
+            "codex_error_info": "usageLimitExceeded",
+            "quota_available": fault != "no-capacity", "quota_observed_at": Ahead.now().timestamp()}
+    monkeypatch.setattr(CodexAppServerAdapter, "failed_request_observation", staticmethod(observation))
+    failures = []
+    for attempt in range(1, 4):
+        # Build the exhaustion through the real original worker, not by resetting
+        # or manufacturing an already exhausted journal reservation.
+        with monkeypatch.context() as allowed:
+            allowed.setattr(CodexAppServerAdapter, "failed_request_observation", staticmethod(lambda **kwargs: {
+                **observation(**kwargs), "only_original_user_item": True, "quota_available": True}))
+            transport.reconcile_request(path)
+            row = transport.core.read_request(ref)
+            assert row["context_recovery"]["quota_attempt"] == attempt
+            failed = runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=15)
+            assert failed["status"] == "failed" and failed["delta_count"] == 0
+            failures.append((store._turn_path(row["session_id"], row["turn_id"]),
+                store._turn_path(row["session_id"], row["turn_id"]).read_bytes()))
+            transport.reconcile_request(path)
+    exhausted = transport.core.read_request(ref)
+    notice = deepcopy(json.loads(path.read_text())["deliveries"])
+    import loopx.chat_manager as manager_module
+    import loopx.chat_runtime as runtime_module
+    from test_chat_manager_model_adoption import configure
+    configure(runtime.coordination_runtime_root, model=None, effort=None, endpoint="antigravity", policy="flexible")
+    allocation = manager_module.manager_executor_allocation(runtime,
+        endpoint_capabilities=[{"agent_id": "codex", "available": True}, {"agent_id": "antigravity", "available": False}])
+    def route(*_args, **_kwargs):
+        return None if fault == "no-capacity" else {"allocation": allocation, "blocked_primary": None,
+            "observed_at": Ahead.now().timestamp()}
+    monkeypatch.setattr(manager_module, "manager_session_quota_route", route)
+    # The adapter observes wall time, while admission above uses the fake clock.
+    monkeypatch.setattr(runtime_module, "manager_session_quota_route", lambda *_args, **_kwargs:
+        None if fault == "no-capacity" else {"allocation": allocation, "blocked_primary": None, "observed_at": time.time()})
+    if fault == "stop":
+        store.append_event(row["session_id"], row["turn_id"], kind="turn.interrupt_requested", payload={})
+    elif fault == "source-changed":
+        provider.messages[event["message_id"]]["content"] = "Revised original source"
+    elif fault == "revoked":
+        transport.bindings.disconnect(binding["binding_id"], expected_revision=transport.bindings.read()["revision"])
+    elif fault == "post-enqueue-crash":
+        enqueue = runtime.enqueue_turn
+        def crash(**kwargs):
+            enqueue(**kwargs)
+            raise OSError("unknown enqueue response")
+        monkeypatch.setattr(runtime, "enqueue_turn", crash)
+        with pytest.raises(OSError, match="unknown enqueue response"):
+            transport.reconcile_request(path)
+        monkeypatch.setattr(runtime, "enqueue_turn", enqueue)
+    transport.reconcile_request(path)
+    recovered = transport.core.read_request(ref)
+    if fault in {"stop", "source-changed", "revoked", "unknown-native", "no-capacity"}:
+        assert recovered["turn_id"] == exhausted["turn_id"]
+        assert recovered["context_recovery"]["quota_attempt"] == 3
+    else:
+        assert recovered["context_recovery"]["answer_review"] is True
+        assert recovered["context_recovery_history"][-1] == exhausted["context_recovery"]
+        done = runtime.wait_for_turn(session_id=row["session_id"], turn_id=recovered["turn_id"], timeout_sec=15)
+        assert done["status"] == ("failed" if fault in {"review-action", "native-changed"} else "completed")
+        transport.reconcile_request(path)
+        assert transport.core.read_request(ref)["delivery_verified"]
+        assert transport.health()[binding["binding_id"]]["pending_count"] == int(fault in {"review-gate", "review-action", "native-changed"})
+        packets = [json.loads(line) for line in capture.read_text().splitlines()]
+        opens = [p["params"] for p in packets if p.get("method") == "thread/start" and p["params"].get("permissions")]
+        assert len(opens) == 1
+        config = opens[0]["config"]
+        assert config["features"]["apply_patch_freeform"] is False and config["features"]["apps"] is False
+        assert config["permissions"][opens[0]["permissions"]]["network"]["enabled"] is False
+        assert [t["name"] for t in opens[0]["dynamicTools"]] == ["loopx_manager_read"]
+        before = capture.read_bytes()
+        transport.reconcile_request(path)
+        assert capture.read_bytes() == before
+        assert all(json.loads(path.read_text())["deliveries"][key] == value for key, value in notice.items())
+    # The original failed business Turns and third-attempt counter survive.
+    assert all(p.read_bytes() == content for p, content in failures)
+
+
 @pytest.mark.parametrize("fault", [None, "terminal-without-execution", "foreign-terminal", "busy", "changed", "truncated", "wrong-hash", "async", "unknown", "final", "reasoning",
     "file-read", "file-only", "file-running", "file-foreign", "file-changed", "file-remote", "file-missing-content",
     "file-missing-uri", "file-unknown-field", "file-oversize"])

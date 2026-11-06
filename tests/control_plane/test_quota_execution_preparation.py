@@ -210,8 +210,8 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
     goal_file.write_text(goal_text)
     capture = tmp_path / "before-claim"
     capture.mkdir(mode=0o700)
-    codex_context.project_codex_context(before, directory=str(native), capture_directory=capture,
-        goal_id=GOAL, agent_id=AGENT, surface="quota_packet", capture_id="before-claim")
+    codex_context.prepare_codex_context(before, directory=str(native), capture_directory=capture,
+        goal_id=GOAL, agent_id=AGENT, surface="quota_packet", capture_id="before-claim").delivery
     hook = [sys.executable, "-m", "loopx.entrypoint", "--registry", str(tmp_path / "registry.json"),
         "--runtime-root", str(tmp_path / "runtime"), "--format", "json", "quota", "context-hook",
         "--context-delivery", "on", "--runtime-profile", scenario,
@@ -322,8 +322,8 @@ def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
     assert before["execution_preparation"]["state"] == "claim_required"
     original = tmp_path / "preparation"
     original.mkdir(mode=0o700)
-    codex_context.project_codex_context(before, directory=str(native), capture_directory=original,
-        goal_id=GOAL, agent_id=AGENT, surface="quota_packet", capture_id="claim-required")
+    codex_context.prepare_codex_context(before, directory=str(native), capture_directory=original,
+        goal_id=GOAL, agent_id=AGENT, surface="quota_packet", capture_id="claim-required").delivery
     from loopx.control_plane.turn_driver import codex_execution_preparation
     record = codex_context.record_native_execution_preparation
     run = codex_execution_preparation._default_runner
@@ -500,7 +500,7 @@ def test_codex_lifecycle_hook_uses_captured_authority_from_another_project(
 ):
     from loopx.control_plane.turn_driver.codex_context import (
         codex_context_hook,
-        project_codex_context,
+        prepare_codex_context,
     )
 
     before = _run(
@@ -527,7 +527,7 @@ def test_codex_lifecycle_hook_uses_captured_authority_from_another_project(
         "source": "startup",
     }
     assert codex_context_hook(str(context_root), event) == {}
-    project_codex_context(
+    prepare_codex_context(
         before,
         directory=str(context_root),
         capture_directory=capture_root,
@@ -535,7 +535,7 @@ def test_codex_lifecycle_hook_uses_captured_authority_from_another_project(
         agent_id=AGENT,
         surface="quota_packet",
         capture_id="claim-required",
-    )
+    ).delivery
 
     command = [
         sys.executable, "-m", "loopx.entrypoint",

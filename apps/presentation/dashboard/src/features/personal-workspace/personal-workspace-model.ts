@@ -340,6 +340,8 @@ export type WorkspaceSchedule = {
 export type WorkspaceActionPreview = {
   /** Exact Todo target from the stored action, used only for display joins. */
   todoId?: string;
+  /** Stored Todo operation for result wording; never grants execution authority. */
+  todoOperation?: string;
   reviewPlan?: ActionReviewPlan;
   actionKind:
     | "goal.create"

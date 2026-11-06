@@ -189,3 +189,17 @@ running best from the first observed score, with a new step on improvement.
 Expand **All score observations** for the full range, including unsuccessful
 iterations. Each chart uses its own labeled score axis. Lines end at observed
 samples. The figure is descriptive and includes provisional runs.
+
+For fixed-duration comparisons, set `duration_policy.target_ms` and list the arm IDs
+permitted to finish a verified Goal early in `duration_policy.allow_goal_completion`.
+For each selected logical run, supply `active_intervals` with observed solver start
+and end times in Unix milliseconds and an `evidence_ref` per interval. Include only
+verified continuations of that run. Omit the field when coverage is unknown. An
+empty array explicitly records zero observed runtime. Overlapping intervals count
+once and downtime between intervals contributes zero.
+
+The JSON and Markdown reports cover every selected case and arm. A short terminal
+run enters `needs_makeup`, even with a valid score or a successful process exit.
+Only a matching completed run with an audited normal end and a satisfied Goal
+can use the early-finish allowance. Incomplete and unverified durations exclude a
+case from the duration-qualified comparison. Retain raw results for diagnosis.

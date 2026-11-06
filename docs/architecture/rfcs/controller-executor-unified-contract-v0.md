@@ -1,24 +1,65 @@
-# RFC: Controller / Executor Sessions and One Governed Work Contract (v0)
+# RFC: Router–Controller–Worker Architecture and One Governed Work Contract (v0)
 
-- **RFC status:** Accepted (design acceptance takes effect on merge)
+<a id="rfc-controller--executor-sessions-and-one-governed-work-contract-v0"></a>
+
+- **RFC status:** Existing design accepted; router / binding-unit extension proposed
 - **Supersedes / closes:** none
 - **Delivery maturity:** Proposal; no new runtime, schema or default is shipped by this document.
 - **Authors / owners:** LoopX maintainers; control-plane and runtime owners
 - **Created:** 2026-10-27
-- **Last normative revision:** 2026-11-02
-- **Implementation baseline:** `fe2b8dcbcb998647edb4bafb51932988bd7fdaa6`
+- **Last normative revision:** 2026-11-06
+- **Latest source audit:** `f91e26d91d3e4e1b28b69f5881a059ea78891082`; historical experiments retain their own baselines.
 - **Related contracts:** [Effect interpreter](agent-loop-effect-interpreter-v0.md), [Session execution modes](agent-session-execution-modes-v0.md), [Semantic handoff](capable-manager-semantic-handoff-v0.md), [Overall roadmap](loopx-overall-roadmap-v0.md)
 - **Language mirror:** [中文版](controller-executor-unified-contract-v0.zh-CN.md)
 
 ## Document map and maintenance contract
 
-The English and Chinese documents are semantic mirrors; a difference is a defect.
+**Target experience: a steward routes several Agents; each Agent continuously
+closes the controller–worker loop of work selection, execution, evidence assessment
+and feedback. Users can converse, correct and stop during that loop, and results
+return along the original request.**
+This is a long-horizon architecture choice to qualify, not a claim of universal
+best practice.
 
-Section 4 records source facts at the named baseline. Sections 1–3 and 5–11
-define the proposed decision and acceptance; section 12 records unresolved
-choices. Before merge this is a review proposal. Merge accepts the design,
-not implementation, installation, experiments or default promotion. Historical
-evidence belongs in a dated ledger when an implementation first produces it.
+<a id="system-topology"></a>
+
+```mermaid
+flowchart TB
+  U[User: App / Lark / CLI] <--> R[Router: steward conversation]
+  R <-->|Scoped request / return| C1
+  R <-->|Scoped request / return| C2
+  U <-.->|Direct interaction, same request and audience rules| C1
+  subgraph A[Agent A: one binding unit]
+    C1[Controller: plan, interact, assess]
+    W1[Worker / Executor: execute, artifacts, evidence]
+    C1 <-->|Task / correction / findings| W1
+  end
+  subgraph B[Agent B: another binding unit]
+    C2[Controller]
+    W2[Worker / Executor]
+    C2 <--> W2
+  end
+  R <-->|Typed route / request operations| K[Existing Core owners and selected AuthorityStore]
+  C1 <-->|Work admission / original settlement| K
+  C2 <--> K
+  W1 --> H1[Scoped Host tools]
+  W2 --> H2[Scoped Host tools]
+```
+
+| Reader question | Entry |
+| --- | --- |
+| Why split these roles, and what is missing? | Sections 1–4 and the [current source audit](#current-delivery-audit) |
+| How do the three layers and one Agent identity fit? | [System diagram](#system-topology), [binding unit](#agent-binding-unit) |
+| What keeps work advancing without another user message? | [Primary execution loop](#controller-worker-main-loop) |
+| How do conversation, Stop and recovery work during execution? | [Asynchronous sequence](#asynchronous-control), [attention / preemption](#controller-attention-and-preemption), [failure isolation](#router-failure-recovery) |
+| What gets delivered, validated and deleted? | [Dependencies and slices](#delivery-path-from-current-state), [product acceptance](#superagent-acceptance), sections 8–11 |
+| Where are C1 field, context, wire and baseline details? | [Technical annex](controller-executor-unified-contract-v0/contract-and-context.md) |
+
+English and Chinese are semantic mirrors. This main document owns current design;
+the annex retains migration detail and dated ledgers retain historical evidence.
+Original section anchors still reach the annex. Design acceptance, source presence,
+packaged/installed qualification and measured benefit are distinct. This RFC creates
+no runtime, changes no default and starts no experiment.
 
 ## 1. Decision summary
 
@@ -31,7 +72,7 @@ evidence belongs in a dated ledger when an implementation first produces it.
    against the original quota-packet path. Existing domain owners still decide
    their own facts.
 2. In the optional two-session profile, the **controller model session is the
-   sole model-facing Core client and an intelligent mediator of control work**.
+   unit’s only model client for work control and settlement, and its intelligent mediator**.
    It reads the contract, reasons about work,
    talks to the executor and submits explicit typed Core operations. Core owns
    legal transitions and receipts; the controller is not a second authority.
@@ -48,10 +89,16 @@ evidence belongs in a dated ledger when an implementation first produces it.
 5. Unification first qualifies the existing single-session path. Two-session
    execution remains opt-in until matched outcome and complete-cost evidence
    justifies adoption. This RFC launches no benchmark or privileged operation.
-6. While the executor works, the controller remains available to the user:
-   answer questions, proactively explain meaningful changes, present useful
-   artifacts and incorporate feedback into subsequent work. Qualify that
-   journey through C6/C8; session separation alone does not deliver it.
+6. The controller–worker execution loop is primary: assess ordinary results as
+   well as blockers, give feedback and continue useful admitted work without a
+   new user prompt. While the executor works, the controller also answers users,
+   incorporates corrections and presents useful artifacts. Reporting is a side
+   activity, not the loop's default destination. Qualify both through C6/C8.
+7. Make the steward the **router**: use existing semantic requests to coordinate
+   several controller + worker binding units. Each retains one Agent identity;
+   the router may use authorized request/route operations but cannot settle the
+   receiver's work. Deliver one asynchronous unit before adopting the existing
+   multi-recipient chain.
 
 ## 2. Problem and motivation
 
@@ -96,8 +143,8 @@ controller/executor communication, shared lifecycle reuse, host adapters,
 benchmark adoption, retirement and observable product acceptance.
 
 Non-goals: a new Goal store, workflow DSL, generic effect executor, permission
-engine, scheduler, mandatory two-Agent team, automatic host switching or changes
-to benchmark scoring. Peer teams retain existing delegation/acceptance contracts.
+engine, scheduler, mandatory two-session execution, unlimited team hierarchies,
+automatic host switching or changes to benchmark scoring. Peer teams retain existing delegation/acceptance contracts.
 This proposal does not move business reasoning into deterministic Core rules.
 
 ## 4. Current-system contract
@@ -119,121 +166,408 @@ source, single/two-session organization and evaluation arm are independent
 axes. Not every combination is supported. Native/plain benchmark controls may
 intentionally have no LoopX Core and must remain uncontaminated controls.
 
+<a id="current-delivery-audit"></a>
+
+### 2026-11-06 audit: reusable foundations and remaining gaps
+
+This audit is pinned to main `f91e26d91d3e4e1b28b69f5881a059ea78891082`.
+A mechanism present in source establishes an implementation boundary, not a
+qualified dual-session journey or benefit.
+
+| Capability | Source fact / in-flight work | Design consequence |
+| --- | --- | --- |
+| Steward requests to several Agents and returns | [`manager_context`](../../../loopx/capabilities/manager_context/README.md) supports several recipients; [`semantic_request.ts`](../../../loopx/control_plane/collaboration/semantic_request.ts) retains exact recipients and original-conversation returns | Router adopts that request chain with per-recipient success/refusal; no routing task store |
+| Recipient identity and route | [`peer_route_selection.ts`](../../../loopx/control_plane/collaboration/peer_route_selection.ts) reports multiple candidates as ambiguous, not unknown as retired | Separate unit discovery from execution admission; integrate role mapping into current binding instead of bypassing ambiguity by choosing another native thread |
+| Request revisions and asynchronous input | [`request_control.ts`](../../../loopx/control_plane/collaboration/request_control.ts) owns revision/assessment/reservation; [`chat_queue_steering.ts`](../../../loopx/control_plane/turn_driver/chat_queue_steering.ts) persists reservations and uncertain delivery | Reuse mechanisms, but current queued steering explicitly excludes some collaboration/LoopX execution inputs and native live steer is text-only; dual-role correction is not delivered |
+| Original-audience return | [`return_delivery.ts`](../../../loopx/control_plane/collaboration/return_delivery.ts) distinguishes a provider write without a locator from no write | Router synthesis must not rerun tasks to repair delivery; delivery is not requester adoption |
+| Shared managed operations | Codex/DSH both call [`managed_operation_host.py`](../../../loopx/control_plane/turn_driver/managed_operation_host.py) and `select_managed_operation_session` | C3.1's generic-handler extraction already exists; reuse it and audit remaining callers instead of repeating the project |
+| Two-role binding | [`codex_sessions.py`](../../../loopx/control_plane/turn_driver/codex_sessions.py) stores sessions by Goal/Agent/Todo or Agent scope, without this proposed controller/worker pair | C3 needs roles/generations, independent queues and continuity within one Agent; two thread IDs alone are insufficient |
+| Unified work contract | Active quota/Turn format branches remain; [#7430](https://github.com/loopx-project/loopx/pull/7430) is an open C1 proposal, inspected at `3a4f6f64f288ab6c663c829ed5f5670c42d72595` | Coordinate with its owners and retain the original single-session outcome/cost gate; do not add router multi-unit delivery to its merge conditions |
+| Common Host transport | [#7568](https://github.com/loopx-project/loopx/pull/7568) remains Draft, inspected at `e3a3c06524fae99519a72d751a16a5e8dd6f9a5d` | A candidate adapter; bounded calls do not establish bidirectional long-lived sessions/asynchronous control. OAR or an all-Host rewrite is not a prerequisite |
+
+The annex below retains older field audits and experiments at their original
+revisions. Historical Draft/test records do not replace this status, and this
+audit does not relabel earlier evidence. Recheck live PRs and tasks before claiming
+implementation.
+
 ### C1 source audit: shared owners and the remaining split
 
-Bound native execution preparation retains the ordinary managed claim reference
-and captures its same-Turn ready decision before CLI compaction. The Host hands
-that source to the existing saved-capture presentation/reader owner, rather than
-discarding it and making the model evaluate another guard to obtain its current
-contract. Goal, Agent, Todo and Turn must match before publication. Required
-material reads, including an explicit complete Goal read, remain required; a
-ready receipt or saved file does not fulfill them. Optional presentation failure
-retains the original digest-bound recovery. Explicit off is inert, and an
-unbound request keeps its original readiness route without inventing a Turn.
-This is a bounded Host handoff repair, not C1 cutover, installed adoption or
-qualification of model cost and long-horizon benefit.
-
-The source already shares more than the output names suggest. `_emit_quota_result`
-captures the complete decision **before** `_project_quota_cli_payload` chooses
-ordinary CLI compaction or `buildTurnEnvelope`. The latter delegates to the
-TypeScript owner; its Python module is a transport adapter. Both quota capture
-and Turn journal capture call `write_decision_capture` in
-[`decision_capture.py`](../../../loopx/control_plane/turn_driver/decision_capture.py).
-Native context delivery and explicit host handoff also reuse that module and
-the existing context-delivery owner. C1 must converge the remaining composition
-and consumer assumptions, rather than introduce another capture service or
-rewrite already shared delta/native-resume logic.
-
-Optional host polling is part of that original observation. The source-fidelity
-slice records `--record-host-poll` once before capture and reuses its receipt in
-ordinary CLI, envelope and native-context delivery. Recovery reads do not poll
-again. A later capture/handoff failure retains the already-recorded observation
-in its error response; it does not imply missing admission or authorize replay.
-Default-off behavior and unreadable receipt diagnostics remain unchanged. This
-repairs capture completeness, not the unified writer/consumer cutover or a
-long-horizon cost-benefit result.
-
-A separate native-presentation slice reuses the committed full recovery as its
-reader target, avoiding an unused second wire publication. Delta and unwrapped
-inputs retain their own immutable files and the same reader/lifecycle owners.
-On a matched 107,289-byte synthetic source, capture writes fall from 216,754 to
-107,289 bytes; full reader bytes and the 3,937-byte warm delta are unchanged.
-This qualifies only duplicate capture IO removal, not model-input reduction,
-complete cost, accepted outcomes or C1 writer/consumer cutover.
-For a small explicit output ceiling, native presentation can also omit repeated
-directory/selection commands while retaining the complete recovery command:
-append `--list` or `--select` to discover/read current facts without a baseline.
-The original 4,000-byte cold/warm/compaction cases retain their requirements,
-Stop, original identity and full recovery; this is transport qualification.
-
-Journal persistence is an independent source-fidelity prerequisite. The proposed
-Python adapter reuses context delivery's sparse number-token collector; both
-TypeScript consumers reuse one source-number validator. Journals remain JSON
-objects, with metadata only for integral floats, signed zero and unsafe integers.
-The journal owner restores these numbers before atomic publication and retains
-their distinctions in replay and immutable-plan comparisons. Ordinary native
-objects retain their encoding; historical receipts are not rewritten.
-
-The interim whole-JSON-string carrier failed the existing 2 MiB request boundary
-for a synthetic 1.55-million-character quoted body accepted by the object path.
-Keep that negative result: qualify the sparse replacement against the same
-workload and limit, including number-dense overhead. Neither this prerequisite
-nor a component byte saving qualifies the unified writer/consumer cutover or
-long-horizon net benefit.
-
-The proposed Turn selection-reader slice removes the Python adaptive-selection
-decision from the driver. Its existing plan, Host, Session, completion and
-settlement callers use the interaction owner's `selectedWorkTodo` rule through
-the existing source-edit transport. The selection adapter retains Python's historical
-scalar/whitespace decoding; original records and numeric values stay intact.
-This retires one duplicate rule, not the historical envelope format. Complete
-writer/consumer cutover and original-quota outcome/full-cost qualification remain
-open. The added bridge calls must be counted; code convergence alone is no
-evidence of lower cost.
-
-| Current source / obligation | Present envelope treatment | Required C1 disposition |
-| --- | --- | --- |
-| `interaction_contract.agent_channel.work_context` and pending required reads | `work_context` plus `required_reads`; identical inline material can be referenced | One complete requirement/evidence source with resolvable references; preserve pending reads and their completion conditions |
-| Selected Todo, recommended action, action portfolio and planning horizon | `action`; reference relocation and text compaction occur in `turnActionProjection` | One selected work/action identity; preserve complete actionable clauses and distinguish summaries from executable instructions |
-| `interaction_contract.cli_channel.settlement_plan` | Copied into `writeback.settlement_plan`, including original effect identity and conditional steps | Reuse the settlement owner unchanged; neither controller dialogue nor a new capture creates another debit identity |
-| User/agent interaction channels, execution policy and task orchestration | Separate `user`, `execution_policy`, `boundary` and orchestration sections | Preserve notification versus execution obligations, authority and stop gates; do not derive them from prose |
-| Replan packet, required reads and staged writeback | Dedicated replan projection and deferred writeback | Preserve fact/source access, policy-specific triggers and ordered mutations; no blanket activation of stride behavior |
-| Scheduler context and execution ownership | Scheduler projection with caller execution context | Carry the actual host owner and ACK obligations; a common schema does not transfer scheduler authority |
-| Complete saved decision, action signature and journal binding | Source hash, projected action hash and captured-decision reference are distinct | Preserve the distinction between semantic integrity, exact transport bytes and receipt identity; no hash substitution |
-
-This is an owner-and-obligation map, **not an exhaustive field inventory or a
-parity result**. Current projections have bounded text, allowlists and relocated
-references. Matching their action signatures alone cannot prove preservation of
-all source clauses or unknown fields. C1 implementation must enumerate those
-fields and callers against its exact base/head; anything unclassified holds
-cutover, rather than disappearing into an assumed compatibility view.
-
-A synthetic probe of the named baseline demonstrates the limit: two long
-`recommended_action` strings with identical prefixes but different tails produce
-the same action-signature document and both report `matches=true`, while their
-`source_decision_hash` values differ. An unregistered top-level source field has
-the same distinction. Conversely, a complete registered settlement plan survives
-projection, and changing its Turn identity changes the action signature. These
-observations reject promoting the existing bounded envelope unchanged into the
-complete contract. They do **not** establish a current authority-loss bug: the
-recommendation is diagnostic, the unknown field is synthetic, and the complete
-source commitment still distinguishes both inputs. No model benefit is measured.
+The complete field, consumer and qualification detail is in [the contract and context annex](controller-executor-unified-contract-v0/contract-and-context.md#c1-source-audit-shared-owners-and-the-remaining-split).
 
 ## 5. Proposed architecture
 
+<a id="router-controller-worker"></a>
+
+### Router, controller and worker: three user-facing responsibilities
+
+**The router is the steward's cross-Agent coordination role; controller + worker
+form one logical Agent binding unit.** Worker is the product term for this RFC's
+executor, not another role, protocol or registered entity. A unit retains its
+Agent identity, Goal ownership, work and budget while using two role sessions.
+Several units may serve one Goal or collaborate across authorized Goals. The
+steward's ordinary conversation needs no synthetic Goal and is not forced into
+two sessions by this design.
+
+Every request edge goes through existing runtime and authorization checks; it is
+not permission for arbitrary model-to-model messaging. The router aggregates only
+authorized returns, not every unit's private conversation. Cross-unit work reuses
+[semantic handoff](capable-manager-semantic-handoff-v0.md), without a privileged
+management tree.
+
+| Role / owner | Decisions and behavior it owns | Responsibilities it does not own |
+| --- | --- | --- |
+| Router / steward | Understand intent, discover context-affine capable units, propose reuse/creation, pass revisions, synthesize results and cross-task tradeoffs | Micromanage worker tools, claim/accept for receivers, copy Goal task stores or budgets |
+| Controller / within a unit | Select work from Goal, planning horizon and evidence; maintain continuity, interact with user/router, assess correction and acceptance, call Core | Become another authority or replace durable work with chat notes; approve every local tool step |
+| Worker / within a unit | Autonomously use tools, experiment, produce artifacts and report evidence/questions within admitted scope | Consume Core packets, author settlement or directly hold Core write access |
+| Core + managed execution + Host adapter | Existing typed rules, persistence, identity, dispatch, observation, stop and recovery | Infer authority/completion from prose or choose domain solutions for the model |
+
+The router may answer simple questions from sufficient existing evidence without
+creating a unit. Prefer reuse of an Agent whose current context and authority fit;
+new Agents still follow existing lifecycle and resource admission. Resolve
+ambiguous bindings rather than taking over by title similarity or recent presence.
+A router's priority is a request: the controller assesses local commitments and
+dependencies, returns adoption, deferral or refusal with reasons, and Core applies
+legal changes.
+
+<a id="agent-binding-unit"></a>
+
+### One Agent identity, two independent sessions
+
+```mermaid
+flowchart LR
+  A[Original Agent identity + exact Goal lifetime] --> C[Controller binding: role / generation]
+  A --> W[Worker binding: role / generation]
+  C --> CS[Native controller session + separate context baseline]
+  W --> WS[Native worker session + separate context baseline]
+  T[Original work / request revision / Turn] --> X[One admitted worker attempt]
+  W --> X
+  X --> E[Original effect identity and once-only settlement]
+```
+
+This is a binding relationship, not a new `AgentUnit` state store. Extend the
+existing session owner for roles, generations and native-session mapping; work
+identity, request revisions and receipts remain with their owners. Reconstructing
+a native session does not create a new logical Agent or task. Restarting or
+changing models cannot borrow the other role's context baseline.
+
+The first profile has one active controller consumer and at most one current
+worker attempt per unit. Units may run concurrently. Future internal parallel
+subtasks must use existing independent delegation/claim contracts, never duplicate
+the same attempt. A governed Turn is not a native model turn: three controller
+messages do not debit three business Turns, but all three model calls count in
+costs. Do not copy the team's resource allowance to every unit; the router adds
+no budget ledger.
+
+<a id="controller-worker-main-loop"></a>
+
+### The primary loop: select, execute, assess, feed back and continue
+
+**The controller is an active work partner, not only a help desk for a blocked
+worker or a reporting session.** An ordinary result, negative evidence or a
+ready continuation is work for the controller even when nobody sends a message.
+
+```mermaid
+flowchart TB
+  G[Current Goal, evidence and eligible work] --> C[Controller selects a useful work segment]
+  C --> A[Existing Core / runtime admits and binds execution]
+  A --> W[Worker executes autonomous tool / reasoning loop]
+  W --> E[Controller assesses findings and evidence]
+  E -->|Further work within the current grant| F[Feedback: continue, revise or request evidence]
+  F --> W
+  E -->|Governed work boundary reached| S[Validate and settle original identity]
+  S --> D[Fresh continuation decision]
+  D -->|Runnable work| G
+  D -->|Explicit wait / repair| H[Existing owner handles boundary]
+  H -->|Recorded trigger and fresh eligibility| G
+  D -->|Stop / terminal| Z[Stop at the proven scope]
+  U[User / router input] -.Update intent or request a response.-> C
+  E -.Useful evidence, optional reporting.-> R[Report / artifact return]
+```
+
+The arrows describe decisions, not one mandatory model call, new attempt or
+quota debit per arrow. Keep three existing boundaries distinct:
+
+| Loop | Who decides what | Boundary |
+| --- | --- | --- |
+| Worker reasoning ↔ tools | Worker chooses local methods within its task | No controller approval for each tool call; escalate material findings, questions or scope limits |
+| Controller ↔ worker | Controller compares evidence with the Goal, supplies feedback and selects the next useful segment | May span several exchanges within admitted work; feedback alone neither settles a Turn nor grants a new attempt |
+| Governed continuation across Turns | Existing Core/runtime validates original settlement and fresh admission | The model proposes work; the existing [Turn loop transition owner](../../reference/protocols/turn-loop-controller-v0.md) still decides legal continuation, waits and stops |
+
+Assessment is substantive: inspect evidence and unresolved acceptance, then
+continue the sound approach, correct it, request missing evidence or close the
+work. Do not rubber-stamp the worker's claim or force a strategy change merely
+to show activity. At a governed work boundary, validate and settle the original
+identity; use fresh admission for a subsequent Turn. Completing a segment, a Todo,
+a native model turn or a report does not by itself close the Goal. A genuine
+dependency, user-action, budget, stop or terminal condition remains effective;
+otherwise useful authorized work must not wait for the user to say “continue”.
+
+This logical loop is event-driven, not a blocking wait that occupies the
+controller session. Persist dispatch, observations, pending assessment and
+continuation through their existing owners. The host/runtime resumes eligible
+processing after a result or recorded wake; it does not keep a model polling.
+On recovery, reconcile the original attempt and unfinished decision/effect before
+continuing, without dispatching another worker merely to restart the loop.
+
+After handling a user/router input, **reselect from the current main-loop work**:
+an unevaluated result, owed feedback, eligible dispatch or settlement may be next.
+Do not blindly resume an old report. Reporting uses evidenced state in bounded
+opportunities while execution proceeds or the loop genuinely waits; it neither
+holds the main loop hostage nor becomes a requirement after every exchange.
+
+<a id="asynchronous-control"></a>
+
+### Asynchronous control while the worker executes
+
+Asynchronous means **the worker's long operation does not occupy the controller's
+processing loop**, not concurrent conflicting decisions in one controller session.
+Persist the original attempt before dispatch and return a recoverable observation
+handle. Do not wait for the entire worker task while holding session or work locks.
+User input, router requests and worker events wake bounded controller processing
+through existing ordered ingress; commit decisions serially per unit. Host waits
+or subscriptions may remain active without model polling. An adapter that blocks
+until the entire task ends is unsupported for this asynchronous profile; a frontend
+that merely accepts messages does not qualify controller interaction.
+
+```mermaid
+sequenceDiagram
+  participant U as User
+  participant R as Router
+  participant C as Controller A
+  participant K as Core / request owner
+  participant H as Host runtime
+  participant W as Worker A
+  R->>K: Publish scoped request and original audience
+  K-->>C: Original request and current work basis
+  C->>K: Assess and request work admission
+  K-->>C: Original identity and allowed scope
+  C->>H: Record attempt, then dispatch
+  H->>W: Task and authorized materials
+  H-->>C: Original attempt observation handle
+  par Worker keeps executing
+    W->>W: Tools and experiments
+    W-->>H: Progress / artifacts / questions
+  and Controller keeps interacting
+    U->>C: Ask about progress / correct requirements
+    C->>K: Read current facts / persist revision
+    C-->>U: Evidenced answer and revision handling status
+    R->>C: Another dependency or coordination request
+    C-->>R: Assessed response
+  end
+  C->>H: Safe correction bound to original attempt
+  H->>W: Supported steer or next safe boundary
+  W-->>C: Version-bound result and evidence
+  C->>C: Assess result and unresolved work
+  opt More useful work within the current grant
+    C->>W: Feedback and next work segment via Host
+    W-->>C: Further findings and evidence
+  end
+  C->>K: At governed boundary, validate and settle original identity
+  K-->>C: Fresh continuation decision for the main loop
+  K-->>R: Result through existing return route
+  R-->>U: Conclusion, artifacts and remaining gaps
+```
+
+User and router inputs share the unit's durable ordered ingress and one control
+writer. Processing order follows the attention and causality rules below, rather
+than an unconditional FIFO queue; there are not two controllers. Invoke the model
+when a question needs semantic interpretation; existing status can be shown directly through typed readback.
+Worker events reach existing observation/journal ownership before triggering
+processing. Recover disconnection by cursor and state reconciliation, not a one-shot
+in-memory callback. Deduplicate by work identity; coalesce progress, but never
+silently drop pending cancellation, revisions, results or errors. A full queue
+returns readable deferral/unavailability and recovery. Reuse scheduler/ingress
+limits and waits, qualifying capacity per host instead of creating a message bus.
+
+| Input | May current work continue? | Handling and readback |
+| --- | --- | --- |
+| Query / artifact inspection | Yes; it does not mutate the attempt | Return recently evidenced state, revision and unknowns; questions do not redispatch work |
+| In-scope correction | At the actual safe consumption boundary | Persist revision; observe adoption after supported steer; otherwise queue for the next boundary and say so |
+| Scope / acceptance change / conflicting requirements | Recheck work that depends on the change | Bind expected revision and use the original owner; neither last-message-wins nor router priority overrides a conflict |
+| Stop / revocation | Enter existing stop handling immediately | Do not wait for the controller model or ordinary progress reports; distinguish recorded request, Host interruption and actual stop, reconciling unknown effects |
+| Worker result / late event | Assessment resumes the main loop, not unconditional new execution | Check original request, attempt, generation and revision; evaluate evidence, feed back or validate/settle at the work boundary, then use fresh admission for the next Turn; late evidence cannot complete another task |
+
+```mermaid
+flowchart LR
+  I[Input persisted] --> A[Receiver assessment]
+  A --> P[Adoptable: await safe boundary]
+  A --> D[Defer / refuse / conflict: return reason]
+  P --> T[Host delivery]
+  T --> O[Subsequent work proves adoption]
+  O --> V[Independent validation and original receipt]
+```
+
+These are evidence stages, not another registered state enum. Map them to existing
+request assessment, ingress, Host observation, validation and settlement facts.
+**Received is not adopted; delivered is not executed; executed is not accepted.**
+The same revision sent directly or relayed by the router shares its original
+request/idempotency identity. Genuinely different requests retain their identities
+and coordinate through explicit version dependencies, not text deduplication.
+There is no implicit global message order across units.
+
+<a id="controller-attention-and-preemption"></a>
+
+### Controller attention: user intent first, interruption at safe boundaries
+
+**Default attention order: current user interaction → ready controller–worker
+main-loop work → ordinary router coordination → unsolicited reporting.** This is
+selection within a unit's existing ingress, not a new global task scheduler or a
+license to override authority. Keep three questions separate: whose intent governs,
+which eligible input needs attention next, and which current operation can yield.
+A higher-priority message does not automatically cancel a worker or a tool call.
+
+| Input / need | Attention policy | Boundary |
+| --- | --- | --- |
+| Authorized Stop, revocation or an enforced budget/fence | Existing deterministic control path runs independently of ordinary model work | Record and interrupt/reconcile through the current owner; never wait behind report generation or for a model to infer Stop |
+| Current user instruction, correction or question | Foreground; address before autonomous coordination and reporting | A status question is not a direction change. A user-requested report is foreground work, unlike an unsolicited report |
+| Main-loop dispatch, result assessment, feedback, continuation and settlement | Next; blocking worker exchanges take precedence within this work and may interrupt background composition | Ordinary results need assessment even without a help request. Routine progress/logs need no model wake unless they change a decision. Escalate required user approval without inventing it |
+| Router's autonomous coordination and nonblocking worker information | Serve after foreground and ready main-loop work, with bounded deferral | A verified relay of an original user request retains its origin and dependency; it is not demoted merely for passing through the router |
+| Unsolicited reports and optional housekeeping | Coalesce and run opportunistically in bounded slices | Refresh against current facts after interruption; do not send every obsolete draft |
+
+Explicit, applicable user intent governs conflicts with autonomous worker/router
+plans, within current authority and scope. Preserve older compatible requirements;
+a recent question does not supersede them. Rank using authenticated origin, original
+request/revision, current dependency and actual blocked state, never a sender's
+self-declared urgency or words such as “urgent” in source text. Unclassified input
+gets bounded assessment rather than a guessed permission change or silent drop.
+
+A required dependency may temporarily inherit the waiting foreground request's
+attention: if answering the user requires resolving a worker question, resolve that
+question first as part of serving the user. Record the existing request/dependency
+link and keep the inherited work bounded to that unblock; it gains no new authority
+and does not promote the worker's entire backlog. Apply the same rule to a necessary
+router dependency. Discover a cycle or missing permission as a blocker, not an
+excuse for endlessly escalating priorities.
+
+**Ordered ingress is not one global FIFO processing order.** Persist arrival and
+revision history unchanged; select among causally eligible pending inputs. Retain
+FIFO for equal attention and preserve per-request revision dependencies. A newer
+correction can invalidate an old draft, but its predecessor is recorded as
+superseded through the existing owner, not erased. A cancellation can invalidate
+pending dispatch immediately without first executing every earlier queued request.
+One controller commits decisions; priority never creates a second control writer.
+
+Preemption has three concrete forms:
+
+1. **Queued work:** select the higher-priority eligible input before starting an
+   unsent report. Keep original arrival/handling facts for recovery and readback.
+2. **Pure drafting / model reasoning:** yield cooperatively at a supported native
+   turn/tool boundary, or interrupt a cancellable model call. Retain a brief and
+   required evidence, not an assumed resumable model stack. Fence the old invocation
+   before another controls the same session; late output/tool proposals cannot
+   publish or mutate state. Recompose the report against current facts on resume.
+3. **An admitted tool/effect or atomic commit:** do not tear it down or infer rollback
+   from model interruption. Accept new input promptly; finish/recover the original
+   transaction or use its supported cancellation. Hold only dependent new effects
+   when an applicable change is pending; independent admitted work retains its
+   scope. Revalidate current revisions before subsequent dispatch/publication.
+
+“Interrupt reporting” therefore normally means interrupting the controller's
+composition, **not restarting or cancelling the business worker**. If a report send
+already happened or its delivery is uncertain, recover that original send before
+retrying; do not retract facts already observed or label a partial stream complete.
+Update visibly stale delivered material through the existing version/return owner.
+A Host without reliable interruption must bound controller slices and expose the
+actual wait; do not start concurrent calls in the same native controller session
+or claim prompt responsiveness for an uninterruptible long report.
+
+```mermaid
+sequenceDiagram
+  participant U as User
+  participant I as Existing ingress / runtime
+  participant C as Controller
+  participant W as Worker
+  C->>W: Dispatch admitted work via runtime
+  W->>W: Autonomous execution
+  W->>I: Ordinary result and evidence, no help request
+  I-->>C: Resume main-loop assessment
+  C->>C: Compare evidence and remaining acceptance
+  C->>W: Feedback and further work within current grant
+  Note over C,W: Worker continues while controller handles input
+  U->>I: Correct a requirement
+  I-->>C: User input ahead of ordinary router/report work
+  C->>C: Assess revision and dependent work
+  C-->>U: Explain adoption or actual pending boundary
+  C->>W: Apply qualified correction at safe boundary
+  W->>I: Further evidence
+  I-->>C: Reselect pending main-loop work
+  C->>C: Assess, continue or close through existing Core
+  opt Reporting is eligible
+    C-->>U: Updated evidenced report
+  end
+```
+
+Prevent both starvation and interruption storms. Batch compatible user corrections
+without losing their individual identities; coalesce supersedable progress, but
+retain questions, errors, results and settlement/recovery obligations. Bound each
+foreground service slice and reserve service opportunities for still-valid
+main-loop work and owed returns; ageing can advance those obligations without overriding
+Stop, explicit cancellation or intent. Optional stale reports can be superseded.
+If arrivals exceed capacity, show backpressure/deferred work and the actual blocker
+instead of promising an impossible latency bound. Do not repeatedly abort an
+in-flight foreground response for every keystroke, or ask the user to tune priority
+numbers. Existing quota/stop rules still bound the work and all wasted/interrupted
+model calls count in complete cost.
+
+For the MVP, qualify the autonomous main loop, stable selection and yielding
+**background composition** on one real Host; do not build arbitrary preemptive tool scheduling. Extend existing
+ingress/request/session facts only where the above origin, dependency and invocation
+fences are absent. The typed owner selects admissible input and protects commits;
+the controller assesses meaning. App/CLI and supported Lark readback distinguish
+input received, handling, deferred/blocked and actual adoption without exposing a
+priority console. This policy belongs to the optional unit profile; do not silently
+reorder current single-session chat queues. C3/C6/C8 own implementation and the
+attention acceptance below; a prose prompt alone does not implement the policy.
+
+<a id="router-failure-recovery"></a>
+
+### Failure isolation: losing a session does not lose the work
+
+```mermaid
+sequenceDiagram
+  participant R as Router
+  participant C as Controller A
+  participant K as Core / original journal
+  participant H as Host / Worker A
+  C->>K: Persist original dispatch intent
+  C->>H: Start original attempt
+  Note over C: Controller exits or disconnects
+  H->>H: Continue only within original grant, budget and boundary
+  R->>K: Read unit state, do not create a replacement worker
+  Note over C: Controller recovers with new control generation
+  C->>K: Recover pending input, attempt and original receipts
+  C->>H: Observe original attempt / recover original result
+  H-->>C: Running / complete / unknown
+  C->>K: Recheck current authority, reconcile or settle
+```
+
+An unavailable router does not stop admitted units just because their aggregate
+return channel is down. Direct interaction retains original audience limits.
+Without a controller, the worker may continue only its originally authorized,
+bounded work; new approval, scope change or dispatch waits for recovery. A
+replacement controller fences the old control generation without automatically
+rerunning a still-valid worker attempt as an orphan. Unknown external effects
+remain unknown; a timeout does not prove safe retry. Core/Host stop and budget
+limits do not depend on either model being online.
+
+Multi-recipient requests are not cross-Goal atomic transactions. If A adopts and B
+refuses, the router presents partial results and assesses another request,
+dependency revision or a needed user decision; it does not erase A's actual
+effects. Cross-unit artifacts retain version, provenance, permission and
+independent acceptance without broadcasting full private context. Rebinding or
+profile rollback first closes new admission, reconciles/stops the original attempt
+and pending effects, then continues with a newly qualified binding.
+
 ### Ownership and one contract
 
-```text
-Core owners <-> unified governed work contract <-> controller session
-                                                       |
-                                      task / findings / artifacts
-                                                       |
-                                                 executor session
-                                                       |
-                                              scoped host tools
-
-Host adapters enforce dispatch, session fences, interruption and transport.
-Core owners validate operations and commit existing effect/settlement receipts.
+```mermaid
+flowchart TB
+  D[Current decisions from existing domain owners] --> C[One semantic composition]
+  C --> S[Complete immutable capture]
+  S --> P[Progressive / full / delta delivery]
+  P --> M[Controller or qualified single-session consumer]
+  M --> O[Explicit typed operations]
+  O --> V[Core validation and original receipts]
 ```
 
 Use the existing TypeScript interaction/work-context and effect owners. The
@@ -331,8 +665,8 @@ holds dependent work; independent authorized work keeps its existing route.
 ### Human interaction during execution
 
 In a supported two-session profile, executor activity must not block the
-controller's user conversation. Reuse the existing role-bound ordered queues,
-versioned requests, host observations and original-audience return path. A
+controller's user conversation. Extend existing queues with role binding; reuse
+versioned requests, host observations and the original-audience return path. A
 question or report does not start another business executor, interrupt an
 authorized attempt without cause, or create another Turn debit.
 
@@ -461,7 +795,9 @@ its existing independent claim/lease/handoff contract.
    generation, scope and budget. Record intent before invoking the executor.
 4. The executor works and returns observations/artifacts. Readback distinguishes
    delivery, execution, result availability, independent validation and accepted
-   writeback. Dialogue can span several exchanges without multiple quota debits.
+   writeback. The controller assesses ordinary results and gives feedback through
+   the [primary loop](#controller-worker-main-loop), not only in response to a
+   blocker. Dialogue can span several exchanges without multiple quota debits.
 5. The controller proposes acceptance or revision; the existing effect owner
    validates and settles the original Turn exactly once. A fresh decision then
    continues runnable work, waits on the recorded event/time or stops.
@@ -475,234 +811,14 @@ its existing independent claim/lease/handoff contract.
 | Stop while a tool is running | Host interrupts within its supported contract; report acknowledgement and actual termination separately. Preserve unknown/in-flight effects; never claim physical rollback from a stop receipt |
 | Controller is unavailable | Existing host/Core stop and budget mechanisms remain effective; hold dependent work and recover, without asking the executor to become Core owner |
 
+<a id="unread-material-across-turns"></a>
+<a id="configuration-and-migration"></a>
+<a id="delivery-acceptance"></a>
+<a id="candidate-context-by-decision-stage"></a>
+
 ### Differential context
 
-Reuse the existing context-delivery owner and immutable capture mechanism.
-The target has two orthogonal layers; neither creates another semantic producer:
-
-- **Layer 1 — Progressive:** default model-facing delivery across LoopX hosts,
-  including ordinary CLI, MCP/HTTP and external workers without Session Hooks.
-  Keep the current Goal, applicable cumulative acceptance, failures/unknowns,
-  authority, stop conditions and outstanding read/settlement obligations inline.
-  Fold heavy history, source bodies and review evidence only through the existing
-  typed composition owner, with exact current-capture read routes and explicit
-  before-dependent-work obligations. Unknown relevance/schema keeps the complete
-  necessary material. This is a delivery default, not permission to collect or
-  persist additional data. A caller without an authorized, usable reader receives
-  complete inline context; a local file path is not a working remote read route.
-  If hard Host limits prevent both routes, expose unavailable context and hold
-  dependent work.
-- **Layer 2 — Delta:** an exact encoding of the composed instance, automatically
-  selected only with qualified consumer/session, role, epoch, schema and source
-  binding. Progressive can use full encoding; a complete inline instance can use
-  Delta. Qualify both combinations as well as Progressive plus Delta and neither.
-  A host without qualified continuity uses current full encoding of Layer 1,
-  without losing Progressive or requiring a native session to be invented.
-
-Distinguish two existing reuse claims. **`captured_file`** compares verified,
-compatible immutable saved artifacts; exact reconstruction does not require the
-model to have read the old file, reached EOF or retained its contents. **Retained
-model-input reuse** may omit previously delivered text only with trusted complete
-delivery and retention evidence for that exact consumer binding. A saved file,
-tool-output receipt or model self-acknowledgement cannot establish that evidence.
-Session Hooks observe their supported boundary; they grant no new authority.
-Preserve deletion, array order, null, empty values, original numeric values and
-complete strings. Unknown fields stay complete until reuse semantics are
-registered. Publish the current complete recovery source before an optional view
-or delta, verify reconstruction, and choose full when Delta plus its metadata is
-not smaller. Layer 1 likewise compares its final serialized UTF-8 view, read
-guidance and index with the same capture's complete alternative; use the smaller
-valid delivery, never trim mandatory meaning to meet a size budget.
-
-Current authority, admission, cancellation, unresolved-read, settlement and
-scheduler facts stay fresh and inline even if unchanged. A warm transport never
-relaxes the underlying instructions. Missing/out-of-order deltas, corrupt or
-unknown baselines select current full encoding/recovery. Truncated or missing
-reads recover the necessary range from the same capture. Compaction invalidates
-retention for the next work Turn's new baseline epoch; it neither invalidates the
-existing Turn nor forces an old-packet prefetch or immediate full reread. Preserve
-the original admission, recovery reference and once-only settlement/debit.
-Execution still checks current source validity and authority; recovering an old
-capture cannot revive cancelled work. The executor's task conversation consumes
-semantic material separately, not a relabeled controller Core-packet delta.
-
-#### Unread material across Turns
-
-Current immutable captures already support exact selected reads. The missing
-design is explicit discovery of unread material across deliveries, not a second
-reader or a requirement to consume an entire baseline. Extend the existing
-context/readback owner and native `session.json` projection; use its equivalent
-consumer binding on other hosts. Distinguish publication, model-visible delivery
-coverage, retention and semantic adoption/accepted outcomes.
-
-`confirmed_read_sections` is a proposed coverage projection;
-`consumed_pointers`, if retained as a name, must derive from that same owner,
-not become a second ledger or imply comprehension. Bind evidence to the exact
-source/capture digest, revision, consumer/session role, epoch, schema and selected
-pointer/range. Confirm coverage only from trusted Host observation of the actual
-model-visible result. Calling `--select`, file existence, reader EOF, a successful
-tool log or a self-ACK alone is insufficient. Partial/truncated/missing output
-stays unconfirmed; selecting a parent/index cannot confirm hidden descendants.
-Without such an observer, coverage is unknown and discovery stays conservative.
-This coverage never becomes a new full-read gate for `captured_file` Delta.
-
-Every warm delivery carries an **`unread_context_index`** (proposed name) for
-eligible non-inline material whose current content is unconfirmed or changed,
-including unchanged text omitted by Delta. Include exact current pointers,
-source revisions/digests and required-read status, rather than inferred relevance
-from a summary. A confirmed range applies only to its observed version; changed
-content, reordered arrays or ambiguous mappings require current rebinding and
-conservative discovery. Confirmed delivery never proves retained input or adoption.
-
-Each item resolves independently through existing `quota context-read --select`
-against the **current complete immutable `projection.json`**, with its exact
-capture SHA, without the previous packet, baseline file, model memory or patch
-chain. A derived `required-context.json` or wire view retains the existing owner's
-explicit mapping to the canonical source; roots and digests are not interchangeable.
-Historical exact-version lookup remains a separate, version-pinned artifact/read
-contract, not an invented path alias or a reason to silently use stale facts.
-If still-required earlier material is absent from the new projection, its owner
-must carry it forward or expose its current authorized source/read obligation.
-Legitimate expiry, revocation or removal must remain explicit, with unavailable
-required material holding dependent work; never silently mark it read or retain
-forbidden raw data. External materials keep their own source-consumption contract.
-
-#### Configuration and migration
-
-The following is proposed behavior, not a change to today's Codex-scoped
-`context_delivery` on/off interface. Evolve the existing typed configuration owner
-to express the two layer decisions; C1 maps exact names and versions before
-implementation. Do not add a parallel settings store or packet-format toggle.
-
-| Configuration / caller | Migration and effective behavior |
-| --- | --- |
-| No saved preference, model-facing caller | Target Layer 1 default applies after that caller's reader/fallback and cost qualification; Layer 2 is auto only for a qualified continuity host, otherwise full encoding. Today's ordinary CLI/other-host full behavior remains until that rollout qualifies. |
-| Explicit invocation/environment off | Preserve current precedence and full/raw delivery for that invocation, with no optional codec/coverage-ledger dependency; do not rewrite the saved preference. |
-| Existing persisted off | Preserve the complete off path and its original read/recovery obligations; never convert it to Progressive or Delta through an absent-preference migration. |
-| Existing on, supported host | Preserve the qualified native file/recovery semantics while mapping to Layer 1 plus qualified Layer 2 auto; no full-model-read prerequisite is introduced. |
-| Existing explicit on, unsupported host | Preserve the current validation error during compatibility. A versioned caller rollout may expose supported Layer 1 after qualification; do not silently reinterpret an unsupported request. |
-| New independently configured layers | Honor each layer independently, including Progressive off with qualified Delta auto. Explicit Delta off preserves Progressive; unsupported auto falls back to current full encoding. |
-| Internal raw machine consumers | Preserve their explicit `--context-delivery off` contracts; do not replace machine JSON with a model-facing file reference or mutate preferences. |
-
-Freeze recorded versions, experimental configurations and historical receipts.
-Qualify default expansion as a behavior change on real callers, including explicit
-off isolation and failure/recovery; a merged design alone changes no defaults.
-
-#### Delivery acceptance
-
-Reuse C1/C2's real-entry and §9 comparisons, including these decisive cases:
-
-| Case | Required observation |
-| --- | --- |
-| Ordinary no-hook CLI and supported MCP/HTTP/worker routes | Layer 1 works through the actual authorized reader or complete inline fallback; no dangling local-only references or invented native epoch. |
-| Unchanged unread tail becomes decisive next Turn | Warm Delta may omit its bytes, but the current index exposes its full source and actual subsequent selection/work obeys the recovered constraint. Index visibility alone is not success. |
-| Changed/unread bodies, reordered arrays, unknown fields or scope | Rebind to the current source; preserve applicable cross-Agent obligations and unknown-scope complete fallback. |
-| Partial pages, lost/truncated tool output, EOF without a Host witness | Do not confirm unseen bytes or hidden descendants; recover missing ranges, conservatively index unknown coverage, and keep file Delta usable. |
-| Compaction, role/session/schema/epoch change | Invalidate incompatible retention/reuse; recover current facts without replaying the original admission, effects or debit, and without old-packet prefetch. |
-| Revoked source, missing reader or legitimately removed material | Respect the current permission/source owner; expose the loss and hold dependent work or use authorized complete fallback, without stale-data disclosure. |
-| Full is cheaper; off and legacy configuration | Choose valid full delivery, preserve explicit off and frozen versions, and observe both source identity and raw machine-consumer parity. |
-
-The primary stored-body reduction is **`1 - V/F`**: `F` is the complete capture's
-actual UTF-8 file bytes and `V` the selected view body file's actual bytes from
-that same capture; saved bytes are `F - V`. Bind both artifacts and their digests,
-and report wire/index overhead separately rather than changing that denominator.
-The delivery size guards above still include their actual presentation overhead.
-A net-benefit claim also counts all later reads/recovery, host/controller/executor calls and latency,
-actual tokenizer/cached/output usage, human attention and accepted outcomes.
-Preserve unfavorable cases and frozen budgets. A smaller packet alone proves
-neither lower token cost nor better outcomes; §9's original quota single-session
-comparison stays primary, and two-session costs remain a separate comparison.
-
-### Candidate context by decision stage
-
-Preserve complete candidate context in the canonical capture; deliver it according
-to the decision the consumer must make through the same C1/C2 owners. This is a
-proposed replacement contract, not permission to skip existing required reads.
-The current capability gate assigns selection to the Agent. A `selected_todo`
-projection or list order alone does not prove that comparison is finished. Keep
-the complete-context repair in [#7557](https://github.com/loopx-project/loopx/pull/7557)
-until consumers and recovery obligations are replaced together.
-
-| Decision stage | Required input before the dependent decision |
-| --- | --- |
-| Select or reconsider work | Complete discoverable candidate index: identity/revision, original objective, declared Goal contribution, priority, eligibility, ownership, dependencies/blockers, current evidence/uncertainty and exact captured detail reference. Missing facts remain unknown. Read full detail for compared alternatives; if the index cannot establish whether an alternative matters, expand it before choosing. Do not silently keep only a top-K set. |
-| Continue admitted work | Full selected task, original and cumulative requirements, applicable global/shared constraints, dependencies, contrary evidence, current authority and stops. A registered continuation contract may defer independent alternatives while exposing new/changed eligibility and evidence that can require reconsideration. An Agent still instructed to select over all runnable candidates remains in the selection stage. |
-| Replan or accept the Goal | Expand all affected work and acceptance, including cross-Agent dependencies and contradictory evidence. Unknown scope expands to the complete captured basis. Ownership and earlier local completion do not prove irrelevance. |
-
-These are consumer obligations, not three packet schemas or new scheduler modes.
-The typed owner determines which reads can be deferred under an explicit contract;
-the Agent/controller makes the semantic choice. Author-provided purpose or risk
-summaries help discovery but cannot prove omitted prose irrelevant. Do not infer
-relevance from keywords, claim labels or a model-authored score. Without sufficient
-typed facts, comparison can still require all bodies: cold selection has no
-promised compression ratio. Default expansion of the current Agent's outcomes is
-useful for ordinary work, with other outcomes discoverable; shared requirements,
-dependencies, conflicting evidence and unknown relationships override that default.
-Outcome scope and candidate selection remain distinct owners.
-
-Extend the existing immutable reader to batch selected details from the **same
-capture**, retaining each requested item's revision, lineage, integrity, coverage
-and cursor. Distinct revisions of one Todo stay distinct. Missing, truncated,
-unsupported or changed detail holds dependent work and uses that capture's full
-recovery; a fresh guard is not a detail reader. One read can deliver several bodies;
-verified bodies need not be repeated within a supported retained session. Reading
-an index never acknowledges hidden bodies. Retained-model reuse covers only text
-actually delivered and retained for that consumer; saved-file Delta has its
-separate artifact proof above. Newly required detail must supply its text even
-if the machine already holds it. Context loss recovers the required model
-artifact, widening to the full source when its scope is unknown. Historical captures
-keep their original obligations. Read receipts prove coverage, not comprehension,
-retention, fresh authority or acceptance.
-
-The single-session Agent consumes this same pipeline. In the controller/executor
-profile, the controller compares alternatives and absorbs Core bookkeeping;
-the executor receives the complete selected work and authorized materials through
-the existing host channel. It does not become a Core client or receive every
-alternative to compensate for an incomplete brief. Reuse capability eligibility,
-work-context/read fulfillment, capture/detail and delta owners; add no parallel
-candidate store, Python relevance policy or per-item approval round trip.
-
-Qualify against original quota single-session delivery and the corrected complete
-context on matched inputs. Include a decisive constraint at the end of an initially
-unexpanded candidate, a useful alternative beyond any display limit, changed peer
-evidence, a now-runnable blocker, identical titles with different requirements,
-missing metadata, context loss and failed batch reads. Actual choice and subsequent
-verified work must honor the constraint; reconstructable JSON or an unchanged
-selected ID is insufficient. Count initial input, all detail reads, paging, retries,
-recovery, both sessions' calls, latency and human intervention through accepted
-outcomes. Keep small-task and cold-selection counterexamples where staging costs
-more. Report bytes separately from tokens measured with the actual model tokenizer.
-
-Delivery stays within C1/C2: qualify the shared same-capture reader and required-read
-recovery through an actual caller; replace that caller's stage-specific delivery
-and obligations together; then qualify retained delta and matched outcomes/full
-cost. Reuse [#7560](https://github.com/loopx-project/loopx/pull/7560)'s outcome-scope
-work without treating outcome relations as candidate-selection proof. Diagnostic
-counter folding in [#7587](https://github.com/loopx-project/loopx/pull/7587) is a
-separate compatible slice, not this replacement. Each slice can have its own PR
-and rollback; no generic retrieval framework or two-session rollout is required.
-
-The native quota caller now implements a bounded acceptance-material slice:
-known cumulative objectives, complete requirement descriptions and current review
-states remain in its required view; source history and review notes/evidence are
-addressable in the original immutable capture. Its read obligation, full/delta
-baseline and recovery move together. Selected detail reads never fulfill hidden
-required content or establish a full baseline. Unknown semantics and signed
-envelopes remain whole; the disabled path is unchanged. The original capture's
-values survive the typed path plan without a JavaScript numeric round trip.
-If the required view plus its detail index is not smaller in serialized UTF-8
-bytes, retain full delivery and its original obligations. Default detail examples
-select source, note or evidence fields rather than replaying the whole outcome.
-
-Native exec and code-mode fixtures also qualify two compactions within one work
-Turn: a sufficient working brief continues with the original work/settlement
-identity without replaying its packet or re-entering admission. The baseline is
-still invalidated; unfinished initial reads and missing necessary facts require
-same-capture recovery, while a new work Turn obtains its fresh guard. This is
-native protocol qualification with deterministic inference, not evidence of
-model compliance or live outcome/cost benefit. C1/C2 remains incomplete:
-candidate, preference and Explore staging, signed-envelope migration and matched
-accepted outcomes with complete costs still need their own qualification.
+The complete field, consumer and qualification detail is in [the contract and context annex](controller-executor-unified-contract-v0/contract-and-context.md#differential-context).
 
 ## 6. Alternatives and design choices
 
@@ -713,6 +829,26 @@ accepted outcomes with complete costs still need their own qualification.
 | Pure natural-language chat with no runtime binding | Reject: stale/duplicate results, cancellation and restart cannot be reliably reconciled |
 | Always use two sessions | Reject: controller cost, latency and lossy delegation may exceed the benefit; keep a qualified single-session profile |
 | One universal runtime/effect executor | Reject: host, scheduler, transaction and provider permissions differ; share semantics and receipts, not ownership |
+
+### How external practice informs this design
+
+Primary sources inspected on 2026-11-06 inform mechanisms, not runtime dependencies
+or evidence of LoopX benefit:
+
+| Primary source | Design implication | What does not transfer directly |
+| --- | --- | --- |
+| [Anthropic: multi-agent research system](https://www.anthropic.com/research/multi-agent-research-system), 2025-06-13 | Independent contexts and handoffs suit decomposable long tasks; additional coordination and tokens belong in the value comparison | Parallel research gains do not establish cheaper coding or dual sessions; retain single-session and small-task counterexamples and complete costs |
+| [Temporal: Workflow message passing](https://docs.temporal.io/encyclopedia/workflow-message-passing) | Separate queries, asynchronous input and changes with a processing result; observe receipt separately from handling | No Temporal/second workflow engine, and Signal semantics are not LoopX acceptance receipts |
+| [Kubernetes: Controllers](https://kubernetes.io/docs/concepts/architecture/controller/) | Observe durable facts, request action and reconcile actual state; reconcile after restart rather than blindly replaying | LoopX's controller uses model judgment and business work is not always idempotently repeatable; deterministic admission and Host execution retain their owners |
+| [Akka: Mailboxes](https://doc.akka.io/libraries/akka-core/current/typed/mailboxes.html) and [sequential actor processing](https://doc.akka.io/libraries/akka-core/current/typed/actors.html) | Priority mailboxes can preserve equal-priority FIFO while a single consumer protects state; queue selection and in-flight handling are separate boundaries | No Akka dependency; mailbox priority does not guarantee model/tool preemption, and silent overflow loss is unsuitable here |
+| [A2A: Life of a Task](https://a2a-protocol.org/dev/topics/life-of-a-task/) (development version) | Distinguish conversation context, messages, tasks and versioned artifacts instead of making every message a new task | Do not copy its enums or terminal rules; retain LoopX request, work and effect identities. Protocol adapters need separate qualification |
+
+Async handlers must also account for state changes across waits; [Temporal’s TypeScript message-handling guidance](https://docs.temporal.io/develop/typescript/workflows/message-passing) informs concurrency coordination. Here the choice is one control commit owner and version rechecks, not assumed preemption of model calls or external effects.
+
+The choice is identity-bound asynchronous interaction with existing Core
+reconciliation, not an extra Agent layer for everything. Section 11's real outcomes
+and complete costs must determine whether this topology improves on single-session
+work.
 
 ## 7. Safety, privacy and compatibility
 
@@ -731,261 +867,11 @@ lossless mapping and explicit maintainer approval required by the RFC index.
 
 ## 8. Migration and rollback
 
+<a id="c1-caller-replacement-and-cutover-unit"></a>
+
 ### C1 wire-layout recommendation
 
-The target combines quota packet's decision-necessary information with
-TurnEnvelope's efficiency and replaces both. “Complete” means complete necessary
-semantics, not every duplicated diagnostic in today's packet permanently inline.
-The lossless root-preserving candidate below is an intermediate migration oracle:
-it exposes omissions and reference breakage while consumers move. Renaming that
-candidate or forwarding all old fields does not satisfy the final design.
-
-Inventory each field and instruction clause with its owning rule and consumer.
-Keep current task, original requirements and revisions, relevant evidence,
-authority, required reads, execution/stop conditions and original settlement
-obligations available before their dependent decision. Reuse typed ownership to
-remove proven duplicate representations and unrelated diagnostic noise. Stable
-material can be referenced or differentially delivered only with verified
-retention or a resolvable, integrity-bound source and explicit read ordering;
-missing context must recover before dependent work. A reference alone does not
-prove that the model received its constraints. Unknown fields cannot be silently
-classified as optional or dropped by a prose heuristic.
-
-Within one canonical contract, absorb the useful envelope properties: clear
-execution identity and action organization, a single machine-owned binding,
-less duplicate instruction text, bounded delivery and reliable detail/recovery.
-Full/delta/detail are encodings of that instance, not permanent competing semantic
-views. Preserve raw source evidence in its existing owner without emitting a
-second executable packet. The final wire layout may change where its mapped
-references, consumers and measured benefit justify it; root preservation is not
-an immutable product constraint.
-
-| Source or concern | Candidate mapping and qualification |
-| --- | --- |
-| Current decision fields during migration | Preserve path/value in the lossless oracle; enumerate all modes and classify necessary semantics, proven duplication and diagnostic-only material before the final mapping. Do not infer optionality from one observed packet. |
-| Work context, required reads and settlement | Keep their existing `interaction_contract` paths and owners. Existing root-relative references retain their meaning; any intentional relocation requires explicit reference and reader migration. Never rewrite prose or command strings by pattern. |
-| Host-operation binding | Compose from the actual caller execution context. Validate consistency with source authority; reject conflicting bindings rather than choosing whichever representation is convenient. |
-| Content and transport integrity | Commit the entire semantic instance independently of the former compact action digest. Preserve exact capture-byte verification and original settlement identity as separate checks; changing a transport encoding does not create a new effect. |
-| Complete capture and Progressive view | Keep canonical `projection.json` distinct from its derived `required-context.json`/wire view; inventory exact root, revision, digest and pointer mappings. Save complete recovery before presentation; reference only through an authorized usable reader. |
-| Saved-file reuse, delivery coverage and retention | Inventory each existing typed owner and its evidence boundary separately. Proposed `confirmed_read_sections`/derived `consumed_pointers` describe observed coverage only; neither is artifact-reconstruction proof, comprehension or a full-read gate for file Delta. |
-| Unread discovery | Map the proposed `unread_context_index` to current complete-capture pointers, revisions and source/read obligations, including unchanged unconfirmed material. Rebind changed/unknown mappings; retain explicit unavailable states and permission checks. |
-| Historical receipts and readers | Decode the recorded version for outstanding work. A temporary internal adapter may serve an existing effect interpreter, but must not become a second emitted contract or a compact replacement for the model's required input. |
-
-A synthetic layout probe used real isolated File/SQLite quota captures and the
-existing TypeScript context codec. Preserving source paths permitted warm delta
-encoding; moving all facts under a new `facts` key while retaining the old
-`quota_packet` surface fell back to full with `delta_not_smaller`. Both layouts
-reconstructed exactly, and an epoch change required full delivery. Retention was
-synthetically asserted; this measures codec behavior, not host observation,
-model comprehension or outcome/cost benefit. It rejects **unmapped root relocation
-under the existing surface**, not nesting in general. A redesigned nested layout
-remains possible if its mapping and consumers justify the migration cost.
-
-Therefore C1/C2 must explicitly version the context surface and its fresh/reuse
-paths with the wire transition. Do not relabel an old surface or inherit its
-baseline by Turn identity. The transition first saves a complete compatible
-source; the model-facing view may already be Progressive. Reuse requires the
-appropriate saved-artifact or retained-model proof above. Qualification includes fields
-outside the old action projection, missing baselines, session/epoch changes and
-same-capture recovery. This resolves a concrete layout risk; shared writer and
-final-consumer replacement remain the next implementation, not another layout
-framework or a declaration that C1 is delivered.
-
-The unfinished implementation candidate [#7430](https://github.com/loopx-project/loopx/pull/7430)
-now composes a complete source in the existing TypeScript owner before both
-quota and native Turn capture, and passes it to actual Codex stdin. Isolated
-File/SQLite CLI tests with a synthetic executable cover source integrity,
-failed-attempt recovery and once-only settlement. This advances the two-writer
-and final-input replacement; it does not qualify C1 cutover. The candidate
-now routes capability reentry through the canonical CLI channel and preserves
-original hash-bound review/writeback readers in complete-contract Codex input.
-Synthetic File/SQLite execution qualifies those readers for fresh obligation-bound
-and prior Todo-bound replans. Native launch now derives its one causal binding
-from the recorded settlement identity; an observed semantic replan obligation
-cannot replace an existing Todo binding. Source-quota and health refusals still
-prevent host launch. Release fixture setup now imports its final source once;
-these executable checks do not qualify a real model or installed host.
-The structured-host renderer now shares complete-input transport with Codex,
-including original hash-bound material readers. Actual isolated File/SQLite
-Turn-to-DSH runner paths receive that same captured source; historical request
-prompts retain their exact content. Structured DSH still has Todo-scoped
-sessions: an obligation-only replan is rejected before dispatch, rather than
-inventing a Todo binding. Full-source input deliberately retains inactive
-capability configuration and diagnostics; those facts do not activate recall
-instructions or reflection result fields. This is a disclosed presentation
-change, with activation and historical parity checked separately.
-The Markdown quota entrypoints now render the same complete contract rather
-than selecting a second subset of facts. Actual File/SQLite CLI captures retain
-every field and instruction under both the ordinary and former envelope flag;
-JSON types and arbitrary source text survive rendering. External-worker
-File/SQLite admission, unresolved-attempt recovery and restart checks pass with
-the complete producer output, but an opaque shell wake still does not prove
-delivery of that original contract to an executor model.
-The real benchmark checkpoint preflight now verifies complete source equality
-for File/SQLite, replan/non-replan and context delivery on/off. Its optional
-full recovery retains that same source, with one initial admission and no
-reader writes. This qualifies transport to the checkpoint's model-input file,
-not native session capture or a benchmark/model outcome. A matching outer
-source hash alone previously admitted an unsupported version or invalid inner
-binding through `replan-view`; the reader now uses the existing complete-contract
-validator, while unversioned historical reads retain their decoder.
-Successor authoring is now bound to the already-decided Turn before complete
-capture, using the same formatting owner as historical staged reads. The complete
-contract includes original Turn/Goal binding and the obligation to finish the
-creation receipt's original settlement before ending, without executing the
-successor. A later modern material read does not append another binding. Actual
-File/SQLite App-heartbeat and generic-CLI tests create the successor from this
-inline contract, reject premature spend, settle the original identity once and
-leave the successor open, without another guard or a staged reader dependency.
-This changes complete-input successor guidance; historical unversioned reads
-retain their old behavior. Settlement-only, capability-intent, unbound and
-mismatched-context inputs retain their authoring unchanged. The checkpoint's
-legacy-reader tests alone do not establish this lifecycle result. Remaining
-material-reader retirement and other C1 consumers must not restore a second
-compact executable fact view merely to satisfy historical assertions.
-The complete-contract boundary now rejects unknown, empty or mistyped root
-execution actions, using the existing decision/frontier vocabularies both
-before capture and on later reads. Valid hashes do not make unknown execution
-semantics supported. Optional evidence remains intact, including unfamiliar
-versions and action-like field names; historical unversioned action routing is
-unchanged. This qualifies the root action boundary, not every required semantic
-field. A real File/SQLite native-CLI producer fault is rejected before capture,
-dispatch or spend. The preceding candidate reached a later launch refusal;
-these probes do not show prior unguarded execution. Selected-work tests now consume the complete interaction context and
-use the actual native `turn plan` entrypoint for host input. Real File/SQLite
-checks retain full task text, canonical notes, scoped gates, fresh requirement
-reads and source-loss recovery without rebinding an App capture to a native
-host. The six earlier failures at obsolete root-layout assertions remain
-historical failures; their downstream semantic checks now execute.
-The six earlier staged-reader failures are retained as historical evidence.
-The complete composer now reuses Explore's existing applicability correction
-before capture: a proven pure replan without a Todo does not advertise the
-Todo-bound result attachment. Evidence, independent graph commands and all
-before-work obligations remain; unfamiliar/custom instructions and ambiguous
-bindings stay intact. Supported Todo-bound attachment authoring remains fully
-inline. This is an applicability correction, not an authority change or a new
-compact fact view. Real File/SQLite native host inputs qualify both bindings.
-The staged tests now consume the complete CLI input and exercise the historical
-material-reader codec against that same immutable capture, including a hostile
-PATH, unavailable registry, tampered identity/acceptance and the actual writer.
-They compare all successor-binding instructions rather than excluding fields
-that the complete input now owns. The attachment refusal fixture supplies a
-valid explicit finding status so it reaches the real missing-Todo identity gate.
-All 23 staged checks and four native host cases passed; these overlapping scopes
-do not establish full consumer retirement or packaged-host qualification.
-The native context fixture now binds both CLI spellings to `complete_turn` and
-compares reconstructed facts with the original captures. Its four initial
-failures came from constructing the restoration oracle with retired surfaces;
-a Unix rendezvous check had masked the same mismatch by accepting full fallback.
-The corrected checks require the original target and actual delta mode. Ten
-cases pass through real Codex exec/app-server/code-mode and worker resume with
-isolated SQLite and deterministic loopback inference, including compaction,
-process resume, replaced history and an unqualified replay profile. No paid
-model or benchmark experiment ran. The current full quota-settlement CLI module
-passes 158 checks, including the historical cache-parity case; the earlier
-intermittent mismatch is not causally explained or relabeled as a pass.
-The File/SQLite context-to-DSH subprocess checks now use the complete capture and
-production request builder instead of treating a current CLI response as a legacy
-action projection. Normal capability-on/off inputs retain every source fact;
-bound replan uses the production capture binder and executes the delivered
-original-evidence readers. Altered source facts, schema versions and replan
-obligations reject before the runner seam. The explicit historical reference
-reader remains covered. Eight focused cases pass with an injected recorder,
-not a live DSH model; runtime code is unchanged by this test migration.
-The complete-contract boundary now also reuses the existing interaction decoder
-for its required version, channel types, notification policy and execution
-consistency. Four negative cases previously passed composition despite invalid
-semantics; they now reject even when a producer supplies correct integrity
-hashes. The original object and unknown optional facts remain intact rather than
-being replaced with normalized decoder output. File/SQLite native input checks
-reject an unsupported inner version before Codex prompt execution or DSH runner
-loading, without spend. The complete-contract/context/DSH/stdio selection passes
-352 cases; TypeScript checking and focused lint pass. This qualifies these
-interaction semantics, not every required field or packaged-host adoption.
-Remaining cache consistency investigation, other old reader expectations, staged instruction parity and
-actual optional/external consumers, version admission and packaged host
-continuity remain unfinished. Operation-SDK checks without an explicit native
-runtime are untested, not qualified. The default writer change remains
-unshipped; the PR is Draft for unfinished author work, not merely pending review. No model or cost benefit is
-established. Historical effect decoding is temporary; it must not become a
-second permanent executable view.
-
-### C1 caller replacement and cutover unit
-
-The cutover unit is a supported entrypoint **and its downstream consumers**,
-not an output flag. Source inspection at `99921829f2c5` identifies the following
-live seams. This supplements the earlier baseline audit; it is a migration
-design, not a claim that these paths have changed.
-
-| Live seam | Concrete replacement and retained owner |
-| --- | --- |
-| `quota.py::_emit_quota_result` / `_project_quota_cli_payload` | Compose the complete contract before capture; replace the ordinary/envelope execution-format branch. Retain admission, capability hooks, capture IO and host poll receipts with their current owners. A diagnostic status view is not an executable contract. |
-| `turn.py` after `build_fresh_turn_decision_owner().resolve()` | Call the same composition owner with the actual scheduler execution context. This entry calls `build_turn_envelope` directly; changing quota CLI emission alone does not migrate Turn. Retain the Turn plan, journal and receipt executor. |
-| `heartbeat/task_body.py::render_thin_heartbeat_task_body` | Replace the `captured_envelope` instruction split with one contract-reading instruction. Preserve exact selection/reentry transport, notification independence, required reads and original settlement. The saved bootstrap still resolves current instructions on wake. |
-| `turn_driver/codex_cli.py::_prompt` and `host_candidate.py::extract_turn_authority` / `render_prompt` | Replace format-specific model inputs at the actual prompt boundary. Today ordinary Codex receives the envelope, staged replan uses extracted authority, and structured hosts use extracted authority. Shared source bytes or signatures do not prove these final inputs preserve the same obligations. Keep provider result encoding and outer effect ownership. |
-| `turn_driver/decision_capture.py` and `cli_commands/quota_capture.py` | Reuse immutable capture, validated readers and full/delta delivery. Fresh delivery and saved-capture recovery must reconstruct the same contract; do not reuse a continuity baseline for a different projection merely because its Turn identity matches. |
-| `benchmark/runtime/worker.py`, `benchmark/runtime/sessions.py` and `scripts/external_scheduler_worker.py` | Migrate the product entry they actually invoke. Keep evaluation setup and outer wake ownership; do not add benchmark-only conversion or count a managed-host test as attached-host acceptance. |
-
-Before replacing any seam, its implementation PR records source path, field or
-instruction clause, current readers, target owner, representation, recovery and
-retirement condition. Relocation must include reference resolution; an omitted
-diagnostic needs evidence that it carries no action, authority, required read or
-acceptance obligation. Unknown data cannot silently disappear. Unknown required
-execution semantics cannot be made safe merely by forwarding their JSON: the
-dependent operation stays unavailable until a compatible consumer understands
-them. Do not classify obligations by substring matching.
-
-Use **one explicit version transition**, not automatic format negotiation per
-wake. New admission for a migrated binding requires compatible composition,
-delivery and consuming readers. An unsupported consumer receives an actionable
-unavailable result before dispatch, without creating a second live writer.
-Already admitted work continues its recorded version and original receipts;
-retain its historical decoder until that work and the supported recovery window
-are reconciled. Rollback likewise separates outstanding work from new admission.
-A version transition does not rewrite saved prompts, journals or source hashes
-as if they had always used the new contract.
-
-The first C1 PR must include the two production composition callsites above and
-at least one complete producer-to-final-input journey, with an explicit list of
-remaining readers. Qualifying that bounded slice does not enable the new writer
-for an unqualified host or close C1. The final cutover removes active format
-choice only after all supported readers qualify. Temporary decoders have named
-callers and removal conditions; they are not user-facing compatibility views.
-
-For each normal, selection, replan, wait, recovery and capability-off fixture,
-check independently authored obligations at **three boundaries**: composed
-contract, reconstructed delivery, and final model input plus required material
-reads. Include a source change outside the old action signature, a missing
-required source, an incompatible consumer and a lost settlement response.
-Reconstruction equality alone misses prompt-layer omission; a complete prompt
-alone misses stale authority or a duplicate debit. These are integration
-requirements, not authorization to run a model or launch an experiment.
-
-1. Inventory actual producers, readers, writers, saved prompts, captures and
-   external integrations. Map each old field and prose obligation to its retained
-   owner/field, authoritative derivation or explicitly approved removal. No
-   blanket claim of “same facts” suffices. Keep original failure fixtures.
-2. Qualify the unified contract in single-session execution through real quota,
-   thin-heartbeat and Turn entrypoints. Switch one writer per binding; old
-   readers are explicit version-pinned migration adapters with an identified
-   caller and removal condition. They do not become permanent product views.
-3. Add role-aware sessions, shared lifecycle reuse and the opt-in two-session
-   profile. Reuse existing same-session/native-resume and effect recovery code.
-4. Adopt the shared product profile in benchmark workers and the packaged App
-   heartbeat journey. Each host proves its own observation, stop and recovery
-   boundaries. Neither a CLI test nor a model simulation qualifies installed App.
-5. Remove old producers, format selectors, duplicate renderers and dual-format
-   tests after the last supported active reader migrates. Keep only historical
-   version decoders for supported receipt replay. End-state acceptance requires
-   one emitted contract and no choice between quota and Turn packet formats.
-
-Rollback disables new admission for the affected profile, drains or interrupts
-its attempts, reconciles receipts and restores the prior qualified profile on
-the next admitted work. Do not silently replace native sessions or reinterpret
-pending receipts. Before field/decoder removal, demonstrate export, old-version
-readback and downgrade behavior; retain the old reader until the supported
-retention/upgrade boundary is satisfied. No destructive migration is authorized
-by this document alone.
+The complete field, consumer and qualification detail is in [the contract and context annex](controller-executor-unified-contract-v0/contract-and-context.md#c1-wire-layout-recommendation).
 
 ## 9. Validation and acceptance
 
@@ -1063,108 +949,7 @@ the added interaction and presentation costs in the optional two-session arm.
 
 ### C1 baseline boundary and reuse inventory
 
-The baseline is the **original caller-visible quota delivery**, not the raw
-internal decision. In `cli_commands/quota.py`, the original emitter captures the
-source, optionally applies `replan_cli_view` when a capture exists, then applies
-`compact_quota_should_run_cli_payload`. Native context delivery adds its own
-full/delta transport afterward. Record the exact revision, host flags, capture
-availability and detail options for both arms. Comparing a compact candidate
-against the larger internal source would overstate savings; comparing a full
-candidate against only a deferred entry would omit baseline follow-up costs.
-
-The existing paths already contain useful efficiency behavior. C1 should absorb
-its qualified semantics into the shared TypeScript composition/context owners,
-then retire the old caller-specific producer. Do not call the whole legacy
-compactor as a shortcut: exact sharing, omission and deferred reads have different
-information and failure consequences.
-
-| Existing information / transformation | Fusion disposition and decisive check |
-| --- | --- |
-| Selected work, original requirements, acceptance, evidence, permissions and stops | Available before the dependent decision. Keep distinct revisions and contradictory evidence; neither lane labels nor action signatures establish completeness. |
-| Identical acceptance copies, nested vision audits, authoring and optional guidance | Prefer one complete in-contract owner plus an exact reference where smaller. Compare JSON types and every clause; different/missing owners remain distinct. No extra read or new decision authority. Existing projection tests provide characterization, not new-consumer qualification. |
-| Bounded Todo lanes, shortened suggestions and omitted boundary/history entries | Treat as deliberate omission, not lossless deduplication. Retain completeness/count facts and same-capture recovery; prove the omitted item cannot change the current decision, or load it before deciding. Never inherit the old display limits as semantic limits. |
-| Captured replan review, acceptance detail and writeback readers | Separate decision facts from later authoring format while retaining the original identity and all required meaning. Bound reads to the same capture; count every required stage, error and recovery. A missing/stale reference must not trigger a new guard or authorize work. |
-| Full/delta/resume delivery | Reuse the existing continuity owner after composition. Establish exact semantic reconstruction and required material availability before action; charge cold fallback and lost-baseline recovery. |
-| Scheduler, admission and settlement identities | One authoritative instance before capture; transport must preserve host ownership, original Turn and once-only effects. Repeated representations do not justify weakening their checks. |
-
-A standalone late move of acceptance sharing is not automatically a useful
-prerequisite. A controlled source-level substitution against main
-`99cfa3ac559bfa237f04f36fb7e926672fea44b2` moved only that rule from the local
-CLI compactor into the existing `reference_context` call. On the same synthetic
-fixture with 100 distinct requirements, serialized projection input grew from
-102,680 to 344,010 bytes; the 102,189-byte caller-visible output stayed equal.
-The ordinary path still made one projection call; all-details delivery changed
-from local sharing to one call. These are projection-parameter measurements,
-not framed traffic, latency, model billing or the integrated C1 comparison.
-Retain this negative result rather than declaring a net efficiency win.
-
-The compatibility owner also uses one local JSON serialization identity for
-acceptance, Vision-audit and replan-authoring sharing. Python's ordinary value
-equality must not turn distinct booleans/numbers, integer/float representations
-or signed zero into an alias to another observation. Exact copies still share
-one in-response owner, including after key reordering; different facts remain
-complete. This repairs source fidelity without another projection RPC. It does
-not qualify the unified writer, final consumers or original-quota outcome/cost
-benefit.
-
-Repair relocated acceptance aliases at the current compatibility owner without
-that extra transport. Existing aliases must follow only inline owners actually
-moved by the projection, including aliases visited before their owner. Preserve
-complete values, original numeric types, carrier order and existing size checks;
-never infer arbitrary reference chains or rewrite saved captures. The complete
-C1 composition must absorb this rule at its source-owning boundary and retire
-the Python compatibility algorithm with its callers, rather than repeatedly
-shipping all acceptance copies across another bridge. Writer/consumer cutover
-and the original-quota outcome/full-cost gate remain open.
-
-A fixed-source synthetic replan audit of candidate `895f38fc5` illustrates why
-the boundary matters. With stride off and no capture staging, the raw source was
-21,461 compact UTF-8 JSON bytes, the original quota CLI projection 20,543, and
-the complete candidate 21,738: **+5.82% against CLI**, versus +1.29% against raw
-source. With capture staging, entry/review/writeback totaled 21,882 bytes versus
-21,821 for the candidate. With `evidence_conditioned_v1`, those staged bytes
-totaled 28,558 versus 33,368 for the candidate. These use the existing synthetic
-replan fixture and production projection/read functions with a synthetic capture
-route; they are not executed model trajectories or an installed-host trial.
-Extra acceptance/Explore reads, actual request framing, cache behavior and
-outcome differences are unmeasured. The legacy receipt toggle produced identical
-data and does not add an independent workload. No net-benefit conclusion follows.
-
-The next implementation slice should first qualify exact same-contract sharing
-through composition, readers and recovery, then assess deferred-detail choices
-with the matched workload above. Keep cold and staged totals separate and retain
-negative results; do not force a byte target by dropping unique instructions.
-
-Report the field/clause diff and its decision consequence together with actual
-model input, cached/uncached tokens, added reads/round trips, reconstruction,
-latency, failures/retries, verification and human intervention. A smaller first
-packet with more total reads can be negative. Judge positive only with preserved
-required semantics and comparable accepted outcomes at lower complete cost, or
-better accepted outcomes at comparable budget. Mixed results remain a tradeoff;
-transport-only passes and unmeasured outcomes remain inconclusive. Set numeric
-criteria before running matched experiments, using the existing measurement
-contract rather than inventing an arbitrary compression threshold. C1 cutover
-requires this quota-baseline comparison; a serializer or byte reduction alone
-cannot close it.
-
-Use the [existing measurement model](long-horizon-harness-benchmark-research-program-v0.md#6-measurement-model).
-Include both sessions' input/output/cached tokens, tool and material reads,
-planning/replan/recovery, wall time, verification, human attention and provider
-cost; unknown usage is not zero. Persist causal attribution without duplicating
-cost when an artifact is forwarded. Compare accepted outcomes under comparable
-budgets, not only replan counts or executor speed. Freeze criteria before any
-separately authorized experiment; this RFC specifies no automatic winner.
-
-For the later two-session comparison, attribute controller reasoning and all
-handoff/material, validation and recovery costs as well as executor work. The
-break-even question is whether those **added complete costs** are outweighed by
-avoided control/bookkeeping work, repeated execution or human intervention,
-while preserving comparable accepted outcomes. Account for actual repeated
-model consumption even when both sessions read the same artifact; forwarding
-one usage receipt must not double-count that receipt. Report workload-specific
-tradeoffs and unknown billing/cache coverage. No universal overhead threshold,
-compression ratio or per-message token ceiling is proposed. This comparison
-does not replace the prior original-quota versus unified single-session gate.
+The complete field, consumer and qualification detail is in [the contract and context annex](controller-executor-unified-contract-v0/contract-and-context.md#c1-baseline-boundary-and-reuse-inventory).
 
 ## 10. Operational contract
 
@@ -1190,6 +975,82 @@ No model busy-polling loop or new recurring automation follows from this RFC.
 
 ## 11. Normative delivery plan and refactor tasks
 
+<a id="delivery-path-from-current-state"></a>
+
+### From current code to a useful product: dependencies and delivery slices
+
+```mermaid
+flowchart TB
+  C1[C1/C2: unified single-session contract and context] --> U[C3-C6: one real dual-session unit]
+  F[Existing request / managed-operation / Session owners] --> U
+  U --> I[C6/C8: autonomous work loop with conversation, correction and Stop]
+  I --> R[C6/C8: router connects two independent units]
+  I --> E[C7: unit outcomes and complete-cost comparison]
+  R --> E
+  E --> Q[C8/C9: scoped adoption and old-path retirement]
+  F -.Independent correctness repairs and caller simplification may land first.-> C1
+```
+
+These are actual dependencies, not a fixed queue every Agent must start at the
+first box. C1 retains its acceptance scope; shared-owner prerequisites, existing
+request/recovery repairs and removal of already-replaced code can land independently.
+A new profile's actual cutover depends on its unified contract being qualified,
+not every Host, language migration or benchmark being complete. Select work from
+the overall roadmap, current user outcome, bottleneck and in-flight owners; row
+numbers are not PR counts.
+
+| Slice within existing C tasks | Complete reviewable delivery / existing owner to adopt | Exit evidence and concrete simplification |
+| --- | --- | --- |
+| **C1/C2 — Finish existing contract cutover** | Converge #7430's source, consumer and recovery work; no router packet | Original single-session quota comparison, field/clause fidelity, real caller, off and recovery; remove each replaced format writer, retaining named historical decoders |
+| **C3/C4 — One binding unit** | Two roles in one Agent through current session/managed-operation owners; qualify one Host with isolation, observation and interruption | Two real sessions and independent context baselines; concurrent/restarted callers cannot overwrite bindings or let old generations write; remove replaced single-slot assumptions without another dual-session runtime |
+| **C5/C6.1/C8 — Work loop with interaction during execution** | Real long worker operation returns a handle; controller consumes user/worker input through request revisions, queue reservations, Stop and readback | Ordinary result → assessment/feedback → further execution without a user wake; original settlement and fresh continuation; substantive response before worker completion, correction changes subsequent artifacts, attention/safe-preemption/fairness cases pass, cancellation need not await a model; replace that caller's whole-task blocking wait and duplicate classification, delivering the same App journey |
+| **C6.2/C8 — Router connects two units** | Steward adopts existing multi-recipient requests, original-audience returns and selected bindings; direct controller input uses the same revision entry | B progresses while A is busy; partial refusal does not rerun A; restart returns results to original audiences without expanding permissions/budgets; remove duplicate synthesis/routing branches |
+| **C7/C8 — Compare and adopt narrowly** | Match workload/Host across original single-session, unified single-session and dual-session arms; separate additional multi-unit coordination arm | Comparable-budget outcomes and complete costs, response/correction/stop latency and human intervention; retain small-task counterexamples and model/Host boundaries. Qualify packaged App/CLI and supported Lark failure/recovery separately |
+| **C9 — Named retirement and default decision** | Retire each replacement with caller, historical-reader window and rollback evidence; decide adoption for qualified workloads/profiles | No second decision/task/budget ledger; original attempts reconcile after new admission closes; retain qualified single-session use, without treating fewer lines or more sessions as benefit |
+
+The recommended next implementation decision is to align in-flight C1 with current
+session ownership, select a Host that actually supports nonblocking worker
+observation, tool isolation and Stop, and deliver a reviewable “one autonomous unit loop +
+interaction during execution” slice. The steward's existing multi-recipient chain
+then adopts it. Binding/recovery simplifications that improve current callers may
+land first without waiting for all of C1. A global scheduler, generic message
+middleware, unlimited Agent hierarchy or third state store is unnecessary. Add
+missing bidirectional Host behavior to the real adapter; a unified interface alone
+is not delivery.
+
+<a id="superagent-acceptance"></a>
+
+### When this qualifies as a Superagent practice
+
+“Superagent” here is a product hypothesis: **an Agent unit that can be entrusted
+with long work, remains conversational during execution, recovers and returns
+evidenced outcomes**, not a model tier or a proven best practice. These cases
+jointly bound that claim:
+
+| Case | Independent oracle / comparison |
+| --- | --- |
+| No user/router messages after initial authorization | Ordinary worker findings lead to controller assessment, useful feedback and another admitted work segment without a help request or human wake. Verify changed artifacts and independent acceptance, not message counts; negative evidence changes the next decision when warranted. Settle original work once and continue under fresh admission; an evidenced wait/stop remains valid |
+| User question interrupts assessment or next dispatch | Answer, then select still-valid pending main-loop work from current facts. No lost result or stalled continuation, no automatic return to reporting and no replacement worker just to answer. Newly admitted segments retain their own identity |
+| Busy worker + user question + new router input | Substantive response before worker completion, both control inputs recorded, original worker-attempt count unchanged. Measure arrival→processing→response, not just queue ACK |
+| Same revision sent directly and relayed, then conflicting independent revisions | Same identity is not applied twice; different sources retain versions and handling reasons; actual subsequent artifacts obey effective requirements |
+| Two independent units + one refusal/disconnection | Unaffected unit continues; refusal/unknown visible, retry does not repeat successful effects, resources are not multiplied per unit |
+| Controller/router restart, reordered/duplicate results, lost settlement response | Recover original attempt, input and receipts; no duplicate execution/debit; old generations and late results cannot take over new work |
+| Stop/revocation with a full queue or unavailable model | Existing Host/Core stop remains reachable; acknowledgment and actual stop are distinct, unknown external effects still require reconciliation |
+| Unsolicited report + blocked worker, then user correction | Yield background composition and unblock; user correction precedes dependent new effects; the original worker is not restarted merely for interruption. Reselect main-loop work, updating the report only when eligible. Recover already-sent/uncertain delivery without duplicate sends |
+| Progress flood, router-relayed user request, equal-priority and reordered input | Preserve user provenance and required dependencies across transport; ordinary progress/self-declared urgency does not preempt; retain equal-attention FIFO and revision causality, including across restart |
+| Noncancellable operation / late model output races user input | Original effect completes/reconciles, old invocation's new tool proposals do not execute; no duplicate effects, actual wait/unsupported preemption readable, no concurrent replacement control writer |
+| Sustained foreground input and repeated interruptions | Under declared capacity, foreground stays responsive and valid main-loop work/owed returns do not starve; measure service latency, worker wait, oldest deferral and cancelled/repeated tokens. Overload is explicit backpressure; Stop does not queue |
+| Simple and long tasks under comparable acceptance | Compare full model/tool/recovery/reporting costs, omitted constraints, verified outcomes, correction rework and human attention. Single-session may win small tasks; faster interaction is not faster total completion |
+
+Reuse semantic oracles through the full chain on isolated real File/SQLite and the
+selected native Host, then qualify the packaged frontend. Changed PostgreSQL
+authority semantics require its isolated real-backend validation. Avoid a giant
+end-to-end fixture for every state permutation: share invariant tests, thin
+adapter tests and a few representative complete journeys. Freeze workload-specific
+thresholds under the existing measurement contract before experiments; untested
+or unknown is not passed. This RFC launches no paid experiment, changes no default
+profile and does not make this topology a prerequisite for all work.
+
 These tasks extend roadmap S2/S4/S6/S7/S11 and the effect interpreter's existing
 convergence work, not a new roadmap. Reconcile related active tasks/PRs before
 claiming; reuse qualified fixes rather than reimplementing them. Task IDs below
@@ -1197,12 +1058,12 @@ are stable design references, not claims that a canonical Todo is complete.
 
 | Task / dependency | Owner and concrete replacement | Decisive exit / rollback |
 | --- | --- | --- |
-| **C1 — Unified contract; first** | Interaction/work-context + quota/Turn owners: inventory fields/instruction clauses, capture/view/read-evidence mappings and versioned two-layer configuration; capture one schema and migrate ordinary quota/Turn producers and thin renderer | Single-session real-entry parity with necessary information, action binding and once-only settlement, plus §9's quota-baseline effectiveness/full-cost comparison; preserve explicit off and version-pinned readers until cutover qualifies |
+| **C1 — Unified contract; new-profile cutover dependency** | Interaction/work-context + quota/Turn owners: inventory fields/instruction clauses, capture/view/read-evidence mappings and versioned two-layer configuration; capture one schema and migrate ordinary quota/Turn producers and thin renderer | Single-session real-entry parity with necessary information, action binding and once-only settlement, plus §9's quota-baseline effectiveness/full-cost comparison; preserve explicit off and version-pinned readers until cutover qualifies |
 | **C2 — One context-delivery pipeline; C1** | Context owner + host observers: compose cross-host Progressive, independent qualified Delta, same-capture detail/recovery and conservative unread discovery; replace staged candidate delivery and duplicate packet branches | Unchanged unread constraints reach actual next-Turn work; qualify no-hook readers, exact evidence/continuity and all four layer combinations at complete cost; full fallback without a new admission; rollback encoding/configuration through the existing owner |
 | **C3 — Session binding and native lifecycle; C1** | Session/runtime owner: extend existing binding for role/generation; reuse native create/resume/observe/interrupt and ordered queues | Two roles cannot overwrite the Agent native ID, cross-read baselines or race execution; recovery observes existing attempts before retry; disable new role admission to roll back |
 | **C4 — Shared governed lifecycle; C1** | Effect/Turn owner + outer worker adapters: converge duplicated prepare/dispatch/observe/validate/writeback/settle orchestration around existing typed operations and receipts | App/Turn/external worker agree on admission, original result and single debit under partial failure; scheduler effects retain their true host owner; switch callers back only after receipt reconciliation |
 | **C5 — Replan and result authoring boundary; C1** | Goal/Vision and interaction owners: expose current facts and typed controller operations; remove ordinary executor obligations to manufacture Core writeback fields in the two-session profile | Fact-first decision preserves default/stride policy differences, all evidence and required validation; invalid proposed writes reject; single-session authoring remains qualified during rollout |
-| **C6 — Controller/executor exchange; C2–C5** | Manager/request + host owners: reuse versioned semantic requests and result return; replace schema-constrained executor work with natural-language work/material exchange; keep user interaction available during execution | Complete sources, local autonomy, Core isolation, corrective exchange, actual feedback adoption through ordered revisions and independently accepted outcome; busy, conflict, stop and late-result cases in §9; return new work to qualified single-session profile on rollback |
+| **C6 — Controller/executor exchange; C2–C5** | Manager/request + host owners: reuse versioned semantic requests and result return; replace schema-constrained executor work with natural-language work/material exchange; keep user interaction available during execution | Complete sources, local autonomy, Core isolation, ordinary result → assessment → feedback → further work without human prompting, actual feedback adoption through ordered revisions, original settlement/fresh continuation and independently accepted outcome; busy, conflict, stop and late-result cases in §9; return new work to qualified single-session profile on rollback |
 | **C7 — Benchmark reuse and full-cost attribution; C4/C6** | Benchmark toolkit/execution owner: thin adapters select the same product profiles; consolidate duplicated launch/session settings and track both sessions without changing frozen trials | Native/plain controls unchanged; matched-arm configuration/replay and complete cost coverage; no jobs launched merely by merging helpers |
 | **C8 — Product configuration and operational readback; C3/C6** | Existing App/settings/Chat projections: one effective configuration owner, role-aware activity, failure/recovery, proactive evidence-based reports, task-appropriate rich views, feedback/readback, Stop and artifact return | Packaged managed and supported attached heartbeat journeys from §9, including unavailable host, late results, quiet/deduplicated reports, accessible fallback, audience denial and recovery; installed qualification separate; no new packet-format toggle |
 | **C9 — Retire old paths and qualify adoption; C1–C8** | Contract/runtime maintainers: remove superseded producers, format switches, duplicated prompts and tests; update protocols, guides and RFC delivery facts | Caller/field/decoder retirement inventory, historical replay and rollback evidence; App + benchmark acceptance and matched benefit before any default promotion |
@@ -1335,7 +1196,7 @@ open PRs and canonical work before claiming one.
 
 | Existing task / package | Simplification result | Start condition |
 | --- | --- | --- |
-| **C3.1 Managed-operation protocol** | Codex and DSH adopt one operation-session flow; remove duplicated binding/profile checks and handoff/start orchestration, and DSH's dependency on a Codex-owned generic handler | When this duplication is the selected bottleneck: existing single-session behavior and two real callers; retain native differences |
+| **C3.1 Managed-operation protocol** | Generic handler and session selection are already shared; extend that boundary for roles and audit before removing remaining duplicated callers | Reuse `managed_operation_host.py`; do not reopen the completed extraction, and retain both real Hosts’ native differences |
 | **C3.2 Session-binding callers** | Reuse shared persistence; eliminate caller-side binding reconstruction and private cross-host imports where a cohesive existing operation can replace them | Pair with C3.1 if a separate change would leave only a rename/facade; role/generation expansion waits for stable C1 |
 | **C4.1 Receipt-to-continuation** | Adopt a qualified typed Turn observation/continuation boundary; retire replaced Python receipt reconstruction and decisions | Keep journal recovery distinct from next-work decisions; integrate C1 and existing recovery fixes |
 | **C4.2 Outer-worker adoption** | Consume qualified semantic results instead of reconstructing common retry/continuation policy | C4.1; preserve wake ownership, original receipts and opaque-command uncertainty |
@@ -1393,6 +1254,16 @@ not full RFC acceptance.
    Test same-model controller/executor first to isolate architecture effects;
    cheaper controller models and different budgets are separate experiments.
    Keep the profile opt-in until full outcome/cost evidence supports a decision.
+
+4. **Asynchronous Host/queue capability mapping — C3/C6 owners, before the first
+   unit rollout.** Name actual handle return, event recovery, role fences,
+   live-steer/next-boundary delivery, Stop and tool-isolation support. Qualify
+   capacity, attention selection, background yielding and response objectives for
+   that workload, not all Hosts by analogy.
+5. **Cross-unit budgets and original-audience synthesis — existing request/quota/
+   product owners, before C6.2.** Map resource limits and return identities,
+   partial failures and direct/relayed input deduplication. Extend missing typed
+   facts in their owners rather than creating another router ledger.
 
 ## Appendix A: Execution ledger
 

@@ -36,6 +36,7 @@ type Selection = {
   arm_id: string; case_id: string; run_id: string; status: Status;
   score: Score | null; protocol_id: string; exclude_reason: string | null;
   rerun_reason: Rerun | null;
+  active_intervals?: { start_ms: number; end_ms: number; evidence_ref: string }[];
   effort?: Effort; score_samples?: ScoreSample[]; configuration?: RunConfiguration;
 };
 type Incident = {
@@ -55,6 +56,7 @@ export type CampaignInput = {
   observed_at: string; title: string; case_ids: string[];
   arms: { arm_id: string; label: string }[];
   selection: Selection[]; incidents: Incident[]; notes: string[];
+  duration_policy?: { target_ms: number; allow_goal_completion: string[] };
   execution_audit?: ExecutionAudit[];
 };
 
@@ -89,6 +91,12 @@ export function validateInput(raw: unknown): CampaignInput {
   const caseIds = new Set(d.case_ids);
   requireThat(Array.isArray(d.selection) && d.selection.length === d.arms.length * d.case_ids.length, 'selection must cover every arm/case exactly once');
   requireThat(distinct(d.selection.map(key)) && distinct(d.selection.map(r => r.run_id)), 'duplicate selection/run id');
+  if (d.duration_policy !== undefined) {
+    const policy = d.duration_policy;
+    requireThat(policy && Number.isSafeInteger(policy.target_ms) && policy.target_ms > 0, 'positive active duration target required');
+    requireThat(Array.isArray(policy.allow_goal_completion) && distinct(policy.allow_goal_completion) &&
+      policy.allow_goal_completion.every(id => armIds.has(id)), 'unknown or duplicate early completion arm');
+  }
   for (const r of d.selection) {
     requireThat(armIds.has(r.arm_id) && caseIds.has(r.case_id) && token(r.run_id), 'unknown selection identity');
     requireThat(statuses.includes(r.status) && token(r.protocol_id), 'invalid status/protocol');
@@ -100,6 +108,14 @@ export function validateInput(raw: unknown): CampaignInput {
       requireThat(token(s.normalization_id) && text(s.evidence_ref) && typeof s.countable === 'boolean', 'score provenance required');
       requireThat(s.origin === 'official' || (s.origin === 'authorized_failure_zero' && s.value === 0), 'score origin invalid');
       requireThat(!s.countable || (r.status === 'completed' && s.origin === 'official' && r.exclude_reason === null), 'countable score contradicts status/origin/exclusion');
+    }
+    if (r.active_intervals !== undefined) {
+      requireThat(Array.isArray(r.active_intervals), 'active intervals must be an array');
+      for (const interval of r.active_intervals) {
+        requireThat(interval && Number.isSafeInteger(interval.start_ms) && interval.start_ms >= 0 &&
+          Number.isSafeInteger(interval.end_ms) && interval.end_ms >= interval.start_ms &&
+          interval.end_ms <= Date.parse(d.observed_at) && text(interval.evidence_ref), 'invalid observed solver interval');
+      }
     }
     if (r.effort !== undefined) {
       const e = r.effort;
@@ -156,8 +172,35 @@ export function validateInput(raw: unknown): CampaignInput {
   return d;
 }
 
+// Each row contains only the verified segments of one selected logical run.
+function durationCoverage(d: CampaignInput, policy: NonNullable<CampaignInput['duration_policy']>) {
+  return d.selection.map(row => {
+    const { arm_id, case_id, run_id } = row;
+    let end = 0;
+    let elapsed = 0;
+    for (const interval of [...row.active_intervals ?? []].sort((a,b) => a.start_ms - b.start_ms)) {
+      elapsed += Math.max(0, interval.end_ms - Math.max(end, interval.start_ms));
+      end = Math.max(end, interval.end_ms);
+    }
+    const active_ms = row.active_intervals === undefined ? null : elapsed;
+    const remaining_ms = active_ms === null ? null : Math.max(0, policy.target_ms - active_ms);
+    const audit = d.execution_audit?.find(item => item.run_id === run_id);
+    const acceptedGoal = row.status === 'completed' && policy.allow_goal_completion.includes(arm_id) &&
+      audit?.outcome === 'normal_end' && audit.goal_verdict === 'satisfied';
+    let disposition: string;
+    if (remaining_ms === 0) disposition = 'covered';
+    else if (acceptedGoal) disposition = 'goal_completed';
+    else if (row.status === 'planned' || row.status === 'running') disposition = row.status;
+    else if (remaining_ms === null) disposition = 'verify_duration';
+    else disposition = 'needs_makeup';
+    return { case_id, arm_id, run_id, active_ms, remaining_ms, disposition };
+  });
+}
+
 export function buildReport(raw: unknown) {
   const d = validateInput(raw);
+  const coverage = d.duration_policy && durationCoverage(d, d.duration_policy);
+  const covered = new Set(coverage?.filter(row => ['covered', 'goal_completed'].includes(row.disposition)).map(key));
   const selected = new Map(d.selection.map(r => [key(r), r]));
   const summary = d.arms.map(a => {
     const rows = d.selection.filter(r => r.arm_id === a.arm_id);
@@ -212,7 +255,7 @@ export function buildReport(raw: unknown) {
       return !reasons.length;
     });
     const scores = (a: string, cs: string[]) => cs.map(c => selected.get(key({arm_id:a,case_id:c}))!.score!.value);
-    const qualifiedCases = cases.filter(c => arms.every(a => selected.get(key({arm_id:a,case_id:c}))!.score!.countable));
+    const qualifiedCases = cases.filter(c => arms.every(a => selected.get(key({arm_id:a,case_id:c}))!.score!.countable && (!coverage || covered.has(key({arm_id:a,case_id:c})))));
     const means = Object.fromEntries(arms.map(a => [a, mean(scores(a, cases))]));
     const deltas = arms.length === 2 && cases.length ? cases.map(c => scores(arms[1], [c])[0] - scores(arms[0], [c])[0]) : [];
     return { arms, case_ids: cases, n: cases.length, case_set_sha256: digest(cases), means,
@@ -252,6 +295,7 @@ export function buildReport(raw: unknown) {
     b.run_count - a.run_count || a.profile_id.localeCompare(b.profile_id));
   return { schema_version: 'benchmark_campaign_report_v1', input_sha256: digest(d),
     observed_at: d.observed_at, title: d.title, summary, comparisons, selection: d.selection,
+    ...(coverage ? { duration_coverage: coverage } : {}),
     configuration_profiles, score_time_series, incidents: d.incidents,
     execution_audit: d.execution_audit ?? [], notes: d.notes };
 }
@@ -287,6 +331,8 @@ export function renderMarkdown(r: Report): string {
     table(['实验组','运行数','Source','Scorer','Model','预算(h)','主动提交冷却(s)','后台评测(s)','资源档位','证据覆盖'],r.configuration_profiles.map(p => [labels.get(p.arm_id),p.run_count,known(p.source_revision_id),known(p.scorer_revision_id),known(p.model_id),hours(p.budget_ms),seconds(p.active_submission_cooldown_ms),seconds(p.background_evaluation_interval_ms),known(p.resource_profile),`${p.configuration_supplied ? p.run_count : 0}/${p.run_count}`])) +
     '\n\n均分使用相同题目交集、相同归一化规则，尺度 0–100。未出分不填 0；授权的故障判零单独保留来源。以下为描述性比较；源版本、协议、资源差异和完整性复核仍需独立审查。\n\n' +
     table(['对比范围','共同题数',...r.summary.map(a => a.label),'第二组−第一组','共同题中双方/各方可计数'],r.comparisons.map(c => [c.arms.map(a => labels.get(a)).join(' / '),c.n,...r.summary.map(a => number(c.means[a.arm_id] ?? null)),number(c.delta_second_minus_first),c.qualified_common_n])) +
+    (r.duration_coverage ? '\n\n## 各臂有效运行时间\n\n' + table(['题目','实验臂','已运行（小时）','距目标（小时）','状态'],
+      r.duration_coverage.map(row => [row.case_id, labels.get(row.arm_id), hours(row.active_ms), hours(row.remaining_ms), row.disposition])) : '') +
     '\n\n' + r.notes.map(n => '- ' + cell(n)).join('\n') + '\n\n## 共同题目与排除记录\n\n' +
     r.comparisons.map(c => `- ${c.arms.map(a => labels.get(a)).join(' / ')}：${c.case_ids.join('、') || '无'}。`).join('\n') +
     `\n\n分数/时间序列：${r.score_time_series.length} 个带来源的采样点，覆盖 ${new Set(r.score_time_series.map(s => s.run_id)).size} 个运行。采样覆盖不同，不从缺失点补零，也不自动计算跨题均值曲线；同名 JSON 保留可绘图序列。\n\n` +

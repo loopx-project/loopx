@@ -185,6 +185,11 @@ def test_scoped_stdio_tools_do_not_offer_shell_or_sender_override(tmp_path):
             assert "conclusion to the original requester" in returned.description
             assert "Preserve requested substantive detail" in returned.description
             assert "State material gaps" in returned.description
+            assert "unknown costs or missing evidence" in returned.description
+            assert "Do not add a second model rewrite" in returned.description
+            peer = next(tool for tool in tools.tools if tool.name == "request_peer")
+            assert "complete goal, relevant corrections, intended reader, language and original result destination" in peer.description
+            assert "negative results and unknowns" in peer.description
             # A legacy Goal alias cannot authorize original-session IO.
             result = await session.call_tool(
                 "original_conversation_collaboration",
@@ -288,7 +293,13 @@ def test_stdio_receiver_links_existing_work_and_returns_without_duplicate_tasks(
                 assert not result.isError, result
                 return json.loads(result.content[0].text)
 
-            first = (await call("read_context", {}))["items"][0]
+            cli_view = cli("manager-inbox", "read", "--goal-id", "goal-a", "--agent-id", "agent-a")
+            assert "Preserve the original author, audience and facts" in cli_view["instruction"]
+            assert "never arbitrary length caps, truncation" in cli_view["instruction"]
+            first_view = await call("read_context", {})
+            assert "Explain unfamiliar terms on first use" in first_view["instruction"]
+            assert "Keep typed remaining_work semantics intact" in first_view["instruction"]
+            first = first_view["items"][0]
             assert first["receiver_followthrough"]["step"] == "assess_request"
             assert first["receiver_followthrough"]["linked_todos"] == []
             await call("assess_request", {"request_id": rid, "decision": "adopt", "reason": "Resume my existing task"})

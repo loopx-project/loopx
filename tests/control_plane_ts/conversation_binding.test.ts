@@ -19,6 +19,80 @@ const current = {schema_version: "loopx_chat_conversation_bindings_v0", revision
 const request = {current, expected_revision: 0, operation: "configure", binding: row, observation,
   available_projects: [project]};
 
+test("exhausted business quota permits one read-only answer, never a fresh business budget", () => {
+  const selected = {...row, context_kind: "steward", grant: "portfolio_read", goal_ids: []};
+  const configured = planConversationBinding({...request, binding: selected}).state;
+  const source = {source_ref: "e".repeat(24), sender_ref: row.operator_ref, private_human_message: true};
+  const context = resolveBoundConversation({current: configured, binding_id: row.binding_id,
+    observation, available_projects: [project], ...source}).context;
+  const ref = "f".repeat(24), message = "Explain the existing change";
+  const previous = {version: 22, failed_turn_id: "second-failure", quota_attempt: 3,
+    client_turn_id: `external-${ref}-recovery-22-quota-3`};
+  const session = {session_id: "original", goal_id: "loopx-manager", agent_id: "codex", upstream_mode: "chat",
+    status: "ready", upstream_thread_id: "native", active_turn_id: null,
+    channel_id: `manager.external.native.${row.binding_id}.${source.source_ref}`, steward_context: context};
+  const failed = {session_id: "original", turn_id: "third-failure", client_turn_id: previous.client_turn_id,
+    message, origin: "lark", status: "failed", delta_count: 0, response: null, upstream_turn_id: "native-failed",
+    error_code: "usage_limit_exceeded", completed_at: "2026-01-01T00:00:00Z"};
+  const at = Date.parse("2026-01-01T00:10:00Z") / 1000;
+  const proof = {thread_id: "native", turn_id: "native-failed", codex_error_info: "usageLimitExceeded",
+    only_original_user_item: true, quota_available: true, quota_observed_at: at};
+  const allocation = {schema_version: "manager_executor_allocation_v0", selection_policy: "flexible",
+    configured_endpoint: "antigravity", executor_endpoint: "codex", allocation_reason: "flexible_availability_fallback",
+    configuration_revision: "current-pool", available: true, eligible_endpoints: ["antigravity", "codex"]};
+  const configuration = {status: "ready", selection_policy: "flexible", executor_endpoint: "antigravity",
+    eligible_endpoints: ["antigravity", "codex"], configuration_revision: "current-pool"};
+  const capacity = {alternate_executor: {allocation, observed_at: at}};
+  const packet = {request: {request_ref: ref, command: null, status: "accepted", delivery_verified: true,
+    message, origin: "lark", binding_id: row.binding_id, session_id: "original", turn_id: failed.turn_id,
+    source, context_recovery: previous}, binding: selected, current_session: session,
+    context_recovery: {version: 22, failed_turn: failed, observed_at: "2026-01-01T00:10:00Z",
+      steering_observed: false, stop_observed: false, attachments_present: false, queued_input_present: false,
+      source_verified: true, native_observation: proof, metadata_capacity: capacity, executor_configuration: configuration}};
+  const plan = planBoundConversationRequest(packet);
+  assert.equal(plan.recovery_eligible, true);
+  assert.equal(plan.answer_review, true);
+  assert.equal(plan.read_only_review, true);
+  assert.equal(plan.answer_executor, "codex");
+  assert.equal(plan.quota_attempt, undefined);
+  assert.equal(previous.quota_attempt, 3);
+  assert.equal(plan.client_turn_id, `external-${ref}-recovery-22-review-1`);
+  const migrated = {...packet, current_session: {...session, upstream_thread_id: "later-review",
+    upstream_context_history: [{thread_id: "native", manager_context_version: 22}]}};
+  assert.equal(planBoundConversationRequest(migrated).recovery_eligible, true,
+    "a later restricted answer must not strand the other exact historical failures");
+  assert.notEqual(planBoundConversationRequest({...migrated, current_session: {...migrated.current_session,
+    upstream_context_history: [{thread_id: "native", manager_context_version: 22, agent_id: "antigravity"}]}}).recovery_eligible, true);
+  for (const change of [{source_verified: false}, {stop_observed: true}, {steering_observed: true},
+    {attachments_present: true}, {queued_input_present: true}, {metadata_capacity: null},
+    {executor_configuration: {...configuration, configuration_revision: "changed"}},
+    {metadata_capacity: {alternate_executor: {...capacity.alternate_executor, observed_at: at - 121}}},
+    {metadata_capacity: {alternate_executor: {...capacity.alternate_executor, observed_at: at + 1}}},
+    ...[{thread_id: "foreign"}, {thread_id: null}, {thread_id: 7}, {turn_id: "foreign"}, {only_original_user_item: false},
+      {codex_error_info: "other"}].map(value => ({native_observation: {...proof, ...value}})),
+    ...[{delta_count: 1}, {response: {}}, {status: "running"}, {message: "changed"},
+      {error_code: "context_window_exceeded"},
+      {client_turn_id: "uncorrelated"}].map(value => ({failed_turn: {...failed, ...value}}))]) {
+    assert.notEqual(planBoundConversationRequest({...packet,
+      context_recovery: {...packet.context_recovery, ...change}}).recovery_eligible, true);
+  }
+  const reservation = {version: 22, failed_turn_id: failed.turn_id, client_turn_id: plan.client_turn_id,
+    answer_review: true, read_only_review: true};
+  const reserved = {...packet, request: {...packet.request, context_recovery: reservation,
+    context_recovery_history: [previous]}};
+  assert.equal(planBoundConversationRequest(reserved).recovery_eligible, true);
+  const admitted = {session_id: "original", turn_id: "review", client_turn_id: plan.client_turn_id, message, origin: "lark"};
+  assert.equal(planBoundConversationRequest({...reserved, current_session: {...session, status: "busy", active_turn_id: "review"},
+    context_recovery: {...reserved.context_recovery, native_observation: null, admitted_turn: admitted}}).admitted_turn_id, "review");
+  assert.notEqual(planBoundConversationRequest({...reserved, request: {...reserved.request,
+    context_recovery_history: []}}).recovery_eligible, true);
+  const failedReview = {...failed, ...admitted};
+  assert.equal(planBoundConversationRequest({...reserved, request: {...reserved.request, turn_id: "review"},
+    context_recovery: {...reserved.context_recovery, failed_turn: failedReview}}).recovery_candidate, false);
+  assert.equal(planBoundConversationRequest({...packet,
+    current_session: {...session, status: "busy", active_turn_id: "another"}}).recovery_candidate, false);
+});
+
 test("settled historical native work permits only one restricted steward answer review", () => {
   const selected = {...row, context_kind: "steward", grant: "portfolio_read", goal_ids: [], executor_endpoint_id: "antigravity"};
   const configured = planConversationBinding({...request, binding: selected}).state;
@@ -1374,7 +1448,7 @@ test("quota backlog projection retires explicit lifecycle stops, not unavailable
   }
 });
 
-for (const errorCode of ["response_timeout", "upstream_transport_failure",
+for (const errorCode of ["response_timeout", "upstream_transport_failure", "context_window_exceeded",
   "antigravity_rpc_error", "antigravity_transport_error", "antigravity_step_error", "runtime_error", "server_restarted"]) {
 test(`delivered ${errorCode} notices retain the exact failed request, including other executors`, () => {
   const request = {request_ref: "f".repeat(24), command: null, status: "accepted",

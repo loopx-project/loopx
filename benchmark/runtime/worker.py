@@ -642,7 +642,10 @@ def run_once(env: dict[str, str]) -> dict:
         if stage == "execute" and execution.mode == "heartbeat" and env.get("LOOPX_CHECKPOINT_REQUEST"):
             from benchmark.runtime.checkpoint import capture_before_replan
 
-            body = capture_before_replan(env, receipt, body)
+            # The prepared Codex exec session carries the complete read guide
+            # in developer instructions, including after compaction.
+            body = capture_before_replan(env, receipt, body,
+                guide_in_host=not execution.native_goal and receipt.get("context_transport", {}).get("available") is True)
         if phase_work_deadline is not None and time.time() >= phase_work_deadline:
             receipt.update(ok=True, budget_exhausted=True, host_invoked=False)
             return receipt
