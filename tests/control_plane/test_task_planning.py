@@ -20,8 +20,8 @@ from loopx.control_plane.goals.start_contract import (
 from loopx.control_plane.goals.task_planning import build_task_planning_packet
 
 
-@pytest.fixture
-def bound_goal(tmp_path):
+@pytest.fixture(params=["file", "sqlite"])
+def bound_goal(tmp_path, request):
     state = tmp_path / "state.md"
     state.write_text("# Active Goal State\n\n## Agent Todos\n\n## User Todos\n")
     registry = tmp_path / "registry.json"
@@ -44,7 +44,7 @@ def bound_goal(tmp_path):
         )
     )
     initialize_canonical_source_fixture(
-        tmp_path / "runtime", "planning-goal", state_path=state, provider="sqlite",
+        tmp_path / "runtime", "planning-goal", state_path=state, provider=request.param,
     )
     return dict(
         registry_path=registry,
@@ -216,3 +216,59 @@ def test_public_cli_returns_a_read_only_checkpoint_and_rejects_execution(bound_g
         assert main(command + ["--execute"]) == 1
     assert "unsupported" in json.loads(output.getvalue())["error"]
     assert not list(Path(bound_goal["runtime_root_arg"]).rglob("*rollout*"))
+
+
+def test_first_plan_declares_then_links_and_reads_canonical_requirements(bound_goal):
+    def cli(*args):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            status = main(["--format", "json", "--registry", str(bound_goal["registry_path"]),
+                "--runtime-root", bound_goal["runtime_root_arg"], *args])
+        result = json.loads(out.getvalue())
+        assert status == 0, result
+        return result
+
+    route = ["--goal-id", "planning-goal", "--agent-id", "planner"]
+    before = build_task_planning_packet(**bound_goal)
+    assert before["goal_acceptance"]["planning_requirements"]["linked_todo_ids"] == []
+    assert before["existing_todos"] == []
+    document = {"outcome_id": "repair", "owner_agent_id": "planner", "objective": bound_goal["text"],
+        "requirements": [{"id": "stable-api", "description": "Keep the API stable while repairing the failure."}],
+        "source": {"ref": "user-task", "summary": bound_goal["text"]}}
+    path = bound_goal["project"] / "requirements.json"
+    path.write_text(json.dumps(document))
+    declared = cli("goal-acceptance", "refine", *route, "--document", str(path),
+        "--expected-provider-revision", before["goal_acceptance"]["provider_revision"],
+        "--operation-id", "first-declaration", "--execute")
+    outcome = declared["goal_acceptance_contract"]["outcome_requirements"]["outcomes"][0]
+    assert outcome["todo_ids"] == []
+    assert not build_task_planning_packet(**bound_goal)["existing_todos"], "Declaration precedes task Todos"
+    written = cli("todo", "add", "--goal-id", "planning-goal", "--role", "agent", "--claimed-by", "planner",
+        "--text", "[P0] Reproduce and repair the failure.", "--task-class", "advancement_task",
+        "--action-kind", "implement", "--execute")
+    current = cli("goal-acceptance", "inspect", *route)
+    path.write_text(json.dumps({"outcome_id": "repair", "todo_ids": [written["todo_id"]]}))
+    command = ["goal-acceptance", "refine", *route, "--document", str(path),
+        "--expected-provider-revision", current["provider_revision"], "--operation-id", "link-first-work", "--execute"]
+    linked = cli(*command)
+    replay = cli(*command)
+    assert replay["status"] in {"replayed", "recovered"}
+    assert replay["goal_acceptance_contract"] == linked["goal_acceptance_contract"]
+    after = build_task_planning_packet(**bound_goal)
+    assert after["goal_acceptance"]["planning_requirements"] == {
+        "agent_id": "planner", "declaration_current": True,
+        "outcome_ids": ["repair"], "linked_todo_ids": [written["todo_id"]],
+    }
+    assert after["goal_acceptance"]["goal_acceptance_contract"].get("criteria", []) == [], "Independent checks stay optional"
+    assert after["goal_acceptance"]["goal_acceptance_contract"]["outcome_requirements"]["outcomes"][0]["sources"] == [document["source"]]
+
+
+def test_shared_planning_preserves_open_intent_and_stop_in_both_entries(bound_goal):
+    guidance = goal_planner_contract()["goal_requirements_guidance"]
+    for requirement in ("source-grounded overall requirements", "an open-ended objective stays open-ended",
+        "maximum timeout is not a requirement to spend it", "independent executable checks", "optional",
+        "Unchanged declarations need no rewrite", "accurate wait/Stop", "not an additional model call"):
+        assert requirement in guidance
+    packet = build_task_planning_packet(**bound_goal)
+    assert packet["planner"]["goal_requirements_guidance"] == guidance
+    assert guidance in build_goal_start_prompt(goal_text=bound_goal["text"], goal_id="planning-goal", agent_id="planner", fine_grained=False)
