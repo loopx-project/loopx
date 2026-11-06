@@ -170,18 +170,20 @@ export const researchNativeReadingScenario = {
         await details.locator(":scope > summary").tap();
         if (c.id === "invalid-first") await page.screenshot({path: resolve(outputDir, "research-native-unknown-phone.png"), animations: "disabled"});
         if (c.id === "lower-negative") {
-          const retained = native.getByRole("button", {name: /原生保留结果.*查看原始证据/});
+          // The native point identifies the action independently of translated
+          // copy distinguishing source declarations from verified adoption.
+          const retained = native.locator('[data-native-point="retained"]').getByRole("button");
           await retained.focus(); await retained.press("Enter");
           const citation = page.getByRole("region", {name: "引用原文", exact: true});
           await citation.waitFor();
           await citation.getByText(/Synthetic observation 0: value -1/).waitFor();
           assert.match(await citation.innerText(), /Synthetic observation 0: value -1/);
           await citation.press("Escape");
-          await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label")?.startsWith("原生保留结果:"));
+          await page.waitForFunction(() => document.activeElement?.matches('[data-native-point="retained"] button'));
           await page.screenshot({path: resolve(outputDir, "research-native-negative-phone.png"), animations: "disabled"});
         }
         if (c.source) {
-          const retained = native.getByRole("button", {name: /原生保留结果.*查看原始证据/});
+          const retained = native.locator('[data-native-point="retained"]').getByRole("button");
           await retained.focus(); await retained.press("Enter");
           const citation = page.getByRole("region", {name: "引用原文", exact: true});
           await citation.waitFor();
@@ -230,7 +232,7 @@ export const researchNativeReadingScenario = {
             }
           }
           await citation.press("Escape");
-          await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label")?.startsWith("原生保留结果:"));
+          await page.waitForFunction(() => document.activeElement?.matches('[data-native-point="retained"] button'));
         }
         if (c.unit) {
           await page.evaluate(() => document.documentElement.style.fontSize = "200%");
@@ -252,7 +254,7 @@ export const researchNativeReadingScenario = {
       await selector.selectOption({label: "tool-pending-source"});
       const selected = await selector.inputValue();
       await page.locator(`.research-progress-scope[data-pack-id="${selected}"]`).waitFor();
-      await page.getByRole("region", {name: "Native measurements", exact: true}).getByRole("button", {name: /Native retained result.*Read original evidence/}).click();
+      await page.getByRole("region", {name: "Native measurements", exact: true}).locator('[data-native-point="retained"]').getByRole("button").click();
       const originalPanel = page.getByRole("region", {name: "Cited original", exact: true});
       await originalPanel.getByText("Exit code 17", {exact: true}).waitFor();
       await originalPanel.getByText("No exit code yet", {exact: true}).waitFor();
