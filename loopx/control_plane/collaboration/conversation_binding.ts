@@ -452,6 +452,40 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
   if (!Number.isSafeInteger(imageCount) || Number(imageCount) < 0 || Number(imageCount) > 4) {
     throw new EffectRuntimeRequestError("invalid external image attachment count");
   }
+  if (params.history_answer_review !== undefined) {
+    const observed = requireJsonObject(params.history_answer_review, "historical answer observation");
+    const binding = requireJsonObject(params.binding, "conversation binding");
+    const current = params.current_session == null ? null : requireJsonObject(params.current_session, "current Session");
+    const source = requireJsonObject(row.source, "original owner source");
+    const context = current?.steward_context as JsonObject | undefined;
+    const created = Date.parse(String(observed.source_created_at));
+    const now = Date.parse(String(observed.observed_at));
+    if (row.command !== null || row.status !== "prepared" || Number(imageCount) !== 0
+        || binding.context_kind !== "steward" || binding.grant !== "portfolio_read"
+        || binding.enabled !== true || (binding.audience ?? "owner") !== "owner"
+        || row.binding_id !== binding.binding_id || source.sender_ref !== binding.operator_ref
+        || source.private_human_message !== true || context?.binding_id !== binding.binding_id
+        || context?.source_ref !== source.source_ref || context?.provider_ref !== binding.provider_ref
+        || context?.operator_ref !== binding.operator_ref
+        || !current || current.agent_id !== "codex" || current.status !== "ready"
+        || current.active_turn_id != null || current.steward_context == null
+        || observed.source_verified !== true || observed.queue_empty !== true || observed.adapter_replaceable !== true
+        || observed.stop_observed !== false || !Number.isSafeInteger(observed.version) || Number(observed.version) < 1
+        || !Number.isFinite(created) || !Number.isFinite(now) || !Number.isFinite(Date.parse(String(current.created_at)))
+        || created < Date.parse(String(current.created_at)) || created > now - 5_000
+        || typeof row.message !== "string" || !row.message.trim() || row.message.trim().startsWith("/")) {
+      return {operation: "hold_history_answer", reason: observed.stop_observed === true ? "source_stopped"
+        : observed.adapter_replaceable !== true ? "owned_background_unavailable"
+        : observed.queue_empty !== true || current?.active_turn_id != null ? "session_busy"
+        : current?.agent_id !== "codex" ? "current_executor_unavailable"
+        : created < Date.parse(String(current?.created_at)) ? "source_predates_session"
+        : "source_scope_unavailable"};
+    }
+    // This creates a new, tools-restricted answer, never an execution of the
+    // historical request or a fabricated failed native Turn.
+    return {operation: "admit_history_answer", session_id: current.session_id,
+      client_turn_id: `external-${request}-recovery-${observed.version}-review-1`};
+  }
   if (![null, "agents", "select_agent", "select_project", "status", "help", "new", "stop", "unsupported", "commission", "confirm_commission", "cancel_commission", "stop_commission", "resume_commission"].includes(command as null | string)) {
     throw new EffectRuntimeRequestError("unsupported external conversation command");
   }
