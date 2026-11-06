@@ -221,17 +221,66 @@ assert "loopx.cli" not in sys.modules
     assert completed.returncode == 0, completed.stderr
 
 
-def test_other_arguments_delegate_to_full_cli() -> None:
-    script = """
-from loopx.entrypoint import main
-
-raise SystemExit(main(["--format", "json", "version"]))
-"""
-    completed = run_isolated_script(script)
-
+@pytest.mark.parametrize("arguments", [
+    ["version"],
+    ["--format", "json", "version"],
+    ["version", "--format", "json"],
+    ["--format=markdown", "version", "--format=json"],
+    ["--format=json", "version", "--format=markdown"],
+    ["--registry", "missing-registry.json", "--runtime-root", "missing-runtime",
+     "--cli-bin", "fixture-loopx", "version", "--format", "json"],
+    ["--format", "markdown", "--format", "json", "version"],
+])
+def test_version_command_uses_its_selected_owner(arguments: list[str]) -> None:
+    completed = run_cli_main(
+        "loopx.entrypoint", arguments,
+        forbidden_modules=("loopx.cli", "loopx.chat_manager", "loopx.control_plane.effect_runtime"),
+        environment={"LOOPX_USAGE_PING": "0"},
+    )
     assert completed.returncode == 0, completed.stderr
-    payload = json.loads(completed.stdout)
-    assert payload["schema_version"] == "loopx_version_v0"
+    from loopx import __version__
+
+    if arguments[-1] == "--format=markdown" or arguments == ["version"]:
+        assert completed.stdout == f"loopx {__version__}\n\n"
+    else:
+        assert json.loads(completed.stdout) == {
+            "ok": True, "schema_version": "loopx_version_v0",
+            "name": "loopx", "version": __version__,
+        }
+
+
+def test_version_command_retains_full_cli_diagnostics() -> None:
+    arguments = [
+        ["version", "--help"], ["version", "-h"],
+        ["version", "--unknown-option"], ["version", "--format", "yaml"],
+        ["version", "--format"], ["version", "--format="],
+        ["--format", "yaml", "version"], ["--format", "", "version"],
+        ["--format", "version"], ["--format", "json", "version", "extra"],
+        ["--cli-bin", "", "version"], ["--registry", "version"],
+        ["--for", "json", "version"], ["version", "--for", "json"],
+        ["version", "--registry", "missing.json"], ["version", "--version"],
+        ["--version", "version"], ["--", "version"],
+    ]
+    assert run_cli_batch("loopx.entrypoint", arguments) == run_cli_batch("loopx.cli", arguments)
+
+
+def test_version_command_retains_explicit_full_cli_patch_points() -> None:
+    script = """
+from loopx import cli
+from loopx.entrypoint import main
+from loopx.cli_commands.version import register_version_command
+
+assert cli.register_version_command is register_version_command
+seen = []
+def patched(args, **kwargs):
+    seen.append(args.command)
+    return 37
+cli.handle_version_command = patched
+assert main(["version"]) == 37
+assert seen == ["version"]
+"""
+    completed = run_isolated_script(script, environment={"LOOPX_USAGE_PING": "0"})
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_top_level_help_skips_full_cli_import() -> None:

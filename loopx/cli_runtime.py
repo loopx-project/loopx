@@ -71,7 +71,7 @@ PROJECT_LIFECYCLE_COMMANDS = {
 	"refresh-state", "checkpoint-context", "read-only-map", "reward", "operator-gate",
 }
 _SELECTED_COMMANDS = _STATUS_COMMANDS | GLOBAL_READ_COMMANDS | PROJECT_LIFECYCLE_COMMANDS | {
-	"todo", "quota", "task-lease", "change-window", "delegation", "turn", "doctor", "commands",
+	"todo", "quota", "task-lease", "change-window", "delegation", "turn", "doctor", "commands", "version",
 	"authority-archive", "coordination-shadow", "extension", "slash-commands",
 	"manager-inbox",
 	"agent-context", "agent-directory", "agent-capabilities",
@@ -396,6 +396,10 @@ def _build_selected_parser(command: str) -> LoopXArgumentParser:
 		from .help_surface import register_command_reference
 
 		register_command_reference(subparsers)
+	elif command == "version":
+		from .cli_commands.version import register_version_command
+
+		register_version_command(subparsers, add_subcommand_format)
 	elif command == "performance-diagnosis":
 		from .capabilities.performance_diagnosis.cli import register_performance_diagnosis_commands
 
@@ -710,7 +714,13 @@ def _dispatch_selected(args: argparse.Namespace, raw_argv: list[str]) -> int:
 	if guard_result is not None:
 		return guard_result
 	registry_path, _registry_was_configured = resolve_cli_registry(args, raw_argv)
-	if args.command == "capability":
+	if args.command == "version":
+		from .cli_commands.version import handle_version_command
+
+		result = handle_version_command(
+			args, output_format=output_format, print_payload=print_payload,
+		)
+	elif args.command == "capability":
 		from .cli_commands.capability import handle_capability_command
 
 		# Keep the explicit full CLI's handler and protected operations unchanged.
@@ -766,6 +776,9 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _run_command(command: str | None, raw_argv: list[str]) -> int:
+	if command == "version" and "loopx.cli" in sys.modules:
+		# Explicit full-CLI callers retain its public registrar/handler patch points.
+		return _run_full_cli(raw_argv)
 	if command in _SELECTED_COMMANDS:
 		try:
 			args = _build_selected_parser(command).parse_args(raw_argv)
