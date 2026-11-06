@@ -9,6 +9,29 @@ outcome objective; subordinate outcomes never replace root continuation, budget
 or stop criteria, including in open-ended research. A local success or plateau
 is not campaign completion. Existing legitimate stops/waits still apply.
 
+## Direct corrections to success criteria
+
+Distinguish a changed purpose from a changed acceptance criterion. When the user
+clarifies how success is judged, refine the matching outcome before work that
+depends on that interpretation. Use the standalone refinement below when the
+change cannot wait for a delivery milestone. Read its complete result, reconcile
+affected Todos and decisions, and obtain current guard context as required;
+do not postpone this until completion or substitute a chat acknowledgement,
+peer message, report or Vision summary. None of those changes canonical acceptance.
+Ordinary progress, wording polish and implementation choices that leave the
+criteria unchanged need no requirement write.
+
+Keep the original objective if the purpose is unchanged. Preserve unaffected
+requirements and actual authorization, budget and stop conditions. If the user
+rejects an Agent-added assumption, remove it from the plan without treating it
+as a retained user commitment. If the correction conflicts with an actually
+persisted requirement or configured check, the additive refinement cannot retire
+it: explicitly reconcile that contract through its owning update path, retaining
+provenance, before claiming alignment. Do not append a contradictory requirement
+and mark both met, or silently edit an authoritative file. Ask only when a
+consequential meaning or authority is genuinely missing, not merely because the
+user gave a correction.
+
 ## Current operating objective
 
 When recorded explicit user direction makes the Goal objective obsolete, prepare
