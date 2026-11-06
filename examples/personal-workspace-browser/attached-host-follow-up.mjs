@@ -178,7 +178,19 @@ export const attachedHostFollowUpScenario = {
       const retainedDraft = "保留这份尚未保存的更正。\n原消息启动后也不能把它重新发送或丢失。";
       await queuedFollowUp.getByRole("button", {name: "更多操作：待处理消息 1", exact: true}).click();
       await queuedFollowUp.getByRole("button", {name: "编辑", exact: true}).click();
-      await page.getByRole("textbox", {name: "编辑待处理消息 1", exact: true}).fill(retainedDraft);
+      const editor = page.getByRole("textbox", {name: "编辑待处理消息 1", exact: true});
+      await editor.fill(retainedDraft);
+      const queueMenu = queuedFollowUp.getByRole("button", {name: "更多操作：待处理消息 1", exact: true});
+      await queueMenu.click();
+      await page.keyboard.press("Escape");
+      await page.screenshot({path: resolve(outputDir, "queue-editor-menu-escape.png"), fullPage: false});
+      if (!await editor.isVisible() || await editor.inputValue() !== retainedDraft) {
+        throw new Error("Closing the queue action menu discarded the independent edit draft");
+      }
+      if (await queueMenu.getAttribute("aria-expanded") !== "false"
+        || !await queueMenu.evaluate(element => element === document.activeElement)) {
+        throw new Error("Escape must close the queue action menu and restore its trigger focus");
+      }
       await composer.fill("主输入框的另一份草稿");
       page.__loopxRuntime.queuedTurns.set(attachedSessionId,
         page.__loopxRuntime.queuedTurns.get(attachedSessionId).filter(turn => turn.turn_id !== "turn-queued-1"));
