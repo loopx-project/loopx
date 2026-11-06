@@ -1893,7 +1893,7 @@ class LarkPrivateConversations:
                                 for event in reversed(events) if event.get("kind") == "agent.phase"
                                 and event.get("payload", {}).get("method") == "error"), None)
                         preparation_recovery = (record["source"].get("private_human_message") is True
-                            and selected["binding"].get("context_kind") == "steward" and not native.get("agent_target"))
+                            and selected["binding"].get("context_kind") in {"project", "steward"} and not native.get("agent_target"))
                         response = manager_failure_reply(turn, retry_info=retry_info,
                             preparation_recovery=preparation_recovery)[1] + " 原会话已保留。"
                     else:
