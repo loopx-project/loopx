@@ -1829,10 +1829,15 @@ steward, group, attached-host and attachment-bearing requests remain outside it.
 The existing original-source reply worker may reserve one continuation after
 60 seconds. Core revalidates the original owner/App/source, unchanged message,
 workspace grant and stop/correction state. Native readback must independently
-show that the exact latest Turn completed, its full item inventory is stable,
+show that the exact original Turn completed, its full item inventory is stable,
 every effect item completed, no background work remains, and the same final
-answer explicitly contains that report. A later native Turn, unknown item,
-failed/declined/live effect, edited source or revoked grant remains a hold.
+answer explicitly contains that report. Historical work may continue only when
+every later native Turn correlates to a settled canonical Core Turn and its full
+item inventory is independently stable with no unknown or unfinished effects.
+The proof pins a digest of these inventories; a later equivalent source submission,
+foreign native input, unknown item, failed/declined/live effect, edited source or
+revoked grant remains a hold. Native loss remains a hold: a cold client cannot
+certify another process's background effects by resuming the thread.
 
 The original Session queue and deterministic `work-1` reservation own execution;
 restart adopts an already committed Turn instead of dispatching it again. The

@@ -231,6 +231,7 @@ from .control_plane.todos.todo_summary import (
     open_todo_items as open_todo_items,
     todo_item_task_class as todo_item_task_class,
     first_open_todo_text,
+    open_todo_items as open_todo_items,
     project_asset_todo_summary,
     sync_connected_attention_action_from_todos as _sync_connected_attention_action_from_todos_read_model,
     todo_lane_items as todo_lane_items,
@@ -238,6 +239,7 @@ from .control_plane.todos.todo_summary import (
     todo_item_is_due_monitor as todo_item_is_due_monitor,
     todo_item_missing_monitor_schedule as todo_item_missing_monitor_schedule,
     todo_item_next_due_at as todo_item_next_due_at,
+    todo_item_task_class as todo_item_task_class,
     todo_projection_sort_key as todo_projection_sort_key,
 )
 from .control_plane.todos.todo_index import (
