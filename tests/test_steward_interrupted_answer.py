@@ -5,6 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 import time
+from types import SimpleNamespace
 
 import pytest
 from test_antigravity_steward_adapter import language_server  # noqa: F401
@@ -15,7 +16,7 @@ from loopx.capabilities.native_chat import external_conversations
 from loopx.extensions.lark.conversation_identity import identity_ref
 
 
-@pytest.mark.parametrize("fault", [None, "stop", "source-changed", "unknown-native", "no-capacity", "native-changed", "review-action", "post-enqueue-crash"])
+@pytest.mark.parametrize("fault", [None, "stop", "source-changed", "unknown-native", "no-capacity", "native-changed", "review-action", "post-enqueue-crash", "image-view"])
 def test_restarted_codex_steward_gets_one_original_read_only_answer(steward, monkeypatch, fault):
     from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter
     from loopx.chat_agent import CodexChatAgentError
@@ -92,6 +93,18 @@ def test_restarted_codex_steward_gets_one_original_read_only_answer(steward, mon
         probes.append(kwargs)
         if fault == "unknown-native":
             return None
+        if fault == "image-view":
+            from loopx.capabilities.native_chat.codex_adapter import interrupted_result_readback
+            def items(method, params, _deadline):
+                if method == "thread/turns/list":
+                    return iter([{"id": failed["upstream_turn_id"], "status": "interrupted"}])
+                assert method == "thread/items/list" and params == {"turnId": failed["upstream_turn_id"]}
+                return iter([{"turnId": failed["upstream_turn_id"], "item": item} for item in [
+                    {"id": "original-user", "type": "userMessage"},
+                    {"id": "original-command", "type": "commandExecution", "status": "completed"},
+                    {"id": "original-image", "type": "imageView", "path": str(artifact)}]])
+            return interrupted_result_readback(SimpleNamespace(thread_id="durable-thread",
+                response_timeout_sec=1, _control_items=items), failed["upstream_turn_id"])
         changed = fault == "native-changed" and bool((transport.core.read_request(ref).get("context_recovery") or {}).get("answer_review"))
         return {"thread_id": "durable-thread", "turn_id": failed["upstream_turn_id"],
             "read_only_review": True, "no_final_answer": True, "effects_observed": True,

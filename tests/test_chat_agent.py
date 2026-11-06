@@ -202,7 +202,8 @@ def test_native_turn_preserves_operator_material(monkeypatch, tmp_path, mode):
 
 
 @pytest.mark.parametrize("fault", [None, "active", "completed", "final", "missing-phase", "correction",
-    "unknown", "foreign", "duplicate", "live-tool", "late-items", "late-turn", "dynamic-tool", "live-dynamic-tool", "later-completed"])
+    "unknown", "foreign", "duplicate", "live-tool", "late-items", "late-turn", "dynamic-tool", "live-dynamic-tool", "later-completed",
+    "image-view", "moving-image-view", "unknown-image-view", "image-without-effect"])
 def test_interrupted_result_review_requires_stable_full_inventory_without_final_or_live_effects(tmp_path, monkeypatch, fault):
     session = chat_agent.CodexChatAgentSession(process=SimpleNamespace(poll=lambda: None),
         messages=queue.Queue(), thread_id="original", work_dir=tmp_path, response_timeout_sec=.2)
@@ -238,6 +239,13 @@ def test_interrupted_result_review_requires_stable_full_inventory_without_final_
                     item.update(type="dynamicToolCall", status="completed" if fault == "dynamic-tool" else "inProgress")
                 rows = [{"turnId": "foreign" if fault == "foreign" else "interrupted", "item": item},
                     {"turnId": "interrupted", "item": {"id": "comment", "type": "agentMessage", "phase": "commentary"}}]
+                if fault in {"image-view", "moving-image-view", "unknown-image-view", "image-without-effect"}:
+                    rows.append({"turnId": "interrupted", "item": {"id": "image",
+                        "type": "futureImageView" if fault == "unknown-image-view" else "imageView",
+                        "path": "/synthetic/changed.png" if fault == "moving-image-view" and items_read > 1
+                        else "/synthetic/figure.png"}})
+                    if fault == "image-without-effect":
+                        rows.pop(0)
                 if fault in {"final", "missing-phase", "correction"} or fault == "late-items" and items_read > 1:
                     rows.append({"turnId": "interrupted", "item": {"id": "extra",
                         "type": "userMessage" if fault == "correction" else "agentMessage",
@@ -247,7 +255,7 @@ def test_interrupted_result_review_requires_stable_full_inventory_without_final_
 
     monkeypatch.setattr(session, "_write", write)
     proof = interrupted_result_readback(session, "interrupted")
-    if fault in {None, "dynamic-tool", "later-completed"}:
+    if fault in {None, "dynamic-tool", "later-completed", "image-view"}:
         digest = proof.pop("native_inventory_sha256")
         assert len(digest) == 64 and set(digest) <= set("0123456789abcdef")
         assert proof == {"thread_id": "original", "turn_id": "interrupted", "read_only_review": True,
