@@ -46,6 +46,11 @@ test("stable context ids bind phase, scope, content and policy revision", () => 
     assert.notEqual(id(original), id(projectAgentContext({ ...input, ...patch }, [provider])));
   }
   assert.notEqual(id(original), id(projectAgentContext(input, [{ ...provider, revision: "v2" }])));
+  for (const patch of [{ guidance: ["Inspect contradictory evidence."] }, { facts: { observed: 1 } }]) {
+    assert.notEqual(id(original), id(projectAgentContext(input, [{ ...provider,
+      produce: () => ({ ...provider.produce({} as any, {}), ...patch }),
+    }])));
+  }
 });
 
 test("provider failures, forged control fields and oversize context are isolated", () => {
@@ -228,7 +233,7 @@ test("coordinator participation guidance survives all bounded lifecycle projecti
     } })!;
     assert.deepEqual(packet.failures, []);
     const [contribution] = packet.contributions as Record<string, any>[];
-    assert.equal(contribution.revision, "v6");
+    assert.equal(contribution.revision, "v7");
     assert.equal(packet.authority, "guidance_only");
     assert.ok(Buffer.byteLength(JSON.stringify(contribution)) <= 2048);
     assert.ok(Buffer.byteLength(JSON.stringify(packet)) <= 3072);
@@ -358,13 +363,38 @@ const blocked = (phase = "before_plan") => ({
   reason_code: "delegation_context_unavailable",
 });
 
-test("delegation facts reproduce the pinned Python projection byte for byte, context_id included", (t) => {
+test("delegation facts preserve the pinned migration contract across guidance revisions", (t) => {
   for (const [name, scenario] of Object.entries<any>(fixture.scenarios)) {
     t.mock.timers.enable({ apis: ["Date"], now: Date.parse(scenario.observed_at) });
     const packet = evaluateGoalAgentContext({ phase: scenario.phase, scope: fixture.scope,
       orchestration: scenario.orchestration, observations: {}, delegation_facts: scenario.delegation_facts });
-    assert.equal(JSON.stringify(packet), JSON.stringify(scenario.expected_context), name);
+    // The fixture preserves the pre-migration observation, not a permanent
+    // wording freeze. Guidance/revision are deliberately versioned; context id
+    // content binding is covered separately above.
+    const factsOnly = (value: any) => ({ ...value, contributions: value.contributions.map(
+      ({ guidance, revision, context_id, ...observation }: any) => observation,
+    ) });
+    assert.deepEqual(factsOnly(packet), factsOnly(scenario.expected_context), name);
     t.mock.timers.reset();
+  }
+});
+
+test("native guidance keeps binding preflight scoped even when delegation is unavailable", () => {
+  for (const delegation_facts of [undefined, { config_error: "unavailable" }, delegationFacts([])]) {
+    const packet = evaluateGoalAgentContext({ phase: "before_delegate", scope: fixture.scope,
+      orchestration: { ...policy, model_config: null }, observations: {}, delegation_facts })!;
+    assert.equal(packet.authority, "guidance_only");
+    assert.deepEqual(packet.failures, []);
+    const [{ guidance, facts }] = packet.contributions as Record<string, any>[];
+    assert.match(guidance.join(" "), /authorized host-native tools directly/);
+    assert.match(guidance.join(" "), /only bound delegation needs its binding entrypoint/);
+    assert.match(guidance.join(" "), /never silently substitute runtime\/model/);
+    assert.equal(facts.capacity_contract.live_availability, "not_observed");
+    if (facts.delegation_context) {
+      assert.equal(facts.delegation_context.execution_scope, "bound_delegation");
+      assert.equal(facts.delegation_context.preflight, "required");
+      assert.deepEqual(facts.delegation_context.routes, []);
+    }
   }
 });
 
