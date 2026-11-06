@@ -698,6 +698,7 @@ def test_late_scheduler_wake_does_not_open_an_unfinishable_turn(planning_env, mo
 @pytest.mark.parametrize("mode", ["heartbeat", "turn", "plain", "native-goal", "loopx-goal"])
 def test_real_scheduler_stops_after_one_budget_exhausted_wake(planning_env, mode):
     from benchmark.runtime.scheduler import worker_command
+    from tests.control_plane.cli_output_fixture import read_cli_context_for_oracle
 
     env = planning_env | {
         "LOOPX_EXECUTION_MODE": mode, "LOOPX_TASK_STAGE": "execute",
@@ -729,7 +730,10 @@ def test_real_scheduler_stops_after_one_budget_exhausted_wake(planning_env, mode
             "--include-detail", "scheduler",
         ], env=env, text=True, capture_output=True)
         assert result.returncode == 0, result.stdout + result.stderr
-        return json.loads(result.stdout)
+        # Follow the current capture's read-only recovery when the CLI returns
+        # compact navigation. Missing projected fields are not admission.
+        body, _ = read_cli_context_for_oracle(result.stdout)
+        return json.loads(body)
     before = quota()
     assert before["should_run"] is True
     command = worker_command(env, python=sys.executable,
