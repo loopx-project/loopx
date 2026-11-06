@@ -31,6 +31,21 @@ from ..control_plane.turn_driver.native_context_profile import (
 )
 
 
+def _complete_selection_transport(payload: dict[str, Any], args: argparse.Namespace, *,
+                                  capture_root: Path) -> str | None:
+    """Bind display argv without editing an already signed complete source."""
+    interaction = payload.get("interaction_contract")
+    cli = interaction.get("cli_channel") if isinstance(interaction, dict) else None
+    selection = cli.get("selection_command") if isinstance(cli, dict) else None
+    if not isinstance(selection, dict):
+        return None
+    presentation = {**payload, "interaction_contract": {**interaction,
+        "cli_channel": {**cli, "selection_command": dict(selection)}}}
+    bind_capture_selection_transport(presentation, args, capture_root=capture_root)
+    cli = (presentation.get("interaction_contract") or {}).get("cli_channel") or {}
+    return (cli.get("selection_command") or {}).get("command_args_template")
+
+
 def native_context_activation(args: argparse.Namespace) -> dict[str, Any]:
     from ..control_plane.turn_driver.codex_context import context_delivery_for_arguments
 
@@ -675,8 +690,14 @@ def progressive_context_capture_view(payload: dict[str, Any], args: argparse.Nam
     if directory is None:
         root = Path(_private_transport_root(runtime_root))
         directory = Path(tempfile.mkdtemp(prefix="context-", dir=root))
-    bind_capture_selection_transport(payload, args, capture_root=directory.parent)
-    required, reference = capture_progressive_context(payload, directory=directory, surface=surface)
+    transport = None
+    if payload.get("schema_version") == "loopx_turn_envelope_v1":
+        surface = "complete_turn"
+        transport = _complete_selection_transport(payload, args, capture_root=directory.parent)
+    else:
+        bind_capture_selection_transport(payload, args, capture_root=directory.parent)
+    required, reference = capture_progressive_context(payload, directory=directory, surface=surface,
+        selection_command_args_template=transport)
     view = native_context_capture_view(required, directory, captured_recovery=reference,
         metadata={"context_delivery": native_context_activation(args),
             **({"capture_sha256": args.capture_sha256} if getattr(args, "capture_sha256", None) else {})},
@@ -756,6 +777,11 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
             return progressive_context_capture_view(payload, args,
                 runtime_root=Path(getattr(args, "_context_delivery_machine_runtime", path.parent)),
                 directory=None, reader_argv=reader_argv)
+        except EffectRuntimeRejected as exc:
+            if payload.get("schema_version") == "loopx_turn_envelope_v1":
+                failure = QuotaDecisionTransportError(str(exc))
+                return {"ok": False, "error_code": failure.error_code, "reason": str(failure),
+                    "capture_sha256": args.capture_sha256, "recovery": full_reference}
         except (QuotaDecisionTransportError, OSError, ValueError, EffectRuntimeRemoteError, EffectRuntimeStartupError):
             pass  # The complete original reference remains the fallback below.
     try:
@@ -793,12 +819,16 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
         # Carry the now-active transport into its selection presentation, not
         # into the immutable source or a second admission. Native lifecycle
         # still owns when the following full/delta view can be published.
-        bind_capture_selection_transport(payload, args, capture_root=root)
+        complete = payload.get("schema_version") == "loopx_turn_envelope_v1"
+        transport = _complete_selection_transport(payload, args, capture_root=root) if complete else None
+        if not complete:
+            bind_capture_selection_transport(payload, args, capture_root=root)
         prepared = prepare_codex_context(payload, directory=directory, capture_directory=cache,
-            goal_id=args.goal_id, agent_id=args.agent_id, surface="quota_packet",
+            goal_id=args.goal_id, agent_id=args.agent_id, surface="complete_turn" if complete else "quota_packet",
             capture_id=hashlib.sha256(raw).hexdigest(),
             continuity_generation=getattr(args, "_context_delivery_generation", None),
-            progressive_enabled=activation["progressive_enabled"], hook_session=hook_session)
+            progressive_enabled=activation["progressive_enabled"], selection_command_args_template=transport,
+            hook_session=hook_session)
         projected = prepared.delivery
         native_prepared = True
         if projected.get("schema_version") == "context_delivery_v1":
