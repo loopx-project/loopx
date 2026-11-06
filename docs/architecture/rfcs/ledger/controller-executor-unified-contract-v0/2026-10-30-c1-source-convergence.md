@@ -2731,3 +2731,51 @@ Configured Python typing remains non-passing: the prior C1 has 4,809 diagnostics
 and this integration 4,814. The five additions are in unchanged main-owned
 modules, verified by identical Git objects; they are not waived. Reader exits,
 independent review, installed adoption and whole-C1 net benefit remain open.
+
+### Complete-source qualification and native execution ordering
+
+The no-write behavior qualifier now accepts Core-validated complete v1 sources
+in either experimental arm and reports the actual packet version. Retained and
+counterfactual candidates use the existing complete composer by default; an
+already captured complete source keeps its original host binding and settlement
+composition. Raw fixtures use the Core's default composition, without inferring
+a different binding from candidate metadata. The versioned v0 state matrix
+remains an explicit historical control, including action aliases refused by the
+current owner. This does not retire supported historical codecs.
+
+Pair preflight checks both confidentiality boundaries before either actor call.
+Complete candidates retain source/integrity validation and exact paired origin;
+provider instructions and encoded scheduler scanning follow the actual packet
+layout rather than the arm name. Current-format ablations are refused before
+actors. Semantic-negative fixtures are changed at their original source and
+composed by Core, so a validly bound pair still has to pass the independent
+fixed strategic-chain oracle. Tampered bindings remain separate negative cases.
+
+The integrated native Host exposed an ordering gap: its delivery guard required
+the Task lease that the model callback would acquire only after launch. Explicit
+non-report Tasks now enter the existing lease lifecycle before that guard; the
+managed callback reuses and checks that same Task. Canonical missing work still
+reaches the kernel's structured refusal, unavailable authority fails closed, and
+a conflicting execution lease is not borrowed. Report and recorded-resume
+paths retain their existing lifecycle. No guard or independent validator is
+relaxed, and this does not qualify automatic selection without an explicit Task.
+
+The frozen main integration first recorded 646 passing and 22 failing tests.
+Development runs retained their 292/4 and 356/1 results; the latter caught an
+early-lease exception replacing the missing-work refusal. After correction, a
+new source-stable eight-module cohort passed all 357 tests, including the 61
+native File/SQLite, original-session, HTTP, refusal and independent-validation
+cases. The main conversation-binding TypeScript module passed 59 tests; the
+five changed qualification Python modules passed typing. These are local
+synthetic actor/provider checks, not live-model behavior or full-cost evidence.
+
+A fresh verified Chat bundle and isolated wheel contain 1,815 Python/TypeScript
+sources matching the tested product bytes. Installed complete requests, current
+and explicit historical pairs, wrong-source refusal and the real adapter with
+a local transport double passed with 300 observed LoopX modules and no checkout
+Core imports. Native Host was imported, not exercised as an installed journey.
+The first stale/missing-bundle build, harness preparation failure and historical
+v0 large-integer source mismatch remain recorded; the legacy positive control
+uses its original representable fixture, while current-format large integers
+remain checked. No active installation, live model run, whole-C1 acceptance,
+quality/readiness or net-benefit qualification follows from these results.
