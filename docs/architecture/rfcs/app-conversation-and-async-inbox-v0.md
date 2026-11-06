@@ -1731,6 +1731,17 @@ The original failure and its delivery remain recorded; a qualified private
 steward notice describes conditional recovery rather than promising a replay.
 Unknown failures after native dispatch remain holds.
 
+Account transport preparation failures can also qualify for an original private
+project or Codex steward request. Core must retain exactly the Session-queue and
+failed events, with null durable `started_at` and `first_event_at` checkpoints,
+no native Turn/result, response, deltas or attachments, and unchanged input/origin.
+This includes the older exact `resume_failed` diagnostic emitted before the
+queue's first durable start checkpoint. Fresh source/grant and account transport
+checks precede admission; they start no model request. Preparation continues the
+existing quota/routing/preparation counter up to three, without resetting its
+backoff or history. A later dispatched failure cannot open another business
+retry family. The original failure and its delivered notice remain unchanged.
+
 Source verification accepts both ordinary text and text-only rich posts. A post
 must retain its original provider rendering, an explicit empty attachment
 inventory and the same admitted text after intake whitespace normalization.
