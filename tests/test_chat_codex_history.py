@@ -11,7 +11,7 @@ from test_chat_manager_model_adoption import conversation, configure  # noqa: F4
 from test_native_steward_private import steward  # noqa: F401
 
 
-def test_source_revocation_during_history_compaction_preserves_original_audience(steward, monkeypatch):
+def test_source_revocation_during_history_compaction_preserves_original_audience(steward, monkeypatch):  # noqa: F811
     import threading
     from concurrent.futures import ThreadPoolExecutor
 
@@ -50,7 +50,7 @@ def test_source_revocation_during_history_compaction_preserves_original_audience
 
 
 @pytest.mark.parametrize("action", ["stop", "close"])
-def test_native_history_preparation_observes_user_stop_before_its_adapter_lock(conversation, monkeypatch, action):
+def test_native_history_preparation_observes_user_stop_before_its_adapter_lock(conversation, monkeypatch, action):  # noqa: F811
     import threading
     from concurrent.futures import ThreadPoolExecutor
 
@@ -102,7 +102,7 @@ def test_native_history_preparation_observes_user_stop_before_its_adapter_lock(c
 
 
 @pytest.mark.parametrize("change", ["close", "settings", "requested-model"])
-def test_history_guard_rechecks_after_native_start_before_publishing(conversation, monkeypatch, change):
+def test_history_guard_rechecks_after_native_start_before_publishing(conversation, monkeypatch, change):  # noqa: F811
     from test_chat_manager_model_adoption import Adapter
     root, store, runtime, session, _ = conversation
     sid = session["session_id"]
