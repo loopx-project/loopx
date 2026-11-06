@@ -824,6 +824,48 @@ Approval needs a reviewed decision, not implementation progress or silence.
   installation, R1 managed minimal or D1–D7. No preset, frontend operation,
   permission or persisted state changes; protected execution keeps its owner.
 
+### 2026-11-07 — Caller process-transport loading proposal
+
+- **Baseline and boundary:** `7f521ff4505fa916a98a7401032922189eef414a`
+  loads `extensions.process_runtime` during the pure Turn-decision import.
+  Doctor Git, contract scanning, caller validation and Host bridge transport
+  now resolve their existing reexports on use. The original function objects,
+  signatures, direct/from/star imports, discovery, caller patch points,
+  preloaded-owner bindings and reload behavior remain available. This uses the
+  existing lazy-export pattern; the export-name set is local compatibility
+  metadata, not a shared state vocabulary. Python retains platform transport;
+  TypeScript retains decisions, deadlines, authority and receipts. No provider,
+  capability, default or process algorithm is added.
+- **Executable evidence:** the four cold-caller oracles fail on the immutable
+  baseline. Focused compatibility checks and the existing architecture oracle
+  pass on the proposal; the Turn-preview unselected-module guard is retained.
+  Real isolated Git, validation and bridge tests cover timeout, cancellation,
+  exited-leader descendants, stdin policy, framing and unconfirmed cleanup.
+  A newly built monolithic wheel repeats compatibility and real-process checks
+  outside the checkout. Complete public discovery/star name sets and transport
+  signatures match the baseline. This is source/wheel proposal evidence, not an
+  upgrade or adoption result.
+- **Measured scope:** pure Turn-decision import loads 337 LoopX modules instead
+  of 338. Pure import and help start no processes or connections; supported help
+  and unknown-command output/exit status remain identical. Shared synthetic
+  SQLite fixtures exercise accepted and rejected registered Turn plans: both
+  revisions start two Node processes and thirteen Git probes, with 62/61
+  connection observations respectively. Their complete returned envelopes match
+  except the source-decision digest from fresh observations. Registered plans
+  still select process transport; the entire preview dependency closure is not
+  qualified as cold. One removed import does not establish latency, RSS,
+  complete-cost, managed-Turn or long-horizon benefit.
+- **Remaining and rollback:** retain I3 for at least one minor release. D2, D5,
+  D6, I3, D3 and full R0/V10/M1/R1/context/model/install acceptance remain open.
+  Canary passes its six direct checks and 17 of 18 selected checks.
+  `first-connect-contract-smoke.py` fails with `KeyError: should_run` on both
+  baseline and proposal; its inline-field assumption needs separate repair.
+  This failure and existing broader lint/browser failures remain open.
+  The completed author proposal may enter normal review with disclosed
+  holds; protected runtime merge still requires maintainer authorization.
+  Revert this caller loading change to restore eager binding without state
+  migration; no unrelated language rewrite is required.
+
 ## Appendix B: Decision log
 
 | Date | Decision | Owner / approval | Alternatives | Normative sections changed |
