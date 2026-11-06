@@ -1704,7 +1704,8 @@ def test_health_reads_source_controls_once_and_keeps_fresh_recovery(ordinary, mo
 
 
 @pytest.mark.parametrize("fault", [None, "changed-source", "revoked", "stop", "unknown-native",
-    "background", "later-user", "reservation-crash", "post-enqueue-crash", "queued-newer", "queued-input", "private-path", "still-incomplete", "cold-native", "dead-native", "foreign-native", "failed-effect"])
+    "background", "later-user", "completed-later", "equivalent-later", "later-failed-effect",
+    "reservation-crash", "post-enqueue-crash", "queued-newer", "queued-items", "queued-input", "private-path", "still-incomplete", "cold-native", "dead-native", "foreign-native", "failed-effect"])
 def test_original_worker_continues_explicit_unfinished_project_work_once_after_restart(ordinary, monkeypatch, fault):  # noqa: F811
     """Reply-worker restart retains native ownership; native loss stays fenced."""
     from datetime import datetime, timedelta, timezone
@@ -1746,13 +1747,15 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
             {{"turnId": active_turn, "item": {{"id": "user", "type": "userMessage"}}}},
             {{"turnId": active_turn, "item": {{"id": "effect", "type": "fileChange", "status": "completed"}}}},
             {{"turnId": active_turn, "item": {{"id": "view", "type": "imageView", "path": str(artifact)}}}},
-            {{"turnId": active_turn, "item": {{"id": "answer", "type": "agentMessage", "phase": "final_answer", "text": response}}}}]}}))
+            {{"turnId": active_turn, "item": {{"id": "answer", "type": "agentMessage", "phase": "final_answer", "text": response}}}},
+            *previous.get("items", [])]}}))
 ''' + source[end:]
     start = source.index('    elif method == "thread/turns/list":')
     end = source.index('    else:\n        result = {}', start)
     source = source[:start] + f'''    elif method in {{"thread/turns/list", "thread/items/list"}}:
         snapshot = json.load(open({str(inventory)!r}))
-        result = {{"data": snapshot["turns" if method == "thread/turns/list" else "items"]}}
+        result = {{"data": snapshot["turns"] if method == "thread/turns/list" else
+            [row for row in snapshot["items"] if row["turnId"] == request["params"]["turnId"]]}}
     elif method == "thread/backgroundTerminals/list":
         if not loaded:
             print(json.dumps({{"id": request["id"], "error": {{"code": -32600, "message": "thread not found"}}}}), flush=True)
@@ -1776,6 +1779,20 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
     original_turn_bytes = store._turn_path(original["session_id"], original["turn_id"]).read_bytes()
     session_before = store.load_session(original["session_id"])
     Path(session_before["codex_home"]).mkdir(parents=True, exist_ok=True)
+    if fault in {"completed-later", "equivalent-later", "later-failed-effect"}:
+        message = event["content"] if fault == "equivalent-later" else "Newer follow-up: a different completed request."
+        later_event = provider.event("notes-app", "later-correlated", message)
+        transport.admit("notes-app", later_event)
+        later_ref = identity_ref(binding["provider_ref"], later_event["message_id"])
+        later = transport.core.read_request(later_ref)
+        later_turn = runtime.wait_for_turn(session_id=later["session_id"], turn_id=later["turn_id"], timeout_sec=10)
+        assert later_turn["status"] == "completed"
+        transport.reconcile_request(transport.root / (later_ref + ".json"))
+        if fault == "later-failed-effect":
+            snapshot = json.loads(inventory.read_text())
+            next(row["item"] for row in snapshot["items"] if row["turnId"] == later_turn["upstream_turn_id"]
+                and row["item"]["type"] == "fileChange")["status"] = "failed"
+            inventory.write_text(json.dumps(snapshot))
     if fault == "cold-native":
         runtime.adapters.pop(original["session_id"]).close_session()
     elif fault == "dead-native":
@@ -1808,15 +1825,15 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
     def worker():
         return LarkPrivateConversations(controller=runtime, runtime_root=store.root.parent, runner=provider, cli_bin="lark-cli")
     selected = worker()
-    if fault in {"reservation-crash", "post-enqueue-crash", "queued-newer", "queued-input"}:
+    if fault in {"reservation-crash", "post-enqueue-crash", "queued-newer", "queued-items", "queued-input"}:
         enqueue = runtime.enqueue_turn
         resume = runtime.resume_session_queue
-        if fault in {"queued-newer", "queued-input"}:
+        if fault in {"queued-newer", "queued-items", "queued-input"}:
             # Hold dispatch before enqueue, rather than relying on a slow
             # adapter startup to let the newer-input fixture win a race.
             monkeypatch.setattr(runtime, "resume_session_queue", lambda **kwargs: None)
         def crash(**kwargs):
-            if fault in {"post-enqueue-crash", "queued-newer", "queued-input"}:
+            if fault in {"post-enqueue-crash", "queued-newer", "queued-items", "queued-input"}:
                 enqueue(**kwargs)
             raise OSError("synthetic continuation admission crash")
         monkeypatch.setattr(runtime, "enqueue_turn", crash)
@@ -1827,21 +1844,25 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
             snapshot = json.loads(inventory.read_text())
             snapshot["turns"].insert(0, {"id": "newer-after-reservation", "status": "completed"})
             inventory.write_text(json.dumps(snapshot))
+        if fault == "queued-items":
+            snapshot = json.loads(inventory.read_text())
+            snapshot["items"][1]["item"]["output"] = "Changed after admission"
+            inventory.write_text(json.dumps(snapshot))
         if fault == "queued-input":
             transport.admit("notes-app", provider.event("notes-app", "newer-input", "Newer follow-up: inspect this correction first."))
-        if fault in {"queued-newer", "queued-input"}:
+        if fault in {"queued-newer", "queued-items", "queued-input"}:
             monkeypatch.setattr(runtime, "resume_session_queue", resume)
         selected = worker()
     selected.reconcile()
     continued = selected.core.read_request(ref)
-    if fault in {"changed-source", "revoked", "stop", "unknown-native", "background", "later-user", "cold-native", "dead-native", "foreign-native", "failed-effect"}:
+    if fault in {"changed-source", "revoked", "stop", "unknown-native", "background", "later-user", "cold-native", "dead-native", "foreign-native", "failed-effect", "equivalent-later", "later-failed-effect"}:
         assert continued["turn_id"] == original["turn_id"] and not continued.get("context_recovery")
-        assert artifact.read_text() == "first\n"
+        assert artifact.read_text() == ("first\nremaining\n" if fault == "equivalent-later" else "first\n")
     else:
         assert continued["turn_id"] != original["turn_id"]
         assert continued["session_id"] == original["session_id"]
         assert continued["context_recovery"]["work_attempt"] == 1
-        interrupted = fault in {"queued-newer", "queued-input"}
+        interrupted = fault in {"queued-newer", "queued-items", "queued-input"}
         assert runtime.wait_for_turn(session_id=continued["session_id"], turn_id=continued["turn_id"], timeout_sec=10)["status"] == ("failed" if interrupted else "completed")
         if fault == "queued-input":
             queued = [item for item in selected.core.pending() if item["request_ref"] != ref and item.get("command") is None]
@@ -1861,7 +1882,7 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
         assert after["project_context"] == session_before["project_context"]
         assert after["upstream_thread_id"] == session_before["upstream_thread_id"]
         starts = [json.loads(line)["params"] for line in capture.read_text().splitlines() if json.loads(line).get("method") == "turn/start"]
-        assert len(starts) == (1 if fault == "queued-newer" else 2)
+        assert len(starts) == (1 if fault in {"queued-newer", "queued-items"} else 3 if fault == "completed-later" else 2)
         if not interrupted:
             assert "Do only the remaining authorized work" in starts[-1]["input"][0]["text"]
         if fault == "queued-input":

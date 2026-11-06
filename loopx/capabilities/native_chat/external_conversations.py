@@ -142,6 +142,7 @@ class ChatExternalConversations:
         later_equivalent = None
         image_failure = turn.get("error_code") == "runtime_error" and bool(row.get("attachments"))
         runtime_failure = turn.get("error_code") in {"model_auth_unavailable", "resume_failed"}
+        unfinished = turn.get("status") == "completed" and bool((turn.get("response") or {}).get("unfinished_work"))
         if turn.get("error_code") == "manager_authorization_unavailable" or image_failure or runtime_failure:
             # Collect canonical facts only. The typed planner owns the exact
             # pre-dispatch sequence, retry budget and authority decision.
@@ -152,6 +153,7 @@ class ChatExternalConversations:
                     {"event_id": item["event_id"], "kind": item["kind"],
                      **{key: item.get("payload", {})[key] for key in ("phase", "schema_version", "error_code", "delivery_mode", "message")
                         if key in item.get("payload", {})}} for item in events]}
+        if preparation is not None or unfinished:
             created = datetime.fromisoformat(turn["created_at"])
             later_equivalent = any(item.get("role") == "user" and item.get("turn_id") != turn["turn_id"]
                 and item.get("text") == row.get("message") and item.get("origin") in {None, "lark", "web"}
@@ -430,7 +432,8 @@ class ChatExternalConversations:
                         adapter = self.controller.adapters.get(row["session_id"])
                     if isinstance(adapter, CodexAppServerAdapter):
                         proof = adapter.completed_work_observation(
-                            thread_ids=plan["native_thread_ids"], turn_id=turn["upstream_turn_id"])
+                            thread_ids=plan["native_thread_ids"], turn_id=turn["upstream_turn_id"],
+                            known_turn_ids=self._settled_native_turn_ids(session["session_id"]))
                 else:
                     proof = CodexAppServerAdapter.failed_request_observation(
                         codex_bin=self.controller.codex_bin, codex_home=Path(session["codex_home"]),
@@ -889,6 +892,16 @@ class ChatExternalConversations:
         # append each actual receipt/failure before the original worker replies.
         return {**response, "message": "原委派格式已复核，以下为实际提交回执；接收者结论仍待回传。"}
 
+    def _settled_native_turn_ids(self, session_id: str) -> set[str]:
+        """Correlate native history through canonical Core Turns, without adopting it."""
+        store = self.controller.store
+        ids = {item["turn_id"] for item in store.messages(session_id, strict=True)
+               if item.get("role") == "user" and item.get("turn_id")}
+        turns = [store.load_turn(session_id, value) for value in ids]
+        return {item["upstream_turn_id"] for item in turns if item
+                and item.get("status") in {"completed", "failed"}
+                and isinstance(item.get("upstream_turn_id"), str) and item["upstream_turn_id"]}
+
     def prepare_continuation_input(self, session: dict[str, Any], turn: dict[str, Any],
                                    native: Any, message: str) -> str:
         """Recheck reserved unfinished work at dispatch; keep the stored input intact."""
@@ -900,7 +913,8 @@ class ChatExternalConversations:
             return message
         proof = continuation.get("native_observation") or {}
         if (self.controller.store.queued_turns(session["session_id"])
-                or completed_work_readback(native, str(proof.get("turn_id") or "")) != proof):
+                or completed_work_readback(native, str(proof.get("turn_id") or ""),
+                    known_turn_ids=self._settled_native_turn_ids(session["session_id"])) != proof):
             raise CodexChatAgentError(
                 "The original unfinished-work inventory changed or newer input is waiting; continuation stopped.",
                 error_code="host_gate", gate=None,
