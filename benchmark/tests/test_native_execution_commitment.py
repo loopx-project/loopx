@@ -162,3 +162,83 @@ def test_read_only_route_is_absent_by_default_and_scoped_to_original_relay():
             client.post("/api/v1/feedback/own/execution-commitment").status_code == 405
         )
         assert calls == [True]
+
+
+@pytest.mark.parametrize("order", [("a", "b", "c"), ("c", "b", "a")])
+def test_multiple_native_trials_keep_independent_routes_and_public_probes(order):
+    """A later valid registration must not be captured by the first route."""
+    import socket
+    import subprocess
+    import sys
+    import threading
+    import time
+    from urllib.error import HTTPError
+    from urllib.request import urlopen
+
+    FastAPI = pytest.importorskip("fastapi").FastAPI
+    uvicorn = pytest.importorskip("uvicorn")
+    app = FastAPI()
+    # A/B share a task; B/C share a run. Neither field alone identifies a trial.
+    identities = {"a": ("run-a", "task-a"), "b": ("run-b", "task-a"),
+                  "c": ("run-b", "task-c"), "uninstalled": ("run-x", "task-x")}
+    states = {"a": False, "b": True, "c": None}
+    calls = []
+
+    def resolve(relay):
+        run, task = identities[relay]
+        return "private-token", dict(run_id=run, task_id=task)
+
+    app.state.judge = SimpleNamespace(resolve_feedback_relay=resolve)
+    observers = {name: (lambda name=name: calls.append(name) or states[name])
+                 for name in order}
+    for name in (*order, *order):
+        run, task = identities[name]
+        install_execution_commitment(app, run_id=run, task_id=task,
+                                     observe=observers[name])
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    server = uvicorn.Server(uvicorn.Config(app, log_level="error", access_log=False))
+    thread = threading.Thread(target=server.run, kwargs={"sockets": [sock]}, daemon=True)
+    thread.start()
+    try:
+        deadline = time.monotonic() + 5
+        while not server.started and thread.is_alive() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert server.started
+        root = f"http://127.0.0.1:{sock.getsockname()[1]}/api/v1/feedback"
+        for name in order:
+            response = urlopen(f"{root}/{name}/execution-commitment", timeout=5)
+            packet = json.load(response)
+            assert packet["task_id"] == identities[name][1]
+            assert packet["fulfilled"] is states[name]
+            assert "private-token" not in json.dumps(packet)
+            for action in ("probe", "check"):
+                result = subprocess.run(
+                    [sys.executable, "-m", "benchmark.runtime.execution_commitment", action,
+                     "--task-id", identities[name][1], "--feedback-url", f"{root}/{name}"],
+                    capture_output=True, text=True, timeout=5)
+                accepted = states[name] is not None if action == "probe" else states[name] is True
+                assert result.returncode == (0 if accepted else 1), result.stdout
+        previous_calls = list(calls)
+        for name in ("missing", "uninstalled"):
+            with pytest.raises(HTTPError) as error:
+                urlopen(f"{root}/{name}/execution-commitment", timeout=5)
+            assert error.value.code == 404
+        assert calls == previous_calls
+        assert sorted(calls) == sorted(list(order) * 3)
+        with pytest.raises(ValueError, match="already installed"):
+            install_execution_commitment(app, run_id="run-b", task_id="task-a",
+                                         observe=lambda: False)
+        routes = [r for r in app.routes if r.path.endswith("/execution-commitment")]
+        assert len(routes) == 1
+        # One app cannot inherit another app's registrations.
+        isolated = FastAPI()
+        isolated.state.judge = app.state.judge
+        TestClient = pytest.importorskip("fastapi.testclient").TestClient
+        with TestClient(isolated) as client:
+            assert client.get("/api/v1/feedback/a/execution-commitment").status_code == 404
+    finally:
+        server.should_exit = True
+        thread.join(5)
+        sock.close()
+        assert not thread.is_alive()

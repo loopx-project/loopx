@@ -152,6 +152,19 @@ def install_execution_commitment(
     """
     from fastapi import HTTPException
 
+    if not run_id or not task_id or not callable(observe):
+        raise ValueError("An exact native identity and observer are required")
+    identity = (run_id, task_id)
+    observers = getattr(app.state, "execution_commitment_observers", None)
+    if observers is not None:
+        previous = observers.get(identity)
+        if previous is not None and previous != observe:
+            raise ValueError("Native execution observer is already installed")
+        observers[identity] = observe
+        return
+    observers = {identity: observe}
+    app.state.execution_commitment_observers = observers
+
     @app.get("/api/v1/feedback/{relay_id}/execution-commitment")
     def execution_commitment(relay_id: str):
         try:
@@ -160,10 +173,11 @@ def install_execution_commitment(
             raise HTTPException(
                 status_code=404, detail="Feedback relay not found"
             ) from None
-        if info["run_id"] != run_id or info["task_id"] != task_id:
+        observer = observers.get((info["run_id"], info["task_id"]))
+        if observer is None:
             raise HTTPException(status_code=404, detail="Feedback relay not found")
         try:
-            fulfilled = observe()
+            fulfilled = observer()
         except (OSError, ValueError, subprocess.SubprocessError):
             fulfilled = None
         if fulfilled is not None and type(fulfilled) is not bool:
@@ -172,7 +186,7 @@ def install_execution_commitment(
             )
         return dict(
             schema_version="sforge_execution_commitment_observation_v0",
-            task_id=task_id,
+            task_id=info["task_id"],
             observed_at_epoch=time.time(),
             fulfilled=fulfilled,
         )
