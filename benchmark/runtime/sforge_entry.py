@@ -11,7 +11,8 @@ import sys
 import time
 
 from .planning import task_plan_packet, validate_plan_readback
-from .worker import PHASE_WORK_RESERVE_SECONDS, loopx_command, run_once
+from .scheduler import phase_work_reserve
+from .worker import loopx_command, run_once
 
 # One planning wake whose native process exits non-zero without a harness
 # error or a validated plan (a dropped model stream, a failed turn) must not
@@ -32,7 +33,8 @@ def prepare_entry(env: dict[str, str]) -> bool:
     remaining = float(env["LOOPX_PHASE_DEADLINE_EPOCH"]) - time.time()
     if not math.isfinite(remaining):
         raise ValueError("Invalid planning budget")
-    if remaining <= PHASE_WORK_RESERVE_SECONDS:
+    reserve = phase_work_reserve(env.get("LOOPX_EXECUTION_MODE", "heartbeat"))
+    if remaining <= reserve:
         return False
     path = Path(env["LOOPX_PLANNING_RESULT"])
     if path.exists():
@@ -67,7 +69,7 @@ def prepare_entry(env: dict[str, str]) -> bool:
                          "return_code": receipt.get("return_code"),
                          **({"error_kind": receipt["error_kind"]} if "error_kind" in receipt else {})})
         remaining = float(env["LOOPX_PHASE_DEADLINE_EPOCH"]) - time.time()
-        if not _retryable_planning_wake(receipt) or remaining <= PHASE_WORK_RESERVE_SECONDS:
+        if not _retryable_planning_wake(receipt) or remaining <= reserve:
             break
     path.with_name("planning-attempts.json").write_text(json.dumps(attempts))
     if receipt.get("ok") is not True:
@@ -91,7 +93,7 @@ def main() -> int:
         # Native process completion must not qualify it as a finished trial.
         return 1
     # A successful plan may itself consume the remaining execution allowance.
-    if float(env["LOOPX_PHASE_DEADLINE_EPOCH"]) - time.time() <= PHASE_WORK_RESERVE_SECONDS:
+    if float(env["LOOPX_PHASE_DEADLINE_EPOCH"]) - time.time() <= phase_work_reserve(env.get("LOOPX_EXECUTION_MODE", "heartbeat")):
         return 1
     # Native SForge owns environment filtering and the outer phase deadline;
     # retain its proxy/isolation inputs rather than launching from setup hooks.

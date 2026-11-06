@@ -1096,10 +1096,8 @@ def _deferred_resume_frontier(
 def _blocked_successor_wait_frontier(
     context: _AgentScopeNoCandidateContext,
 ) -> dict[str, Any] | None:
-    candidates = project_todo_resume_planning(
-        context.summary,
-        agent_id=context.agent_id,
-    )["blocked_successor_items"]
+    planning = project_todo_resume_planning(context.summary, agent_id=context.agent_id)
+    candidates = planning["blocked_successor_items"]
     if not candidates:
         return None
     first = candidates[0]
@@ -1124,7 +1122,11 @@ def _blocked_successor_wait_frontier(
             **context.candidate_counts,
             "blocked_successor_wait_count": len(candidates),
         },
-        extra_fields={"blocked_successor_wait_candidates": candidates[:3]},
+        extra_fields={
+            "blocked_successor_wait_candidates": candidates[:3],
+            **({"automatic_resume_todo": planning["automatic_resume_todo"]}
+               if "automatic_resume_todo" in planning else {}),
+        },
     )
 
 

@@ -107,9 +107,9 @@ def test_small_codec_delta_uses_cheaper_complete_native_delivery(tmp_path, monke
     index_requests = []
     request = turn_envelope._turn_envelope_result
 
-    def observe_registration(directory, view, *, hook_session=None):
+    def observe_registration(directory, view, **kwargs):
         registrations.append((directory, copy.deepcopy(view)))
-        return register(directory, view, hook_session=hook_session)
+        return register(directory, view, **kwargs)
 
     def observe_index_request(operation, **kwargs):
         if operation == "context_select":
