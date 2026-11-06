@@ -88,7 +88,9 @@ def _run_git(
     evidence, so an exhausted budget degrades along that existing path instead
     of raising out of a read-only diagnostic. The query is launched in a
     session of its own so the budget can retire the helpers it started, not
-    just the Git process this call happens to hold.
+    just the Git process this call happens to hold. Cancelling the diagnostic
+    (a terminal Ctrl-C) reaches this process's group and not that session, so
+    an interrupted wait retires the same helpers and then keeps travelling.
     """
 
     argv = ["git", "-C", str(source_root), *arguments]
@@ -110,6 +112,13 @@ def _run_git(
     except subprocess.TimeoutExpired:
         _retire_owned_probe(process)
         return None
+    except BaseException:
+        # The wait is over without Git answering: an operator cancelled the
+        # diagnostic. Retiring here is the only owner this session has, and the
+        # original cancellation still has to reach its own handler, so the
+        # timeout keeps answering "unknown" while Ctrl-C keeps being Ctrl-C.
+        _retire_owned_probe(process)
+        raise
     return GitAnswer(
         returncode=process.returncode, stdout=stdout, stderr=stderr
     )
