@@ -119,10 +119,12 @@ def test_registry_git_probe_reports_unavailable_without_git(
     }
 
 
-def test_registry_boundary_require_not_tracked_rejects_unreadable_index(
+@pytest.mark.parametrize("root_failure", [False, True], ids=["bad-index", "unknown-root"])
+def test_registry_boundary_require_not_tracked_rejects_unavailable_git(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    root_failure: bool,
 ) -> None:
     from loopx.cli import main
 
@@ -135,9 +137,12 @@ def test_registry_boundary_require_not_tracked_rejects_unreadable_index(
     registry.parent.mkdir()
     registry.write_text('{"goals": []}\n', encoding="utf-8")
     run_git(repo, "add", "--force", "--", ".loopx/registry.json")
-    bad_index = tmp_path / "bad-index"
-    bad_index.write_bytes(b"DIRC")
-    monkeypatch.setenv("GIT_INDEX_FILE", str(bad_index))
+    if root_failure:
+        monkeypatch.setenv("GIT_DIR", str(tmp_path / "missing.git"))
+    else:
+        bad_index = tmp_path / "bad-index"
+        bad_index.write_bytes(b"DIRC")
+        monkeypatch.setenv("GIT_INDEX_FILE", str(bad_index))
 
     exit_code = main([
         "--format", "json", "--registry", str(registry),
@@ -146,7 +151,8 @@ def test_registry_boundary_require_not_tracked_rejects_unreadable_index(
     payload = json.loads(capsys.readouterr().out)
     assert exit_code == 1, payload
     assert payload["ok"] is False
-    assert payload["git"]["inside_worktree"] is True
+    assert payload["git"]["inside_worktree"] is (not root_failure)
+    assert payload["git"].get("worktree_discovery_unknown", False) is root_failure
     assert payload["git"]["probe_status"] == "git_unavailable"
     assert "tracked by Git" in payload["error"]
 
@@ -177,6 +183,7 @@ def test_registry_git_probe_retires_the_process_tree_on_timeout(
 
     observed = registry_module._registry_git_probe(probe / "registry.json")
     assert observed["probe_status"] == "git_unavailable"
+    assert observed["worktree_discovery_unknown"] is True
 
     pid = int(grandchild.read_text(encoding="utf-8").strip())
     deadline = time.monotonic() + 10
