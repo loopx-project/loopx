@@ -63,6 +63,25 @@ test("exhausted business quota permits one read-only answer, never a fresh busin
     "a later restricted answer must not strand the other exact historical failures");
   assert.notEqual(planBoundConversationRequest({...migrated, current_session: {...migrated.current_session,
     upstream_context_history: [{thread_id: "native", manager_context_version: 22, agent_id: "antigravity"}]}}).recovery_eligible, true);
+  const history = {...session, upstream_context_history: [{thread_id: "123", manager_context_version: 22}]};
+  for (const thread_id of [123, null, false, {}, [], "foreign"]) {
+    const prior = planBoundConversationRequest({...packet, current_session: history,
+      request: {...packet.request, context_recovery: {...previous, native_observation: {thread_id}}}});
+    assert.deepEqual(prior.native_thread_ids, ["native", "123"],
+      "an untrusted prior identity cannot reorder validated string identities");
+    const proof = planBoundConversationRequest({...packet, current_session: {...session, upstream_thread_id: "123"},
+      context_recovery: {...packet.context_recovery,
+        native_observation: {...packet.context_recovery.native_observation, thread_id}}});
+    assert.equal(proof.recovery_candidate, true);
+    assert.equal(proof.recovery_eligible, false, "a proof must match without identity coercion");
+  }
+  assert.deepEqual(planBoundConversationRequest({...packet, current_session: history,
+    request: {...packet.request, context_recovery: {...previous,
+      native_observation: {thread_id: "123"}}}}).native_thread_ids, ["123", "native"]);
+  assert.equal(planBoundConversationRequest({...packet,
+    current_session: {...session, upstream_thread_id: "123"},
+    context_recovery: {...packet.context_recovery, native_observation: {...proof, thread_id: "123"}}}).recovery_eligible, true,
+  "numeric-looking string identities remain valid");
   for (const change of [{source_verified: false}, {stop_observed: true}, {steering_observed: true},
     {attachments_present: true}, {queued_input_present: true}, {metadata_capacity: null},
     {executor_configuration: {...configuration, configuration_revision: "changed"}},
