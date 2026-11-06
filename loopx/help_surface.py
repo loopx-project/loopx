@@ -325,7 +325,6 @@ COMMAND_GROUPS: list[dict[str, object]] = [
                 "command": "loopx periodic-report",
                 "purpose": "Resolve a portable weekly profile, evaluate report triggers, and compose provider-neutral run receipts.",
             },
-            {"command": "loopx auto-research", "purpose": "Project public-safe research frontiers."},
             {
                 "command": "loopx deepresearch",
                 "purpose": "Run a bounded, citation-auditable research ledger and report workflow.",
@@ -334,7 +333,6 @@ COMMAND_GROUPS: list[dict[str, object]] = [
                 "command": "loopx agent-turn-recall",
                 "purpose": "Prepare goal-scoped memory guidance for one admitted autonomous agent turn.",
             },
-            {"command": "loopx multi-agent", "purpose": "Launch visible role-scoped Codex TUI agents."},
             {"command": "loopx canary", "purpose": "Plan or run catalog-informed smoke profiles."},
             {
                 "command": "loopx performance-diagnosis --help",

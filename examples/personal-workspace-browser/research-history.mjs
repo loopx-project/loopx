@@ -1519,10 +1519,11 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await progress.locator(`.research-progress-scope[data-pack-id="${"a".repeat(64)}"]`).waitFor();
       const basis = progress.locator('.research-progress-basis');
       assert.equal(await basis.evaluate(e => e.open), false);
-      const improvement = progress.getByRole('region', {name: '已采用成果增量', exact: true});
+      const improvement = progress.getByRole('region', {name: '声明的保留增量', exact: true});
       assert.equal(await improvement.locator('[data-retained-improvement]').textContent(), '+4');
       await improvement.getByRole('button', {name: '成果增量说明', exact: true}).focus();
       await improvement.getByRole('tooltip').waitFor({state: 'visible'});
+      assert.match(await improvement.getByRole('tooltip').innerText(), /不证明实际文件采用/, 'Source-declared retention does not establish independent artifact adoption');
       await page.keyboard.press('Escape');
       await improvement.locator('summary').click();
       await improvement.getByRole('button', {name: '查看原文', exact: true}).click();
@@ -1734,7 +1735,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       assert.equal(await nativeResults.locator('[data-native-point="retained"] strong').textContent(), '3', 'Native facts do not require an analyzer result');
       assert.match(await nativeResults.innerText(), /部分窗口 · 起点未知/);
       assert.match(await nativeResults.locator('[data-native-point="initial"]').innerText(), /未知/);
-      const nativeCitation = nativeResults.getByRole('button', {name: /原生保留结果.*查看原始证据/});
+      const nativeCitation = nativeResults.locator('[data-native-point="retained"]').getByRole('button');
       await nativeCitation.focus(); await nativeCitation.press('Enter');
       await citedOriginal.waitFor();
       await citedOriginal.press('Escape');
