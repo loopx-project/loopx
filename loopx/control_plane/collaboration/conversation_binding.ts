@@ -1141,8 +1141,8 @@ function planExhaustedStewardAnswer(recovery: JsonObject, row: JsonObject, curre
       && Number(item.manager_context_version) <= version)
     .map(item => sessionIdentity(item.thread_id, "original native thread"))];
   const priorNative = budget.native_observation as JsonObject | undefined;
-  const priorNativeThread = threads.find(thread => thread === priorNative?.thread_id);
-  const nativeThreads = [...new Set([...(priorNativeThread ? [priorNativeThread] : []), ...threads])];
+  const priorThreadId = priorNative?.thread_id;
+  const nativeThreads = [...new Set([...(typeof priorThreadId === "string" && threads.includes(priorThreadId) ? [priorThreadId] : []), ...threads])];
   const candidate = {...no, recovery_candidate: true, answer_review: true, read_only_review: true,
     client_turn_id: client, session_id: current.session_id, failed_turn_id: failed.turn_id,
     native_thread_ids: nativeThreads};
