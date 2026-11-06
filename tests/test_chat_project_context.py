@@ -27,6 +27,12 @@ def test_source_reference_contract_reaches_native_project_turn_without_expanding
     assert "private, ignored, unpublished or modified local content" in text
     assert "only when this channel can resolve that authorized artifact" in text
     assert "never upload or publish content merely to make a citation clickable" in text
+    assert "Follow the user's language and stated reader preferences" in text
+    assert "Explain unfamiliar terms on first use" in text
+    assert "unknown costs or missing evidence" in text
+    assert "never arbitrary length caps, truncation" in text
+    assert "Do not add a second model rewrite" in text
+    assert "complete goal, relevant corrections, intended reader, language and original result destination" in text
     # Citation usability is guidance, not an extra grant or hidden Goal.
     assert start["cwd"] == turn["cwd"] == str(workspace)
     assert start["sandbox"] == "read-only"
@@ -36,9 +42,14 @@ def test_source_reference_contract_reaches_native_project_turn_without_expanding
 
 
 def test_steward_and_collaboration_preserve_the_same_receiver_source_boundaries():
+    from loopx.chat_manager import MANAGER_AGENT_OBJECTIVE
+
     steward = manager_answer_contract_instruction()
     collaboration = collaboration_answer_instruction()
     assert steward in collaboration
     assert "do not guess the hosting organization or substitute a moving branch" in steward
     assert "plain file/section reference" in steward
     assert "never upload or publish content merely to make a citation clickable" in steward
+    assert steward in MANAGER_AGENT_OBJECTIVE
+    assert "Preparation, saving, delivery, adoption, execution and acceptance are distinct" in steward
+    assert "Preserve the original author, audience and facts" in steward

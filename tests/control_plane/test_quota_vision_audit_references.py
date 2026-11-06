@@ -328,6 +328,7 @@ def test_real_guard_capture_and_recovery_preserve_vision_before_effects(
         "--codex-app",
         "--turn-instance-id",
         "vision-read",
+        "--context-delivery", "off",
         "--decision-output-dir",
         str(capture),
         cwd=project,
@@ -336,6 +337,7 @@ def test_real_guard_capture_and_recovery_preserve_vision_before_effects(
     assert "context_delivery" not in full
     saved = json.loads((capture / "decision.json").read_text())
     assert saved == full
+    assert "projection_ref" not in saved["vision_continuation_audit"]
     audit = full["vision_continuation_audit"]
     assert "projection_ref" not in audit
     assert (
