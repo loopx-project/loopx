@@ -64,6 +64,73 @@ def _fake_container(monkeypatch):
     return box, SimpleNamespace(containers=SimpleNamespace(get=lambda identity: box))
 
 
+def _returned_budget_stop(declaration):
+    state = Path(declaration['scheduler_state'])
+    value = json.loads(state.read_bytes())
+    value['host_attempt'].update(status='stopped', stop_exit_code=75, session_id='original')
+    value.update(last_wake_rc=75, last_wake_status='wake_requested_stop', last_wake_failure_kind=None)
+    state.write_text(json.dumps(value))
+    os.utime(state, (111, 111))
+    receipt = Path(declaration['wake_log_dir']) / declaration['wake_turn_id'] / 'receipt.json'
+    value = json.loads(receipt.read_bytes())
+    value['timed_out'] = True
+    receipt.write_text(json.dumps(value))
+    os.utime(receipt, (110, 110))
+    return state, receipt
+
+
+@pytest.mark.parametrize('fault', [None, 'null_prior_session', 'same_mtime', 'cleanup_reserve', 'live', 'new_attempt',
+    'not_stop', 'wrong_exit', 'failure', 'unknown_failure', 'cleared_pending', 'wrong_session',
+    'missing_session', 'wrong_goal', 'wrong_agent', 'not_timed_out', 'not_invoked',
+    'not_budget', 'successful', 'success_exit', 'later_wake', 'tied_wake', 'receipt_after_state',
+    'outside_phase'])
+def test_returned_legacy_budget_stop_requires_its_last_receipt(tmp_path, monkeypatch, fault):
+    declaration = _source(tmp_path)
+    state, receipt = _returned_budget_stop(declaration)
+    value, returned = json.loads(state.read_bytes()), json.loads(receipt.read_bytes())
+    box, client = _fake_container(monkeypatch)
+    if fault == 'null_prior_session': value['host_attempt']['session_id'] = None
+    elif fault == 'live': box.attrs['State'].update(Status='running', Running=True, Pid=42)
+    elif fault == 'new_attempt': value['host_attempt']['attempt_id'] = 'b' * 32
+    elif fault == 'not_stop': value['host_attempt']['status'] = 'unknown'
+    elif fault == 'wrong_exit': value['host_attempt']['stop_exit_code'] = 1
+    elif fault == 'failure': value['host_attempt']['host_failure'] = {'kind': 'quota_exhausted'}
+    elif fault == 'unknown_failure': value['last_wake_failure_kind'] = 'unknown'
+    elif fault == 'cleared_pending': state.with_name(state.name + '.host-attempt').write_text('{"pending":false}')
+    elif fault == 'wrong_session': returned['session']['session_id'] = 'another'
+    elif fault == 'missing_session': returned['session']['session_id'] = ''
+    elif fault == 'wrong_goal': returned['goal_id'] = 'another-goal'
+    elif fault == 'wrong_agent': returned['agent_id'] = 'another-agent'
+    elif fault == 'not_timed_out': returned['timed_out'] = False
+    elif fault == 'not_invoked': returned['host_invoked'] = False
+    elif fault == 'not_budget': returned['budget_exhausted'] = False
+    elif fault == 'successful': returned['ok'] = True
+    elif fault == 'success_exit': returned['return_code'] = 0
+    elif fault == 'outside_phase': Path(declaration['phase_clock']).write_text('90')
+    elif fault == 'cleanup_reserve': Path(declaration['phase_clock']).write_text('130')
+    state.write_text(json.dumps(value)); os.utime(state, (111, 111))
+    receipt.write_text(json.dumps(returned))
+    stamp = 111 if fault == 'same_mtime' else 112 if fault == 'receipt_after_state' else 110
+    os.utime(receipt, (stamp, stamp))
+    if fault in {'later_wake', 'tied_wake'}:
+        other = receipt.parent.with_name('wake-109000000000-aaaaaaaaaaaa') / 'receipt.json'
+        other.parent.mkdir(); other.write_text('{}')
+        stamp = 110.5 if fault == 'later_wake' else 110
+        os.utime(other, (stamp, stamp))
+    original = state.read_bytes(), receipt.read_bytes()
+    output = tmp_path / 'source-proof.json'
+    if fault not in {None, 'null_prior_session', 'same_mtime', 'cleanup_reserve'}:
+        with pytest.raises(ValueError):
+            subject.prepare_stopped_recovery(client, container_id=box.id, declaration=declaration, output=output)
+        assert not output.exists()
+    else:
+        result = subject.prepare_stopped_recovery(client, container_id=box.id, declaration=declaration, output=output)
+        assert result['session']['session_id'] == 'original'
+        assert result['process_stopped_at'] == stamp
+        assert result['execution_authority_granted'] is False
+    assert (state.read_bytes(), receipt.read_bytes()) == original
+
+
 @pytest.mark.parametrize("fault", [None, "live", "restart_command", "mount", "custom_hostname", "ambiguous_wake"])
 def test_prepare_stopped_source_keeps_original_state_and_requires_unique_return(tmp_path, monkeypatch, fault):
     declaration = _source(tmp_path)
@@ -117,13 +184,16 @@ def test_consumer_rejects_stale_or_incomplete_latest_source(tmp_path, monkeypatc
 
 
 @pytest.mark.skipif(os.environ.get("LOOPX_EDGEBENCH_DOCKER_SMOKE") != "1", reason="Explicit disposable Docker qualification")
-def test_real_stopped_docker_proof_installation_is_inert_and_read_back(tmp_path):
+@pytest.mark.parametrize('returned', [False, True])
+def test_real_stopped_docker_proof_installation_is_inert_and_read_back(tmp_path, returned):
     docker = pytest.importorskip("docker")
     client = docker.from_env(timeout=30)
     box = client.containers.create("python:3.12-slim", ["tail", "-f", "/dev/null"], network_disabled=True)
     local = tmp_path / "fixture"
     local.mkdir()
     declaration = _source(local)
+    if returned:
+        _returned_budget_stop(declaration)
     declaration = {key: value.replace(str(local), "/fixture") for key, value in declaration.items()}
     try:
         package = io.BytesIO()
