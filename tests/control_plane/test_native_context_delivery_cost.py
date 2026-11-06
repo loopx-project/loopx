@@ -219,10 +219,10 @@ def test_native_cost_selection_keeps_exact_numbers_and_unknown_constraints(tmp_p
 def test_disabled_native_context_stays_unwrapped_and_exact(tmp_path):
     payload = {**_payload(), "measurement": 2**60 + 1}
     unused = tmp_path / "unused"
-    projected = context.project_codex_context(
+    projected = context.prepare_codex_context(
         payload, directory=None, capture_directory=unused,
         goal_id="fixture", agent_id="agent", surface="quota_packet", capture_id="off",
-    )
+    ).delivery
     assert projected is payload and not unused.exists()
     view = native_context_capture_view(projected, tmp_path)
     assert view["mode"] == "full" and "target" not in view and "baseline_reference" not in view

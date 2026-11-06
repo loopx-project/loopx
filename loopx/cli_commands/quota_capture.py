@@ -516,21 +516,26 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
     field_index = None
     initial_read_pointers = None
     initial_read_reference = None
+
+    def pin_initial_selection(plan: dict[str, Any]) -> None:
+        nonlocal initial_read_pointers, initial_read_reference
+        selections = plan["selections"]
+        initial_read_pointers = [item["pointer"] for item in selections]
+        selected = _context_selection_bytes(current_document, selections, list_fields=False, list_depth=None)
+        try:
+            initial_read_reference = write_context_read_reference(Path(current["path"]), current["sha256"], selection={
+                "select": initial_read_pointers, "initial_read": False, "list_fields": False, "list_depth": None,
+                "sha256": hashlib.sha256(selected).hexdigest()})
+        except OSError:
+            # Read-only capture roots keep the existing initial recipe;
+            # metadata is optional and never a read/authority receipt.
+            pass
+
     if initial_read_plan is not None:
         try:
             initial, plan = initial_read_plan["initial"], initial_read_plan["plan"]
             if initial:
-                selections = plan["selections"]
-                initial_read_pointers = [item["pointer"] for item in selections]
-                selected = _context_selection_bytes(current_document, selections, list_fields=False, list_depth=None)
-                try:
-                    initial_read_reference = write_context_read_reference(Path(current["path"]), current["sha256"], selection={
-                        "select": initial_read_pointers, "initial_read": False, "list_fields": False, "list_depth": None,
-                        "sha256": hashlib.sha256(selected).hexdigest()})
-                except OSError:
-                    # Read-only capture roots keep the existing initial recipe;
-                    # metadata is optional and never a read/authority receipt.
-                    pass
+                pin_initial_selection(plan)
             else:
                 field_index = _context_index_fields(current_document, plan["selections"][0]["children"])
         except (EffectRuntimeRemoteError, EffectRuntimeStartupError):

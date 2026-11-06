@@ -76,6 +76,16 @@ def read_selection(command):
     return page, selected_context_values(page["content"])
 
 
+def pinned_initial_view(payload, directory):
+    base = native_context_capture_view(payload, directory)
+    from loopx.control_plane.quota import turn_envelope
+
+    plan = turn_envelope._turn_envelope_result("context_select", context=payload, initial_read=True)
+    capture = {key: base["recovery"][key] for key in ("path", "sha256")}
+    return native_context_capture_view(payload, directory, captured_recovery=base["recovery"],
+        initial_read_plan={"initial": True, "plan": plan, "capture": capture})
+
+
 @pytest.mark.parametrize("required", [True, False])
 def test_initial_read_delivers_explicit_selection_only_at_its_gate(tmp_path, decision, required):
     cli = decision["interaction_contract"]["cli_channel"]
@@ -203,7 +213,7 @@ def test_prepared_initial_read_keeps_exact_body_without_retransmitting_unused_pr
     decision["unselected_evidence"] = "Historical evidence remains available. " * 10000
     decision["unselected_structure"] = {f"unread_branch_{index}": {"detail": index} for index in range(500)}
     decision["selected_todo"]["future_number"] = 10**45 + 17
-    view = native_context_capture_view(decision, tmp_path)
+    view = pinned_initial_view(decision, tmp_path)
     raw = Path(view["recovery"]["path"]).read_bytes()
     original = read_context_capture(Namespace(capture_file=view["recovery"]["path"],
         capture_sha256=view["recovery"]["sha256"], format="json", initial_read=True,
@@ -768,8 +778,8 @@ def test_warm_delta_initial_read_uses_current_action_without_the_old_base(tmp_pa
         decision["effective_action"] = "normal_run" if marker == "before" else "autonomous_replan_required"
         decision["interaction_contract"]["agent_channel"].update(
             primary_action=f"Read {marker} action.", delivery_allowed=marker == "before")
-        wire = codex_context.project_codex_context(decision, directory=str(tmp_path), capture_directory=directory,
-            goal_id="fixture", agent_id="agent", surface="quota_packet", capture_id=name)
+        wire = codex_context.prepare_codex_context(decision, directory=str(tmp_path), capture_directory=directory,
+            goal_id="fixture", agent_id="agent", surface="quota_packet", capture_id=name).delivery
         view = native_context_capture_view(wire, directory, context_directory=str(tmp_path))
     assert view["mode"] == "delta" and "first_read_command" in view
     current = json.loads(Path(view["recovery"]["path"]).read_bytes())
