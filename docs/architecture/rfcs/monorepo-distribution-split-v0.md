@@ -820,6 +820,38 @@ Approval needs a reviewed decision, not implementation progress or silence.
   installation, R1 managed minimal or D1–D7. No preset, frontend operation,
   permission or persisted state changes; protected execution keeps its owner.
 
+### 2026-11-06 — Discovery integration and the next executable boundary
+
+- **Integrated:** [#8012](https://github.com/loopx-project/loopx/pull/8012)
+  merged the proposed head `58442be4d` as `83f569178` on November 4. On the
+  independently prepared `main` revision `62e234c93`, all 23 discovery and
+  protected-dispatch cases pass. Replay with
+  `uv run --extra test python -m pytest -q tests/test_cli_entrypoint.py -k 'capability_discovery or capability_non_discovery'`.
+  This verifies current source integration; the earlier installed-wheel and
+  paired performance evidence remains bound to its original revision and
+  environment. No installed host or new wheel is qualified by this replay.
+- **Resolved prerequisite:** [#8054](https://github.com/loopx-project/loopx/pull/8054)
+  (`886f2cdff`) removed capture I/O from the settlement plan's cold import.
+  `uv run --extra test python -m pytest -q tests/architecture/test_control_plane_import_boundaries.py::test_settlement_plan_import_does_not_load_native_capture_io`
+  passes on `62e234c93`. The November 4 failure remains historical evidence;
+  the later fix removes that specific import blocker. The broader suite and
+  configured mypy were not rerun on this revision, so their earlier results
+  do not become a current passing qualification.
+- **Next source slice:** characterize the existing `generic-cli` managed Turn
+  path with SQLite authority and optional task hooks disabled, as a candidate
+  for the selected D2/D5 composition. Reuse the Turn, host selector and typed
+  authority owners. Existing CLI interruption and successor-replay tests in
+  `tests/test_loopx_turn_driver.py` locate integration seams; they do not
+  establish a minimal preset. The next slice must name the actual dependency
+  closure and exercise an isolated task-producing host process, interruption,
+  restart and independently validated result readback with original identities
+  and no repeated confirmed effects. A deterministic local host can qualify
+  its synthetic transport boundary, not a model host or complete V4 journey.
+- **Remaining:** full R0/V10, M1/I3/D3, the separate status proposal #8011,
+  split installation and R1 remain open. D2/D5 are still owner decisions;
+  this candidate changes no preset, default, execution authority or release
+  commitment. Further directory moves are not the next execution evidence.
+
 ## Appendix B: Decision log
 
 | Date | Decision | Owner / approval | Alternatives | Normative sections changed |

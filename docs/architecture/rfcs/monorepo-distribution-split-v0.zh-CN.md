@@ -596,6 +596,31 @@ R0 可以先于目录移动交付，但不代表内核合格。R3/R4 可选，�
   不关闭完整 R0/V10、M1、拆包安装、R1 managed minimal 或 D1–D7。不改变 preset、
   前端操作、权限或持久化状态；受保护执行仍由既有 owner 所有。
 
+### 2026-11-06 — 发现路径集成与下一条可执行边界
+
+- **已集成：** [#8012](https://github.com/loopx-project/loopx/pull/8012)
+  于 11 月 4 日将提案 head `58442be4d` 合并为 `83f569178`。在独立准备的
+  `main` 版本 `62e234c93` 上，全部 23 个发现与受保护分发用例通过。复验命令：
+  `uv run --extra test python -m pytest -q tests/test_cli_entrypoint.py -k 'capability_discovery or capability_non_discovery'`。
+  这验证当前源码集成；此前安装 wheel 与成对性能证据仍绑定原版本和环境。本次
+  复验不证明已安装宿主或新 wheel 的资格。
+- **已解决的前置问题：** [#8054](https://github.com/loopx-project/loopx/pull/8054)
+  （`886f2cdff`）将 capture I/O 移出 settlement plan 的冷 import。
+  `uv run --extra test python -m pytest -q tests/architecture/test_control_plane_import_boundaries.py::test_settlement_plan_import_does_not_load_native_capture_io`
+  在 `62e234c93` 上通过。11 月 4 日的失败仍是历史证据；后续修复移除了这一
+  特定 import 阻塞。本版本没有重跑更广的套件或配置的 mypy，不能将此前结果改写
+  为当前通过资格。
+- **下一源码切片：** 刻画既有 `generic-cli` managed Turn 路径，使用 SQLite
+  authority 并关闭可选任务 hook，作为所选 D2/D5 装配的候选。复用 Turn、host
+  selector 与类型化 authority owner。`tests/test_loopx_turn_driver.py` 中既有
+  CLI 中断与 successor 重放测试可定位集成接缝，但不证明 minimal preset。
+  下一片必须明确实际依赖闭包，并通过隔离、能产生任务产物的宿主进程验证中断、
+  重启和独立验收后的结果回读，保留原身份且不重复已确认效果。确定性的本地宿主
+  可以验证其合成 transport 边界，不证明模型宿主或完整 V4 旅程。
+- **剩余：** 完整 R0/V10、M1/I3/D3、独立 status 提案 #8011、拆包安装与 R1
+  均未关闭。D2/D5 仍由 owner 决策；本候选不改变 preset、默认值、执行权限或
+  发布承诺。继续移动目录不构成下一条执行证据。
+
 ## 附录 B：决策日志
 
 | 日期 | 决策 | 负责人 / 批准 | 备选 | 变更的规范章节 |
