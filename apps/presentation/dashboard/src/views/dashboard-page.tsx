@@ -3347,17 +3347,17 @@ function PersonalGoalHome({
             void sendManagerQuestion(message, { agentId: runtimeBindings[targetContextId]?.agentId,
               contextId: targetContextId, attachments, queue: { sessionId, ingressId, onAccepted: resolve } }).catch(reject);
           }),
-          onObserveConversationTurn: async (targetContextId, sessionId, turnId) => {
+          onObserveConversationQueue: async (targetContextId, sessionId) => {
             const key = `${targetContextId}:${selectedAgent.agentId}`;
-            if (activeConversationContext.current !== targetContextId || sessionIds.current.get(key) !== sessionId
-                || (activeTurnIds.current.get(targetContextId) === turnId
-                  && streamControllers.current.get(targetContextId)?.signal.aborted === false)) return;
+            if (activeConversationContext.current !== targetContextId || sessionIds.current.get(key) !== sessionId) return;
             // Queue advancement is a read observation. The existing history
             // recovery owner adopts the exact current Session/Turn and stream.
             const history = await conversationHistory.refresh();
             const current = currentChannelSession(history, selectedAgent.agentId);
             if (activeConversationContext.current === targetContextId && sessionIds.current.get(key) === sessionId
-                && current?.session_id === sessionId && current.active_turn_id === turnId) {
+                && current?.session_id === sessionId && current.active_turn_id
+                && (activeTurnIds.current.get(targetContextId) !== current.active_turn_id
+                  || streamControllers.current.get(targetContextId)?.signal.aborted !== false)) {
               setTurnRecoveryRequest(value => value + 1);
             }
           },
