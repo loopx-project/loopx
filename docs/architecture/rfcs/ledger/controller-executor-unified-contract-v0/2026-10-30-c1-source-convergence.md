@@ -5,7 +5,59 @@
 - **Source:** original candidate `648104978fdd67176cccdbb765c5bc3f36bf2ca3`, integrated with target `e8f4c6f8125e3cc0ef912afac653d5542671392f`.
 - **Language mirror:** [中文版](2026-10-30-c1-source-convergence.zh-CN.md)
 
-## Current dependency repair: source transport below the driver
+## Current repair: scoped capture reads and migrated consumers
+
+C1 integrates main `3a0c9608cc06`. The shared thin heartbeat renderer had turned
+complete-capture availability into an unconditional pre-action whole-capture
+read. Four matched real CLI cases (ordinary/App × default/explicit context-off)
+compare actual main with pre-fix C1 integration `c6d7d0a573f0`: main does not add
+that obligation, while C1 does.
+The repaired renderer requires current work context, required materials and
+applicable goals, criteria, constraints and stops; it scopes original capture
+reads to decision dependencies. Explicit full-read obligations, supplied flags
+and complete original-source/identity recovery remain. In all four cases, text
+outside the changed read clause is byte-identical before/after. The instruction
+grows by 347 UTF-8 bytes: this is a semantic correction, not a measured token or
+whole-task saving.
+
+On frozen C1 `c37bd8d0d9`, selected-work collection fails on a deleted helper;
+native-child and independent-delegation checks record 62 passes and eight
+failures. The existing fixtures now use the current context reader and v1
+request/work-contract owner. Contradictory secondary carriers and damaged owner
+identities are still deliberately injected to require pre-effect refusal;
+original material, off isolation, lost-response recovery, replay and once-only
+settlement assertions remain. Read-scope/source-preflight checks pass 141 cases
+with four skips; native/delegation checks pass 70. A broader run first records
+104 passes and 28 failures; its subsequent migrated delegation/example run
+records 139 passes and two stale example assertions. After migrating explicit
+selection and typed pre-effect refusal, both complete canonical-delivery cases
+pass on source and the installed package. The refusal checks the original
+subject and absence of Host, state, scheduler and spend effects. The broader
+failures were not all independently
+reproduced on untouched `c37` and are not attributed wholesale to that baseline.
+
+The first installed-wheel run records 88 passes and 32 setup errors: the example
+initializer imports TypeScript through checkout-relative paths. Its existing
+Python launcher now supplies the actually loaded package root to the same
+initializer; canonical authority, exclusive disposable-runtime creation and
+existing-state refusal remain. No Core source is copied into the harness.
+After that repair, the installed run records 148 passes and two remaining
+stale settlement-field assertions; correcting them yields 150 passes in a
+new complete run. All 1,815 package Python/TypeScript sources match the tested
+candidate; 374 observed Python processes import only from the
+isolated package. Earlier failures and partial replays keep their own evidence.
+
+Configured cold-cache Mypy (17 roots), control-plane TypeScript and changed-path
+Ruff checks pass without weakening settings. Exact-head premerge and
+review/readiness remain separate qualification gates; this checkpoint does not
+declare them passed.
+This slice neither substantially reduces the parent PR nor qualifies complete
+provider coverage, independent review, natural adoption, model costs or whole
+C1. The actual main already has the intended ordinary-read scope, so this C1
+regression does not justify a duplicate main change. Historical experiments and
+frozen base/head cost denominators remain below.
+
+## Previous dependency repair: source transport below the driver
 
 C1 integrates main `5a58635028fb`, including merged proposals #8192 and #8186.
 Its configured Python check originally

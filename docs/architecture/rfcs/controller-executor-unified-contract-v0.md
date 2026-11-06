@@ -1257,6 +1257,19 @@ typecheck passes with a fresh cache and unchanged strict/import settings. This
 qualifies that configured boundary, not every imported Python module, runtime
 performance, whole C1 or a significant reduction of the parent PR.
 
+The shared thin heartbeat renderer preserves dependency-scoped reading. A complete
+capture remains available for recovery; ordinary execution does not acquire an
+unconditional whole-capture read obligation. The Agent reads current work context
+and required materials before acting, including applicable goals, criteria,
+constraints and stops. Selection, replan, missing/truncated input and referenced
+details require the relevant original sections. Original-execution or lost-context
+recovery restores the complete original source and identity; explicit full-read
+obligations and supplied capture/handoff flags remain binding. This correction
+covers ordinary/App and default/explicit-off entries at their shared renderer.
+It changes Agent-facing obligations and is validated against actual main and
+candidate CLI output, not treated as text-only compaction or evidence of model
+adoption, token savings or whole-task net benefit.
+
 C1's inventory is part of its usable replacement, not a standalone architecture
 framework. C3/C4/C5 can proceed independently once C1's contract is stable;
 C7 can prepare measurements before C6 but cannot claim two-session outcomes.

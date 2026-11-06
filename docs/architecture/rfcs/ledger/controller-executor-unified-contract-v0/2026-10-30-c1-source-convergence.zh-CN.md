@@ -5,7 +5,42 @@
 - **来源：** 原候选 `648104978fdd67176cccdbb765c5bc3f36bf2ca3`，集成目标 `e8f4c6f8125e3cc0ef912afac653d5542671392f`。
 - **语言镜像：** [English](2026-10-30-c1-source-convergence.md)
 
-## 当前依赖修复：来源传输位于 driver 下层
+## 当前修复：按依赖读取 capture 并迁移消费者
+
+C1 集成 main `3a0c9608cc06`。共享 thin heartbeat renderer 曾把完整 capture 的
+可用性变成行动前无条件通读整份 capture 的义务。普通／App × 默认／显式 context-off
+四种同输入真实 CLI 对照实际 main 与修复前 C1 集成 `c6d7d0a573f0`：main 未新增此
+义务，修复前 C1 四种入口均新增。
+修复后仍要求当前工作上下文、必读材料及适用目标、验收、约束和停止条件；原 capture
+按决策依赖读取。显式全读、所供 flags 以及完整原来源／身份恢复义务继续有效。
+四种入口在读取条款之外的文字修复前后逐字相同，指导文字增加 347 个 UTF-8 字节。
+这是语义纠正，不是测得的 token 或完整任务节省。
+
+冻结 C1 `c37bd8d0d9` 的 selected-work 因导入已删除 helper 无法收集；native-child
+与独立 delegation 记录 62 通过、八个失败。既有夹具现采用当前 context reader 和
+v1 request／work-contract owner；仍故意注入矛盾的第二 carrier 和损坏的 owner
+身份，要求副作用前拒绝。原材料、off 隔离、响应丢失恢复、重放及一次结算断言保留。
+读取范围／来源预检 141 通过、四个跳过，native／delegation 70 通过。扩展运行先记
+104 通过、28 失败，迁移后的完整 delegation／示例运行记录 139 通过、两个示例旧断言
+失败；迁移显式选择和 typed 副作用前拒绝后，两个完整 canonical-delivery 用例在源码
+及安装包均通过。拒绝断言核对原 subject，以及 Host、状态、scheduler 和扣额均无效果。
+这 28 项没有全部在未改动 `c37` 上独立复现，不能统称为该冻结基线的回归。
+
+首次安装 wheel 运行记录 88 通过、32 个 setup error：示例初始化器沿 checkout
+相对路径导入 TypeScript。既有 Python launcher 现将实际加载包的根目录传给同一
+初始化器；canonical authority、独占创建可丢弃 runtime 和拒绝已有状态保持。
+harness 不复制 Core 源码。修复后安装运行记录 148 通过及两个残留旧结算字段断言，
+修正后新的一次完整运行 150 项通过。包内 1,815 个 Python／TypeScript 源
+与实测候选一致，374 个已观测 Python 进程仅从隔离安装包导入。
+原失败与局部重放均保留各自证据。
+
+配置内空缓存 Mypy（17 入口）、全控制面 TypeScript 及改动路径 Ruff 通过，未放宽
+配置。精确 head 的 premerge 及评审／readiness 仍须独立取得，本文不声明已通过。
+本片不建立父 PR 已显著缩小、完整 provider、独立评审、自然采用、模型费用或整体
+C1 资格。实际 main 已有预期普通读取范围，不为 C1 此回归重复修改 main。
+下方历史实验及冻结 base/head 成本分母继续保留。
+
+## 上一次依赖修复：来源传输位于 driver 下层
 
 C1 集成 main `5a58635028fb`，包含已合入的独立提案 #8192 和 #8186。
 配置内 Python 检查原先报 463 文件中的 4,562 条错误：
