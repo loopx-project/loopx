@@ -95,6 +95,8 @@ class SForgeWorker(CodexAgent):
                  context_delivery: str | None = None,
                  provider_request_admission: bool = False,
                  native_goal_continue: bool = False,
+                 require_full_budget: bool = False,
+                 commitment_task_id: str | None = None,
                  replan_after_turns: int | None = None,
                  replan_after_todos: int | None = None,
                  stride_strategy: str | None = None,
@@ -124,6 +126,12 @@ class SForgeWorker(CodexAgent):
             if (os.environ.get("CODEX_WIRE_API") or "responses") != "responses":
                 raise ValueError("provider_request_admission requires the Responses wire API")
         self.provider_request_admission = provider_request_admission
+        if type(require_full_budget) is not bool or (require_full_budget and (
+                not profile.startswith("heartbeat-") or feedback != "native"
+                or not isinstance(commitment_task_id, str) or not commitment_task_id.strip())):
+            raise ValueError("require_full_budget requires a heartbeat trial and its native task identity")
+        self.require_full_budget = require_full_budget
+        self.commitment_task_id = commitment_task_id
         if timeout_seconds <= 0:
             raise ValueError("Worker budget must be positive")
         if not config.agent_model or not config.agent_effort:
@@ -406,6 +414,7 @@ class SForgeWorker(CodexAgent):
             **({"provider_request_admission": "on"} if self.provider_request_admission else {}),
             **({"native_goal_continue": True} if self.native_goal_continue else {}),
             "outer_resume": self.resume_cmd is not None,
+            **({"require_full_budget": True} if self.require_full_budget else {}),
             "explore_graph": self.profile == "heartbeat-explore",
             "explore_harness": self.profile == "heartbeat-explore",
             "feedback": self.feedback,
@@ -457,6 +466,8 @@ class SForgeWorker(CodexAgent):
                     asyncio.run(self.runtime._verify_phase_configuration(self.environment, cwd=self.cwd))
                 else:
                     asyncio.run(self.runtime._prepare_phase(self.environment, result.stdout, cwd=self.cwd))
+                if self.require_full_budget:
+                    asyncio.run(self._configure_execution_commitment())
                 if self.profile == "heartbeat-explore" and self.warm_start is None:
                     observed = asyncio.run(self.runtime._loopx(self.environment, [
                         "configure-goal", "--goal-id", self.runtime.goal_id,
@@ -485,6 +496,11 @@ class SForgeWorker(CodexAgent):
         if self.task_entry == "loopx-planned" and self.warm_start is None:
             env["LOOPX_PLANNING_RESULT"] = "/opt/loopx-benchmark/control/planning-phase-001.json"
             command = [f"{_PYTHON}/bin/python3", "-m", "benchmark.runtime.sforge_entry", *command]
+        if self.require_full_budget:
+            # Native SForge publishes its solver segment after command
+            # preparation. Probe then, before the first model request.
+            probe = self._execution_commitment_command("probe")
+            command = ["/bin/bash", "-c", shlex.join(probe) + " && exec " + shlex.join(command)]
         # Persist the phase deadline for repeated command preparation. Reusing
         # an entry command must never grant another full trial budget.
         deadline = "/opt/loopx-benchmark/control/phase-deadline"
@@ -511,6 +527,86 @@ class SForgeWorker(CodexAgent):
             '&& test "$(date +%s)" -ge "$LOOPX_PHASE_DEADLINE_EPOCH"; then exit 0; fi; exit $phase_rc',
             execution_start_marker=started,
         )
+
+    def _execution_commitment_command(self, action):
+        # Checks run in the task workspace. Use the protected payload first;
+        # a task-local Python package must not replace the host's observer.
+        script = (f"import sys; sys.path.insert(0, {_SRC!r}); "
+                  "from benchmark.runtime.execution_commitment import main; raise SystemExit(main())")
+        return [f"{_PYTHON}/bin/python3", "-I", "-c", script, action,
+                "--task-id", self.commitment_task_id, "--feedback-url", self.commitment_feedback_url]
+
+    async def _configure_execution_commitment(self):
+        """Bind the explicit caller requirement through the ordinary Core owner.
+
+        Restores validate the inherited command through the owner's preview;
+        they never overwrite a check, reset planning or reopen a Goal.
+        """
+        async def call(*args):
+            return await self.runtime._loopx(self.environment,
+                ["goal-acceptance", *args, "--goal-id", self.runtime.goal_id], cwd=self.cwd)
+
+        # Native registration already supplied this container's scoped relay.
+        # Pin it in the private host check, rather than inheriting an effect
+        # service's earlier process environment on File/SQLite or after restart.
+        from .execution_commitment import validate_feedback_endpoint
+        observed = await self.environment.exec(shlex.join([f"{_PYTHON}/bin/python3", "-I", "-c",
+            "import os; print(os.environ.get('SFORGE_FEEDBACK_URL', ''))"]))
+        if observed.return_code:
+            raise ValueError("Native execution commitment relay is unavailable")
+        self.commitment_feedback_url = validate_feedback_endpoint(observed.stdout.strip())
+        current = await call("inspect")
+        if self.warm_start is not None and current.get("goal_acceptance_contract", {}).get("revision") is None:
+            raise ValueError("Restored Goal does not retain this execution commitment")
+        if self.warm_start is None and current.get("goal_acceptance_contract", {}).get("revision") is not None:
+            raise ValueError("New execution commitment requires an unconfigured acceptance contract")
+        outcome_id = "benchmark-execution-commitment"
+        criterion_id = "authorized-execution"
+        document = {"outcome_id": outcome_id, "owner_agent_id": self.runtime.agent_id,
+            "objective": "Carry out the authorized task execution commitment",
+            "requirements": [{"id": criterion_id, "description":
+                "Continue improving the original task through the authorized finite execution. "
+                "Local deliveries and scoring milestones do not close this ongoing commitment. "
+                "Genuine blockers and stop conditions remain authoritative."}],
+            "source": {"ref": "benchmark:caller-execution-commitment",
+                       "summary": "Explicit caller requirement for this new trial"}}
+        checks = {"outcome_id": outcome_id, "scope": {"kind": "goal"},
+            "criteria": [{"id": criterion_id, "validation_argv": self._execution_commitment_command("check"),
+                "validation_timeout_seconds": 5}]}
+        for action, body in (("refine", document), ("configure", checks)):
+            if self.warm_start is not None and action == "refine":
+                continue
+            suffix = f"compare-{uuid.uuid4().hex}" if self.warm_start is not None else action
+            path = f"{_CONTROL}/execution-commitment-{suffix}.json"
+            with tempfile.TemporaryDirectory(prefix="benchmark-commitment-") as directory:
+                source = Path(directory) / "document.json"
+                source.write_text(json.dumps(body))
+                source.chmod(0o444)
+                await self.environment.upload_file(source, path)
+            args = [action, *(["--agent-id", self.runtime.agent_id] if action == "refine" else []),
+                "--document", path, "--expected-provider-revision", current["provider_revision"],
+                "--operation-id", ("benchmark-execution-commitment-compare" if self.warm_start is not None
+                                   else f"benchmark-execution-commitment-{action}")]
+            if self.warm_start is not None:
+                try:
+                    preview = await call(*args)
+                    contract = current["goal_acceptance_contract"]
+                    if (contract.get("revision") is None or contract.get("scope") != {"kind": "goal"}
+                            or contract.get("tasks") or not contract.get("digest")
+                            or preview["goal_acceptance_contract"].get("digest") != contract["digest"]):
+                        raise ValueError("Restored Goal does not retain this execution commitment")
+                finally:
+                    removed = await self.environment.exec(shlex.join(["rm", "-f", path]))
+                    if removed.return_code:
+                        raise RuntimeError("Could not remove the transient acceptance comparison")
+                return
+            await call(*args, "--execute")
+            current = await call("inspect")
+            if action == "configure":
+                contract = current["goal_acceptance_contract"]
+                if (contract.get("scope") != {"kind": "goal"} or contract.get("tasks")
+                        or contract.get("status") != "unverified"):
+                    raise ValueError("Execution commitment acceptance readback differs")
 
     def _warm_command(self, action, *, user="agent"):
         env = self.runtime._worker_env(cwd=self.cwd)
