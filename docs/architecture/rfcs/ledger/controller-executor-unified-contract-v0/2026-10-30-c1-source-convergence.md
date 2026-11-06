@@ -2430,3 +2430,40 @@ During qualification main advanced to `7f550aef58a8`, changing the Chat
 original-conversation fallback and its two frontend fixtures. That later
 combination has not been qualified; the cohort and integration base remain
 `0423908e9cf4` rather than being relabeled as the moving target.
+
+### Main integration and independent context layers
+
+Implementation `6f00db17c654` integrates main `918844a01746`. It retains the
+invocation-local initial plan while adopting main's independent Delta path:
+explicit Progressive off plus Delta auto does not publish progressive navigation
+or observed-field reuse. Digest-bound file deltas and complete current recovery
+remain available. Normal quota presentation and managed preview already consume
+the shared complete-source owner; this integration does not repeat their cutover
+or retire version-pinned historical journals. C1's RFC increments follow main's
+annex layout without dropping either language's obligations.
+
+Actual Codex with static loopback inference qualifies default Progressive and
+independent Delta in both source and isolated wheels. Complete unchanged large
+acceptance fields still reduce the matched warm selected BODY from 14,386 to
+2,583 bytes; unverified observed-field continuity restores 14,386 bytes. The
+independent-Delta case reconstructs every original field and reads complete
+current recovery through the actual client. Saved-source identity refusals,
+explicit off and lost-predecessor/compaction recovery also pass from the wheels.
+These are transport checks, not a new model experiment or installed adoption.
+
+A new matched engineering cohort uses the same synthetic three-step Task with
+main's original quota product entry: File/SQLite, cold/warm/recovery, three
+repetitions and the same checked artifacts and single debits. It records 36
+scenarios and 60 Turns, including preparation and child RPC/IO once. BODY is
+reconstructed from returned pages in byte-offset order, not the backing file's
+size. SQLite warm current-step BODY is 23,617 → 22,970 bytes (−2.74%), CLI stdout
+58,949 → 48,401 bytes (−17.89%), RPCs 294 → 290 and framed RPC bytes about −3.74%.
+Including preparation, stdout is 115,568 → 93,613 bytes, RPCs 586 → 578 and framed
+traffic about −4.01%; observed Python regular-file reads/writes fall about
+8.80%/26.18%. Node/kernel/provider IO and model costs are not measured. File warm
+instrumented CLI time increases about 7.5%; this is not latency qualification.
+The lightweight quota fixture does not contain the large acceptance bodies, so
+its result does not attribute savings to field reuse. It validates the measured
+steps, not completion of the original three-step Task, natural model adoption or
+whole-C1 net benefit. Historical failures and the remaining reader, quality and
+independent-acceptance obligations remain open.
