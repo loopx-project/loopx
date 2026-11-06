@@ -852,6 +852,63 @@ Approval needs a reviewed decision, not implementation progress or silence.
   this candidate changes no preset, default, execution authority or release
   commitment. Further directory moves are not the next execution evidence.
 
+### 2026-11-06 — Proposed generic-cli/SQLite composition and recovery evidence
+
+This is a D2/D5 candidate and source characterization, not an approved preset.
+It reuses the existing Turn, host selection, authority and settlement owners.
+
+| Dimension | Candidate / observed boundary |
+| --- | --- |
+| Installation | Current monolithic `loopx` source checkout; Python 3.13.5 and Node 26.0.0 on macOS arm64. Test extras prepare the experiment, not a minimal install. No split distribution or installed host is qualified |
+| Host | Existing `generic-cli`, `isolated-headless`, JSON stdio via `--host-adapter-command-json`; one local deterministic task-producing process and a separate trusted argv validator. No model session or workspace/IM service is needed by this fixture |
+| Authority | Canonical SQLite through the existing TypeScript effect runtime and its local RPC transport; existing Turn journal, validation and settlement. The test scaffold seeds a `soft_claim` shadow; this evidence cannot alone qualify normal hard-lease V2 parity |
+| Required logical core | Bootstrap/selected CLI, TurnEnvelope and host admission, current authority/stop/budget/claim rules, journal/recovery, process supervision, independent validation and result/settlement readback. Their owners remain shared with standard |
+| Optional activation | No task-memory or other optional hook is enabled in the fixture; no model jobs or external operations. Imported settings/policy helpers are not proof of activation or permission to remove them |
+| Identity and recovery | Resume the original journal with `--resume-turn-key`; a fresh `--turn-instance-id` is intentionally refused on that path. Cached confirmed host work is reused; unconfirmed work and other interruption points remain separately governed |
+
+- **Actual task and recovery:** a real host process writes the squared integers
+  zero through seven; an independent process checks the expected literal array.
+  Both the ordinary path and an OS `SIGKILL` of the owned CLI after its typed host
+  result was persisted end with one host invocation, one writeback and one debit
+  per isolated SQLite fixture. The interrupted path has no debit before restart;
+  restart validates the cached result without invoking the host again. A further
+  committed replay reports no repeated host/writeback/debit/scheduler effect.
+  The artifact bytes match across both paths. No active project state was faulted.
+- **Actual loading:** at product revision `62e234c93`, the ordinary Python path
+  loads 538 LoopX modules across 21 capability namespaces, without `loopx.cli`
+  or the `loopx.chat` tree. A second drill uses an isolated existing-runtime
+  broker and a transparent Node module-load observer: its bootstrap, execution
+  and recovery load 231 TypeScript files and eight JSON files under
+  `control_plane`. These are observed closures, not approved core membership.
+  The private broker's identity, shutdown acknowledgement and process exit were
+  verified; shared services were not stopped.
+- **Costs and limits:** parent-side tracing distinguishes required local RPC
+  from external network connections; none of the latter is observed. The
+  ordinary invocation observes 34 Git subprocesses, one Node version probe, one
+  Node host supervisor and one Python validator; the supervisor launches the
+  task host. Child/broker CPU and RSS, full wire/context bytes and model-host
+  costs remain unmeasured. These small instrumented drills are not repeated
+  matched performance samples, a D6 budget or long-horizon benefit evidence.
+- **Independent regression evidence:** the six SQLite cases of
+  `test_managed_start_interruption_preserves_reservation_and_attempt`, plus
+  `test_turn_run_once_cli_rejects_unproven_host_claim_before_writeback` and
+  `test_turn_run_once_cli_replays_declared_successor_after_interruption` pass in
+  `tests/test_loopx_turn_driver.py`. Probe setup refusals remain separate from
+  product failures: an overbroad network observer, an incorrect host-request
+  schema and conflicting resume flags were corrected without changing production
+  code or relaxing authority; failed observations were retained.
+- **Next owner change:** `loopx/cli_commands/turn_run_once.py` imports DSH host
+  builders before selecting the host, although their call sites are under
+  `args.host == "dsh"`. The generic path therefore loads
+  `turn_dsh_host` and `dsh_goal_mode.turn_host_adapter` despite selecting neither.
+  Characterize the existing exports/patch points, then defer those builders at
+  their owning seam and recheck generic/DSH/Codex behavior and default-off parity.
+  Namespace counts alone do not justify deleting shared policy helpers.
+- **Remaining:** opt-in minimal selection, complete D2/D5 adoption, hard-lease
+  and context V2/V5 parity, interruption during unconfirmed host work, model-host
+  V4, full V10 and split-install qualification remain open. No new engine,
+  provider, default, authority field or runtime self-merge is introduced.
+
 ## Appendix B: Decision log
 
 | Date | Decision | Owner / approval | Alternatives | Normative sections changed |
