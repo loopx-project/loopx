@@ -7,6 +7,3 @@
 .personal-goal-draft button { min-height: 44px; padding: 8px 12px; border: 1px solid var(--pw-line-strong); border-radius: 6px; background: transparent; color: inherit; text-align: left; white-space: normal; overflow-wrap: anywhere; }
 .personal-goal-draft button:focus-visible { outline: 2px solid var(--pw-blue); outline-offset: 2px; }
 .personal-goal-draft footer { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-top: 16px; }
-.personal-manager-conversation-tray:has(.personal-goal-draft) { max-height: min(620px, 65dvh); }
-.personal-manager-conversation-tray:has(.personal-goal-draft) .personal-manager-conversation-messages { min-height: 0; max-height: none; }
-.personal-manager-conversation-bubble .personal-goal-draft > strong { color: var(--pw-text); font-size: var(--text-body); line-height: var(--leading-body); font-weight: 600; }
