@@ -142,7 +142,7 @@ test('four real native prefixes retain the Bench owner counts, missing text attr
   assert.equal(grid.left.input.unattributed_requests, 818); assert.equal(grid.right.input.unattributed_requests, 956);
   for (let i=0; i<packs.length; i++) {
     assert.equal(packs[i]!.solver_usage!.artifact_sha256, fixture.lineage[i].source_sha256);
-    assert.equal(packs[i]!.pack_id, fixture.lineage[i].candidate_pack_id);
+    assert.equal(packs[i]!.pack_id, fixture.lineage[i].registered_pack_id);
     assert.notEqual(packs[i]!.pack_id, fixture.lineage[i].original_pack_id, 'New frozen observation does not rewrite its original pack');
   }
 });
