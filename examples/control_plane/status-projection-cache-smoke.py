@@ -94,6 +94,10 @@ def run_cli_result(
 ) -> tuple[dict[str, Any], int, str]:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(REPO_ROOT)
+    # This smoke reads machine JSON and asserts the inline decision/cache fields;
+    # the model-facing capture transport replaces that body with a reader
+    # reference, so keep the same opt-out the canary harness uses in argv.
+    env["LOOPX_CONTEXT_DELIVERY"] = "off"
     result = subprocess.run(
         [
             sys.executable,
