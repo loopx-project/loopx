@@ -509,7 +509,7 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
     return {pending: !returned && row.command === null && row.status === "accepted"
       && turn?.session_id === row.session_id && turn?.turn_id === row.turn_id
       && (expandedResult || metadataOwed || answerReviewOwed || unfinished || turn?.status === "failed"
-        && ["usage_limit_exceeded", "response_timeout", "upstream_transport_failure",
+        && ["usage_limit_exceeded", "response_timeout", "upstream_transport_failure", "context_window_exceeded",
           "antigravity_rpc_error", "antigravity_transport_error", "antigravity_step_error",
           "manager_authorization_unavailable", "runtime_error", "server_restarted"].includes(String(turn.error_code)))
       && !(current?.session_id === row.session_id && current?.status === "closed")
@@ -1141,7 +1141,8 @@ function planExhaustedStewardAnswer(recovery: JsonObject, row: JsonObject, curre
       && Number(item.manager_context_version) <= version)
     .map(item => sessionIdentity(item.thread_id, "original native thread"))];
   const priorNative = budget.native_observation as JsonObject | undefined;
-  const nativeThreads = [...new Set([...(threads.includes(priorNative?.thread_id) ? [priorNative!.thread_id] : []), ...threads])];
+  const nativeThreads = [...new Set([...(typeof priorNative?.thread_id === "string" && threads.includes(priorNative.thread_id)
+    ? [priorNative.thread_id] : []), ...threads])];
   const candidate = {...no, recovery_candidate: true, answer_review: true, read_only_review: true,
     client_turn_id: client, session_id: current.session_id, failed_turn_id: failed.turn_id,
     native_thread_ids: nativeThreads};
@@ -1158,7 +1159,7 @@ function planExhaustedStewardAnswer(recovery: JsonObject, row: JsonObject, curre
       || !Number.isFinite(now) || !Number.isFinite(ended) || now < ended + 60_000) return no;
   if (recovery.native_observation == null) return candidate;
   const proof = requireJsonObject(recovery.native_observation, "exhausted original request inventory");
-  if (!nativeThreads.includes(proof.thread_id) || proof.turn_id !== failed.upstream_turn_id
+  if (typeof proof.thread_id !== "string" || !nativeThreads.includes(proof.thread_id) || proof.turn_id !== failed.upstream_turn_id
       || proof.only_original_user_item !== true || proof.codex_error_info !== "usageLimitExceeded") return candidate;
   const capacity = nativeRecoveryCapacity(recovery, row, current, candidate);
   return {...capacity, recovery_eligible: capacity.recovery_eligible === true && capacity.answer_executor === "codex"};
