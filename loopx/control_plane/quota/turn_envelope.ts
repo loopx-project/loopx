@@ -1518,10 +1518,11 @@ export function turnEnvelopeRoute(envelope: JsonObject, historicalText?: JsonObj
 // Quota field vocabulary stays with its decision owner; the RFC 6901 reader
 // receives addresses and remains independent of Goal/permission policy.
 const INITIAL_CONTEXT_DECISION_FIELDS = ["ok", "schema_version", "goal_id", "agent_id", "should_run", "effective_action",
-    "normal_delivery_allowed", "recovery_delivery_allowed", "self_repair_allowed", "capability_repair_allowed", "workspace_repair_allowed",
-    "safe_bypass_allowed", "safe_bypass_kind", "blocked_action_scope", "reason",
-    "execution_obligation", "goal_boundary", "heartbeat_receipt", "work_lane_contract", "selected_todo"];
+  "normal_delivery_allowed", "recovery_delivery_allowed", "self_repair_allowed", "capability_repair_allowed", "workspace_repair_allowed",
+  "safe_bypass_allowed", "safe_bypass_kind", "blocked_action_scope", "reason",
+  "execution_obligation", "goal_boundary", "heartbeat_receipt", "work_lane_contract", "selected_todo"];
 
+/** Navigation over captured facts, never a summary or a source-read receipt. */
 function capturedDecisionSelection(request: JsonObject): JsonObject {
   const initial = request.initial_read === true || request.list_fields === true
     && Array.isArray(request.select) && request.select.length === 1 && request.select[0] === "";
