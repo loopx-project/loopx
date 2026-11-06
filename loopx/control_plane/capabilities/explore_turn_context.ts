@@ -9,6 +9,7 @@ import {PLANNING_TODO_ID} from "../work_items/planning_relations.ts";
 
 import {EXPLORE_WRITEBACK_SUMMARY_LIMIT, exploreBeforeWorkGuidance, exploreResultWritebackAffordance} from "./explore_result_writeback.ts";
 import {EXPLORE_RESULT_PAGE_MAX, normalizeExploreResultPages} from "./explore_result_page.ts";
+import {projectWorkYardstickCue, WORK_YARDSTICK_DECISION_SCHEMA} from "../work_items/yardstick_decision.ts";
 import {projectExploreMeasurementFeedback} from "./explore_measurements.ts";
 
 /** Reusable evidence and instructions in this owner's read model. Current
@@ -17,7 +18,7 @@ import {projectExploreMeasurementFeedback} from "./explore_measurements.ts";
  * provenance and applicability; no timestamp or revision is normalized away. */
 export function exploreReusableContextPaths(content: JsonObject = {}): (string | number)[][] {
   return [
-    ...["recent_nodes", "recent_findings", "writeback_results", "measurement_feedback",
+    ...["recent_nodes", "recent_findings", "writeback_results", "measurement_feedback", "work_yardsticks", "work_yardstick_capture",
       "path_delta_attachment_template", "linked_question_attachment_template",
       "optional_question_evolution_example", "result_writeback_guidance",
       "result_attachment_template", "optional_measurement_example", "measurement_guidance",
@@ -336,12 +337,35 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
     ...(resultNode == null ? [] : ["--result-node", resultNode]),
   ) : null;
   const writeback = exploreResultWritebackAffordance();
+  const workCues = params.yardstick_enabled === true ? rows(params.work_todos)
+    .filter(todo => todo.role === "agent" && !todo.done && todo.claimed_by === agent
+      && ["open", "pending", "in_progress", "blocked"].includes(String(todo.status))
+      && (todoId === null || todo.todo_id === todoId))
+    .map(todo => projectWorkYardstickCue({enabled: true, goal_id: goal, agent_id: agent, todo_id: todo.todo_id,
+      findings: findings.filter(row => (todo.explore_result_node_refs as unknown[] ?? []).includes(row.node_id)),
+      measurement_feedback: measurementFeedback}))
+    .filter((cue): cue is JsonObject => cue !== null && (resultNode === null || cue.node_id === resultNode)) : [];
   return {
     ok: true, goal_id: goal, agent_id: agent, graph_enabled: graph, harness_enabled: harness,
     ...(todoId === null ? {} : {todo_id: todoId}),
     ...(reviewPages ? {review_pages: reviewPages} : {}),
     graph: graph ? {
       counts: projection.counts ?? {},
+      ...(params.yardstick_enabled === true ? {
+        work_yardstick_capture: {optional: true, field: "work_yardstick_decision", schema_version: WORK_YARDSTICK_DECISION_SCHEMA,
+          guidance: "At a meaningful target, yardstick or next-method change, optionally attach the current decision to the existing Explore result. No change needs no attachment. Cite prior_finding_id from this Todo's current decision (null initially). Distinguish the accepted outcome's evaluation profile from an unqualified proxy; record counterevidence and bounded next work without changing user constraints. Read the ordinary task-scoped context for omitted decisions.",
+          template: {schema_version: WORK_YARDSTICK_DECISION_SCHEMA,
+            target: {summary: "", scope: "", acceptance_ref: ""},
+            authoritative: {metric: "", unit: "", higher_is_better: true, comparison_scope: "", input_revision: "", evaluation_ref: ""},
+            proxy: null, counterevidence_refs: [], next_action: {method_id: "", reason: "", cost_bound: ""}, prior_finding_id: null}},
+        ...(workCues.length ? {work_yardsticks: workCues.slice(0, 3).map(cue => resultNode !== null ? cue : {
+          source_finding_id: cue.source_finding_id, node_id: cue.node_id,
+          todo_id: (cue.binding as JsonObject).todo_id, target: (cue.target as JsonObject).summary,
+          cue: (cue.next_action as JsonObject).reason, counterevidence_refs: cue.counterevidence_refs,
+          details_command: resultRead("--result-node", String(cue.node_id)),
+        }), omitted_work_yardsticks: Math.max(0, workCues.length - 3),
+          work_yardstick_command: command("turn-context", "--agent-id", agent, "--todo-id", "<todo-id>")} : {}),
+      } : {}),
       recent_nodes: nodes.slice(0, 3).map(row => compact(row, ["node_id", "title", "status", "blocked_reason"])),
       // The canonical evidence projection calls the finding's title `finding`.
       recent_findings: findings.slice(0, 3).map(row => ({...compact({...row, title: row.finding}, ["finding_id", "node_id", "title", "status", "measurement_error"]),

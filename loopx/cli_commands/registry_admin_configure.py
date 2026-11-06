@@ -83,6 +83,14 @@ def register_configure_goal_command(subparsers: argparse._SubParsersAction) -> N
         "--clear-execution-planning-horizon-goal", action="store_true",
         help="Remove the Goal horizon override and restore review-configuration inheritance.",
     )
+    configure_goal_parser.add_argument(
+        "--execution-yardstick-enabled", action=BooleanOptionalAction, default=None,
+        help="Enable Yardstick measurement review for this Goal (default off). Requires available Explore evidence; does not enable Explore or authorize execution.",
+    )
+    configure_goal_parser.add_argument(
+        "--clear-execution-yardstick-enabled", action="store_true",
+        help="Remove the Goal Yardstick choice and restore the live device preference.",
+    )
     from ..control_plane.work_items.stride_policy_codec import stride_strategy_options
     configure_goal_parser.add_argument(
         "--execution-stride-strategy", choices=stride_strategy_options(),
