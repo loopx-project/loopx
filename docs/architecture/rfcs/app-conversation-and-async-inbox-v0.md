@@ -1846,6 +1846,26 @@ This isolated answer review receives its complete original question and verified
 visible results at dispatch. It does not import or serially compact the unrelated
 conversation before it can answer. Core retains the full transcript, and ordinary
 conversation restoration continues to preserve that history.
+
+An original private steward may also have a verified history gap with no Core
+request at all. The existing service can reserve one **answer-only review** for
+that source on its already-bound Codex Session. Complete history observation,
+fresh original-owner/message readback, an idle queue, unchanged binding and no
+later source Stop/New are required; a source predating the Session is held.
+The provider records `provider_history` provenance, never a received WS event or
+a fabricated failed Turn. The review uses the same restricted adapter and normal
+account policy, cannot change executor, write, send, delegate or rerun business,
+and returns through the original reply worker with independent readback. A lost
+queue acknowledgement adopts the same reservation. Captured ordinary requests,
+project/attached/group sources, commands, media and unsuccessful reviews retain
+their existing boundaries; history cannot turn into ordinary admission or a
+business retry. Existing evidence may answer a question directly; unknown past
+effects and missing business work remain explicit gaps.
+
+The provider inspects at most 64 unresolved originals as one complete source
+control inventory. Larger, incomplete or unreadable inventories remain pending;
+live captures take priority. Downgrading a store with these reservations to a
+reader that lacks the answer-only protocol is outside this recovery contract.
 If restart happens after the queue claim but before native dispatch, the worker
 adopts that same unstarted Turn through ordinary preparation and execution
 fences. It does not wait forever for a queued Turn to become running by itself;
