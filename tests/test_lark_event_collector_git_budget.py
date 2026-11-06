@@ -10,7 +10,10 @@ from __future__ import annotations
 
 import os
 import shlex
+import shutil
+import signal
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -158,3 +161,85 @@ def test_an_ignored_untracked_config_still_loads(tmp_path: Path) -> None:
     target = _config(project)
 
     assert _project_config_path(project, ".loopx/config/collector.json") == target.resolve()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="a terminal Ctrl-C is a POSIX group signal")
+def test_a_cancelled_command_takes_the_git_it_started(tmp_path: Path) -> None:
+    """Ctrl-C during the admission retires the session the read owns.
+
+    `collector-plan` dispatches to `plan_lark_event_collector`, so the child
+    below runs that entry in its own process, as the CLI would, with a `git`
+    that answers everything through real Git except the ownership read: that
+    one blocks, the shape a real `core.fsmonitor` hook has while Git waits on
+    it. The interrupt then goes to the child's own process group, which is the
+    scope a terminal Ctrl-C reaches. Git runs in a session of its own, so the
+    interrupt never reaches it: only the waiting call can retire it.
+    """
+
+    project = _git_project(tmp_path)
+    _config(project)
+    real_git = shutil.which("git")
+    assert real_git is not None
+    heartbeats = tmp_path / "heartbeats"
+    heartbeats.write_text("", encoding="utf-8")
+    stop = tmp_path / "stop"
+    bin_dir = tmp_path / "blocking-bin"
+    bin_dir.mkdir()
+    fake = bin_dir / "git"
+    fake.write_text(
+        f"#!{sys.executable}\n"
+        "import os, sys, time\n"
+        "from pathlib import Path\n"
+        "if 'ls-files' not in sys.argv:\n"
+        f"    os.execv({real_git!r}, [{real_git!r}] + sys.argv[1:])\n"
+        f"heartbeats, stop = Path({str(heartbeats)!r}), Path({str(stop)!r})\n"
+        "while not stop.exists():\n"
+        "    with heartbeats.open('a', encoding='utf-8') as stream:\n"
+        "        stream.write('tick\\n')\n"
+        "    time.sleep(0.1)\n",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith(("PYTEST", "COVERAGE", "COV_CORE"))
+    }
+    environment.update({
+        "PYTHONPATH": str(Path(__file__).resolve().parents[1]),
+        "LOOPX_USAGE_PING": "0",
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+    })
+    command = subprocess.Popen(
+        [
+            sys.executable, "-c",
+            "import sys\n"
+            "from loopx.extensions.lark.event_collector import plan_lark_event_collector\n"
+            "plan_lark_event_collector(project=sys.argv[1], config_path=sys.argv[2])\n",
+            str(project), ".loopx/config/collector.json",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=environment,
+        start_new_session=True,
+    )
+    try:
+        deadline = time.monotonic() + 25
+        while heartbeats.stat().st_size == 0 and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert heartbeats.stat().st_size > 0, "the fixture never blocked, so this proves nothing"
+        assert command.poll() is None, "the command had already returned"
+        os.killpg(os.getpgid(command.pid), signal.SIGINT)
+        command.communicate(timeout=25)
+        assert command.returncode != 0
+        retired = heartbeats.stat().st_size
+        time.sleep(0.6)
+        assert heartbeats.stat().st_size == retired, (
+            "the blocked Git and its helper outlived the cancellation"
+        )
+    finally:
+        stop.write_text("stop\n", encoding="utf-8")
+        if command.poll() is None:
+            os.killpg(os.getpgid(command.pid), signal.SIGKILL)
+            command.communicate(timeout=25)

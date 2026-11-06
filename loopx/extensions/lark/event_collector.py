@@ -87,7 +87,10 @@ def _run_git_probe(
     config is ignored and untracked, so a probe that runs out of budget lands on
     the refusing side instead of raising out of the command. The three
     questions share one deadline, and a question asked after it has passed is
-    not started at all.
+    not started at all. The probe runs in a session of its own so an exhausted
+    budget can retire the helpers Git started; that also means cancelling the
+    command reaches this process's group and not the probe, so an interrupted
+    wait retires the same session before the cancellation keeps travelling.
     """
 
     budget = (
@@ -115,6 +118,12 @@ def _run_git_probe(
     except subprocess.TimeoutExpired:
         _retire_owned_probe(process)
         return None
+    except BaseException:
+        # The operator cancelled the command. An exhausted budget keeps
+        # refusing the config, while Ctrl-C retires its helpers and stays the
+        # cancellation the caller raised.
+        _retire_owned_probe(process)
+        raise
     return subprocess.CompletedProcess(
         args=argv, returncode=process.returncode, stdout=stdout, stderr=""
     )
