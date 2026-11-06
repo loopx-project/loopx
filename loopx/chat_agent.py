@@ -1199,8 +1199,10 @@ class CodexChatAgentSession:
     def _notify(self, method: str, params: dict[str, Any]) -> None:
         self._write({"method": method, "params": params})
 
-    def _next_message(self, *, deadline: float) -> dict[str, Any]:
+    def _next_message(self, *, deadline: float, check: Callable[[], None] | None = None) -> dict[str, Any]:
         while True:
+            if check is not None:
+                check()
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise self._runtime_error("Codex app-server timed out.")
@@ -1229,14 +1231,16 @@ class CodexChatAgentSession:
         waiter.put(message)
         return True
 
-    def _next_event(self, *, deadline: float) -> dict[str, Any]:
+    def _next_event(self, *, deadline: float, check: Callable[[], None] | None = None) -> dict[str, Any]:
         while True:
+            if check is not None:
+                check()
             with self._message_dispatch_lock:
                 try:
                     return self._pending_events.get_nowait()
                 except queue.Empty:
                     pass
-                message = self._next_message(deadline=deadline)
+                message = self._next_message(deadline=deadline, **({"check": check} if check is not None else {}))
                 if self._route_response(message):
                     continue
                 self._observe_command_item(message)
@@ -1445,6 +1449,10 @@ class CodexChatAgentSession:
         finally:
             with self._response_waiters_lock:
                 self._response_waiters.pop(request_id, None)
+
+    def compact_history(self, *, check: Callable[[], None] | None = None) -> None:
+        from .capabilities.native_chat.codex_adapter import compact_native_history
+        compact_native_history(self, check=check)
 
     def steer(self, user_message: str, *, expected_turn_id: str) -> str:
         """Inject one user message into the exact active Codex Turn."""
