@@ -1033,7 +1033,7 @@ function nativeRecoveryCapacity(recovery: JsonObject, row: JsonObject, current: 
 
 /** A completed model Turn can explicitly report unfinished business. The
  * proposal alone grants nothing: only the original worker may reserve one
- * continuation after stable latest-native/source/grant/stop checks.
+ * continuation after stable correlated-native/source/grant/stop checks.
  */
 function unfinishedProjectWork(result: JsonObject): JsonObject | null {
   const raw = result.unfinished_work;
@@ -1078,7 +1078,8 @@ function planUnfinishedWork(recovery: JsonObject, row: JsonObject, current: Json
       admitted_turn_id: sessionIdentity(admitted.turn_id, "admitted unfinished work"), native_thread_ids: [],
       not_before: previous.not_before};
   }
-  if (current.active_turn_id != null || current.status !== "ready") return no;
+  if (current.active_turn_id != null || current.status !== "ready"
+      || recovery.queued_input_present !== false || recovery.later_equivalent_input_present !== false) return no;
   const now = Date.parse(String(recovery.observed_at)), ended = Date.parse(String(completed.completed_at));
   if (!Number.isFinite(now) || !Number.isFinite(ended) || now < ended + 60_000) return no;
   const native = sessionIdentity(current.upstream_thread_id, "original native thread");
@@ -1088,6 +1089,7 @@ function planUnfinishedWork(recovery: JsonObject, row: JsonObject, current: Json
   return {...planned, recovery_eligible: recovery.source_verified === true
     && observed.thread_id === native && observed.turn_id === completed.upstream_turn_id
     && observed.completed_work === true && observed.all_effects_settled === true
+    && typeof observed.native_inventory_sha256 === "string" && BARE_SHA256_PATTERN.test(observed.native_inventory_sha256)
     && matchesWork(observed.unfinished_work)};
 }
 
