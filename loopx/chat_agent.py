@@ -1754,6 +1754,10 @@ class CodexChatAgentSession:
                 "cwd": str(self.work_dir),
                 **({"model": self.model} if self.model else {}),
                 **({"effort": self.reasoning_effort} if self.reasoning_effort else {}),
+                # Chat renders native summaries, but a resumed thread may have
+                # disabled them. Request the public summary on each Chat Turn;
+                # execution hosts retain their own verbosity configuration.
+                **({"summary": "concise"} if not self.execution_mode else {}),
                 "approvalPolicy": "never",
                 **({"permissions": self.permissions_profile} if self.permissions_profile else {}),
                 **(
