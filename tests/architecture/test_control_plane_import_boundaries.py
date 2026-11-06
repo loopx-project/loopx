@@ -398,6 +398,54 @@ def test_turn_preview_import_does_not_select_report_delivery_or_lark_hosts() -> 
     assert completed.returncode == 0, completed.stderr
 
 
+def test_host_bridge_defers_process_helpers_and_preserves_exports() -> None:
+    completed = subprocess.run(
+        [sys.executable, "-c", """
+import sys
+import loopx.control_plane.turn_driver.host_bridge_transport as bridge
+assert 'loopx.extensions.process_runtime' not in sys.modules
+names = {'force_terminate_process', 'write_process_stdin_before_deadline'}
+assert names <= set(dir(bridge))
+assert not hasattr(bridge, 'unknown_process_helper')
+from loopx.control_plane.turn_driver.host_bridge_transport import force_terminate_process, write_process_stdin_before_deadline
+from loopx.extensions import process_runtime
+assert force_terminate_process is process_runtime.force_terminate_process
+assert write_process_stdin_before_deadline is process_runtime.write_process_stdin_before_deadline
+exports = {}
+exec('from loopx.control_plane.turn_driver.host_bridge_transport import *', exports)
+assert exports['force_terminate_process'] is force_terminate_process
+assert exports['write_process_stdin_before_deadline'] is write_process_stdin_before_deadline
+assert exports['GuardedHostBridge'] is bridge.GuardedHostBridge
+"""],
+        cwd=REPOSITORY_ROOT, capture_output=True, check=False, text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_doctor_git_defers_cleanup_and_preserves_exports() -> None:
+    completed = subprocess.run(
+        [sys.executable, "-c", """
+import sys
+from pathlib import Path
+from loopx import doctor_git
+assert 'loopx.extensions.process_runtime' not in sys.modules
+assert doctor_git._run_git(Path.cwd(), 'rev-parse', '--show-toplevel').returncode == 0
+assert 'loopx.extensions.process_runtime' not in sys.modules
+assert 'terminate_process_tree' in dir(doctor_git)
+assert not hasattr(doctor_git, 'unknown_process_helper')
+from loopx.doctor_git import terminate_process_tree
+from loopx.extensions import process_runtime
+assert terminate_process_tree is process_runtime.terminate_process_tree
+exports = {}
+exec('from loopx.doctor_git import *', exports)
+assert exports['terminate_process_tree'] is terminate_process_tree
+assert exports['git_source_metadata'] is doctor_git.git_source_metadata
+"""],
+        cwd=REPOSITORY_ROOT, capture_output=True, check=False, text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_lazy_report_and_lark_exports_preserve_original_owner_identity() -> None:
     # Compatibility includes from-imports, attribute access, dir(), star
     # exports for report facades, and the existing Lark command patch seam.
