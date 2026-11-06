@@ -4,8 +4,6 @@ import hashlib
 import json
 from types import SimpleNamespace
 
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 import pytest
 
 from benchmark.edgebench.execution_commitment import (
@@ -129,6 +127,9 @@ def test_short_native_segment_is_known_zero_credit(tmp_path, monkeypatch):
 
 
 def test_read_only_route_is_absent_by_default_and_scoped_to_original_relay():
+    FastAPI = pytest.importorskip("fastapi").FastAPI
+    pytest.importorskip("httpx")
+    TestClient = pytest.importorskip("fastapi.testclient").TestClient
     app = FastAPI()
     with TestClient(app) as client:
         assert (
