@@ -7,6 +7,7 @@ It does not capture process memory or qualify a native conversation cursor.
 from __future__ import annotations
 
 from contextlib import closing
+from copy import copy
 import hashlib
 import json
 import math
@@ -110,7 +111,7 @@ class _ArchiveReader:
 
 
 def _archive(container, remote: str, destination: Path, *, deadline: float | None = None) -> Path:
-    """Read through the daemon, rejecting links/devices and archive traversal.
+    """Read through the daemon, rejecting symlinks/devices and archive traversal.
 
     Docker's archive reader works while paused, unlike exec-based file readers.
     Keep only the declared object, not parent filesystem or process credentials.
@@ -150,16 +151,36 @@ def _archive(container, remote: str, destination: Path, *, deadline: float | Non
             with tarfile.open(fileobj=_ArchiveReader(raw, deadline) if deadline is not None else raw) as archive:
                 members = []
                 root = PurePosixPath(remote).name
-                names = set()
+                names = {}
                 for member in archive:
                     check()
                     path = PurePosixPath(member.name)
                     if (path.is_absolute() or ".." in path.parts or not path.parts or
                             path.parts[0] != root or str(path) in names or
-                            not (member.isfile() or member.isdir())):
+                            not (member.isfile() or member.isdir() or member.islnk())):
                         raise ValueError("Worker archive contains undeclared, linked or special members")
-                    names.add(str(path))
+                    names[str(path)] = member
                     members.append(member)
+
+                # The typed artifact owner observes regular files, not inode
+                # sharing. Docker encodes a second name for the same inode as a
+                # tar hardlink (common in build outputs). Materialize its bytes
+                # from an inventoried regular member; never resolve a link on
+                # the host filesystem or permit a link chain/symlink escape.
+                extracted = []
+                for member in members:
+                    check()
+                    if member.islnk():
+                        target_path = PurePosixPath(member.linkname)
+                        target = names.get(str(target_path))
+                        if (target_path.is_absolute() or ".." in target_path.parts or
+                                target is None or not target.isfile()):
+                            raise ValueError("Worker archive contains undeclared, linked or special members")
+                        regular = copy(target)
+                        regular.name, regular.mode = member.name, member.mode
+                        extracted.append(regular)
+                    else:
+                        extracted.append(member)
 
                 def filtered(member, path):
                     check()
@@ -167,7 +188,7 @@ def _archive(container, remote: str, destination: Path, *, deadline: float | Non
                     check()
                     return result
 
-                archive.extractall(destination, members=members, filter=filtered)
+                archive.extractall(destination, members=extracted, filter=filtered)
                 # The data filter intentionally drops directory modes. This is a
                 # private raw transport witness, so restore only ordinary permission
                 # bits after safe extraction; never restore owners or special bits.
