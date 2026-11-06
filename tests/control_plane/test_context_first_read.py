@@ -815,15 +815,24 @@ def test_warm_delta_initial_read_uses_current_action_without_the_old_base(tmp_pa
 
 
 @pytest.mark.parametrize("invalidate", ["compact", "resume", "partial", "task_switch", "off"])
-def test_native_first_read_reuses_only_observed_current_fields(tmp_path, monkeypatch, navigated_decision, invalidate):
+@pytest.mark.parametrize("coalesced", [False, True])
+def test_native_first_read_reuses_only_observed_current_fields(tmp_path, monkeypatch, navigated_decision, invalidate, coalesced):
     from test_codex_context_lifecycle import setup, deliver
 
     event = setup(tmp_path, monkeypatch)
     source = navigated_decision["interaction_contract"]["agent_channel"]["work_context"]["sources"][0]
     content = source["content"]
     outcomes = content["goal_acceptance_contract"]["outcome_requirements"]["outcomes"]
+    if coalesced:
+        # All outcomes are relevant, so the reader may package them as one
+        # complete parent. Delivery still observes each complete outcome.
+        outcomes.pop()
     for outcome in outcomes:
         outcome["requirements"][0]["description"] *= 240
+    if coalesced:
+        outcomes.append({"id": "small", "owner_agent_id": "author", "revision": 1,
+            "requirements": [{"id": "short", "description": "Keep this short current fact."}]})
+        content["outcome_context"]["suggested_outcome_ids"].append("small")
     prefix = "/interaction_contract/agent_channel/work_context/sources/0/content/goal_acceptance_contract/outcome_requirements/outcomes"
     def navigation(capture, enabled=True):
         directory = tmp_path / capture
@@ -848,13 +857,14 @@ def test_native_first_read_reuses_only_observed_current_fields(tmp_path, monkeyp
         return found
 
     def facts(pages):
-        return {row["pointer"]: row["value"] for row in json.loads(
-            "".join(page["content"] for page in pages))["selections"]}
+        return selected_context_values("".join(page["content"] for page in pages))
 
     navigated_decision["goal_boundary"]["stop_condition"] = "Preserve every applicable stop. " * 220
     first = pages(navigation("first")["first_read_command"])
     assert len(first) > 1 and facts(first)[prefix + "/0"] == outcomes[0]
     deliver(tmp_path, event, first[1:] if invalidate == "partial" else first)
+    if coalesced:
+        assert prefix + "/2" not in codex_context._state(tmp_path).get("consumed_pointers", {})
     outcomes[1]["requirements"][0]["description"] = "Revised stop: require the audited result."
     if invalidate == "task_switch":
         navigated_decision["selected_todo"]["todo_id"] = content["outcome_context"]["todo_id"] = "todo_next"

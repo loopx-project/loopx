@@ -14,50 +14,80 @@ import {createHash} from "node:crypto";
 import {capturedContextSelection} from "./context_selection.ts";
 
 type Path = (string | number)[];
+const MIN_REUSABLE_BODY_BYTES = 1024;
 const pointer = (path: Path): string => path.length ? "/" + path.map(key =>
   String(key).replaceAll("~", "~0").replaceAll("/", "~1")).join("/") : "";
 const at = (root: unknown, path: Path): unknown => path.reduce<unknown>((row, key) =>
   Array.isArray(row) ? row[Number(key)] : jsonObject(row)?.[key], root);
 const known = (row: JsonObject, fields: string[]): boolean => Object.keys(row).every(key => fields.includes(key));
 
+/** One registry for bodies eligible for observed reuse, regardless of whether
+ * the reader delivered the body itself or packaged it in a complete parent. */
+function reusableFirstReadFields(context: JsonObject): {path: Path; freshKeys: string[]}[] {
+  const base: Path = ["interaction_contract", "agent_channel", "work_context", "sources"];
+  const sources = at(context, base);
+  if (!Array.isArray(sources)) return [];
+  return sources.flatMap((value, i) => {
+    const source = jsonObject(value), content = jsonObject(source?.content);
+    if (!content) return [];
+    const path = [...base, i, "content"];
+    if (source?.kind === "agent_preferences")
+      return [{path, freshKeys: ["ok", "revision", "instruction"]}];
+    if (source?.source !== "goal_acceptance") return [];
+    const outcomesPath = [...path, "goal_acceptance_contract", "outcome_requirements", "outcomes"];
+    const outcomes = at(context, outcomesPath);
+    return Array.isArray(outcomes) ? outcomes.flatMap((outcome, index) =>
+      typeof jsonObject(outcome)?.id === "string"
+        ? [{path: [...outcomesPath, index], freshKeys: ["id", "revision"]}] : []) : [];
+  });
+}
+
 /** Digests stay in the private observed-read journal, never repeated to the model.
  * The existing exact-source identity preserves non-JS numeric spellings. */
 export function contextReadSectionDigests(request: JsonObject, paths: Path[]): JsonObject {
   const context = requireJsonObject(request.context, "read section source");
   const identity = contextSourceIdentity(request, request.source_number_tokens);
-  return Object.fromEntries(paths.map(path => [pointer(path),
-    createHash("sha256").update(identity(at(context, path), ["context", ...path])).digest("hex")]));
+  const selected = new Set(paths.map(pointer));
+  const covered = new Map(paths.map(path => [pointer(path), path]));
+  for (const {path} of reusableFirstReadFields(context))
+    if (paths.some(parent => pathStartsWith(path, parent))) covered.set(pointer(path), path);
+  return Object.fromEntries([...covered].flatMap(([address, path]) => {
+    const content = identity(at(context, path), ["context", ...path]);
+    // Parent delivery must not multiply tiny bodies into a larger journal.
+    return selected.has(address) || Buffer.byteLength(content) >= MIN_REUSABLE_BODY_BYTES
+      ? [[address, createHash("sha256").update(content).digest("hex")]] : [];
+  }));
 }
 
 /** Only previously delivered supplementary bodies may use a reference. Current
  * decisions, stops, selection, settlement and unknown source shapes stay inline. */
-function observedFirstRead(request: JsonObject, selections: {pointer: string; path: Path}[]): JsonObject | undefined {
+function observedFirstRead(request: JsonObject, pointers: string[]): JsonObject | undefined {
   const context = requireJsonObject(request.context, "current first read");
   const seen = requireJsonObject(request.consumed_pointers, "observed sections");
   if (typeof jsonObject(context.selected_todo)?.todo_id !== "string") return undefined;
-  const sources = ["interaction_contract", "agent_channel", "work_context", "sources"];
+  const fields = new Map(reusableFirstReadFields(context).map(field => [pointer(field.path), field]));
   const identity = contextSourceIdentity(request, request.source_number_tokens);
   const reused: JsonObject = {};
+  // Match semantic fields before the reader groups complete parents. Otherwise
+  // selecting every outcome hides the individual unchanged bodies from reuse.
+  const selections = capturedContextSelection({context, select: pointers,
+    preserve_selection_order: true}).selections as {pointer: string; path: Path}[];
   const current = selections.flatMap(row => {
     const {path, pointer: address} = row;
-    if (typeof seen[address] !== "string" || !pathStartsWith(path, sources)
-        || typeof path[4] !== "number" || path[5] !== "content") return [row];
-    const source = jsonObject(at(context, path.slice(0, 5)));
-    const preference = source?.kind === "agent_preferences" && path.length === 6;
-    const outcome = source?.source === "goal_acceptance" && path.length === 10
-      && path[6] === "goal_acceptance_contract" && path[7] === "outcome_requirements"
-      && path[8] === "outcomes" && typeof path[9] === "number";
+    const field = fields.get(address);
+    if (typeof seen[address] !== "string" || !field) return [row];
     const body = jsonObject(at(context, path));
-    if (!body || !(preference || outcome) || (outcome && typeof body.id !== "string")) return [row];
+    if (!body) return [row];
     const content = identity(body, ["context", ...path]);
     // A reference and its recovery instructions should cost less than the field.
-    if (Buffer.byteLength(content) < 1024 || createHash("sha256").update(content).digest("hex") !== seen[address])
+    if (Buffer.byteLength(content) < MIN_REUSABLE_BODY_BYTES || createHash("sha256").update(content).digest("hex") !== seen[address])
       return [row];
     reused[address] = seen[address];
-    return (outcome ? ["id", "revision"] : ["ok", "revision", "instruction"]).filter(key =>
+    return field.freshKeys.filter(key =>
       Object.hasOwn(body, key)).map(key => ({pointer: address + "/" + key, path: [...path, key]}));
   });
-  return Object.keys(reused).length ? {selections: current, reused} : undefined;
+  return Object.keys(reused).length ? {selections: capturedContextSelection({context, initial_read: true},
+    current.map(row => row.pointer)).selections, reused} : undefined;
 }
 
 function inlineReadSections(request: JsonObject, required: JsonObject): JsonObject {
@@ -306,8 +336,8 @@ export function prepareProgressiveContextDelivery(request: JsonObject, legacyFie
   const observe = request.observe_first_read === true && !!jsonObject(required.context.selected_todo)?.todo_id;
   const navigation = request.include_initial_read_plan === true || observe
     ? nativeContextReadPlan(required.context, decisionFields) : undefined;
-  const selections = navigation?.initial ? (navigation.plan as JsonObject).selections : undefined;
-  const observed = observe && selections ? observedFirstRead(codec, selections as {pointer: string; path: Path}[]) : undefined;
+  const observed = observe && navigation?.initial
+    ? observedFirstRead(codec, initialContextReadPointers(required.context, decisionFields)) : undefined;
   const {operation: _operation, source_edits: _edits, source_number_tokens: _numbers, ...source} = request;
   return contextProjectionChanges(source, {context: required.context, delivery, projected: required.projected,
     ...(observed ? {observed_first_read: observed} : {}),
