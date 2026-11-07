@@ -216,3 +216,60 @@ test('duration policy checks every selected arm and only accepts verified volunt
   input.selection[0].active_intervals[0].end_ms = -1;
   assert.throws(() => buildReport(input),/observed solver interval/);
 });
+
+test('makeup tolerance waives only known terminal gaps, retaining actual duration and qualification gates', () => {
+  const input = fixture();
+  input.duration_policy = {target_ms: 100, allow_goal_completion: [], makeup_tolerance_ms: 15};
+  for (const [i, elapsed] of [85, 84, 100, 86, 0, 85].entries()) {
+    input.selection[i].active_intervals = [{start_ms: 0, end_ms: elapsed, evidence_ref: 'solver:segment'}];
+  }
+  // Overlap is not extra active time: 50 + 45 - 10 = 85.
+  input.selection[0].active_intervals = [[0,50],[40,85]].map(([start_ms,end_ms]) =>
+    ({start_ms,end_ms,evidence_ref:'solver:segment'}));
+  let report = buildReport(input);
+  assert.deepEqual(report.duration_coverage!.map(row => row.disposition),
+    ['within_tolerance', 'needs_makeup', 'covered', 'within_tolerance', 'needs_makeup', 'within_tolerance']);
+  assert.equal(report.duration_coverage![0].active_ms, 85);
+  assert.equal(report.duration_coverage![0].remaining_ms, 15);
+  assert.equal(report.comparisons[0].qualified_common_n, 2);
+  assert.deepEqual(report.duration_policy, input.duration_policy);
+  assert.match(renderMarkdown(report), /容差内免补/);
+  input.selection[0].score!.countable = false;
+  report = buildReport(input);
+  assert.equal(report.comparisons[0].qualified_common_n, 1);
+  input.selection[0].status = 'cancelled';
+  assert.equal(buildReport(input).comparisons[0].n, 2);
+  input.selection[0].status = 'running';
+  assert.equal(buildReport(input).duration_coverage![0].disposition, 'running');
+  input.selection[0].status = 'planned';
+  assert.equal(buildReport(input).duration_coverage![0].disposition, 'planned');
+  input.selection[0].status = 'completed';
+  delete input.selection[0].active_intervals;
+  assert.equal(buildReport(input).duration_coverage![0].disposition, 'verify_duration');
+  input.selection[0].active_intervals = [{start_ms:0,end_ms:85,evidence_ref:'solver:segment'}];
+  delete input.duration_policy.makeup_tolerance_ms;
+  assert.equal(buildReport(input).duration_coverage![0].disposition, 'needs_makeup');
+});
+
+test('duration tolerance rejects invalid policy and real CLI retains the declared waiver', () => {
+  const input = fixture();
+  input.duration_policy = {target_ms: 100, allow_goal_completion: []};
+  for (const bad of [-1, 100, 101, 1.5, NaN, Infinity, true, null]) {
+    input.duration_policy.makeup_tolerance_ms = bad as number;
+    assert.throws(() => buildReport(input), /makeup tolerance/);
+  }
+  input.duration_policy.makeup_tolerance_ms = 15;
+  input.selection[0].active_intervals = [{start_ms:0,end_ms:85,evidence_ref:'solver:segment'}];
+  const dir = mkdtempSync(join(tmpdir(), 'duration-tolerance-'));
+  try {
+    const path = join(dir, 'input.json'), prefix = join(dir, 'report');
+    writeFileSync(path, JSON.stringify(input));
+    const run = spawnSync(process.execPath, ['--experimental-strip-types', resolve('scripts/benchmark-campaign-report.ts'), path, prefix], {encoding:'utf8'});
+    assert.equal(run.status, 0, run.stderr);
+    const actual = JSON.parse(readFileSync(prefix + '.json', 'utf8'));
+    assert.equal(actual.duration_policy.makeup_tolerance_ms, 15);
+    assert.equal(actual.duration_coverage[0].disposition, 'within_tolerance');
+    assert.equal(actual.duration_coverage[0].remaining_ms, 15);
+    assert.match(readFileSync(prefix + '.md', 'utf8'), /容差内免补/);
+  } finally { rmSync(dir, {recursive: true, force: true}); }
+});
