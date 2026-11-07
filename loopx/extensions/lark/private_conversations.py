@@ -639,6 +639,7 @@ class LarkPrivateConversations:
         _atomic_write_json(path, record)
         return message
 
+    @effect_runtime_request_scope()
     def admit(self, profile: str, event: dict[str, Any], *,
               defer_background_stop: bool = False, history_review: bool = False) -> dict[str, Any]:
         record_event_timing(profile, str(event.get("message_id") or ""), "admission_started")
