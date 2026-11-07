@@ -508,17 +508,20 @@ def test_public_quota_cli_delivers_required_view_and_signed_original_evidence(ac
 
 @pytest.mark.parametrize("initialized", [False, True])
 def test_native_quota_reuses_only_its_published_source(acceptance_goal, tmp_path, monkeypatch, initialized):
-    _, _, _, run = acceptance_goal
+    project, _, _, _ = acceptance_goal
     lifecycle, captures = tmp_path / "native", tmp_path / "captures"
     lifecycle.mkdir(mode=0o700)
     captures.mkdir(mode=0o700)
     monkeypatch.setenv("CODEX_THREAD_ID", "session")
     if initialized:
         setup(lifecycle, monkeypatch)
-    code, packet = run("quota", "should-run", "--goal-id", "goal-acceptance", "--agent-id", "agent-a",
+    # The acceptance fixture's helper decodes the guard's policy from its
+    # navigation. These assertions need the original CLI transport.
+    code, packet = _run_cli(tmp_path / "registry.json", tmp_path / "runtime",
+        "quota", "should-run", "--goal-id", "goal-acceptance", "--agent-id", "agent-a",
         "--todo-id", "todo_export", "--context-delivery", "on", "--codex-app",
         "--codex-context-dir", str(lifecycle), "--decision-output-root", str(captures),
-        "--turn-instance-id", "original-turn")
+        "--turn-instance-id", "original-turn", cwd=project)
     assert code == 0 and packet["ok"], packet
     original = next(captures.glob("*/decision.json"))
     raw = original.read_bytes()
@@ -531,29 +534,32 @@ def test_native_quota_reuses_only_its_published_source(acceptance_goal, tmp_path
     else:
         assert packet["mode"] == "full" and "target" not in view
         assert "candidate" not in context._state(lifecycle) and "pending" not in context._state(lifecycle)
-    code, page = run("quota", "context-read", "--capture-file", str(original),
+    code, page = _run_cli(tmp_path / "registry.json", tmp_path / "runtime",
+        "quota", "context-read", "--capture-file", str(original),
         "--capture-sha256", hashlib.sha256(raw).hexdigest(), "--select", "/selected_todo",
-        "--page-bytes", "16000", "--max-page-output-bytes", "20000")
+        "--page-bytes", "16000", "--max-page-output-bytes", "20000", cwd=project)
     assert code == 0 and page["eof"], page
     assert json.loads(page["content"])["selections"][0]["value"] == json.loads(raw)["selected_todo"]
     assert original.read_bytes() == raw
 
 
 def test_native_quota_reader_rejects_changed_original(acceptance_goal, tmp_path, monkeypatch):
-    _, _, _, run = acceptance_goal
+    project, _, _, _ = acceptance_goal
     lifecycle, captures = tmp_path / "native", tmp_path / "captures"
     lifecycle.mkdir(mode=0o700)
     captures.mkdir(mode=0o700)
     setup(lifecycle, monkeypatch)
-    code, packet = run("quota", "should-run", "--goal-id", "goal-acceptance", "--agent-id", "agent-a",
+    code, packet = _run_cli(tmp_path / "registry.json", tmp_path / "runtime",
+        "quota", "should-run", "--goal-id", "goal-acceptance", "--agent-id", "agent-a",
         "--todo-id", "todo_export", "--context-delivery", "on", "--codex-app",
         "--codex-context-dir", str(lifecycle), "--decision-output-root", str(captures),
-        "--turn-instance-id", "original-turn")
+        "--turn-instance-id", "original-turn", cwd=project)
     assert code == 0 and packet["ok"], packet
     original = Path(reference_metadata_oracle(packet)["recovery"]["path"])
     state = (lifecycle / "session.json").read_bytes()
     original.write_bytes(original.read_bytes() + b" ")
-    code, refused = run("quota", "context-read", "--reference-file", packet["recovery"]["reference_file"])
+    code, refused = _run_cli(tmp_path / "registry.json", tmp_path / "runtime",
+        "quota", "context-read", "--reference-file", packet["recovery"]["reference_file"], cwd=project)
     assert code == 1 and refused["ok"] is False, refused
     assert "Restore the original" in refused["recovery"]
     assert (lifecycle / "session.json").read_bytes() == state
