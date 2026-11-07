@@ -574,7 +574,14 @@ export function materializeQuotaRow(item: JsonObject, profile: JsonObject | null
   const action = text("action_kind").toLowerCase();
   const gate = text("task_class") ? classification === "user_gate" : classification === "user_gate" ||
     ["approval", "approve", "boundary", "gate", "blocker", "credential", "private", "production", "leaderboard", "submission", "public_claim"].some(hint => action.includes(hint));
-  const instant = (key: string) => {const value = parseTodoTimestampMicros(text(key)); return value === null ? null : Number(value) / 1000000;};
+  const instant = (key: string) => {
+    const value = parseTodoTimestampMicros(text(key));
+    if (value === null) return null;
+    // Convert decimal seconds once; rounding the microsecond integer first
+    // loses valid distant-clock facts before the quota owner compares them.
+    const absolute = value < 0n ? -value : value;
+    return Number(`${value < 0n ? "-" : ""}${absolute / 1000000n}.${String(absolute % 1000000n).padStart(6, "0")}`);
+  };
   return {presentation: [priority, address ?? 999999, address === null ? pythonFieldText(item, truth(item.completed_at) ? "completed_at" : "updated_at") : "",
       address === null ? pythonFieldText(item, "todo_id") : ""],
     claim: readAgent(item.claimed_by), bound: readAgent(item.bound_agent), blocks: readAgent(item.blocks_agent),
