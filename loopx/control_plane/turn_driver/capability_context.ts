@@ -1,6 +1,7 @@
 import type {JsonObject} from "../effect_program.ts";
 import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
-import {requireJsonObject, requireNonEmptyString, requireStringArray} from "../runtime_decode.ts";
+import {requireBoolean, requireJsonObject, requireNonEmptyString, requireStringArray} from "../runtime_decode.ts";
+import {withComposedCliSettlement} from "../quota/settlement_plan.ts";
 import {quotaActionSignatureDocument, turnEnvelopeActionSignatureDocument} from "../quota/turn_envelope.ts";
 
 // This is a local host-IO contract, not a new capability or authority vocabulary.
@@ -19,13 +20,14 @@ const RESERVED = new Set([
 ]);
 const FIELD = /^[a-z][a-z0-9_]{2,95}$/;
 
-function contextSource(value: unknown): JsonObject {
+function contextSource(value: unknown, composedSettlement: boolean): JsonObject {
   const source = requireJsonObject(value, "context source");
   // Reuse the governing owner. Binding the original observation adds detail
   // locations/measurements without changing the authorized decision.
   return {goal_id: source.goal_id, agent_id: source.agent_id,
     governing: "heartbeat_receipt" in source
-      ? quotaActionSignatureDocument(source) : turnEnvelopeActionSignatureDocument(source)};
+      ? quotaActionSignatureDocument(composedSettlement ? withComposedCliSettlement(source) : source)
+      : turnEnvelopeActionSignatureDocument(source)};
 }
 
 function fields(value: unknown, label: string): JsonObject {
@@ -69,7 +71,11 @@ export function validateTurnContextContribution(input: JsonObject): JsonObject {
   }
   const normalized = {hook_id: registration.hook_id, capability_id: registration.capability_id,
     readback_slots: slots, context_fields: context, instructions, result_fields: resultFields, readback};
-  return {...normalized, basis_digest: canonicalAuthoritySha256({source: contextSource(input.source), ...normalized})};
+  const composedSettlement = input.composed_settlement === undefined ? false
+    : requireBoolean(input.composed_settlement, "composed_settlement");
+  return {...normalized, basis_digest: canonicalAuthoritySha256({
+    source: contextSource(input.source, composedSettlement), ...normalized,
+  })};
 }
 
 export function projectTurnContextContribution(input: JsonObject): JsonObject {

@@ -336,14 +336,13 @@ def _emit_quota_result(
             cli["settlement_plan"], registry_path=registry_path,
             runtime_root=context.runtime_root if context is not None else None,
         )
-    if context is not None:
+    if (args.quota_command == "spend-slot" and args.format == "json" and context is not None
+            and getattr(args, "max_page_output_bytes", None) is not None):
         observe_quota_result(
             args, payload, registry_path=registry_path, runtime_root=context.runtime_root,
             turn_id=_effective_spend_turn_instance_id(payload, heartbeat_turn_id=heartbeat_turn_id),
             started_at=usage_quota_started,
         )
-    if (args.quota_command == "spend-slot" and args.format == "json" and context is not None
-            and getattr(args, "max_page_output_bytes", None) is not None):
         view, result_code = budgeted_spend_result(payload, args,
             runtime_root=context.runtime_root, reader_argv=reader_argv)
         print_payload(view, args.format, _quota_renderer(args))
@@ -369,6 +368,20 @@ def _emit_quota_result(
             args,
             payload,
             registry_path=registry_path,
+        )
+    if args.quota_command == "should-run":
+        # The capture route and optional settlement attachments are already
+        # fixed. Bind the hook to the same typed settlement as the capture.
+        attach_reward_memory_recall_after_should_run(
+            payload, quota_command=args.quota_command, heartbeat_turn_id=heartbeat_turn_id,
+            registry_path=registry_path, goal_id=args.goal_id, agent_id=args.agent_id,
+            composed_settlement=context_delivery_enabled,
+        )
+    if context is not None:
+        observe_quota_result(
+            args, payload, registry_path=registry_path, runtime_root=context.runtime_root,
+            turn_id=_effective_spend_turn_instance_id(payload, heartbeat_turn_id=heartbeat_turn_id),
+            started_at=usage_quota_started,
         )
     # A decided refusal has the same complete contract as an admission. `ok`
     # still controls exit status and host handoff; composition grants no work.
@@ -950,14 +963,6 @@ def handle_quota_command(
                 spend_turn_instance_id=spend_turn_instance_id, rollout_details=rollout_details,
                 append_cli_rollout_event=append_cli_rollout_event,
             )
-    attach_reward_memory_recall_after_should_run(
-        payload,
-        quota_command=args.quota_command,
-        heartbeat_turn_id=heartbeat_turn_id,
-        registry_path=registry_path,
-        goal_id=args.goal_id,
-        agent_id=args.agent_id,
-    )
     return _emit_quota_result(
         payload,
         args,

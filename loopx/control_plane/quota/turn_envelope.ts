@@ -1,7 +1,7 @@
 import {capturedContextSelection} from "./context_selection.ts";
 import {contextReadSectionDigests, initialContextReadPointers, prepareProgressiveContext, prepareProgressiveContextDelivery,
   progressiveContextPlan} from "./progressive_context.ts";
-import {composedCliSettlementPlan} from "./settlement_plan.ts";
+import {withComposedCliSettlement} from "./settlement_plan.ts";
 import type { LoopXTurnRouteValue } from "../turn_driver/turn_contract_generated.ts";
 import { EFFECTIVE_ACTIONS, EffectiveAction, type QuotaEffectiveActionValue } from "./effective_action.generated.ts";
 import { AGENT_SCOPE_FRONTIER_ACTIONS } from "../agents/agent_scope_frontier.generated.ts";
@@ -1856,23 +1856,11 @@ export function composeCompleteTurnDecision(value: unknown): JsonObject {
   const interaction = object(payload.interaction_contract);
   const cli = object(interaction.cli_channel);
   const plan = object(cli.settlement_plan);
-  let source = payload;
   // The ordinary complete-contract consumer uses the existing combined owner.
   // Replan successor creation retains its distinct original-Turn protocol.
   const useComposedSettlement = request.composed_settlement === undefined ? false
     : requireBoolean(request.composed_settlement, "composed_settlement");
-  const composedPlan = packet.obligation_id || !useComposedSettlement ? null : composedCliSettlementPlan(plan);
-  if (composedPlan !== null) {
-    const originalWriteback = (plan.ordered_steps as JsonObject[]).find(step => step.kind === "durable_writeback");
-    const originalSpend = (plan.ordered_steps as JsonObject[]).find(step => step.kind === "quota_spend");
-    const composedWriteback = (composedPlan.ordered_steps as JsonObject[]).find(step => step.kind === "durable_writeback");
-    source = {...payload, interaction_contract: {...interaction, cli_channel: {...cli,
-      settlement_plan: composedPlan,
-      next_cli_actions: Array.isArray(cli.next_cli_actions) ? cli.next_cli_actions
-        .filter(command => command !== originalSpend?.command_template)
-        .map(command => command === originalWriteback?.command_template ? composedWriteback!.command_template : command)
-        : cli.next_cli_actions}}};
-  }
+  let source = useComposedSettlement ? withComposedCliSettlement(payload) : payload;
   if (packet.obligation_id && packet.settlement_only !== true &&
       payload.effective_action !== EffectiveAction.GOVERNED_CAPABILITY_INTENT &&
       packet.obligation_id === object(object(payload.autonomous_replan_obligation).replan_context).obligation_id &&

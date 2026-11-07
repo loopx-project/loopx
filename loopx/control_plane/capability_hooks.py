@@ -222,6 +222,8 @@ def turn_context_source(payload: Mapping[str, Any]) -> Mapping[str, Any]:
 def dispatch_turn_context_hooks(
     payload: dict[str, Any],
     registrations: Sequence[TurnContextHookRegistration],
+    *,
+    composed_settlement: bool = False,
 ) -> None:
     contributions: list[dict[str, Any]] = []
     failures: list[dict[str, str]] = []
@@ -250,6 +252,7 @@ def dispatch_turn_context_hooks(
                     "registration": registration.contract(),
                     "result": result,
                     "source": turn_context_source(payload),
+                    **({"composed_settlement": True} if composed_settlement else {}),
                 },
             )
             readback = contribution.pop("readback")
