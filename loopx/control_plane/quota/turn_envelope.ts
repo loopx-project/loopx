@@ -1775,8 +1775,8 @@ export function completePlanningFacts(request: JsonObject): JsonObject {
   return {...lineage, work, source_decision_hash: decisionSourceHash(decision),
     action_source_hash: canonicalHash(turnEnvelopeActionSignatureDocument(work)),
     scoped_settlement_identity: scopedIdentity, scoped_identity_error: identityError,
-    ...(request.inspect_plan === true && lineage.route === "replan_required"
-      ? {inspection_paths: replanInspectionPaths(decision)} : {})};
+    ...(request.inspect_plan === true && (lineage.route === "ready_for_host" || lineage.route === "replan_required")
+      ? {inspection_paths: turnPlanInspectionPaths(decision, lineage.route)} : {})};
 }
 
 function completeHostDecision(request: JsonObject): JsonObject {
@@ -2120,7 +2120,7 @@ const INITIAL_CONTEXT_DECISION_FIELDS = ["ok", "schema_version", "goal_id", "age
 
 /** The read-only plan needs the current decision and executable authoring
  * guidance. Evidence and diagnostics remain in its exact source capture. */
-function replanInspectionPaths(decision: JsonObject): string[][] {
+function turnPlanInspectionPaths(decision: JsonObject, route: "ready_for_host" | "replan_required"): string[][] {
   const paths = INITIAL_CONTEXT_DECISION_FIELDS.filter(field => field !== "schema_version").map(field => [field]);
   for (const field of ["agent_identity", "decision", "recommended_action", "execution_preparation", "requires_user_action",
     "action_portfolio", "delivery_workspace_isolation", "replan_action_packet"])
@@ -2144,6 +2144,16 @@ function replanInspectionPaths(decision: JsonObject): string[][] {
   paths.push(["interaction_contract", "agent_channel", "work_context", "instruction"]);
   for (const field of Object.keys(object(interaction.cli_channel)))
     if (field !== "vision_continuation_audit") paths.push(["interaction_contract", "cli_channel", field]);
+  if (route === "ready_for_host") {
+    for (const field of ["status_health_ok", "state", "status", "waiting_on", "quota", "scheduler_hint",
+      "action_required", "action_selection_qualification", "execution_profile", "task_scope",
+      "handoff_readiness", "planning_horizon"])
+      paths.push([field]);
+    for (const field of ["next_step", "next_action_basis"])
+      paths.push(["agent_lane_next_action", field]);
+    for (const field of ["selected_todo_ref", "selected_todo_authority", "user_todos", "unavailable_context", "failures"])
+      paths.push(["interaction_contract", "agent_channel", "work_context", field]);
+  }
   return paths;
 }
 

@@ -842,6 +842,46 @@ def test_real_cli_output_stays_inside_baseline_and_growth_contracts(
     _assert_scenario_matrix(scenarios)
 
 
+@pytest.mark.parametrize("scenario", [SCENARIOS[0], SCENARIOS[2]], ids=["small", "multi-agent"])
+def test_host_ready_turn_plan_preserves_current_controls(tmp_path: Path, scenario: Scenario) -> None:
+    with _stable_budget_fixture_root(tmp_path / scenario.name) as root:
+        project, runtime, registry_path, state_file = _write_fixture(root, scenario)
+        import_fixture_authority(registry_path, GOAL_ID)
+        command = _surface_commands(project=project, runtime=runtime, registry_path=registry_path,
+                                    state_file=state_file, output_format="json")["loopx_turn_plan"]
+        before = state_file.read_bytes()
+        code, text = _invoke_cli(command)
+        assert code == 0, text
+        payload = json.loads(text)
+        assert payload["route"]["kind"] == "ready_for_host"
+        assert payload["boundary"]["inspection_only"] is True
+        assert not any(payload["effects"].values()) and state_file.read_bytes() == before
+        if os.name != "posix":
+            assert payload["work_contract"]["contract_binding"]
+            return
+        assert_cli_output_baseline(CLI_OUTPUT_BUDGET_BY_ID["loopx_turn_plan"], scenario=scenario.name,
+            output_format="json", text=text, measurement=measure_cli_output(text, output_format="json"))
+        detail = payload["detail_ref"]
+        original = json.loads(Path(detail["path"]).read_bytes())
+        plan = payload["work_contract"]
+        for field in ("selected_todo", "goal_boundary", "scheduler_hint", "handoff_readiness",
+                      "action_portfolio", "planning_horizon"):
+            assert plan.get(field) == original.get(field)
+        channel = "agent_channel"
+        context = plan["interaction_contract"][channel]
+        expected = original["interaction_contract"][channel]
+        assert context["required_reads"] == expected["required_reads"]
+        for field in ("selected_todo_ref", "selected_todo_authority", "user_todos",
+                      "unavailable_context", "failures"):
+            assert context["work_context"].get(field) == expected["work_context"].get(field)
+        assert "sources" not in context["work_context"]
+        assert "complete" not in context["work_context"]
+        selector = "/interaction_contract/agent_channel/work_context/sources"
+        body, _, _ = read_pinned_cli_body(detail["command"] + " --select " + selector)
+        assert json.loads(body)["selections"] == [{"pointer": selector,
+            "value": expected["work_context"]["sources"]}]
+
+
 def test_diagnose_keeps_selected_reads_once_and_out_of_the_goal_overview(
     tmp_path: Path,
 ) -> None:

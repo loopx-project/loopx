@@ -488,11 +488,13 @@ observation. This is the native Turn execution default; ordinary quota capture
 remains opt-in. `turn plan`, `managed-step` inspection and `run-once` previews
 remain read-only with respect to Goal state and execution.
 
-For a complete-contract replan, the default JSON `turn plan` keeps the current
-decision, scope, required reads and executable Vision authoring inline. On
-hosts with private capture support, `detail_ref.command` reads the exact work
-contract for that inspection. Append `--list` to discover fields or `--select`
-to read only the current Goal, acceptance or evidence needed for the decision.
+For a complete-contract plan ready for a host or replan, default JSON
+`turn plan` keeps the current decision, scope and required reads inline.
+Host-ready plans retain scheduler and handoff constraints. Replan keeps
+executable Vision authoring inline. On hosts with private capture support,
+`detail_ref.command` reads the exact work contract for that inspection.
+Append `--list` to discover fields or `--select` to read the current Goal,
+acceptance or evidence needed for the decision.
 This snapshot lives in the private context transport directory. Explicit
 `--include-transaction-detail` and hosts without a usable capture directory
 retain the complete inline contract.
@@ -538,9 +540,10 @@ operations retain their existing authority and validation.
 上下文后继续调用 Host；先处置原效果，再按当前准入创建新 Turn。文件含私有上下文，
 保留在运行时目录，禁止放入公开产物。
 
-完整契约的重规划分支中，默认 JSON `turn plan` 直接交付当前决策、范围、必读项和可执行
-的 Vision 写回指导。宿主支持私有捕获时，`detail_ref.command` 从同一预览的完整工作
-契约读取。可加 `--list` 查找字段，或加 `--select` 读取本次决策所需的 Goal、验收及证据。
+完整契约的宿主就绪和重规划分支中，默认 JSON `turn plan` 直接交付当前决策、范围和
+必读项。宿主就绪时保留调度及交接约束，重规划时保留可执行的 Vision 写回指导。
+宿主支持私有捕获时，`detail_ref.command` 从同一预览的完整工作契约读取。可加
+`--list` 查找字段，或加 `--select` 读取本次决策所需的 Goal、验收及证据。
 快照保存在私有上下文目录。显式 `--include-transaction-detail` 和私有捕获不可用时保留
 完整内联契约。
 

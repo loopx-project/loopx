@@ -15,6 +15,7 @@ import pytest
 
 import loopx.cli_commands.turn_run_once as turn_run_once_command
 from loopx.cli_commands.turn_rendering import render_loopx_turn_execution_markdown
+from tests.control_plane.cli_output_fixture import read_pinned_cli_body
 from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 from tests.control_plane.canonical_authority_fixture import (
     initialize_canonical_authority,
@@ -1902,15 +1903,21 @@ def test_turn_cli_inspection_cannot_become_execution(
     assert code == 0, inspection
     assert inspection["route"] == original_plans[0]["route"]
     assert inspection["schema_version"] == "loopx_turn_plan_v1" and "turn_envelope" not in inspection
-    assert json.dumps(inspection["work_contract"], sort_keys=True) == json.dumps(
+    source = inspection["work_contract"]
+    if not transaction_detail and os.name == "posix":
+        assert "future_fixture_observation" not in source
+        body, _, _ = read_pinned_cli_body(inspection["detail_ref"]["command"])
+        source = json.loads(body)
+    assert json.dumps(source, sort_keys=True) == json.dumps(
         original_plans[0]["work_contract"], sort_keys=True)
-    assert inspection["work_contract"]["future_fixture_observation"]["numbers"][-1] == 2**60 + 1
+    assert source["future_fixture_observation"]["numbers"][-1] == 2**60 + 1
     if transaction_detail:
         # Explicit detail retains transport metadata, never a second source.
         detailed = build_loopx_turn_host_request(inspection)
         assert detailed["work_contract"] == original_plans[0]["work_contract"]
     else:
-        # Even restoring valid transaction detail cannot promote inspection.
+        # Restoring the full source and valid transaction detail cannot promote inspection.
+        inspection["work_contract"] = source
         inspection["transaction"] = original_plans[0]["transaction"]
         inspection["session"] = original_plans[0]["session"]
         with pytest.raises(ValueError, match="CLI inspection"):
@@ -1966,7 +1973,11 @@ def test_turn_cli_resolves_its_decision_through_the_shared_owner(
 
     payload = json.loads(output.getvalue())
     assert exit_code == 0, payload
-    assert payload["work_contract"]["schema_version"] == "loopx_turn_envelope_v1"
+    source = payload["work_contract"]
+    if os.name == "posix":
+        body, _, _ = read_pinned_cli_body(payload["detail_ref"]["command"])
+        source = json.loads(body)
+    assert source["schema_version"] == "loopx_turn_envelope_v1"
     assert "turn_envelope" not in payload
     assert len(status_reads) == 1, (
         "`turn` must read its live status through the shared Turn decision "

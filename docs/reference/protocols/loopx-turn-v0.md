@@ -93,8 +93,9 @@ and an independent validator:
 4. `loopx turn run-once --execute` performs writeback and quota spend only when
    the typed result and independent validation both pass.
 
-Default `turn plan` output is an inspection projection. Complete-contract JSON
-replans show the current decision and executable guidance inline. Their
+Default `turn plan` output is an inspection projection. JSON plans ready for a
+host or replan show the current decision and executable guidance inline. A
+host-ready plan also keeps scheduler and handoff constraints visible.
 `detail_ref.command` reads the same complete `work_contract` from private
 storage. When private capture is unavailable, the complete source stays inline.
 `boundary.inspection_only=true` prevents execution even if a caller restores
