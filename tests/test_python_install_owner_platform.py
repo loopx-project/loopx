@@ -212,8 +212,13 @@ def test_doctor_fix_preserves_installation_owner(
     (metadata / "INSTALLER").write_text(
         "pip\n" if installer == "pipx" else installer + "\n", encoding="utf-8"
     )
-    module = Path(doctor.__file__).as_posix()
-    (metadata / "RECORD").write_text(f"{module},,\n", encoding="utf-8")
+    module = prefix / "loopx" / "doctor.py"
+    module.parent.mkdir()
+    module.touch()
+    monkeypatch.setattr(doctor, "__file__", str(module))
+    # Wheel RECORD paths are relative to the distribution root. Absolute
+    # drive paths become drive-relative under Python 3.11 on Windows.
+    (metadata / "RECORD").write_text("loopx/doctor.py,,\n", encoding="utf-8")
     if installer == "pipx":
         (prefix / "pipx_metadata.json").write_text(
             '{"environment":"loopx-preview"}', encoding="utf-8"
