@@ -415,7 +415,21 @@ After a Host claim, the ready guard uses the private
 returns its writer digest with the fields needed to verify the same Todo and
 Turn. The hook verifies that digest when it opens the original file. If the
 file changed, the receipt preserves the claim and pins recovery to the original
-bytes before work can continue.
+bytes before work can continue. If readiness is interrupted, retrying the
+same original decision capture reuses its managed claim operation. The
+authority owner checks the original lease on replay. The native session
+keeps the latest eligible live guard digest separately from the capture.
+Presenting the exact saved decision preserves that binding. Older captures
+and copies with different bytes remain readable. Preserve any original claim receipt and use
+`quota should-run` with the same Goal, Agent, Todo and Turn and a fresh
+capture if preparation is still required. A retired lease requires a fresh
+eligible preparation capture.
+
+中文：Host 重试绑定原始决策 capture 的领取操作，由权威 owner 验证原租约。
+原生会话独立保存最新合格准入的摘要。重新展示逐字节一致的快照会保留绑定。
+旧快照和字节不同的副本仍可读，保留已有领取回执。
+仍需准备时，用原 Goal、Agent、Todo 和 Turn 运行 `quota should-run`，
+生成新的 capture，再按当前准入结果准备。已退役的租约需要新的合格 capture。
 
 The Goal availability adapter still reads and UTF-8-validates the complete file
 and hashes all bytes for its revision. With native context delivery off, only the path and revision of unmarked or mixed sources cross the

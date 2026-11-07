@@ -70,6 +70,8 @@ def _run(
     leases: list[dict[str, object]],
     *guard_args: str,
     todos: list[dict[str, object]] | None = None,
+    context_delivery: str = "off",
+    goal_suffix: str = "",
     write_scopes: list[str] | None = None,
 ):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
@@ -79,7 +81,7 @@ def _run(
     state.write_text(
         "---\nstatus: active\n---\n# Goal\n\n## Objective\n"
         "Deliver one validated synthetic change.\n\n## Next Action\n"
-        "Run the selected Todo.\n",
+        "Run the selected Todo.\n" + goal_suffix,
         encoding="utf-8",
     )
     write_fixture_registry(
@@ -109,12 +111,26 @@ def _run(
     )
     code, packet = run_json_cli_result(
         "quota", "should-run", "--goal-id", GOAL, "--agent-id", AGENT,
-        "--context-delivery", "off",
+        "--context-delivery", context_delivery,
         *guard_args,
         registry_path=registry, runtime_root=runtime,
     )
     assert code == 0, json.dumps(packet, ensure_ascii=False, indent=2)
     return packet
+
+
+def _present_saved_guard(tmp_path, native, capture, scenario, turn):
+    source = capture / "decision.json"
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    code, view = run_json_cli_result(
+        "quota", "context-project", "--runtime-profile", scenario,
+        "--context-delivery", "on", "--codex-context-dir", str(native),
+        "--goal-id", GOAL, "--agent-id", AGENT, "--turn-instance-id", turn,
+        "--capture-file", str(source), "--capture-sha256", digest,
+        registry_path=tmp_path / "registry.json", runtime_root=tmp_path / "runtime",
+    )
+    assert code == 0 and view["ok"] is True, view
+    return digest
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -205,16 +221,15 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
     assert codex_context.codex_context_hook(str(native), event) == {}
     original = {**_todo(), "text": "Deliver the complete synthetic request: 保留原文" + "。不可截断的验收条件" * 100,
         "note": "Preserve the original stop and once-only settlement."}
-    before = _run(tmp_path, monkeypatch, provider, [], "--runtime-profile", scenario,
-        "--turn-instance-id", "preparation-turn", "--todo-id", TODO, todos=[original])
-    assert before["execution_preparation"]["state"] == "claim_required"
-    goal_file = tmp_path / "state.md"
-    goal_text = goal_file.read_text() + "\n\n## Constraints\n\n" + "Preserve the complete Goal and its stop. 保留停止条件。\n" * 100
-    goal_file.write_text(goal_text)
     capture = tmp_path / "before-claim"
-    capture.mkdir(mode=0o700)
-    codex_context.prepare_codex_context(before, directory=str(native), capture_directory=capture,
-        goal_id=GOAL, agent_id=AGENT, surface="quota_packet", capture_id="before-claim").delivery
+    before = _run(tmp_path, monkeypatch, provider, [], "--runtime-profile", scenario,
+        "--turn-instance-id", "preparation-turn", "--todo-id", TODO,
+        "--defer-context-presentation", "--codex-context-dir", str(native), "--decision-output-dir", str(capture),
+        todos=[original], context_delivery="on",
+        goal_suffix="\n\n## Constraints\n\n" + "Preserve the complete Goal and its stop. 保留停止条件。\n" * 100)
+    assert before["execution_preparation"]["state"] == "claim_required"
+    goal_text = (tmp_path / "state.md").read_text()
+    digest = _present_saved_guard(tmp_path, native, capture, scenario, "preparation-turn")
     hook = [sys.executable, "-m", "loopx.entrypoint", "--registry", str(tmp_path / "registry.json"),
         "--runtime-root", str(tmp_path / "runtime"), "--format", "json", "quota", "context-hook",
         "--context-delivery", "on", "--runtime-profile", scenario,
@@ -240,7 +255,7 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
     assert receipt["todo_id"] == TODO and receipt["turn_instance_id"] == "preparation-turn"
     assert receipt["execution_preparation"]["state"] == "ready"
     claim_reference = receipt["claim_operation_id"]
-    assert claim_reference.startswith("todo-claim:")
+    assert claim_reference == f"todo-claim:codex-capture:{digest}"
     ready = receipt["context"]
     assert ready["ok"], ready.get("reason")
     if location == "root":
@@ -307,7 +322,6 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
 def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
     tmp_path, monkeypatch, capsys, provider, replace_stage,
 ):
-    import hashlib
     import io
     from loopx.cli import main
     from loopx.control_plane.turn_driver import codex_context
@@ -320,13 +334,10 @@ def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
     native.mkdir(mode=0o700)
     event = {"session_id": session, "cwd": str(tmp_path), "hook_event_name": "SessionStart", "source": "startup"}
     assert codex_context.codex_context_hook(str(native), event) == {}
-    before = _run(tmp_path, monkeypatch, provider, [], "--codex-app",
-        "--turn-instance-id", "prepared-turn", "--todo-id", TODO)
-    assert before["execution_preparation"]["state"] == "claim_required"
     original = tmp_path / "preparation"
-    original.mkdir(mode=0o700)
-    codex_context.prepare_codex_context(before, directory=str(native), capture_directory=original,
-        goal_id=GOAL, agent_id=AGENT, surface="quota_packet", capture_id="claim-required").delivery
+    _run(tmp_path, monkeypatch, provider, [], "--codex-app",
+        "--turn-instance-id", "prepared-turn", "--todo-id", TODO, "--codex-context-dir", str(native),
+        "--decision-output-dir", str(original), context_delivery="on")
     from loopx.control_plane.turn_driver import codex_execution_preparation
     record = codex_context.record_native_execution_preparation
     run = codex_execution_preparation._default_runner
@@ -385,6 +396,124 @@ def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
                           check=True, text=True, capture_output=True)
     assert json.loads(json.loads(read.stdout)["content"])["selections"][0]["value"] == "ready"
     assert log.read_bytes() == after_claim
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("case", [
+    "same-execution", "released-execution", "legacy-released-execution",
+    "reencoded-released-execution", "legacy-marked-released-execution",
+])
+def test_native_hook_replays_the_original_claim_after_guard_timeout(
+    tmp_path, monkeypatch, capsys, provider, case,
+):
+    import io
+    from loopx.cli import main
+    from loopx.control_plane.turn_driver import codex_context, codex_execution_preparation
+
+    tmp_path = tmp_path.resolve()
+    monkeypatch.chdir(tmp_path)
+    session, turn = "claim-replay-session", "claim-replay-turn"
+    monkeypatch.setenv("CODEX_THREAD_ID", session)
+    native = tmp_path / "native"
+    native.mkdir(mode=0o700)
+    event = {"session_id": session, "cwd": str(tmp_path),
+             "hook_event_name": "SessionStart", "source": "startup"}
+    assert codex_context.codex_context_hook(str(native), event) == {}
+    capture = tmp_path / "before-claim"
+    legacy = case.startswith("legacy-")
+    released = case != "same-execution"
+    native_args = () if legacy else ("--defer-context-presentation", "--codex-context-dir", str(native))
+    before = _run(tmp_path, monkeypatch, provider, [], "--codex-app",
+        "--turn-instance-id", turn, "--todo-id", TODO, "--decision-output-dir", str(capture),
+        *native_args, context_delivery="off" if legacy else "on")
+    assert before["execution_preparation"]["state"] == "claim_required"
+    source = capture / "decision.json"
+    original_bytes = source.read_bytes()
+    digest = _present_saved_guard(tmp_path, native, capture, "codex_app_heartbeat", turn)
+
+    run = codex_execution_preparation._default_runner
+    claims, guards = [], []
+
+    def interrupt_first_guard(command, **kwargs):
+        if "--prepared-capture-reference" in command:
+            guards.append(command[command.index("--turn-instance-id") + 1])
+            if len(guards) == 1:
+                raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        result = run(command, **kwargs)
+        if "claim" in command:
+            claims.append(json.loads(result.stdout))
+        return result
+
+    monkeypatch.setattr(codex_execution_preparation, "_default_runner", interrupt_first_guard)
+    registry, runtime = tmp_path / "registry.json", tmp_path / "runtime"
+    command = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+               "quota", "context-hook", "--codex-app", "--context-delivery", "on",
+               "--codex-context-dir", str(native)]
+
+    def hook():
+        data = json.dumps({**event, "hook_event_name": "PostToolUse"}).encode()
+        monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(data)))
+        capsys.readouterr()
+        assert main(command) == 0
+        return json.loads(capsys.readouterr().out)
+
+    def read(*args):
+        code, payload = run_json_cli_result(*args, registry_path=registry, runtime_root=runtime, cwd=tmp_path)
+        assert code == 0 and payload["ok"], payload
+        return payload
+
+    if legacy:
+        # Before the upgrade the Host issued the ordinary claim without a
+        # persisted operation ID, then could lose the ready result.
+        legacy_claim = read(*before["execution_preparation"]["claim"]["cli_args"])
+        original_id = legacy_claim["claim_operation_id"]
+    else:
+        assert hook() == {}
+        original_id = claims[0]["claim_operation_id"]
+        assert original_id == f"todo-claim:codex-capture:{digest}"
+    original = read("todo", "receipt", "--goal-id", GOAL, "--operation-id", original_id)
+    lease = original["receipts"][0]["result"]["lease"]
+    if released:
+        read("task-lease", "release", "--goal-id", GOAL, "--todo-id", TODO, "--owner", AGENT,
+            "--expected-version", str(lease["version"]), "--idempotency-key", lease["idempotency_key"])
+
+    presented_capture = capture
+    unverified_copy = case in ("reencoded-released-execution", "legacy-marked-released-execution")
+    if unverified_copy:
+        presented_capture = tmp_path / "unverified"
+        presented_capture.mkdir(mode=0o700)
+        copy = presented_capture / "decision.json"
+        if legacy:
+            copy.write_text(json.dumps({**json.loads(original_bytes), "native_claim_replay_bound": True}))
+        else:
+            copy.write_bytes(original_bytes + b" ")
+        copy.chmod(0o600)
+    presented_digest = _present_saved_guard(tmp_path, native, presented_capture, "codex_app_heartbeat", turn)
+    assert (presented_digest != digest) == unverified_copy
+    result = hook()
+    current = read("task-lease", "inspect", "--goal-id", GOAL, "--todo-id", TODO)
+    assert source.read_bytes() == original_bytes
+    if legacy or unverified_copy:
+        guidance = result["hookSpecificOutput"]["additionalContext"]
+        assert "no verified live guard binding" in guidance and "fresh capture" in guidance
+        assert "host_execution_prepared" not in guidance
+        assert len(claims) == len(guards) == (0 if legacy else 1)
+        assert not current["active"] and current["lease"]["lease_epoch"] == lease["lease_epoch"]
+    elif released:
+        assert len(claims) == 2
+        assert result == {} and not claims[1]["ok"]
+        assert not current["active"] and current["lease"]["lease_epoch"] == lease["lease_epoch"]
+        assert guards == [turn]
+    else:
+        assert len(claims) == 2
+        context = result["hookSpecificOutput"]["additionalContext"]
+        receipt = json.loads(context.rsplit("Receipt: ", 1)[1])
+        assert receipt["claim_operation_id"] == claims[1]["claim_operation_id"] == original_id
+        assert receipt["turn_instance_id"] == turn and receipt["execution_preparation"]["state"] == "ready"
+        assert current["active"] and current["lease"] == lease
+        assert guards == [turn, turn]
+    readback = read("todo", "receipt", "--goal-id", GOAL, "--operation-id", original_id)
+    assert readback["cursor"] == original["cursor"] and readback["receipts"] == original["receipts"]
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -555,47 +684,44 @@ def test_preparation_does_not_replace_explicit_action_selection(monkeypatch):
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("lease_state", ["missing", "expired"])
+@pytest.mark.parametrize("startup", ["before-guard", "after-guard"])
 def test_codex_lifecycle_hook_uses_captured_authority_from_another_project(
-    tmp_path, monkeypatch, provider, lease_state,
+    tmp_path, monkeypatch, provider, lease_state, startup,
 ):
     from loopx.control_plane.turn_driver.codex_context import (
         codex_context_hook,
-        prepare_codex_context,
     )
 
-    before = _run(
-        tmp_path,
-        monkeypatch,
-        provider,
-        [] if lease_state == "missing" else [_lease(expired=True)],
-        "--runtime-profile", "codex_app_ssh_goal",
-        "--begin-turn",
-    )
-    turn = before["heartbeat_receipt"]["turn_instance_id"]
+    tmp_path = tmp_path.resolve()
     context_root = tmp_path / "context"
     capture_root = tmp_path / "capture"
     context_root.mkdir(mode=0o700)
-    capture_root.mkdir(mode=0o700)
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
     foreign_workspace = tmp_path / "project-b"
     foreign_workspace.mkdir()
-    monkeypatch.setenv("CODEX_THREAD_ID", "codex-hook-session")
-    monkeypatch.chdir(foreign_workspace)
     event = {
         "session_id": "codex-hook-session",
         "cwd": str(foreign_workspace.resolve()),
         "hook_event_name": "SessionStart",
         "source": "startup",
     }
-    assert codex_context_hook(str(context_root), event) == {}
-    prepare_codex_context(
-        before,
-        directory=str(context_root),
-        capture_directory=capture_root,
-        goal_id=GOAL,
-        agent_id=AGENT,
-        surface="quota_packet",
-        capture_id="claim-required",
-    ).delivery
+    if startup == "before-guard":
+        assert codex_context_hook(str(context_root), event) == {}
+    before = _run(
+        tmp_path,
+        monkeypatch,
+        provider,
+        [] if lease_state == "missing" else [_lease(expired=True)],
+        "--runtime-profile", "codex_app_ssh_goal",
+        "--begin-turn", "--defer-context-presentation", "--codex-context-dir", str(context_root),
+        "--decision-output-dir", str(capture_root), context_delivery="on",
+    )
+    turn = before["heartbeat_receipt"]["turn_instance_id"]
+    monkeypatch.setenv("CODEX_THREAD_ID", "codex-hook-session")
+    monkeypatch.chdir(foreign_workspace)
+    if startup == "after-guard":
+        assert codex_context_hook(str(context_root), event) == {}
+    _present_saved_guard(tmp_path, context_root, capture_root, "codex_app_ssh_goal", turn)
 
     command = [
         sys.executable, "-m", "loopx.entrypoint",
