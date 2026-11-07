@@ -2098,6 +2098,52 @@ an exact final check proves otherwise. Retain I3 for at least one minor release,
 M1/#8011, full R0/V10/R1, D2/D5/D6/D3, context/model/split-install,
 adoption/full-cost gaps and all frozen failures.
 
+### 2026-11-08 — Legacy projection kind and remaining native read cost
+
+Independent review found that source precedence survived composition but its
+projection kind did not. When canonical and legacy asset inputs referenced the
+same dictionary, object identity selected the user-summary path even when the
+existing precedence rule had chosen the legacy asset. Legacy string counts
+became null; a `next`-only input bypassed the missing-Todo-ID refusal.
+
+Production `4c3ed5d39` makes the existing selector return both source and its
+existing projection kind. Every display/inventory caller still uses the same
+selected source. No new vocabulary, persisted field or authority is introduced.
+Thirteen new cases compare complete summaries with the independent original
+selector for both roles, shared/copy inputs, canonical precedence and actual
+guard selection/refusal. Six fail at the preceding head; all pass after repair.
+The first test draft assumed numeric legacy counts and an unbound guard; its
+failures are retained, and the final oracle preserves the original string
+values and bound Agent/Turn path. The focused suite passes 96 cases. Source and
+isolated wheel independently preserve legacy counts and refuse missing IDs;
+four fresh 101-Todo source/wheel × File/SQLite lifecycles preserve the artifact,
+completion time, four receipts, one debit, restart and negative/replay checks.
+Real disposable PostgreSQL again passes 391 store and 11 service cases with
+zero skips; its server is stopped.
+
+Attribution of the preceding five paired cost runs points to repeated native
+reads during guard, writeback, spend and settled replay. A separate instrumented
+complete lifecycle observes eight additional native `todo.read` calls, each
+adding 147,456 observed daemon disk-write bytes: 1,179,648 bytes in total.
+Instrumented elapsed times are excluded from qualification. A standalone probe
+of the exact native snapshot owner records four read-only SQLite connections
+per snapshot and the same 147,456-byte process-counter increment. Alternating
+identity reads use one read-only connection and 36,864 bytes; provider revision
+and database content digest remain unchanged. These observations locate read
+lifecycle cost; they do not identify physical-device writes or justify removing
+identity, revision, WAL, lease or recovery checks.
+
+The Python `invalid-vision` profile is dominated by imports with the same call
+counts in both arms. Its wall weights do not attribute the paired CPU difference
+or justify another import migration. The next accepted work is a bounded study
+of the existing SQLite read/connection lifecycle, preserving fresh incarnation
+and revision checks through the typed owners. Provider edits require their
+ordinary task scope/ownership preparation. The previous corrected cost table
+remains at `2c9d6360e`, not this compatibility repair; no fresh speedup claim is
+made. Keep the original task, independent exact-head review, whole-path/full-cost
+and host/model/adoption acceptance open, with I3, M1/#8011, R0/V10/R1,
+D2/D5/D6/D3, context/split-install and all frozen failures retained.
+
 ## Appendix B: Decision log
 
 | Date | Decision | Owner / approval | Alternatives | Normative sections changed |

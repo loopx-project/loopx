@@ -1617,6 +1617,40 @@ Mach timebase `125/3` 换算；daemon CPU／写入减初始 setup baseline：
 M1/#8011、完整 R0/V10/R1、D2/D5/D6/D3、context/model/split-install、
 adoption/full-cost 缺口及全部冻结失败继续保留。
 
+### 2026-11-08 — 旧格式投影类型与剩余 native read 成本
+
+独立评审发现，组合读取保留了来源优先级，却丢失所选投影类型。当 canonical 与
+旧 asset 输入共享同一字典时，即使既有优先级选中旧 asset，对象身份仍使其走
+user-summary 路径，旧字符串计数变为 null；只有 `next` 的输入绕过缺少 Todo ID
+的拒绝。
+
+生产代码 `4c3ed5d39` 让既有选择器同时返回来源和原投影类型；display／inventory
+调用方仍使用同一选中来源，没有新增词汇、持久字段或 authority。13 个新用例以原
+独立选择器的完整 summary 为对照，覆盖双 role、共享／复制输入、canonical 优先级
+及真实 guard 选择／拒绝；前一 head 六个失败，修复后全过。首版测试错误假定旧计数
+为数值，且未绑定 guard；其失败保留，最终 oracle 遵循原字符串值和绑定 Agent／Turn
+路径。聚焦 suite 96 个通过。源码与隔离 wheel 独立保留旧计数并拒绝缺少 ID；四条新
+101-Todo 源码／wheel × File／SQLite 生命周期保留产物、原完成时间、四份 receipt、
+一次 debit、重启、反例及 replay。真实 disposable PostgreSQL 再次通过 store391、
+service11，零 skip，服务已停止。
+
+对前五组成本数据归因后，剩余增量指向 guard、writeback、spend 和 settled replay
+中的重复 native read。另一组插桩完整生命周期观察到八次新增 native `todo.read`，
+每次增加 147,456 个已观测 daemon disk-write 字节，共 1,179,648 字节；插桩耗时不
+进入资格比较。对真实 native snapshot owner 的独立探针观察到每个 snapshot 四个
+只读 SQLite connection，同样增加 147,456 个 process-counter 字节。交错 identity
+read 使用一个只读 connection、36,864 字节，provider revision 和数据库内容 digest
+不变。这定位了 read lifecycle 成本，不代表物理设备写入，也不支持删除 identity、
+revision、WAL、lease 或 recovery 检查。
+
+Python `invalid-vision` profile 主要是 import，两边调用数相同；其 wall 权重不能
+归因成对 CPU 差异，也不支持另做 import migration。下一个既有验收步骤是研究原
+SQLite read／connection lifecycle，通过 typed owner 保留新鲜 incarnation 与
+revision 校验；provider 编辑先按普通流程准备 Task scope／ownership。前一修正
+成本表仍对应 `2c9d6360e`，不是本次兼容性修正，不新增提速声明。原 Task、独立
+exact-head 评审、完整路径／完整成本、host／model／adoption 验收继续开放；I3、
+M1/#8011、R0/V10/R1、D2/D5/D6/D3、context／split-install 及全部冻结失败保留。
+
 ## 附录 B：决策日志
 
 | 日期 | 决策 | 负责人 / 批准 | 备选 | 变更的规范章节 |
