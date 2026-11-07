@@ -1771,6 +1771,57 @@ remain in force when affected. This diagnosis changes no production behavior,
 preset, budget, provider, authority or installed host. All earlier acceptance,
 adoption and complete-cost gaps remain open.
 
+### 2026-11-07 — Guard cost candidate selection and context transport composition
+
+An isolated source-console counterfactual defers three Monitor adapter imports
+until their functions are invoked. The 101-Todo SQLite lifecycle still retains
+the original artifact, completion time, four receipts and one debit. The guard
+loads 502 rather than 503 modules and still makes 89 traced runtime calls;
+only `todos.external_wait_contract` disappears. Monitor history lookup and
+quota accounting admission execute on the guard path, so their dependencies
+remain necessary. This rejects that import deferral as the next cost-reduction
+slice; the temporary wrapper is not a production or compatibility qualification.
+
+The existing context-transport candidates are separate from loading reduction:
+[#8286](https://github.com/loopx-project/loopx/pull/8286) at `efce6cb9c` skips
+inactive Anti-Entropy validation, and
+[#8290](https://github.com/loopx-project/loopx/pull/8290) at `9537687be` omits the
+governing source from status-only context validation. A temporary combined
+overlay against runtime base `32167518b` was exercised through four complete
+File/SQLite × base/overlay source-console episodes with 101 Todos. Accepted
+evidence, first completion time, controlled Effect restart, four committed
+receipts and one debit remain intact; evidence replacement and settled-Turn
+execution remain refusals. The combined source also passes 91 focused Python
+cases and 20 TypeScript cases with zero skips. The applied paths are restored
+after qualification; this creates no competing implementation or merge.
+
+| Provider | Traced guard calls, base → overlay | JSON parameter bytes, base → overlay | Loaded modules, base → overlay |
+| --- | ---: | ---: | ---: |
+| SQLite | 89 → 87 | 1,904,862 → 1,772,448 (−6.95%) | 503 → 503 |
+| File | 89 → 87 | 1,903,569 → 1,771,587 (−6.93%) | 503 → 503 |
+
+These single instrumented observations count the UTF-8 JSON parameters passed
+to the shared runtime. They exclude transport headers, retries, responses,
+startup and service CPU; they are not total wire bytes or a latency comparison.
+The SQLite status-only validation inputs total 134,868 bytes on base; the one
+remaining input is 2,045 bytes in the overlay. Immutable context and settlement
+owners remain in place. This independently confirms a bounded transport delta,
+without qualifying either candidate's merge, a combined wheel, installed-host
+adoption or complete task benefit. The frozen cost studies remain unchanged.
+
+The largest remaining guard parameter producers are `todo.context.page`
+(789,198 bytes across nine calls), `todo.quota_planning.project` (390,361 bytes)
+and `goal.vision_wait.project` (185,559 bytes), identical in the SQLite base and
+overlay. The next bounded investigation targets reuse of the canonical Todo
+source in those existing typed projection owners, before implementing one
+coherent source-read transaction. It must preserve source/provider revisions,
+actor/lease fences, complete exact reads, archive/replay lineage, pause/gates
+and pending intents. More leaf RPCs or lossy source-field pruning do not qualify
+the transaction cutover. Existing Goal-route work in #8123 and its unresolved
+performance holds remain separate. Full source/wheel correctness and a matched,
+unprofiled default-SQLite whole-path comparison are still required for a new
+implementation; all earlier milestone, adoption and complete-cost gaps remain.
+
 ## Appendix B: Decision log
 
 | Date | Decision | Owner / approval | Alternatives | Normative sections changed |

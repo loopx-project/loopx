@@ -1348,6 +1348,49 @@ CPU。四次 guard 观测的 source snapshot 约为 0.048–0.050 秒。因此�
 PostgreSQL 资格继续适用。本诊断没有修改生产行为、preset、budget、provider、
 authority 或 installed host。既有验收、采纳和完整成本缺口继续开放。
 
+### 2026-11-07 — Guard 成本候选取舍与 context transport 组合
+
+隔离的源码 console 反事实在函数被调用时才加载三个 Monitor adapter 依赖。
+101-Todo SQLite 生命周期仍保留原 artifact、首次完成时间、四份 receipt 与
+一次 debit。guard 从 503 个模块降至 502 个，跟踪的 runtime 调用仍为 89；
+只有 `todos.external_wait_contract` 消失。Monitor 历史查找与 quota accounting
+admission 在 guard 路径实际执行，其依赖仍然必要。因此不选择这项 import
+延迟作为下一成本缩减切片；临时 wrapper 不是生产实现或兼容性资格。
+
+既有 context transport 候选与加载缩减分别验证：
+[#8286](https://github.com/loopx-project/loopx/pull/8286) 的 `efce6cb9c` 跳过
+inactive Anti-Entropy validation；
+[#8290](https://github.com/loopx-project/loopx/pull/8290) 的 `9537687be` 从
+status-only context validation 中省略 governing source。以 runtime base
+`32167518b` 为基线的临时组合 overlay，已跑四组 File/SQLite × base/overlay
+完整源码 console episode，每组含 101 Todos。已验收证据、首次完成时间、
+受控 Effect 重启、四份已提交 receipt 和一次 debit 均保留；证据替换与已结算
+Turn 的再次执行仍被拒绝。组合源码另通过 91 个聚焦 Python 用例与 20 个
+TypeScript 用例，零 skip。验证后恢复临时变更的路径，没有新增竞争实现或合入。
+
+| Provider | guard 跟踪调用，base → overlay | JSON 参数字节，base → overlay | 加载模块，base → overlay |
+| --- | ---: | ---: | ---: |
+| SQLite | 89 → 87 | 1,904,862 → 1,772,448（−6.95%） | 503 → 503 |
+| File | 89 → 87 | 1,903,569 → 1,771,587（−6.93%） | 503 → 503 |
+
+这些单次插桩观测统计传入共享 runtime 的 UTF-8 JSON 参数，不含 transport
+header、retry、response、startup 或 service CPU；不是完整 wire 字节或延迟
+比较。SQLite base 的两个 status-only validation 输入共 134,868 字节，
+overlay 唯一保留的输入为 2,045 字节。不可变 context 与 settlement owner
+继续负责原边界。这独立验证了有界 transport delta，但不证明候选 merge、组合
+wheel、installed-host adoption 或完整任务收益。冻结成本研究没有变更。
+
+剩余最大的 guard 参数生产者是 `todo.context.page`（九次调用共 789,198
+字节）、`todo.quota_planning.project`（390,361 字节）和
+`goal.vision_wait.project`（185,559 字节）；SQLite base 与 overlay 数值
+相同。下一有界调查先在这些既有 typed projection owner 中验证 canonical
+Todo source 的复用，再实现一个完整 source-read transaction。必须保留
+source/provider revision、actor/lease fence、完整 exact read、archive/replay
+lineage、pause/gates 与 pending intents。新增更多 leaf RPC 或有损裁剪 source
+字段不能取得 transaction cutover 资格。#8123 的既有 Goal-route 工作与其未
+解决的性能 hold 保持独立。新实现仍需完整 source/wheel 正确性，以及不插桩、
+匹配条件的默认 SQLite 全路径比较；既有里程碑、采纳与完整成本缺口继续开放。
+
 ## 附录 B：决策日志
 
 | 日期 | 决策 | 负责人 / 批准 | 备选 | 变更的规范章节 |
