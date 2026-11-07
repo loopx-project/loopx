@@ -85,7 +85,7 @@ def service(tmp_path, request, monkeypatch):
     config.write_text(json.dumps({"schema_version": "loopx_local_delegation_v0", "bindings": [{
         "id": "analysis", "agent_id": "analyst", "todo_id": "todo_analyst-initial", "requesters": ["lead"],
         "workspace": str(root / "analyst" / "initial"), "timeout_seconds": 60, "output_refs": ["output.json"],
-        "host_args": ["--host", "generic-cli", "--iteration-context", "fresh", "--host-command-json",
+        "host_args": ["--host", "generic-cli", "--iteration-context", "fresh", "--host-adapter-request-schema", "loopx_turn_host_request_v1", "--host-command-json",
                       json.dumps([sys.executable, str(host), str(root)])],
     }]}))
     return root, Delegations(root / "runtime", root / "registry.json", demo.GOAL, "lead", config)

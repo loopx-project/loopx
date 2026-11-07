@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from copy import deepcopy
-from dataclasses import dataclass
 from typing import Any
 
 from ..effect_runtime import effect_runtime_projection_result, source_number_tokens

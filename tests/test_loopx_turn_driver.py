@@ -2285,6 +2285,7 @@ raise SystemExit(0 if artifact.read_text(encoding="utf-8") == "validated" else 7
             "codex-fixture",
             "--project",
             str(host_project),
+            "--host-adapter-request-schema", "loopx_turn_host_request_v1",
             "--host-adapter-command-json",
             json.dumps([sys.executable, "-c", host_script]),
             "--validation-command-json",
@@ -2383,6 +2384,7 @@ raise SystemExit(0 if artifact.read_text(encoding="utf-8") == "validated" else 7
                 "codex-fixture",
                 "--project",
                 str(host_project),
+                "--host-adapter-request-schema", "loopx_turn_host_request_v1",
                 "--host-command-json",
                 json.dumps([sys.executable, "-c", host_script]),
                 "--validation-command-json",
@@ -2418,7 +2420,7 @@ raise SystemExit(0 if artifact.read_text(encoding="utf-8") == "validated" else 7
             "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
             "turn", "run-once", "--host", "generic-cli", "--goal-id", "loopx-turn-fixture",
             "--agent-id", "codex-fixture", "--turn-instance-id", "next-cadence-fixture",
-            "--project", str(host_project), "--host-command-json",
+            "--project", str(host_project), "--host-adapter-request-schema", "loopx_turn_host_request_v1", "--host-command-json",
             json.dumps([sys.executable, "-c", host_script]), "--validation-command-json",
             json.dumps([sys.executable, "-c", validation_script]),
             "--no-global-sync", "--execute",
@@ -2467,6 +2469,7 @@ def test_managed_start_interruption_preserves_reservation_and_attempt(
             "--format", "json", "turn", "run-once", "--host", "generic-cli",
             "--goal-id", scope["goal_id"], "--agent-id", scope["agent_id"],
             "--turn-instance-id", "start-checkpoint-fixture", "--project", str(project),
+            "--host-adapter-request-schema", "loopx_turn_host_request_v1",
             "--host-adapter-command-json", json.dumps([sys.executable, "-c", host_script]),
             "--no-global-sync", "--execute"]
     persist, make_cadence = executor._write_journal, turn_cadence.managed_cadence_start
@@ -2838,6 +2841,7 @@ raise SystemExit(0 if artifact.read_text(encoding="utf-8") == "completed" else 7
         "codex-fixture",
         "--project",
         str(host_project),
+        "--host-adapter-request-schema", "loopx_turn_host_request_v1",
         "--host-adapter-command-json",
         json.dumps([sys.executable, "-c", host_script]),
         "--validation-command-json",
@@ -3096,6 +3100,7 @@ def _turn_run_once_completion_argv(
         "codex-fixture",
         "--project",
         str(project),
+        "--host-adapter-request-schema", "loopx_turn_host_request_v1",
         "--host-adapter-command-json",
         json.dumps([sys.executable, "-c", host_script]),
         "--validation-command-json",
@@ -3755,6 +3760,7 @@ raise SystemExit(0 if pathlib.Path("claimed-artifact.txt").is_file() else 9)
                 "codex-fixture",
                 "--project",
                 str(host_project),
+                "--host-adapter-request-schema", "loopx_turn_host_request_v1",
                 "--host-command-json",
                 json.dumps([sys.executable, "-c", host_script]),
                 "--validation-command-json",
@@ -4107,7 +4113,8 @@ def test_turn_run_once_host_wires_validated_reflection_post_settlement(
             "json.dump(result, sys.stdout)\n",
             encoding="utf-8",
         )
-        host_args += ["--host-adapter-command-json", json.dumps([sys.executable, str(runner)])]
+        host_args += ["--host-adapter-request-schema", "loopx_turn_host_request_v1",
+                      "--host-adapter-command-json", json.dumps([sys.executable, str(runner)])]
     args = [
         "--registry",
         str(registry),

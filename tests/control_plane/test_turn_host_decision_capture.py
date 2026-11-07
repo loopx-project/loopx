@@ -130,6 +130,8 @@ def test_generic_dispatch_checks_complete_goal_before_host(
         "from pathlib import Path; import sys; sys.stdin.read(); "
         f"Path({str(marker)!r}).write_text('started'); raise SystemExit(9)",
     ]}
+    if launch == "argv" and mode != "historical":
+        host["host_adapter_request_schema"] = "loopx_turn_host_request_v1"
 
     def execute():
         return run_loopx_turn_once(plan, **host, project=tmp_path / "project",
@@ -615,7 +617,7 @@ def test_real_dsh_cli_preserves_complete_input_and_once_only_settlement(tmp_path
     validator = [sys.executable, "-c", "import json,pathlib,sys; json.load(sys.stdin); "
                  f"assert pathlib.Path({fixture.MARKER_NAME!r}).read_text() == {fixture._marker_value(1)!r}"]
     host_args = (["--host", "dsh", "--dsh-runner", str(runner)] if launch == "builtin" else [
-        "--host", "generic-cli", "--host-adapter-command-json", json.dumps([
+        "--host", "generic-cli", "--host-adapter-request-schema", "loopx_turn_host_request_v1", "--host-adapter-command-json", json.dumps([
             sys.executable, "-m", "loopx.dsh_goal_mode", "--workspace", str(workspace),
             "--dsh-runner", str(runner), "--dsh-home", str(tmp_path / "stdio-dsh-home")])])
     argv = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
@@ -634,6 +636,109 @@ def test_real_dsh_cli_preserves_complete_input_and_once_only_settlement(tmp_path
         "--format", "json", "todo", "list", "--goal-id", fixture.GOAL_ID, "--todo-id", fixture.TODO_ID])
     assert code == 0 and current["todo"]["status"] == "open"
     assert current["authority_read"]["source_authority"] == provider + "_v0"
+
+
+
+@pytest.mark.skipif(os.name != "posix", reason="the deterministic TraeX executable uses a POSIX shebang")
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_real_traex_cli_checks_the_adapter_before_dispatch_and_replays_once(
+    tmp_path, monkeypatch, provider,
+):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    fixture = _fixture_module()
+    project, runtime, workspace, registry = fixture._write_fixture(tmp_path, turn_count=2)
+    state = project / ".codex/goals" / fixture.GOAL_ID / "ACTIVE_GOAL_STATE.md"
+    summary = parse_active_state_todos(state.read_text(), state_path=state, item_limit=None)
+    initialize_canonical_authority(runtime, fixture.GOAL_ID,
+        build_todo_runtime_shadow_projection(goal_id=fixture.GOAL_ID, handoff_mode="soft_claim",
+            todos=summary["agent_todos"]["items"]), state_path=state, provider=provider)
+
+    traex = tmp_path / "traex-fixture"
+    traex_calls = tmp_path / "traex-calls.txt"
+    traex.write_text(
+        f"#!{sys.executable}\n"
+        "import json,sys\nfrom pathlib import Path\nfrom jsonschema import validate\n"
+        f"open({str(traex_calls)!r}, 'a').write('invoked\\n')\n"
+        "args = sys.argv[1:]\n"
+        "prompt = args[-1]\n"
+        "assert 'Never re-enter admission for detail reads.' in prompt\n"
+        "source, _ = json.JSONDecoder().raw_decode(prompt.split('Turn request:\\n', 1)[1])\n"
+        "assert source['schema_version'] == 'loopx_turn_host_request_v1'\n"
+        "assert 'turn_envelope' not in source\n"
+        "contract = source['work_contract']\n"
+        f"assert contract['selected_todo']['todo_id'] == {fixture.TODO_ID!r}\n"
+        "ref = source['detail_ref']['captured_decision']\n"
+        "assert ref['turn_key'] == source['turn_key']\n"
+        "original = Path(ref['path']).read_bytes()\n"
+        "assert ref['source_hash_ref'] == '$.source_decision_hash'\n"
+        "assert source['source_decision_hash'] == contract['contract_binding']['content_hash']\n"
+        "assert json.loads(original) == contract\n"
+        f"Path({fixture.MARKER_NAME!r}).write_text({fixture._marker_value(1)!r})\n"
+        "candidate = {'result_kind':'validated_progress','classification':'traex_complete_work',\n"
+        "    'delivery_batch_scale':'implementation','delivery_outcome':'outcome_progress',\n"
+        "    'path_delta_mode':'unchanged','vision_unchanged_reason':'Step 2 remains.',\n"
+        "    'next_action':'Advance step 2.','work_evidence':['artifact:marker'],\n"
+        "    'validation_evidence':['fixture:independent-marker-validator']}\n"
+        "schema = Path(args[args.index('--output-schema') + 1])\n"
+        "validate(candidate, json.loads(schema.read_text()))\n"
+        "Path(args[args.index('--output-last-message') + 1]).write_text(json.dumps(candidate))\n",
+        encoding="utf-8",
+    )
+    traex.chmod(0o700)
+
+    adapter = Path(__file__).resolve().parents[2] / "scripts/traex_turn_host_adapter.py"
+    adapter_calls = tmp_path / "adapter-calls.txt"
+    adapter_runner = [
+        sys.executable, "-c",
+        "import os,sys; "
+        f"open({str(adapter_calls)!r}, 'a').write('invoked\\n'); "
+        "os.execv(sys.executable, [sys.executable, *sys.argv[1:]])",
+        str(adapter), "--traex-bin", str(traex), "--workspace", str(workspace),
+    ]
+    validation_calls = tmp_path / "validation-calls.txt"
+    validator = [sys.executable, "-c", "import json,pathlib,sys; json.load(sys.stdin); "
+                 f"assert pathlib.Path({fixture.MARKER_NAME!r}).read_text() == {fixture._marker_value(1)!r}; "
+                 f"open({str(validation_calls)!r}, 'a').write('validated\\n')"]
+    argv = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+            "turn", "run-once", "--goal-id", fixture.GOAL_ID, "--agent-id", fixture.AGENT_ID,
+            "--host", "generic-cli", "--execution-mode", "isolated-headless", "--project", str(workspace),
+            "--host-adapter-command-json", json.dumps(adapter_runner),
+            "--validation-command-json", json.dumps(validator), "--no-global-sync", "--timeout-seconds", "30"]
+    fresh = [*argv, "--turn-instance-id", "traex-complete-source", "--execute"]
+    for incompatible in ([], ["--host-adapter-request-schema", "loopx_turn_host_request_v0"]):
+        code, refused = fixture._run_cli([*fresh, *incompatible])
+        assert code == 1 and refused["status"] == "unavailable", refused
+        assert "--host-adapter-request-schema loopx_turn_host_request_v1" in refused["reason"]
+        assert not any(refused["effects"].values())
+        assert not turn_journal_path(runtime, goal_id=fixture.GOAL_ID, turn_key=refused["resume_turn_key"]).exists()
+        assert not adapter_calls.exists() and not validation_calls.exists()
+        assert fixture._quota_spend_count(runtime) == 0
+
+    compatible = ["--host-adapter-request-schema", "loopx_turn_host_request_v1"]
+    code, first = fixture._run_cli([*fresh, *compatible])
+    assert code == 0 and first["status"] == "committed", json.dumps(first, ensure_ascii=False)
+    assert first["result_kind"] == "validated_progress"
+    assert first["effects"]["state_written"] and first["effects"]["quota_spent"]
+    code, replay = fixture._run_cli([*argv, "--resume-turn-key", first["resume_turn_key"], "--execute"])
+    assert code == 0 and replay["status"] == "committed", replay
+    assert replay["replayed"] and not any(replay["effects"].values())
+    assert adapter_calls.read_text().splitlines() == ["invoked"]
+    assert validation_calls.read_text().splitlines() == ["validated"]
+    assert fixture._quota_spend_count(runtime) == 1
+
+    from loopx.control_plane.turn_driver.executor import build_loopx_turn_host_request
+
+    plan = load_loopx_turn_plan_from_journal(runtime, goal_id=fixture.GOAL_ID,
+        agent_id=fixture.AGENT_ID, turn_key=first["resume_turn_key"])
+    request = build_loopx_turn_host_request(plan)
+    for invalid in ({**request, "turn_envelope": {}}, {**request, "work_contract": None}):
+        result = subprocess.run(
+            [sys.executable, str(adapter), "--traex-bin", str(traex), "--workspace", str(workspace)],
+            input=json.dumps(invalid), text=True, capture_output=True, cwd=workspace, timeout=15,
+        )
+        assert result.returncode == 2 and not result.stdout
+        assert "invalid LoopX Turn Host request" in result.stderr
+        assert traex_calls.read_text().splitlines() == ["invoked"]
 
 
 def test_historical_tool_identity_preserves_raw_values(complete_host_request):

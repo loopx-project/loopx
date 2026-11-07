@@ -419,7 +419,7 @@ json.dump({'schema_version': 'loopx_turn_result_v0', 'turn_key': request['turn_k
     'vision_unchanged_reason': 'The original fixture remains open.',
     'reward_memory_reflection_json': '{"status":"no_evidence"}'}, sys.stdout)
 ''', encoding="utf-8")
-        host_args = ["--host", host_kind, "--host-adapter-command-json", json.dumps([sys.executable, str(runner)])]
+        host_args = ["--host", host_kind, "--host-adapter-request-schema", "loopx_turn_host_request_v1", "--host-adapter-command-json", json.dumps([sys.executable, str(runner)])]
     monkeypatch.setenv("FIXTURE_HOST_CAPTURE", str(capture))
     output = io.StringIO()
     with contextlib.redirect_stdout(output):

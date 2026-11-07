@@ -620,6 +620,7 @@ def _mode_variant_commands(
             AGENT_IDS[0],
             "--project",
             str(project),
+            "--host-adapter-request-schema", "loopx_turn_host_request_v1",
             "--host-command-json",
             '["python3","-c","raise SystemExit(9)"]',
             "--no-global-sync",

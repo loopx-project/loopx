@@ -116,6 +116,7 @@ uses a registered Goal, Agent, eligible claimed Todo and independent validator:
 ```sh
 loopx turn run-once --goal-id demo --agent-id analyst --todo-id todo_demo \
   --project /srv/work/project --host generic-cli --iteration-context fresh \
+  --host-adapter-request-schema loopx_turn_host_request_v1 \
   --host-command-json '["loopx-memt-turn","--config","/srv/operator/memt.json"]' \
   --validation-command-json '["python3","/srv/operator/check_artifact.py"]'
 ```

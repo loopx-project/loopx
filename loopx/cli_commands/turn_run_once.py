@@ -887,6 +887,7 @@ def execute_turn_run_once(
             decision_capture_payload=decision,
             require_decision_capture=True,
             host_argv=raw_argv,
+            host_adapter_request_schema=getattr(args, "host_adapter_request_schema", None),
             host_runner=host_runner,
             session_binding_resolver=session_binding_resolver,
             project=project,
