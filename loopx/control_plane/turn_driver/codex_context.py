@@ -813,7 +813,7 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                         from .native_first_read import observed_first_read_reference
 
                         reference = observed_first_read_reference(directory, result["target"], recovery,
-                            transaction["context"], plan)
+                            transaction["context"], plan, transaction.get("initial_read_plan"))
                         if reference is not None:
                             state["pending"]["observed_first_read"] = reference
                     _save(root, state)

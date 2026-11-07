@@ -3,6 +3,7 @@ import {EffectiveAction} from "./effective_action.generated.ts";
  * addressed in the immutable source. This plan changes no canonical state. */
 import {isDeepStrictEqual} from "node:util";
 import {visionAuthoringContract} from "../goals/vision_checkpoint.ts";
+import {completeGoalNarrative} from "../work_items/goal_context_source.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {jsonObject, requireBoolean, requireJsonObject} from "../runtime_decode.ts";
 import {GOAL_OUTCOMES_SCHEMA, OUTCOME_CONTEXT_NAVIGATION_SCHEMA} from "../goals/outcome_requirements.ts";
@@ -17,6 +18,7 @@ import {createHash} from "node:crypto";
 
 
 type Path = (string | number)[];
+type ReusableReadField = {path: Path; freshKeys: string[]; minimumBytes: number; sourceFile?: string};
 const MIN_REUSABLE_BODY_BYTES = 1024;
 const pointer = (path: Path): string => path.length ? "/" + path.map(key =>
   String(key).replaceAll("~", "~0").replaceAll("/", "~1")).join("/") : "";
@@ -26,14 +28,21 @@ const known = (row: JsonObject, fields: string[]): boolean => Object.keys(row).e
 
 /** One registry for bodies eligible for observed reuse, regardless of whether
  * the reader delivered the body itself or packaged it in a complete parent. */
-function reusableFirstReadFields(context: JsonObject): {path: Path; freshKeys: string[]; minimumBytes: number}[] {
+function reusableFirstReadFields(context: JsonObject): ReusableReadField[] {
   const base: Path = ["interaction_contract", "agent_channel", "work_context", "sources"];
   const sources = at(context, base);
   if (!Array.isArray(sources)) return [];
-  return sources.flatMap((value, i) => {
+  return sources.flatMap<ReusableReadField>((value, i) => {
     const source = jsonObject(value), content = jsonObject(source?.content);
     if (!content) return [];
     const path = [...base, i, "content"];
+    // The current source and full-file revision still reach the first read.
+    // Only the literal narrative may carry forward across generated Todo edits.
+    if (source?.source === "goal_state" && content.ok !== false &&
+        (content.status === undefined || content.status === "loaded") &&
+        typeof content.state_file === "string" && completeGoalNarrative(content))
+      return [{path: [...path, "text"], freshKeys: [], minimumBytes: MIN_REUSABLE_BODY_BYTES,
+        sourceFile: content.state_file}];
     if (source?.kind === "agent_preferences")
       return [{path, freshKeys: ["ok", "revision", "instruction"], minimumBytes: MIN_REUSABLE_BODY_BYTES}];
     if (source?.source !== "goal_acceptance") return [];
@@ -66,15 +75,22 @@ function reusableFirstReadFields(context: JsonObject): {path: Path; freshKeys: s
   });
 }
 
+function observedSectionDigest(body: string, field?: ReusableReadField): string {
+  // Same text at a reused array index is insufficient after a Goal file rebind.
+  const value = field?.sourceFile === undefined ? body : JSON.stringify([field.sourceFile, body]);
+  return createHash("sha256").update(value).digest("hex");
+}
+
 /** Digests stay in the private observed-read journal, never repeated to the model.
  * The existing exact-source identity preserves non-JS numeric spellings. */
 export function contextReadSectionDigests(request: JsonObject, paths: Path[]): JsonObject {
   const context = requireJsonObject(request.context, "read section source");
   const identity = contextSourceIdentity(request, request.source_number_tokens);
   const selected = new Set(paths.map(pointer));
+  const fields = new Map(reusableFirstReadFields(context).map(field => [pointer(field.path), field]));
   const covered = new Map(paths.map(path => [pointer(path), {path, minimumBytes: MIN_REUSABLE_BODY_BYTES}]));
-  for (const field of reusableFirstReadFields(context))
-    if (paths.some(parent => pathStartsWith(field.path, parent))) covered.set(pointer(field.path), field);
+  for (const [address, field] of fields)
+    if (paths.some(parent => pathStartsWith(field.path, parent))) covered.set(address, field);
   const inherited = jsonObject(request.consumed_pointers), coverage = new Set(paths.map(pointer));
   // The IO owner authenticates the reader's native observation. Recheck each
   // inherited value against this exact source before combining it with the
@@ -86,7 +102,7 @@ export function contextReadSectionDigests(request: JsonObject, paths: Path[]): J
       const read = capturedContextSelection({context, select: [address], recover_selection_errors: true});
       if (read.rejected_selection) continue;
       const path = (read.selections as {path: Path}[])[0].path;
-      if (createHash("sha256").update(identity(at(context, path), ["context", ...path])).digest("hex") === expected)
+      if (observedSectionDigest(identity(at(context, path), ["context", ...path]), fields.get(address)) === expected)
         coverage.add(address);
     }
     const complete = (path: Path): boolean => {
@@ -95,18 +111,18 @@ export function contextReadSectionDigests(request: JsonObject, paths: Path[]): J
       return value !== null && typeof value === "object" && Object.keys(value).length > 0
         && Object.keys(value).every(key => complete([...path, Array.isArray(value) ? Number(key) : key]));
     };
-    for (const field of reusableFirstReadFields(context))
-      if (complete(field.path)) covered.set(pointer(field.path), field);
+    for (const [address, field] of fields)
+      if (complete(field.path)) covered.set(address, field);
   }
   return Object.fromEntries([...covered].flatMap(([address, {path, minimumBytes}]) => {
     const content = identity(at(context, path), ["context", ...path]);
     // Parent delivery must not multiply tiny bodies into a larger journal.
     return selected.has(address) || Buffer.byteLength(content) >= minimumBytes
-      ? [[address, createHash("sha256").update(content).digest("hex")]] : [];
+      ? [[address, observedSectionDigest(content, fields.get(address))]] : [];
   }));
 }
 
-/** Only previously delivered supplementary bodies may use a reference. Current
+/** Only registered, previously delivered bodies may use a reference. Current
  * decisions, stops, selection, settlement and unknown source shapes stay inline. */
 function observedFirstRead(request: JsonObject, pointers: string[]): JsonObject | undefined {
   const context = requireJsonObject(request.context, "current first read");
@@ -126,7 +142,7 @@ function observedFirstRead(request: JsonObject, pointers: string[]): JsonObject 
     const body = at(context, path);
     if (typeof seen[address] === "string" && field) {
       const content = identity(body, ["context", ...path]);
-      if (Buffer.byteLength(content) >= field.minimumBytes && createHash("sha256").update(content).digest("hex") === seen[address]) {
+      if (Buffer.byteLength(content) >= field.minimumBytes && observedSectionDigest(content, field) === seen[address]) {
         reused[address] = seen[address];
         return field.freshKeys.filter(key => body !== null && typeof body === "object" &&
           Object.hasOwn(body, key)).map(key => ({pointer: pointer([...path, key]), path: [...path, key]}));
@@ -148,8 +164,22 @@ function observedFirstRead(request: JsonObject, pointers: string[]): JsonObject 
     JSON.stringify({pointer: row.pointer}).slice(0, -1) + ',"value":' + identity(at(context, row.path), ["context", ...row.path]) + '}'), 0);
   // Splitting a container repeats addresses. Count those and the reuse index;
   // retain a margin for the existing recovery guidance, or deliver it whole.
-  return bytes(grouped) + Buffer.byteLength(JSON.stringify(Object.keys(reused))) + MIN_REUSABLE_BODY_BYTES < bytes(original)
-    ? {selections: grouped, reused} : undefined;
+  if (bytes(grouped) + Buffer.byteLength(JSON.stringify(Object.keys(reused))) + MIN_REUSABLE_BODY_BYTES >= bytes(original))
+    return undefined;
+  if (request.include_initial_read_plan === true) {
+    // The IO adapter already receives the ordinary plan. Send the changed
+    // middle of that list, keeping its exact order and coalescing decisions.
+    let start = 0, end = original.length, stop = grouped.length;
+    while (start < end && start < stop && original[start].pointer === grouped[start].pointer) start++;
+    while (end > start && stop > start && original[end - 1].pointer === grouped[stop - 1].pointer) {
+      end--;
+      stop--;
+    }
+    const selection_splice = {start, end, selections: grouped.slice(start, stop)};
+    if (Buffer.byteLength(JSON.stringify(selection_splice)) < Buffer.byteLength(JSON.stringify(grouped)))
+      return {selection_splice, reused};
+  }
+  return {selections: grouped, reused};
 }
 
 function inlineReadSections(request: JsonObject, required: JsonObject): JsonObject {

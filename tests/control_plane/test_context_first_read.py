@@ -1083,3 +1083,87 @@ def test_native_first_read_reuses_only_observed_current_fields(tmp_path, monkeyp
     assert facts(restarted)[prefix + "/0"] == outcomes[0]
     recovered = pages(second["first_read_command"])
     assert facts(recovered)[prefix + "/0"] == outcomes[0]
+
+
+@pytest.mark.parametrize("transition", ["unchanged", "corrected", "different_source", "incomplete"])
+def test_native_first_read_goal_narrative_reuse(tmp_path, monkeypatch, decision, transition):
+    from test_codex_context_lifecycle import deliver, setup
+
+    event = setup(tmp_path, monkeypatch)
+    narrative = "保留完整目标、独立验收、权限边界和停止条件。\n" * 140
+    source = decision["interaction_contract"]["agent_channel"]["work_context"]["sources"][0]
+    plan = decision["interaction_contract"]["cli_channel"]["settlement_plan"]
+    prefix = "/interaction_contract/agent_channel/work_context/sources/0/content"
+    body_pointer = prefix + "/text"
+    source.update(source="goal_state", ordering="before_work")
+
+    def goal_source(path, text, generated):
+        def revision(value):
+            return "sha256:" + hashlib.sha256(value.encode()).hexdigest()
+
+        line = len(text.splitlines()) + 1
+        return {"state_file": path, "text": text, "revision": revision(text + generated),
+                "excluded_todo_regions": [{"role": "agent", "start_line": line, "end_line": line,
+                                           "revision": revision(generated)}]}
+
+    def capture(name, content):
+        source.update(content=content, command=f"cat -- {content['state_file']}")
+        plan["identity"]["turn_instance_id"] = name
+        directory = tmp_path / name
+        directory.mkdir(mode=0o700)
+        prepared = codex_context.prepare_codex_context(decision, directory=str(tmp_path),
+            capture_directory=directory, goal_id="fixture", agent_id="agent",
+            surface="quota_packet", capture_id=name)
+        return model_context_reference(native_context_capture_view(prepared.delivery, directory,
+            context_directory=str(tmp_path), initial_read_plan=prepared.initial_read_plan))
+
+    def read(command):
+        pages, size, offset = [], 0, 0
+        while command:
+            words = shlex.split(command)
+            stdout = subprocess.check_output([sys.executable, "-m", "loopx.entrypoint", "--format", "json",
+                *words[words.index("quota"):]])
+            page = json.loads(stdout)
+            assert page["ok"] and page["offset"] == offset, page
+            pages.append(page)
+            size += len(stdout)
+            offset += len(page["content"].encode())
+            command = page.get("next_command")
+        assert pages[-1]["eof"] and offset == pages[-1]["total_bytes"]
+        return pages, selected_context_values("".join(page["content"] for page in pages)), size
+
+    first = capture("first", goal_source("goal.md", narrative, "old generated todo\n"))
+    pages, facts, _ = read(first["first_read_command"])
+    assert facts[body_pointer] == narrative and "previously_delivered_fields" not in pages[0]
+    deliver(tmp_path, event, pages)
+    assert body_pointer in codex_context._state(tmp_path)["consumed_pointers"]
+
+    text = narrative + "Use the revised owner decision.\n" if transition == "corrected" else narrative
+    current = goal_source("alternate.md" if transition == "different_source" else "goal.md",
+                          text, "new generated todo\n")
+    if transition == "incomplete":
+        current.update(read_complete=False, recovery="Restore the complete Goal source.")
+    decision["goal_boundary"]["stop_condition"] = "Stop before an external write."
+    second = capture("second", current)
+    pages, facts, warm_bytes = read(second["first_read_command"])
+    assert facts[prefix + "/revision"] == current["revision"]
+    assert facts["/goal_boundary"] == decision["goal_boundary"]
+    assert facts["/interaction_contract/cli_channel/settlement_plan/identity/turn_instance_id"] == "second"
+    if transition != "unchanged":
+        assert facts[body_pointer] == text and "previously_delivered_fields" not in pages[0]
+        if transition == "incomplete":
+            assert facts[prefix + "/recovery"] == current["recovery"]
+        return
+
+    assert pages[0]["previously_delivered_fields"] == [body_pointer] and body_pointer not in facts
+    observed = json.loads(Path(pages[0]["reference_file"]).read_text())["observed_read"]
+    ordinary = Path(pages[0]["reference_file"]).with_name(observed["fallback_reference"]["filename"])
+    recovery = second["recovery"]["command"]
+    _, restored, _ = read(recovery + " --select " + body_pointer)
+    assert restored[body_pointer] == narrative
+    codex_context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": "PostCompact"})
+    fallback, after, fallback_bytes = read(second["first_read_command"])
+    assert "previously_delivered_fields" not in fallback[0] and after[body_pointer] == narrative
+    assert Path(fallback[0]["reference_file"]) == ordinary
+    assert {key: value for key, value in after.items() if key != body_pointer} == facts
+    assert fallback_bytes - warm_bytes > 3000
