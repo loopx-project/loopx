@@ -309,4 +309,3 @@ def test_the_real_scan_reports_one_owner_regardless_of_separator(
     assert sites == [
         "loopx/capabilities/material_lifecycle/_validation.py:1"
     ], sites
-
