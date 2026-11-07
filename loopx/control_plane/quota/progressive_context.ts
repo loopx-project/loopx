@@ -415,9 +415,9 @@ export function prepareProgressiveContextDelivery(request: JsonObject, legacyFie
 
 /** Stateless presentation uses the same plan without inventing a native session,
  * retained baseline or admission identity. Hosts may add delta independently. */
-export function prepareProgressiveContext(request: JsonObject): JsonObject {
+export function prepareProgressiveContext(request: JsonObject, plan?: JsonObject): JsonObject {
   const values: ProjectionSourceValues = new WeakMap();
-  const required = requiredNativeContext(request, values);
+  const required = requiredNativeContext(request, values, plan);
   const {operation: _operation, source_edits: _edits, source_number_tokens: _numbers, ...source} = request;
   return contextProjectionChanges(source, {context: required.context, projected: required.projected}, values);
 }

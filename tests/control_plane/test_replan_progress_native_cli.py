@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -163,6 +164,60 @@ def test_progress_cli_reads_policy_with_context_delivery(
         assert (identity["goal_id"], identity["agent_id"]) == (GOAL, AGENT)
         assert identity["todo_id"] == TODO
         assert policy["execution_obligation"]["must_attempt_work"] is True
+    finally:
+        restart_effect_runtime(wait_for_exit=True)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_stateless_progressive_replan_uses_the_saved_decision(tmp_path, monkeypatch, provider):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    fixture = make_progress_cli_fixture(tmp_path, provider, "advanced")
+    capture = tmp_path / "capture"
+    scope = ("--codex-app", "--goal-id", GOAL, "--agent-id", AGENT, "--turn-instance-id", TURN)
+    delivery = ("--context-delivery", "on", "--delta-delivery", "off")
+
+    def first_review(view):
+        page = read_stage(shlex.split(view["first_read_command"]))
+        assert page["ok"] and page["offset"] == 0 and page["eof"]
+        assert len(page["content"].encode()) == page["total_bytes"]
+        fields = {row["pointer"]: row["value"] for row in json.loads(page["content"])["selections"]}
+        assert fields["/heartbeat_receipt"] == source["heartbeat_receipt"]
+        assert "/replan_action_packet/planning_guidance" not in fields
+        return shlex.split(fields["/replan_action_packet/review"])
+
+    def read_stage(command, status=0):
+        result = subprocess.run(command, capture_output=True, text=True, timeout=30)
+        assert result.returncode == status, result.stdout + result.stderr
+        return json.loads(result.stdout)
+
+    try:
+        initial = call_progress_cli(fixture, "quota", "should-run", *scope, "--todo-id", TODO,
+            "--decision-output-dir", str(capture), *delivery)
+        original = capture / "decision.json"
+        raw = original.read_bytes()
+        source = json.loads(raw)
+        receipt = source["heartbeat_receipt"]
+        authority = _authority(fixture)
+        review_command = first_review(initial)
+        assert review_command[review_command.index("--decision-file") + 1] == str(original)
+        review = read_stage(review_command)
+        assert review["planning_guidance"] == source["replan_action_packet"]["planning_guidance"]
+        writer = read_stage(shlex.split(review["next"]["writeback"]))
+        assert writer["writeback"]["settlement_plan"]["identity"] == receipt["settlement_identity"]
+        assert writer["required_outcome"] == source["replan_action_packet"]["required_outcome"]
+
+        recovered_path = original.with_name("recovered.json")
+        original.rename(recovered_path)
+        projected = call_progress_cli(fixture, "quota", "context-project", *scope, *delivery,
+            "--capture-file", str(recovered_path), "--capture-sha256", hashlib.sha256(raw).hexdigest())
+        recovered_review = first_review(projected)
+        assert recovered_review[recovered_review.index("--decision-file") + 1] == str(recovered_path)
+        assert read_stage(recovered_review)["source_hash"] == review["source_hash"]
+        recovered_review[recovered_review.index("--source-hash") + 1] = "sha256:" + "0" * 64
+        refused = read_stage(recovered_review, status=1)
+        assert refused["ok"] is False and "matching source hash" in refused["reason"]
+        assert recovered_path.read_bytes() == raw
+        assert _authority(fixture) == authority
     finally:
         restart_effect_runtime(wait_for_exit=True)
 

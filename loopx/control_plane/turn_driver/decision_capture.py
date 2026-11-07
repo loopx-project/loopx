@@ -425,17 +425,23 @@ def capture_context_projection(payload: dict[str, Any], *, directory: Path,
 
 
 def capture_progressive_context(payload: dict[str, Any], *, directory: Path,
-                                surface: str = "quota_packet") -> tuple[dict[str, Any], dict[str, Any]]:
+                                surface: str = "quota_packet",
+                                selection_command_args_template: str | None = None,
+                                captured_decision_path: str | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
     """Publish the complete current source before optional stateless presentation.
 
     The typed owner applies the shrink guard. This neither creates a native
     journal nor requires/adopts an execution Turn. All recovery is same-capture.
+    A caller may supply the exact decision it just verified for staged reads.
     """
     from ..quota.turn_envelope import prepare_progressive_context
 
     source = capture_context_projection(payload, directory=directory)
     transaction = prepare_progressive_context(payload, surface=surface, source_reference={
         **{key: source[key] for key in ("path", "sha256")},
+        **({"selection_command_args_template": selection_command_args_template}
+            if selection_command_args_template is not None else {}),
+        **({"captured_decision_path": captured_decision_path} if captured_decision_path is not None else {}),
         "source_path": source["path"],
         "command_template": source["command"] + " --select '<pointer>'",
     })

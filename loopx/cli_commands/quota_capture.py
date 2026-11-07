@@ -668,7 +668,8 @@ def progressive_context_or_current(payload: dict[str, Any], args: argparse.Names
 def progressive_context_capture_view(payload: dict[str, Any], args: argparse.Namespace, *,
                                      runtime_root: Path, directory: Path | None,
                                      surface: str = "quota_packet",
-                                     reader_argv: list[str] | None = None) -> dict[str, Any]:
+                                     reader_argv: list[str] | None = None,
+                                     captured_decision_path: str | None = None) -> dict[str, Any]:
     """Same-capture presentation for every caller, without a native journal.
 
     A plain read-only should-run remains read-only. Private transport files do
@@ -680,8 +681,9 @@ def progressive_context_capture_view(payload: dict[str, Any], args: argparse.Nam
     if directory is None:
         root = Path(_private_transport_root(runtime_root))
         directory = Path(tempfile.mkdtemp(prefix="context-", dir=root))
-    bind_capture_selection_transport(payload, args, capture_root=directory.parent)
-    required, reference = capture_progressive_context(payload, directory=directory, surface=surface)
+    transport = _capture_selection_transport_template(payload, args, capture_root=directory.parent)
+    required, reference = capture_progressive_context(payload, directory=directory, surface=surface,
+        selection_command_args_template=transport, captured_decision_path=captured_decision_path)
     view = native_context_capture_view(required, directory, captured_recovery=reference,
         metadata={"context_delivery": native_context_activation(args),
             **({"capture_sha256": args.capture_sha256} if getattr(args, "capture_sha256", None) else {})},
@@ -763,7 +765,7 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
         try:
             return progressive_context_capture_view(payload, args,
                 runtime_root=Path(getattr(args, "_context_delivery_machine_runtime", path.parent)),
-                directory=None, reader_argv=reader_argv)
+                directory=None, reader_argv=reader_argv, captured_decision_path=str(path))
         except (QuotaDecisionTransportError, OSError, ValueError, EffectRuntimeRemoteError, EffectRuntimeStartupError):
             pass  # The complete original reference remains the fallback below.
     try:
