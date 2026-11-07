@@ -55,11 +55,21 @@ function readRecord(path: string): JsonObject {
   try {
     const stat = fstatSync(fd);
     if (!stat.isFile()) fail("invalid manager context record");
-    if (stat.size > 128_000) fail("manager context record too large");
-    const buffer = Buffer.alloc(128_001);
+    const limit = 128_000;
+    if (stat.size > limit) fail("manager context record too large");
+    // Most receipts are small. Read one byte past the observed size so an
+    // in-place append still gets the same bounded read through EOF.
+    let buffer = Buffer.alloc(stat.size + 1);
     let size = 0, count: number;
-    while (size < buffer.length && (count = readSync(fd, buffer, size, buffer.length - size, null)) > 0) size += count;
-    if (size > 128_000) fail("manager context record too large");
+    while ((count = readSync(fd, buffer, size, buffer.length - size, null)) > 0) {
+      size += count;
+      if (size > limit) fail("manager context record too large");
+      if (size === buffer.length) {
+        const expanded = Buffer.alloc(limit + 1);
+        buffer.copy(expanded);
+        buffer = expanded;
+      }
+    }
     const bytes = buffer.subarray(0, size);
     let parsed: unknown;
     try {
