@@ -2027,7 +2027,10 @@ def test_health_reads_source_controls_once_and_keeps_fresh_recovery(ordinary, mo
 @pytest.mark.parametrize("fault", [None, "changed-source", "revoked", "stop", "unknown-native",
     "background", "later-user", "completed-later", "equivalent-later", "later-failed-effect",
     "settled-command", "later-settled-command", "unsettled-command",
-    "reservation-crash", "post-enqueue-crash", "queued-newer", "queued-items", "queued-input", "private-path", "still-incomplete", "cold-native", "dead-native", "foreign-native", "failed-effect"])
+    "reservation-crash", "post-enqueue-crash", "queued-newer", "queued-items", "queued-input", "private-path", "still-incomplete",
+    "cold-native", "dead-native", "foreign-native", "failed-effect", "reviewed-work", "reviewed-enqueue-crash",
+    "reviewed-exit-130", "reviewed-stop", "reviewed-revoked", "reviewed-no-owner", "reviewed-equivalent",
+    "reviewed-owner-lost-after-admission"])
 def test_original_worker_continues_explicit_unfinished_project_work_once_after_restart(ordinary, monkeypatch, fault):  # noqa: F811
     """Reply-worker restart retains native ownership; native loss stays fenced."""
     from datetime import datetime, timedelta, timezone
@@ -2135,7 +2138,13 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
         if fault == "unsettled-command":
             snapshot["items"][1]["item"]["exitCode"] = None
         inventory.write_text(json.dumps(snapshot))
-    if fault == "cold-native":
+    review_first = bool(fault and fault.startswith("reviewed-"))
+    if fault == "reviewed-exit-130":
+        snapshot = json.loads(inventory.read_text())
+        snapshot["items"][1]["item"].update(type="commandExecution", status="failed", exitCode=130,
+            startedAtMs=1000, completedAtMs=1001, aggregatedOutput="Interrupted.")
+        inventory.write_text(json.dumps(snapshot))
+    if fault == "cold-native" or review_first:
         runtime.adapters.pop(original["session_id"]).close_session()
     elif fault == "dead-native":
         runtime.adapters[original["session_id"]].close_session()
@@ -2198,7 +2207,8 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
     artifact_before_recovery = artifact.read_bytes()
     selected.reconcile()
     continued = selected.core.read_request(ref)
-    reviewed = fault in {"cold-native", "failed-effect", "equivalent-later", "later-failed-effect", "unsettled-command"}
+    reviewed = review_first or fault in {"cold-native", "failed-effect", "equivalent-later", "later-failed-effect", "unsettled-command"}
+    continued_after_review = fault in {"reviewed-work", "reviewed-enqueue-crash"}
     if fault in {"changed-source", "revoked", "stop", "unknown-native", "background", "later-user", "dead-native", "foreign-native"}:
         assert continued["turn_id"] == original["turn_id"] and not continued.get("context_recovery")
         assert artifact.read_bytes() == artifact_before_recovery
@@ -2219,9 +2229,11 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
         returned = deliveries[presentation_phase(continued, "terminal")]
         assert returned["verified"] and "The remaining work is still pending." in returned["text"]
         writes = list(provider.writes)
-        assert not worker().core.context_recovery_candidate(ref)
-        worker().reconcile()
-        assert provider.writes == writes
+        if not review_first:
+            # Finish the existing review assertions before its continuation backoff elapses.
+            clock = datetime.fromisoformat(review["completed_at"]) + timedelta(seconds=59)
+            worker().reconcile()
+            assert provider.writes == writes
 
         recovery_calls = [json.loads(line) for line in capture.read_text().splitlines()][len(before_recovery_calls):]
         resume, = [row["params"] for row in recovery_calls if row.get("method") == "thread/resume"]
@@ -2232,6 +2244,82 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
         assert permissions["filesystem"][":workspace_roots"] == {".": "read"}
         assert permissions["network"]["enabled"] is False
         assert sum(row.get("method") == "turn/start" for row in recovery_calls) == 1
+        if review_first:
+            review_bytes = store._turn_path(review["session_id"], review["turn_id"]).read_bytes()
+            if fault == "reviewed-stop":
+                transport.admit("notes-app", provider.event("notes-app", "stop-after-review", "/stop"))
+            elif fault == "reviewed-revoked":
+                transport.bindings.disconnect(binding["binding_id"], expected_revision=transport.bindings.read()["revision"])
+            elif fault == "reviewed-no-owner":
+                runtime.adapters.pop(review["session_id"]).close_session()
+            elif fault == "reviewed-equivalent":
+                repeated = provider.event("notes-app", "repeat-after-review", event["content"])
+                transport.admit("notes-app", repeated)
+                same = selected.core.read_request(identity_ref(binding["provider_ref"], repeated["message_id"]))
+                runtime.wait_for_turn(session_id=same["session_id"], turn_id=same["turn_id"], timeout_sec=10)
+                selected.reconcile_request(transport.root / (same["request_ref"] + ".json"))
+            clock = datetime.now(timezone.utc) + timedelta(seconds=61)
+            if fault == "reviewed-enqueue-crash":
+                enqueue = runtime.enqueue_turn
+                def crash_after_enqueue(**kwargs):
+                    enqueue(**kwargs)
+                    raise OSError("synthetic post-review admission crash")
+                monkeypatch.setattr(runtime, "enqueue_turn", crash_after_enqueue)
+                with pytest.raises(OSError, match="post-review admission crash"):
+                    worker().reconcile()
+                monkeypatch.setattr(runtime, "enqueue_turn", enqueue)
+                assert selected.core.read_request(ref)["turn_id"] == review["turn_id"]
+
+            artifact_before = artifact.read_bytes()
+            owner_lost = fault == "reviewed-owner-lost-after-admission"
+            if owner_lost:
+                resume = runtime.resume_session_queue
+                monkeypatch.setattr(runtime, "resume_session_queue", lambda **kwargs: None)
+                worker().reconcile()
+                queued = selected.core.read_request(ref)
+                assert queued["turn_id"] != review["turn_id"]
+                runtime.adapters.pop(review["session_id"]).close_session()
+                monkeypatch.setattr(runtime, "resume_session_queue", resume)
+                resume(session_id=queued["session_id"], work_dir=workspace, objective="")
+            worker().reconcile()
+            final = selected.core.read_request(ref)
+            if owner_lost:
+                held = runtime.wait_for_turn(session_id=final["session_id"], turn_id=final["turn_id"], timeout_sec=10)
+                assert held["status"] == "failed" and held["error_code"] == "host_gate", held
+                selected.reconcile_request(path)
+                assert artifact.read_bytes() == artifact_before
+                assert worker().core.quota_backlog_pending(selected.core.read_request(ref))
+                assert not worker().core.context_recovery_candidate(ref)
+            elif continued_after_review:
+                assert final["session_id"] == original["session_id"] and final["turn_id"] != review["turn_id"]
+                assert final["context_recovery"]["work_original_turn_id"] == original["turn_id"]
+                assert final["context_recovery"]["failed_turn_id"] == review["turn_id"]
+                assert final["context_recovery_history"] == [recovery]
+                result = runtime.wait_for_turn(session_id=final["session_id"], turn_id=final["turn_id"], timeout_sec=10)
+                assert result["status"] == "completed", result
+                selected.reconcile_request(path)
+                result_deliveries = json.loads(path.read_text())["deliveries"]
+                assert result_deliveries["terminal"] == original_delivery
+                assert result_deliveries[presentation_phase(continued, "terminal")] == returned
+                reply = result_deliveries[presentation_phase(final, "terminal")]
+                assert reply["verified"] and "Verified remaining work completed." in reply["text"]
+                assert artifact.read_bytes() == b"first\nremaining\n"
+                assert not worker().core.quota_backlog_pending(selected.core.read_request(ref))
+                assert not worker().core.context_recovery_candidate(ref)
+                assert store.load_session(final["session_id"])["project_context"] == session_before["project_context"]
+                assert store.load_session(final["session_id"])["upstream_thread_id"] == session_before["upstream_thread_id"]
+            else:
+                assert final["turn_id"] == review["turn_id"]
+                assert final["context_recovery"] == recovery
+                assert artifact.read_bytes() == artifact_before
+            assert store._turn_path(review["session_id"], review["turn_id"]).read_bytes() == review_bytes
+            starts = [json.loads(line)["params"] for line in capture.read_text().splitlines() if json.loads(line).get("method") == "turn/start"]
+            assert len(starts) == (3 if continued_after_review or fault == "reviewed-equivalent" else 2)
+            if continued_after_review:
+                assert "Do only the remaining authorized work" in starts[-1]["input"][0]["text"]
+            writes = list(provider.writes)
+            worker().reconcile()
+            assert provider.writes == writes
     else:
         assert continued["turn_id"] != original["turn_id"]
         assert continued["session_id"] == original["session_id"]
@@ -2269,8 +2357,10 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
             assert "Verified remaining work completed." in bodies
     assert store._turn_path(original["session_id"], original["turn_id"]).read_bytes() == original_turn_bytes
     after_recovery_calls = [json.loads(line) for line in capture.read_text().splitlines()]
-    expected_new = {"initialize": int(reviewed) + int(fault == "cold-native"),
-        "thread/start": 0, "thread/resume": int(reviewed)}
+    # Stop also resumes the native thread to check for background work.
+    extra_resume = continued_after_review or fault in {"reviewed-equivalent", "reviewed-stop"}
+    expected_new = {"initialize": int(reviewed) + int(fault == "cold-native" or review_first) + int(extra_resume),
+        "thread/start": 0, "thread/resume": int(reviewed) + int(extra_resume)}
     for method, count in expected_new.items():
         assert sum(row.get("method") == method for row in after_recovery_calls[len(before_recovery_calls):]) == count
 
