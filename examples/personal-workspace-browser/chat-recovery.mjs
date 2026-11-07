@@ -561,6 +561,10 @@ export const chatRecoveryScenario = {
       // Session read returns, both must act on the exact reported Turn.
       const controlledTurnId = `turn-foreign-controls-${Date.now()}`;
       const controlledTurnControl = page.locator(`.personal-composer-stop[data-turn-id="${controlledTurnId}"]`);
+      const controlledTurnEvents = `**/api/chat/sessions/${busySessionId}/turns/${controlledTurnId}/events`;
+      const heldControlEvents = [];
+      // Keep this Turn running until the operator interrupts it.
+      await page.route(controlledTurnEvents, (route) => { heldControlEvents.push(route); });
       page.__loopxRuntime.turnMessages.set(controlledTurnId, "交接期间可调整和中断的中断控制回合");
       page.__loopxRuntime.sessions.set(busySessionId, { ...page.__loopxRuntime.sessions.get(busySessionId), active_turn_id: controlledTurnId, status: "busy" });
       let controlRejectedPosts = 0;
@@ -605,6 +609,8 @@ export const chatRecoveryScenario = {
       }
       await page.locator(".personal-message").filter({ hasText: "已中断。你可以在当前会话继续发送消息。" }).last().waitFor({ timeout: 5_000 });
       await controlledTurnControl.waitFor({ state: "hidden", timeout: 5_000 });
+      await Promise.all(heldControlEvents.splice(0).map((route) => route.abort().catch(() => {})));
+      await page.unroute(controlledTurnEvents);
       if (await composerInput.inputValue() !== "") throw new Error("The accepted shared-composer adjustment did not clear");
       await composerInput.fill("中断后的后续消息草稿");
       if (await sendButton.isDisabled()) throw new Error("A new follow-up draft stayed blocked after interruption");
