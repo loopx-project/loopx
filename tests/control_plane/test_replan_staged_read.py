@@ -273,7 +273,9 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
             assert view_path == capture / "decision.json"
         else:
             assert "--decision-output-root" in commands[0]
-        source, view = json.loads(source_path.read_bytes()), json.loads(view_path.read_bytes())
+        raw = source_path.read_bytes()
+        source, view = json.loads(raw), json.loads(view_path.read_bytes())
+        assert view_path.read_bytes() == raw
         assert str(view_path) in body and str(source_path) not in body
         assert body.endswith("original heartbeat instructions")
         if context_delivery:
@@ -334,6 +336,7 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
                     token = token.replace("~1", "/").replace("~0", "~")
                     expected = expected[int(token)] if isinstance(expected, list) else expected[token]
                 assert row["value"] == expected
+        assert source_path.read_bytes() == view_path.read_bytes() == raw
         assert source["schema_version"] == "loopx_turn_envelope_v1"
         assert view == source  # The checkpoint sends one complete source, not a second fact lens.
         assert source["heartbeat_receipt"]["turn_instance_id"] == TURN
@@ -789,10 +792,13 @@ def test_large_acceptance_is_not_repeated_in_cli_or_envelope_work_context(tmp_pa
 
 
 def test_staged_entry_replays_goal_and_changed_horizon_with_existing_delta_owner(tmp_path):
+    from loopx.control_plane.quota.turn_envelope import project_captured_replan_cli_view
     from replan_packet_fixture import populated_replan_source
 
     source = populated_replan_source(tmp_path, acceptance=True)
-    entry = _turn_envelope_result("replan_cli_view", payload=source)
+    source["measurements"] = [1.0, -0.0, 9007199254740993]
+    entry = project_captured_replan_cli_view(source)
+    assert json.dumps(entry["measurements"]) == json.dumps(source["measurements"])
     assert entry["action_portfolio"] == source["action_portfolio"]
     scope = {"goal_id": source["goal_id"], "agent_id": source["agent_identity"]["agent_id"],
         "session_id": "synthetic-session", "context_epoch": "one"}
@@ -801,7 +807,7 @@ def test_staged_entry_replays_goal_and_changed_horizon_with_existing_delta_owner
         current = copy.deepcopy(source)
         if changed:
             current["planning_horizon"]["work_items"][0].update(priority="P0", successor_todo_ids=["todo-new-dependency"])
-        value = _turn_envelope_result("replan_cli_view", payload=current)
+        value = project_captured_replan_cli_view(current)
         candidate = prepare_context_delivery(value, scope=scope, capture_id="entry-b", surface="quota_packet",
             baseline=full, retained={"complete": True, "target": full["target"]})
         # Even without native delta, the entry has one immutable reader rather
@@ -825,7 +831,7 @@ def test_staged_entry_replays_goal_and_changed_horizon_with_existing_delta_owner
                   {"effective_action": "governed_capability_intent"},
                   {"replan_action_packet": {**source["replan_action_packet"], "settlement_only": True}}):
         legacy = {**source, **patch}
-        assert _turn_envelope_result("replan_cli_view", payload=legacy) == legacy
+        assert project_captured_replan_cli_view(legacy) == legacy
 
 
 def test_native_reader_keeps_its_installation_across_acceptance_and_writeback(tmp_path, monkeypatch):
