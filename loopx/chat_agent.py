@@ -680,6 +680,7 @@ class CodexChatAgentSession:
     project_context: dict[str, str] | None = None
     model: str | None = None
     resolved_model: str | None = None
+    native_model_provider: str | None = None
     reasoning_effort: str | None = None
     resolved_reasoning_effort: str | None = None
     service_tier: str | None = None
@@ -733,6 +734,8 @@ class CodexChatAgentSession:
         idle_timeout_sec: float = 180.0,
         hard_timeout_sec: float | None = None,
         resume_thread_id: str | None = None,
+        fork_thread_id: str | None = None,
+        expected_native_provider: str | None = None,
         execution_mode: bool = False,
         isolate_process_tree: bool = False,
         runtime_profile: str = "restricted",
@@ -764,12 +767,18 @@ class CodexChatAgentSession:
         root = work_dir.resolve()
         if runtime_profile not in {"restricted", "trusted_owner"}:
             raise ValueError("unsupported Codex Chat runtime profile")
+        if fork_thread_id and (
+            resume_thread_id or execution_mode or read_only_review or project_context
+            or metadata_review_context or answer_review_context or not expected_native_provider
+        ):
+            raise ValueError("Codex history fork requires an authorized ordinary native thread")
+        existing_thread_id = resume_thread_id or fork_thread_id
         from .capabilities.native_chat import codex_context
         policy, selected_sandbox = codex_context.native_conversation_policy(
             root=root, metadata_review_context=metadata_review_context, answer_review_context=answer_review_context,
             answer_review_host_read=answer_review_host_read, read_only_review=read_only_review,
             project_context=project_context, goal_id=goal_id, execution_mode=execution_mode,
-            runtime_profile=runtime_profile, dynamic_tools=dynamic_tools, resume_thread_id=resume_thread_id,
+            runtime_profile=runtime_profile, dynamic_tools=dynamic_tools, resume_thread_id=existing_thread_id,
             sandbox=sandbox)
         # Core owns the optional narrower project filesystem policy. A model,
         # transport or project config cannot substitute a profile of its choice.
@@ -925,7 +934,7 @@ class CodexChatAgentSession:
             # the account owner has switched back to a subscription (or vice
             # versa). Follow Codex's effective route without selecting accounts,
             # copying auth, restarting clients or replacing the original thread.
-            follow_native_provider = bool(resume_thread_id and not execution_mode
+            follow_native_provider = bool(existing_thread_id and not execution_mode
                 and (not permissions_profile or metadata_review_context is not None) and not provider_override)
             read_native_config = read_project_defaults or bool(permissions_profile) or owner_git_write or follow_native_provider or api_transport is not None
             if read_native_config:
@@ -989,12 +998,15 @@ class CodexChatAgentSession:
                 if any(value is not None and (not isinstance(value, str) or not value.strip())
                        for value in (model, reasoning_effort)):
                     raise session._runtime_error("Codex returned invalid project model settings.")
+            if expected_native_provider and provider_override and provider_override != expected_native_provider:
+                raise session._runtime_error("Codex native history belongs to a different model provider.")
+            thread_method = "thread/fork" if fork_thread_id else "thread/resume" if resume_thread_id else "thread/start"
             thread_result = session._request(
-                "thread/resume" if resume_thread_id else "thread/start",
+                thread_method,
                 {
                     **(
-                        {"threadId": resume_thread_id, "excludeTurns": True}
-                        if resume_thread_id
+                        {"threadId": existing_thread_id, "excludeTurns": True}
+                        if existing_thread_id
                         else {}
                     ),
                     "cwd": str(root),
@@ -1023,13 +1035,17 @@ class CodexChatAgentSession:
                     "approvalPolicy": "never",
                     **(
                         {"dynamicTools": dynamic_tools}
-                        if dynamic_tools and not resume_thread_id
+                        if dynamic_tools and not existing_thread_id
                         else {}
                     ),
                 },
                 request_id=2,
             )
             codex_context.verify_conversation_provider(session, provider_override, thread_result)
+            native_provider = thread_result.get("modelProvider")
+            session.native_model_provider = native_provider if isinstance(native_provider, str) and native_provider else None
+            if expected_native_provider is not None and session.native_model_provider != expected_native_provider:
+                raise session._runtime_error("Codex native history belongs to a different model provider.")
             if model and thread_result.get("model") not in {None, model}:
                 raise CodexChatAgentError(
                     "Codex did not apply the requested conversation model.",
@@ -1077,6 +1093,20 @@ class CodexChatAgentSession:
                 raise session._runtime_error(
                     "Codex app-server resumed an unexpected thread."
                 )
+            if fork_thread_id:
+                native_thread = thread_result.get("thread")
+                sandbox_type = {
+                    "read-only": "readOnly",
+                    "workspace-write": "workspaceWrite",
+                    "danger-full-access": "dangerFullAccess",
+                }.get(selected_sandbox)
+                applied_sandbox = thread_result.get("sandbox")
+                if (session.thread_id == fork_thread_id or not isinstance(native_thread, dict)
+                        or native_thread.get("forkedFromId") != fork_thread_id
+                        or thread_result.get("cwd") != str(root) or thread_result.get("approvalPolicy") != "never"
+                        or sandbox_type is None or not isinstance(applied_sandbox, dict)
+                        or applied_sandbox.get("type") != sandbox_type):
+                    raise session._runtime_error("Codex did not verify the original thread and policy of its history fork.")
             if permissions_profile:
                 session._public_source_read_context = codex_context.public_source_read_context(host_config or {})
             if read_only_review and session._background_terminals(time.monotonic() + response_timeout_sec):
@@ -1093,7 +1123,7 @@ class CodexChatAgentSession:
             return session
         except _LegacyModelCatalogSchemaError as exc:
             session.close()
-            if _compatibility_catalog_path is not None:
+            if _compatibility_catalog_path is not None or fork_thread_id:
                 raise _model_catalog_compatibility_error() from exc
             with _current_builtin_model_catalog(resolved, environment=runtime_env) as catalog_path:
                 return cls.start(
@@ -1105,6 +1135,7 @@ class CodexChatAgentSession:
                     idle_timeout_sec=idle_timeout_sec,
                     hard_timeout_sec=hard_timeout_sec,
                     resume_thread_id=resume_thread_id,
+                    expected_native_provider=expected_native_provider,
                     execution_mode=execution_mode,
                     isolate_process_tree=isolate_process_tree,
                     runtime_profile=runtime_profile,

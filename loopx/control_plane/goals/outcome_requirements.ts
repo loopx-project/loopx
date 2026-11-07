@@ -363,11 +363,15 @@ export function observeOutcomeRequirements(declaration: JsonObject, acceptance: 
   oracleObservations: JsonObject[] = []): JsonObject {
   const current = declaration.current_lifetime === true;
   const allCriteria = (acceptance.criteria ?? []) as JsonObject[], tasks = (acceptance.tasks ?? []) as JsonObject[];
+  const goalScope = (acceptance.scope as JsonObject | undefined)?.kind === "goal";
+  const criteriaForOutcome = (outcomeId: string): JsonObject[] =>
+    acceptance.outcome_id === outcomeId || (acceptance.outcome_id === undefined && !goalScope)
+      ? allCriteria : [];
   const outcomes = (declaration.outcomes as (Outcome & {basis_digest?: string; review_basis_current: boolean; work: {todo_id: string; status: string}[]})[]).map(o => ({...o,
     requirements: o.requirements.map(r => {
-      const criteria = acceptance.outcome_id === undefined || acceptance.outcome_id === o.id ? allCriteria : [];
+      const criteria = criteriaForOutcome(o.id);
       const criterion = criteria.find(c => c.id === r.id && c.description === r.description);
-      const covered = o.todo_ids.length > 0 && o.todo_ids.every(key => tasks.some(t => t.todo_id === key && t.state === "ready" && (t.criterion_ids as string[]).includes(r.id)));
+      const covered = goalScope || o.todo_ids.length > 0 && o.todo_ids.every(key => tasks.some(t => t.todo_id === key && t.state === "ready" && (t.criterion_ids as string[]).includes(r.id)));
       const oracle = criterion?.oracle as JsonObject | undefined;
       const receipt = acceptance.verification as JsonObject | null | undefined;
       const ownResult = (receipt?.results as JsonObject[] | undefined)?.find(result => result.criterion_id === r.id);
@@ -385,8 +389,8 @@ export function observeOutcomeRequirements(declaration: JsonObject, acceptance: 
   const uncovered = current ? outcomes.flatMap(outcome => {
     const unmet = outcome.requirements.filter(r => !r.planning_satisfied).map(r => r.id);
     if (!unmet.length || outcome.work.some(w => !["done", "missing"].includes(String(w.status)))) return [];
-    const criteria = acceptance.outcome_id === undefined || acceptance.outcome_id === outcome.id ? allCriteria
-      .filter(criterion => outcome.requirements.some(requirement => requirement.id === criterion.id)) : [];
+    const criteria = criteriaForOutcome(outcome.id)
+      .filter(criterion => outcome.requirements.some(requirement => requirement.id === criterion.id));
     const receipt = acceptance.verification as JsonObject | null | undefined;
     const basis = {outcome_id: outcome.id, basis_digest: outcome.basis_digest ?? null, work: outcome.work,
       requirements: outcome.requirements.map(({id, status, planning_satisfied, agent_review}) => ({id, status, planning_satisfied,

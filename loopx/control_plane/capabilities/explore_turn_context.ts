@@ -20,7 +20,7 @@ export function exploreReusableContextPaths(content: JsonObject = {}): (string |
   return [
     ...["recent_nodes", "recent_findings", "writeback_results", "measurement_feedback", "work_yardsticks", "work_yardstick_capture",
       "path_delta_attachment_template", "linked_question_attachment_template",
-      "optional_question_evolution_example", "result_writeback_guidance",
+      "optional_question_evolution_example", "optional_execution_observation_example", "result_writeback_guidance",
       "result_attachment_template", "optional_measurement_example", "measurement_guidance",
       "record_node_template", "record_finding_template", "guidance",
       "result_writeback_option", "result_writeback_inline_option", "result_writeback_inline_field",
@@ -49,6 +49,7 @@ function resultWritebackFields(writeback: JsonObject): JsonObject {
       path_delta_attachment_template: writeback.path_delta_attachment_template,
       linked_question_attachment_template: writeback.linked_question_attachment_template,
       optional_question_evolution_example: writeback.optional_question_evolution_example,
+      optional_execution_observation_example: writeback.optional_execution_observation_example,
       result_writeback_guidance: writeback.guidance,
       result_attachment_template: writeback.attachment_template,
       optional_measurement_example: writeback.optional_measurement_example,
@@ -358,11 +359,15 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
             target: {summary: "", scope: "", acceptance_ref: ""},
             authoritative: {metric: "", unit: "", higher_is_better: true, comparison_scope: "", input_revision: "", evaluation_ref: ""},
             proxy: null, counterevidence_refs: [], next_action: {method_id: "", reason: "", cost_bound: ""}, prior_finding_id: null}},
-        ...(workCues.length ? {work_yardsticks: workCues.slice(0, 3).map(cue => resultNode !== null ? cue : {
-          source_finding_id: cue.source_finding_id, node_id: cue.node_id,
-          todo_id: (cue.binding as JsonObject).todo_id, target: (cue.target as JsonObject).summary,
-          cue: (cue.next_action as JsonObject).reason, counterevidence_refs: cue.counterevidence_refs,
-          details_command: resultRead("--result-node", String(cue.node_id)),
+        ...(workCues.length ? {work_yardsticks: workCues.slice(0, 3).map(cue => {
+          if (resultNode !== null) return cue;
+          const comparison = cue.search_comparison as JsonObject | undefined;
+          return {source_finding_id: cue.source_finding_id, node_id: cue.node_id,
+            todo_id: (cue.binding as JsonObject).todo_id, target: (cue.target as JsonObject).summary,
+            cue: (cue.next_action as JsonObject).reason, counterevidence_refs: cue.counterevidence_refs,
+            ...(comparison ? {comparison_cue: comparison.guidance,
+              comparison_candidate_ref: (comparison.goal as JsonObject).preferred_candidate_ref} : {}),
+            details_command: resultRead("--result-node", String(cue.node_id))};
         }), omitted_work_yardsticks: Math.max(0, workCues.length - 3),
           work_yardstick_command: command("turn-context", "--agent-id", agent, "--todo-id", "<todo-id>")} : {}),
       } : {}),

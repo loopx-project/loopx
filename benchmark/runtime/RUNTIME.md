@@ -5,6 +5,22 @@ LHTB, SWE-Marathon and other Harbor tasks use
 `PYTHONPATH`. This research runner is not another installed product package.
 Native tasks, environment, phases, feedback, verifier and scores stay in Harbor.
 
+SForge LoopX workers using a native ChatGPT login check that login through the
+receiver's native app-server before entering the phase clock or scheduler. This
+startup observation reads the account and usage route without requesting a
+credential refresh or invoking a model. It preserves a single 25-second IO
+window across preparation, initialization and reads. An explicit native
+transport disconnect or timeout can open at most three disposable observers
+within that window; rejected RPCs, invalid accounts and unknown failures do not
+retry. Process cleanup may finish after the IO deadline. An unavailable route
+exits with `native_receiver_unavailable` and bounded local stage, error category,
+attempt and elapsed-time diagnostics; raw errors, native stderr and account
+responses are not emitted. Repair the receiver's proxy/login and retry its
+ordinary entry. Existing phase deadlines, sessions, pending requests and retry
+limits are retained. This check does not recover an already dispatched failed
+Turn, extend its budget, select an account or authorize a retry. Official/plain
+workers and custom API routes keep their existing entry behavior.
+
 The shared adapter reads `PATH` from the task container before installing its
 isolated profile. Worker and login shells retain those task toolchain directories;
 LoopX modes prepend their staged Node and CLI. No operator-host PATH or other
@@ -13,6 +29,38 @@ installation. This changes tool discovery for newly installed trials only; keep
 existing trials pinned when comparing runner versions.
 
 ## Configure the native job
+
+For a new EdgeBench study that explicitly permits host-native collaboration,
+pass the same `--native-child-limit 3` to every arm. This gives each fresh Codex
+profile the canonical `agents.max_concurrent_threads_per_session = 3` setting
+(three open child sessions in addition to the parent), and the same optional delegation authorization
+in the task input and workspace instructions. It neither requires delegation
+nor grants separate child evaluation opportunities, time, accounts or access.
+Only the parent submits candidates, and Stop still applies to the whole task.
+The option requires a non-game task with native feedback.
+Completed children retain a slot until closed; the shared instructions say to
+close them when no longer needed. The adapter does not enable deeper delegation
+or raise the native client's existing depth limit.
+
+LoopX arms additionally initialize their existing Goal spawn policy with the
+same limit. Host-native children are ephemeral host sessions, not registered
+LoopX Agents; this adds no peer scheduler, persistent Agent or delegation
+binding. The existing native-child receipt and context owners remain unchanged.
+The adapter reads back that Goal policy before later phases and restored work;
+it does not change an existing Goal to make a mismatch pass. Repeated same-session
+entry preserves the fixed configuration. Warm restore compares the requested
+limit, including omission, with the sealed native config before native activation.
+
+Omitting the option preserves prior configuration, instructions and receipt
+fields. The worker environment explicitly emits an empty child-limit value for
+the omitted option so a container's ambient value cannot enable it; this is the
+only intentional default environment/command serialization change. Do not add
+the option to a running study. Record the explicit authorization as
+a new protocol factor: arms in the new study share it, while comparisons to an
+older study cannot attribute changes solely to context delivery or another fix.
+Roll back by starting a separate study without the option, not by editing a
+continuing session. Capacity/configuration acceptance is not evidence that a
+model delegated useful work or that its score improved.
 
 Use this agent in the benchmark's existing job config, retaining its dataset
 and environment settings:
@@ -125,9 +173,12 @@ the original full packet; no delta is required for checkpoint recovery. Native
 cursor verification also binds the context-directory/root option. The existing
 Darwin native-checkpoint refusal remains in force.
 
-The host-side checkpoint preflight still captures the complete original decision.
-With context delivery enabled, its prompt now supplies `quota context-project`
-with that original path/hash, Goal/Agent/Turn and private cache location. The
+The host-side checkpoint preflight captures the complete original decision.
+With context delivery enabled, its prompt supplies `quota context-project`
+with that original path/hash for ordinary work. An admitted replan with staged
+review and writeback commands uses the existing replan projection in a private
+presentation. Its readers retain the original guard's path and hash. The
+projection command also carries the Goal, Agent, Turn and private cache location. The
 native tool presents the saved decision using the same native lifecycle projector;
 no guard, checkpoint, admission or debit is repeated. Cold delivery supplies the
 full body and its target; qualified warm delivery supplies the exact delta.

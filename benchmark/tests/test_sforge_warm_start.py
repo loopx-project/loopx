@@ -76,10 +76,11 @@ def point(tmp_path, request, monkeypatch):
     (workspace / "candidate").write_text("retained candidate")
     (workspace / "candidate").chmod(0o600)
     config = tmp_path / "config.toml"
-    if getattr(request, "param", None) in {"gateway", "gateway-on"}:
+    if getattr(request, "param", None) in {"gateway", "gateway-on", "gateway-children"}:
         from benchmark.runtime.codex import Execution, codex_settings
         config.write_text(codex_settings(execution=Execution(context="resume",
-            context_delivery="on" if request.param == "gateway-on" else "off"),
+            context_delivery="on" if request.param == "gateway-on" else "off",
+            native_child_limit=3 if request.param == "gateway-children" else None),
             workspace=workspace, model="original", effort="high",
             base_url="http://gateway:4001/v1", wire_api="responses"))
     else:
@@ -114,7 +115,8 @@ def point(tmp_path, request, monkeypatch):
     unit = tmp_path / "point"
     sealed = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "capture", "components": components,
         "point_metadata": metadata, "expected_source_sha256": observed["source_sha256"], "destination": str(unit)})
-    start = warm.WarmStart(unit, sealed["sha256"], config, "source-goal", "source-agent", "source-todo", int(time.time()) + 600)
+    start = warm.WarmStart(unit, sealed["sha256"], config, "source-goal", "source-agent", "source-todo",
+        int(time.time()) + 600, native_child_limit=3 if getattr(request, "param", None) == "gateway-children" else None)
     return start, workspace
 
 
@@ -231,10 +233,12 @@ def test_staging_preserves_sealed_modes(point, monkeypatch, tmp_path, model_tran
         assert "destination_config" not in declaration
 
 
-@pytest.mark.parametrize("point,context_delivery", [("gateway", "off"), ("gateway-on", "on")], indirect=["point"])
+@pytest.mark.parametrize("point,context_delivery,native_child_limit", [
+    ("gateway", "off", None), ("gateway-on", "on", None), ("gateway-children", "off", 3),
+], indirect=["point"])
 @pytest.mark.parametrize("model_transition", [False, True])
 def test_fresh_gateway_stages_exact_first_worker_settings(point, monkeypatch, tmp_path,
-                                                        model_transition, context_delivery):
+                                                        model_transition, context_delivery, native_child_limit):
     from benchmark.runtime.codex import Execution, prepare_codex_home
 
     start, workspace = point
@@ -272,7 +276,8 @@ def test_fresh_gateway_stages_exact_first_worker_settings(point, monkeypatch, tm
     home.mkdir()
     skills.mkdir()
     (home / "config.toml").write_bytes(effective)
-    args = dict(home=home, execution=Execution(context="resume", context_delivery=context_delivery), workspace=workspace,
+    args = dict(home=home, execution=Execution(context="resume", context_delivery=context_delivery,
+        native_child_limit=native_child_limit), workspace=workspace,
         model=model, effort=effort, base_url="http://gateway:4002/v1",
         api_key="synthetic", wire_api="responses", skills=skills)
     old_receiver = tmp_path / "unrebound-home"
@@ -282,8 +287,92 @@ def test_fresh_gateway_stages_exact_first_worker_settings(point, monkeypatch, tm
         prepare_codex_home(**{**args, "home": old_receiver})
     assert (old_receiver / "config.toml").read_bytes() == requested
     prepare_codex_home(**args)
+    if native_child_limit is not None:
+        for changed in [None, 2]:
+            with pytest.raises(ValueError, match="settings changed within a trial"):
+                prepare_codex_home(**{**args, "execution": replace(args["execution"], native_child_limit=changed)})
+        assert (home / "config.toml").read_bytes() == effective
     with pytest.raises(ValueError, match="settings changed within a trial"):
         prepare_codex_home(**{**args, "base_url": "http://gateway:4003/v1"})
+
+
+@pytest.mark.parametrize("point", ["gateway-children"], indirect=True)
+def test_warm_render_cannot_change_native_child_authorization(point):
+    start, workspace = point
+    effective = start.config.read_bytes().replace(b':4001/', b':4002/').replace(
+        b'max_concurrent_threads_per_session = 3', b'max_concurrent_threads_per_session = 2')
+    class NoEffects:
+        def __getattr__(self, name):
+            pytest.fail("capacity mismatch must reject before restoring workspace or authority")
+    with pytest.raises(ValueError):
+        asyncio.run(start.stage(NoEffects(), str(workspace), effective_config=effective,
+            provider_base_url="http://gateway:4002/v1"))
+
+
+@pytest.mark.parametrize("point,requested,allowed", [
+    ("gateway-children", None, False), ("gateway-children", 2, False),
+    ("gateway", 3, False), ("gateway-children", 3, True), ("gateway", None, True),
+], indirect=["point"])
+def test_warm_cli_checks_sealed_native_child_limit_before_activation(point, tmp_path, monkeypatch, requested, allowed):
+    pytest.importorskip("harbor")
+    pytest.importorskip("sforge")
+    from sforge.harness.config import SForgeConfig
+    from benchmark.edgebench import checkpoint_controller, checkpoint_supervisor, run as entry
+
+    start, workspace = point
+    source = json.loads((start.root / "checkpoint.json").read_bytes())
+    metadata = source["point_metadata"]
+    metadata["worker_file_snapshot"].update(native_capsule_component_id="native", native_capsule_sha256="a" * 64)
+    components = source["components"]
+    observed = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "probe", "components": components})
+    sealed_root = tmp_path / "warm-cli-point"
+    sealed = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "capture", "components": components,
+        "point_metadata": metadata, "expected_source_sha256": observed["source_sha256"], "destination": str(sealed_root)})
+    request = tmp_path / "request.json"
+    request.write_text(json.dumps({"destination": "/logs/agent/checkpoints", "point_metadata": {},
+        "components": [{"id": "code", "source_path": str(workspace)}],
+        "native_session": True, "loopx_state": True, "evaluation_opportunity": True, "controller_handoff": True}))
+    for name, value in {"LOOPX_SRC_DIR": str(tmp_path), "LOOPX_EXPECTED_COMMIT": "fixture",
+                        "CODEX_AUTH_JSON_PATH": str(tmp_path / "unused-auth.json")}.items():
+        monkeypatch.setenv(name, value)
+    for name in ("OPENAI_BASE_URL", "OPENAI_API_KEY", "LOOPX_RUNNER_SRC_DIR"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(entry, "source_pins", lambda *args: ("fixture", "fixture"))
+    monkeypatch.setattr(entry, "archive_source", lambda *args: None)
+    monkeypatch.setattr(entry, "load_config", SForgeConfig)
+    monkeypatch.setattr(entry, "load_benchmark", lambda *args: None)
+    monkeypatch.setattr(entry, "make_task_spec", lambda *args: SimpleNamespace(
+        task_id="fixture", cwd=str(workspace), work_image_key="work", judge_image_key="judge",
+        internet=False, game_mode=False, submit_paths=["candidate"],
+        work=SimpleNamespace(agent_query="Synthetic task"),
+        judge=SimpleNamespace(selection="score_first", score_direction="maximize")))
+    monkeypatch.setattr(checkpoint_supervisor, "CheckpointSupervisor", lambda *args, **kwargs: object())
+    monkeypatch.setattr(entry, "RecordingDockerBackend", lambda **kwargs: SimpleNamespace(image_exists=lambda _: True))
+
+    class ReachedNativeActivation(Exception):
+        pass
+
+    def restore(*args, **kwargs):
+        assert kwargs["run_id"] == "receiver"
+        raise ReachedNativeActivation
+
+    monkeypatch.setattr(checkpoint_controller, "restore", restore)
+    argv = ["--task", "fixture", "--tasks-dir", str(tmp_path), "--log-dir", str(tmp_path),
+        "--run-id", "receiver", "--worker", "heartbeat-explore", "--model", "fixture", "--effort", "high",
+        "--task-entry", "loopx-planned", "--judge-url", "http://localhost:1", "--checkpoint-request", str(request),
+        "--checkpoint-controller-file", str(tmp_path / "controller.json"), "--restore-checkpoint", str(sealed_root),
+        "--restore-sha256", sealed["sha256"], "--restore-config", str(start.config), "--restore-goal", start.goal_id,
+        "--restore-agent", start.agent_id, "--restore-source-todo", start.source_todo_id]
+    if requested is not None:
+        argv.extend(("--native-child-limit", str(requested)))
+    if allowed:
+        with pytest.raises(ReachedNativeActivation):
+            entry.main(argv)
+    else:
+        with pytest.raises(ValueError, match="native child limit differs from the sealed checkpoint"):
+            entry.main(argv)
+    assert not (tmp_path / "runs" / "receiver").exists()
+    assert not (tmp_path / ".warm-attempts" / "receiver" / "restored-phase-deadline").exists()
 
 
 @pytest.mark.parametrize("point", ["gateway"], indirect=True)

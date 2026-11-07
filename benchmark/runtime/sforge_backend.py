@@ -24,6 +24,8 @@ class RecordingDockerBackend(DockerBackend):
             raise ValueError("docker_host_bridge must be an explicit boolean")
         if type(research_sidecar) is not bool:
             raise ValueError("research_sidecar requires an explicit boolean")
+        if feedback is not None and getattr(checkpoint, "preservation", None) is not None:
+            raise ValueError("Failure preservation requires native feedback without an online sampler")
         self.research_sidecar = research_sidecar
         super().__init__(client)
         self.docker_host_bridge = docker_host_bridge
@@ -90,9 +92,12 @@ class RecordingDockerBackend(DockerBackend):
     def exec_run_with_timeout(self, handle, cmd, timeout=60, **kwargs):
         kwargs["environment"] = self._agent_environment(kwargs.get("environment"))
         is_solver = cmd == ["/bin/bash", "-c", getattr(self, "execution_command", None)]
-        if is_solver and self.checkpoint is not None:
+        preservation = getattr(self.checkpoint, "preservation", None)
+        if is_solver and self.checkpoint is not None and preservation is None:
             self.checkpoint.start(handle.raw)
         try:
+            if is_solver and preservation is not None:
+                self.checkpoint.start(handle.raw)
             result = super().exec_run_with_timeout(handle, cmd, timeout, **kwargs)
             if is_solver:
                 # SForge's RunResult discards the process exit code. Preserve
@@ -109,9 +114,18 @@ class RecordingDockerBackend(DockerBackend):
                 pending.write_text(json.dumps(self.execution_receipt))
                 pending.replace(target)
             return result
+        except Exception as error:
+            if (is_solver and self.execution_receipt is None
+                    and getattr(self.checkpoint, "preservation", None) is not None):
+                self.execution_receipt = {"transport_error_kind": type(error).__name__,
+                                          "execution_started": None}
+            raise
         finally:
             if is_solver and self.checkpoint is not None:
-                self.checkpoint.close()
+                if getattr(self.checkpoint, "preservation", None) is None:
+                    self.checkpoint.close()
+                else:
+                    self.checkpoint.finish_solver(self.execution_receipt)
             if is_solver and self.feedback is not None:
                 self.feedback.pause()
 
@@ -141,6 +155,9 @@ class RecordingDockerBackend(DockerBackend):
 
     def cleanup_container(self, handle, logger=None):
         try:
+            preservation = getattr(self.checkpoint, "preservation", None)
+            if preservation is not None and preservation.retain_source:
+                preservation.stop_source(handle.raw)
             if self.checkpoint is not None:
                 self.checkpoint.close()
             if self.feedback is not None:
@@ -201,7 +218,11 @@ class RecordingDockerBackend(DockerBackend):
                     self.native_goal_receipt = {"native_goal_outcome": "unknown"}
         finally:
             try:
-                super().cleanup_container(handle, logger)
+                preservation = getattr(self.checkpoint, "preservation", None)
+                if preservation is not None and preservation.retain_source:
+                    preservation.stop_source(handle.raw)
+                else:
+                    super().cleanup_container(handle, logger)
             finally:
                 if self.feedback is not None:
                     # Native cleanup logs some failures instead of raising. Verify the

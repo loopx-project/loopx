@@ -60,6 +60,7 @@ from .control_plane.quota.scheduler_ack import (
 )
 from .control_plane.quota.settlement import (
     read_heartbeat_settlement,
+    read_quota_spend_precheck,
     settlement_result_payload,
 )
 from .control_plane.quota.ledger_readback import (
@@ -1673,7 +1674,7 @@ def spend_quota_slot(
             or recover_unbound_visible_goal
         )
     ):
-        settlement_readback = read_heartbeat_settlement(
+        settlement_readback = read_quota_spend_precheck(
             Path(str(raw_runtime_root)).expanduser(),
             goal_id=safe_goal_id,
             agent_id=agent_id,
@@ -1712,7 +1713,7 @@ def spend_quota_slot(
     if turn_instance_id and raw_runtime_root:
         runtime_root = Path(str(raw_runtime_root)).expanduser()
         if settlement_readback is None:
-            settlement_readback = read_heartbeat_settlement(
+            settlement_readback = read_quota_spend_precheck(
                 runtime_root,
                 goal_id=safe_goal_id,
                 agent_id=agent_id,
@@ -1771,8 +1772,7 @@ def spend_quota_slot(
                     else {}
                 ),
             }
-        prior_spend_run = settlement_readback.spend_run
-        if prior_spend_run is not None:
+        if settlement_readback.spend_run_present:
             return {
                 "ok": True,
                 "mode": "spend-slot",

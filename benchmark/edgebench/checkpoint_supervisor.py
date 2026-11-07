@@ -19,12 +19,19 @@ from .checkpoint_worker import _archive, capture_worker, qualify_export_storage
 
 class CheckpointSupervisor:
     def __init__(self, controller_file: Path, destination: Path, retention_policy: Path | None = None,
-                 *, retention_enabled: bool = True):
+                 *, retention_enabled: bool = True, terminal_components: list[dict[str, str]] | None = None,
+                 terminal_receipt: Path | None = None):
         _controller(controller_file)  # Fail before native registration.
         qualify_export_storage(destination)
         if not retention_enabled and retention_policy is not None:
             raise ValueError("A retention policy cannot be combined with disabled retention")
         self.controller_file, self.destination = controller_file, destination
+        self.preservation = None
+        if terminal_components is not None:
+            from .terminal_capture import FailurePreservation
+            if terminal_receipt is None or terminal_receipt.exists():
+                raise ValueError("Terminal preservation requires a fresh private receipt")
+            self.preservation = FailurePreservation(self, terminal_components, terminal_receipt)
         self.token = None
         self.stop = threading.Event()
         self.thread = None
@@ -47,6 +54,7 @@ class CheckpointSupervisor:
     def start(self, container):
         if self.thread is not None or self.token is None:
             raise ValueError("Checkpoint supervisor requires one bound worker execution")
+        self.container = container
         self.destination.mkdir(mode=0o700, parents=True, exist_ok=False)
         if self.retention_enabled:
             from loopx.hosts.checkpoint_retention import _state
@@ -58,9 +66,14 @@ class CheckpointSupervisor:
                                   mode=0o600, fsync_directory=True)
             self.maintenance = threading.Thread(target=self._maintain, daemon=True)
             self.maintenance.start()
-        self.container = container
         self.thread = threading.Thread(target=self._run, args=(container,), daemon=True)
         self.thread.start()
+
+    def finish_solver(self, execution):
+        if self.preservation is None:
+            self.close()
+        else:
+            self.preservation.finish(execution)
 
     def close(self):
         self.stop.set()

@@ -12,6 +12,10 @@ This records producer evidence, not verified execution or utility. Findings,
 replan context and the existing research-history detail retain it; omission
 preserves old events. See the [local probe producer](../../../benchmark/runtime/EXECUTION_OBSERVATIONS.md).
 
+When the observed execution used the finding's tested input revision, result
+attachments can bind it once and select the evidence to reuse. Readback and
+standalone observations keep the complete observation form. [Execution evidence authoring](../../../docs/reference/protocols/explore-result-from-path-delta-v0.md#execution-evidence-on-the-same-input)
+
 ## Quantitative findings
 
 An ordinary result attachment can include `measurements`, saved on its existing
@@ -118,6 +122,23 @@ regressions or revisit better candidates before repeating work. Best does not
 identify the current retained candidate, establish causality, satisfy acceptance
 or authorize execution. Actual adoption and outcome benefit require subsequent
 work and evidence; automatic branch rankings remain unchanged.
+
+When an enabled work Yardstick has two different measured candidates on its
+declared goal profile, from findings on the same node and Goal/Agent/Todo
+binding, Explore context names the observed better-scoring candidate as an
+available comparison base and links the scoped evidence. A
+tied goal outcome calls for checking headroom. The detail read shows a proxy
+ordering only when its exact profile compares the same two candidates, with
+separate result references and metric directions for each profile. Weigh
+continuation, a distinct mechanism or a compatible combination by expected
+end-to-end gain and full implementation and validation cost. Use a bounded
+check that can change the choice while honoring the accepted constraints and
+budget. The compact cue keeps the recorded next-action reason and adds a
+separate comparison cue. The detail read retains the complete work decision.
+The comparison uses findings from the current work, target, and acceptance
+reference. A different target or acceptance reference needs its own eligible
+pair, even when the measured metric, evaluator and inputs stay the same.
+The comparison is advisory and carries no retention or execution obligation.
 
 Manually captured measured findings also appear in the existing result pages
 and, when linked to eligible work, its exact-source comparison cards. They need

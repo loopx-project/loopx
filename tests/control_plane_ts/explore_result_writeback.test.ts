@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import {normalizeExploreExecutionObservation} from "../../loopx/control_plane/capabilities/explore_execution_observation.ts";
 import {exploreResultWritebackAffordance, normalizeExploreResultAttachment, planExploreQuestionEvolution} from "../../loopx/control_plane/capabilities/explore_result_writeback.ts";
 
 const attachment = {
@@ -44,6 +45,43 @@ test("execution observations reuse the finding's existing evidence references", 
   assert.deepEqual(normalizeExploreResultAttachment({attachment: ordinary}), ordinary);
   assert.deepEqual(normalizeExploreResultAttachment({attachment: {...ordinary, execution_observation: observed}}),
     {...ordinary, execution_observation: {...observed, evidence_refs: [...refs].sort()}});
+});
+
+test("explicit finding bindings expand to the existing complete execution record", () => {
+  const {input_revision: _revision, ...facts} = execution;
+  const authoring = {...facts, schema_version: "explore_execution_from_finding_v0", evidence_refs: "finding"};
+  const normalize = (observation: Record<string, unknown>) =>
+    normalizeExploreResultAttachment({attachment: {...attachment, execution_observation: observation}});
+  const complete = {...attachment, execution_observation: execution};
+  assert.deepEqual(normalize(authoring), complete);
+  assert.deepEqual(normalizeExploreResultAttachment({
+    attachment: {...attachment, execution_observation: authoring}, other_attachment: complete,
+  }), complete);
+  const subset = [attachment.evidence_refs[1]];
+  assert.deepEqual(normalize({...authoring, evidence_refs: subset}).execution_observation,
+    {...execution, evidence_refs: subset});
+
+  const {evidence_refs: _selection, ...unbound} = authoring;
+  assert.throws(() => normalize(unbound), /one to eight evidence references/);
+  for (const refs of [null, [], ["foreign:execution"], ["/absolute/file"]]) {
+    assert.throws(() => normalize({...authoring, evidence_refs: refs}));
+  }
+  for (const revision of [null, execution.input_revision, "different-revision"]) {
+    assert.throws(() => normalize({...authoring, input_revision: revision}), /cannot override/);
+  }
+  assert.throws(() => normalize({...authoring, result_ref: attachment.evidence_refs[0],
+    result_candidate_sha256: "b".repeat(64)}), /this executed candidate/);
+  assert.throws(() => normalize({...authoring, result_ref: attachment.evidence_refs[0],
+    result_candidate_sha256: execution.candidate_sha256, evidence_refs: subset}), /included evidence reference/);
+  assert.throws(() => normalize(facts), /fields are missing or unsupported/);
+  assert.throws(() => normalizeExploreExecutionObservation({observation: authoring}), /fields are missing or unsupported/);
+
+  const affordance = exploreResultWritebackAffordance();
+  const example = affordance.optional_execution_observation_example as Record<string, unknown>;
+  const expanded = normalize(example.execution_observation as Record<string, unknown>).execution_observation;
+  assert.deepEqual(expanded, {...example.execution_observation as Record<string, unknown>,
+    schema_version: execution.schema_version, input_revision: attachment.input_revision,
+    evidence_refs: attachment.evidence_refs});
 });
 
 test("execution reference compatibility preserves attribution, text bounds and method identifiers", () => {

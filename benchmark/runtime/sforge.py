@@ -20,11 +20,12 @@ from loopx.control_plane.goals.goal_vision_policy import DEFAULT_PLANNING_HORIZO
 from benchmark.edgebench.feedback import FEEDBACK_MODES
 from benchmark.edgebench.feedback_hook import FEEDBACK_PAYLOAD
 
-from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution, codex_settings, prepare_codex_home
+from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution, codex_settings, native_child_instructions, prepare_codex_home
 from .codex_offline import CodexOffline, MODEL_CATALOG_REMOTE, stage_portable_python
 from .harbor import (
     BenchmarkCodex, _CONTROL, _CODEX_HOME, _PYTHON, _SCHEDULER_STATE, _SRC,
 )
+from .research_probe import resolve_execution_observation
 from .scheduler import worker_command
 
 
@@ -93,6 +94,8 @@ class SForgeWorker(CodexAgent):
                  task_entry: str | None = None,
                  turn_envelope: bool = False,
                  context_delivery: str | None = None,
+                 execution_observation: str | None = None,
+                 native_child_limit: int | None = None,
                  provider_request_admission: bool = False,
                  native_goal_continue: bool = False,
                  replan_after_turns: int | None = None,
@@ -110,10 +113,16 @@ class SForgeWorker(CodexAgent):
         ):
             raise ValueError("turn_envelope requires a heartbeat worker")
         self.turn_envelope = turn_envelope
+        self.native_child_limit = Execution(mode="plain", native_child_limit=native_child_limit).native_child_limit
+        if self.native_child_limit is not None and (not feedback_prompt or not workspace_instructions):
+            raise ValueError("Native child authorization requires the explicit task prompt and workspace instructions")
         self.context_delivery = Execution(
             mode="heartbeat" if profile.startswith("heartbeat-") else "plain",
             context_delivery=context_delivery,
         ).context_delivery
+        self.execution_observation = resolve_execution_observation(execution_observation)
+        if self.execution_observation is not None and not profile.startswith("heartbeat-"):
+            raise ValueError("execution_observation requires a heartbeat worker")
         if type(provider_request_admission) is not bool:
             raise ValueError("provider_request_admission must be a boolean opt-in")
         if provider_request_admission and not profile.startswith("heartbeat-"):
@@ -193,6 +202,8 @@ class SForgeWorker(CodexAgent):
                 raise ValueError("Managed research storage requires matching warm receiver selection")
             if not profile.startswith("heartbeat-") or feedback != "native" or self.task_entry != "loopx-planned":
                 raise ValueError("Warm checkpoint continuation requires a planned native heartbeat worker")
+            if getattr(warm_start, "native_child_limit", None) != self.native_child_limit:
+                raise ValueError("Worker native child limit differs from the warm start request")
             warm_start.verify(cwd)
         self.profile, self.cwd = profile, cwd
         if feedback not in FEEDBACK_MODES:
@@ -215,6 +226,11 @@ class SForgeWorker(CodexAgent):
             or task_objective not in feedback_prompt
         ):
             raise ValueError("Task objective must occur in the native task prompt")
+        if self.native_child_limit is not None:
+            assert feedback_prompt is not None and workspace_instructions is not None
+            authorization = native_child_instructions(self.native_child_limit)
+            feedback_prompt = authorization + feedback_prompt
+            workspace_instructions = authorization + workspace_instructions
         self.feedback = feedback
         self.feedback_prompt = feedback_prompt
         self.workspace_instructions = workspace_instructions
@@ -305,7 +321,7 @@ class SForgeWorker(CodexAgent):
                     shutil.copyfile(os.environ["CODEX_AUTH_JSON_PATH"], home / "auth.json")
                     (home / "auth.json").chmod(0o600)
                 prepare_codex_home(
-                    home, execution=Execution(mode="plain"), workspace=Path(self.cwd),
+                    home, execution=Execution(mode="plain", native_child_limit=self.native_child_limit), workspace=Path(self.cwd),
                     model=self._config.agent_model, effort=effort,
                     base_url=runtime_base_url or "",
                     api_key=runtime_api_key or "", wire_api="responses", skills=None,
@@ -336,6 +352,9 @@ class SForgeWorker(CodexAgent):
                 task_entry=self.task_entry,
                 turn_envelope=self.turn_envelope,
                 context_delivery=self.context_delivery,
+                **({"execution_observation": self.execution_observation}
+                   if self.execution_observation is not None else {}),
+                native_child_limit=self.native_child_limit,
                 **({"provider_request_admission": True} if self.provider_request_admission else {}),
                 native_goal_continue=self.native_goal_continue,
                 replan_after_turns=self.replan_after_turns,
@@ -428,6 +447,8 @@ class SForgeWorker(CodexAgent):
             **({"planning_timeout_seconds": None}
                if self.task_entry == "loopx-planned" else {}),
             "stop_hook": self.profile == "official",
+            **({"native_child_limit": self.native_child_limit}
+               if self.native_child_limit is not None else {}),
             **(self.runtime._turn_envelope_receipt() if self.runtime is not None else {}),
             **({"provider_request_admission": "on"} if self.provider_request_admission else {}),
             **({"native_goal_continue": True} if self.native_goal_continue else {}),
@@ -435,6 +456,8 @@ class SForgeWorker(CodexAgent):
             "explore_graph": self.profile == "heartbeat-explore",
             "explore_harness": self.profile == "heartbeat-explore",
             "feedback": self.feedback,
+            **({"execution_observation": self.execution_observation}
+               if self.execution_observation is not None else {}),
             **({"feedback_delivery": "codex_hooks", "feedback_payload": FEEDBACK_PAYLOAD}
                if self.feedback == "best-only" else {}),
             **(self.runtime._replan_receipt() if self.runtime and
@@ -482,8 +505,11 @@ class SForgeWorker(CodexAgent):
                     # The sealed Goal, task graph, review counters and strategy
                     # are the continuing state. Do not bootstrap, seed another
                     # task, or reset an existing configuration during restore.
+                    if self.native_child_limit is not None:
+                        asyncio.run(self.runtime._verify_phase_configuration(self.environment, cwd=self.cwd))
                     asyncio.run(self.runtime._write_task_document(self.environment, result.stdout))
-                    asyncio.run(self.runtime._verify_phase_configuration(self.environment, cwd=self.cwd))
+                    if self.native_child_limit is None:
+                        asyncio.run(self.runtime._verify_phase_configuration(self.environment, cwd=self.cwd))
                 else:
                     asyncio.run(self.runtime._prepare_phase(self.environment, result.stdout, cwd=self.cwd))
                 if self.profile == "heartbeat-explore" and self.warm_start is None:

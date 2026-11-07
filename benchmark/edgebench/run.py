@@ -124,6 +124,10 @@ def main(argv=None):
                         help="Opt-in short heartbeat context with same-invocation full captures")
     parser.add_argument("--context-delivery", choices=("off", "on"),
                         help="Native Codex context delivery: on by default for heartbeat workers; pass off to disable")
+    parser.add_argument("--execution-observation", choices=("local_probe",),
+                        help="Optional local execution probe for heartbeat workers")
+    parser.add_argument("--native-child-limit", type=int,
+                        help="Explicit native child capacity and optional task delegation authorization, shared across study arms; omitted preserves existing behavior")
     parser.add_argument("--provider-request-admission", action="store_true",
                         help="Opt-in canonical admission before each heartbeat custom Responses request")
     parser.add_argument("--native-goal-continue", action="store_true",
@@ -151,6 +155,8 @@ def main(argv=None):
                         help="Host-private native checkpoint controller; requires full fresh-replan handoff")
     parser.add_argument("--checkpoint-export-root", type=Path,
                         help="Existing physical host volume for full worker checkpoints; must preserve Linux filenames")
+    parser.add_argument("--preserve-failed-worker", action="store_true",
+                        help="Opt-in terminal joint capture and stopped-worker retention after a failed heartbeat execution; requires full controller capture")
     parser.add_argument("--checkpoint-request", type=Path,
                         help="Explicit host JSON declaration staged into a heartbeat worker; omitted disables capture")
     parser.add_argument("--restore-checkpoint", type=Path,
@@ -185,6 +191,9 @@ def main(argv=None):
                         help="Host services run on Docker's default bridge (e.g. runner inside a VM); "
                              "pin host.docker.internal there instead of Docker's host-gateway alias")
     args = parser.parse_args(argv)
+    if args.native_child_limit is not None and (
+            args.native_child_limit < 1 or args.feedback != "native"):
+        parser.error("--native-child-limit requires a positive limit and native feedback")
     api_base_url = os.environ.get("OPENAI_BASE_URL") or None
     api_key = os.environ.get("OPENAI_API_KEY") if api_base_url else None
     if api_base_url and not api_key:
@@ -204,6 +213,8 @@ def main(argv=None):
         args.context_delivery = Execution(mode="heartbeat" if args.worker.startswith("heartbeat-") else "plain").context_delivery
     if args.context_delivery != "off" and not args.worker.startswith("heartbeat-"):
         parser.error("--context-delivery requires a heartbeat worker")
+    if args.execution_observation is not None and not args.worker.startswith("heartbeat-"):
+        parser.error("--execution-observation requires a heartbeat worker")
     if args.provider_request_admission:
         if not args.worker.startswith("heartbeat-"):
             parser.error("--provider-request-admission requires a heartbeat worker")
@@ -231,6 +242,10 @@ def main(argv=None):
         parser.error("controller file and full controller_handoff must be enabled together with native feedback")
     if (args.checkpoint_retention_policy is not None or args.no_checkpoint_retention) and not handoff:
         parser.error("Checkpoint retention requires the explicit native controller capture path")
+    if args.preserve_failed_worker and not handoff:
+        parser.error("Failed-worker preservation requires full native controller capture")
+    if args.preserve_failed_worker and args.eval_interval != 0:
+        parser.error("Failed-worker preservation requires agent-only native submissions")
     if args.checkpoint_export_root is not None:
         if not handoff:
             parser.error("Checkpoint export storage requires full controller capture")
@@ -282,6 +297,8 @@ def main(argv=None):
                 archive_source(runner, pins[1], Path(directory) / "runner.tar", ("benchmark/runtime",))
     task_file = args.tasks_dir / f"{args.task}.json"
     task = make_task_spec(task_file, load_benchmark(args.tasks_dir))
+    if args.native_child_limit is not None and task.game_mode:
+        parser.error("--native-child-limit requires a non-game task with workspace instructions")
     research_sidecar = args.feedback == "native" and not task.game_mode
     if research_sidecar:
         from benchmark.runtime.research_artifacts import validate_research_scope, with_research_capture
@@ -353,7 +370,8 @@ def main(argv=None):
             args.restore_goal, args.restore_agent, args.restore_source_todo,
             int(time.time()) + args.timeout, args.replan_after_turns or 6,
             tuple(args.restore_research_component), args.restore_fresh_replan,
-            destination_config=args.restore_model_config, research_sidecar=research_sidecar)
+            destination_config=args.restore_model_config, research_sidecar=research_sidecar,
+            native_child_limit=args.native_child_limit)
         metadata = candidate.verify(task.cwd)
         if args.restore_model_config is not None:
             from loopx.hosts.codex_checkpoint import checkpoint_destination_config
@@ -370,10 +388,13 @@ def main(argv=None):
                          warm_start=warm_start, research_sidecar=research_sidecar,
                          timeout_seconds=args.timeout, feedback_prompt=feedback_prompt, feedback=args.feedback,
                          workspace_instructions=workspace_instructions,
+                         native_child_limit=args.native_child_limit,
                          task_objective=task_objective,
                          task_entry=args.task_entry,
                          turn_envelope=args.turn_envelope,
                          context_delivery=args.context_delivery,
+                         **({"execution_observation": args.execution_observation}
+                            if args.execution_observation is not None else {}),
                          **({"provider_request_admission": True} if args.provider_request_admission else {}),
                          native_goal_continue=args.native_goal_continue,
                          replan_after_turns=args.replan_after_turns,
@@ -405,9 +426,15 @@ def main(argv=None):
         from benchmark.edgebench.checkpoint_supervisor import CheckpointSupervisor
         destination = (args.checkpoint_export_root / args.run_id / args.task / "checkpoints"
                        if args.checkpoint_export_root is not None else trial / "checkpoints")
+        terminal = None
+        if args.preserve_failed_worker:
+            from benchmark.edgebench.terminal_capture import terminal_components
+            terminal = terminal_components(declaration, task.cwd)
         checkpoint = CheckpointSupervisor(args.checkpoint_controller_file, destination,
                                           retention_policy=args.checkpoint_retention_policy,
-                                          retention_enabled=not args.no_checkpoint_retention)
+                                          retention_enabled=not args.no_checkpoint_retention,
+                                          terminal_components=terminal,
+                                          terminal_receipt=(trial / "terminal-preservation.json") if terminal else None)
     backend = RecordingDockerBackend(log_dir=trial / "collected", logger=logger,
                                      oauth_proxy=bool(args.api_proxy_url or api_base_url),
                                      blind_api_endpoint=blind_endpoint, feedback=feedback,
@@ -444,6 +471,8 @@ def main(argv=None):
         "sforge_source": active_source_receipt(),
         **turn_envelope_receipt(explicit=args.turn_envelope),
         **({"context_delivery": "on"} if args.context_delivery != "off" else {}),
+        **({"execution_observation": args.execution_observation}
+           if args.execution_observation is not None else {}),
         **({"provider_request_admission": "on"} if args.provider_request_admission else {}),
         **({"native_goal_continue": True} if args.native_goal_continue else {}),
         "task_sha256": hashlib.sha256(task_file.read_bytes()).hexdigest(),
@@ -475,6 +504,7 @@ def main(argv=None):
         **({"checkpoint_request_sha256": hashlib.sha256(checkpoint_request).hexdigest()}
            if checkpoint_request is not None else {}),
         **({"checkpoint_export_directory": str(checkpoint.destination)} if checkpoint is not None else {}),
+        **({"preserve_failed_worker": True} if args.preserve_failed_worker else {}),
     }
     receipt_path = trial / "runtime-receipt.json"
     receipt_path.write_text(json.dumps(receipt, indent=2))

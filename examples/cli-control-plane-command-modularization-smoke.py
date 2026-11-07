@@ -175,11 +175,35 @@ def assert_todo_markdown_error_payload() -> None:
     assert_contains(result.stdout, "- error: todo add requires --role", "todo markdown error")
 
 
+def assert_history_reader_route() -> None:
+    with tempfile.TemporaryDirectory(prefix="loopx-cli-history-smoke-") as tmp:
+        script = f"""
+import contextlib
+import io
+import json
+import sys
+from loopx.entrypoint import main
+output = io.StringIO()
+with contextlib.redirect_stdout(output):
+    result = main(["--registry", {str(Path(tmp) / 'absent.json')!r},
+                   "--format", "json", "history", "--agent-id", "fixture-agent"])
+assert result == 1
+assert json.loads(output.getvalue()) == {{"ok": False,
+    "error": "--agent-id requires --goal-id without a history action"}}
+for module in ("loopx.cli", "loopx.chat_server", "loopx.cli_commands.benchmark_dispatch"):
+    assert module not in sys.modules, module
+"""
+        result = subprocess.run([sys.executable, "-c", script], cwd=REPO_ROOT,
+                                text=True, capture_output=True, check=False)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def main() -> int:
     assert_source_shape()
     assert_help_surfaces()
     assert_todo_error_payload()
     assert_todo_markdown_error_payload()
+    assert_history_reader_route()
     print("cli-control-plane-command-modularization-smoke: ok")
     return 0
 

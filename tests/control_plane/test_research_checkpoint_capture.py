@@ -31,6 +31,86 @@ def test_feature_off_and_failed_wakes_do_not_read_request_or_settlement(monkeypa
     assert failed["checkpoint"]["captured"] is False
 
 
+@pytest.mark.skipif(os.name != "posix", reason="native benchmark uses the POSIX source launcher")
+@pytest.mark.parametrize(("changed_reference", "replan"), [(False, False), (True, False), (False, True)])
+def test_native_preflight_uses_the_committed_capture(tmp_path, monkeypatch, changed_reference, replan):
+    import shlex
+    import subprocess
+    import sys
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = cli._write_fixture(tmp_path)
+    if replan:
+        cli._configure_autonomous_replan_fixture(project, runtime, registry)
+    cli._initialize_fixture_authority(project, runtime, provider="sqlite")
+    cli_path = Path(__file__).resolve().parents[2] / "scripts/loopx"
+    turn = "wake-prepared-native-context"
+    logs = tmp_path / "logs"
+    wakes = logs / "wakes"
+    wake = wakes / turn
+    wake.mkdir(parents=True)
+    context = tmp_path / "context"
+    context.mkdir(mode=0o700)
+    request = tmp_path / "request.json"
+    request.write_text(json.dumps({"trigger": "fresh_replan", "destination": str(logs / "checkpoints"),
+        "components": [{"id": "fixture", "source_path": str(project)}], "point_metadata": {}}))
+    env = {**os.environ, "LOOPX_PROJECT": str(project), "LOOPX_CLI": str(cli_path),
+        "LOOPX_PYTHON": sys.executable, "LOOPX_REGISTRY": str(registry), "LOOPX_RUNTIME_ROOT": str(runtime),
+        "LOOPX_GOAL_ID": cli.GOAL_ID, "LOOPX_AGENT_ID": cli.AGENT_ID, "LOOPX_WAKE_LOG_DIR": str(wakes),
+        "LOOPX_CHECKPOINT_REQUEST": str(request), "LOOPX_CONTEXT_DELIVERY": "on",
+        "LOOPX_CODEX_CONTEXT_DIR": str(context), "LOOPX_EXECUTION_MODE": "heartbeat"}
+    observed = []
+    actual_run = subprocess.run
+
+    def observe_guard(argv, **kwargs):
+        result = actual_run(argv, **kwargs)
+        if "should-run" in argv:
+            assert "--prepared-capture-reference" in argv and "--defer-context-presentation" in argv
+            response = json.loads(result.stdout)
+            observed.append(response)
+            if changed_reference:
+                return subprocess.CompletedProcess(argv, result.returncode,
+                    json.dumps({**response, "capture_sha256": "0" * 64}), result.stderr)
+        return result
+
+    monkeypatch.setattr("benchmark.runtime.checkpoint.subprocess.run", observe_guard)
+    receipt = {"turn_id": turn, "mode": "heartbeat", "stage": "execute"}
+    if changed_reference:
+        with pytest.raises(ValueError, match="prepared capture differs"):
+            capture_before_replan(env, receipt, "original work instructions")
+        assert not (wake / "checkpoint-start-guard.json").exists()
+    else:
+        body = capture_before_replan(env, receipt, "original work instructions")
+        command = shlex.split(next(line for line in body.splitlines() if " quota context-project " in line))
+        source = Path(command[command.index("--capture-file") + 1])
+        digest = command[command.index("--capture-sha256") + 1]
+        assert hashlib.sha256(source.read_bytes()).hexdigest() == digest
+        assert json.loads(source.read_bytes())["heartbeat_receipt"]["turn_instance_id"] == turn
+        if replan:
+            assert source.name == "checkpoint-start-view.json"
+            original = source.parent / "decision-original/decision.json"
+            assert hashlib.sha256(original.read_bytes()).hexdigest() == observed[0]["capture_sha256"]
+            command.remove("--initial-read")
+            command.extend(["--select", "/replan_action_packet/review", "--select", "/replan_action_packet/writeback"])
+            selected = actual_run(command, cwd=project, env=env, capture_output=True, text=True, check=True)
+            page = json.loads(selected.stdout)
+            assert page["ok"] and page["eof"], page
+            actions = {row["pointer"]: row["value"] for row in json.loads(page["content"])["selections"]}
+            assert "--replan-stage writeback" in actions["/replan_action_packet/writeback"]
+            review = actual_run(shlex.split(actions["/replan_action_packet/review"]),
+                                cwd=project, env=env, capture_output=True, text=True, check=True)
+            review_packet = json.loads(review.stdout)
+            original_packet = json.loads(original.read_bytes())
+            assert review_packet["obligation_id"] == original_packet["replan_action_packet"]["obligation_id"]
+        else:
+            assert source.name == "decision.json"
+            assert digest == observed[0]["capture_sha256"]
+            assert not list(wake.glob("checkpoint-start-*/checkpoint-start-view.json"))
+        assert body.endswith("original work instructions")
+    assert len(observed) == 1 and "interaction_contract" not in observed[0]
+    assert cli._heartbeat_receipt_count(runtime, turn) == 1
+
+
 def test_closed_budget_never_reads_the_request_or_replays_work(monkeypatch):
     def forbidden(*args, **kwargs):
         raise AssertionError("closed budget must not read sources")

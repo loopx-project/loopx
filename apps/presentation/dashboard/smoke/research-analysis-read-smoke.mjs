@@ -5,8 +5,10 @@ import {mkdtemp, mkdir, readFile, writeFile, rm} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {resolve} from "node:path";
 import {createInterface} from "node:readline";
+import {createElement} from "react";
+import {renderToStaticMarkup} from "react-dom/server";
 import {resolveTestPython} from "../../../../scripts/test-python.mjs";
-import {readAnalysisSnapshot} from "../src/features/personal-workspace/goal-research-analysis.tsx";
+import {readAnalysisSnapshot, ResearchAnalysisPanel} from "../src/features/personal-workspace/goal-research-analysis.tsx";
 
 // A language-specific cache miss must not hide the same registered pack's
 // older, unspecified-language result or turn a read into model execution.
@@ -85,6 +87,25 @@ try {
   assert.equal(value.pack.result, null, "An original read failure does not erase the current-language state");
   failOriginal = false;
   assert.deepEqual((await read()).originalPack, original, "The ordinary read retries recovery without execution");
+
+  // A failed/in-flight observation is unknown; only a successful empty read
+  // supports the absence message. Keep the existing read retry as recovery.
+  for (const zh of [true, false]) {
+    const empty = {...pack, availability: "available", selection: {exhaustive: false}, episode_count: 0};
+    const controller = {zh, pack: empty, requestPack: empty, location: {open: true}, panel: {current: null},
+      readOnly: true, loading: false, snapshot: {catalog: {}}, read: async () => {}, close: () => {}};
+    const noSaved = zh ? "此来源尚无已保存的分析。" : "This source has no saved analysis yet.";
+    const render = state => renderToStaticMarkup(createElement(ResearchAnalysisPanel, {analysis: {...controller, ...state}}));
+    assert.ok(render({}).includes(noSaved), "A successful empty source retains its ordinary absence state");
+    for (const state of [{loading: true}, {readError: "Source unavailable"}, {snapshot: {catalog: {}, originalReadError: "Original unavailable"}}]) {
+      const html = render(state);
+      assert.ok(!html.includes(noSaved), "An incomplete source read must not claim that no saved analysis exists");
+      if (!state.loading) {
+        assert.ok(html.includes('role="alert"'));
+        assert.ok(html.includes(zh ? 'aria-label="重试读取"' : 'aria-label="Retry reading"'));
+      }
+    }
+  }
 
   for (const options of [{current: () => false}, {signal: AbortSignal.abort()}]) {
     reset("zh");
