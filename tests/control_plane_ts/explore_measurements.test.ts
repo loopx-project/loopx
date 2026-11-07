@@ -106,6 +106,60 @@ test("quantitative evidence keeps zero, negatives and unknown distinct and rejec
   assert.throws(() => normalizeExploreMeasurements([]));
 });
 
+test("one finding retains paired candidates without changing their comparison conditions", () => {
+  const baseline = {...metric, value: 9};
+  const candidate = {...metric, value: 6, candidate_ref: "candidate:b", evidence_ref: "result:b"};
+  const pair = [baseline, candidate];
+  const attachment = {schema_version: "explore_result_attachment_v0", question: "Which candidate improves quality?",
+    applicability: "Matched inputs, evaluator and resource budget", input_revision: metric.input_revision,
+    observation: "The matched candidate regressed.", interpretation: "Retain both observations for the next decision.",
+    status: "refuted", evidence_refs: pair.map(item => item.evidence_ref), measurements: pair};
+  assert.deepEqual(normalizeExploreResultAttachment({attachment}).measurements, pair);
+  const {comparison_scope, input_revision, evaluation_ref} = metric;
+  assert.deepEqual(normalizeExploreMeasurements(pair.map(({comparison_scope: _scope,
+    input_revision: _input, evaluation_ref: _evaluation, ...row}) => row),
+  {comparison_scope, input_revision, evaluation_ref}), pair);
+  for (const direction of [true, false]) {
+    const measured = pair.map(item => ({...item, higher_is_better: direction}));
+    const [feedback] = projectExploreMeasurementFeedback([{finding_id: "paired", node_id: "question-a", measurements: measured}]);
+    assert.equal(feedback.measured_count, 2);
+    assert.equal(feedback.latest.measurement.candidate_ref, "candidate:b");
+    assert.equal(feedback.previous_best?.candidate_ref, "candidate:a");
+    assert.equal(feedback.best?.candidate_ref, direction ? "candidate:a" : "candidate:b");
+    assert.equal(feedback.improvement, direction ? -3 : 3);
+    const [reordered] = projectExploreMeasurementFeedback([{finding_id: "paired", node_id: "question-a",
+      measurements: [...measured].reverse()}]);
+    assert.deepEqual(reordered.best, feedback.best, "declared batch order cannot change the best score");
+    assert.equal(reordered.measured_count, 2);
+    assert.equal(reordered.latest.measurement.candidate_ref, "candidate:a", "latest is the last declared observation, not execution chronology");
+  }
+  const [unknown] = projectExploreMeasurementFeedback([{finding_id: "paired", node_id: "question-a",
+    measurements: [baseline, {...candidate, value: null}]}]);
+  assert.equal(unknown.best?.value, 9);
+  assert.equal(unknown.improvement, null);
+  assert.equal(unknown.measured_count, 1);
+  assert.equal(unknown.unknown_count, 1);
+});
+
+test("paired observations do not weaken duplicate, scope, source or execution checks", () => {
+  for (const mutation of [{value: 10}, {evidence_ref: "result:another"}, {candidate_ref: " candidate:a "}])
+    assert.throws(() => normalizeExploreMeasurements([metric, {...metric, ...mutation}]), /duplicated/);
+  const {candidate_ref: _candidate, ...missingCandidate} = metric;
+  assert.throws(() => normalizeExploreMeasurements([missingCandidate]), /fields are missing/);
+  const changedScope = {...metric, comparison_scope: "validation:other-budget"};
+  assert.equal(normalizeExploreMeasurements([metric, changedScope]).length, 2);
+  assert.equal(projectExploreMeasurementFeedback([{finding_id: "changed", node_id: "question-a",
+    measurements: [metric, changedScope]}]).length, 2);
+  const other = {...metric, candidate_ref: "candidate:b", evidence_ref: "result:b"};
+  const execution = {schema_version: "explore_execution_observation_v0",
+    candidate_sha256: "a".repeat(64), result_candidate_sha256: "a".repeat(64),
+    input_revision: metric.input_revision, planned_method_id: "probe", executed_method_id: "probe",
+    change_reason: null, elapsed_seconds: 1, limit_seconds: 10, search_iterations: null,
+    stop_reason: "process_exit:0", evidence_refs: [metric.evidence_ref], result_ref: metric.evidence_ref};
+  assert.throws(() => normalizeExploreMeasurementsRequest({measurements: [metric, other],
+    execution_observation: execution}), /executed candidate's result/);
+});
+
 test("regression returns the earlier best candidate and useful signed feedback, including lower-is-better", () => {
   const input = [finding("new", 6), finding("best", 9), finding("first", 8)];
   const before = JSON.stringify(input);
