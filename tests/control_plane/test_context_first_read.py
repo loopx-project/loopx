@@ -86,6 +86,31 @@ def pinned_initial_view(payload, directory):
         initial_read_plan={"initial": True, "plan": plan, "capture": capture})
 
 
+def test_first_read_keeps_goal_turn_binding_ahead_of_work_context(tmp_path, decision):
+    interaction = decision["interaction_contract"]
+    action = "loopx quota should-run --runtime-profile codex_cli --turn-instance-id fixture-turn"
+    interaction["agent_channel"].update(primary_action=action, must_attempt=True, delivery_allowed=False)
+    interaction["cli_channel"] = {
+        "turn_binding_required": True,
+        "next_cli_actions": [action],
+        "spend_after_validation": False,
+    }
+
+    view = pinned_initial_view(decision, tmp_path)
+    page = read_context_capture(Namespace(
+        capture_file=view["recovery"]["path"], capture_sha256=view["recovery"]["sha256"],
+        format="json", select=None, initial_read=True, offset=0,
+        page_bytes=64000, max_page_output_bytes=64000,
+    ))
+    assert page["ok"] and page["eof"]
+    values = selected_context_values(page["content"])
+    assert values["/interaction_contract/cli_channel/turn_binding_required"] is True
+    assert values["/interaction_contract/cli_channel/next_cli_actions"] == [action]
+    assert list(values).index("/interaction_contract/cli_channel/next_cli_actions") < list(values).index(
+        "/interaction_contract/agent_channel/work_context/sources/0/content/text"
+    )
+
+
 @pytest.mark.parametrize("required", [True, False])
 def test_initial_read_delivers_explicit_selection_only_at_its_gate(tmp_path, decision, required):
     cli = decision["interaction_contract"]["cli_channel"]

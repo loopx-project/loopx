@@ -460,6 +460,10 @@ export function initialContextReadPointers(context: JsonObject, decisionFields: 
   include("interaction_contract", "user_channel");
   for (const field of ["primary_action", "delivery_allowed", "must_attempt", "quiet_noop_allowed"])
     include("interaction_contract", "agent_channel", field);
+  const turnBindingRequired = object(interaction.cli_channel)?.turn_binding_required === true;
+  if (turnBindingRequired)
+    for (const field of ["turn_binding_required", "next_cli_actions", "spend_allowed_now", "spend_after_validation", "spend_policy"])
+      include("interaction_contract", "cli_channel", field);
   include("interaction_contract", "agent_channel", "required_reads");
   const work = ["interaction_contract", "agent_channel", "work_context"];
   include(...work, "instruction");
@@ -533,9 +537,10 @@ export function initialContextReadPointers(context: JsonObject, decisionFields: 
     include(...source, "content", "harness", "guidance");
     include(...source, "content", "harness", "orchestration_gate");
   });
-  for (const field of ["execution_preparation", "next_cli_actions", "spend_allowed_now", "spend_after_validation", "spend_policy",
-    "quota_spend_source", "delivery_workspace_causality", "vision_continuation_audit"])
-    include("interaction_contract", "cli_channel", field);
+  if (!turnBindingRequired)
+    for (const field of ["execution_preparation", "next_cli_actions", "spend_allowed_now", "spend_after_validation", "spend_policy",
+      "quota_spend_source", "delivery_workspace_causality", "vision_continuation_audit"])
+      include("interaction_contract", "cli_channel", field);
   // Explicit selection clears next_cli_actions. Deliver the owner's discovery
   // and same-Turn binding recipe alongside its non-exhaustive suggestions.
   if (object(interaction.cli_channel)?.selection_required === true) {

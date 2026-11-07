@@ -835,6 +835,27 @@ def build_live_quota_should_run_decision(
             key: value for key, value in hook_dispatch.items() if key != "projections"
         }
     interaction = payload.get("interaction_contract")
+    cli = interaction.get("cli_channel") if isinstance(interaction, dict) else None
+    if isinstance(cli, dict) and cli.get("turn_binding_required") is True:
+        # Reconcile the legacy work fields after hooks and recovery have chosen
+        # the final interaction. The selected work stays visible but unadmitted.
+        reason = cli["spend_policy"]
+        payload["normal_delivery_allowed"] = False
+        payload["recommended_action"] = cli["next_cli_actions"][0]
+        payload.pop("agent_lane_next_action", None)
+        for key in ("execution_obligation", "work_lane_contract"):
+            obligation = payload.get(key)
+            if isinstance(obligation, dict):
+                obligation["must_attempt_work"] = False
+        obligation = payload.get("execution_obligation")
+        if isinstance(obligation, dict):
+            obligation.update(delivery_allowed=False, reason=reason)
+        lane = payload.get("work_lane_contract")
+        if isinstance(lane, dict):
+            lane["action"] = payload["recommended_action"]
+        recommendation = payload.get("heartbeat_recommendation")
+        if isinstance(recommendation, dict):
+            recommendation["spend_policy"] = reason
     if isinstance(interaction, dict) and goal_id and agent_id:
         scope = {
             "goal_id": goal_id,
