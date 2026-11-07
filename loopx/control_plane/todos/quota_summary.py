@@ -491,10 +491,10 @@ def select_quota_todo_contexts(
     roles: list[str] = []
     requests: list[dict[str, Any]] = []
     for role, canonical, asset in (("user", user_canonical, user_asset), ("agent", agent_canonical, agent_asset)):
-        source = _select_todo_source(canonical, asset)
-        if source is None:
+        selected = _select_todo_source(canonical, asset)
+        if selected is None:
             continue
-        kind = "user" if source is canonical else "project_asset"
+        kind, source = selected
         values.append(source)
         roles.append(role)
         requests.append(project_quota_planning(source, all_open_items=[], source_open_count=source.get("open_count"),
@@ -537,11 +537,12 @@ def select_quota_todo_contexts(
 def _select_todo_source(
     canonical_value: Any,
     project_asset_value: Any,
-) -> dict[str, Any] | None:
-    sources = (canonical_value, project_asset_value)
+) -> tuple[str, dict[str, Any]] | None:
+    """Keep the projection kind selected by precedence, including aliased values."""
+    sources = (("user", canonical_value), ("project_asset", project_asset_value))
     if not is_canonical_attention_todo_summary(canonical_value):
         sources = tuple(reversed(sources))
-    return next((source for source in sources if isinstance(source, dict)), None)
+    return next(((kind, source) for kind, source in sources if isinstance(source, dict)), None)
 
 
 def select_quota_todo_source_items(
@@ -550,8 +551,8 @@ def select_quota_todo_source_items(
 ) -> list[dict[str, Any]]:
     """Return the authoritative pre-hot-path todo source for semantic checks."""
 
-    source = _select_todo_source(canonical_value, project_asset_value)
-    return todo_summary_source_items(source) if source is not None else []
+    selected = _select_todo_source(canonical_value, project_asset_value)
+    return todo_summary_source_items(selected[1]) if selected is not None else []
 
 
 def select_quota_todo_display_views(
@@ -561,8 +562,8 @@ def select_quota_todo_display_views(
     """Select the source once for the quota caller's three consumed displays."""
     from .summary_item import todo_source_display_views
 
-    source = _select_todo_source(canonical_value, project_asset_value)
-    return (todo_source_display_views(source) if source is not None
+    selected = _select_todo_source(canonical_value, project_asset_value)
+    return (todo_source_display_views(selected[1]) if selected is not None
             else {"summary": [], "planning": [], "terminal": []})
 
 
@@ -574,8 +575,9 @@ def select_planning_inventory_source_items(
 ) -> list[dict[str, Any]]:
     """Select the canonical non-terminal rows shared by planning read models."""
 
-    source = _select_todo_source(canonical_value, project_asset_value)
-    return todo_planning_source_items(source, include_terminal=include_terminal) if source is not None else []
+    selected = _select_todo_source(canonical_value, project_asset_value)
+    return (todo_planning_source_items(selected[1], include_terminal=include_terminal)
+            if selected is not None else [])
 
 
 def _task_orchestration_authority_items(
