@@ -599,6 +599,76 @@ R0 可以先于目录移动交付，但不代表内核合格。R3/R4 可选，�
   不关闭完整 R0/V10、M1、拆包安装、R1 managed minimal 或 D1–D7。不改变 preset、
   前端操作、权限或持久化状态；受保护执行仍由既有 owner 所有。
 
+### 2026-11-07 — 调用方进程传输按需加载提案
+
+- **基线与边界：**`7f521ff4505fa916a98a7401032922189eef414a` 的纯
+  Turn-decision import 会加载 `extensions.process_runtime`。Doctor Git、
+  contract 扫描、调用方 validation 和 Host bridge transport 改为使用时解析既有
+  reexport。保留原函数对象、签名、direct/from/star import、名称发现、调用方补丁点、
+  预加载 owner 的绑定和 reload 行为。复用现有 lazy-export 模式；导出名集合是本地
+  兼容元数据，不是共享状态词汇。Python 保留平台传输，TypeScript 保留决策、deadline、
+  authority 与 receipt；不新增 provider、capability、default 或进程算法。
+- **可执行证据：**四个冷加载调用方 oracle 在不可变基线上失败。提案通过聚焦兼容
+  检查和既有架构 oracle，保留 Turn-preview 的未选模块隔离门。真实隔离的 Git、
+  validation 和 bridge 测试覆盖 timeout、cancellation、leader 退出后的后代、stdin
+  策略、framing 和未确认 cleanup。重新构建的单体 wheel 在源码目录外重复兼容与真实
+  进程检查；完整公开 discovery/star 名称集合及 transport 签名与基线一致。这是
+  source/wheel 提案证据，不代表现有 host 升级或实际采用。
+- **实测范围：**纯 Turn-decision import 的 LoopX 模块数从 338 降至 337。
+  纯 import 和 help 没有进程启动或连接，支持的 help、unknown-command 输出与退出码
+  保持一致。共享合成 SQLite fixture 覆盖接受与拒绝的已注册 Turn plan：两个版本都
+  启动两个 Node 进程和十三个 Git probe，连接观察分别为 62/61 次。完整返回 envelope
+  仅 fresh observation 的 source-decision digest 不同。已注册 plan 仍会选择进程
+  transport，完整 preview 依赖闭包尚未通过冷加载资格。减少一个 import 不能证明
+  latency、RSS、完整成本、managed-Turn 或长程收益。
+- **剩余与回滚：**I3 至少保留一个 minor release。D2、D5、D6、I3、D3，以及完整
+  R0/V10/M1/R1/context/model/install 验收仍开放。Canary 六个 direct check 通过，
+  18 个 selected check 中 17 个通过；`first-connect-contract-smoke.py` 在基线与
+  提案都报 `KeyError: should_run`，其 inline-field 假设需要独立修复。该失败与既有
+  全库 lint/browser 失败仍开放。完成的作者提案可披露 hold 后进入正常 review；受保护 runtime
+  合入仍需 maintainer 授权。回退本调用方加载改动即可恢复 eager binding，无需状态
+  迁移或无关语言重写。
+
+### 2026-11-06 — History 读取路径的所选加载
+
+- **基线与边界：** `22b0f6c25`。普通 `history` 读取与帮助通过共享 CLI grammar
+  和 guard 复用既有 registrar/handler。维护动作、parser 拒绝及已预加载完整 CLI
+  的进程保留原路径，包括 handler/renderer patch 点。历史算法、证据窗口、公开
+  import 与 TS owner 均不变。这是单体发行物中可回滚的 R0 读取片；公开迁移的
+  I3 仍至少保留一个 minor 版本。
+- **真实路径证据：** 基线／候选源码与实际安装 wheel 的四个环境，各有 27 个
+  console 用例保留 stdout/stderr/退出码、UTC 排序、Agent 过滤、limit、空／未知
+  输入与当前／过期证据读取。另有四个安装／源码 facade 探针保留被 patch 的
+  handler 与 renderer。预加载 handler 的 oracle 在修复前失败；最终 history／
+  parser 选择通过 26 个测试。既有历史、artifact 与证据 oracle 保留。必需原生
+  服务使用可丢弃的数据／进程命名空间，并通过认证的退出回读确认清理。
+- **匹配测量：** Apple M4 Pro、48 GiB、macOS 27 arm64、Python 3.13.5、
+  Node 26.0.0；Python 依赖及源码配对中的 Node 依赖版本一致。四个负载各有 30
+  组交错基线／候选配对，bytecode 预编译，Python 每次启动新进程，原生服务暖复用。
+  最终采样 229 秒，三轮合计 698 秒，低于冻结的 20 分钟采样上限；安装、验证及
+  tracing 单独记录。此前环境／兼容性修正前的观察保留原有效性范围。
+
+| 负载 | elapsed 中位数 / p95 ms，基线 → 候选 | CPU 中位数 ms | CLI 峰值 RSS 中位数 MiB |
+| --- | --- | --- | --- |
+| 源码帮助 | 1552 / 1862 → 204 / 349 | 670 → 100 | 91.4 → 31.3 |
+| 源码 Agent 读取 | 1603 / 1833 → 417 / 482 | 665 → 150 | 91.9 → 34.4 |
+| Wheel 帮助 | 1621 / 2053 → 220 / 375 | 695 → 100 | 91.8 → 31.0 |
+| Wheel Agent 读取 | 1648 / 1825 → 414 / 462 | 725 → 150 | 92.2 → 34.6 |
+
+- **加载与效果：** 源码／wheel 帮助由 1157 降至 155 个 LoopX 模块，注册 Goal
+  读取由 1158 降至 208，证据读取由 1159 降至 210。Python audit 的 read-open
+  观察中，源码帮助为 1290 → 246，冷原生读取为 1311 → 723；wheel 分别为
+  1291 → 247、1710 → 723。帮助观察到的写入／进程／连接均为零。冷注册读取
+  保留六次 write-open、两个进程启动、一个连接，客户端 IPC 发送／接收为
+  252/355 bytes；证据读取保留一次 write-open、两个连接及 1377/804 IPC bytes。
+  这些必需效果不属于可选激活。已有服务可在 PATH 无 Node 时继续工作，冷缺失
+  保留原拒绝。输出字节一致；耗时包含解释器与进程调用，子孙进程 CPU/RSS/I/O、
+  完整模型与人工注意力成本仍未知。
+- **保留项与后续：** 实测帮助 p95 仍高于提出的 200 ms 目标，不采纳 D6。
+  source-session loader 清单及 Turn preview import 检查在未改动基线上同样失败，
+  保留为资格验证限制。本片不关闭完整 R0/V10、M1、拆包安装、R1／context／宿主
+  资格或开放设计决策。回滚只需撤回加载片，不涉及状态迁移。
+
 ### 2026-11-06 — Version 按需加载及匹配成本
 
 独立候选 `8a79d8602e699e51452ca1f43dc9b9527c81aa1b` 对比基线

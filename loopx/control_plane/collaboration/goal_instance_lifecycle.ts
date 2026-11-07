@@ -1,6 +1,6 @@
 import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
-import { assertNever, jsonObject } from "../runtime_decode.ts";
+import { assertNever, jsonObject, requireJsonObject } from "../runtime_decode.ts";
 import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 import {
   parseExactGoalRef,
@@ -352,4 +352,21 @@ export function decideCollaborationLifecycle(
   return withOriginalRequestDiagnostic(
     "operation" in facts ? decideExactLifecycle(facts) : facts, raw, selectedOperation,
   );
+}
+
+/** Decide one existing inventory batch under the caller's retained lifetime guard. */
+export function inspectOriginalRequestBatch(value: JsonObject): JsonObject {
+  const { profile_id, caller_goal_ref, current_goal_ref, items } = value;
+  if (!Array.isArray(items) || items.length > 12) {
+    throw new EffectRuntimeRequestError("original request inspection accepts at most 12 items");
+  }
+  return {
+    items: items.map((item) => decideCollaborationLifecycle({
+      ...requireJsonObject(item, "original request inspection item"),
+      profile_id,
+      caller_goal_ref,
+      current_goal_ref,
+      operation: "original_request_inspect",
+    })),
+  };
 }

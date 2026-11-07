@@ -21,6 +21,12 @@
       "These runs include operational interventions and are not a qualified causal comparison. Local and native measurements retain separate scopes."
     ],
     "redactions": [],
+    "trajectory_archive": {
+      "url": "https://huggingface.co/datasets/huangrt01/loopx-edgebench-research-checkpoints-20261015/resolve/a97e88f951deb6827d7051a59927860e9e4c4476/20261107-real-benchmark-trajectories/grid_turing_robot.zip",
+      "sha256": "ea147c9ae7173e3f1ce9ca6e0bbda5e0103e2be035b8e6d0658dd35a2d282c8d",
+      "manifest_url": "https://huggingface.co/datasets/huangrt01/loopx-edgebench-research-checkpoints-20261015/blob/a97e88f951deb6827d7051a59927860e9e4c4476/20261107-real-benchmark-trajectories/manifest.json",
+      "redactions_url": "https://huggingface.co/datasets/huangrt01/loopx-edgebench-research-checkpoints-20261015/blob/a97e88f951deb6827d7051a59927860e9e4c4476/20261107-real-benchmark-trajectories/redactions.json"
+    },
     "boundary": "Display-state events only. No execution/authority store, credentials, raw session transcript, hidden evaluator, workspace or model weights are included."
   },
   "source_counts": {

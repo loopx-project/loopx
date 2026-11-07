@@ -824,6 +824,99 @@ Approval needs a reviewed decision, not implementation progress or silence.
   installation, R1 managed minimal or D1–D7. No preset, frontend operation,
   permission or persisted state changes; protected execution keeps its owner.
 
+### 2026-11-07 — Caller process-transport loading proposal
+
+- **Baseline and boundary:** `7f521ff4505fa916a98a7401032922189eef414a`
+  loads `extensions.process_runtime` during the pure Turn-decision import.
+  Doctor Git, contract scanning, caller validation and Host bridge transport
+  now resolve their existing reexports on use. The original function objects,
+  signatures, direct/from/star imports, discovery, caller patch points,
+  preloaded-owner bindings and reload behavior remain available. This uses the
+  existing lazy-export pattern; the export-name set is local compatibility
+  metadata, not a shared state vocabulary. Python retains platform transport;
+  TypeScript retains decisions, deadlines, authority and receipts. No provider,
+  capability, default or process algorithm is added.
+- **Executable evidence:** the four cold-caller oracles fail on the immutable
+  baseline. Focused compatibility checks and the existing architecture oracle
+  pass on the proposal; the Turn-preview unselected-module guard is retained.
+  Real isolated Git, validation and bridge tests cover timeout, cancellation,
+  exited-leader descendants, stdin policy, framing and unconfirmed cleanup.
+  A newly built monolithic wheel repeats compatibility and real-process checks
+  outside the checkout. Complete public discovery/star name sets and transport
+  signatures match the baseline. This is source/wheel proposal evidence, not an
+  upgrade or adoption result.
+- **Measured scope:** pure Turn-decision import loads 337 LoopX modules instead
+  of 338. Pure import and help start no processes or connections; supported help
+  and unknown-command output/exit status remain identical. Shared synthetic
+  SQLite fixtures exercise accepted and rejected registered Turn plans: both
+  revisions start two Node processes and thirteen Git probes, with 62/61
+  connection observations respectively. Their complete returned envelopes match
+  except the source-decision digest from fresh observations. Registered plans
+  still select process transport; the entire preview dependency closure is not
+  qualified as cold. One removed import does not establish latency, RSS,
+  complete-cost, managed-Turn or long-horizon benefit.
+- **Remaining and rollback:** retain I3 for at least one minor release. D2, D5,
+  D6, I3, D3 and full R0/V10/M1/R1/context/model/install acceptance remain open.
+  Canary passes its six direct checks and 17 of 18 selected checks.
+  `first-connect-contract-smoke.py` fails with `KeyError: should_run` on both
+  baseline and proposal; its inline-field assumption needs separate repair.
+  This failure and existing broader lint/browser failures remain open.
+  The completed author proposal may enter normal review with disclosed
+  holds; protected runtime merge still requires maintainer authorization.
+  Revert this caller loading change to restore eager binding without state
+  migration; no unrelated language rewrite is required.
+
+### 2026-11-06 — History reader selected loading
+
+- **Baseline and boundary:** `22b0f6c25`. Ordinary `history` reads and help use
+  the existing registrar/handler through the shared CLI grammar and guard.
+  Maintenance actions, rejected parser requests and a preloaded full CLI retain
+  the original route, including handler/renderer patch points. History algorithms,
+  evidence windows, public imports and the TS owner remain unchanged. This is a
+  reversible R0 reader slice in the monolithic distribution; I3 still requires
+  at least one minor release for public moves.
+- **Real-path evidence:** 27 actual-console cases per baseline/candidate source
+  and installed-wheel environment preserve stdout/stderr/exit codes, UTC order,
+  Agent filtering, limits, empty/unknown inputs and current/stale evidence reads.
+  Four additional installed/source facade probes preserve patched handlers and
+  renderers. The preloaded-handler oracle failed before its correction; final
+  history/parser selection passes 26 tests. Existing durable history, artifact
+  and evidence oracles are retained. Required native services use disposable
+  process and data namespaces, with authenticated exit readback.
+- **Matched measurement:** Apple M4 Pro, 48 GiB, macOS 27 arm64, Python 3.13.5,
+  Node 26.0.0; matched Python dependencies and source-pair Node dependencies.
+  Each of four workloads has 30 interleaved baseline/candidate pairs, precompiled
+  bytecode and fresh Python processes with warm native-service reuse. The final
+  sampling takes 229 seconds; all three rounds total 698 seconds, below the
+  frozen 20-minute sampling bound. Setup, validation and tracing are separate.
+  Earlier environment/refinement observations retain their original scope.
+
+| Workload | Median / p95 elapsed ms, base → candidate | Median CPU ms | Median CLI peak RSS MiB |
+| --- | --- | --- | --- |
+| Source help | 1552 / 1862 → 204 / 349 | 670 → 100 | 91.4 → 31.3 |
+| Source Agent read | 1603 / 1833 → 417 / 482 | 665 → 150 | 91.9 → 34.4 |
+| Wheel help | 1621 / 2053 → 220 / 375 | 695 → 100 | 91.8 → 31.0 |
+| Wheel Agent read | 1648 / 1825 → 414 / 462 | 725 → 150 | 92.2 → 34.6 |
+
+- **Loading and effects:** source/wheel help loads 155 rather than 1157 LoopX
+  modules; registered reads load 208 rather than 1158, evidence reads 210 rather
+  than 1159. Python audit read-open observations decrease from 1290 to 246 for
+  source help and 1311 to 723 for its cold native read; wheel observations are
+  1291 → 247 and 1710 → 723. Help has zero observed writes/processes/connections.
+  Cold registered reads retain six write-opens, two process starts and one
+  connection, with 252/355 client IPC bytes sent/received. Evidence reads retain
+  one write-open, two connections and 1377/804 IPC bytes. These required effects
+  are not optional activation. A serving runtime can work without Node on PATH;
+  cold absence retains the existing failure. Output bytes match. Timing includes
+  interpreter and process invocation; descendant CPU/RSS/I/O, full model and
+  attention costs remain unknown.
+- **Holds and remaining work:** measured help p95 remains above the proposed
+  200 ms target; D6 is not adopted. Source-session loader inventory and Turn
+  preview import checks fail identically on the untouched baseline. Their failures
+  are retained as qualification holds. This does not close full R0/V10, M1,
+  split installation, R1/context/host qualification or open design decisions.
+  Revert the loader slice for rollback; no state migration is involved.
+
 ### 2026-11-06 — Selected version loading and matched costs
 
 The independent proposal `8a79d8602e699e51452ca1f43dc9b9527c81aa1b` at baseline

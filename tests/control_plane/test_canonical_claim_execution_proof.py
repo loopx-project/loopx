@@ -104,7 +104,12 @@ def expired_managed_claim(tmp_path, monkeypatch, request):
         f"import {{prepareCoordinationProjectionCommit}} from {json.dumps((module / 'coordination_projection.ts').as_uri())};"
         "let text='';for await(const chunk of process.stdin)text+=chunk;const input=JSON.parse(text);"
         "const store=await openLocalAuthorityStore(input.runtime,input.goal);let result;"
-        "if(input.patch){const head=await store.loadAuthority();"
+        "if(input.todo_patch){const head=await store.loadAuthority();"
+        "const todo=head.head.todos.find(todo=>todo.todo_id===input.todo);"
+        "result=await store.commitAuthority(prepareCoordinationProjectionCommit({goal_id:input.goal,"
+        "operation_id:'synthetic-edit-'+head.provider_revision,expected_provider_revision:head.provider_revision,projection:head.head,"
+        "mutations:[{kind:'todo_upsert',todo:{...todo,...input.todo_patch}}]}));}"
+        "else if(input.patch){const head=await store.loadAuthority();"
         "result=await store.commitAuthority(prepareCoordinationProjectionCommit({goal_id:input.goal,"
         "operation_id:'synthetic-identity-change',expected_provider_revision:head.provider_revision,projection:head.head,"
         "mutations:[{kind:'lease_upsert',lease:{...head.head.leases[0],...input.patch}}]}));}"
@@ -114,9 +119,9 @@ def expired_managed_claim(tmp_path, monkeypatch, request):
         "process.stdout.write(JSON.stringify(result));"
     )
 
-    def author(patch=None):
+    def author(patch=None, *, todo_patch=None):
         result = subprocess.run(["node", "--no-warnings", "--experimental-strip-types", "--input-type=module", "-e", script],
-            input=json.dumps({"runtime": str(runtime), "goal": goal, "todo": target, "patch": patch}),
+            input=json.dumps({"runtime": str(runtime), "goal": goal, "todo": target, "patch": patch, "todo_patch": todo_patch}),
             capture_output=True, text=True, timeout=45, check=True)
         accepted = json.loads(result.stdout)
         assert accepted["status"] == "applied", accepted
@@ -196,6 +201,8 @@ def test_changed_execution_packet_never_recommends_claim_adoption(expired_manage
     before = snapshot()
     for command in ("update", "complete"):
         extra = ["--note", "Reviewed progress"] if command == "update" else ["--evidence", "evidence:output"]
+        if command == "update":
+            extra += ["--update-expected-provider-revision", before[1]]
         rejected = cli(["todo", command, *selected, "--agent-id", "agent-a", "--claim-operation-id",
                         "expired-original-claim", *extra], expected_exit=1)
         assert rejected["error_code"] == "claim_execution_unavailable"
@@ -205,3 +212,80 @@ def test_changed_execution_packet_never_recommends_claim_adoption(expired_manage
         assert "todo list" in render_todo_markdown(rejected)
         assert cli(recovery["inspect"]["cli_args"], use_fixture_route=False)["todo"] == before[0]
     assert snapshot() == before
+
+
+@pytest.mark.parametrize("intervening_edit", ["none", "before-claim", "after-read"])
+def test_expired_claim_with_cas_reconciles_only_selected_todo(
+    expired_managed_claim, intervening_edit, record_property,
+):
+    cli, selected, snapshot, author, _ = expired_managed_claim
+    original = snapshot()
+    attempt = ["todo", "update", *selected, "--agent-id", "agent-a", "--claim-operation-id",
+               "expired-original-claim", "--update-operation-id", "original-reviewed-edit",
+               "--update-expected-provider-revision", original[1], "--note", "Validated progress"]
+    before = snapshot()
+    refused = cli(attempt, expected_exit=1)
+    assert refused.get("error_code") == "claim_execution_unavailable", json.dumps(refused)
+    recovery = refused["recovery"]
+    assert recovery["action"] == "claim_task" and recovery["execution_authority_granted"] is False
+    assert snapshot() == before
+    assert recovery["inspect"]["cli_args"][-2:] == selected[-2:]
+    assert recovery["retry"]["requires_flags"] == ["--claim-operation-id", "--update-expected-provider-revision"]
+    retry = recovery["retry"]["cli_args"]
+    assert "expired-original-claim" not in retry
+    assert retry[retry.index("--update-expected-provider-revision") + 1] == "<provider_revision_from_reconciled_todo_read>"
+    rendered = render_todo_markdown(refused)
+    assert rendered.index("todo claim") < rendered.index("todo list") < rendered.index("todo update")
+    if intervening_edit == "before-claim":
+        author(todo_patch={"text": "Preserve another writer's accepted correction"})
+        before = snapshot()
+    prepared = cli(recovery["claim"]["cli_args"], use_fixture_route=False)
+    assert prepared["ok"] and prepared["todo_changed"] is False
+    # Claim only describes its own change, not changes since the old caller read.
+    current = cli(recovery["inspect"]["cli_args"], use_fixture_route=False)
+    assert current["todo"] == before[0]
+    revision = current["authority_read"]["provider_revision"]
+    assert revision != original[1]
+    retry = [prepared["claim_operation_id"] if value == "<claim_operation_id_from_claim>" else
+             revision if value == "<provider_revision_from_reconciled_todo_read>" else value for value in retry]
+    if intervening_edit == "after-read":
+        author(todo_patch={"text": "Preserve a concurrent correction after inspection"})
+        concurrent = snapshot()
+        rejected = cli(retry, expected_exit=1, use_fixture_route=False)
+        assert rejected["error_code"] == "provider_revision_mismatch"
+        assert snapshot() == concurrent, "recovery must not silently rebase a concurrent edit"
+        current = cli(recovery["inspect"]["cli_args"], use_fixture_route=False)
+        retry[retry.index("--update-expected-provider-revision") + 1] = current["authority_read"]["provider_revision"]
+    accepted = cli(retry, use_fixture_route=False)
+    assert accepted["ok"]
+    final = snapshot()
+    assert final[0]["text"] == current["todo"]["text"]
+    assert final[0]["note"] == "Validated progress"
+    assert final[0]["status"] == "open"
+    assert cli(retry, use_fixture_route=False)["ok"] and snapshot() == final
+    record_property("recovery_interaction", json.dumps({
+        "commands": ["todo update (refused)", "todo claim", "todo list --todo-id", "todo update (reconciled retry)"],
+        "whole_goal_reads": 0, "automatic_revision_rebase": False,
+        "intervening_edit": intervening_edit, "verification_reads_excluded": True,
+    }))
+
+
+@pytest.mark.parametrize("reference", ["old-reference", "-old-reference"])
+def test_cas_retry_projection_preserves_intent_and_routes_without_stale_references(tmp_path, reference):
+    from loopx.cli import build_parser
+    from loopx.cli_commands.todo_event import _route_native_recovery
+
+    args = build_parser().parse_args([
+        "todo", "update", "--goal-id", "example-goal", "--todo-id", "todo_example", "--agent-id", "agent-a",
+        "--claim-operation-id=" + reference, "--update-operation-id", "original-intent",
+        "--update-expected-provider-revision=" + reference, "--note=--update-expected-provider-revision",
+    ])
+    packet = {"recovery": {"retry": {"command": "loopx todo update",
+        "requires_flags": ["--claim-operation-id", "--update-expected-provider-revision"],
+        "reference_source": "claim_operation_id_from_claim"}}}
+    _route_native_recovery(packet, args, registry_path=tmp_path / "registry.json", runtime_root_arg=str(tmp_path / "runtime"))
+    retried = build_parser().parse_args(packet["recovery"]["retry"]["cli_args"])
+    assert retried.claim_operation_id == "<claim_operation_id_from_claim>"
+    assert retried.update_expected_provider_revision == "<provider_revision_from_reconciled_todo_read>"
+    assert retried.update_operation_id == "original-intent" and retried.note == "--update-expected-provider-revision"
+    assert retried.registry == str(tmp_path / "registry.json") and retried.runtime_root == str(tmp_path / "runtime")

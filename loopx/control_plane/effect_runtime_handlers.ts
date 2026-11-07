@@ -663,6 +663,7 @@ export function createEffectRuntimeHandlers(
       "collaboration.goal_instance.decide",
       lazyHandler(() => import("./collaboration/goal_instance_lifecycle.ts"), ({decideCollaborationLifecycle}) => (params) => decideCollaborationLifecycle(params)),
     ],
+    ["collaboration.goal_instance.inspect_original_requests", lazyHandler(() => import("./collaboration/goal_instance_lifecycle.ts"), ({inspectOriginalRequestBatch}) => inspectOriginalRequestBatch)],
     ["external_evidence.discover", lazyHandler(() => import("./capabilities/external_evidence.ts"), ({projectExternalEvidenceDiscovery}) => projectExternalEvidenceDiscovery)],
     ["external_evidence.plan", lazyHandler(() => import("./capabilities/external_evidence.ts"), ({planExternalEvidenceRequest}) => planExternalEvidenceRequest)],
     ["external_evidence.receipt", lazyHandler(() => import("./capabilities/external_evidence.ts"), ({recordExternalEvidenceReceiptObservation}) => recordExternalEvidenceReceiptObservation)],
