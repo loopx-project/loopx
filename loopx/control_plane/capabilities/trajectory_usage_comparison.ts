@@ -1,6 +1,7 @@
 /** Descriptive comparison of two frozen captures. No arm inference, study
  * qualification, cross-run pooling, tokenization, billing or scientific score. */
 import type {TrajectoryInput, TrajectoryLoopXInput, TrajectoryLoopXRequests, TrajectorySolverUsage} from './trajectory_assessment_types.ts';
+import {hasObservedTrajectoryLoopXRequestUsage} from './trajectory_loopx_requests.ts';
 
 type ComparisonProjection = Pick<TrajectorySolverUsage, 'session_id' | 'method' | 'start' | 'end' | 'request_coverage' | 'loopx_input'> & {
   loopx_requests?: Omit<Extract<TrajectoryLoopXRequests, {status: 'observed'}>, 'requests'> | Extract<TrajectoryLoopXRequests, {status: 'unavailable'}>;
@@ -20,6 +21,7 @@ function values(capture: TrajectoryUsageCapture) {
   const input = usage.loopx_input;
   const attributed = input && input.status !== 'unavailable' ? input : null;
   const requests = usage.loopx_requests?.status === 'observed' ? usage.loopx_requests : null;
+  const measured = requests && hasObservedTrajectoryLoopXRequestUsage(requests) ? requests : null;
   return {pack_id: capture.pack_id, title: capture.title,
     total: {input: all.input_tokens, cached: all.cached_input_tokens,
       uncached: all.input_tokens - all.cached_input_tokens, output: all.output_tokens, requests: coverage.unique_requests},
@@ -28,11 +30,11 @@ function values(capture: TrajectoryUsageCapture) {
       /** Uncovered requests are not zero control input. */
       unattributed_requests: coverage.unique_requests - (attributed?.attributed_requests ?? 0),
       status: attributed?.status ?? 'unavailable', method: input?.method ?? null},
-    commands: {input: requests?.tokens.input_tokens ?? null,
-      cached: requests?.tokens.cached_input_tokens ?? null,
-      uncached: requests ? requests.tokens.input_tokens - requests.tokens.cached_input_tokens : null,
-      output: requests?.tokens.output_tokens ?? null, fraction: requests?.input_fraction ?? null,
-      uncached_fraction: requests?.uncached_input_fraction ?? null,
+    commands: {input: measured?.tokens.input_tokens ?? null,
+      cached: measured?.tokens.cached_input_tokens ?? null,
+      uncached: measured ? measured.tokens.input_tokens - measured.tokens.cached_input_tokens : null,
+      output: measured?.tokens.output_tokens ?? null, fraction: measured?.input_fraction ?? null,
+      uncached_fraction: measured?.uncached_input_fraction ?? null,
       recognized_requests: requests?.recognized_requests ?? null, mixed_call_requests: requests?.mixed_call_requests ?? null,
       unclassified_calls: requests?.unclassified_calls ?? null, unmatched_calls: requests?.unmatched_calls ?? null,
       model_seconds: null, charged_cost: null},
