@@ -249,6 +249,12 @@ function fnmatchCharacterClass(body: string): {members: CharacterClass; negated:
   }
   const negated = chunks[0]?.[0] === "!";
   if (negated) chunks[0].shift();
+  if (chunks.length > 1 && chunks[0].length === 0) {
+    // Removing ! can leave a range separator at the start of the class.
+    // Python treats that leading hyphen as a literal, not a missing endpoint.
+    chunks.shift();
+    chunks[0].unshift("-");
+  }
   const literals: string[] = [], ranges: Array<readonly [number, number]> = [];
   for (const [index, chunk] of chunks.entries()) {
     literals.push(...chunk.slice(index === 0 ? 0 : 1,
@@ -913,7 +919,7 @@ function scopeLanguageCovered(required: string, allowed: readonly string[]): boo
   return true;
 }
 
-/** One transport crossing for the selected Todo and inactive-authority hints. */
+/** Batch coverage checks through the scope owner used by admission and hints. */
 export function evaluateWriteScopeCoverage(value: unknown): JsonObject {
   const input = requireJsonObject(value, "write-scope coverage");
   if (!Array.isArray(input.checks)) throw new EffectRuntimeRequestError("checks must be an array");

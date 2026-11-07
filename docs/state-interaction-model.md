@@ -457,7 +457,9 @@ not establish coverage. Goal authorization retains case-sensitive `fnmatch`
 semantics, including wildcards that can match `/`, independently of lease
 conflict comparison. Coverage search is bounded and fails closed when it cannot
 prove inclusion; narrow complex declarations to concrete scopes in that case.
-Inactive grants may explain a repair hint but do not authorize the write.
+Inactive grants may explain missing-scope repair hints but do not authorize the
+write. Evaluate them only after active coverage fails; optional hint failures
+must not suppress that repair or interrupt an already authorized task.
 
 ```mermaid
 flowchart TB

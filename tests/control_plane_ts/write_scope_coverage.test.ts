@@ -18,6 +18,13 @@ const cases: [string, string[], boolean][] = [
   ["src/[z-a!b].ts", ["src/[!b].ts"], true],
   ["src/[!b].ts", ["src/[z-a!b].ts"], true],
   ["src/c.ts", ["src/[!z-a].ts"], true],
+  ["src/a.ts", ["src/[z-a!-b].ts"], true],
+  ["src/b.ts", ["src/[z-a!-b].ts"], false],
+  ["src/-.ts", ["src/[z-a!-b].ts"], false],
+  ["src/[ac].ts", ["src/[z-a!-b].ts"], true],
+  ["src/[ab].ts", ["src/[z-a!-b].ts"], false],
+  ["src/[!-b].ts", ["src/[z-a!-b].ts"], true],
+  ["src/[z-a!-b].ts", ["src/[!-b].ts"], true],
   ["src/long.ts", ["src/?.ts"], false],
   ["src/?.ts", ["src/*.ts"], true],
   ["src/*.ts", ["src/[!x]*.ts"], false],
@@ -118,9 +125,10 @@ test("coverage transport batches decisions and rejects malformed facts", async (
 test("literal and singleton-glob authorization preserve Python character-class normalization", () => {
   const probe = spawnSync(resolveTestPython(), ["-c", `
 import fnmatch, itertools, json
-classes = [''.join(p) for size in range(1, 6) for p in itertools.product('!az-', repeat=size)]
+classes = [''.join(p) for size in range(1, 7) for p in itertools.product('!az-', repeat=size)]
 classes += ['z-a!b', '!z-a!b', 'z-a^b', 'z-a[b', 'z-a]b', 'z-a\\\\b',
-            'a-b-c-d', '😀-a!b', '!😀-a', '&~|', '[]', '[]!']
+            'a-b-c-d', '😀-a!b', '!😀-a', '&~|', '[]', '[]!',
+            'z-a!-b', 'z-a!-b-d', 'z-a!-bc-d', '😀-a!-b']
 names = list('abcz!-^]&|~') + [chr(92), '😀']
 print(json.dumps([[body, [fnmatch.fnmatchcase('src/' + name + '.ts', 'src/[' + body + '].ts')
                          for name in names]] for body in classes]))

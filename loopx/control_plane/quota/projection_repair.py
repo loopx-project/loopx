@@ -4,7 +4,9 @@ from .effective_action import EffectiveAction
 from typing import Any
 
 from ...state_projection import actions_are_projection_aligned, is_user_wait_text
-from ..effect_runtime import effect_runtime_result
+from ..effect_runtime import (
+    EffectRuntimeRemoteError, EffectRuntimeStartupError, effect_runtime_result,
+)
 from ..todos.contract import (
     TODO_TASK_CLASS_ADVANCEMENT,
     normalize_required_write_scopes,
@@ -221,6 +223,10 @@ def build_boundary_projection_repair_hint(
         return None
     boundary = goal_boundary if isinstance(goal_boundary, dict) else {}
     allowed_scopes = normalize_required_write_scopes(boundary.get("write_scope"))
+    active_coverage = _write_scope_coverage(required_scopes, [allowed_scopes])[0]
+    missing_scopes = [scope for scope, covered in zip(required_scopes, active_coverage) if not covered]
+    if not missing_scopes:
+        return None
     boundary_authority = (
         boundary.get("checkpointed_boundary_authority")
         if isinstance(boundary.get("checkpointed_boundary_authority"), dict)
@@ -230,14 +236,6 @@ def build_boundary_projection_repair_hint(
         entry for entry in (boundary_authority or {}).get("entries", []) or []
         if isinstance(entry, dict) and entry.get("active") is not True
     ]
-    coverage = _write_scope_coverage(required_scopes, [allowed_scopes, *[
-        normalize_required_write_scopes(entry.get("write_scope"))
-        for entry in inactive_entries
-    ]])
-    missing_indexes = [index for index, covered in enumerate(coverage[0]) if not covered]
-    missing_scopes = [required_scopes[index] for index in missing_indexes]
-    if not missing_scopes:
-        return None
     selected_text = protocol_action_text(selected.get("text"), limit=220)
     repair: dict[str, Any] = {
         "source": "quota.should-run",
@@ -278,8 +276,17 @@ def build_boundary_projection_repair_hint(
             "active_write_scope": boundary_authority.get("active_write_scope"),
         }
         inactive_candidates = []
-        for entry, entry_coverage in zip(inactive_entries, coverage[1:]):
-            if any(entry_coverage[index] for index in missing_indexes):
+        try:
+            inactive_coverage = _write_scope_coverage(missing_scopes, [
+                normalize_required_write_scopes(entry.get("write_scope"))
+                for entry in inactive_entries
+            ]) if inactive_entries else []
+        except (EffectRuntimeRemoteError, EffectRuntimeStartupError, TypeError):
+            # Optional provenance hints cannot overturn the active decision or
+            # hide the repair for uncovered writes. Active failures still raise.
+            inactive_coverage = []
+        for entry, entry_coverage in zip(inactive_entries, inactive_coverage):
+            if any(entry_coverage):
                 inactive_candidates.append(
                     {
                         key: entry.get(key)
