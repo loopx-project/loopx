@@ -40,6 +40,13 @@ ACCEPTED_RESULT_KINDS = {
 }
 MATERIAL_KINDS = {"validated_progress", "repair_required", "replan_required"}
 
+TURN_EXECUTION_BOUNDARY_RULE = (
+    "User notification policy does not grant or cancel execution authority. "
+    "Respect the supplied must_attempt, delivery_allowed and quiet_noop_allowed; "
+    "alternatives and capability intents do not override admission or scope. "
+    "Obey execution_policy and task_orchestration_contract when supplied. "
+)
+
 GOAL_ACCEPTANCE_READ_RULE = (
     "Read vision_continuation_audit before judging Goal acceptance or proposing "
     "closeout; preserve its ordered required_before_closeout, evidence requirements "
@@ -330,6 +337,7 @@ def render_prompt(authority: Mapping[str, Any], *, allow_completion: bool = Fals
             "when its contract allows it. Obey every supplied write scope, workspace "
             "restriction, approval boundary and stop condition. Checkpointed approval "
             "covers only active_write_scope; other approval gates remain.\n"
+            f"{TURN_EXECUTION_BOUNDARY_RULE}\n"
             "Read agent_context before planning; unavailable_context is a failed read, "
             "not empty context: discard affected cached context and hold dependent work "
             "until recovery. Independent work retains its existing authority.\n"

@@ -395,8 +395,9 @@ def _render_prompt(request: Mapping[str, Any], *, checked: Mapping[str, Any] | N
         'completed_phases must be exactly ["host_execute","typed_result"], and turn_key must match the request.',
     ]
     if complete:
-        from .host_candidate import goal_acceptance_prompt_instruction
+        from .host_candidate import TURN_EXECUTION_BOUNDARY_RULE, goal_acceptance_prompt_instruction
 
+        instructions.insert(2, TURN_EXECUTION_BOUNDARY_RULE)
         acceptance = goal_acceptance_prompt_instruction(_mapping(model_request.get("work_contract")))
         if acceptance:
             instructions.insert(2, acceptance)

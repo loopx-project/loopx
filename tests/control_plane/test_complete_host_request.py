@@ -98,6 +98,28 @@ def test_open_goal_acceptance_judgment_keeps_its_read_audit(
     assert request == before
 
 
+@pytest.mark.parametrize("host", ["codex", "structured"])
+def test_complete_host_keeps_notification_and_execution_boundaries(
+    complete_host_request, tmp_path, host,
+):
+    from loopx.control_plane.turn_driver.codex_cli import _prompt
+    from loopx.control_plane.turn_driver.host_candidate import render_prompt
+
+    request = _captured_request(complete_host_request, tmp_path)
+    wire = complete_host_input(request)
+    prompt = (_prompt(request) if host == "codex"
+              else render_prompt(extract_turn_authority(request), allow_completion=False))
+    instructions, encoded = prompt.split("Turn request:\n", 1)
+    assert "User notification policy does not grant or cancel execution authority" in instructions
+    for field in ("must_attempt", "delivery_allowed", "quiet_noop_allowed",
+                  "execution_policy", "task_orchestration_contract"):
+        assert field in instructions
+    assert "alternatives and capability intents do not override admission or scope" in instructions
+    assert "Do not write LoopX state" in instructions
+    assert "owns those effects" in instructions
+    assert json.JSONDecoder().raw_decode(encoded)[0] == wire
+
+
 def test_private_plan_lineage_is_not_a_host_wire(complete_host_request):
     request, source = complete_host_request
     plan = build_loopx_turn_plan(request["turn_envelope"], work_contract=source,
