@@ -450,6 +450,15 @@ grant write authority by itself. If a selected todo declares
 `quota should-run` must route to `boundary_projection_repair` or a concrete
 user/controller gate instead of letting the agent perform the protected write.
 
+Write-scope patterns denote sets of possible paths, including future files.
+Every path denoted by a Todo's required scope must be covered by the union of
+active grants; matching the pattern's spelling as if it were a filename does
+not establish coverage. Goal authorization retains case-sensitive `fnmatch`
+semantics, including wildcards that can match `/`, independently of lease
+conflict comparison. Coverage search is bounded and fails closed when it cannot
+prove inclusion; narrow complex declarations to concrete scopes in that case.
+Inactive grants may explain a repair hint but do not authorize the write.
+
 ```mermaid
 flowchart TB
   subgraph Harness["LoopX control plane"]

@@ -1,10 +1,10 @@
 from __future__ import annotations
 from .effective_action import EffectiveAction
 
-import fnmatch
 from typing import Any
 
 from ...state_projection import actions_are_projection_aligned, is_user_wait_text
+from ..effect_runtime import effect_runtime_result
 from ..todos.contract import (
     TODO_TASK_CLASS_ADVANCEMENT,
     normalize_required_write_scopes,
@@ -160,19 +160,21 @@ def build_state_projection_gap_repair_hint(
     }
 
 
-def write_scope_allowed(required_scope: str, allowed_scopes: list[str]) -> bool:
-    required = str(required_scope or "").strip()
-    if not required:
-        return True
-    for allowed in allowed_scopes:
-        pattern = str(allowed or "").strip()
-        if not pattern:
-            continue
-        if required == pattern:
-            return True
-        if fnmatch.fnmatchcase(required, pattern):
-            return True
-    return False
+def _write_scope_coverage(
+    required_scopes: list[str], scope_groups: list[list[str]],
+) -> list[list[bool]]:
+    """Transport one batch to the same scope owner used by child admission."""
+    checks = [
+        {"required": required, "allowed": allowed}
+        for allowed in scope_groups for required in required_scopes
+    ]
+    response = effect_runtime_result("quota.write_scope_coverage", {"checks": checks})
+    covered = response.get("covered") if isinstance(response, dict) else None
+    if (not isinstance(covered, list) or len(covered) != len(checks)
+            or any(not isinstance(value, bool) for value in covered)):
+        raise TypeError("invalid typed write-scope coverage result")
+    width = len(required_scopes)
+    return [covered[index:index + width] for index in range(0, len(covered), width)]
 
 
 def build_boundary_projection_repair_hint(
@@ -219,19 +221,24 @@ def build_boundary_projection_repair_hint(
         return None
     boundary = goal_boundary if isinstance(goal_boundary, dict) else {}
     allowed_scopes = normalize_required_write_scopes(boundary.get("write_scope"))
-    missing_scopes = [
-        scope
-        for scope in required_scopes
-        if not write_scope_allowed(scope, allowed_scopes)
-    ]
-    if not missing_scopes:
-        return None
-    selected_text = protocol_action_text(selected.get("text"), limit=220)
     boundary_authority = (
         boundary.get("checkpointed_boundary_authority")
         if isinstance(boundary.get("checkpointed_boundary_authority"), dict)
         else None
     )
+    inactive_entries = [
+        entry for entry in (boundary_authority or {}).get("entries", []) or []
+        if isinstance(entry, dict) and entry.get("active") is not True
+    ]
+    coverage = _write_scope_coverage(required_scopes, [allowed_scopes, *[
+        normalize_required_write_scopes(entry.get("write_scope"))
+        for entry in inactive_entries
+    ]])
+    missing_indexes = [index for index, covered in enumerate(coverage[0]) if not covered]
+    missing_scopes = [required_scopes[index] for index in missing_indexes]
+    if not missing_scopes:
+        return None
+    selected_text = protocol_action_text(selected.get("text"), limit=220)
     repair: dict[str, Any] = {
         "source": "quota.should-run",
         "trigger": "required_write_scope_missing_from_goal_boundary",
@@ -271,11 +278,8 @@ def build_boundary_projection_repair_hint(
             "active_write_scope": boundary_authority.get("active_write_scope"),
         }
         inactive_candidates = []
-        for entry in boundary_authority.get("entries") or []:
-            if not isinstance(entry, dict) or entry.get("active") is True:
-                continue
-            scopes = normalize_required_write_scopes(entry.get("write_scope"))
-            if any(write_scope_allowed(scope, scopes) for scope in missing_scopes):
+        for entry, entry_coverage in zip(inactive_entries, coverage[1:]):
+            if any(entry_coverage[index] for index in missing_indexes):
                 inactive_candidates.append(
                     {
                         key: entry.get(key)
