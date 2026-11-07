@@ -9,6 +9,7 @@ import {executeCoordinationTodoClaim, type CoordinationTodoClaimInput} from "./t
 type RecoveryInput = Pick<CoordinationTodoClaimInput, "goal_id" | "todo_id" | "actor_agent_id" |
   "registered_agents" | "expected_role" | "operation_id" | "now"> & {
     claim_operation_id: string; expected_provider_revision: string;
+    caller_expected_provider_revision?: string;
   };
 
 export async function claimExecutionRecovery(store: AuthorityStore, input: RecoveryInput,
@@ -35,6 +36,20 @@ export async function claimExecutionRecovery(store: AuthorityStore, input: Recov
   // An optional observation failure must not hide the original proof refusal.
   if (preview === null) return undefined;
   if (preview.dry_run === true && ["planned", "no_change"].includes(String(preview.status))) {
+    if (input.caller_expected_provider_revision !== undefined) {
+      // Claim advances authority even when the Todo body is unchanged. It does
+      // not prove that no other writer changed the Todo before the new claim.
+      // Retain the caller's CAS obligation; never silently rebase its edit.
+      return {action: "claim_task", lease_state: "expired", execution_authority_granted: false,
+        reason: "The original execution expired. Explicitly claim this Todo, then inspect this same Todo and reconcile its current content with the intended edit. A new claim does not validate the old provider revision. Only after reconciliation, retry with the returned claim_operation_id and authority_read.provider_revision from that inspection. Keep the operation intent and id; do not reuse either stale reference or assume unchanged content from the claim receipt. Claim and inspection grant no permission to overwrite intervening edits.",
+        claim: {command: "loopx todo claim", cli_args: ["todo", "claim", "--goal-id", input.goal_id,
+          "--todo-id", input.todo_id, "--agent-id", input.actor_agent_id, "--claimed-by", input.actor_agent_id]},
+        inspect: {command: "loopx todo list", cli_args: ["todo", "list", "--goal-id", input.goal_id,
+          "--todo-id", input.todo_id]},
+        retry: {command: `loopx todo ${command}`,
+          requires_flags: ["--claim-operation-id", "--update-expected-provider-revision"],
+          reference_source: "claim_operation_id_from_claim"}};
+    }
     return {action: "claim_task", lease_state: "expired", execution_authority_granted: false,
       reason: "The original execution expired. Explicitly run a new ordinary Todo claim, then retry the unchanged operation with its returned claim_operation_id. Do not reuse the expired claim id. Claim rechecks current ownership and eligibility; this preview grants no execution authority.",
       claim: {command: "loopx todo claim", cli_args: ["todo", "claim", "--goal-id", input.goal_id,
