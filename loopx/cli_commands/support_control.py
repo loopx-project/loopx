@@ -234,24 +234,16 @@ def handle_support_control_command(
         )
 
     if args.command == "heartbeat-prequota":
-        prequota_registry = (
-            registry_path
-            if registry_was_supplied
-            else explicit_global_registry(args.runtime_root)
+        from .support_control_heartbeat import handle_heartbeat_prequota_command
+
+        return handle_heartbeat_prequota_command(
+            args, registry_path=registry_path,
+            registry_was_supplied=registry_was_supplied,
+            print_payload=print_payload, output_format=output_format,
+            runner=run_heartbeat_pre_quota,
+            markdown_renderer=render_heartbeat_pre_quota_markdown,
+            global_registry_resolver=explicit_global_registry,
         )
-        payload = run_heartbeat_pre_quota(
-            registry_path=prequota_registry,
-            runtime_root_arg=args.runtime_root,
-            goal_id=args.goal_id,
-            agent_id=args.agent_id,
-            fetch_timeout_seconds=args.fetch_timeout_seconds,
-        )
-        print_payload(
-            payload,
-            output_format(args),
-            render_heartbeat_pre_quota_markdown,
-        )
-        return 0
 
     supervisor_result = handle_supervisor_control_command(
         args,

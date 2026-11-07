@@ -81,6 +81,7 @@ _SELECTED_COMMANDS = _STATUS_COMMANDS | GLOBAL_READ_COMMANDS | PROJECT_LIFECYCLE
 	"handoff", "handoff-mode",
 	"performance-diagnosis",
 	"heartbeat-prompt",
+	"heartbeat-prequota",
 	"goal-acceptance",
 	"host-mode-plan",
 	"capability",
@@ -478,7 +479,7 @@ def _build_selected_parser(command: str) -> LoopXArgumentParser:
 		from .capabilities.performance_diagnosis.cli import register_performance_diagnosis_commands
 
 		register_performance_diagnosis_commands(subparsers, add_subcommand_format)
-	elif command == "heartbeat-prompt":
+	elif command in {"heartbeat-prompt", "heartbeat-prequota"}:
 		from .cli_commands.support_control_heartbeat_registration import register_heartbeat_control_commands
 
 		register_heartbeat_control_commands(subparsers, add_subcommand_format)
@@ -806,6 +807,14 @@ def _dispatch_selected(args: argparse.Namespace, raw_argv: list[str]) -> int:
 		# Keep the explicit full CLI's handler and protected operations unchanged.
 		result = handle_capability_command(
 			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
+			output_format=output_format, print_payload=print_payload,
+		)
+	elif args.command == "heartbeat-prequota":
+		from .cli_commands.support_control_heartbeat import handle_heartbeat_prequota_command
+
+		result = handle_heartbeat_prequota_command(
+			args, registry_path=registry_path,
+			registry_was_supplied=user_supplied_registry(raw_argv),
 			output_format=output_format, print_payload=print_payload,
 		)
 	else:
