@@ -48,15 +48,20 @@ export function contextSourceIdentity(source: JsonObject, supplied?: unknown):
 
 /** Return only display edits, never round-trip unrelated source facts through
  * JavaScript numbers. References address the immutable input, including bodies
- * moved into source_projection. Python applies these edits without policy. */
+ * moved into source_projection. Native wire may omit same-path copies;
+ * identity derivation retains their numeric lineage. Python only applies edits. */
 export type ProjectionSourceValues = WeakMap<object, Map<string, ProjectionPath>>;
 
 export function contextProjectionChanges(source: JsonObject, projected: JsonObject,
-    sourceValues?: ProjectionSourceValues): JsonObject {
+    sourceValues?: ProjectionSourceValues, omitSamePathSources = false): JsonObject {
   const paths = contextObjectPaths(source), changes: ProjectionChange[] = [];
   const visit = (before: unknown, after: unknown, path: ProjectionPath, parent?: object): void => {
     const original = parent && sourceValues?.get(parent)?.get(String(path.at(-1)));
-    if (original) { changes.push({path, from: original}); return; }
+    if (original) {
+      if (!omitSamePathSources || original.length !== path.length || original.some((key, i) => key !== path[i]))
+        changes.push({path, from: original});
+      return;
+    }
     if (Object.is(before, after)) return;
     const from = after !== null && typeof after === "object" ? paths.get(after) : undefined;
     if (from) { changes.push({path, from}); return; }
@@ -67,12 +72,22 @@ export function contextProjectionChanges(source: JsonObject, projected: JsonObje
       // Remove from the end so earlier indices retain their original meaning.
       for (let i = old.length - 1; i >= after.length; i--) changes.push({path: [...path, i], remove: true});
     } else if (jsonObject(after)) {
+      const start = changes.length;
       const old = jsonObject(before) ?? {};
       if (!jsonObject(before)) changes.push({path, value: {}});
       for (const key of Object.keys(old))
         if (!Object.hasOwn(after as JsonObject, key)) changes.push({path: [...path, key], remove: true});
       for (const [key, value] of Object.entries(after as JsonObject))
         visit(Object.hasOwn(old, key) ? old[key] : undefined, value, [...path, key], after as object);
+      // Small scalar records can cost less than separate removal paths.
+      // Keep source-lineage and numeric edits on their existing exact codec.
+      if (changes.length - start > 1 && Object.values(after as JsonObject).every(
+          value => value === null || typeof value === "string" || typeof value === "boolean")) {
+        const edits = changes.slice(start), replacement = {path, value: after};
+        if (!edits.some(edit => "from" in edit) &&
+            Buffer.byteLength(JSON.stringify([replacement])) < Buffer.byteLength(JSON.stringify(edits)))
+          changes.splice(start, edits.length, replacement);
+      }
     } else changes.push({path, value: after});
   };
   visit(source, projected, []);
