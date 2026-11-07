@@ -402,13 +402,16 @@ def retire_owned_process(
     if not math.isfinite(timeout) or timeout <= 0:
         raise ValueError("native process cleanup timeout must be positive and finite")
     deadline = time.monotonic() + timeout
+    # Split one budget: native termination gets most of it, the remainder is
+    # left for pipe handles a Windows reader thread may still own. The inner
+    # budget is derived from what is left of the caller's deadline and never
+    # widened to a floor, so a sub-50 ms cleanup stays sub-50 ms.
+    terminate_timeout = min(timeout * 0.8, deadline - time.monotonic())
     try:
-        # Reserve part of the single cleanup budget for the pipe handles that a
-        # Windows reader thread may still own.
         force_terminate_process(
             process,
             process_tree_owned=process_tree_owned,
-            timeout=max(0.05, timeout * 0.8),
+            timeout=max(terminate_timeout, 1e-6),
         )
     finally:
         _close_owned_streams_before_deadline(process, deadline)
