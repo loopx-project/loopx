@@ -19,6 +19,7 @@ from loopx.control_plane.testing.model_tool_behavior import (
     ScriptedExecToolAction,
 )
 from loopx.control_plane.testing.terminal_settlement_tool_behavior import (
+    TERMINAL_SETTLEMENT_TOOL_BEHAVIOR_MAX_CALLS,
     TERMINAL_SETTLEMENT_FIXTURE_TODO_ID,
     DoubaoTerminalSettlementToolBehaviorActor,
     _build_fixture,
@@ -188,6 +189,7 @@ def test_real_tool_loop_settles_final_todo_after_spend(
         "terminal_closeout",
     ]
     assert receipt["terminal_order_observed"] is True
+    assert receipt["tool_call_limit"] == TERMINAL_SETTLEMENT_TOOL_BEHAVIOR_MAX_CALLS
     assert receipt["selected_todo_id"] == TERMINAL_SETTLEMENT_FIXTURE_TODO_ID
     assert receipt["decision"] == "execute"
     assert receipt["boundary"] == {
@@ -208,6 +210,8 @@ def test_real_tool_loop_settles_final_todo_after_spend(
     assert "the host validates that tool result" in system_prompt
     assert "validation step's command_condition" in system_prompt
     assert "distinct from the final --no-follow-up closeout after spend" in system_prompt
+    assert "run it before authoring any durable_writeback input" in system_prompt
+    assert "one tool call under the shell's existing `.scratch/` directory" in system_prompt
     assert "A receipt without command templates does not replace that plan" in system_prompt
     assert first["messages"][1] == {"role": "user", "content": fixture.task_body}
     assert TERMINAL_SETTLEMENT_FIXTURE_TODO_ID not in fixture.task_body
