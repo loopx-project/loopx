@@ -1,6 +1,7 @@
 """Durable queued inputs and ingress receipts for the existing Chat store."""
 from __future__ import annotations
 
+from collections.abc import Callable, Iterator
 from datetime import datetime, timedelta, timezone
 from functools import cached_property
 import os
@@ -73,9 +74,46 @@ def chat_runtime_activation_state(runtime_root: Path) -> dict[str, int]:
 class ChatIngressStore:
     @cached_property
     def _terminal_turn_discovery(self) -> FileChatDiscovery:
-        # File queue discovery owns this per-store hint. Concurrent first use
+        # Queue discovery and client lookup share this hint. Concurrent first use
         # may build two empty observers; neither holds execution authority.
         return FileChatDiscovery()
+
+    def _turn_discovery_rows(
+        self, session_id: str, turns_dir: Path, read: Callable[[Path], dict[str, Any]],
+    ) -> Iterator[tuple[Path, dict[str, Any]]]:
+        from .chat_store import CHAT_TURN_SCHEMA_VERSION, TERMINAL_TURN_STATES
+
+        def terminal(path: Path, payload: dict[str, Any]) -> dict[str, Any] | None:
+            status = payload.get("status")
+            client_id = payload.get("client_turn_id")
+            if (payload.get("schema_version") == CHAT_TURN_SCHEMA_VERSION
+                    and payload.get("session_id") == session_id and payload.get("turn_id") == path.stem
+                    and isinstance(status, str) and status in TERMINAL_TURN_STATES
+                    and (client_id is None or isinstance(client_id, str))):
+                return {
+                    "schema_version": CHAT_TURN_SCHEMA_VERSION, "session_id": session_id,
+                    "turn_id": path.stem, "status": status, "client_turn_id": client_id,
+                }
+            return None
+
+        paths = (path for path in turns_dir.glob("*.json") if not path.name.endswith(".events.json"))
+        return self._terminal_turn_discovery.rows(turns_dir, paths, read=read, project=terminal)
+
+    def turn_for_client(self, session_id: str, client_turn_id: str) -> dict[str, Any] | None:
+        from .chat_store import _read_json
+
+        turns_dir = self._session_dir(session_id) / "turns"
+        if not turns_dir.is_dir():
+            return None
+        for path, observation in self._turn_discovery_rows(session_id, turns_dir, _read_json):
+            if observation.get("client_turn_id") != client_turn_id:
+                continue
+            # Replay validation needs the complete current record, including
+            # the original request body and the latest persisted result.
+            payload = _read_json(path)
+            if payload.get("client_turn_id") == client_turn_id:
+                return payload
+        return None
 
     def runtime_activation_lock(self):
         return chat_runtime_activation_lock(self.root.parent)
@@ -109,16 +147,7 @@ class ChatIngressStore:
                 payload = _read_json(path)
             return payload
 
-        def terminal(path, payload):
-            if (payload.get("schema_version") == CHAT_TURN_SCHEMA_VERSION
-                    and payload.get("session_id") == session_id and payload.get("turn_id") == path.stem
-                    and isinstance(payload.get("status"), str)
-                    and payload.get("status") in TERMINAL_TURN_STATES):
-                return {key: payload[key] for key in ("schema_version", "session_id", "turn_id", "status")}
-            return None
-
-        paths = (path for path in turns_dir.glob("*.json") if not path.name.endswith(".events.json"))
-        for path, payload in self._terminal_turn_discovery.rows(turns_dir, paths, read=read, project=terminal):
+        for _, payload in self._turn_discovery_rows(session_id, turns_dir, read):
             if (
                 payload.get("schema_version") == CHAT_TURN_SCHEMA_VERSION
                 and payload.get("status") == "queued"

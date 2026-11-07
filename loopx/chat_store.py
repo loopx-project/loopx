@@ -1443,16 +1443,6 @@ class ChatSessionStore(ChatIngressStore):
                     return turn
                 return None
 
-    def turn_for_client(self, session_id: str, client_turn_id: str) -> dict[str, Any] | None:
-        turns_dir = self._session_dir(session_id) / "turns"
-        for path in turns_dir.glob("*.json") if turns_dir.is_dir() else []:
-            if path.name.endswith(".events.json"):
-                continue
-            payload = _read_json(path)
-            if payload.get("client_turn_id") == client_turn_id:
-                return payload
-        return None
-
     def load_turn(self, session_id: str, turn_id: str) -> dict[str, Any] | None:
         payload = _read_json(self._turn_path(session_id, turn_id))
         return payload if payload.get("schema_version") == CHAT_TURN_SCHEMA_VERSION else None

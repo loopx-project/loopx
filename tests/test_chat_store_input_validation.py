@@ -52,6 +52,44 @@ def _dedup_store(tmp_path: Path) -> tuple[ChatSessionStore, str]:
     return store, session_id
 
 
+def test_queue_admission_reuses_terminal_observation_but_reads_replay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx.capabilities.native_chat.file_discovery import file_change_fingerprint
+
+    store, sid = _dedup_store(tmp_path)
+    request = {"client_turn_id": "original-input", "message": "Original request"}
+    turn, _ = store.create_queued_turn(sid, **request)
+    tid = turn["turn_id"]
+    store.update_turn(sid, tid, status="completed", response={"message": "Original answer"})
+    path = store._turn_path(sid, tid)
+    assert store.queued_turns(sid, strict=True) == []
+
+    read_json = chat_store._read_json
+    reads = []
+
+    def observe_read(candidate: Path) -> dict:
+        if candidate == path:
+            reads.append(candidate)
+        return read_json(candidate)
+
+    monkeypatch.setattr(chat_store, "_read_json", observe_read)
+    _, created = store.create_queued_turn(sid, client_turn_id="new-input", message="New request")
+    assert created
+    if file_change_fingerprint(path) is not None:
+        assert not reads
+
+    reads.clear()
+    replay, created = store.create_queued_turn(sid, **request)
+    assert not created
+    assert reads
+    assert replay["turn_id"] == tid
+    assert replay["response"]["message"] == "Original answer"
+
+    store.update_turn(sid, tid, response={"message": "Updated answer"})
+    assert store.turn_for_client(sid, request["client_turn_id"])["response"]["message"] == "Updated answer"
+
+
 @pytest.mark.parametrize("fault", [None, "changed-turn", "failed", "wrong-invocation", "immutable"])
 def test_completed_native_retention_is_fenced_and_private(tmp_path: Path, fault: str | None) -> None:
     store, sid = _dedup_store(tmp_path)
