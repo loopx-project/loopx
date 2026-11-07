@@ -7,6 +7,7 @@ import type { LoopXTurnRouteValue } from "../turn_driver/turn_contract_generated
 import { EFFECTIVE_ACTIONS, EffectiveAction, type QuotaEffectiveActionValue } from "./effective_action.generated.ts";
 import { AGENT_SCOPE_FRONTIER_ACTIONS } from "../agents/agent_scope_frontier.generated.ts";
 import { createHash } from "node:crypto";
+import {authorityUnicodeCompare} from "../coordination/authority_store_codec.ts";
 import { inflateSync } from "node:zlib";
 import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 import {omitUnboundExploreResultWriteback, referenceExploreResultWriteback} from "../capabilities/explore_turn_context.ts";
@@ -216,19 +217,8 @@ function canonicalValue(value: unknown): unknown {
   if (typeof value !== "object" || value === null) return value;
   const source = value as JsonObject;
   return Object.fromEntries(
-    Object.keys(source).sort(comparePythonUnicode).map((key) => [key, canonicalValue(source[key])]),
+    Object.keys(source).sort(authorityUnicodeCompare).map((key) => [key, canonicalValue(source[key])]),
   );
-}
-
-function comparePythonUnicode(left: string, right: string): number {
-  const leftPoints = Array.from(left, (item) => item.codePointAt(0) ?? 0);
-  const rightPoints = Array.from(right, (item) => item.codePointAt(0) ?? 0);
-  const sharedLength = Math.min(leftPoints.length, rightPoints.length);
-  for (let index = 0; index < sharedLength; index += 1) {
-    const difference = leftPoints[index] - rightPoints[index];
-    if (difference !== 0) return difference;
-  }
-  return leftPoints.length - rightPoints.length;
 }
 
 function canonicalHash(value: unknown): string {
@@ -354,8 +344,7 @@ function referenceGoalAcceptance(payload: JsonObject,
  * sources. Equal content shares a reference, while differing revisions of the
  * same outcome retain their complete bodies, including unknown fields.
  */
-function capturedAcceptanceOutcomes(payload: JsonObject): Map<string, JsonObject> | null {
-  const outcomes = new Map<string, JsonObject>();
+function indexCapturedAcceptanceOutcomes(payload: JsonObject, indexOutcome: (value: unknown) => string): void {
   const carriers = acceptanceCarriers(payload);
   // Sharing prefers the first source, but a diagnostic index must cover every
   // loaded registered carrier, including different same-id revisions.
@@ -367,21 +356,15 @@ function capturedAcceptanceOutcomes(payload: JsonObject): Map<string, JsonObject
         parentPath: ["interaction_contract", "agent_channel", "work_context", "sources", index, "content"]});
     }
   }
-  let hasSource = false;
   for (const {parent, field} of carriers) {
     const acceptance = Object.hasOwn(parent, `${field}_ref`)
       ? inlineAcceptance(payload, parent[`${field}_ref`]) : object(parent[field]);
     if (!Object.keys(acceptance).length) continue;
-    hasSource = true;
     const requirements = object(acceptance.outcome_requirements);
     if (!Object.hasOwn(acceptance, "outcome_requirements")) continue;
     if (!Array.isArray(requirements.outcomes)) throw new EffectRuntimeRequestError("captured outcome source is unsupported");
-    for (const value of requirements.outcomes) {
-      const outcome = requireJsonObject(value, "captured acceptance outcome");
-      outcomes.set(canonicalHash(outcome), outcome);
-    }
+    for (const value of requirements.outcomes) indexOutcome(value);
   }
-  return hasSource ? outcomes : null;
 }
 
 /** Expose existing facts, not another acceptance verdict. Missing values stay
@@ -715,7 +698,18 @@ function replanGoalContext(payload: JsonObject, reads: JsonObject | null, coreRe
   const complete = payload.schema_version === COMPLETE_TURN_DECISION_VERSION;
   // Recorded quota/v0 reads retain their bounded original index. The complete
   // source indexes every registered carrier and its current requirement facts.
-  const outcomes = (reads && complete ? capturedAcceptanceOutcomes(payload) : null) ?? new Map<string, JsonObject>();
+  const outcomes = new Map<string, JsonObject>();
+  const refsByOutcome = new WeakMap<JsonObject, string>();
+  function indexOutcome(value: unknown): string {
+    const outcome = requireJsonObject(value, "captured acceptance outcome");
+    // Shared carriers can resolve to the same original object. Distinct
+    // objects are still checked, even when their IDs or revisions coincide.
+    const ref = refsByOutcome.get(outcome) ?? canonicalHash(outcome);
+    refsByOutcome.set(outcome, ref);
+    outcomes.set(ref, outcome);
+    return ref;
+  }
+  if (reads && complete) indexCapturedAcceptanceOutcomes(payload, indexOutcome);
   function indexedGoal(value: unknown): JsonObject {
     const core = {...object(value)};
     if (!("acceptance_contract" in core) && "acceptance_contract_ref" in core) {
@@ -726,12 +720,7 @@ function replanGoalContext(payload: JsonObject, reads: JsonObject | null, coreRe
     const acceptance = {...object(core.acceptance_contract)};
     const requirements = object(acceptance.outcome_requirements);
     if (!Array.isArray(requirements.outcomes) || !requirements.outcomes.length || !reads) return core;
-    const refs = requirements.outcomes.map(value => {
-      const outcome = requireJsonObject(value, "captured acceptance outcome");
-      const ref = canonicalHash(outcome);
-      outcomes.set(ref, outcome);
-      return ref;
-    });
+    const refs = requirements.outcomes.map(indexOutcome);
     const {outcomes: _outcomes, ...metadata} = requirements;
     delete acceptance.outcome_requirements;
     return {...core, acceptance_contract: acceptance,
