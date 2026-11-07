@@ -915,7 +915,11 @@ export function PersonalWorkspacePage({
   const { locale, t } = useWorkspaceI18n();
   const [localGoalId, setLocalGoalId] = useState<string | null>(controlledGoalId ?? null);
   const sourceGoal = model.goals.find(goal => goal.goalId === (controlledGoalId === undefined ? localGoalId : controlledGoalId));
-  const researchReadSourceUrl = sourceGoal?.sourceAccess ? `/status.json?source_namespace=${sourceGoal.sourceAccess.namespace}` : statusSourceControl?.activeSource.kind === "runtime" && statusSourceControl.connectionState !== "loading" && statusSourceControl.connectionState !== "error" ? statusSourceControl.activeSource.statusUrl : undefined;
+  const directoryReadSourceUrl = statusSourceControl?.activeSource.kind === "runtime"
+    && statusSourceControl.connectionState !== "loading" && statusSourceControl.connectionState !== "error"
+    ? statusSourceControl.activeSource.statusUrl : undefined;
+  const researchReadSourceUrl = sourceGoal?.sourceAccess
+    ? `/status.json?source_namespace=${sourceGoal.sourceAccess.namespace}` : directoryReadSourceUrl;
   const readOnly = sourceReadOnly || sourceGoal?.sourceAccess?.readOnly === true;
   const hostReadOnly = statusSourceControl?.activeSource.readOnly ?? sourceReadOnly;
   const [localAgentId, setLocalAgentId] = useState(controlledAgentId ?? agents.find((agent) => agent.available)?.agentId ?? "codex");
@@ -2972,7 +2976,7 @@ export function PersonalWorkspacePage({
                     historyRefreshRevision={historyRefreshRevision} proposals={proposals} onPreview={createPreview} />,
                   tasks: taskBoard(!settingsOpen && selectedGoalTab === "tasks"),
                   research: !readOnly || researchReadSourceUrl
-                    ? <GoalResearchWorkbench goalId={selectedGoal.goalId} goals={workspaceGoals} onSelectGoal={id => selectGoal(id, "research")} onOpenTasks={() => setSelectedGoalTab("tasks")} active={!settingsOpen && selectedGoalTab === "research"} zh={locale === "zh-CN"} refreshRevision={historyRefreshRevision} readSourceUrl={researchReadSourceUrl} />
+                    ? <GoalResearchWorkbench goalId={selectedGoal.goalId} goals={workspaceGoals} onSelectGoal={id => selectGoal(id, "research")} onOpenTasks={() => setSelectedGoalTab("tasks")} active={!settingsOpen && selectedGoalTab === "research"} zh={locale === "zh-CN"} refreshRevision={historyRefreshRevision} readSourceUrl={researchReadSourceUrl} directoryReadSourceUrl={directoryReadSourceUrl} />
                     : <ContextHelp label={locale === "zh-CN" ? "来源无研究读取入口" : "Research source unavailable"} icon={CircleHelp}><p role="status">{locale === "zh-CN" ? "此来源尚未提供研究记录的读取入口。" : "This source does not provide a research history endpoint."}</p></ContextHelp>,
                   files: goalResults(selectedGoalTab === "files" && !settingsOpen),
                   chat: agentWorkActive ? <GoalAgentWorkPage key={`${selectionScope}:${selectedWorkAgentId}`} goal={selectedGoal} agentId={selectedWorkAgentId!} readOnly={readOnly}
