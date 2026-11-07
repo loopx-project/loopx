@@ -1,3 +1,4 @@
+import {EXECUTION_PREPARATION_SCHEMA_VERSION} from "../work_items/execution_preparation.ts";
 import {capturedContextSelection} from "./context_selection.ts";
 import {contextReadSectionDigests, initialContextReadPointers, prepareProgressiveContext, prepareProgressiveContextDelivery,
   progressiveContextPlan} from "./progressive_context.ts";
@@ -27,7 +28,7 @@ import { projectTurnStartUnavailableContext } from "../capability_hooks.ts";
 import { jsonObject, requireBoolean, requireJsonObject, requireNonEmptyString, requireStringLiteral,
   sourceNumberTokens } from "../runtime_decode.ts";
 import { projectPendingCapabilityIntent } from "../work_items/pending_capability_intent.ts";
-import { assertGoalContextDelivered, assertInteractionRequiredReads, capturedTodoTextSha256, decodeInteractionContract, projectInteractionRequiredReads, selectedWorkTodo, selectedWorkTodoId, USER_CHANNEL_NOTIFICATION_POLICIES } from "../work_items/interaction_contract.ts";
+import { INTERACTION_CONTRACT_SCHEMA_VERSION, assertGoalContextDelivered, assertInteractionRequiredReads, capturedTodoTextSha256, decodeInteractionContract, projectInteractionRequiredReads, selectedWorkTodo, selectedWorkTodoId, USER_CHANNEL_NOTIFICATION_POLICIES } from "../work_items/interaction_contract.ts";
 import { measureTurnEnvelope, TURN_ENVELOPE_SECTION_TARGETS } from "./turn_envelope_budget.ts";
 export { TURN_ENVELOPE_BUDGET_BYTES } from "./turn_envelope_budget.ts";
 
@@ -1804,11 +1805,11 @@ function checkedContextPresentationPlan(request: JsonObject): JsonObject {
   const staged = nativeReplanPresentation(request);
   if (staged) return staged;
   if (request.surface !== "complete_turn")
-    return progressiveContextPlan({payload: context, surface: request.surface});
+    return progressiveContextPlan({payload: context, surface: request.surface}, progressivePreparationScope(context));
   const source = {...context};
   delete source.schema_version;
   delete source.contract_binding;
-  return progressiveContextPlan({payload: source, surface: "quota_packet"});
+  return progressiveContextPlan({payload: source, surface: "quota_packet"}, progressivePreparationScope(source));
 }
 
 function completeWorkIdentity(decision: JsonObject): JsonObject {
@@ -2166,6 +2167,36 @@ function replanCliView(payload: JsonObject, identity: ReplanValueIdentity = cano
       work_context: replanWorkContext(payload, object(agent.work_context), reads, identity)}},
     autonomous_replan_obligation: {...obligation, context_read: reads.review},
     replan_action_packet: replanActionPacket(payload, reads)};
+}
+
+/** Present the long scope list on demand only while an ordinary Turn prepares work. */
+function progressivePreparationScope(payload: JsonObject):
+  {path: string[]; marker_path: string[]; instruction: string} | undefined {
+  const interaction = jsonObject(payload.interaction_contract);
+  const cli = jsonObject(interaction?.cli_channel);
+  const preparation = jsonObject(cli?.execution_preparation);
+  if (interaction?.schema_version !== INTERACTION_CONTRACT_SCHEMA_VERSION ||
+      payload.should_run !== true || payload.effective_action !== EffectiveAction.NORMAL_RUN ||
+      jsonObject(interaction.agent_channel)?.delivery_allowed !== false ||
+      cli?.spend_allowed_now !== false || cli.spend_after_validation !== false) return undefined;
+  const selecting = cli.selection_required === true && !Object.hasOwn(cli, "execution_preparation") &&
+    jsonObject(cli.selection_command)?.schema_version === "action_selection_cli_command_v1";
+  const claiming = cli.selection_required !== true && payload.normal_delivery_allowed === false &&
+    preparation?.schema_version === EXECUTION_PREPARATION_SCHEMA_VERSION && preparation.state === "claim_required" &&
+    preparation.delivery_allowed === false && jsonObject(preparation.claim)?.host_execution_allowed === true;
+  if (!selecting && !claiming) return undefined;
+  const boundary = jsonObject(payload.goal_boundary);
+  const scopes = boundary?.write_scope;
+  // The recovery pointer and its guidance also cost bytes. Leave short lists inline.
+  if (!boundary || Object.hasOwn(boundary, "write_scope_pointer") ||
+      !Array.isArray(scopes) || scopes.some(scope => typeof scope !== "string") ||
+      Buffer.byteLength(JSON.stringify(scopes)) < 1024) return undefined;
+  return {
+    path: ["goal_boundary", "write_scope"],
+    marker_path: ["goal_boundary", "write_scope_pointer"],
+    instruction: "If choosing work depends on write scope, select the pointer in goal_boundary.write_scope_pointer from the source below. "
+      + "Use the complete current scope from the ready decision before delivery. ",
+  };
 }
 
 function nativeReplanPresentation(request: JsonObject): JsonObject | undefined {
