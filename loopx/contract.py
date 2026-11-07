@@ -36,7 +36,6 @@ from .control_plane.projects.registry_codec import load_registry
 from .control_plane.todos.active_state_editing import COMPLETED_WORK_ARCHIVE_HEADING
 from .control_plane.todos.active_state_todo_parser import active_state_incomplete_warning
 from .control_plane.todos.authoring_scope import todo_contract_diagnostics
-from .extensions.process_runtime import terminate_process_tree
 from .history import (
     RunHistoryAudit,
     build_run_history_audit,
@@ -350,6 +349,8 @@ def _retire_owned_probe(process: subprocess.Popen[str]) -> None:
     """
 
     try:
+        from .extensions.process_runtime import terminate_process_tree
+
         terminate_process_tree(process, grace_seconds=0.2)
     except (OSError, RuntimeError):
         pass

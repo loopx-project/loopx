@@ -1821,35 +1821,43 @@ def test_turn_cli_resolves_its_decision_through_the_shared_owner(
     )
 
 
+@pytest.mark.parametrize("provider", ("file", "sqlite"))
 def test_turn_cli_projects_explicit_fresh_iteration_context(
-    tmp_path: Path,
+    tmp_path: Path, provider: str,
 ) -> None:
-    project, runtime, registry = _write_live_fixture(tmp_path)
-    output = io.StringIO()
+    _, runtime, registry = _write_live_fixture(tmp_path, provider=provider)
+    # Use the CLI entrypoint in a fresh process. In-process
+    # callers and test collection may already have selected these providers.
+    process = subprocess.run(
+        [
+            sys.executable, "-c", "\n".join((
+                "import sys",
+                "from loopx.entrypoint import main",
+                "status = main(sys.argv[1:])",
+                "unselected = {'loopx.extensions.process_runtime',",
+                "              'loopx.capabilities.semantic_preference.contract',",
+                "              'loopx.capabilities.semantic_preference.reward_memory'}",
+                "assert not unselected & sys.modules.keys(), unselected & sys.modules.keys()",
+                "raise SystemExit(status)",
+            )),
+            "--registry", str(registry),
+            "--runtime-root", str(runtime),
+            "--format", "json",
+            "turn", "plan",
+            "--goal-id", "loopx-turn-fixture",
+            "--agent-id", "codex-fixture",
+            "--iteration-context", "fresh",
+            "--include-transaction-detail",
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        env={**os.environ, "LOOPX_USAGE_PING": "0"},
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
 
-    with contextlib.redirect_stdout(output):
-        exit_code = cli_main(
-            [
-                "--registry",
-                str(registry),
-                "--runtime-root",
-                str(runtime),
-                "--format",
-                "json",
-                "turn",
-                "plan",
-                "--goal-id",
-                "loopx-turn-fixture",
-                "--agent-id",
-                "codex-fixture",
-                "--iteration-context",
-                "fresh",
-                "--include-transaction-detail",
-            ]
-        )
-
-    payload = json.loads(output.getvalue())
-    assert exit_code == 0, payload
+    assert process.returncode == 0, process.stdout + process.stderr
+    payload = json.loads(process.stdout)
     assert payload["session"]["action"] == "start_new"
     assert payload["session"]["context_policy"] == {
         "schema_version": "loopx_iteration_context_policy_v0",
