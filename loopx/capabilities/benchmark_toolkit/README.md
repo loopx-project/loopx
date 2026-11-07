@@ -929,6 +929,58 @@ transition, and a bounded periodic cadence, pass exact-job receipt and runner-ow
 `runtime-observation`. Apply its typed terminal or runner-invalid transition before
 releasing that reservation, then backfill the reported gap.
 
+Managed providers can deliver a completed closeout through one host operation:
+
+```bash
+loopx benchmark terminal-reconcile \
+  --goal-id <registered-goal-id> \
+  --request-json managed-terminal.json \
+  --execute --format json
+```
+
+Without `--execute` this previews the transition. The request contains the
+original executed, newly-created `admission_receipt` (not an idempotent
+admission lookup), the existing board `identity`
+(`benchmark_id`, `study_id`, `case_id`, `run_id`, `arm_id`, `arm_role`, `attempt`),
+and the provider's `terminal` proof: the same identity, terminal `status`,
+`observed_at`, and explicit `solver_terminal=true` and `grading_drained=true`.
+This is trusted controller input, not solver input. The provider must qualify
+runtime continuity against its retained launch and native event evidence before
+publishing it. A running solver, pending
+grading, an unknown observation, missing board/ledger, mismatched admission, or
+a conflicting terminal status is rejected without releasing a reservation.
+The managed path requires a unique run ID across the Goal's board; it rejects
+the same reservation appearing in multiple studies rather than guessing its owner.
+Every launch or replacement must use a fresh Goal-wide run ID. Deliberately
+reusing both an old run ID and its admission timestamp is outside this managed
+contract; the legacy reservation format cannot distinguish that duplicate tuple.
+Forward the original whole provider proof. Do not assemble its admission and
+terminal pieces from separate runs. The shared CLI validates its bound state
+transition; it does not independently reread provider files or attest the SDK.
+
+The TypeScript policy checks the exact admission generation (`admitted_at` as
+well as run/case/role). The existing local ledger transports lock the concurrency
+envelope and board in that order, recheck the policy's input snapshot, write and
+read back the terminal row, then release and read back that original slot.
+An intervening write requires retrying the original proof; it does not authorize
+a replacement admission. A process interruption after the board write can be
+replayed. Same-terminal replay preserves later scores, insight and observation
+time, and an already released run is idempotent. This is process-crash recovery,
+not a new power-loss durability guarantee. New state transitions use the actual
+host reconciliation time, strictly after the current board observation and no
+earlier than provider termination; replay keeps the persisted timestamp. A stale
+running shard can therefore be merged again without an equal-time ambiguity.
+
+This command never stops workers, deletes artifacts, restarts an experiment,
+changes duration allowances or upgrades score qualification. Keep accepted
+grading alive until it drains. The provider/controller owns bounded retry after
+an unavailable writer; no scheduler or polling loop is installed. A terminal
+board row alone is not a release receipt. Read `board_readback_verified` and
+`slot_readback_verified`; new admission still needs its own resource checks.
+Standalone board upserts and explicit `concurrency-release` retain their
+existing behavior. The managed command additionally requires a registered Goal
+and cannot use an unregistered project override.
+
 For hosts where parallel jobs can exhaust temporary storage, memory, process
 capacity, file descriptors, persistent storage, or provider capacity, enable
 `--require-resource-headroom-receipt`. Each new admission must then include a

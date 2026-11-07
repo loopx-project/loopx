@@ -849,6 +849,45 @@ Omit the flag on the next run to disable it. No active experiment is changed by
 installing this code. Inspect wake receipts and the saved decisions before
 claiming adoption; score countability still requires the usual integrity review.
 
+## Close a managed native attempt
+
+For a native-feedback run with an existing experiment-board row and a fresh
+concurrency admission, pass `--managed-run-json PRIVATE_BINDING.json` to the
+EdgeBench runner. Keep the binding owner-only and outside the solver workspace.
+It contains `goal_id`, the absolute controller `project` path, the original
+`admission_receipt` from `loopx benchmark concurrency-admit --execute --format json`,
+and the board `identity` (`benchmark_id`, `study_id`, `case_id`, `run_id`, `arm_id`,
+`arm_role`, `attempt`). Match `case_id` to `--task` and `run_id` to `--run-id`.
+Use the receipt that created the slot and a unique run ID across the Goal.
+
+The runner retains `managed-run.json` beside the runtime receipt. Before the
+solver starts, the receipt captures the binding and source pins. At return, it
+binds the original solver execution record when termination is confirmed. The
+runner publishes `managed-terminal.json` after validating those receipts and
+the native grading drain for the same run. The controller holds the registered
+Goal and project access.
+
+If grading drains later, the native grading owner must first retain its
+complete, drained `grading_status.json` and the matching history in the same
+attempt. To validate that evidence or retry a proof write, run the following
+once on the host that owns the attempt. Omit `--execute` to preview.
+
+```sh
+python -m benchmark.edgebench.managed_run --trial "$ATTEMPT_DIR" --execute
+```
+
+The replay reads retained evidence. Pending, unknown, or mismatched native
+evidence leaves the reservation active. Use the proof from the exact attempt on
+the controller and retain the command's JSON receipt with its binding.
+
+```sh
+loopx benchmark terminal-reconcile --goal-id "$GOAL_ID" --project "$PROJECT" \
+  --request-json "$ATTEMPT_DIR/managed-terminal.json" --execute --format json
+```
+
+The [toolkit closeout contract](../../loopx/capabilities/benchmark_toolkit/README.md#concurrency-envelope)
+defines readback, release and replay. Omit the flag on new ordinary trials.
+
 ## Sharing terminal results
 
 The [Portfolio ten-arm retrospective report](studies/portfolio-ten-arm-20261006/README.md)
