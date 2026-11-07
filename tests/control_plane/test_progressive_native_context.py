@@ -9,6 +9,7 @@ import shlex
 import pytest
 
 from loopx.cli_commands.quota_capture import read_context_capture
+from loopx.control_plane.testing.canary_harness import run_json_cli_result
 from loopx.control_plane.turn_driver import codex_context as context
 from tests.control_plane.codex_checkpoint_fixture import reference_metadata_oracle
 from test_codex_context_lifecycle import setup, project, deliver, read_pages
@@ -469,11 +470,18 @@ def test_public_quota_cli_delivers_required_view_and_original_evidence(acceptanc
     lifecycle.mkdir(mode=0o700)
     (tmp_path / "captures").mkdir(mode=0o700)
     setup(lifecycle, monkeypatch)
-    code, packet = run("quota", "should-run", "--goal-id", "goal-acceptance", "--agent-id", "agent-a",
+    # Use the raw CLI response here. The acceptance fixture's policy reader
+    # unwraps the navigation before returning the authoritative document.
+    code, packet = run_json_cli_result("quota", "should-run", "--goal-id", "goal-acceptance", "--agent-id", "agent-a",
         "--todo-id", "todo_export", "--context-delivery", "on", "--codex-app",
         "--codex-context-dir", str(lifecycle), "--decision-output-root", str(tmp_path / "captures"),
-        "--turn-instance-id", "original-turn")
+        "--turn-instance-id", "original-turn", registry_path=workspace.parent / "registry.json",
+        runtime_root=workspace.parent / "runtime")
     assert code == 0, {key: packet.get(key) for key in ("error", "error_code", "error_detail", "reason", "reason_code")}
+    first_read = shlex.split(packet["first_read_command"])
+    assert int(first_read[first_read.index("--max-page-output-bytes") + 1]) == 12000
+    bulk_read = shlex.split(packet["recovery"]["command"])
+    assert int(bulk_read[bulk_read.index("--max-page-output-bytes") + 1]) == 64000
     recovery = context._state(lifecycle)["recovery"]
     assert Path(recovery["path"]).name == "required-context.json"
     required = json.loads(Path(recovery["path"]).read_bytes())

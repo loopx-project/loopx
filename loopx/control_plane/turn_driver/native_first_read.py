@@ -12,7 +12,7 @@ def observed_first_read_reference(directory: str, target: dict[str, Any], recove
                                   context: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any] | None:
     """Write the typed delivery plan once. The host renders it from the immutable source."""
     try:
-        reference = write_initial_context_read_reference(Path(recovery["path"]), recovery["sha256"],
+        reference, _ = write_initial_context_read_reference(Path(recovery["path"]), recovery["sha256"],
             context, plan["selections"],
             observed_read={"directory": directory, "target": target, "fields": plan["reused"]})
         return {"path": str(reference), "pointer_bytes": sum(len(key.encode()) + 4 for key in plan["reused"])}
