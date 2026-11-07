@@ -39,7 +39,11 @@ def register_chat_background_services(server) -> None:
 
 
 def close_chat_background_services(server) -> None:
-    server.background_services.close()
+    # A failed socket bind closes the server before its background mixin finishes.
+    services = getattr(server, "background_services", None)
+    if services is None:
+        return
+    services.close()
     # Directly constructed HTTP fixtures/embedders can still supply old owner
     # attributes without registering. Close them once through the same adapter.
     for attribute in ("codex_account_service", "manager_return_service", "lark_goal_topic_runtime"):

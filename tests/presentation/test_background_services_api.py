@@ -81,7 +81,7 @@ def test_http_recheck_starts_existing_owners_once_and_preserves_disabled_feature
     while time.monotonic() < deadline:
         _, result = request(server)
         tasks = {item["id"]: item for item in result["tasks"]}
-        if tasks["manager-returns"]["last_success_at"] is not None:
+        if all(tasks[key]["last_success_at"] is not None for key in ("manager-returns", "manager-executions")):
             break
         time.sleep(.02)
     assert tasks["manager-returns"]["state"] == "healthy"
