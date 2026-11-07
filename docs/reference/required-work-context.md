@@ -426,13 +426,31 @@ After a Host claim, the ready guard uses the private
 returns its writer digest with the fields needed to verify the same Todo and
 Turn. The hook verifies that digest when it opens the original file. If the
 file changed, the receipt preserves the claim and pins recovery to the original
-bytes before work can continue.
-The private native journal reserves automatic preparation before claiming a
-bound capture. If readiness is interrupted, the hook offers one readback
-for the original claim receipt and current lease. Follow the captured readiness
-check for the same Todo and Turn once the active lease matches. An authorized
-retry of the same capture uses the same managed claim operation. A retired
-lease needs a fresh eligible preparation capture.
+bytes before work can continue. If readiness is interrupted, retrying the
+same original decision capture reuses its managed claim operation. The
+authority owner checks the original lease on replay. The native session
+keeps the latest eligible live guard digest separately from the capture.
+Presenting the exact saved decision preserves that binding. Older captures
+and copies with different bytes remain readable. Preserve any original claim receipt and use
+`quota should-run` with the same Goal, Agent, Todo and Turn and a fresh
+capture if preparation is still required. A retired lease requires a fresh
+eligible preparation capture.
+
+中文：Host 重试绑定原始决策 capture 的领取操作，由权威 owner 验证原租约。
+原生会话独立保存最新合格准入的摘要。重新展示逐字节一致的快照会保留绑定。
+旧快照和字节不同的副本仍可读，保留已有领取回执。
+仍需准备时，用原 Goal、Agent、Todo 和 Turn 运行 `quota should-run`，
+生成新的 capture，再按当前准入结果准备。已退役的租约需要新的合格 capture。
+
+For each verified live guard, the private native journal reserves the first
+automatic preparation before running the claim. If it is interrupted,
+the hook offers one readback for the original claim receipt and current
+lease, even after the same saved decision is presented again. Use the
+same-Turn readiness check after verifying the matching active lease.
+
+对经验证的同一原始准入，Hook 在认领前记录一次自动准备。中断后提供一次
+原认领回执和当前租约的读回入口，重新展示同一快照也不会重复自动认领。
+核对原租约仍有效后，按同轮准入复查 ready。
 
 The Goal availability adapter still reads and UTF-8-validates the complete file
 and hashes all bytes for its revision. With native context delivery off, only the path and revision of unmarked or mixed sources cross the

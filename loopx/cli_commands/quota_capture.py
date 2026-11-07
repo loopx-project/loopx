@@ -1034,13 +1034,20 @@ def prepare_decision_capture(args: argparse.Namespace) -> Path | None:
     return directory
 
 
-def capture_decision(directory: Path | None, payload: dict[str, object]) -> str | None:
+def capture_decision(directory: Path | None, payload: dict[str, object], *,
+                     args: argparse.Namespace | None = None, native_context: bool = False) -> str | None:
     if directory is None:
         return
     from ..control_plane.turn_driver.decision_capture import write_decision_capture
 
     try:
-        return write_decision_capture(directory / "decision.json", payload, publish=os.replace)
+        digest = write_decision_capture(directory / "decision.json", payload, publish=os.replace)
+        if native_context and args is not None and args.quota_command == "should-run" and payload.get("ok") is True:
+            from ..control_plane.turn_driver.codex_context import record_native_claim_source
+
+            record_native_claim_source(payload, digest, directory=args.codex_context_dir,
+                context_root=getattr(args, "codex_context_root", None))
+        return digest
     except (OSError, ValueError) as exc:
         raise QuotaDecisionTransportError(
             "Decision capture failed after guard evaluation; the Turn receipt may "
@@ -1376,6 +1383,7 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
             record_native_execution_preparation,
         )
         from ..control_plane.turn_driver.codex_execution_preparation import (
+            LegacyNativePreparationCapture,
             codex_execution_preparation_context,
             codex_execution_preparation_readback_context,
             execute_codex_execution_preparation,
@@ -1402,6 +1410,8 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
                     if workspace.is_absolute() and workspace.resolve() == Path.cwd().resolve():
                         request = native_execution_preparation_request(directory, event)
                     if request is not None:
+                        if "claim_source_sha256" not in request:
+                            raise LegacyNativePreparationCapture()
                         if request.get("readback_only") is True:
                             additional = codex_execution_preparation_readback_context(request)
                         else:
@@ -1444,6 +1454,8 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
                                     receipt["context"]["recovery_command"] = context_capture_read_command(
                                         source, digest, reader_argv=current_loopx_cli_argv())
                             additional = codex_execution_preparation_context(receipt)
+                except LegacyNativePreparationCapture as error:
+                    additional = str(error)
                 except (OSError, RuntimeError, subprocess.SubprocessError, ValueError, TypeError, RecursionError):
                     # Reconcile only the attempted source. A concurrent guard
                     # can replace recovery, so it must never be reserved here.

@@ -61,7 +61,9 @@ def test_native_journal_projects_one_host_execution_request(tmp_path, monkeypatc
         },
         "heartbeat_receipt": {"turn_instance_id": "turn-fixture"},
     }
-    _, wire = project(tmp_path, payload=payload)
+    claim_source = "1" * 64
+    context.record_native_claim_source(payload, claim_source, directory=str(tmp_path), context_root=None)
+    _, wire = project(tmp_path, capture_id=claim_source, payload=payload)
     request = context.native_execution_preparation_request(
         str(tmp_path), {**event, "hook_event_name": "PostToolUse"},
     )
@@ -69,7 +71,9 @@ def test_native_journal_projects_one_host_execution_request(tmp_path, monkeypatc
         "goal_id": "fixture",
         "agent_id": "agent",
         "todo_id": "todo_fixture",
-        "claim_args": payload["execution_preparation"]["claim"]["cli_args"],
+        "claim_args": [*payload["execution_preparation"]["claim"]["cli_args"],
+            "--claim-operation-id", f"todo-claim:codex-capture:{claim_source}"],
+        "claim_source_sha256": claim_source,
         "authority_route": {
             "registry_path": str(tmp_path / "registry.json"),
             "runtime_root": str(tmp_path / "runtime"),
@@ -109,10 +113,14 @@ def test_native_journal_projects_one_host_execution_request(tmp_path, monkeypatc
         str(tmp_path), {**event, "hook_event_name": "SessionStart"},
     )["todo_id"] == "todo_fixture"
     payload["heartbeat_receipt"] = {"turn_instance_id": "next-turn"}
-    _, next_wire = project(tmp_path, capture_id="next", payload=payload)
+    next_claim_source = "2" * 64
+    context.record_native_claim_source(payload, next_claim_source, directory=str(tmp_path), context_root=None)
+    _, next_wire = project(tmp_path, capture_id=next_claim_source, payload=payload)
     assert next_wire["recovery"]["sha256"] != request["source_sha256"]
     assert context.native_execution_preparation_request(str(tmp_path), eligible) == {
         **request, "turn_instance_id": "next-turn", "source_sha256": next_wire["recovery"]["sha256"],
+        "claim_source_sha256": next_claim_source,
+        "claim_args": [*request["claim_args"][:-1], f"todo-claim:codex-capture:{next_claim_source}"],
     }
 
 
