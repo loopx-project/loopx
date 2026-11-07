@@ -548,22 +548,48 @@ export function initialContextReadPointers(context: JsonObject, decisionFields: 
     include(...source, "content", "harness", "guidance");
     include(...source, "content", "harness", "orchestration_gate");
   });
+  const cli = object(interaction.cli_channel);
+  const planPath = ["interaction_contract", "cli_channel", "settlement_plan"];
+  const plan = object(cli?.settlement_plan);
+  const steps = (plan?.schema_version === "quota_settlement_plan_v1" || plan?.schema_version === "quota_settlement_plan_v2") && Array.isArray(plan.ordered_steps)
+    ? plan.ordered_steps : undefined;
+  const prepared = object(cli?.execution_preparation);
+  const identity = object(plan?.identity);
+  const settlementSteps = steps?.map(object).filter(step => step?.kind === "durable_writeback" || step?.kind === "quota_spend");
+  const [writeback, spend] = settlementSteps ?? [];
+  const manualSettlement = plan?.schema_version === "quota_settlement_plan_v1";
+  // The complete contract's composed writeback owns the debit. Its runtime
+  // receipt step has no separate command for the agent to run.
+  const composedSettlement = plan?.schema_version === "quota_settlement_plan_v2" && writeback?.owner === "agent"
+    && spend?.owner === "runtime" && !Object.hasOwn(spend, "command_template");
+  const templates = manualSettlement ? [writeback?.command_template, spend?.command_template]
+    : composedSettlement ? [writeback?.command_template] : undefined;
+  // A ready Turn already shows its ordered writeback and spend with their
+  // conditions. Hide only the exact duplicate fallback in this first read;
+  // recovery, legacy readers and the original capture keep both forms.
+  const repeatsSettlement = context.effective_action === EffectiveAction.NORMAL_RUN && context.normal_delivery_allowed === true
+    && channel?.delivery_allowed === true && cli?.selection_required !== true && prepared?.state === "ready"
+    && typeof identity?.effect_id === "string" && identity.effect_id.length > 0
+    && typeof identity.todo_id === "string" && prepared.todo_id === identity.todo_id
+    && object(context.selected_todo)?.todo_id === identity.todo_id
+    && isDeepStrictEqual(identity, object(object(context.heartbeat_receipt)?.settlement_identity))
+    && settlementSteps?.length === 2 && writeback?.kind === "durable_writeback" && spend?.kind === "quota_spend"
+    && templates?.every(command => typeof command === "string" && command.length > 0) === true
+    && isDeepStrictEqual(cli?.next_cli_actions, templates);
   for (const field of ["execution_preparation", "next_cli_actions", "spend_allowed_now", "spend_after_validation", "spend_policy",
     "quota_spend_source", "delivery_workspace_causality", "vision_continuation_audit"])
-    include("interaction_contract", "cli_channel", field);
+    if (field !== "next_cli_actions" || !repeatsSettlement) include("interaction_contract", "cli_channel", field);
   // Explicit selection clears next_cli_actions. Deliver the owner's discovery
   // and same-Turn binding recipe alongside its non-exhaustive suggestions.
-  if (object(interaction.cli_channel)?.selection_required === true) {
+  if (cli?.selection_required === true) {
     for (const field of ["selection_required", "selection_policy_ref", "selection_command"])
       include("interaction_contract", "cli_channel", field);
     include("action_portfolio", "selection_policy");
     include("action_portfolio", "suggested_actions");
   }
-  const planPath = ["interaction_contract", "cli_channel", "settlement_plan"];
-  const plan = object(object(interaction.cli_channel)?.settlement_plan);
-  if ((plan?.schema_version === "quota_settlement_plan_v1" || plan?.schema_version === "quota_settlement_plan_v2") && Array.isArray(plan.ordered_steps)) {
+  if (plan && steps) {
     for (const field of Object.keys(plan)) if (field !== "ordered_steps") include(...planPath, field);
-    plan.ordered_steps.forEach((value, stepIndex) => {
+    steps.forEach((value, stepIndex) => {
       const step = object(value), stepPath = [...planPath, "ordered_steps", stepIndex];
       if (!step) { include(...stepPath); return; }
       for (const field of Object.keys(step)) {

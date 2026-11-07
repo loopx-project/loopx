@@ -699,6 +699,16 @@ creation. Source and packaged consumer checks are distinct from installed App
 adoption, live optional-provider/model behavior and original-quota complete-cost
 benefit. These repairs do not close C1 or authorize rollout or merge.
 
+#### One settlement recipe in the ready first read
+
+The progressive reader omits `next_cli_actions` only when it repeats the
+recognized ordered settlement plan for the ready Todo and original effect.
+The ordinary quota plan supplies separate writeback and spend templates; the
+complete C1 plan supplies one combined writeback and a runtime-owned spend
+receipt. Both retain the original commands, ordering and preconditions in
+the captured plan. A distinct fallback or unknown plan remains visible;
+the exact original field is still readable, and direct output is unchanged.
+
 ### C1 baseline boundary and reuse inventory
 
 The baseline is the **original caller-visible quota delivery**, not the raw
