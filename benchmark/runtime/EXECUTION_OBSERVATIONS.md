@@ -126,6 +126,26 @@ Malformed optional diagnostics preserve reliable host measurements and retain
 a bounded diagnostic-error receipt. Evidence paths must be fresh; raw output
 stays local. The probe neither submits nor accesses hidden evaluation.
 
+When simultaneous memory could change a candidate choice, run the complete
+representative workload with the same probe and pass
+`--memory-limit-bytes <applicable-reference-limit>`. On Linux the producer
+samples proportional set size across the command's process group, including
+workers and the process holding their results. An unstable group is skipped.
+The adjacent `.memory.json` binds the sampled peak, limit, candidate and input
+revision. Its digest is included in the execution observation's evidence refs.
+A missing sample stays unknown. Use the same input, limits and measurement
+method when comparing candidates. Sampled PSS has different accounting from a
+container memory limit, and a sample below the reference cannot qualify
+headroom. Processes in other groups and peaks between samples are outside
+coverage. The option leaves the command's execution and time limit in place.
+
+Observed excess provides an optional next action for the current Yardstick
+decision. Keep the best authoritative evidence, reuse the matching incumbent
+measurement and spend the next bounded comparison on a different lower-footprint
+mechanism over the full workload. Check its contribution to the accepted outcome
+before promotion. The current Todo, execution authority and evaluator stay with
+their owners. A native timeout alone supplies no memory observation.
+
 The adjacent `.candidate.json` preserves selected relative paths and hashes.
 `candidate_sha256` hashes the sorted JSON file manifest, not native archive
 container bytes. Pins cover only declared files at the probe boundaries, not
@@ -188,6 +208,18 @@ Stop、原预算和真实阻塞继续有效，不为填满时长制造任务。
 证据路径必须新建，原始输出留在本地；不提交原生评测，不读取隐藏评测。候选
 变化拒绝归因；文件清单哈希不是原生归档哈希，只覆盖明确选择的文件及探针
 边界，不覆盖传递依赖或独立写入者，结果仍须证明对应实际评测快照和输入版本。
+
+当并行内存占用会影响候选选择时，用同一入口执行完整代表性工作集并传入
+`--memory-limit-bytes <参考上限>`。Linux 采样命令进程组内各进程的 PSS，
+组成员变化或读不到完整数据时跳过该采样。相邻 `.memory.json` 绑定采样峰值、
+参考上限、候选和输入版本，其摘要进入原执行观测引用。组外进程和采样间峰值
+未覆盖。PSS 与容器内存限额的统计口径有差异，低于上限的采样不能确认余量。
+此选项沿用命令原执行及超时行为。
+
+实际观测超限时，现有 Yardstick 决策可采纳证据中给出的下一动作。保留最好的
+权威结果，复用同口径 incumbent 测量，把下一次有界试验用在较低占用的不同
+机制上，并在同一完整工作集验证对目标的贡献。Todo、授权和评测仍由原 owner
+管理。只有超时回执时，内存保持未知。
 
 当前授权工作实际产生或取得新的决策证据后，才进入相应工作段的检查点。旧反馈读回、
 记账和没有新增信息的确定性重复验证只是上下文，应先用于推进原任务。使用当前

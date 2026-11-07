@@ -141,6 +141,159 @@ def test_probe_cli_preserves_a_failed_candidate_exit_and_its_observation(tmp_pat
     observed = json.loads(output.read_text())
     assert observed["exit_code"] == 3 and observed["search_iterations"] is None
     assert json.loads(output.with_suffix(".json.candidate.json").read_text())["candidate_sha256"] == observed["candidate_sha256"]
+    assert not output.with_suffix(".json.memory.json").exists()
+
+
+def test_memory_observation_without_samples_leaves_timeout_and_next_method_unknown(tmp_path, monkeypatch):
+    import benchmark.runtime.research_probe as producer
+
+    monkeypatch.setattr(producer, "_group_pss_sample", lambda _group: None)
+    observed = probe(tmp_path, monkeypatch, source="import time; time.sleep(1)",
+                     limit_seconds=0.08, memory_limit_bytes=1024)
+    sidecar = tmp_path / "observation.json.memory.json"
+    evidence = json.loads(sidecar.read_bytes())
+    assert observed["stop_reason"] == "host_timeout" and observed["exit_code"] < 0
+    assert evidence["candidate_sha256"] == observed["candidate_sha256"]
+    assert evidence["complete_samples"] == 0 and evidence["peak_pss_bytes"] is None
+    assert evidence["observed_limit_exceeded"] is None and "next_action" not in evidence
+    assert "resource:" + hashlib.sha256(sidecar.read_bytes()).hexdigest() in observed["evidence_refs"]
+
+
+def test_changed_candidate_cannot_publish_memory_evidence(tmp_path, monkeypatch):
+    with pytest.raises(ValueError, match="candidate changed"):
+        probe(tmp_path, monkeypatch,
+              source="from pathlib import Path; Path(__file__).write_text('print(0)')", memory_limit_bytes=1024)
+    assert json.loads((tmp_path / "observation.json").read_text())["ok"] is False
+    assert (tmp_path / "observation.json.memory.json").read_bytes() == b""
+
+
+@pytest.mark.skipif(sys.platform != "linux" or not Path("/proc/self/smaps_rollup").exists(),
+                    reason="requires live Linux process-group PSS")
+def test_full_workload_memory_evidence_changes_next_ordinary_work(tmp_path):
+    from tests.control_plane.test_work_yardstick_cli import attachment, binding, context, refresh, run, setup
+
+    project, runtime, registry = setup(tmp_path)
+    limit_bytes = 38 * 1024 * 1024
+    revision = "two-complete-shards-v1"
+    shard_size = 22 * 1024 * 1024
+    # All three mechanisms compute the same independent workload. One expands
+    # both buffers at once. A streaming contender bounds retained state.
+    template = """
+import json
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+if len(sys.argv) == 2:
+    marker = int(sys.argv[1])
+    if {streaming}:
+        total = 0
+        chunk_size = 1024 * 1024
+        for offset in range(0, {shard_size}, chunk_size):
+            scratch = bytearray([marker]) * min(chunk_size, {shard_size} - offset)
+            total += sum(scratch)
+    else:
+        scratch = bytearray([marker]) * {shard_size}
+        total = sum(scratch)
+    time.sleep(0.75)
+    print(total)
+else:
+    def shard(marker):
+        return subprocess.Popen(
+            [sys.executable, __file__, str(marker)],
+            stdout=subprocess.PIPE, text=True,
+        )
+    def read(process):
+        output, _ = process.communicate(timeout=3)
+        assert process.returncode == 0
+        return int(output)
+    first = shard(1)
+    if {parallel}:
+        second = shard(2)
+        values = [read(first), read(second)]
+    else:
+        values = [read(first), read(shard(2))]
+    Path("last-workload.json").write_text(json.dumps(values))
+    print(json.dumps(values))
+"""
+
+    def execute(name, *, streaming=False, parallel, method_id):
+        candidate = project / f"{name}.py"
+        candidate.write_text(template.format(shard_size=shard_size, streaming=streaming, parallel=parallel))
+        output = project / f"{name}.observation.json"
+        command = [sys.executable, "-m", "benchmark.runtime.research_probe",
+            "--candidate-file", str(candidate), "--output", str(output), "--input-revision", revision,
+            "--planned-method-id", method_id, "--executed-method-id", method_id,
+            "--evidence-ref", f"probe:{name}", "--limit-seconds", "6",
+            "--memory-limit-bytes", str(limit_bytes), "--", sys.executable, str(candidate)]
+        process = subprocess.run(command, cwd=project, env={**os.environ, "PYTHONPATH": str(fixture.REPO_ROOT)},
+                                 text=True, capture_output=True, timeout=10)
+        assert process.returncode == 0, process.stderr
+        assert json.loads(output.with_suffix(".json.stdout").read_text()) == [shard_size, 2 * shard_size]
+        observation = json.loads(process.stdout)
+        memory_bytes = output.with_suffix(".json.memory.json").read_bytes()
+        memory = json.loads(memory_bytes)
+        ref = "resource:" + hashlib.sha256(memory_bytes).hexdigest()
+        assert ref in observation["evidence_refs"]
+        assert memory["candidate_sha256"] == observation["candidate_sha256"]
+        assert memory["input_revision"] == revision and memory["complete_samples"] > 0
+        return observation, memory, ref
+
+    baseline, incumbent_memory, incumbent_ref = execute("incumbent", parallel=False, method_id="method:sequential")
+    challenger, expanded_memory, expanded_ref = execute("expanded", parallel=True, method_id="method:expanded")
+    assert incumbent_memory["observed_limit_exceeded"] is False
+    assert expanded_memory["observed_limit_exceeded"] is True and expanded_memory["members_at_peak"] == 3
+    assert "next_action" not in incumbent_memory
+
+    def result(observation, memory, evidence_ref, prior_finding_id, next_action, counterevidence):
+        packet = attachment()
+        yardstick = packet["work_yardstick_decision"]
+        yardstick["authoritative"]["input_revision"] = revision
+        yardstick["proxy"].update(metric="sampled-pipeline-memory", unit="bytes", higher_is_better=False,
+                                  input_revision=revision, evaluation_ref="evaluator:linux-process-group-pss-v1")
+        yardstick.update(prior_finding_id=prior_finding_id, next_action=next_action, counterevidence_refs=counterevidence)
+        packet.update(input_revision=revision, evidence_refs=observation["evidence_refs"],
+                      execution_observation=observation,
+                      measurements=[{**yardstick["proxy"], "value": memory["peak_pss_bytes"],
+                          "candidate_ref": "sha256:" + observation["candidate_sha256"], "evidence_ref": evidence_ref}])
+        return packet
+
+    # Use the real commit/next ordinary work surface, without manufacturing a
+    # replan obligation or running another evaluation in the control plane.
+    exceeded_attachment = project / "expanded.json"
+    exceeded_attachment.write_text(json.dumps(result(challenger, expanded_memory, expanded_ref, None,
+                                                     expanded_memory["next_action"], [expanded_ref])))
+    first = refresh(project, runtime, registry, "memory-study-1", exceeded_attachment)
+    assert first["explore_result_delivery"]["ok"]
+    run(project, runtime, registry, "quota", "spend-slot", *binding("memory-study-1"),
+        "--slots", "1", "--source", "heartbeat", "--execute")
+    guard = run(project, runtime, registry, "quota", "should-run", "--codex-app", *binding("memory-study-2"))
+    cue = context(runtime, registry)["graph"]["work_yardsticks"][0]
+    assert cue["source_finding_id"] in json.dumps(guard)
+    assert cue["counterevidence_refs"] == [expanded_ref]
+    assert cue["next_action"] == expanded_memory["next_action"]
+    chosen = cue["next_action"]["method_id"]
+    assert chosen == "method:lower-footprint-challenge"
+    contender, streamed_memory, streamed_ref = execute("streamed", streaming=True, parallel=True, method_id=chosen)
+    assert streamed_memory["observed_limit_exceeded"] is False
+    assert streamed_memory["peak_pss_bytes"] < incumbent_memory["peak_pss_bytes"] < expanded_memory["peak_pss_bytes"]
+    assert len({baseline["candidate_sha256"], challenger["candidate_sha256"], contender["candidate_sha256"]}) == 3
+    assert incumbent_ref in baseline["evidence_refs"]
+
+    adopted_attachment = project / "streamed.json"
+    adopted_attachment.write_text(json.dumps(result(contender, streamed_memory, streamed_ref, cue["source_finding_id"],
+        {"method_id": "method:confirm-outcome", "reason": "Check accepted outcome with the new mechanism",
+         "cost_bound": "Use the existing evaluation allowance"}, [])))
+    second = run(project, runtime, registry, "refresh-state", *binding("memory-study-2"), "--classification", "validated_change",
+        "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+        "--explore-result-json", str(adopted_attachment), "--no-global-sync", "--suppress-external-sinks")
+    assert second["explore_result_delivery"]["ok"]
+    followthrough = context(runtime, registry)["graph"]["work_yardsticks"][0]["previous_decision_followthrough"]
+    assert followthrough["executed_method_id"] == chosen and followthrough["recorded_planned_method_matches"]
+    assert followthrough["candidate_sha256"] == contender["candidate_sha256"]
+    print(json.dumps({name: evidence["peak_pss_bytes"] for name, evidence in (
+        ("incumbent", incumbent_memory), ("expanded", expanded_memory), ("streamed", streamed_memory))}))
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
