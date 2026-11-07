@@ -378,6 +378,7 @@ def _native_context_reference(projected: dict[str, Any], reference: dict[str, An
                               initial_read_reference: Path | None,
                               page_bytes: int, output_bytes: int,
                               page_attached: bool = False,
+                              first_read_requested: bool = False,
                               reader_argv: list[str] | None = None) -> dict[str, Any]:
     """Build the bounded native reference without publishing or registering it."""
     target = projected.get("target") if projected.get("schema_version") == "context_delivery_v1" else None
@@ -413,10 +414,13 @@ def _native_context_reference(projected: dict[str, Any], reference: dict[str, An
     # The reference must fit even under an explicit small caller ceiling.
     def fits() -> bool:
         return len(json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= min(output_bytes, 7900)
-    if initial_read_pointers:
+    if first_read_requested or initial_read_pointers:
         overview = result.pop("overview")
         instruction = result["instruction"]
-        if any(pointer.endswith("/vision_authoring/rule") for pointer in initial_read_pointers):
+        if first_read_requested:
+            instruction = ("If the initial selection names a Vision authoring step, select the complete vision_authoring object "
+                "at that step before composing a Vision. " + instruction)
+        elif any(pointer.endswith("/vision_authoring/rule") for pointer in (initial_read_pointers or ())):
             instruction = ("Before composing a Vision, select the complete vision_authoring object "
                 "at the displayed step in this capture. " + instruction)
         first_read = ("Read the top-level content and follow next_command if eof is false. "
@@ -541,6 +545,9 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
     field_index = None
     initial_read_pointers = None
     initial_read_reference = None
+    # A stateless attached page uses the ordinary verified selector below.
+    # Its recovery recipe does not require an extra root index to be planned.
+    stateless_first_read = progressive_enabled and page_attached and captured_recovery is not None
 
     def pin_initial_selection(plan: dict[str, Any]) -> None:
         nonlocal initial_read_pointers, initial_read_reference
@@ -566,7 +573,7 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
         except (EffectRuntimeRemoteError, EffectRuntimeStartupError):
             # Optional discovery cannot invalidate the immutable file reference.
             pass
-    elif progressive_enabled:
+    elif progressive_enabled and not stateless_first_read:
         try:
             plan = _turn_envelope_result("context_select", context=current_document, select=[""], list_fields=True)
         except (EffectRuntimeRemoteError, EffectRuntimeStartupError):
@@ -581,7 +588,8 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
             field_index=field_index, initial_read_pointers=initial_read_pointers,
             progressive_enabled=progressive_enabled,
             initial_read_reference=initial_read_reference,
-            page_bytes=page_bytes, output_bytes=output_bytes, page_attached=page_attached, reader_argv=reader_argv)
+            page_bytes=page_bytes, output_bytes=output_bytes, page_attached=page_attached,
+            first_read_requested=stateless_first_read, reader_argv=reader_argv)
 
     if typed and mode == "delta":
         result = None
