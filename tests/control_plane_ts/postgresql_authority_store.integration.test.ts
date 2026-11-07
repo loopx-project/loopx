@@ -19,6 +19,8 @@ import {
 } from "../../loopx/control_plane/coordination/postgresql_authority_store.ts";
 import { openLocalAuthorityStoreHandle } from "../../loopx/control_plane/coordination/local_authority_provider.ts";
 import {readLocalCoordinationTodoSource} from "../../loopx/control_plane/coordination/local_authority_read.ts";
+import {CANONICAL_SNAPSHOT_PAGE_REQUEST, readCanonicalSnapshotFromStore} from "../../loopx/control_plane/coordination/canonical_snapshot_page.ts";
+import {projectTodoContextPage} from "../../loopx/control_plane/todos/context_projection.ts";
 import {coordinationTodoReadModel} from "../../loopx/control_plane/coordination/coordination_projection.ts";
 import {inspectGoalAcceptance, refineGoalAcceptanceOutcome} from "../../loopx/control_plane/goals/acceptance_authority.ts";
 import {authorityProjectionFixture} from "./authority_projection_fixture.ts";
@@ -185,6 +187,71 @@ if (database && installed) {
     assert.equal((await readLocalCoordinationTodoSource({...request,
       source: {...source, store_identity: "foreign"}}, {createStore: () => store})).reason_code,
     "todo_source_lineage_mismatch");
+  });
+
+  test("PostgreSQL canonical snapshot feeds complete display views without becoming a fresh authority read", async t => {
+    await installed;
+    const options = {tenant_id: `tenant-${randomUUID()}`, goal_id: `goal-${randomUUID()}`};
+    t.after(() => cleanScope(options.tenant_id, options.goal_id));
+    const store = new PostgreSqlAuthorityStore(database, options);
+    const retainedNote = "Keep every acceptance clause.\nRecover the original artifact and settlement identity.";
+    const todos = [
+      {todo_id: "todo_01_open", role: "agent", status: "open", done: false, archive_state: "active",
+        text: "Implement the requested outcome", task_class: "advancement_task",
+        required_write_scopes: ["result.json"], note: retainedNote},
+      {todo_id: "todo_02_blocker", role: "agent", status: "blocked", done: false, archive_state: "active",
+        text: "Wait for the required input", task_class: "blocker", claimed_by: "author"},
+      {todo_id: "todo_03_completed", role: "agent", status: "done", done: true, archive_state: "active",
+        text: "Preserve the verified artifact", task_class: "advancement_task",
+        note: retainedNote, evidence: "artifact:verified-result", completed_at: "2026-01-01T00:00:00Z"},
+    ];
+    const projection = authorityProjectionFixture(options.goal_id, todos);
+    const committed = await store.commitAuthority({expected_provider_revision: null,
+      operation_id: "seed-display-source", events: [], receipts: [], next_projection: projection});
+    assert.equal(committed.status, "applied");
+    if (committed.status !== "applied") return;
+    const request = {schema_version: CANONICAL_SNAPSHOT_PAGE_REQUEST, runtime_root: tmpdir(),
+      goal_id: options.goal_id, include_leases: true, projection_readback: null, after: null};
+    const first = await readCanonicalSnapshotFromStore(request, store);
+    assert.equal(first.status, "page");
+    assert.equal(first.next, null);
+    const source = {source: {record: {items: first.todos}}, handoff_gates: []};
+    const before = JSON.stringify(first);
+    const views = projectTodoContextPage({summary_display_views: source});
+    const ids = (rows: unknown) => (rows as JsonObject[]).map(row => row.todo_id);
+    assert.deepEqual(ids(views.summary), ["todo_01_open", "todo_02_blocker"]);
+    assert.deepEqual(ids(views.planning), ["todo_01_open", "todo_02_blocker"]);
+    assert.deepEqual(ids(views.terminal), ["todo_01_open", "todo_02_blocker", "todo_03_completed"]);
+    assert.deepEqual((views.planning as JsonObject[])[0].required_write_scopes, ["result.json"]);
+    const terminal = (views.terminal as JsonObject[])[2];
+    assert.equal(terminal.note, retainedNote);
+    assert.equal(terminal.evidence, "artifact:verified-result");
+    assert.equal(terminal.completed_at, "2026-01-01T00:00:00Z");
+    assert.equal(JSON.stringify(first), before, "display cannot mutate the complete source snapshot");
+    const unchanged = await store.loadAuthority();
+    assert.equal(unchanged.status, "loaded");
+    if (unchanged.status !== "loaded") return;
+    assert.equal(unchanged.provider_revision, committed.provider_revision);
+    assert.deepEqual(unchanged.head, projection, "display cannot write or compact provider records");
+
+    const changed = authorityProjectionFixture(options.goal_id, todos.map(row =>
+      row.todo_id === "todo_01_open" ? {...row, status: "done", done: true} : row));
+    const later = await store.commitAuthority({expected_provider_revision: committed.provider_revision,
+      operation_id: "advance-display-source", events: [], receipts: [], next_projection: changed});
+    assert.equal(later.status, "applied");
+    if (later.status !== "applied") return;
+    const fresh = await readCanonicalSnapshotFromStore(request, store);
+    assert.equal(fresh.status, "page");
+    assert.notEqual((fresh.snapshot as JsonObject).provider_revision, (first.snapshot as JsonObject).provider_revision);
+    assert.deepEqual((fresh.todos as JsonObject[]).filter(row => row.todo_id !== "todo_01_open"),
+      (first.todos as JsonObject[]).filter(row => row.todo_id !== "todo_01_open"), "non-target provider rows stay unchanged");
+    assert.deepEqual(ids(projectTodoContextPage({summary_display_views: {
+      source: {record: {items: fresh.todos}}, handoff_gates: [],
+    }}).planning), ["todo_02_blocker"]);
+    assert.deepEqual(ids(projectTodoContextPage({summary_display_views: source}).planning), ["todo_01_open", "todo_02_blocker"],
+      "the retained source is historical evidence, never a newly read provider head");
+    await assert.rejects(readCanonicalSnapshotFromStore({...request,
+      after: {snapshot: first.snapshot, todo_offset: 1, lease_offset: 0}}, store), /canonical snapshot changed/);
   });
 
   registerAuthorityStoreConformance("PostgreSQL provider", async (t) => {

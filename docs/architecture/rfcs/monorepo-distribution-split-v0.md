@@ -1849,6 +1849,35 @@ transaction, matched complete-cost qualification and affected backend acceptance
 stay open. I3 remains at least one minor release; M1/#8011, full R0/V10/R1,
 D2/D5/D6/D3, context/model/split-install, adoption and all frozen failures remain.
 
+#### Remaining provider-first transaction boundary
+
+The next implementation must compose the existing provider-admitted
+`canonicalTodoCollection` and projection owners. The native snapshot owner binds
+Goal, store incarnation, provider revision, cursor and query to complete rows,
+leases, read-model validation and acceptance guards. A continuation is a position
+within that read, not a reusable current-head handle; a changed snapshot restarts
+the complete read. Displaying a retained source does not obtain fresh authority.
+
+`quota_selection.py` still sends a complete summary source alongside encoded
+selection rows and source-row facts. Its request also includes the clock,
+actor/profile, capabilities, closure evidence, route/handoff facts and resume
+inputs. Move canonical row materialization into the existing typed owner before
+collapsing that transport. Preserve the Python-value codec where strict integer,
+boolean or text distinctions remain observable. Provider rows cannot substitute
+for independent caller evidence or pending intent; all-done counts alone cannot
+reconstruct a closure declaration.
+
+`goal_vision_wait` separately consumes complete lineage, scoped blockers,+acceptance gaps and resume facts. The combined transaction must preserve each
+causal obligation, including when two obligations share a witness. Full notes,
+write scopes, archive/settled identity and source provenance remain part of its
+parity oracle.
+
+The real PostgreSQL integration case connects the existing native snapshot read
+to all three display views, checks unchanged provider/source data, observes a
+new provider revision after a separate commit, and refuses a stale continuation.
+This qualifies a composition prerequisite. The combined guard transaction,
+PostgreSQL source/wheel host journey and complete-cost benefit remain open.
+
 ## Appendix B: Decision log
 
 | Date | Decision | Owner / approval | Alternatives | Normative sections changed |
