@@ -586,7 +586,6 @@ def main(argv=None):
         try:
             solver_retained = retain_managed_solver(trial, managed_binding, managed_launch, receipt=receipt, result=result)
         except (OSError, TypeError, ValueError) as error:
-            receipt_path.write_text(json.dumps(receipt, indent=2))
             logger.warning("Managed solver evidence unavailable (%s)", type(error).__name__)
         else:
             try:

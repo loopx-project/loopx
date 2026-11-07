@@ -166,7 +166,19 @@ def retain_managed_solver(trial: Path, binding: dict, launch: dict, *, receipt: 
         if (execution == result.solver_execution and _solver_ended(
                 execution, admitted_at=admitted.timestamp(), observed_at=datetime.now(UTC).timestamp())):
             retained["solver_execution_sha256"] = digest
-    _write_runtime_receipt(trial, receipt, retained)
+    try:
+        _write_runtime_receipt(trial, receipt, retained)
+    except OSError:
+        # An error after replacement can leave the exact terminal record visible.
+        # An error before replacement allows one retry from the original launch.
+        observed, _ = _read_record(trial / RUNTIME_FILENAME, private=True)
+        expected = {**receipt, "managed_run": retained}
+        if json.dumps(observed) != json.dumps(expected):
+            if (observed.get("status") != "starting" or observed.get("managed_run") != launch
+                    or _runtime_digest(observed) != launch["launch_runtime_sha256"]
+                    or any(observed.get(key) != receipt.get(key) for key in ("run_id", "task", "feedback"))):
+                raise
+            _write_runtime_receipt(trial, receipt, retained)
     return "solver_execution_sha256" in retained
 
 
