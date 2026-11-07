@@ -683,12 +683,10 @@ def render_thin_heartbeat_task_body(
 {scope_sentence}
 
 {HOST_LOOP_QUOTA_DISPATCH_RULE}
-Read work_context and required_reads before acting, including applicable goals, criteria,
-constraints and stops. Read only the original capture sections needed for selection,
-replan, missing/truncated content or commands and referenced details. Original-execution
-or lost-context recovery restores the complete original source and identity, not fresh admission.
-Preserve explicit full-read obligations and supplied capture/handoff flags on selection
-and same-Turn repair.
+Read work_context and required_reads before acting (applicable goals/criteria/constraints/stops).
+Read only needed original sections for selection/replan, missing/truncated content/commands or detail refs.
+Recover execution/lost context with full original source and identity; never re-admit.
+Honor explicit full reads; keep capture/handoff flags on selection/same-Turn repair.
 {HEARTBEAT_TURN_BOOTSTRAP_RULE}
 ```sh
 {render_turn_bootstrap()}
@@ -702,7 +700,7 @@ and same-Turn repair.
 {HOST_LOOP_TODO_CLOSEOUT_COMPACT_RULE}
 `agent_read_required`: drain/read/triage before work; settle/ACK.
 
-P0 blocked: admitted P1/P2; no wait spend.
+P0 blocked: admitted P1/P2.
 
 {reward_memory_rule}
 

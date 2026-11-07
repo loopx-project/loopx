@@ -42,12 +42,13 @@ def assert_original_read_and_recovery_duties(body):
     text = ' '.join(body.split())
     for obligation in (
         'Read work_context and required_reads before acting',
-        'applicable goals, criteria, constraints and stops',
-        'original capture sections needed for selection, replan',
-        'missing/truncated content or commands and referenced details',
-        'complete original source and identity, not fresh admission',
-        'explicit full-read obligations and supplied capture/handoff flags',
-        'selection and same-Turn repair',
+        'applicable goals/criteria/constraints/stops',
+        'Read only needed original sections for selection/replan',
+        'missing/truncated content/commands or detail refs',
+        'Recover execution/lost context with full original source and identity; never re-admit',
+        'Honor explicit full reads',
+        'keep capture/handoff flags on selection/same-Turn repair',
+        'No spend for waiting alone',
         'RRULE/projected-fallback_hint/ack/fail',
     ):
         assert obligation in text, obligation
