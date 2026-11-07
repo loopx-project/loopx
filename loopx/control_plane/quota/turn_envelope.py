@@ -181,6 +181,17 @@ def bind_turn_decision_capture(
     )
 
 
+def project_captured_replan_cli_view(payload: dict[str, Any]) -> dict[str, Any]:
+    """Stage replan reads without round-tripping unchanged source values."""
+    if not isinstance(payload.get("replan_read_path"), str):
+        return payload
+    from .cli_projection import _apply_context_projection_changes
+
+    result = _turn_envelope_result("replan_cli_view", payload=payload, source_edits=True,
+        source_number_tokens=source_number_tokens(payload))
+    return _apply_context_projection_changes(payload, result)
+
+
 def prepare_context_delivery(
     context: Mapping[str, Any], *, scope: Mapping[str, str], capture_id: str,
     baseline: Mapping[str, Any] | None = None,

@@ -656,7 +656,8 @@ def context_selection_view(payload: dict[str, Any], *, select: list[str] | None,
     if plan.get("rejected_selection"):
         return plan, None, None
     presentation = initial_read if present_goal_narrative is None else present_goal_narrative
-    def render(plan: dict[str, Any], present: bool):
+
+    def render(plan: dict[str, Any], present: bool) -> tuple[bytes, str, list[str]]:
         raw, displayed = _context_selection_bytes(payload, plan["selections"], list_fields=list_fields,
             list_depth=list_depth, present_goal_narrative=present)
         return raw, hashlib.sha256(raw).hexdigest(), displayed
