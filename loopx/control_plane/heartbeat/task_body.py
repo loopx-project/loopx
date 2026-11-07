@@ -545,19 +545,14 @@ def _render_goal_task_body(
         permission_rule=permission_rule,
     )
     envelope_rule = (
-        "Read the complete captured contract before selection, work or settlement; "
-        "use interaction_contract for action, required reads and settlement. "
-        "Retain supplied transport flags on fresh guards.\n"
+        "Read required and other needed sections via detail_ref.full_decision.\n"
+        if captured_envelope else ""
     )
     if captured_context:
         # The opted-in native Goal has a 4000-character host limit, including
         # the complete CLI/registry/runtime/capture paths. Keep those commands
         # intact and refer to the registered active state instead of repeating
         # its path. Ordinary/off Goal instructions remain byte-for-byte intact.
-        envelope_rule = (
-            "Read the complete captured contract before selection/work/settlement; "
-            "keep fresh-guard transport flags.\n"
-        )
         wait_rule = (
             "\n`/goal` owns blocked state. Recheck quota at "
             "scheduler_hint.unchanged_poll limit. Third identical blocked turn "

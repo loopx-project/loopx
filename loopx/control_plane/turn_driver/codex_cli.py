@@ -394,6 +394,12 @@ def _render_prompt(request: Mapping[str, Any], *, checked: Mapping[str, Any] | N
         "For user_action_required, wait, or iteration_failed, leave material-only fields empty and explain the stop in summary. iteration_failed ends only this iteration and never requests a retry or successor.",
         'completed_phases must be exactly ["host_execute","typed_result"], and turn_key must match the request.',
     ]
+    if complete:
+        from .host_candidate import goal_acceptance_prompt_instruction
+
+        acceptance = goal_acceptance_prompt_instruction(_mapping(model_request.get("work_contract")))
+        if acceptance:
+            instructions.insert(2, acceptance)
     if staged and not complete:
         instructions.append(replan_prompt_instruction(authority))
     elif staged:
