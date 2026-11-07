@@ -17,7 +17,7 @@ const directorySchema = z.object({
   goals: z.array(z.object({
     id: z.string(),
     parent_goal_id: z.string().nullable().optional().catch(null),
-    source_access: z.object({namespace: z.string(), label: z.string(), read_only: z.literal(true)}).optional(),
+    source_access: z.object({namespace: z.string(), label: z.string(), read_only: z.literal(true), original_goal_id: z.string().optional()}).optional(),
     display_name: z.string(),
     activation_state: z.enum(["active", "stopped"]),
     registry_member: z.literal(true),

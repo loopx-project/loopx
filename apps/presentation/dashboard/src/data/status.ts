@@ -553,7 +553,7 @@ export const runRecordSchema = z.object({
 });
 
 export const runGoalSchema = z.object({
-  source_access: z.object({namespace: z.string(), label: z.string(), read_only: z.literal(true)}).optional(),
+  source_access: z.object({namespace: z.string(), label: z.string(), read_only: z.literal(true), original_goal_id: z.string().optional()}).optional(),
   parent_goal_id: z.string().nullable().optional().catch(null),
   goal_objective: z.string().nullable().optional().catch(null),
   zcode_goal_eligible_agent_ids: z.array(z.string()).optional().default([]).catch([]),
