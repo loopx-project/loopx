@@ -248,7 +248,9 @@ export const researchDisplayLanguageScenario = {
         assert.equal(await allRecords.locator(".research-history-records > li").count(), 1);
         const revision = allRecords.locator(".research-record-entry").last();
         await revision.locator(":scope > summary").click();
-        assert.equal(await revision.locator(".research-record-group-history > li").count(), 2);
+        const revisionHistory = revision.locator(".research-record-group-history");
+        await revisionHistory.waitFor();
+        assert.equal(await revisionHistory.locator(":scope > li").count(), 2);
         const comparison = revision.locator(".research-record-comparison").last();
         const compareEntry = comparison.locator(":scope > summary");
         await compareEntry.focus(); await compareEntry.press("Enter");
