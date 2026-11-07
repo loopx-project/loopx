@@ -135,17 +135,26 @@ def test_tool_inventory_is_opt_in_separate_and_retains_native_counter_identity(t
     assert path.read_bytes() == raw
 
 
-@pytest.mark.parametrize("direct_call", [False, True])
-def test_real_cli_registers_recorded_component_without_model_execution(tmp_path, direct_call):
+@pytest.mark.parametrize("call_kind", ["absent", "direct", "compound"])
+def test_real_cli_registers_recorded_component_without_model_execution(tmp_path, call_kind):
     from loopx.capabilities.benchmark_toolkit.trajectory_assessment_store import inspect_pack
 
     source, rows = native_trace(tmp_path)
-    if direct_call:
+    if call_kind != "absent":
         call = {"type": "custom_tool_call", "call_id": "tool", "name": "exec",
                 "input": 'text(await tools.exec_command({cmd: "loopx status"}))'}
         reply = {"type": "custom_tool_call_output", "call_id": "tool", "output": "saved"}
         items = [{"type": "response_item", "payload": item} for item in (call, reply)]
-        (tmp_path / "usage.jsonl").write_text("\n".join(map(json.dumps, rows[:2] + [items[0], rows[2], items[1]] + rows[3:])))
+        native_command = []
+        if call_kind == "compound":
+            call["input"] = 'text(await Promise.all([tools.exec_command({cmd: "loopx status"}), tools.exec_command({cmd: "pwd"})]));'
+            # Same Turn and matching time window, but the command's ID is not the parent tool call ID.
+            native_command = [{"type": "event_msg", "timestamp": rows[2]["timestamp"], "payload": {
+                "type": "item_completed", "thread_id": "session", "turn_id": "turn",
+                "item": {"type": "CommandExecution", "id": "exec-child", "command": ["bash", "-lc", "loopx status"]},
+            }}]
+        usage_rows = rows[:2] + [items[0], rows[2], *native_command, items[1]] + rows[3:]
+        (tmp_path / "usage.jsonl").write_text("\n".join(map(json.dumps, usage_rows)))
     evidence = "Synthetic fixed negative result."
     (tmp_path / "evidence.txt").write_text(evidence)
     data = {"schema_version": "trajectory_assessment_input_v1",
@@ -172,14 +181,20 @@ def test_real_cli_registers_recorded_component_without_model_execution(tmp_path,
     inventory = view["solver_usage"]["projection"]["tool_context"]
     footprint = view["solver_usage"]["projection"]["loopx_requests"]
     assert footprint["status"] == "observed"
-    if direct_call:
+    if call_kind == "direct":
         assert inventory["operations"] == [{"operation": "status", "calls": 1, "bytes": 5}]
         assert inventory["loopx_tool_output_fraction"] == 1.0
         assert footprint["recognized_requests"] == 1
         assert footprint["tokens"]["input_tokens"] == 100
         assert footprint["input_fraction"] == 1.0  # Whole request, distinct from the packet estimate above.
+    elif call_kind == "compound":
+        assert view["solver_usage"]["projection"]["request_coverage"]["all_requests"]["input_tokens"] == 100
+        assert footprint["recognized_requests"] == 0 and footprint["unclassified_calls"] == 1
+        assert footprint["input_fraction"] is None and footprint["uncached_input_fraction"] is None
+        assert inventory["loopx_tool_output_bytes"] == 0  # The mixed return is still unassigned.
+        assert "exec-child" not in json.dumps(view)
     else:
         assert inventory["loopx_tool_output_fraction"] is None
-        assert footprint["recognized_requests"] == 0
+        assert footprint["recognized_requests"] == 0 and footprint["input_fraction"] == 0
     assert view["job"] is None and view["result"] is None
     assert "hello world" not in json.dumps(view)

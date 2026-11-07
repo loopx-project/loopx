@@ -10,6 +10,13 @@ type Call = {line: number; operation: string | null; response?: string; returned
 const keys: Array<keyof TrajectoryRequestTokens> = ['input_tokens', 'cached_input_tokens', 'cache_write_input_tokens',
   'output_tokens', 'reasoning_output_tokens', 'total_tokens'];
 
+/** Empty recognized sums describe coverage, not usage, if any calls are unresolved.
+ * Also used when reading frozen captures that stored zero before this distinction. */
+export function hasObservedTrajectoryLoopXRequestUsage(value: Pick<Extract<TrajectoryLoopXRequests, {status: 'observed'}>,
+  'recognized_requests' | 'unmatched_calls' | 'unclassified_calls'>): boolean {
+  return value.recognized_requests > 0 || (value.unmatched_calls === 0 && value.unclassified_calls === 0);
+}
+
 export function summarizeTrajectoryLoopXRequests(rows: Row[], tools: unknown,
   coverage: TrajectoryRequestCoverage | undefined): TrajectoryLoopXRequests | undefined {
   if (tools === undefined) return undefined;
@@ -74,12 +81,14 @@ export function summarizeTrajectoryLoopXRequests(rows: Row[], tools: unknown,
         other_calls: group.other, tokens: {...usage}});
     }
     const all = coverage.all_requests, uncached = all.input_tokens - all.cached_input_tokens;
-    return {method, status: 'observed', total_requests: seen.size, recognized_requests: requests.length,
-      mixed_call_requests: requests.filter(r => r.other_calls > 0).length,
+    const recognition = {recognized_requests: requests.length,
       unmatched_calls: [...calls.values()].filter(c => c.operation && !c.returned).length,
-      unclassified_calls: [...calls.values()].filter(c => !c.operation).length,
-      tokens, input_fraction: all.input_tokens > 0 ? tokens.input_tokens / all.input_tokens : null,
-      uncached_input_fraction: uncached > 0 ? (tokens.input_tokens - tokens.cached_input_tokens) / uncached : null,
+      unclassified_calls: [...calls.values()].filter(c => !c.operation).length};
+    const measured = hasObservedTrajectoryLoopXRequestUsage(recognition);
+    return {method, status: 'observed', total_requests: seen.size, ...recognition,
+      mixed_call_requests: requests.filter(r => r.other_calls > 0).length,
+      tokens, input_fraction: measured && all.input_tokens > 0 ? tokens.input_tokens / all.input_tokens : null,
+      uncached_input_fraction: measured && uncached > 0 ? (tokens.input_tokens - tokens.cached_input_tokens) / uncached : null,
       model_seconds: null, charged_cost: null, requests};
   } catch (error) {
     return {method, status: 'unavailable', reason: error instanceof Error ? error.message : 'Request association unavailable.'};
