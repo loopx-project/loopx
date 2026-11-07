@@ -1,6 +1,6 @@
 import { ChatApiError } from "../../data/chat";
 import type { WorkspaceTranslate } from "./i18n";
-import type { WorkspaceActionPreviewRequest } from "./personal-workspace-model";
+import type { WorkspaceActionPreview, WorkspaceActionPreviewRequest } from "./personal-workspace-model";
 
 /** Input shape only; current execution authority is always checked by the backend. */
 export function parseTodoCompletionProof(text: string): {
@@ -35,4 +35,14 @@ export function todoCompletionPreviewFeedback(
   if (request.actionKind !== "todo.update" || request.normalizedParameters.operation !== "complete"
     || !todoCompletionProofRequired(error)) return null;
   return t("feedback.taskCompletionUnavailable");
+}
+
+/** Call only after the action owner confirms completion of this exact proposal. */
+export function completedActionFeedback(
+  proposal: Pick<WorkspaceActionPreview, "actionKind" | "todoOperation" | "title">,
+  t: WorkspaceTranslate,
+): string {
+  return proposal.actionKind === "todo.update" && proposal.todoOperation === "complete"
+    ? t("feedback.todoMarkedComplete")
+    : t("feedback.completed", { title: proposal.title });
 }

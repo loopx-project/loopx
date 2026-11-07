@@ -161,6 +161,19 @@ provider behavior.
 不要把 stdout/stderr tail 提交进 fixture。Fake provider 可以验证序列化、脱敏和
 fail-closed，但不能证明真实 provider 行为合格。
 
+Standalone smoke subprocesses must force `LOOPX_USAGE_PING=0` after merging
+caller overrides, including environments rebuilt from an allowlist. Temporary
+HOME/state paths are also fenced by the [shared telemetry owner](../reference/usage-ping.md#disclosure-and-precedence).
+For custom scratch roots, retain the declared temp root or persist an explicit
+disabled setting before removing environment markers. Telemetry-specific tests
+opt in only to numeric loopback collectors and qualify every channel with a
+zero-request negative case and a sending positive control.
+
+独立 smoke 在合并调用方环境后必须强制关闭遥测，重建最小环境也不例外。
+共用 owner 额外防护临时 HOME/状态路径；自定义 scratch 应保留声明的临时根，
+或先持久关闭再移除环境标记。遥测专项测试只向数字回环地址显式开启，
+用全通道零请求反例和实际发送正例共同验收。
+
 Follow [Public/private boundaries](../public-private-boundary.md) whenever a
 smoke touches benchmark, host, agent, or external-system data.
 

@@ -43,7 +43,8 @@ class _Authority:
     root: Path
     api_key: str = "fixture-provider-key"
 
-    def invocation(self, upstream, name, *, timeout=None, receipt=None, wake=None, turn_id=None):
+    def invocation(self, upstream, name, *, timeout=None, receipt=None, wake=None, turn_id=None,
+                   extra_env=None):
         if wake is None:
             wake = self.root / name
             wake.mkdir()
@@ -56,6 +57,8 @@ class _Authority:
             "OPENAI_BASE_URL": upstream,
             "OPENAI_API_KEY": self.api_key,
         }
+        if extra_env is not None:
+            env.update(extra_env)
         session = SimpleNamespace(
             admission=FirstPartyHostGoalAdmission.for_plan(
                 registry_path=self.registry, goal_id=quota_fixture.GOAL_ID,
@@ -288,6 +291,23 @@ def test_registry_wait_rechecks_original_process_and_deadline(authority, monkeyp
                 else "provider_request_budget_exhausted"
             )
             assert not upstream.rows and _finished(wake)[0]["forwarded"] is False
+
+
+def test_heartbeat_short_phase_uses_the_same_zero_reserve_as_worker(authority):
+    with _upstream() as upstream, _process() as process:
+        guard, receipt, wake = authority.invocation(
+            upstream.base_url, "short-heartbeat",
+            extra_env={
+                "LOOPX_EXECUTION_MODE": "heartbeat",
+                "LOOPX_PHASE_DEADLINE_EPOCH": str(time.time() + 140),
+            },
+        )
+        with guard.serve(["native", "-"]):
+            guard.started(process)
+            assert _post(guard.base_url)[0] == 200
+            assert len(upstream.rows) == 1
+            assert _finished(wake)[0]["forwarded"] is True
+            assert receipt["provider_request_invocations"][0]["sent"] == 1
 
 
 def test_process_attachment_is_one_shot(authority):

@@ -12,6 +12,124 @@ from loopx.capabilities.native_chat.conversation_bindings import ChatConversatio
 from loopx.extensions.lark.conversation_identity import identity_ref
 
 
+@pytest.mark.parametrize("fault", [None, "owned-adapter", "background", "source-changed", "stop",
+    "revoked", "queued", "review-metadata", "reservation-crash"])
+def test_original_project_worker_reviews_existing_partial_results_without_business_replay(ordinary, monkeypatch, fault):  # noqa: F811
+    from datetime import datetime, timedelta, timezone
+    from pathlib import Path
+    from loopx.extensions.lark.private_conversations import LarkPrivateConversations
+    from loopx.extensions.lark.private_progress import presentation_phase
+    from test_lark_private_conversations import connect
+
+    store, runtime, _, _, capture, fake, workspace = ordinary
+    work = {"remaining": "Confirm the existing update", "dependency": "Original source outage", "effects_settled": True}
+    partial = "Only part was confirmed.\n<loopx-review-json>" + json.dumps({
+        "message": "", "unfinished_work": work}) + "</loopx-review-json>"
+    inventory = workspace / "native-result-inventory.json"
+    code = fake.read_text().replace("turn_count = 0", f"turn_count = 100 if __import__('os').path.exists({str(inventory)!r}) else 0")
+    start = code.index("        response = 'Visible runtime response.")
+    end = code.index('        print(json.dumps({"method": "item/agentMessage/delta"', start)
+    code = code[:start] + f'''        response = {partial!r} if "Core admitted ONE read-only review" not in json.dumps(request["params"]) or {fault == 'review-metadata'!r} else "Existing local result verified; no business operation was repeated."
+''' + code[end:]
+    marker = '        result = {"thread": {"id": "durable-thread"},'
+    code = code.replace(marker, '''        permissions = request.get("params", {}).get("permissions")
+        result = {**({"activePermissionProfile": {"id": permissions}, "runtimeWorkspaceRoots": [request["params"]["cwd"]]} if permissions else {}), "thread": {"id": "durable-thread"},''')
+    start = code.index('    elif method == "thread/turns/list":')
+    end = code.index('    else:\n        result = {}', start)
+    code = code[:start] + f'''    elif method in {{"thread/turns/list", "thread/items/list", "thread/backgroundTerminals/list"}}:
+        if __import__('os').path.exists({str(inventory)!r}):
+            with open({str(inventory)!r}) as observed:
+                saved = json.load(observed)
+            result = {{"data": saved["turns" if method == "thread/turns/list" else "items" if method == "thread/items/list" else "background"]}}
+        else:
+            result = {{"data": []}}
+''' + code[end:]
+    fake.write_text(code)
+    store, runtime, provider, transport = connect(ordinary)
+    try:
+        event = provider.event("notes-app", "old-partial-result", "Confirm the requested update")
+        transport.admit("notes-app", event)
+        binding = next(row for row in transport.bindings.read()["bindings"] if row["transport_ref"] == "notes-app")
+        ref = identity_ref(binding["provider_ref"], event["message_id"])
+        original = transport.core.read_request(ref)
+        sid = original["session_id"]
+        ended = runtime.wait_for_turn(session_id=sid, turn_id=original["turn_id"], timeout_sec=10)
+        assert ended["status"] == "completed" and ended["response"]["unfinished_work"] == work
+        transport.reconcile()
+        path = transport.root / f"{ref}.json"
+        old_delivery = json.loads(path.read_text())["deliveries"]["terminal"]
+        store.update_turn(sid, original["turn_id"],
+            completed_at=(datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat())
+        ended = store.load_turn(sid, original["turn_id"])
+        old_bytes = store._turn_path(sid, original["turn_id"]).read_bytes()
+        native = ended["upstream_turn_id"]
+        inventory.write_text(json.dumps({"turns": [{"id": native, "status": "completed"}],
+            "items": [{"turnId": native, "item": {"id": "user", "type": "userMessage"}},
+                {"turnId": native, "item": {"id": "effect", "type": "commandExecution", "status": "failed", "exitCode": 130}},
+                {"turnId": native, "item": {"id": "answer", "type": "agentMessage", "phase": "final_answer", "text": partial}}],
+            "background": [{"itemId": "effect", "processId": "owned"}] if fault == "background" else []}))
+        artifact = workspace / "existing-result.md"
+        artifact.write_text("Already produced by the original execution.\n")
+        retained = artifact.read_bytes()
+        if fault not in {"owned-adapter", "background"}:
+            runtime.adapters.pop(sid).close_session()
+        Path(store.load_session(sid)["codex_home"]).mkdir(parents=True, exist_ok=True)
+        if fault == "source-changed":
+            provider.messages[event["message_id"]]["content"] = "Revised request"
+        elif fault == "stop":
+            transport.admit("notes-app", provider.event("notes-app", "later-stop", "/stop"))
+        elif fault == "revoked":
+            transport.bindings.disconnect(original["binding_id"], expected_revision=transport.bindings.read()["revision"])
+        elif fault == "queued":
+            store.create_queued_turn(sid, client_turn_id="newer-input", message="New input first", origin="web")
+
+        def worker():
+            return LarkPrivateConversations(controller=runtime, runtime_root=store.root.parent,
+                runner=provider, cli_bin="lark-cli")
+
+        selected = worker()
+        if fault == "reservation-crash":
+            enqueue = runtime.enqueue_turn
+            with monkeypatch.context() as crash:
+                crash.setattr(runtime, "enqueue_turn", lambda **_: (_ for _ in ()).throw(OSError("reservation crash")))
+                with pytest.raises(OSError, match="reservation crash"):
+                    selected.reconcile_request(path)
+            assert runtime.enqueue_turn == enqueue
+            selected = worker()
+        if fault == "revoked":
+            selected.reconcile()  # The original service contains a revoked-source read failure.
+        else:
+            selected.reconcile_request(path)
+        recovered = selected.core.read_request(ref)
+        if fault in {"background", "source-changed", "stop", "revoked", "queued"}:
+            assert recovered["turn_id"] == original["turn_id"] and not recovered.get("context_recovery")
+        else:
+            assert recovered["turn_id"] != original["turn_id"]
+            assert recovered["context_recovery"]["read_only_review"] is True
+            assert recovered["context_recovery"]["unfinished_work"] == work
+            assert not any(recovered["context_recovery"].get(k) for k in ["work_attempt", "quota_attempt", "routing_attempt", "answer_review"])
+            result = runtime.wait_for_turn(session_id=sid, turn_id=recovered["turn_id"], timeout_sec=10)
+            assert result["status"] == ("failed" if fault == "review-metadata" else "completed"), result
+            selected.reconcile_request(path)
+            delivered = json.loads(path.read_text())
+            assert delivered["deliveries"]["terminal"] == old_delivery
+            assert delivered["deliveries"][presentation_phase(recovered, "terminal")]["verified"]
+            assert selected.health()[original["binding_id"]]["pending_count"] == 1
+            assert not selected.core.context_recovery_candidate(ref)
+            writes = list(provider.writes)
+            selected.reconcile_request(path)
+            assert provider.writes == writes
+            calls = [json.loads(line) for line in capture.read_text().splitlines()]
+            starts = [row["params"] for row in calls if row.get("method") == "turn/start"]
+            assert len(starts) == 2 and starts[-1]["permissions"] == "loopx_workspace_only_read"
+            assert "Core admitted ONE read-only review" in starts[-1]["input"][0]["text"]
+            assert not any(row.get("method") in {"thread/fork", "thread/inject_items"} for row in calls)
+        assert store._turn_path(sid, original["turn_id"]).read_bytes() == old_bytes
+        assert artifact.read_bytes() == retained
+    finally:
+        runtime.close()
+
+
 @pytest.mark.parametrize("command", ["stop", "new"])
 def test_quota_backlog_observes_a_later_source_stop_before_new_admission(ordinary, monkeypatch, command):  # noqa: F811
     from datetime import datetime, timedelta, timezone

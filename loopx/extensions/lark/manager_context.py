@@ -60,6 +60,7 @@ def manager_failure_reply(
         "server_restarted": "管家服务在处理过程中重启",
         "runtime_unavailable": "本地运行环境初始化失败，请检查 LoopX 安装与运行配置，修复后重试",
         "resume_failed": "原 Agent 会话恢复失败，请检查执行器状态，修复后重试",
+        "model_auth_unavailable": "账户模型连接暂时不可用",
         "manager_channel_executor_rebind_required": (
             "管家的执行器已由本机设置更改，需要重新应用一次管家连接"
         ),
@@ -76,6 +77,12 @@ def manager_failure_reply(
     if code == "manager_authorization_unavailable" and preparation_recovery:
         return code, ("已收到你的消息，但本轮在准备授权上下文时失败。请求已保留；只有核验为模型调用前失败、"
                       "连接恢复且没有后续重交时，原队列才会限次接续。可用 /status 查看状态。")
+    if code in {"model_auth_unavailable", "resume_failed"} and preparation_recovery:
+        return code, ("已收到你的消息，但本轮准备执行器连接时失败。请求已保留；只有核验为模型调用前失败、"
+                      "连接恢复且没有后续重交时，原队列才会按剩余次数接续。可用 /status 查看状态。")
+    if code == "server_restarted":
+        return code, ("处理被管家服务重启中断，原请求和会话已保留。系统会先核对原执行记录，"
+                      "符合条件的由原队列恢复结果回复；执行效果不明的操作不会直接重做。")
     # Old hosts can terminate with `other` after typed disconnect retries.
     # Describe that observed history without changing the terminal category,
     # inferring an authorization failure, or granting permission to replay.

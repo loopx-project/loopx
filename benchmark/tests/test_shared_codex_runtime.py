@@ -198,6 +198,7 @@ def test_native_goal_staged_source_is_importable_without_loopx_control_plane(tmp
          f"import sys; sys.path.insert(0, {str(staged)!r}); "
          "import loopx.capabilities.benchmark_toolkit.native_codex_goal as goal; "
          "import loopx.capabilities.benchmark_toolkit.native_codex_process as process; "
+         "import benchmark.runtime.codex_readiness; "
          "print(goal.__name__, process.__name__)"],
         cwd=tmp_path, env={"PATH": os.environ["PATH"]}, capture_output=True, text=True,
     )
@@ -871,7 +872,8 @@ def test_harbor_default_execution_budget_tracks_total_trial(tmp_path, total):
     from benchmark.runtime.harbor import BenchmarkCodex
     agent = BenchmarkCodex(logs_dir=tmp_path, model_name="fixture",
                            scheduler_timeout_sec=total)
-    assert agent.execution.timeout_seconds == total - 160
+    assert agent.execution.timeout_seconds is None
+    assert "LOOPX_CODEX_TURN_TIMEOUT_SEC" not in agent._worker_env(cwd="/task")
     assert agent.scheduler_timeout == total
 
 

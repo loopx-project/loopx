@@ -26,7 +26,6 @@ from .harbor import (
     BenchmarkCodex, _CONTROL, _CODEX_HOME, _PYTHON, _SCHEDULER_STATE, _SRC,
 )
 from .scheduler import worker_command
-from .worker import PHASE_WORK_RESERVE_SECONDS
 
 
 # Experiment profiles, local to the research runner; not new LoopX modes.
@@ -125,8 +124,8 @@ class SForgeWorker(CodexAgent):
             if (os.environ.get("CODEX_WIRE_API") or "responses") != "responses":
                 raise ValueError("provider_request_admission requires the Responses wire API")
         self.provider_request_admission = provider_request_admission
-        if timeout_seconds <= PHASE_WORK_RESERVE_SECONDS:
-            raise ValueError("Worker budget must exceed the 160s startup/settlement reserve")
+        if timeout_seconds <= 0:
+            raise ValueError("Worker budget must be positive")
         if not config.agent_model or not config.agent_effort:
             raise ValueError("Explicit model and reasoning effort are required")
         if config.agent_api_base_url and not config.agent_api_key:
@@ -218,9 +217,9 @@ class SForgeWorker(CodexAgent):
         self.instructions_installed = False
         self.prompt_installed = False
         self.timeout_seconds = timeout_seconds
-        # Let one call use the trial budget. The shared worker recomputes the
-        # remaining deadline on every continuation, retaining cleanup time.
-        self.turn_timeout = timeout_seconds - PHASE_WORK_RESERVE_SECONDS
+        # The phase owns the total budget. No separate per-wake cap is needed;
+        # the scheduler's transport watchdog may outlive bounded child cleanup.
+        self.turn_timeout = timeout_seconds
         self.runtime = None
         self.prepared = False
         # Only the official profile delegates continuation to SForge. Heartbeat
@@ -310,7 +309,7 @@ class SForgeWorker(CodexAgent):
             self.runtime = BenchmarkCodex(
                 **common, execution_mode=mode,
                 iteration_context="resume" if mode == "heartbeat" else "fresh",
-                turn_timeout_sec=self.turn_timeout,
+                turn_timeout_sec=None,
                 scheduler_timeout_sec=self.timeout_seconds,
                 task_entry=self.task_entry,
                 turn_envelope=self.turn_envelope,
@@ -481,7 +480,8 @@ class SForgeWorker(CodexAgent):
         if self.warm_start is not None:
             env["LOOPX_WARM_START"] = f"{_CONTROL}/warm-start.json"
         command = worker_command(env, python=f"{_PYTHON}/bin/python3", source=_SRC,
-                                 state_file=_SCHEDULER_STATE, host_timeout=self.turn_timeout)
+                                 state_file=_SCHEDULER_STATE, host_timeout=self.turn_timeout,
+                                 resume_budget_stop=self.warm_start is not None)
         if self.task_entry == "loopx-planned" and self.warm_start is None:
             env["LOOPX_PLANNING_RESULT"] = "/opt/loopx-benchmark/control/planning-phase-001.json"
             command = [f"{_PYTHON}/bin/python3", "-m", "benchmark.runtime.sforge_entry", *command]
@@ -500,8 +500,16 @@ class SForgeWorker(CodexAgent):
             # environment. Do not duplicate it in the logged shell command.
             env.pop("OPENAI_API_KEY", None)
         exports = " ".join(f"{key}={shlex.quote(value)}" for key, value in env.items())
+        # Run once at receiver execution entry, before its phase clock and
+        # scheduler. Do not turn route failures into an unknown native request
+        # or count setup failure against solver time. Custom API providers keep
+        # their own admission path; no observer runs on every heartbeat wake.
+        readiness = ""
+        if not self._config.agent_api_base_url:
+            readiness = (f"env {exports} {shlex.quote(f'{_PYTHON}/bin/python3')} "
+                         "-m benchmark.runtime.codex_readiness; ")
         return self._execution_command(
-            f"set -eu; {clock}"
+            f"set -eu; {readiness}{clock}"
             f"export LOOPX_PHASE_DEADLINE_EPOCH=$(cat {deadline}); "
             f"remaining=$(( LOOPX_PHASE_DEADLINE_EPOCH - $(date +%s) )); "
             f'if test "$remaining" -le 0; then test -f {started}; exit $?; fi; '

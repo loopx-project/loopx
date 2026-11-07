@@ -19,10 +19,10 @@ import subprocess
 import time
 import tomllib
 from pathlib import Path
-from contextlib import contextmanager, nullcontext, redirect_stdout, redirect_stderr
+from contextlib import nullcontext, redirect_stdout, redirect_stderr
 from typing import Any
 
-from loopx.control_plane.turn_driver.codex_stdio import StdioNativeGoalTransport
+from loopx.control_plane.turn_driver.codex_stdio import StdioNativeGoalTransport, native_checkpoint_reader
 
 
 def _complete_history(request, session_id: str, *, interrupted_guard: dict | None = None) -> list[dict[str, Any]]:
@@ -141,20 +141,6 @@ def _verify_interrupted_guard(turns: list[dict], guard: dict) -> None:
                 raise ValueError("native pending guard is ambiguous after an earlier matching call")
     if guard.get("native_call_id") is not None and item["id"] != guard["native_call_id"]:
         raise ValueError("native pending guard call identity differs")
-
-
-@contextmanager
-def native_checkpoint_reader(env: dict[str, str], *, timeout: float):
-    """Keep one native inspection process open across a sealed capture window."""
-    with StdioNativeGoalTransport.spawn(
-        [env["CODEX_BIN"], "-c", "features.goals=false", "app-server", "--listen", "stdio://"],
-        cwd=env["LOOPX_PROJECT"], env=env, stderr=subprocess.DEVNULL,
-        response_timeout_sec=timeout,
-    ) as transport:
-        transport.request("initialize", {"clientInfo": {"name": "loopx_checkpoint", "version": "0.1.0"},
-                                          "capabilities": {"experimentalApi": True}})
-        transport.notify("initialized", {})
-        yield transport
 
 
 def _native_thread_readback(request, env: dict[str, str], session_id: str) -> None:

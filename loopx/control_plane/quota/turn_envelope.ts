@@ -228,6 +228,50 @@ function canonicalHash(value: unknown): string {
   return `sha256:${createHash("sha256").update(JSON.stringify(canonicalValue(value)), "utf8").digest("hex")}`;
 }
 
+function replanAuthoringContract(payload: JsonObject): JsonObject {
+  const contract = object(object(payload.replan_action_packet).writeback_contract);
+  if (!Object.hasOwn(contract, "vision_authoring_ref")) return contract;
+  const reference = contract.vision_authoring_ref;
+  const match = typeof reference === "string"
+    ? /^\$\.interaction_contract\.cli_channel\.settlement_plan\.ordered_steps\[(0|[1-9]\d*)\]\.vision_authoring$/.exec(reference) : null;
+  const steps = object(object(object(payload.interaction_contract).cli_channel).settlement_plan).ordered_steps;
+  const step = object(match && Array.isArray(steps) ? steps[Number(match[1])] : null);
+  if (Object.hasOwn(contract, "vision_authoring") || step.kind !== "durable_writeback" ||
+      Object.hasOwn(step, "vision_authoring_ref") || !Object.keys(object(step.vision_authoring)).length) {
+    throw new EffectRuntimeRequestError("Replan authoring reference must resolve to one complete inline durable-writeback owner");
+  }
+  delete contract.vision_authoring_ref;
+  return {...contract, vision_authoring: step.vision_authoring};
+}
+
+function referenceReplanAuthoring(payload: JsonObject,
+    identity = contextSourceIdentity(payload)): JsonObject {
+  const packet = object(payload.replan_action_packet);
+  const contract = object(packet.writeback_contract);
+  if (Object.hasOwn(contract, "vision_authoring_ref")) {
+    replanAuthoringContract(payload);
+    return payload;
+  }
+  const authoring = object(contract.vision_authoring);
+  const steps = object(object(object(payload.interaction_contract).cli_channel).settlement_plan).ordered_steps;
+  if (!Object.keys(authoring).length || !Array.isArray(steps)) return payload;
+  const encoded = JSON.stringify(canonicalValue(authoring));
+  const source = identity(authoring, ["replan_action_packet", "writeback_contract", "vision_authoring"]);
+  const index = steps.findIndex((value, index) => {
+    const step = object(value);
+    return step.kind === "durable_writeback" && !Object.hasOwn(step, "vision_authoring_ref") &&
+      jsonObject(step.vision_authoring) !== null &&
+      identity(step.vision_authoring, ["interaction_contract", "cli_channel", "settlement_plan",
+        "ordered_steps", index, "vision_authoring"]) === source;
+  });
+  if (index < 0) return payload;
+  const reference = `$.interaction_contract.cli_channel.settlement_plan.ordered_steps[${index}].vision_authoring`;
+  if (Buffer.byteLength(encoded, "utf8") <= Buffer.byteLength(reference, "utf8") + 8) return payload;
+  delete contract.vision_authoring;
+  return {...payload, replan_action_packet: {...packet, writeback_contract: {
+    ...contract, vision_authoring_ref: reference}}};
+}
+
 function resolveExploreGuidance(payload: JsonObject, context: JsonObject): JsonObject {
   if (!Array.isArray(context.sources)) return context;
   const steps = object(object(object(payload.interaction_contract).cli_channel).settlement_plan).ordered_steps;
@@ -384,6 +428,70 @@ function referenceExploreGuidance(payload: JsonObject): JsonObject {
   });
   return {...payload, interaction_contract: {...interaction, agent_channel: {...agent,
     work_context: {...context, sources}}}};
+}
+
+/** Keep the complete vision audit once. These existing projection references
+ * share identical facts only; a channel-specific obligation is never a summary
+ * of the root. The old display adapter delegates here before adding metadata. */
+function visionAuditReference(audit: JsonObject): JsonObject {
+  const reference: JsonObject = {projection_ref: "$.vision_continuation_audit"};
+  for (const key of ["schema_version", "required", "decision"]) {
+    if (Object.hasOwn(audit, key)) reference[key] = audit[key];
+  }
+  if (typeof audit.vision_gap_judge === "object" && audit.vision_gap_judge !== null &&
+      !Array.isArray(audit.vision_gap_judge)) {
+    const judge = object(audit.vision_gap_judge);
+    reference.vision_gap_judge = {projection_ref: "$.vision_continuation_audit.vision_gap_judge"};
+    for (const key of ["done", "decision"]) {
+      if (Object.hasOwn(judge, key)) (reference.vision_gap_judge as JsonObject)[key] = judge[key];
+    }
+  }
+  return reference;
+}
+
+function mapNestedVisionAudits(payload: JsonObject,
+    visit: (audit: JsonObject, path: (string | number)[]) => JsonObject): JsonObject {
+  const map = (value: unknown, path: (string | number)[]) => {
+    const parent = object(value), audit = parent.vision_continuation_audit;
+    if (typeof audit !== "object" || audit === null || Array.isArray(audit)) return value;
+    return {...parent, vision_continuation_audit: visit(audit as JsonObject, [...path, "vision_continuation_audit"])};
+  };
+  const rawInteraction = payload.interaction_contract, interaction = object(rawInteraction);
+  const hasInteraction = typeof rawInteraction === "object" && rawInteraction !== null && !Array.isArray(rawInteraction);
+  return {...payload,
+    ...(Object.hasOwn(payload, "goal_frontier_projection") ? {
+      goal_frontier_projection: map(payload.goal_frontier_projection, ["goal_frontier_projection"])} : {}),
+    ...(hasInteraction ? {interaction_contract: {...interaction,
+      ...Object.fromEntries(["agent_channel", "cli_channel"].filter(key => Object.hasOwn(interaction, key))
+        .map(key => [key, map(interaction[key], ["interaction_contract", key])]))}} : {})};
+}
+
+function requireVisionAuditReferences(payload: JsonObject): void {
+  const owner = object(payload.vision_continuation_audit);
+  const chained = Object.hasOwn(owner, "projection_ref") || Object.hasOwn(object(owner.vision_gap_judge), "projection_ref");
+  if (chained) throw new EffectRuntimeRequestError("Vision audit reference requires a complete inline root owner");
+  mapNestedVisionAudits(payload, audit => {
+    if (Object.hasOwn(audit, "projection_ref") || Object.hasOwn(object(audit.vision_gap_judge), "projection_ref")) {
+      if (!Object.keys(owner).length ||
+          JSON.stringify(canonicalValue(audit)) !== JSON.stringify(canonicalValue(visionAuditReference(owner)))) {
+        throw new EffectRuntimeRequestError("Vision audit reference must match its complete inline root owner without conflicting facts");
+      }
+    }
+    return audit;
+  });
+}
+
+function referenceVisionContinuation(payload: JsonObject,
+    identity = contextSourceIdentity(payload)): JsonObject {
+  requireVisionAuditReferences(payload);
+  const owner = object(payload.vision_continuation_audit);
+  if (!Object.keys(owner).length) return payload;
+  const encoded = JSON.stringify(canonicalValue(owner)), reference = visionAuditReference(owner);
+  // A short audit is cheaper inline. Do not create a reference merely to count sharing.
+  if (Buffer.byteLength(encoded, "utf8") <= Buffer.byteLength(JSON.stringify(reference), "utf8")) return payload;
+  const source = identity(owner, ["vision_continuation_audit"]);
+  return mapNestedVisionAudits(payload, (audit, path) =>
+    identity(audit, path) === source ? structuredClone(reference) : audit);
 }
 
 function currentTaskTitleOwner(payload: JsonObject): {index: number; todo: JsonObject} | null {
@@ -582,6 +690,8 @@ function replanView(request: JsonObject): JsonObject {
   if (request.source_hash !== canonicalHash(payload) || payload.ok !== true) {
     throw new EffectRuntimeRequestError("Replan read requires the original successful decision and matching source hash");
   }
+  requireVisionAuditReferences(payload);
+  replanAuthoringContract(payload);
   const packet = object(payload.replan_action_packet);
   const obligation = object(payload.autonomous_replan_obligation);
   const context = object(obligation.replan_context);
@@ -610,7 +720,7 @@ function replanView(request: JsonObject): JsonObject {
     // The current nested review syntax belongs to authoring, not duplicate
     // decision evidence. Top-level required_fields cannot describe that shape.
     for (const key of ["decision_followthrough", "explore_basis", "decision_value_review"]) delete stride[key];
-    const contract = {...object(packet.writeback_contract)};
+    const contract = replanAuthoringContract(payload);
     if (contract.vision_authoring) {
       const authoring = {...object(contract.vision_authoring)};
       delete authoring.minimal_example;
@@ -695,6 +805,7 @@ function replanView(request: JsonObject): JsonObject {
 function replanActionPacket(payload: JsonObject, reads = replanReadCommands(payload)): JsonObject | null {
   const source = object(payload.replan_action_packet);
   if (Object.keys(source).length === 0) return null;
+  const writeback = replanAuthoringContract(payload);
   if (reads) return {...compactFields(source, ["schema_version", "decision", "obligation_id", "required_outcome", "allowed_terminal"]),
     review: reads.review, writeback: reads.writeback,
     guidance: "Read review state and applicable acceptance/evidence; choose the next work, then follow review.next for Todo selection or writeback. Reads grant no authority and require no acknowledgement."};
@@ -705,7 +816,6 @@ function replanActionPacket(payload: JsonObject, reads = replanReadCommands(payl
   // The typed replan owner supplies bounded instructions; do not truncate their
   // authority/stop qualifiers through generic diagnostic compaction.
   if (Array.isArray(source.planning_guidance)) compact.planning_guidance = source.planning_guidance;
-  const writeback = object(source.writeback_contract);
   if (writeback.vision_authoring) compact.writeback_contract = writeback;
   return Object.keys(compact).length > 0 ? compact : null;
 }
@@ -1517,13 +1627,16 @@ export function turnEnvelopeRoute(envelope: JsonObject, historicalText?: JsonObj
 /** Navigation over captured facts, never a summary or a source-read receipt. */
 // Quota field vocabulary stays with its decision owner; the RFC 6901 reader
 // receives addresses and remains independent of Goal/permission policy.
+const INITIAL_CONTEXT_DECISION_FIELDS = ["ok", "schema_version", "goal_id", "agent_id", "should_run", "effective_action",
+  "normal_delivery_allowed", "recovery_delivery_allowed", "self_repair_allowed", "capability_repair_allowed", "workspace_repair_allowed",
+  "safe_bypass_allowed", "safe_bypass_kind", "blocked_action_scope", "reason",
+  "execution_obligation", "goal_boundary", "heartbeat_receipt", "work_lane_contract", "selected_todo"];
+
+/** Navigation over captured facts, never a summary or a source-read receipt. */
 function capturedDecisionSelection(request: JsonObject): JsonObject {
   const initial = request.initial_read === true || request.list_fields === true
     && Array.isArray(request.select) && request.select.length === 1 && request.select[0] === "";
-  return capturedContextSelection(request, initial ? initialContextReadPointers(requireJsonObject(request.context, "captured context"), ["ok", "schema_version", "goal_id", "agent_id", "should_run", "effective_action",
-    "normal_delivery_allowed", "recovery_delivery_allowed", "self_repair_allowed", "capability_repair_allowed", "workspace_repair_allowed",
-    "safe_bypass_allowed", "safe_bypass_kind", "blocked_action_scope", "reason",
-    "execution_obligation", "goal_boundary", "heartbeat_receipt", "work_lane_contract", "selected_todo"]) : []);
+  return capturedContextSelection(request, initial ? initialContextReadPointers(requireJsonObject(request.context, "captured context"), INITIAL_CONTEXT_DECISION_FIELDS) : []);
 }
 
 export function evaluateTurnEnvelope(value: unknown): JsonObject {
@@ -1587,9 +1700,22 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
   if (operation === "reference_context") {
     const source = requireJsonObject(request.payload, "quota decision");
     let payload = source;
+    if (request.vision_audit === true) payload = referenceVisionContinuation(source,
+      contextSourceIdentity(source, request.source_number_tokens));
     if (jsonObject(request.diagnostics)) payload = projectQuotaDiagnostics(payload, request.diagnostics as JsonObject);
     if (request.goal_acceptance === true) payload = referenceGoalAcceptance(payload,
       contextSourceIdentity(source, request.source_number_tokens));
+    if (request.replan_authoring === true) {
+      const shared = referenceReplanAuthoring(payload, contextSourceIdentity(source, request.source_number_tokens));
+      if (shared !== payload) {
+        const packet = object(shared.replan_action_packet);
+        payload = {...shared, replan_action_packet: {...packet, payload_compaction: {
+          schema_version: "quota_cli_replan_action_compaction_v0", mode: "compact_hot_path",
+          compacted_fields: ["writeback_contract.vision_authoring"],
+          projection_ref: object(packet.writeback_contract).vision_authoring_ref,
+        }}};
+      }
+    }
     if (request.task_title === true) payload = referenceCurrentTaskTitle(payload);
     if (request.explore_guidance === true) payload = referenceExploreGuidance(payload);
     if (request.refresh_result === true) payload = referenceExploreResultDelivery(payload, request.source_number_tokens);
@@ -1606,7 +1732,7 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
   if (operation === "progressive_context_delivery") return prepareProgressiveContext(request);
   if (operation === "context_delivery") return request.native_projection === undefined
     ? prepareContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS)
-    : prepareProgressiveContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS);
+    : prepareProgressiveContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS, INITIAL_CONTEXT_DECISION_FIELDS);
   if (operation === "native_context_lifecycle") return updateNativeContextLifecycle(request);
   if (operation === "context_recovery") return restoreContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS);
   if (operation === "bind_capture") return bindTurnDecisionCapture(request);

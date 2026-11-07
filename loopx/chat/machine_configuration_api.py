@@ -72,6 +72,11 @@ def _public_payload(
         machine_namespaces=namespace_catalog["namespaces"],
         goal_features=build_configuration_capability_descriptors(),
     )
+    for capability in projected["capability_catalog"]["capabilities"]:
+        if capability["capability_id"] == "periodic_report":
+            # Human review is bound to an original Goal Session, not a device default.
+            editor = capability["configuration_editor"]
+            editor["fields"] = [field for field in editor["fields"] if field["key"] != "review_required"]
     return projected
 
 

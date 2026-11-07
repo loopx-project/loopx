@@ -580,7 +580,8 @@ def test_restored_capture_cannot_drop_its_preflight_basis(tmp_path, monkeypatch,
 
 
 @pytest.mark.parametrize("native_participant", [False, True])
-def test_preflight_defers_history_only_when_capture_will_verify_it(tmp_path, monkeypatch, native_participant):
+@pytest.mark.parametrize("native_context", [False, True])
+def test_preflight_defers_history_only_when_capture_will_verify_it(tmp_path, monkeypatch, native_participant, native_context):
     from types import SimpleNamespace
     from benchmark.runtime import checkpoint
     wake = tmp_path / "wakes" / "turn"
@@ -593,8 +594,11 @@ def test_preflight_defers_history_only_when_capture_will_verify_it(tmp_path, mon
         from pathlib import Path
         captured = Path(command[command.index("--decision-output-root") + 1]) / "decision-original"
         captured.mkdir()
-        (captured / "decision.json").write_text(json.dumps({"ok": True}))
-        return SimpleNamespace(stdout=json.dumps({"ok": True}))
+        original = json.dumps({"ok": True, "source": captured.parent.name})
+        (captured / "decision.json").write_text(original)
+        (captured / "decision.json").chmod(0o600)
+        return SimpleNamespace(stdout=original if native_participant else
+                               json.dumps({"ok": True, "view": captured.parent.name}))
     monkeypatch.setattr(checkpoint.subprocess, "run", guard)
     monkeypatch.setattr(checkpoint, "effect_runtime_result", lambda *a, **k: {"capture": False, "reason": "no_fresh_replan"})
     observed = []
@@ -606,8 +610,30 @@ def test_preflight_defers_history_only_when_capture_will_verify_it(tmp_path, mon
         "LOOPX_CLI": "loopx", "LOOPX_PROJECT": str(tmp_path), "LOOPX_RUNTIME_ROOT": str(tmp_path),
         "LOOPX_REGISTRY": str(tmp_path / "registry"), "LOOPX_GOAL_ID": "goal", "LOOPX_AGENT_ID": "agent"}
     receipt = {"turn_id": "turn", "mode": "heartbeat", "stage": "execute"}
-    assert checkpoint.capture_before_replan(env, receipt, "current work").endswith("current work")
+    if native_context:
+        env.update(LOOPX_CONTEXT_DELIVERY="on", LOOPX_CODEX_CONTEXT_DIR=str(tmp_path / "context"))
+    body = checkpoint.capture_before_replan(env, receipt, "current work")
+    assert body.endswith("current work")
+    view = wake / "checkpoint-start-view.json"
     assert observed == [not native_participant]
+    if native_context:
+        pattern = ("checkpoint-start-*/decision-original/decision.json" if native_participant else
+                   "checkpoint-start-*/checkpoint-start-view.json")
+        original, = wake.glob(pattern)
+        assert str(original) in body and hashlib.sha256(original.read_bytes()).hexdigest() in body
+        first_bytes = original.read_bytes()
+        if native_participant:
+            assert not list(wake.glob("checkpoint-start-*/checkpoint-start-view.json"))
+        else:
+            assert json.loads(first_bytes) == {"ok": True, "view": original.parent.name}
+        assert original.stat().st_mode & 0o077 == 0
+        resumed = checkpoint.capture_before_replan(env, receipt, "resume")
+        second, = set(wake.glob(pattern)) - {original}
+        assert str(second) in resumed and hashlib.sha256(second.read_bytes()).hexdigest() in resumed
+        assert original.read_bytes() == first_bytes != second.read_bytes()
+        assert not view.exists()
+    else:
+        assert str(view) in body and json.loads(view.read_text())["ok"]
     assert receipt["checkpoint"]["reason"] == "no_fresh_replan"
 
 

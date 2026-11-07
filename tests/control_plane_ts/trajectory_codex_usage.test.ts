@@ -28,7 +28,8 @@ test('invalid supplementary tool inventory cannot erase native counters', () => 
   const before = run();
   const result = summarize({events: fixture(), session_id: 'session', tool_context: [{line: 0}]});
   assert.equal(result.tool_context?.status, 'unavailable');
-  const {tool_context, ...native} = result;
+  assert.equal(result.loopx_requests?.status, 'unavailable');
+  const {tool_context, loopx_requests, ...native} = result;
   assert.deepEqual(native, before);
 });
 test('unknown counters, resets, missing prefix, session mismatch and unfinished work reject',()=>{

@@ -68,7 +68,7 @@ class ResearchAnalysisRequestMixin:
             required = {"goal_id", "pack_id", "analysis_key", "source_id", "first_line", "last_line"} if citation else {"goal_id"}
             if usage_turn:
                 required = {"goal_id", "pack_id", "analysis_key", "turn_id"}
-            allowed = (required if citation or usage_turn else {"goal_id", "pack_id"}) | {"output_language"}
+            allowed = (required if citation or usage_turn else {"goal_id", "pack_id", "compare_pack_id"}) | {"output_language"}
             if not required <= query.keys() or query.keys() - allowed or any(len(v) != 1 for v in query.values()):
                 raise ValueError("Use the registered Goal and opaque pack identifiers")
             values = {key: value[0] for key, value in query.items()}
@@ -79,7 +79,17 @@ class ResearchAnalysisRequestMixin:
             runtime = self._research_analysis_scope(goal_id)
             if runtime is None:
                 return
-            if usage_turn:
+            if "compare_pack_id" in values:
+                if "pack_id" not in values:
+                    raise ValueError("A comparison requires two explicit captures")
+                left = store.inspect_pack(runtime_root=runtime, owner_goal_id=goal_id,
+                    pack_id=values["pack_id"], output_language=language)
+                right = store.inspect_pack(runtime_root=runtime, owner_goal_id=goal_id,
+                    pack_id=values["compare_pack_id"], output_language=language)
+                self._research_analysis_verify_source_goal(runtime, goal_id, values["pack_id"], left)
+                self._research_analysis_verify_source_goal(runtime, goal_id, values["compare_pack_id"], right)
+                result = {"ok": True, "comparison": store.compare_captured_usage(left, right)}
+            elif usage_turn:
                 self._research_analysis_verify_source_goal(runtime, goal_id, values["pack_id"])
                 result = store.read_usage_turn(runtime_root=runtime, owner_goal_id=goal_id,
                     output_language=language, **values)

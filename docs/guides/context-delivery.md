@@ -75,6 +75,14 @@ One shared preparation call does not prove that every final caller has migrated.
 | Saved-file delta | Verified immutable file versions with compatible identity | Model retention, comprehension or fresh permission |
 | Provider prompt cache | Provider-specific processing/billing reuse of input | Source correctness, task success or LoopX net savings |
 
+Replan authoring uses the same-response form: CLI display can reference the
+complete `vision_authoring` in a durable-writeback step. The existing TypeScript
+Turn owner chooses an exact owner and resolves it for ordinary and captured
+readers. Dangling references, reference chains, conflicting inline values and
+references to another kind of step are rejected. A small or different value
+stays inline. Sharing neither changes the original settlement identity nor
+establishes cross-Turn retention or net cost savings.
+
 Semantic summarization is another operation: it can change wording or meaning.
 The exact codec is not a semantic summary. A controller-authored brief remains
 a separate proposed workflow with its own retained-requirement and outcome
@@ -108,6 +116,18 @@ An omission from a delta is not evidence that a constraint disappeared, or that
 the model has retained it. Retrieve necessary current facts when uncertain.
 Default-off and signed-envelope callers retain their own read contracts; the
 progressive native example does not relax them.
+
+In a continuing native session, a progressive first read can reference exact
+criteria or requirement descriptions delivered by an earlier complete read. An appended
+criterion, revised review or supporting-material projection need not replay
+every unchanged description. Current revisions, changed descriptions, review
+states and new controls invalidate their containing criterion and remain visible.
+An exact unchanged criterion needs no metadata split. Splitting a container adds addresses
+and recovery guidance, so the reader keeps the complete presentation when the
+split would not save enough bytes. This tool-delivery assumption is separate
+from file deltas and provider caching; it does not prove model retention or
+lower total cost. Partial reads and lost continuity cannot qualify this reuse.
+Explicit same-capture selections always recover the complete current value.
 
 ### Read and recover the right object
 

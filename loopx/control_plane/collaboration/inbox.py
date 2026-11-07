@@ -524,7 +524,7 @@ def _result_observation(key, value):
         "value": {field: value[field] for field in (
             "request_id", "goal_id", "agent_id", "source_id", "goal_ref", "phase",
             "decision", "result_key", "previous_result_key", "update_id", "attachments",
-            "request_revision", "request_revision_digest", "recipient", "requester", "remaining_work",
+            "request_revision", "request_revision_digest", "recipient", "requester", "remaining_work", "return_format_version",
         ) if field in value},
         "text_chars": len(text),
         "text_sha256": hashlib.sha256(text.encode()).hexdigest(),
