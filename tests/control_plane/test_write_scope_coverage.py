@@ -8,6 +8,7 @@ import copy
 import json
 import os
 from pathlib import Path
+import runpy
 import subprocess
 
 import pytest
@@ -54,6 +55,11 @@ def selected(scopes):
     (["materials/run/**", "reports/result.md"], ["material*/**", "reports/*.md"], False),
     (["src/[A-Z].ts"], ["src/[a-z].ts"], True),
     (["src/a.ts"], [], True),
+    (["src/b.ts"], ["src/[z-a!b].ts"], True),
+    (["src/c.ts"], ["src/[z-a!b].ts"], False),
+    (["src/[b].ts"], ["src/[z-a!b].ts"], True),
+    (["src/[ac].ts"], ["src/[z-a!b].ts"], False),
+    (["src/[!b].ts"], ["src/[z-a!b].ts"], False),
 ])
 def test_boundary_checks_entire_declared_language(scope_transport, required, allowed, needs_repair):
     todo = selected(required)
@@ -86,6 +92,15 @@ def test_inactive_grants_use_the_same_coverage_without_granting_authority(scope_
     assert repair["missing_write_scopes"] == ["src/[ab].ts"]
     assert [entry["decision_id"] for entry in repair["inactive_authority_candidates"]] == ["covers_missing"]
     assert len(scope_transport) == 1
+
+
+def test_existing_projection_smoke_uses_typed_boundary_entrypoint(scope_transport):
+    smoke = Path(__file__).resolve().parents[2] / "examples/control_plane/quota-projection-repair-state-machine-smoke.py"
+    # Reuse every retained smoke assertion over the real typed handler. The
+    # standalone smoke separately qualifies the managed runtime transport.
+    assert runpy.run_path(str(smoke))["main"]() == 0
+    assert scope_transport
+    assert all(method == "quota.write_scope_coverage" for method, _ in scope_transport)
 
 
 @pytest.mark.parametrize(("run", "scopes"), [(False, ["src/**"]), (True, [])])
