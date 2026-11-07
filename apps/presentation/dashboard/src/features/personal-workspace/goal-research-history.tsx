@@ -11,7 +11,7 @@ import {requestJson} from "../../data/chat";
 import {sourceReadApiUrl} from "../../data/local-status-query";
 import {ContextHelp} from "./context-help";
 import type {WorkspaceGoal} from "./personal-workspace-model";
-import {groupUnlinkedHistoryQuestions, layoutExploreHistory, parseExploreHistoryPage, projectExploreHistory, type ExploreHistoryEvent} from "../../../../../../loopx/control_plane/presentation/explore_history.js";
+import {groupUnlinkedHistoryQuestions, layoutExploreHistory, mergeExploreHistoryEvents, parseExploreHistoryPage, projectExploreHistory, type ExploreHistoryEvent} from "../../../../../../loopx/control_plane/presentation/explore_history.js";
 import "./goal-research-history.css";
 import {ExploreMeasurements, formatExploreMeasurementValue} from "./explore-measurements";
 import {projectTrajectoryDisplay, trajectoryDisplaySnapshotText} from "../../../../../../loopx/control_plane/capabilities/trajectory_assessment_display.js";
@@ -196,7 +196,7 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
     const controller = new AbortController();
     setBusy(true); setError(""); setLoaded(0);
     void (async () => {
-      const events: ExploreHistoryEvent[] = [];
+      const events = new Map<string, ExploreHistoryEvent>();
       const cursors = new Set<string>();
       let total = -1;
       try {
@@ -205,21 +205,21 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
           const query = new URLSearchParams({goal_id: goalId, view: "history", ...(cursor ? {cursor} : {})});
           const page = parseExploreHistoryPage(await requestJson<unknown>(sourceReadApiUrl(readSourceUrl, `/api/chat/explore-results?${query}`), {signal: controller.signal}), originalGoalId);
           if (total !== -1 && total !== page.total) throw new Error("Explore history snapshot changed");
-          total = page.total; events.push(...page.items);
-          if (events.length > total || (page.next_cursor && (!page.items.length || cursors.has(page.next_cursor)))) throw new Error("Invalid Explore history pagination");
-          if (current) setLoaded(events.length);
+          total = page.total;
+          mergeExploreHistoryEvents(events, page.items, originalGoalId);
+          if (events.size > total || (page.next_cursor && (!page.items.length || cursors.has(page.next_cursor)))) throw new Error("Invalid Explore history pagination");
+          if (current) setLoaded(events.size);
           cursor = page.next_cursor ?? "";
           if (cursor) cursors.add(cursor);
           // The owning HTTP snapshot bounds size; never silently cap history here.
         } while (cursor && current);
         if (current) {
-          if (cursor || events.length !== total) throw new Error("Explore history coverage mismatch");
-          projectExploreHistory(events, originalGoalId); // Verify replay identities before replacing a valid snapshot.
-          setRead({events, total, complete: true});
+          if (cursor || events.size !== total) throw new Error("Explore history coverage mismatch");
+          setRead({events: [...events.values()], total, complete: true});
         }
       } catch (failure) {
         if (current) {
-          if (events.length) setRead(previous => previous.complete ? previous : {events, total: Math.max(total, events.length), complete: false});
+          if (events.size) setRead(previous => previous.complete ? previous : {events: [...events.values()], total: Math.max(total, events.size), complete: false});
           setError(failure instanceof Error ? failure.message : String(failure));
         }
       } finally {if (current) setBusy(false);}
@@ -647,6 +647,7 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
     </ContextHelp> : null}
     {value?.events.length ? <details ref={records} className="research-history-all-records" open={recordsOpen} onToggle={event => setRecordsOpen(event.currentTarget.open)}><summary>{zh ? "全部已读记录" : "All loaded records"} · {value.events.length}</summary>
       {recordsOpen ? <ResearchRecordSearch key={JSON.stringify([goalId, readSourceUrl])} goalId={originalGoalId} events={history.canonical?.events ?? []}
+        nodes={history.canonical?.nodes ?? []}
         displayEvents={currentDisplay && !originalDisplay ? value.events : undefined}
         displaySections={currentDisplay && !originalDisplay ? displayProjection.sections : undefined}
         renderBody={findingBody}

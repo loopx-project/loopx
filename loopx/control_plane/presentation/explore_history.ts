@@ -77,11 +77,7 @@ export function parseExploreHistoryPage(input: unknown, goalId: string): Explore
   return {goal_id: goalId, items, total: page.total as number, next_cursor: page.next_cursor as string | null};
 }
 
-export function projectExploreHistory(events: readonly ExploreHistoryEvent[], goalId: string) {
-  const unique = new Map<string, ExploreHistoryEvent>();
-  const nodes = new Map<string, ExploreHistoryNode>();
-  const edges = new Map<string, ExploreHistoryEvent>();
-  const findings = new Map<string, ExploreHistoryEvent>();
+export function mergeExploreHistoryEvents(unique: Map<string, ExploreHistoryEvent>, events: readonly ExploreHistoryEvent[], goalId: string) {
   for (const event of events) {
     if (event.goal_id !== goalId) throw new Error("Explore history Goal mismatch");
     const previous = unique.get(event.event_id);
@@ -90,6 +86,16 @@ export function projectExploreHistory(events: readonly ExploreHistoryEvent[], go
       continue;
     }
     unique.set(event.event_id, event);
+  }
+}
+
+export function projectExploreHistory(events: readonly ExploreHistoryEvent[], goalId: string) {
+  const unique = new Map<string, ExploreHistoryEvent>();
+  mergeExploreHistoryEvents(unique, events, goalId);
+  const nodes = new Map<string, ExploreHistoryNode>();
+  const edges = new Map<string, ExploreHistoryEvent>();
+  const findings = new Map<string, ExploreHistoryEvent>();
+  for (const event of unique.values()) {
     if (event.event_kind === "node") {
       const node = nodes.get(event.result_id);
       if (node) {node.latest = event; node.updates.push(event);}
