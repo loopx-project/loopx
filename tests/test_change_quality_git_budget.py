@@ -47,6 +47,7 @@ def _fake_git(tmp_path: Path, script: str, monkeypatch: pytest.MonkeyPatch) -> P
     return bin_dir
 
 
+@pytest.mark.skipif(os.name != "posix", reason="the fake git is a POSIX script")
 def test_a_git_that_never_answers_stops_inside_the_budget(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
