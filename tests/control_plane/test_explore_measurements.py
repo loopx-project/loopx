@@ -31,6 +31,88 @@ def context(args):
         ("registry_path", "runtime_root", "goal_id", "agent_id")})
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_paired_cli_refresh_rejects_duplicates_then_replays_and_reads_both_candidates(tmp_path, monkeypatch, provider):
+    from canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.test_quota_settlement_cli import (
+        _write_fixture, _run_cli, GOAL_ID, AGENT_ID, TODO_ID, TURN_ID,
+    )
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+    import threading
+    from urllib.request import urlopen
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path, provider=provider)
+    config = json.loads(registry.read_text())
+    config["goals"][0]["explore_graph"] = {"enabled": True}
+    registry.write_text(json.dumps(config))
+    binding = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+               "--turn-instance-id", TURN_ID)
+    rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding, cwd=project)
+    assert rc == 0 and guard["should_run"], guard
+    pair = [{**measurement("baseline", 9), "evidence_ref": "result:baseline"},
+            {**measurement("alternative", 6), "evidence_ref": "result:alternative"}]
+    attachment = {**payload()["explore_result"], "measurements": pair,
+                  "evidence_refs": [row["evidence_ref"] for row in pair]}
+    source = tmp_path / "paired-result.json"
+    args = ("refresh-state", *binding, "--classification", "validated_change",
+            "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+            "--no-global-sync", "--suppress-external-sinks", "--explore-result-json", str(source))
+    log = explore_result_log_path(runtime, GOAL_ID)
+    index = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
+    previous = index.read_bytes() if index.exists() else b""
+    # Different receipts cannot disguise duplicate candidate observations.
+    source.write_text(json.dumps({**attachment, "measurements": [pair[0],
+        {**pair[1], "candidate_ref": pair[0]["candidate_ref"]}]}))
+    rc, rejected = _run_cli(registry, runtime, *args, cwd=project)
+    assert rc == 1 and not rejected["appended"], rejected
+    assert "duplicated" in rejected["error"]
+    assert (index.read_bytes() if index.exists() else b"") == previous
+    assert not log.exists()
+
+    source.write_text(json.dumps(attachment))
+    rc, captured = _run_cli(registry, runtime, *args, cwd=project)
+    assert rc == 0 and captured["appended"] and captured["explore_result_delivery"]["ok"], captured
+    committed = (index.read_bytes(), log.read_bytes())
+    rc, replay = _run_cli(registry, runtime, *args, cwd=project)
+    assert rc == 0 and replay["idempotent_replay"], replay
+    assert (index.read_bytes(), log.read_bytes()) == committed
+    rc, received = _run_cli(registry, runtime, "explore", "turn-context", "--goal-id", GOAL_ID,
+                            "--agent-id", AGENT_ID, cwd=project)
+    assert rc == 0, received
+    finding = received["graph"]["writeback_results"][0]
+    assert finding["measurements"] == pair
+    feedback = received["graph"]["measurement_feedback"][0]
+    assert feedback["best"]["candidate_ref"] == "candidate:baseline"
+    assert feedback["latest"]["measurement"]["candidate_ref"] == "candidate:alternative"
+    assert feedback["improvement"] == -3 and feedback["measured_count"] == 2
+    assert len(load_explore_result_events_strict(log, goal_id=GOAL_ID)) == 2
+
+    # The existing product reader consumes the same persisted finding, not a
+    # second measurement owner or a synthetic HTTP response.
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.registry_path, server.runtime_root = registry, runtime
+    server.runtime_root_override, server.verbose = None, False
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        base = f"http://127.0.0.1:{server.server_port}/api/chat/explore-results?goal_id={GOAL_ID}"
+        for suffix in ("", "&view=history"):
+            with urlopen(base + suffix) as response:
+                rows = json.load(response)["items"]
+            measured = next(row for row in rows if row.get("measurements"))
+            assert measured["measurements"] == pair
+    finally:
+        server.shutdown()
+        worker.join(timeout=5)
+        server.server_close()
+    assert (index.read_bytes(), log.read_bytes()) == committed
+    source.write_text(json.dumps({**attachment, "measurements": [pair[0], {**pair[1], "value": 10}]}))
+    rc, conflict = _run_cli(registry, runtime, *args, cwd=project)
+    assert rc == 1, conflict
+    assert (index.read_bytes(), log.read_bytes()) == committed
+
+
 @pytest.mark.parametrize("measured", [False, True])
 def test_tied_finding_times_bound_latest_appends_and_corrections(measured):
     # The production writer records whole seconds. Equal source times must not

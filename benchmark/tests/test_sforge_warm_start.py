@@ -120,7 +120,7 @@ def point(tmp_path, request, monkeypatch):
 @pytest.mark.parametrize("change", [
     {"goal_id": "foreign-goal"}, {"agent_id": "foreign-agent"}, {"source_todo_id": "missing"},
     {"deadline_epoch": 1}, {"deadline_epoch": True}, {"normal_cadence": 0}, {"normal_cadence": True},
-    {"fresh_replan": "false"},
+    {"fresh_replan": "false"}, {"research_sidecar": "false"},
 ])
 def test_invalid_participant_rejects_before_workspace_or_authority_changes(point, change):
     start, workspace = point
@@ -385,6 +385,8 @@ def test_warm_launcher_reserves_host_attempt_without_preempting_native_run(tmp_p
 def research_point(point, tmp_path, monkeypatch, request):
     start, workspace = point
     research = tmp_path / "retained-experiments"
+    managed = getattr(request, "param", None) == "managed"
+    component_id = "benchmark_research" if managed else "experiments"
     if getattr(request, "param", "directory") == "file":
         research.write_text("retained observations")
         research.chmod(0o600)
@@ -395,7 +397,7 @@ def research_point(point, tmp_path, monkeypatch, request):
         (research / "observations.json").write_text('[2, 3, 5]')
         (research / "candidate.py").chmod(0o600)
     manifest = json.loads((start.root / "checkpoint.json").read_bytes())
-    components = manifest["components"] + [{"id": "experiments", "source_path": str(research)}]
+    components = manifest["components"] + [{"id": component_id, "source_path": str(research)}]
     metadata = manifest["point_metadata"]
     metadata["worker_file_snapshot"]["components"].append(components[-1])
     probe = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "probe", "components": components})
@@ -408,7 +410,11 @@ def research_point(point, tmp_path, monkeypatch, request):
     else:
         research.unlink()
     monkeypatch.setattr(warm, "_RESEARCH_ROOTS", (tmp_path,))
-    return replace(start, root=unit, sha256=result["sha256"], research_component_ids=("experiments",)), workspace, research
+    if managed:
+        from benchmark.runtime import research_artifacts
+        monkeypatch.setattr(research_artifacts, "RESEARCH_DIRECTORY", str(research))
+    return replace(start, root=unit, sha256=result["sha256"], research_sidecar=managed,
+        research_component_ids=() if managed else ("experiments",)), workspace, research
 
 
 def test_explicit_research_files_reproduce_the_retained_experiment(research_point):
@@ -432,6 +438,47 @@ def test_unselected_research_files_remain_inert(research_point):
     start, workspace, research = research_point
     warm.restore_workspace({"root": str(start.root), "sha256": start.sha256, "deadline_epoch": start.deadline_epoch}, workspace)
     assert not research.exists()
+
+
+@pytest.mark.parametrize("research_point", ["managed"], indirect=True)
+def test_managed_research_roundtrips_through_existing_capture_and_receiver(research_point, monkeypatch, tmp_path):
+    start, workspace, research = research_point
+    original_manifest = (start.root / "checkpoint.json").read_bytes()
+    control = tmp_path / "control"
+    control.mkdir()
+    monkeypatch.setattr(warm, "_CONTROL", str(control))
+    class Environment:
+        async def upload_dir(self, source, target):
+            shutil.copytree(source, target)
+        async def upload_file(self, source, target):
+            shutil.copyfile(source, target)
+        async def exec(self, command, **kwargs):
+            return SimpleNamespace(return_code=0)
+    assert start.research_component_ids == ()  # No extra manual recovery flag.
+    assert asyncio.run(start.stage(Environment(), str(workspace)))[0] == str(research)
+    declaration = json.loads((control / "warm-start.json").read_bytes())
+    assert declaration["research_component_ids"] == ["benchmark_research"]
+    warm.restore_workspace(declaration, workspace)
+    scope = {}
+    exec((research / "candidate.py").read_text(), scope)
+    assert [scope["predict"](x) for x in json.loads((research / "observations.json").read_text())] == [14, 21, 35]
+    assert (research / "candidate.py").stat().st_mode & 0o777 == 0o600
+    assert (workspace / "candidate").read_text() == "retained candidate"
+    assert (start.root / "checkpoint.json").read_bytes() == original_manifest
+    with pytest.raises(ValueError, match="already exists"):
+        warm.restore_workspace(declaration, workspace)
+
+
+def test_legacy_checkpoint_keeps_original_workspace_and_does_not_invent_research(point):
+    start, workspace = point
+    original_manifest = (start.root / "checkpoint.json").read_bytes()
+    start = replace(start, research_sidecar=True)
+    metadata = start.verify(str(workspace))
+    assert start._selected_research(metadata) == ()
+    warm.restore_workspace({"root": str(start.root), "sha256": start.sha256,
+                            "deadline_epoch": start.deadline_epoch}, workspace)
+    assert (workspace / "candidate").read_text() == "retained candidate"
+    assert (start.root / "checkpoint.json").read_bytes() == original_manifest
 
 
 @pytest.mark.parametrize("selected", [("absent",), ("workspace",), ("context",),

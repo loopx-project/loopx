@@ -1441,10 +1441,7 @@ class LarkPrivateConversations:
         store = self.core.controller.store
         turn = store.load_turn(row["session_id"], message["turn_id"]) or {}
         status = turn.get("status")
-        if "feedback" not in phase and status in TERMINAL_TURN_STATES:
-            return  # Existing finished mirrors keep their frozen history.
-        prior = phase.setdefault("feedback", {})
-        if prior.get("ok") and prior.get("turn_status") == status:
+        if not self._app_feedback_due(phase, status):
             return
         try:
             if message not in self._web_projection_messages(row, inputs_only=True):
@@ -1492,6 +1489,27 @@ class LarkPrivateConversations:
         except (OSError, ValueError, KeyError):
             phase["feedback"] = {"ok": False, "turn_status": status,
                 "blocker": "original_web_projection_unavailable"}
+
+    @staticmethod
+    def _app_feedback_due(phase: dict[str, Any], status: str | None) -> bool:
+        if "feedback" not in phase:
+            return status not in TERMINAL_TURN_STATES  # Do not backfill finished mirrors.
+        prior = phase["feedback"]
+        return not (prior.get("ok") and prior.get("turn_status") == status)
+
+    def _has_app_feedback_work(self, row: dict[str, Any]) -> bool:
+        # Discovery uses only reference metadata and current Turn state. A
+        # due item still follows the complete input/source/grant checks below.
+        store = self.core.controller.store
+        sid = row["session_id"]
+        for message_id, turn_id in self._delivery_discovery.web_input_turn_refs(store, sid):
+            phase = row["deliveries"].get("web." + message_id, {})
+            if not phase.get("verified"):
+                continue
+            turn = store.load_turn(sid, turn_id)
+            if turn is not None and self._app_feedback_due(phase, turn.get("status")):
+                return True
+        return False
 
     def _reconcile_web_projection(self, path: Path) -> int:
         # The existing worker pool serializes this outbox with a durable fence.
@@ -1548,6 +1566,13 @@ class LarkPrivateConversations:
             with exclusive_file_lock(path.with_suffix(".feedback"), operation="reconcile_web_input_feedback"):
                 with exclusive_file_lock(path, operation="read_web_input_feedback"):
                     row = _read_json(path)
+                try:
+                    due = self._has_app_feedback_work(row)
+                except (OSError, ValueError, KeyError):
+                    # An unavailable hint cannot suppress the original reader.
+                    due = True
+                if not due:
+                    continue
                 try:
                     messages = self._web_projection_messages(row, inputs_only=True)
                 except (OSError, ValueError, KeyError):

@@ -15,7 +15,9 @@ topology source in the projection is for Feishu docs or any diagram renderer.
 from __future__ import annotations
 
 import hashlib
+import html
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
@@ -44,16 +46,21 @@ from ....capabilities.explore.result_log import (
 from ....presentation.explore_views import (
     PRESENTATION_MODE_DUAL_VIEW,
     build_explore_presentation_bundle,
+    build_vertical_explore_mermaid,
     explore_source_digest,
     explore_source_revision,
     validate_explore_view_freshness,
 )
 from ..private_json import write_private_json_atomic
 from .kanban import (
+    _credential_safe_lark_values,
     _extract_base_token,
     _extract_table_id,
     _extract_created_record_id,
+    _public_safe_lark_values,
     _public_safe_text,
+    _redact_public_safe_shapes,
+    _redact_credential_shapes,
     _select_options,
     lark_record_rows,
     now_lark_datetime,
@@ -337,6 +344,7 @@ def _build_upsert_command(
     record_id: str | None,
     values: Mapping[str, Any],
 ) -> list[str]:
+    safe_values = _credential_safe_lark_values(dict(values))
     args = [
         config.cli_bin,
         "base",
@@ -350,7 +358,7 @@ def _build_upsert_command(
     ]
     if record_id:
         args.extend(["--record-id", record_id])
-    args.extend(["--json", _record_json_args(values)])
+    args.extend(["--json", _record_json_args(safe_values)])
     return args
 
 
@@ -824,6 +832,121 @@ def configure_lark_explore_visual_sink(
     }
 
 
+_EXPLORE_NODE_DISPLAY_FIELDS = ("title", "summary", "blocked_reason")
+_EXPLORE_EDGE_DISPLAY_FIELDS = ("edge_type", "summary")
+_SVG_TEXT_SPAN_PATTERN = re.compile(
+    r"(?P<open><text\b[^>]*>)(?P<content>[^<]*)(?P<close></text>)"
+)
+_MERMAID_LABEL_PATTERN = re.compile(r'"(?P<content>[^"\n]*)"')
+
+
+def _redact_visual_display_text(value: Any, *, public_safe: bool) -> str:
+    return (
+        _redact_public_safe_shapes(value)
+        if public_safe
+        else _redact_credential_shapes(value)
+    )
+
+
+def _redact_explore_display_records(
+    records: Any,
+    *,
+    fields: tuple[str, ...],
+    public_safe: bool,
+) -> tuple[list[dict[str, Any]], bool]:
+    sanitized: list[dict[str, Any]] = []
+    changed = False
+    for record in records or []:
+        if not isinstance(record, Mapping):
+            continue
+        view = dict(record)
+        for display_field in fields:
+            value = view.get(display_field)
+            if not isinstance(value, str) or not value:
+                continue
+            redacted = _redact_visual_display_text(value, public_safe=public_safe)
+            if redacted != value:
+                view[display_field] = redacted
+                changed = True
+        sanitized.append(view)
+    return sanitized, changed
+
+
+def _redact_explore_display_values(
+    nodes: Any,
+    edges: Any,
+    *,
+    public_safe: bool,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], bool]:
+    """Redact display text before any SVG or Mermaid encoding.
+
+    IDs, parent links, status, tags and timestamps stay untouched so the
+    topology, lane assignment and freshness keep their structural meaning.
+    """
+
+    redacted_nodes, nodes_changed = _redact_explore_display_records(
+        nodes, fields=_EXPLORE_NODE_DISPLAY_FIELDS, public_safe=public_safe
+    )
+    redacted_edges, edges_changed = _redact_explore_display_records(
+        edges, fields=_EXPLORE_EDGE_DISPLAY_FIELDS, public_safe=public_safe
+    )
+    return redacted_nodes, redacted_edges, nodes_changed or edges_changed
+
+
+def _redact_explore_projection_display(
+    projection: Mapping[str, Any],
+    *,
+    public_safe: bool,
+) -> dict[str, Any]:
+    nodes, edges, _ = _redact_explore_display_values(
+        projection.get("nodes") or [],
+        projection.get("edges") or [],
+        public_safe=public_safe,
+    )
+    return {**projection, "nodes": nodes, "edges": edges}
+
+
+def _redact_rendered_display_spans(
+    source: str,
+    *,
+    input_format: str,
+    public_safe: bool,
+) -> str:
+    """Rewrite only decoded display spans of a caller-supplied rendered view.
+
+    The semantic paths redact values before encoding. This guard keeps the
+    visibility boundary for pre-rendered projections while never matching
+    enclosing markup, so ``</text>`` and Mermaid delimiters stay intact.
+    """
+
+    if input_format == "svg":
+
+        def redact_svg_text(match: re.Match[str]) -> str:
+            content = html.unescape(match.group("content"))
+            return (
+                match.group("open")
+                + html.escape(
+                    _redact_visual_display_text(content, public_safe=public_safe)
+                )
+                + match.group("close")
+            )
+
+        return _SVG_TEXT_SPAN_PATTERN.sub(redact_svg_text, source)
+    if input_format == "mermaid":
+
+        def redact_mermaid_label(match: re.Match[str]) -> str:
+            return (
+                '"'
+                + _redact_visual_display_text(
+                    match.group("content"), public_safe=public_safe
+                )
+                + '"'
+            )
+
+        return _MERMAID_LABEL_PATTERN.sub(redact_mermaid_label, source)
+    return source
+
+
 def sync_explore_visual_to_lark(
     config: LarkExploreConfig,
     *,
@@ -833,12 +956,16 @@ def sync_explore_visual_to_lark(
     semantic_digest: str,
     display_projection: Mapping[str, Any] | None = None,
     view_key: str | None = None,
+    sink_visibility: str = SINK_VISIBILITY_OWNER_ONLY,
     execute: bool = False,
     runner: CommandRunner = default_subprocess_runner,
     defer_readback: bool = False,
 ) -> dict[str, Any]:
     """Publish a configured whiteboard without conflating it with Base rows."""
 
+    if sink_visibility not in SINK_VISIBILITIES:
+        raise ValueError(f"sink_visibility must be one of {sorted(SINK_VISIBILITIES)}")
+    public_safe = sink_visibility == SINK_VISIBILITY_SHARED
     if not isinstance(visual_sink, Mapping):
         return {
             "ok": True,
@@ -875,18 +1002,22 @@ def sync_explore_visual_to_lark(
                 "freshness": freshness,
                 "error": freshness["reason"],
             }
-    graph = (
-        dict(display_projection)
-        if isinstance(display_projection, Mapping)
-        else build_explore_graph_view(
+    if isinstance(display_projection, Mapping):
+        graph = dict(display_projection)
+    else:
+        render_nodes, render_edges, _ = _redact_explore_display_values(
             projection.get("nodes") or [],
             projection.get("edges") or [],
+            public_safe=public_safe,
+        )
+        graph = build_explore_graph_view(
+            render_nodes,
+            render_edges,
             statuses=visual_sink.get("statuses") or [],
             tags=visual_sink.get("tags") or [],
             include_ancestors=bool(visual_sink.get("include_ancestors", True)),
             node_limit=max(1, int(visual_sink.get("mermaid_node_limit") or 100)),
         )
-    )
     sink_key = str(view_key or visual_sink.get("view_role") or "visual").strip() or "visual"
     try:
         style = resolve_explore_board_style(visual_sink)
@@ -918,6 +1049,11 @@ def sync_explore_visual_to_lark(
             "renderer": style.renderer,
             "error": f"display projection does not contain {style.source_key} source",
         }
+    rendered_source = _redact_rendered_display_spans(
+        rendered_source,
+        input_format=style.input_format,
+        public_safe=public_safe,
+    )
     delivery_material = json.dumps(
         {
             "source_digest": semantic_digest,
@@ -1001,6 +1137,8 @@ def sync_explore_visual_to_lark(
         "style_fallback": style_fallback,
         "renderer": style.renderer,
         "input_format": style.input_format,
+        "sink_visibility": sink_visibility,
+        "public_safe_redaction": public_safe,
         "docx_token": str(visual_sink.get("docx_token") or "") or None,
         "graph_counts": graph.get("graph_counts"),
         "filter": graph.get("filter"),
@@ -1036,11 +1174,15 @@ def sync_explore_visuals_to_lark(
     projection: Mapping[str, Any],
     visual_sinks: Mapping[str, Any],
     config_path: Path,
+    sink_visibility: str = SINK_VISIBILITY_OWNER_ONLY,
     execute: bool = False,
     runner: CommandRunner = default_subprocess_runner,
 ) -> dict[str, Any]:
     """Generate and publish configured same-source Explore views."""
 
+    if sink_visibility not in SINK_VISIBILITIES:
+        raise ValueError(f"sink_visibility must be one of {sorted(SINK_VISIBILITIES)}")
+    public_safe = sink_visibility == SINK_VISIBILITY_SHARED
     bundle = build_explore_presentation_bundle(projection)
     requested_roles = [
         role
@@ -1081,6 +1223,25 @@ def sync_explore_visuals_to_lark(
             },
         )
         role_view = role_bundle[role]
+        render_nodes, render_edges, display_redacted = _redact_explore_display_values(
+            role_view.get("nodes") or [],
+            role_view.get("edges") or [],
+            public_safe=public_safe,
+        )
+        if display_redacted:
+            render_layout = build_vertical_explore_mermaid(
+                render_nodes,
+                render_edges,
+                view_role=role,
+                group_node_limit=stage_capacity,
+            )
+            role_view = dict(
+                role_view,
+                nodes=render_nodes,
+                edges=render_edges,
+                mermaid=render_layout["mermaid"],
+                stage_views=render_layout["stage_views"],
+            )
         stage_views = [
             item
             for item in role_view.get("stage_views") or []
@@ -1097,6 +1258,7 @@ def sync_explore_visuals_to_lark(
                 role_sink=role_sink,
                 stage_views=stage_views,
                 config_path=config_path,
+                sink_visibility=sink_visibility,
                 execute=execute,
                 runner=runner,
                 read_local_config=read_lark_explore_local_config,
@@ -1165,6 +1327,7 @@ def sync_explore_visuals_to_lark(
                     semantic_digest=role_bundle["source_digest"],
                     display_projection=stage_projection,
                     view_key=f"{role}_stage_{stage_index:02d}",
+                    sink_visibility=sink_visibility,
                     execute=bool(execute and not readback_host_wait_exhausted),
                     runner=runner,
                     defer_readback=bool(execute and not readback_host_wait_exhausted),
@@ -1204,6 +1367,7 @@ def sync_explore_visuals_to_lark(
                 semantic_digest=role_bundle["source_digest"],
                 display_projection=overview_projection,
                 view_key=f"{role}_overview",
+                sink_visibility=sink_visibility,
                 execute=bool(execute and not readback_host_wait_exhausted),
                 runner=runner,
                 defer_readback=bool(execute and not readback_host_wait_exhausted),
@@ -1548,7 +1712,7 @@ def _finding_record_values(finding: Mapping[str, Any], *, goal_id: str, source_i
 
 
 def _public_safe_values(values: dict[str, Any]) -> dict[str, Any]:
-    return {key: _public_safe_text(value) if isinstance(value, str) else value for key, value in values.items()}
+    return _public_safe_lark_values(values)
 
 
 def _with_edge_link_values(
@@ -1612,6 +1776,10 @@ def sync_explore_results_to_lark(
             for item in projection.get("findings") or []
             if isinstance(item, Mapping)
         ],
+    }
+    rows_by_table = {
+        table_key: [_credential_safe_lark_values(values) for values in rows]
+        for table_key, rows in rows_by_table.items()
     }
     if public_safe:
         rows_by_table = {
@@ -1886,6 +2054,7 @@ def sync_issue_fix_explore_on_material_change(
     agent_id: str | None = None,
     project: Path | None = None,
     state_file: Path | None = None,
+    sink_visibility: str = SINK_VISIBILITY_SHARED,
     execute: bool = False,
     external_sink_delivery_authorized: bool = True,
     runner: CommandRunner = default_subprocess_runner,
@@ -1893,6 +2062,9 @@ def sync_issue_fix_explore_on_material_change(
     """Sync changed graph digests after the canonical Explore log is updated.
     Failed/interrupted Lark writes remain retryable; advance the stored sink digest only after successful remote sync.
     """
+
+    if sink_visibility not in SINK_VISIBILITIES:
+        raise ValueError(f"sink_visibility must be one of {sorted(SINK_VISIBILITIES)}")
 
     from ....capabilities.issue_fix.explore_projection import (
         build_issue_fix_executive_visual_projection,
@@ -2027,6 +2199,7 @@ def sync_issue_fix_explore_on_material_change(
             projection=projection_result["projection"],
             visual_sinks=visual_sinks,
             config_path=config_path,
+            sink_visibility=sink_visibility,
             execute=False,
             runner=runner,
         )
@@ -2105,6 +2278,7 @@ def sync_issue_fix_explore_on_material_change(
             config,
             projection=projection_result["projection"],
             config_path=config_path,
+            sink_visibility=sink_visibility,
             execute=True,
             runner=runner,
         )
@@ -2119,19 +2293,27 @@ def sync_issue_fix_explore_on_material_change(
             projection=projection_result["projection"],
             visual_sinks=visual_sinks,
             config_path=config_path,
+            sink_visibility=sink_visibility,
             execute=True,
             runner=runner,
         )
     else:
+        display_projection = None
+        if str(visual_sink.get("projection_mode") or "") == "issue_fix_two_lane":
+            display_projection = build_issue_fix_executive_visual_projection(
+                _redact_explore_projection_display(
+                    projection_result["projection"],
+                    public_safe=sink_visibility == SINK_VISIBILITY_SHARED,
+                )
+            )
         visual_sync = sync_explore_visual_to_lark(
             config,
             projection=projection_result["projection"],
             visual_sink=visual_sink,
             config_path=config_path,
             semantic_digest=digest,
-            display_projection=build_issue_fix_executive_visual_projection(projection_result["projection"])
-            if str(visual_sink.get("projection_mode") or "") == "issue_fix_two_lane"
-            else None,
+            display_projection=display_projection,
+            sink_visibility=sink_visibility,
             execute=True,
             runner=runner,
         )
@@ -2238,7 +2420,7 @@ def build_explore_card_markdown(projection: Mapping[str, Any]) -> str:
         lines.append("**Exploring now**")
         for node in frontier[:5]:
             lines.append(f"- {node.get('title')}")
-    return "\n".join(lines).strip()
+    return _redact_credential_shapes("\n".join(lines).strip())
 
 
 def build_explore_result_card(
@@ -2256,7 +2438,7 @@ def build_explore_result_card(
     markdown = build_explore_card_markdown(projection)
     card = build_lark_markdown_reply_card(
         markdown,
-        title=title or f"Exploration map: {goal_id}",
+        title=_redact_credential_shapes(title or f"Exploration map: {goal_id}"),
         template=template,
         footer=(
             f"LoopX explore | {projection.get('generated_at')} | {projection.get('source_event_count')} result events"

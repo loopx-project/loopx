@@ -671,6 +671,28 @@ and credentials belong outside the public repository.
 
 ## Research checkpoint storage
 
+New native non-game runs give every worker profile the same research directory,
+`/tmp/loopx-benchmark-research`, outside the task workspace and submitted paths.
+Keep experiment notes, local probes and candidate history there; required build
+and runtime inputs still belong in the task's declared submission paths. The
+runner does not filter submissions, extend evaluator feedback or alter grading.
+Overlapping submission/capture roots and existing unrelated data at this reserved
+path reject setup before solver execution.
+
+Terminal collection retains this directory under `collected/research`. With an
+explicit checkpoint request, the runner adds a separate `benchmark_research`
+component to the staged declaration, without modifying the caller's file. Warm
+continuation restores that exact component at its original path through the
+ordinary verified research-file transport. Other external research components
+still require explicit selection. Old checkpoints remain valid and preserve
+their workspace files; they start with an empty external research directory,
+without automatic relocation or deletion of historical artifacts. A warm receiver
+appends a bounded storage-policy update to its existing `AGENTS.md`, preserving
+the original task text and prior feedback policy; it does not rewrite the sealed
+checkpoint or Goal state. Terminal
+collection alone does not make a run resumable. Game and restricted-feedback
+runs retain their existing storage behavior.
+
 Full controller capture requires a filesystem that preserves case-sensitive and
 Unicode-normalization-sensitive filenames. A Linux controller using a shared
 host volume may not have those properties. New controller-enabled launches probe

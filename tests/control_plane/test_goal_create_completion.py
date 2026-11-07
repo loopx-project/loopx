@@ -107,6 +107,33 @@ def test_full_approved_creation_text_is_not_truncated(environment, app, provider
     assert requirement["description"] == criteria
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_first_plan_reuses_creation_requirements_without_a_second_declaration(environment, app, provider):
+    from loopx.control_plane.goals.task_planning import build_task_planning_packet
+    from benchmark.runtime.planning import validate_plan_readback
+
+    configure, _, _, project, runtime = environment
+    _, request, _ = app
+    configure(provider)
+    criteria = "\U0001f4dd" * 1000  # Main's creation limit is 2,000 UTF-16 units.
+    proposal = preview_goal(request, completion_criteria=criteria)
+    status, applied = request(f"/api/actions/{proposal['proposal_id']}/apply", {})
+    assert status == 200, applied
+    before = inspect(project, runtime)
+    packet = build_task_planning_packet(registry_path=project / ".loopx/registry.json",
+        runtime_root_arg=str(runtime), goal_id="report", agent_id="codex",
+        project=project, text="Deliver the report.")
+    outcomes = packet["goal_acceptance"]["goal_acceptance_contract"]["outcome_requirements"]["outcomes"]
+    assert len(outcomes) == 1 and outcomes[0]["id"] == "goal-creation"
+    assert outcomes[0]["requirements"][0]["description"] == criteria
+    assert outcomes[0]["sources"][0]["ref"] == f"goal-create:{proposal['proposal_id']}:completion"
+    ids = applied["proposal"]["receipt"]["resource_ids"]["todo_ids"]
+    verified = validate_plan_readback({"input_digest": packet["input_digest"],
+        "status": "ready", "todo_ids": ids}, packet, packet)
+    assert verified["goal_requirements_readback"]["outcome_ids"] == ["goal-creation"]
+    assert inspect(project, runtime) == before, "Reuse is read-only, without another declaration or revision"
+
+
 def test_no_criteria_does_not_infer_requirements_from_objective(environment, app):
     _, _, _, project, runtime = environment
     _, request, _ = app
@@ -181,7 +208,7 @@ def test_managed_creation_retains_requirements_before_one_host_dispatch(environm
     original = getattr(target, method)
 
     def lose_response(*args, **kwargs):
-        result = original(*args, **kwargs)
+        original(*args, **kwargs)
         raise TimeoutError("Committed creation response was lost")
 
     monkeypatch.setattr(target, method, lose_response)
