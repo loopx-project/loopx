@@ -259,6 +259,8 @@ test('duration tolerance rejects invalid policy and real CLI retains the declare
     assert.throws(() => buildReport(input), /makeup tolerance/);
   }
   input.duration_policy.makeup_tolerance_ms = 15;
+  (input.duration_policy as typeof input.duration_policy & {operator_annotation: string}).operator_annotation =
+    'must not enter report output';
   input.selection[0].active_intervals = [{start_ms:0,end_ms:85,evidence_ref:'solver:segment'}];
   const dir = mkdtempSync(join(tmpdir(), 'duration-tolerance-'));
   try {
@@ -268,6 +270,11 @@ test('duration tolerance rejects invalid policy and real CLI retains the declare
     assert.equal(run.status, 0, run.stderr);
     const actual = JSON.parse(readFileSync(prefix + '.json', 'utf8'));
     assert.equal(actual.duration_policy.makeup_tolerance_ms, 15);
+    assert.deepEqual(actual.duration_policy, {
+      target_ms: 100,
+      allow_goal_completion: [],
+      makeup_tolerance_ms: 15,
+    });
     assert.equal(actual.duration_coverage[0].disposition, 'within_tolerance');
     assert.equal(actual.duration_coverage[0].remaining_ms, 15);
     assert.match(readFileSync(prefix + '.md', 'utf8'), /容差内免补/);
