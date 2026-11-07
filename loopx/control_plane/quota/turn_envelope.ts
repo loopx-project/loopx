@@ -5,6 +5,7 @@ import {contextProjectionChanges, contextSourceIdentity, projectQuotaDiagnostics
 import type { LoopXTurnRouteValue } from "../turn_driver/turn_contract_generated.ts";
 import { EffectiveAction, type QuotaEffectiveActionValue } from "./effective_action.generated.ts";
 import { createHash } from "node:crypto";
+import {authorityUnicodeCompare} from "../coordination/authority_store_codec.ts";
 import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 import {omitUnboundExploreResultWriteback, referenceExploreResultWriteback} from "../capabilities/explore_turn_context.ts";
 import {prepareContextDelivery, restoreContextDelivery} from "./context_delivery.ts";
@@ -210,19 +211,8 @@ function canonicalValue(value: unknown): unknown {
   if (typeof value !== "object" || value === null) return value;
   const source = value as JsonObject;
   return Object.fromEntries(
-    Object.keys(source).sort(comparePythonUnicode).map((key) => [key, canonicalValue(source[key])]),
+    Object.keys(source).sort(authorityUnicodeCompare).map((key) => [key, canonicalValue(source[key])]),
   );
-}
-
-function comparePythonUnicode(left: string, right: string): number {
-  const leftPoints = Array.from(left, (item) => item.codePointAt(0) ?? 0);
-  const rightPoints = Array.from(right, (item) => item.codePointAt(0) ?? 0);
-  const sharedLength = Math.min(leftPoints.length, rightPoints.length);
-  for (let index = 0; index < sharedLength; index += 1) {
-    const difference = leftPoints[index] - rightPoints[index];
-    if (difference !== 0) return difference;
-  }
-  return leftPoints.length - rightPoints.length;
 }
 
 function canonicalHash(value: unknown): string {
@@ -579,7 +569,7 @@ function selectedTodo(payload: JsonObject, recommendedAction: string | null): Js
 
 /** These reads stay on one captured observation; they never re-enter the guard. */
 function replanReadCommands(payload: JsonObject, path = payload.replan_read_path,
-  argv = payload.replan_read_argv ?? ["loopx"]): JsonObject | null {
+  argv = payload.replan_read_argv ?? ["loopx"], verifiedSourceHash?: string): JsonObject | null {
   const packet = object(payload.replan_action_packet);
   if (typeof path !== "string" || !path.trim() || path.includes("\0") || payload.ok !== true ||
       payload.effective_action === EffectiveAction.GOVERNED_CAPABILITY_INTENT ||
@@ -590,7 +580,7 @@ function replanReadCommands(payload: JsonObject, path = payload.replan_read_path
     throw new EffectRuntimeRequestError("captured replan CLI route is malformed");
   }
   const command = `${argv.map(arg => shellQuote(arg as string)).join(" ")} --format json quota replan-view --decision-file ${shellQuote(path)}` +
-    ` --source-hash ${canonicalHash(payload)}`;
+    ` --source-hash ${verifiedSourceHash ?? canonicalHash(payload)}`;
   return {review: `${command} --replan-stage review`, writeback: `${command} --replan-stage writeback`,
     acceptance: `${command} --replan-stage acceptance`, explore: `${command} --replan-stage explore`};
 }
@@ -612,6 +602,16 @@ function deferredReplanWriteback(writeback: JsonObject): JsonObject {
 function replanGoalContext(payload: JsonObject, reads: JsonObject | null, coreRef = "$.core_goal") {
   const context = object(object(payload.autonomous_replan_obligation).replan_context);
   const outcomes = new Map<string, JsonObject>();
+  const refsByOutcome = new WeakMap<JsonObject, string>();
+  function indexOutcome(value: unknown): string {
+    const outcome = requireJsonObject(value, "captured acceptance outcome");
+    // Shared carriers can resolve to the same original object. Distinct
+    // objects are still checked, even when their IDs or revisions coincide.
+    const ref = refsByOutcome.get(outcome) ?? canonicalHash(outcome);
+    refsByOutcome.set(outcome, ref);
+    outcomes.set(ref, outcome);
+    return ref;
+  }
   function indexedGoal(value: unknown): JsonObject {
     const core = {...object(value)};
     if (!("acceptance_contract" in core) && "acceptance_contract_ref" in core) {
@@ -622,12 +622,7 @@ function replanGoalContext(payload: JsonObject, reads: JsonObject | null, coreRe
     const acceptance = {...object(core.acceptance_contract)};
     const requirements = object(acceptance.outcome_requirements);
     if (!Array.isArray(requirements.outcomes) || !requirements.outcomes.length || !reads) return core;
-    const refs = requirements.outcomes.map(value => {
-      const outcome = requireJsonObject(value, "captured acceptance outcome");
-      const ref = canonicalHash(outcome);
-      outcomes.set(ref, outcome);
-      return ref;
-    });
+    const refs = requirements.outcomes.map(indexOutcome);
     const {outcomes: _outcomes, ...metadata} = requirements;
     delete acceptance.outcome_requirements;
     return {...core, acceptance_contract: acceptance,
@@ -693,7 +688,8 @@ function replanWorkContext(payload: JsonObject, context: JsonObject, reads = rep
 
 function replanView(request: JsonObject): JsonObject {
   const payload = requireJsonObject(request.payload, "captured replan decision");
-  if (request.source_hash !== canonicalHash(payload) || payload.ok !== true) {
+  const sourceHash = canonicalHash(payload);
+  if (request.source_hash !== sourceHash || payload.ok !== true) {
     throw new EffectRuntimeRequestError("Replan read requires the original successful decision and matching source hash");
   }
   requireVisionAuditReferences(payload);
@@ -710,7 +706,7 @@ function replanView(request: JsonObject): JsonObject {
   // A native journal binds its path after planning. The CLI supplies that same
   // physical source route without modifying the captured observation or hash.
   const path = request.captured_decision_path ?? payload.replan_read_path;
-  const reads = replanReadCommands(payload, path, payload.replan_read_argv ?? request.reader_argv ?? ["loopx"]);
+  const reads = replanReadCommands(payload, path, payload.replan_read_argv ?? request.reader_argv ?? ["loopx"], sourceHash);
   const sourceRead = reads ? {source_read: `cat -- ${shellQuote(path as string)}`} : {};
   if (request.stage === "acceptance") {
     const {outcomes} = replanGoalContext(payload, reads);
@@ -732,7 +728,7 @@ function replanView(request: JsonObject): JsonObject {
       delete authoring.minimal_example;
       contract.vision_authoring = authoring;
     }
-    const writeback = actionProjection(payload, false).writeback;
+    const writeback = actionProjection(payload, false, sourceHash).writeback;
     const plan = object(object(writeback).settlement_plan);
     const identity = object(plan.identity);
     if (typeof identity.turn_instance_id === "string") {
@@ -1100,7 +1096,7 @@ function contractCapsule(payload: JsonObject): JsonObject {
   return capsule;
 }
 
-function actionProjection(payload: JsonObject, deferSettlement = true): JsonObject {
+function actionProjection(payload: JsonObject, deferSettlement = true, verifiedSourceHash?: string): JsonObject {
   const agentIdentity = object(payload.agent_identity);
   const semanticAgentId = scalarString(
     payload.agent_id || agentIdentity.agent_id,
@@ -1117,12 +1113,14 @@ function actionProjection(payload: JsonObject, deferSettlement = true): JsonObje
     ? projectPendingCapabilityIntent(payload.pending_capability_intent) : null;
   // A governed capability action has already won the live decision. Stale
   // replan/host-reentry projections must not replace its exact command.
-  const replanPacket = capabilityIntent ? null : replanActionPacket(payload);
+  const reads = capabilityIntent ? null
+    : replanReadCommands(payload, payload.replan_read_path, payload.replan_read_argv ?? ["loopx"], verifiedSourceHash);
+  const replanPacket = capabilityIntent ? null : replanActionPacket(payload, reads);
   const replanSettlementOnly = object(payload.replan_action_packet).settlement_only === true;
   const recommendedAction = replanPacket
     ? replanSettlementOnly
       ? scalarString(object(object(payload.replan_action_packet).writeback_contract).rule, "replan settlement rule")
-      : replanReadCommands(payload) ? "read replan_action_packet.review, decide from state, then follow review.next"
+      : reads ? "read replan_action_packet.review, decide from state, then follow review.next"
       : "apply replan_action_packet and emit one required semantic outcome"
     : text(turn.observation.recommended_action || payload.recommended_action, 480);
   // The signed host action is executable authority, not a display summary.
@@ -1131,7 +1129,7 @@ function actionProjection(payload: JsonObject, deferSettlement = true): JsonObje
   const action: JsonObject = {
     recommended_action: recommendedAction,
     primary_action: replanPacket && !replanSettlementOnly
-      ? replanReadCommands(payload)?.review ?? "produce one required semantic outcome"
+      ? reads?.review ?? "produce one required semantic outcome"
       : primaryAction || null,
     must_attempt: Boolean(agentChannel.must_attempt),
     delivery_allowed: Boolean(agentChannel.delivery_allowed),
@@ -1142,7 +1140,6 @@ function actionProjection(payload: JsonObject, deferSettlement = true): JsonObje
   if (turn.observation.action_portfolio !== null) {
     action.action_portfolio = { ...turn.observation.action_portfolio };
   }
-  const reads = capabilityIntent ? null : replanReadCommands(payload);
   if (turn.observation.planning_horizon !== null) action.planning_horizon = {...turn.observation.planning_horizon};
   if (reads && deferSettlement) {
     const goal = replanGoalContext(payload, reads, "$.action.core_goal");

@@ -764,6 +764,37 @@ def test_explore_uses_its_own_incremental_budget_and_real_result_log(tmp_path):
     assert json_bytes(writer) <= 16 * 1024
 
 
+def test_historical_replan_reader_keeps_unicode_capture_hash(tmp_path):
+    from hashlib import sha256
+
+    source = {
+        "ok": True, "goal_id": "fixture-goal", "agent_id": "fixture-agent",
+        "replan_action_packet": {"obligation_id": "fixture-replan"},
+        "autonomous_replan_obligation": {"replan_context": {
+            "obligation_id": "fixture-replan",
+            "core_goal": {"future_fields": {
+                "\U00010000": "Supplementary", "\ue000": "BMP", "a\u00e9": "Prefix", "a": "ASCII",
+            }},
+        }},
+    }
+    capture = tmp_path / "decision.json"
+    original = json.dumps(source, ensure_ascii=False, indent=2).encode()
+    capture.write_bytes(original)
+    # Python sorts Unicode code points, independently of JS's UTF-16 default.
+    canonical = json.dumps(source, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    digest = f"sha256:{sha256(canonical).hexdigest()}"
+    result = subprocess.run([sys.executable, "-m", "loopx.entrypoint", "--format", "json", "quota", "replan-view",
+        "--decision-file", str(capture), "--source-hash", digest, "--replan-stage", "review"],
+        capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stdout
+    review = json.loads(result.stdout)
+    assert review["source_hash"] == digest
+    assert review["core_goal"] == source["autonomous_replan_obligation"]["replan_context"]["core_goal"]
+    writer = shlex.split(review["next"]["writeback"])
+    assert writer[writer.index("--source-hash") + 1] == digest
+    assert capture.read_bytes() == original
+
+
 def test_replan_reader_rejects_replaced_entries_and_recovers_original(tmp_path):
     source = _quota_payload()
     original = tmp_path / "decision.json"
