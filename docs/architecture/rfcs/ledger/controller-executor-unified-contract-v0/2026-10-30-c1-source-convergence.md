@@ -2871,3 +2871,36 @@ imports. Some children override the audit environment, so this is not an
 observation of every process. These synthetic checks qualify the repaired
 Goal/audit/caller slice; whole-C1 acceptance, the remaining budget regression,
 live App/model adoption and complete-cost benefit remain open.
+
+### Preserve producer-bound heartbeat Turn identities
+
+Runtime `3736048363` removes an inapplicable wake instruction after the existing
+producer has actually replaced the timestamp placeholder. A bound prompt already
+contains its original concrete assignment and separate guard; asking the model
+to replace a new wake timestamp is redundant and risks losing that identity.
+Reusable unbound templates retain the original guidance. The existing binding
+owner handles all four prompt modes; no new field, switch or reader is added,
+and saved bodies, commands, transport flags, required reads and recovery/stop/
+settlement rules are unchanged.
+
+Eight mode/shell counterfactuals fail before the repair and pass afterward;
+Windows syntax is emulated, not an installed Windows qualification. Thirty-two
+actual-builder characterizations retain exact unbound default/off output in
+16 cases and remove only the fulfilled instruction in 16 bound cases, with
+unchanged other generator fields and limits. The original four real-CLI budget
+cases retain their paths, scopes and assertions: the long cases change from
+5,519 to **5,379 raw JSON characters**, removing 139 body characters and one
+additional JSON escape character. Matched main remains 5,363. This repairs the
+candidate regression; it does not establish a whole-workflow saving over main.
+The 5,400/5,500/4,000 limits and independent overflow cases remain unchanged.
+
+A new source-stable nine-module cohort passes all **865** cases; a complete
+three-module isolated installed cohort passes all **90**. These include the
+original worker selection, repair, capture, replay and once-only settlement
+oracles. Earlier 855/2 and 80/2 cohorts retain their original versions. Default
+17-root Mypy and changed-path Ruff pass. Fresh bundle verification and wheel
+source checks bind 1,815 Core sources and 24 optional-provider files to the
+frozen tested bytes; five observed Python processes, 1,179 Core modules and six
+observed subprocess paths show no checkout Core imports. The same audit-coverage
+limits, synthetic providers, unqualified live-model adoption and complete-cost
+claims apply. Independent review and whole-C1 acceptance remain open.
