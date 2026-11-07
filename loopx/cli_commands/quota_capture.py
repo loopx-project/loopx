@@ -631,7 +631,7 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
 def project_native_quota_context(payload: dict[str, Any], args: argparse.Namespace, *,
                                  capture_directory: Path, capture_id: str, decision_identity: tuple[str, str],
                                  progressive_enabled: bool, reader_argv: list[str] | None,
-                                 claim_source_sha256: str | None = None) -> dict[str, Any]:
+                                 captured_claim_replay: bool = False) -> dict[str, Any]:
     """Prepare one already-decided native view; callers retain receipt failures."""
     from ..control_plane.turn_driver.codex_context import (
         NativeContextSessionUnavailable, codex_context_directory, prepare_codex_context,
@@ -645,7 +645,8 @@ def project_native_quota_context(payload: dict[str, Any], args: argparse.Namespa
         capture_directory=capture_directory, goal_id=decision_identity[0], agent_id=decision_identity[1],
         surface="turn_envelope" if getattr(args, "turn_envelope", False) else "quota_packet",
         capture_id=capture_id, continuity_generation=getattr(args, "_context_delivery_generation", None),
-        progressive_enabled=progressive_enabled, claim_source_sha256=claim_source_sha256)
+        progressive_enabled=progressive_enabled,
+        claim_source_sha256=capture_id if captured_claim_replay else None)
     recovery = prepared.delivery.get("recovery")
     view = native_context_capture_view(prepared.delivery, capture_directory, context_directory=directory,
         progressive_enabled=progressive_enabled, initial_read_plan=prepared.initial_read_plan,
