@@ -493,13 +493,17 @@ class BenchmarkCodex(CodexOffline):
         )
         if pending.return_code == 0:
             raise RuntimeError("Resolve the pending Turn before entering another task phase")
-        registry_exists = await self._registry_exists(environment)
-        if registry_exists and self.execution.native_child_limit is not None:
+        # Check explicitly requested capacity before replacing any task document.
+        registry_exists = (await self._registry_exists(environment)
+                           if self.execution.native_child_limit is not None else None)
+        if registry_exists:
             retained = await self._loopx(
                 environment, ["configure-goal", "--goal-id", self.goal_id], cwd=cwd,
             )
             self._verify_native_child_configuration(retained.get("after") or retained.get("before") or {})
         await self._write_task_document(environment, instruction)
+        if registry_exists is None:
+            registry_exists = await self._registry_exists(environment)
         if not registry_exists:
             await self._loopx(
                 environment,
