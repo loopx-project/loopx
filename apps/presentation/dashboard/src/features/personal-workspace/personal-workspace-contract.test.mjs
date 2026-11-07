@@ -5,7 +5,7 @@ import { localizedCapabilityFieldCopy } from "./capability-localization.ts";
 import { taskSessionStatus } from "./goal-activity.ts";
 import "./monitor-readback.test.mjs";
 
-const source = (name) => readFileSync(new URL(name, import.meta.url), "utf8");
+const source = (name) => readFileSync(new URL(name, import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const projectionAgent = { agentId: "status-only", adapterKind: "status_projection", available: true, label: "Status" };
 const missingAgent = { agentId: "codex", available: false, label: "Codex" };
 const availableAgent = { agentId: "claude", available: true, label: "Claude" };
@@ -118,7 +118,8 @@ assert.doesNotMatch(page.match(/function operationProposalFields[\s\S]*?\n\}/)?.
 assert.match(page, /t\("proposal\.primary\.operationGroup"\)/, "Operation confirmation routes users to the bound group");
 assert.match(chatData, /result_delivery:/, "Dashboard retains operation result-delivery readback");
 assert.match(chatData, /return_delivery\??:/, "Chat messages retain manager return-delivery readback");
-assert.match(dashboard, /reconcileConversationReturns\(/, "Manager return polling uses the shared conversation-return read model");
+assert.match(dashboard, /readConversationReturns\(/, "Manager return polling uses the shared conversation-return observation");
+assert.match(dashboard, /reconcileConversationHistory\(/, "Manager return polling reconciles the shared conversation history");
 assert.match(conversationReturns, /source\.return_delivery \?\? row\.returnDelivery/, "Manager return polling refreshes delivery state after the message arrives");
 assert.match(timeline + page, /ReturnDeliveryStatus/, "Both manager conversation surfaces render return delivery state");
 for (const state of ["delivered", "verification_required", "explicit_unverified"]) {
