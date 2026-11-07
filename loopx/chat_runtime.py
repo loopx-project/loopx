@@ -874,7 +874,8 @@ class ChatRuntimeController:
                 # transport cannot prove that its original Chat worker exited.
                 raise ValueError("the original Chat worker is still active; read its current Turn")
             elif current is not None:
-                if recovery.get("history_review") is True and current.healthcheck():
+                if (recovery.get("history_review") is True or recovery.get("read_only_review")
+                        and recovery.get("unfinished_work")) and current.healthcheck():
                     if (not isinstance(current, CodexAppServerAdapter)
                             or not current.answer_review_replaceable()):
                         raise CodexChatAgentError("The original adapter still owns background work; answer review held.",

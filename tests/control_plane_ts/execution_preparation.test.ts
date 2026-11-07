@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import {
+  EXECUTION_HANDOFF_MODES,
+  HANDOFF_MODES,
+} from "../../loopx/control_plane/coordination/handoff_mode_vocabulary.ts";
 import {EffectRuntimeRequestError} from "../../loopx/control_plane/effect_runtime_errors.ts";
 import {projectExecutionPreparation} from "../../loopx/control_plane/work_items/execution_preparation.ts";
 
@@ -83,5 +87,23 @@ test("malformed facts are rejected", () => {
   assert.throws(
     () => projectExecutionPreparation(facts({leases: [{status: "released", active: true}]})),
     /active requires status=active/,
+  );
+});
+
+test("the execution handoff vocabulary stays narrower than the historical one", () => {
+  // `legacy` still decodes stored state and receipts, but it is not an accepted
+  // execution-preparation input. Borrowing the shared `HANDOFF_MODES` list here
+  // instead of the execution subset would admit it silently, so both the
+  // membership and the rejection are pinned against the vocabulary owner.
+  for (const mode of EXECUTION_HANDOFF_MODES) {
+    assert.doesNotThrow(() => projectExecutionPreparation(facts({handoff_mode: mode})));
+  }
+  const historical: readonly string[] = HANDOFF_MODES;
+  const execution: readonly string[] = EXECUTION_HANDOFF_MODES;
+  assert.ok(historical.includes("legacy"), "legacy stays decodable for stored receipts");
+  assert.ok(!execution.includes("legacy"), "legacy is not a new execution target");
+  assert.throws(
+    () => projectExecutionPreparation(facts({handoff_mode: "legacy"})),
+    EffectRuntimeRequestError,
   );
 });
