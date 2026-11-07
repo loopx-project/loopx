@@ -19,8 +19,10 @@ from loopx.capabilities.reward_memory.turn_hooks import memory_context_result
 from loopx.control_plane.capability_hooks import (
     TurnContextHookRegistration, dispatch_turn_context_hooks, project_turn_context,
 )
+from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
 from tests.capabilities.test_agent_turn_recall import RecallProvider, active_record
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 from tests.control_plane.reward_memory_host_fixture import enable_live_memory
 from tests.control_plane.test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, _initialize_fixture_authority, _write_fixture,
@@ -32,15 +34,20 @@ def run_cli(args: list[str]) -> dict:
     with redirect_stdout(output):
         code = main(args)
     assert code == 0, output.getvalue()[:1200]
-    return json.loads(output.getvalue())
+    return read_cli_policy_payload(output.getvalue(), returncode=code)
 
 
-def quota_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str):
+def quota_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, *, retire: bool = False):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)
     state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
-    state.write_text(state.read_text().replace(
-        "action_kind=validate", "action_kind=validate continuation_policy=same_agent_non_delivery"))
+    text = state.read_text().replace(
+        "action_kind=validate", "action_kind=validate continuation_policy=same_agent_non_delivery")
+    if retire:
+        basis = json.dumps({"retirement_basis": {"target_symbols": ["old_api"]}})
+        text = text.replace("- [ ] [P1] Validate and settle the selected delivery.",
+            f"- [ ] [P1] Retire old_api and settle the selected delivery. {basis}")
+    state.write_text(text)
     _initialize_fixture_authority(project, runtime, provider=provider)
     monkeypatch.chdir(project)
     return registry, ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
@@ -48,10 +55,17 @@ def quota_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("entry", ["quota", "thin-heartbeat"])
+@pytest.mark.parametrize(("progressive", "delta", "retire"), [
+    ("off", "off", False),
+    ("on", "off", False),
+    ("off", "auto", False),
+    ("on", "auto", True),
+], ids=["raw", "progressive", "delta", "both-with-retirement"])
 def test_real_app_guard_delivers_scoped_memory_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, entry: str,
+    progressive: str, delta: str, retire: bool,
 ) -> None:
-    registry, route = quota_fixture(tmp_path, monkeypatch, provider)
+    registry, route = quota_fixture(tmp_path, monkeypatch, provider, retire=retire)
     enable_live_memory(registry, recall=True, ingest=True)
     _, config = resolve_reward_memory_experiment(
         registry_path=registry, goal_id=GOAL_ID, agent_id=AGENT_ID)
@@ -71,18 +85,34 @@ def test_real_app_guard_delivers_scoped_memory_once(
         args = route + ["quota", "should-run", "--goal-id", GOAL_ID,
             "--agent-id", AGENT_ID, "--codex-app", "--turn-instance-id", turn,
             "--available-capability", "filesystem_read"]
+    args += ["--context-delivery", progressive, "--delta-delivery", delta]
     first = run_cli(args)
     assert first["should_run"] is True
+    assert_complete_turn_decision(first)
+    plan = first["interaction_contract"]["cli_channel"]["settlement_plan"]
+    combined = delta == "auto"
+    assert plan["schema_version"] == ("quota_settlement_plan_v2" if combined else "quota_settlement_plan_v1")
+    assert plan["ordered_steps"][2]["owner"] == ("runtime" if combined else "agent")
     assert first["reward_memory_recall"]["status"] == "applied"
     assert memory.calls == 1
     # Participation stays small. The complete private input has one carrier.
     assert first["reward_memory_recall"]["context"] is None
-    contributions = first.get("turn_context_contributions", [])
-    assert len(contributions) == 1
-    contribution = contributions[0]
+    contributions = {item["hook_id"]: item for item in first["turn_context_contributions"]}
+    assert set(contributions) == ({"reward-memory.turn-context", "anti-entropy.turn-context"}
+                                 if retire else {"reward-memory.turn-context"})
+    contribution = contributions["reward-memory.turn-context"]
     guidance = contribution["context_fields"]["reward_memory_recall"]["context"]["guidance"]
     assert len(guidance) == 1 and guidance[0]["content_summary"]
-    assert project_turn_context(first)["reward_memory_recall"]["context"]["guidance"] == guidance
+    projected = project_turn_context(first)
+    assert projected["reward_memory_recall"]["context"]["guidance"] == guidance
+    if retire:
+        assert first["anti_entropy_guidance"]["target_symbols"] == ["old_api"]
+        assert projected["anti_entropy_context"] == (
+            contributions["anti-entropy.turn-context"]["context_fields"]["anti_entropy_context"])
+    changed = deepcopy(first)
+    changed_plan = changed["interaction_contract"]["cli_channel"]["settlement_plan"]
+    changed_plan["ordered_steps"][1]["command_template"] += " --evidence substituted"
+    assert project_turn_context(changed) == {}
     assert contribution["result_fields"]["reward_memory_reflection_json"]["maxLength"] == 2400
     assert "private, non-authoritative" in contribution["instructions"][0]
     repeated = run_cli(args)

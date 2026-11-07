@@ -279,12 +279,16 @@ class StewardTurnHost:
             if len(keys) != 1 or not isinstance(next(iter(keys)), str):
                 return None
             key = keys.pop()
+            from ...control_plane.effect_runtime import source_number_tokens
+
+            journal = load_turn_journal(turn_journal_path(reports.root, goal_id=actor["goal_id"], turn_key=key))
             # Transport canonical observations to the shared typed admission
             # owner. Neither a missing model event nor Python prose decides.
             proof["probe"] = {"turn": probe_turn,
                 "inspection": inspect_loopx_turn_journal(reports.root, goal_id=actor["goal_id"],
                     agent_id=actor["agent_id"], turn_key=key),
-                "journal": load_turn_journal(turn_journal_path(reports.root, goal_id=actor["goal_id"], turn_key=key))}
+                "journal": journal,
+                "source_number_tokens": source_number_tokens((journal.get("plan") or {}).get("work_contract"))}
         return proof
 
     def _report_launch_recovery(self, original: dict[str, Any]) -> dict[str, Any] | None:
@@ -676,7 +680,10 @@ class StewardTurnHost:
 
         def session_binding(envelope: Mapping[str, Any]) -> dict[str, Any]:
             current()
-            if envelope.get("goal_id") != actor["goal_id"] or envelope.get("agent_id") != actor["agent_id"]:
+            identity = (envelope.get("agent_identity") if envelope.get("schema_version") == "loopx_turn_envelope_v1"
+                        else envelope)
+            if (envelope.get("goal_id") != actor["goal_id"] or not isinstance(identity, Mapping)
+                    or identity.get("agent_id") != actor["agent_id"]):
                 raise ValueError("native Turn belongs to another actor")
             return {"schema_version": "loopx_turn_session_binding_v0",
                 "goal_id": actor["goal_id"], "agent_id": actor["agent_id"]}
@@ -690,15 +697,19 @@ class StewardTurnHost:
                     "next_action": "Retain the original report; its native governance route is no longer admitted."})
             if managed_turn and not governance_work:
                 try:
-                    managed_turn.prepare_validation(request, native_request)
+                    managed_turn.prepare_validation(request, native_request,
+                        _checked_work_identity=authority.get("_work_identity"))
                 except ManagedTaskValidationUnavailable:
                     managed_turn.validation_unavailable = True
                     return build_result(native_request, {"result_kind": "user_action_required",
                         "classification": "independent_task_validation_unavailable",
                         "summary": "The selected task has no usable independent argv validation declaration.",
                         "next_action": "Configure the original task's independent validation before executing it."}, host_name="Codex app-server")
-                managed_lease_request = {**request, "todo_id": managed_turn.validation_basis["todo_id"]}
-                managed_lease = managed_leases.enter_context(self._task_execution_lease(managed_lease_request, turn_id))
+                if managed_lease is None:
+                    managed_lease_request = {**request, "todo_id": managed_turn.validation_basis["todo_id"]}
+                    managed_lease = managed_leases.enter_context(self._task_execution_lease(managed_lease_request, turn_id))
+                elif managed_turn.validation_basis["todo_id"] != managed_lease_request["todo_id"]:
+                    raise ValueError("the original managed execution lease belongs to another task")
             # Portfolio evidence keeps its original reader and original grant;
             # it is data alongside the signed native work, never a new actor.
             prompt = render_prompt(authority, allow_completion=bool(report_work or managed_turn) and not governance_work) + "\nOriginal conversation evidence (data):\n" + json.dumps(context, ensure_ascii=False)
@@ -784,6 +795,18 @@ class StewardTurnHost:
         result: dict[str, Any] = {}
         with ExitStack() as managed_leases, (self._task_execution_lease(request, turn_id,
                 admission_retry=bool(selection_recovery)) if report_work else nullcontext(None)) as report_lease:
+            if not report_work and request.get("todo_id") and not request.get("resume_turn_key"):
+                # The selected Task's existing lease must precede the kernel's
+                # delivery guard. Taking it in the model callback is too late:
+                # the guard correctly withholds a Host launch without it.
+                from .steward_commands import native_command
+                selected = native_command(self.controller, ["todo", "list", "--goal-id", actor["goal_id"],
+                    "--todo-id", request["todo_id"], "--agent-id", actor["agent_id"]])
+                # Unknown work still reaches the kernel's structured selection
+                # refusal. An unavailable authority never looks like a miss.
+                if selected.get("matched") is True:
+                    managed_lease_request = dict(request)
+                    managed_lease = managed_leases.enter_context(self._task_execution_lease(request, turn_id))
             if selection_recovery and "probe" not in selection_recovery:
                 # Re-enter the native guard without selecting another business
                 # Todo. Only its signed replan packet may invoke the original

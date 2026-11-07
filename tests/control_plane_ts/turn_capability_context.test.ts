@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
+import {quotaActionSignatureDocument} from "../../loopx/control_plane/quota/turn_envelope.ts";
 import {validateTurnContextRegistration, validateTurnContextContribution,
   projectTurnContextContribution} from "../../loopx/control_plane/turn_driver/capability_context.ts";
 
@@ -16,6 +18,22 @@ test("registered context survives location-only capture binding", () => {
     source: {...source, detail_ref: {full_decision: "fixture location"}, measurements: {bytes: 500}}}), contribution);
 });
 
+test("readback-only validation never produces or accepts a reusable contribution", () => {
+  const status = {...result, context_fields: {}, instructions: [], result_fields: {}};
+  const request = {registration, result: status, readback_only: true};
+  const readback = validateTurnContextContribution(request);
+  assert.deepEqual(readback.readback, status.readback);
+  assert.equal(Object.hasOwn(readback, "basis_digest"), false);
+  assert.throws(() => projectTurnContextContribution({contribution: readback, readback: status.readback, source}));
+  assert.throws(() => validateTurnContextContribution({...request, source}));
+  assert.throws(() => validateTurnContextContribution({registration, result: status}));
+  for (const patch of [{context_fields: result.context_fields}, {instructions: result.instructions},
+    {result_fields: result.result_fields}]) {
+    assert.throws(() => validateTurnContextContribution({...request, result: {...status, ...patch}}));
+  }
+  assert.throws(() => validateTurnContextContribution({...request, result: {...status, readback: {other_slot: {}}}}));
+});
+
 const quotaSource = {goal_id: "fixture-goal", agent_id: "fixture-agent",
   ok: true, should_run: true, mode: "should-run", effective_action: "normal_run",
   interaction_contract: {schema_version: "loopx_interaction_contract_v0", mode: "bounded_delivery",
@@ -26,6 +44,20 @@ const quotaSource = {goal_id: "fixture-goal", agent_id: "fixture-agent",
   goal_boundary: {write_scope: ["fixture/**"], capabilities: {reward_memory: {
     enabled: true, configured_for_agent: true, experiment_available: true,
     automatic_recall: true, automatic_ingest: false}}}};
+
+test("an existing quota contribution can replay with its exact legacy reader binding", () => {
+  const source = {...quotaSource, replan_read_path: "fixture/decision.json",
+    replan_action_packet: {obligation_id: "fixture-replan", decision: "replan_required"}};
+  const current = validateTurnContextContribution({registration, source, result});
+  const {basis_digest: currentBasis, ...value} = current;
+  const legacyBasis = canonicalAuthoritySha256({source: {goal_id: source.goal_id, agent_id: source.agent_id,
+    governing: quotaActionSignatureDocument(source)}, ...value});
+  assert.notEqual(legacyBasis, currentBasis);
+  const contribution = {...value, basis_digest: legacyBasis};
+  assert.deepEqual(projectTurnContextContribution({contribution, source, readback: result.readback}), contribution);
+  assert.throws(() => projectTurnContextContribution({contribution, readback: result.readback,
+    source: {...source, replan_read_path: "fixture/other.json"}}));
+});
 
 test("native quota context survives location-only capture binding", () => {
   const contribution = validateTurnContextContribution({registration, source: quotaSource, result});

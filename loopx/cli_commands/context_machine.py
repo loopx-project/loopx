@@ -42,7 +42,8 @@ def _private_transport_root(runtime_root: Path) -> str:
     return str(root)
 
 
-def capture_context_recovery(value: dict[str, Any], *, runtime_root: Path) -> dict[str, Any]:
+def capture_context_recovery(value: dict[str, Any], *, runtime_root: Path,
+                             index_and_select: bool = True) -> dict[str, Any]:
     """Publish exact write-time facts through the existing generic file reader.
 
     This does not present a delta, advance a native baseline or rerun admission.
@@ -56,6 +57,8 @@ def capture_context_recovery(value: dict[str, Any], *, runtime_root: Path) -> di
     try:
         directory = Path(tempfile.mkdtemp(prefix="recovery-", dir=_private_transport_root(runtime_root)))
         reference = capture_context_projection(value, directory=directory, filename="required-context.json")
+        if not index_and_select:
+            return {key: reference[key] for key in ("path", "sha256", "command")}
         path, digest = Path(reference["path"]), reference["sha256"]
         return {"path": str(path), "sha256": digest,
             "index_command": context_capture_read_command(path, digest, list_fields=True, list_depth=2),

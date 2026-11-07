@@ -1,6 +1,7 @@
 import type {JsonObject} from "../effect_program.ts";
 import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
-import {requireJsonObject, requireNonEmptyString, requireStringArray} from "../runtime_decode.ts";
+import {requireBoolean, requireJsonObject, requireNonEmptyString, requireStringArray} from "../runtime_decode.ts";
+import {withComposedCliSettlement} from "../quota/settlement_plan.ts";
 import {quotaActionSignatureDocument, turnEnvelopeActionSignatureDocument} from "../quota/turn_envelope.ts";
 
 // This is a local host-IO contract, not a new capability or authority vocabulary.
@@ -19,13 +20,16 @@ const RESERVED = new Set([
 ]);
 const FIELD = /^[a-z][a-z0-9_]{2,95}$/;
 
-function contextSource(value: unknown): JsonObject {
+function contextSource(value: unknown, composedSettlement: boolean, bindReaderLocation = false): JsonObject {
   const source = requireJsonObject(value, "context source");
-  // Reuse the governing owner. Binding the original observation adds detail
-  // locations/measurements without changing the authorized decision.
+  // The replan reader generates commands that carry the capture's own hash.
+  // Bind the governing action and settlement rather than these read addresses.
+  const {replan_read_path: _readerPath, ...beforeReaderBinding} = source;
+  const quotaSource = bindReaderLocation ? source : beforeReaderBinding;
   return {goal_id: source.goal_id, agent_id: source.agent_id,
     governing: "heartbeat_receipt" in source
-      ? quotaActionSignatureDocument(source) : turnEnvelopeActionSignatureDocument(source)};
+      ? quotaActionSignatureDocument(composedSettlement ? withComposedCliSettlement(quotaSource) : quotaSource)
+      : turnEnvelopeActionSignatureDocument(source)};
 }
 
 function fields(value: unknown, label: string): JsonObject {
@@ -69,7 +73,20 @@ export function validateTurnContextContribution(input: JsonObject): JsonObject {
   }
   const normalized = {hook_id: registration.hook_id, capability_id: registration.capability_id,
     readback_slots: slots, context_fields: context, instructions, result_fields: resultFields, readback};
-  return {...normalized, basis_digest: canonicalAuthoritySha256({source: contextSource(input.source), ...normalized})};
+  if (input.readback_only !== undefined && requireBoolean(input.readback_only, "readback_only")) {
+    // A status-only result is returned to the guard and is never a reusable
+    // context contribution. Keep its registration, slot and budget checks.
+    if (Object.hasOwn(input, "source") || Object.hasOwn(input, "composed_settlement") || Object.keys(context).length ||
+        instructions.length || Object.keys(resultFields).length) {
+      throw new Error("readback-only context validation cannot carry a source or a contribution");
+    }
+    return normalized;
+  }
+  const composedSettlement = input.composed_settlement === undefined ? false
+    : requireBoolean(input.composed_settlement, "composed_settlement");
+  return {...normalized, basis_digest: canonicalAuthoritySha256({
+    source: contextSource(input.source, composedSettlement), ...normalized,
+  })};
 }
 
 export function projectTurnContextContribution(input: JsonObject): JsonObject {
@@ -82,6 +99,15 @@ export function projectTurnContextContribution(input: JsonObject): JsonObject {
     result: {context_fields: contribution.context_fields, instructions: contribution.instructions,
       result_fields: contribution.result_fields, readback}});
   if (contribution.basis_digest !== normalized.basis_digest) {
+    const source = requireJsonObject(input.source, "context source");
+    // An existing unversioned quota observation may already have been bound
+    // to its exact reader. Preserve that basis only on an exact legacy match.
+    if ("heartbeat_receipt" in source && !Object.hasOwn(source, "contract_binding") &&
+        typeof source.replan_read_path === "string") {
+      const {basis_digest: _currentBasis, ...value} = normalized;
+      const legacyBasis = canonicalAuthoritySha256({source: contextSource(source, false, true), ...value});
+      if (contribution.basis_digest === legacyBasis) return {...normalized, basis_digest: legacyBasis};
+    }
     throw new Error("context source or contribution changed after registration");
   }
   return normalized;
