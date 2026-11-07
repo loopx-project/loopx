@@ -824,6 +824,57 @@ Approval needs a reviewed decision, not implementation progress or silence.
   installation, R1 managed minimal or D1–D7. No preset, frontend operation,
   permission or persisted state changes; protected execution keeps its owner.
 
+### 2026-11-06 — History reader selected loading
+
+- **Baseline and boundary:** `22b0f6c25`. Ordinary `history` reads and help use
+  the existing registrar/handler through the shared CLI grammar and guard.
+  Maintenance actions, rejected parser requests and a preloaded full CLI retain
+  the original route, including handler/renderer patch points. History algorithms,
+  evidence windows, public imports and the TS owner remain unchanged. This is a
+  reversible R0 reader slice in the monolithic distribution; I3 still requires
+  at least one minor release for public moves.
+- **Real-path evidence:** 27 actual-console cases per baseline/candidate source
+  and installed-wheel environment preserve stdout/stderr/exit codes, UTC order,
+  Agent filtering, limits, empty/unknown inputs and current/stale evidence reads.
+  Four additional installed/source facade probes preserve patched handlers and
+  renderers. The preloaded-handler oracle failed before its correction; final
+  history/parser selection passes 26 tests. Existing durable history, artifact
+  and evidence oracles are retained. Required native services use disposable
+  process and data namespaces, with authenticated exit readback.
+- **Matched measurement:** Apple M4 Pro, 48 GiB, macOS 27 arm64, Python 3.13.5,
+  Node 26.0.0; matched Python dependencies and source-pair Node dependencies.
+  Each of four workloads has 30 interleaved baseline/candidate pairs, precompiled
+  bytecode and fresh Python processes with warm native-service reuse. The final
+  sampling takes 229 seconds; all three rounds total 698 seconds, below the
+  frozen 20-minute sampling bound. Setup, validation and tracing are separate.
+  Earlier environment/refinement observations retain their original scope.
+
+| Workload | Median / p95 elapsed ms, base → candidate | Median CPU ms | Median CLI peak RSS MiB |
+| --- | --- | --- | --- |
+| Source help | 1552 / 1862 → 204 / 349 | 670 → 100 | 91.4 → 31.3 |
+| Source Agent read | 1603 / 1833 → 417 / 482 | 665 → 150 | 91.9 → 34.4 |
+| Wheel help | 1621 / 2053 → 220 / 375 | 695 → 100 | 91.8 → 31.0 |
+| Wheel Agent read | 1648 / 1825 → 414 / 462 | 725 → 150 | 92.2 → 34.6 |
+
+- **Loading and effects:** source/wheel help loads 155 rather than 1157 LoopX
+  modules; registered reads load 208 rather than 1158, evidence reads 210 rather
+  than 1159. Python audit read-open observations decrease from 1290 to 246 for
+  source help and 1311 to 723 for its cold native read; wheel observations are
+  1291 → 247 and 1710 → 723. Help has zero observed writes/processes/connections.
+  Cold registered reads retain six write-opens, two process starts and one
+  connection, with 252/355 client IPC bytes sent/received. Evidence reads retain
+  one write-open, two connections and 1377/804 IPC bytes. These required effects
+  are not optional activation. A serving runtime can work without Node on PATH;
+  cold absence retains the existing failure. Output bytes match. Timing includes
+  interpreter and process invocation; descendant CPU/RSS/I/O, full model and
+  attention costs remain unknown.
+- **Holds and remaining work:** measured help p95 remains above the proposed
+  200 ms target; D6 is not adopted. Source-session loader inventory and Turn
+  preview import checks fail identically on the untouched baseline. Their failures
+  are retained as qualification holds. This does not close full R0/V10, M1,
+  split installation, R1/context/host qualification or open design decisions.
+  Revert the loader slice for rollback; no state migration is involved.
+
 ### 2026-11-06 — Selected version loading and matched costs
 
 The independent proposal `8a79d8602e699e51452ca1f43dc9b9527c81aa1b` at baseline
