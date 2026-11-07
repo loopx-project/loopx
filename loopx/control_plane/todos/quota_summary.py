@@ -475,6 +475,65 @@ def select_quota_todo_summary(
     return summary
 
 
+def select_quota_todo_contexts(
+    user_canonical: Any, user_asset: Any, agent_canonical: Any, agent_asset: Any,
+    *, agent_identity: dict[str, Any] | None, available_capabilities: Any,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, list[dict[str, Any]]], list[dict[str, Any]]]:
+    """The quota caller explicitly consumes both summaries and Agent displays.
+
+    One native read transaction materializes each complete source. A supplied
+    compatibility source retains its full codec and cannot acquire authority.
+    """
+    from .quota_selection import _decode_quota_summary_wire
+    from .goal_todo_projection import project_todo_read
+
+    values: list[dict[str, Any]] = []
+    roles: list[str] = []
+    requests: list[dict[str, Any]] = []
+    for role, canonical, asset in (("user", user_canonical, user_asset), ("agent", agent_canonical, agent_asset)):
+        source = _select_todo_source(canonical, asset)
+        if source is None:
+            continue
+        kind = "user" if source is canonical else "project_asset"
+        values.append(source)
+        roles.append(role)
+        requests.append(project_quota_planning(source, all_open_items=[], source_open_count=source.get("open_count"),
+            agent_identity=agent_identity, filter_user_gate_blocks_agent=role == "user",
+            available_capabilities=available_capabilities, resolve_capacity=True,
+            summary_kind=kind, consume_display_views=role == "agent", request_only=True))
+        requests[-1]["summary_request"]["consume_source_summary"] = role == "user"
+        requests[-1]["summary_request"]["consume_vision_wait_basis"] = role == "agent"
+    summaries: dict[str, dict[str, Any]] = {}
+    views: dict[str, list[dict[str, Any]]] = {"summary": [], "planning": [], "terminal": []}
+    user_rows: list[dict[str, Any]] = []
+    if requests:
+        result = project_todo_read({"kind": "quota_projection", "requests": requests})
+        wires = result.get("quota_wires")
+        if not isinstance(wires, list) or len(wires) != len(requests):
+            raise RuntimeError("invalid complete quota projection response")
+        for role, source, wire in zip(roles, values, wires, strict=True):
+            summaries[role] = _decode_quota_summary_wire(wire, source)
+            if role == "user":
+                user_rows = wire.get("source_summary")
+                if not isinstance(user_rows, list) or any(not isinstance(row, dict) for row in user_rows):
+                    raise RuntimeError("invalid User quota source display")
+            if role == "agent":
+                raw = wire.get("display_views") if isinstance(wire, dict) else None
+                if not isinstance(raw, dict) or set(raw) != set(views) or any(
+                    not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows)
+                    for rows in raw.values()
+                ):
+                    raise RuntimeError("invalid explicit Agent quota display views")
+                views = raw
+                from .summary_item import _QuotaProjectedSummary
+                basis = wire.get("vision_wait_basis")
+                if not isinstance(basis, dict):
+                    raise RuntimeError("invalid prepared quota vision wait basis")
+                summaries[role] = _QuotaProjectedSummary(summaries[role], basis, views["terminal"],
+                    (agent_identity or {}).get("agent_id"))
+    return summaries.get("user"), summaries.get("agent"), views, user_rows
+
+
 def _select_todo_source(
     canonical_value: Any,
     project_asset_value: Any,

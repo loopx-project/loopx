@@ -169,6 +169,12 @@ _REQUEST_RUNTIME_REVISION: ContextVar[_RequestRuntimeRevision | None] = (
 )
 
 
+def todo_projection_request_identity() -> object | None:
+    """Bind a source codec to its current logical request, never to a TTL."""
+    state = _REQUEST_RUNTIME_REVISION.get()
+    return state if state is not None and not state._closed else None
+
+
 class EffectRuntimeRemoteError(RuntimeError):
     """A typed exception returned by the managed TypeScript runtime."""
 

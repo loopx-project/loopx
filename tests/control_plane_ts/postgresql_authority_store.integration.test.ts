@@ -21,6 +21,8 @@ import { openLocalAuthorityStoreHandle } from "../../loopx/control_plane/coordin
 import {readLocalCoordinationTodoSource} from "../../loopx/control_plane/coordination/local_authority_read.ts";
 import {CANONICAL_SNAPSHOT_PAGE_REQUEST, readCanonicalSnapshotFromStore} from "../../loopx/control_plane/coordination/canonical_snapshot_page.ts";
 import {projectTodoContextPage} from "../../loopx/control_plane/todos/context_projection.ts";
+import {readCanonicalTodoProjection, readCanonicalQuotaProjection} from "../../loopx/control_plane/todos/read_transaction.ts";
+import {canonicalReadRoot} from "./local_promotion_fixture.ts";
 import {coordinationTodoReadModel} from "../../loopx/control_plane/coordination/coordination_projection.ts";
 import {inspectGoalAcceptance, refineGoalAcceptanceOutcome} from "../../loopx/control_plane/goals/acceptance_authority.ts";
 import {authorityProjectionFixture} from "./authority_projection_fixture.ts";
@@ -126,6 +128,62 @@ async function cleanScope(tenantId: string, goalId: string): Promise<void> {
 }
 
 if (database && installed) {
+  test("PostgreSQL canonical quota transaction binds one provider read and complete caller differences", async t => {
+    await installed;
+    const options = {tenant_id: `tenant-${randomUUID()}`, goal_id: `goal-${randomUUID()}`};
+    t.after(() => cleanScope(options.tenant_id, options.goal_id));
+    const root = await canonicalReadRoot(t, options.goal_id);
+    const store = new PostgreSqlAuthorityStore(database, options);
+    const projection = authorityProjectionFixture(options.goal_id, [{todo_id: "todo_native_quota", role: "agent",
+      status: "open", done: false, archive_state: "active", text: "Deliver the complete required artifact", priority: "P1",
+      task_class: "advancement_task", required_write_scopes: ["output.json"], note: "Retained source note", evidence: "artifact:retained"}]);
+    const seeded = await store.commitAuthority({operation_id: "quota-native-seed", expected_provider_revision: null,
+      next_projection: projection, events: [], receipts: []});
+    assert.equal(seeded.status, "applied");
+    let loads = 0;
+    const observed = new Proxy(store, {get(target, property) {
+      if (property === "loadAuthority") return async () => {loads++; return target.loadAuthority();};
+      const value = Reflect.get(target, property);
+      return typeof value === "function" ? value.bind(target) : value;
+    }});
+    const dependencies = {createStore: () => observed};
+    const read = {schema_version: "todo_read_request_v0", kind: "canonical_fields",
+      source: {runtime_root: root, goal_id: options.goal_id, include_leases: false, projection_readback: null},
+      observed_at: 1790812800, evaluated_at: "2026-10-01T00:00:00Z", rollout_events: []};
+    const initial = await readCanonicalTodoProjection(read, dependencies);
+    const fields = initial.fields as JsonObject, lineage = initial.source_projection as JsonObject;
+    const request = (field: string, changes: JsonObject[], displays: boolean): JsonObject => ({
+      schema_version: "todo_quota_planning_request_v4", current_time: "2026-10-01T00:00:00Z",
+      summary_request: {kind: "user", materialize_source: true, materialize_resume: true, consume_display_views: displays,
+        source_reference: {read, expected_source: lineage.source, field, field_sha256: (lineage.field_digests as JsonObject)[field], changes, python_values: []},
+        integer_counts: {source: null, warning: null}},
+      source_contract: fields[field], handoff_items: [], route_items: [],
+      resume_options: {agent_id: "agent-a", item_limit: 8, available_capabilities: []},
+      selection: {observed_at: 1790812800, available: [], agent_id: "agent-a", profile: null, user_gate_scope: field === "user_todos",
+        monitor_supported: false, items: [], active_items: [], active_executable_items: [], source_open_count: 1, source_complete: true,
+        diagnostic_limit: 3, backlog_limit: 8, visibility_limit: 16},
+    });
+    const requests = [request("user_todos", [], false), request("agent_todos", [{path: ["vision_wait_states"], value: [{agent_id: "agent-a", state: "waiting"}]}], true)];
+    loads = 0;
+    const result = await readCanonicalQuotaProjection({requests}, dependencies);
+    assert.equal(loads, 1, "both role requests share this one native provider read only");
+    const wires = result.quota_wires as JsonObject[];
+    assert.equal(wires[0]!.display_views, undefined, "the User caller did not request three displays");
+    const views = wires[1]!.display_views as JsonObject;
+    assert.equal((views.terminal as JsonObject[])[0]!.note, "Retained source note");
+    assert.deepEqual((views.summary as JsonObject[])[0]!.required_write_scopes, ["output.json"]);
+    const forged = structuredClone(requests);
+    ((forged[1]!.summary_request as JsonObject).source_reference as JsonObject).changes = [{path: ["items", 0, "note"], value: "Forged source fact"}];
+    await assert.rejects(readCanonicalQuotaProjection({requests: forged}, dependencies), /canonical Todo facts/);
+    const untouched = await store.loadAuthority();
+    assert.equal(untouched.status, "loaded");
+    if (untouched.status !== "loaded") throw new Error("synthetic provider disappeared");
+    assert.deepEqual(untouched.head, projection);
+    const changed = await store.commitAuthority({operation_id: "quota-native-source-change", expected_provider_revision: untouched.provider_revision,
+      next_projection: authorityProjectionFixture(options.goal_id, (projection.todos as JsonObject[]).map(row => ({...row, text: "A new requirement"}))), events: [], receipts: []});
+    assert.equal(changed.status, "applied");
+    await assert.rejects(readCanonicalQuotaProjection({requests}, dependencies), /canonical source changed/);
+  });
   test("PostgreSQL planning reads the Agent declaration and work links from the canonical head", async t => {
     await installed;
     const options = {tenant_id: `tenant-${randomUUID()}`, goal_id: `goal-${randomUUID()}`};

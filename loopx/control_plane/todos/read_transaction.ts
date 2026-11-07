@@ -11,12 +11,16 @@ import {id, canonicalTodoReadItems, structureCanonicalTodo} from "./read_codec.t
 import {compactTodoReadSummary, compactThinTodoRead, compactTodoQueueSummary, todoReadProjectionContract} from "./read_presentation.ts";
 import {projectTodoContextPage} from "./context_projection.ts";
 import {sealProjectionEnvelope, PROJECTION_ENVELOPE_SEAL_REQUEST} from "../projection_envelope.ts";
+import {canonicalAuthoritySha256, canonicalAuthorityJson} from "../coordination/authority_store_codec.ts";
+import {decodeTodoReadSource} from "./read_codec.ts";
+import {projectTodoQuotaPlanning} from "./quota_selection.ts";
+import type {LocalAuthorityProviderDependencies} from "../coordination/local_authority_provider.ts";
 
 const includesArchivedRows = (query: JsonObject): boolean =>
   query.read_scope === "completed_history" || query.include_archived === true;
 
-export async function readCanonicalTodoProjection(input: JsonObject): Promise<JsonObject> {
-  const canonical = await collectCanonicalTodoSource(requireJsonObject(input.source, "canonical Todo read source"));
+export async function readCanonicalTodoProjection(input: JsonObject, dependencies: LocalAuthorityProviderDependencies = {}): Promise<JsonObject> {
+  const canonical = await collectCanonicalTodoSource(requireJsonObject(input.source, "canonical Todo read source"), dependencies);
   if (canonical.status !== "loaded") return {schema_version: TODO_READ_RESULT, canonical};
   const todos = canonical.todos;
   const guards = canonical.goal_acceptance_work_guards ?? {};
@@ -24,20 +28,146 @@ export async function readCanonicalTodoProjection(input: JsonObject): Promise<Js
   const query = requireJsonObject(input.query ?? {}, "Todo query");
   const includeArchived = includesArchivedRows(query);
   const retained = query.read_scope === "completed_history";
-  const projected = await projectCanonicalTodoFields({...input, todos, retained, include_archived: includeArchived,
+  let projected = await projectCanonicalTodoFields({...input, todos, retained, include_archived: includeArchived,
     goal_acceptance_contract: canonical.goal_acceptance_contract ?? null,
     goal_acceptance_work_guards: guards});
-  if (input.query == null || projected.rejection) return {...projected, canonical};
+  if (input.read_pipeline !== undefined) {
+    if (input.kind !== "canonical_fields" || input.query != null || !Array.isArray(input.read_pipeline) || !input.read_pipeline.length) {
+      throw new EffectRuntimeRequestError("Todo select pipeline requires a complete canonical read");
+    }
+    for (const value of input.read_pipeline) {
+      if (projected.rejection) return {...projected, canonical};
+      const stage = requireJsonObject(value, "Todo select pipeline stage");
+      validateCanonicalSource(canonical, requireJsonObject(stage.expected_source, "Todo select source identity"));
+      const selector = requireJsonObject(stage.selector, "Todo native selector");
+      const references = requireJsonObject(stage.sources, "Todo select source references");
+      if (!Array.isArray(selector.roles) || Object.keys(references).length !== selector.roles.length) {
+        throw new EffectRuntimeRequestError("Todo select pipeline must bind every consumed role");
+      }
+      const fields: JsonObject = {};
+      for (const role of selector.roles) {
+        const key = `${String(role)}_todos`;
+        fields[key] = resolveCanonicalSource(requireJsonObject(projected.fields, "Todo select fields"),
+          requireJsonObject(references[key], "Todo select source"), key);
+      }
+      const selected = await selectTodoReadFields({...selector, fields,
+        field_evaluations: projected.field_evaluations, include_source_evaluations: true});
+      if (selected.rejection) return {...selected, canonical};
+      projected = {...selected, fields: requireJsonObject(selected.projection, "native Todo selection").summaries};
+    }
+  }
+  if (input.query == null || projected.rejection) return {
+    ...(input.return_projection === true && projected.projection
+      ? {schema_version: TODO_READ_RESULT, projection: projected.projection, field_evaluations: projected.field_evaluations}
+      : {...projected, canonical}),
+    ...(projected.fields && !projected.rejection ? {source_projection: {
+      source: Object.fromEntries(["source_authority", "store_identity", "provider_revision", "cursor"].map(key => [key, canonical[key]])),
+      field_digests: Object.fromEntries(Object.entries(requireJsonObject(projected.fields, "Todo fields"))
+        .map(([key, field]) => [key, canonicalAuthoritySha256(field)]))}} : {})};
   return todoListPayload(input, originalRecords(canonical.todos), projected, canonical);
 }
 
-async function collectCanonicalTodoSource(source: JsonObject): Promise<JsonObject> {
+function validateCanonicalSource(canonical: JsonObject, expected: JsonObject): void {
+  if (canonical.status !== "loaded" || Object.keys(expected).length !== 4 ||
+      ["source_authority", "store_identity", "provider_revision", "cursor"].some(field => expected[field] !== canonical[field])) {
+    throw new EffectRuntimeRequestError("quota canonical source changed; restart the complete guarded read");
+  }
+}
+
+/** Full-tree transport, with provider facts immutable. Independent additions and
+ * the acceptance owner's observation do not acquire provider provenance. */
+function resolveCanonicalSource(fields: JsonObject, reference: JsonObject, expectedField?: string): JsonObject {
+  if ((reference.field !== "agent_todos" && reference.field !== "user_todos") ||
+      expectedField !== undefined && reference.field !== expectedField) {
+    throw new EffectRuntimeRequestError("quota source field must name the consumed Todo role");
+  }
+  const field = requireJsonObject(fields[reference.field], "quota source field");
+  if (canonicalAuthoritySha256(field) !== reference.field_sha256) {
+    throw new EffectRuntimeRequestError("quota source projection no longer matches the original complete read");
+  }
+  const record = JSON.parse(JSON.stringify(field)) as JsonObject;
+  if (!Array.isArray(reference.changes)) throw new EffectRuntimeRequestError("quota source changes must be an array");
+  for (const raw of reference.changes) {
+    const change = requireJsonObject(raw, "quota source change");
+    if (!Array.isArray(change.path) || !change.path.length ||
+        change.path.some(key => typeof key !== "string" && !(typeof key === "number" && Number.isSafeInteger(key) && key >= 0)) ||
+        (change.delete === true) === Object.hasOwn(change, "value")) {
+      throw new EffectRuntimeRequestError("invalid complete-source change");
+    }
+    const path = change.path as (string | number)[];
+    let parent: any = record;
+    for (const key of path.slice(0, -1)) {
+      if (parent === null || typeof parent !== "object" || !Object.hasOwn(parent, key)) {
+        throw new EffectRuntimeRequestError("quota source change path is absent");
+      }
+      parent = parent[key];
+    }
+    const last = path.at(-1)!;
+    if (parent === null || typeof parent !== "object" || Array.isArray(parent) &&
+        (typeof last !== "number" || last >= parent.length || change.delete === true)) {
+      throw new EffectRuntimeRequestError("quota source change parent is invalid");
+    }
+    if (change.delete === true) {
+      if (!Object.hasOwn(parent, last)) throw new EffectRuntimeRequestError("quota source deletion is absent");
+      delete parent[last];
+    } else Object.defineProperty(parent, last, {value: change.value, enumerable: true, writable: true, configurable: true});
+  }
+  for (const [key, value] of Object.entries(field)) {
+    if (key !== "goal_acceptance_contract" && (!Object.hasOwn(record, key) || canonicalAuthoritySha256(value) !== canonicalAuthoritySha256(record[key]))) {
+      throw new EffectRuntimeRequestError("canonical Todo facts cannot be replaced by caller source differences");
+    }
+  }
+  if (!Array.isArray(reference.python_values ?? []) || (reference.python_values as unknown[][] | undefined)?.some(fact =>
+      !Array.isArray(fact) || !Array.isArray(fact[0]) || !fact[0].length ||
+      Object.hasOwn(field, fact[0][0]) && fact[0][0] !== "goal_acceptance_contract")) {
+    throw new EffectRuntimeRequestError("canonical Todo scalar facts cannot be replaced by caller source differences");
+  }
+  return decodeTodoReadSource({record, python_values: reference.python_values ?? []});
+}
+
+/** Resolve complete source differences against one freshly validated provider
+ * revision. Nothing is retained between RPCs; supplied evidence remains supplied. */
+export async function readCanonicalQuotaProjection(input: JsonObject, dependencies: LocalAuthorityProviderDependencies = {}): Promise<JsonObject> {
+  if (!Array.isArray(input.requests) || !input.requests.length || input.requests.length > 2) {
+    throw new EffectRuntimeRequestError("quota projection requires one or two explicit source requests");
+  }
+  const reads = new Map<string, JsonObject>();
+  const wires: JsonObject[] = [];
+  for (const value of input.requests) {
+    let request = requireJsonObject(value, "quota projection request");
+    const summary = requireJsonObject(request.summary_request, "quota summary request");
+    if (summary.source_reference !== undefined) {
+      const reference = requireJsonObject(summary.source_reference, "quota source reference");
+      const read = requireJsonObject(reference.read, "quota source read");
+      if (read.kind !== "canonical_fields" || read.query != null) {
+        throw new EffectRuntimeRequestError("quota source requires the original complete canonical read");
+      }
+      const expected = requireJsonObject(reference.expected_source, "quota source identity");
+      const key = JSON.stringify(canonicalAuthorityJson({read, expected}));
+      let projected = reads.get(key);
+      if (projected === undefined) {
+        projected = await readCanonicalTodoProjection(read, dependencies);
+        const canonical = requireJsonObject(projected.canonical, "quota canonical source");
+        validateCanonicalSource(canonical, expected);
+        if (projected.rejection) throw new EffectRuntimeRequestError("quota canonical source evaluation was rejected");
+        reads.set(key, projected);
+      }
+      const source = {record: resolveCanonicalSource(requireJsonObject(projected.fields, "quota source fields"), reference),
+        python_values: reference.python_values ?? []};
+      request = {...request, summary_request: {...summary, source}};
+    }
+    wires.push(projectTodoQuotaPlanning(request));
+  }
+  return {schema_version: TODO_READ_RESULT, quota_wires: wires};
+}
+
+async function collectCanonicalTodoSource(source: JsonObject, dependencies: LocalAuthorityProviderDependencies = {}): Promise<JsonObject> {
   const todos: unknown[] = [], leases: unknown[] = [], guards: JsonObject = {};
   let after: unknown = null, first: JsonObject | null = null;
   do {
     const page = await readCanonicalSnapshot({schema_version: LOCAL_COORDINATION_TODO_SNAPSHOT_PAGE_REQUEST_SCHEMA,
       runtime_root: source.runtime_root, goal_id: source.goal_id, include_leases: source.include_leases === true,
-      projection_readback: source.projection_readback ?? null, after});
+      projection_readback: source.projection_readback ?? null, after}, dependencies);
     if (page.status !== "page") return {
       ...page, schema_version: LOCAL_COORDINATION_TODO_LIST_RESULT_SCHEMA};
     if (first === null) first = page;
@@ -174,7 +304,19 @@ async function todoListPayload(input: JsonObject, original: JsonObject[], fields
     coverage: {scope: "goal_todo_query", expected_count: projection.uncapped_todo_count,
       included_count: projection.uncapped_todo_count, shown_count: shownCount,
       available_count: projection.uncapped_todo_count, omitted: []}});
+  const completeSource = !query.role && !query.status && !query.todo_id && !query.agent_id && query.limit == null &&
+    !query.thin && !query.json_references && !summary && !fullText && !includeArchived;
+  const sourceFields = requireJsonObject(fields.fields, "canonical Todo fields");
+  const sourceIdentity = Object.fromEntries(["source_authority", "store_identity", "provider_revision", "cursor"].map(key => [key, canonical[key]]));
+  const {query: _query, read_observed_at: _readObserved, ...producer} = input;
   return {schema_version: TODO_READ_RESULT, payload: result,
+    ...(completeSource ? {source_projection: {source: sourceIdentity,
+      field_digests: Object.fromEntries(["user_todos", "agent_todos"].map(key => [key, canonicalAuthoritySha256(result[key])])),
+      replay_read: {...producer, kind: "canonical_fields", read_pipeline: [{expected_source: sourceIdentity,
+        sources: Object.fromEntries(["user_todos", "agent_todos"].map(field => [field,
+          {field, field_sha256: canonicalAuthoritySha256(sourceFields[field]), changes: [], python_values: []}])),
+        selector: {roles, status: null, todo_id: null, agent_id: null, limit: null, source_name: sourceName,
+          observed_at: input.observed_at, evaluated_at: input.evaluated_at}}]}}} : {}),
     ...(canonical.goal_acceptance_oracle_observation_basis ? {canonical_acceptance: {
       goal_acceptance_contract: canonical.goal_acceptance_contract,
       goal_acceptance_oracle_observation_basis: canonical.goal_acceptance_oracle_observation_basis,
