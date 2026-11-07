@@ -425,17 +425,23 @@ def capture_context_projection(payload: dict[str, Any], *, directory: Path,
 
 
 def capture_progressive_context(payload: dict[str, Any], *, directory: Path,
-                                surface: str = "quota_packet") -> tuple[dict[str, Any], dict[str, Any]]:
+                                surface: str = "quota_packet",
+                                selection_command_args_template: str | None = None,
+                                captured_decision_path: str | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
     """Publish the complete current source before optional stateless presentation.
 
     The typed owner applies the shrink guard. This neither creates a native
     journal nor requires/adopts an execution Turn. All recovery is same-capture.
+    A caller may supply the exact decision it just verified for staged reads.
     """
     from ..quota.turn_envelope import prepare_progressive_context
 
     source = capture_context_projection(payload, directory=directory)
     transaction = prepare_progressive_context(payload, surface=surface, source_reference={
         **{key: source[key] for key in ("path", "sha256")},
+        **({"selection_command_args_template": selection_command_args_template}
+            if selection_command_args_template is not None else {}),
+        **({"captured_decision_path": captured_decision_path} if captured_decision_path is not None else {}),
         "source_path": source["path"],
         "command_template": source["command"] + " --select '<pointer>'",
     })
@@ -559,26 +565,83 @@ def context_selection_transport(payload: dict[str, Any], select: list[str] | Non
     return result
 
 
-def context_selection_bytes(payload: dict[str, Any], selections: list[dict[str, Any]],
-                             *, list_fields: bool, list_depth: int | None) -> bytes:
-    """Render TS-verified addresses from original, digest-checked JSON values."""
+_GOAL_SOURCE_PREFIX = ["interaction_contract", "agent_channel", "work_context", "sources"]
+_GOAL_NARRATIVE_PRESENTATION = (
+    "The generated frontmatter objective appears once under ## Objective. "
+    "Use --select on the same capture at this pointer for verbatim source text."
+)
+
+
+def _first_read_goal_text(payload: dict[str, Any], path: list[Any], value: Any) -> str | None:
+    # Only render the typed selector's registered Goal text leaf. The source,
+    # enclosing containers, exact detail reads and unknown shapes stay literal.
+    if (not isinstance(value, str) or path[:4] != _GOAL_SOURCE_PREFIX
+            or len(path) != 7 or type(path[4]) is not int or path[5:] != ["content", "text"]):
+        return None
+    interaction = payload["interaction_contract"]
+    source = interaction["agent_channel"]["work_context"]["sources"][path[4]]
+    content = source["content"]
+    if (interaction.get("schema_version") != "loopx_interaction_contract_v0"
+            or source.get("source") != "goal_state" or content.get("ok") is False
+            or content.get("read_complete") is False or not content.get("state_file")
+            or not (content.get("full_source") is True or content.get("excluded_todo_regions"))):
+        return None
+    from ..goals.active_state_metadata import goal_narrative_without_objective_mirror
+
+    text = goal_narrative_without_objective_mirror(value)
+    # Allow room for the presentation notice and immutable selection metadata.
+    return text if text is not None and len(value) - len(text) > len(_GOAL_NARRATIVE_PRESENTATION) + 96 else None
+
+
+def _context_selection_bytes(payload: dict[str, Any], selections: list[dict[str, Any]],
+                             *, list_fields: bool, list_depth: int | None,
+                             present_goal_narrative: bool) -> tuple[bytes, list[str]]:
+    """Render TS-verified addresses from the original, digest-checked values."""
     views: list[dict[str, Any]] = []
+    presented: list[str] = []
     for item in selections:
         selected: Any = payload
-        for key in item["path"]:
+        path, pointer = item["path"], item["pointer"]
+        for key in path:
             selected = selected[key]
         if list_fields:
-            views.append({"pointer": item["pointer"], "fields": context_index_fields(payload, item["children"])})
+            views.append({"pointer": pointer, "fields": context_index_fields(payload, item["children"])})
         else:
-            views.append({"pointer": item["pointer"], "value": selected})
+            text = _first_read_goal_text(payload, path, selected) if present_goal_narrative else None
+            if text is None:
+                views.append({"pointer": pointer, "value": selected})
+            else:
+                presented.append(pointer)
+                views.append({"pointer": pointer, "value": text, "presentation": _GOAL_NARRATIVE_PRESENTATION})
     view_options = {"list_depth": list_depth} if list_depth is not None and list_depth != 1 else {}
-    return json.dumps({"schema_version": "context_capture_index_v1" if list_fields else "context_capture_selection_v1",
+    raw = json.dumps({"schema_version": "context_capture_index_v1" if list_fields else "context_capture_selection_v1",
         "selections": views, **view_options}, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
+    return raw, presented
+
+
+def context_selection_binding(select: list[str], *, list_fields: bool, list_depth: int | None,
+                              sha256: str, presented: bool = False) -> dict[str, Any]:
+    return {"select": select, "initial_read": False, "list_fields": list_fields, "list_depth": list_depth,
+        "sha256": sha256, **({"present_goal_narrative": True} if presented else {})}
+
+
+def write_initial_context_read_reference(path: Path, digest: str, payload: dict[str, Any],
+                                        selections: list[dict[str, Any]], *,
+                                        observed_read: dict[str, Any] | None = None) -> tuple[Path, bytes]:
+    """Pin the shared rendered selection and return its exact rendered bytes."""
+    raw, presented = _context_selection_bytes(payload, selections, list_fields=False, list_depth=None,
+        present_goal_narrative=True)
+    reference = write_context_read_reference(path, digest,
+        selection=context_selection_binding([item["pointer"] for item in selections], list_fields=False,
+            list_depth=None, sha256=hashlib.sha256(raw).hexdigest(), presented=bool(presented)),
+        observed_read=observed_read)
+    return reference, raw
 
 
 def context_selection_view(payload: dict[str, Any], *, select: list[str] | None,
                            initial_read: bool, list_fields: bool, list_depth: int | None,
                            expected_sha256: str | None, preserve_selection_order: bool = False,
+                           present_goal_narrative: bool | None = None,
                            ) -> tuple[dict[str, Any], bytes | None, str | None]:
     """Replay the TS selector and verify the original digest-pinned view."""
     from ..quota.turn_envelope import _turn_envelope_result
@@ -592,15 +655,24 @@ def context_selection_view(payload: dict[str, Any], *, select: list[str] | None,
         recover_selection_errors=not initial_read, **selection, **depth, **order)
     if plan.get("rejected_selection"):
         return plan, None, None
-    raw = context_selection_bytes(payload, plan["selections"], list_fields=list_fields, list_depth=list_depth)
-    digest = hashlib.sha256(raw).hexdigest()
+    presentation = initial_read if present_goal_narrative is None else present_goal_narrative
+    def render(plan: dict[str, Any], present: bool):
+        raw, displayed = _context_selection_bytes(payload, plan["selections"], list_fields=list_fields,
+            list_depth=list_depth, present_goal_narrative=present)
+        return raw, hashlib.sha256(raw).hexdigest(), displayed
+
+    raw, digest, displayed = render(plan, presentation)
     if preserve_selection_order and expected_sha256 != digest:
         # Historical explicit references may pin canonical output despite
         # retaining caller order. Only the same source and addresses can replay.
         plan = _turn_envelope_result("context_select", context=context,
             list_fields=list_fields, **selection, **depth)
-        raw = context_selection_bytes(payload, plan["selections"], list_fields=list_fields, list_depth=list_depth)
-        digest = hashlib.sha256(raw).hexdigest()
+        raw, digest, displayed = render(plan, presentation)
+    if (expected_sha256 is not None and expected_sha256 != digest
+            and initial_read and present_goal_narrative is None and displayed):
+        # An unpinned initial cursor may have started before presentation was
+        # enabled. Its original digest must still match the literal view.
+        raw, digest, displayed = render(plan, False)
     if expected_sha256 is not None and expected_sha256 != digest:
         raise ValueError("selected view digest changed; restore the original selection and reader")
-    return plan, raw, digest
+    return {**plan, "presentation_pointers": displayed} if displayed else plan, raw, digest

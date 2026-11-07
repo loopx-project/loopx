@@ -72,6 +72,7 @@ def _run(
     todos: list[dict[str, object]] | None = None,
     context_delivery: str = "off",
     goal_suffix: str = "",
+    write_scopes: list[str] | None = None,
 ):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     runtime = tmp_path / "runtime"
@@ -96,6 +97,7 @@ def _run(
         extra_goal_fields={"coordination": {
             "registered_agents": [AGENT, "agent-b"],
             "handoff_mode": "hard_lease",
+            **({"write_scope": write_scopes, "requires_parent_approval": ["publish"]} if write_scopes else {}),
         }},
     )
     projection = build_todo_runtime_shadow_projection(
@@ -519,6 +521,7 @@ def test_native_hook_replays_the_original_claim_after_guard_timeout(
 def test_projected_claim_prepares_the_same_receipt_bound_turn(
     tmp_path, monkeypatch, provider, multiple_candidates,
 ):
+    scopes = [f"src/synthetic-area-{index:03d}/**" for index in range(220)]
     unbound = _run(
         tmp_path,
         monkeypatch,
@@ -529,6 +532,7 @@ def test_projected_claim_prepares_the_same_receipt_bound_turn(
         "--begin-turn",
         todos=[_todo(), {**_todo(), "todo_id": "todo_other_candidate", "index": 2}]
         if multiple_candidates else None,
+        write_scopes=scopes,
     )
     assert "heartbeat_receipt" in unbound, json.dumps(
         unbound, ensure_ascii=False, indent=2,
@@ -563,6 +567,59 @@ def test_projected_claim_prepares_the_same_receipt_bound_turn(
         runtime_root=tmp_path / "runtime", goal_id=GOAL, include_leases=True,
     )["leases"]
 
+    def read_model_view(packet, stage, *, deferred):
+        source = tmp_path / f"{stage}.json"
+        raw = json.dumps(packet, ensure_ascii=False, separators=(",", ":")).encode()
+        source.write_bytes(raw)
+        registry, runtime = tmp_path / "absent-registry.json", tmp_path / "reader-runtime"
+        args = ["quota", "context-project", "--capture-file", str(source),
+            "--capture-sha256", hashlib.sha256(raw).hexdigest(), "--context-delivery", "on",
+            "--delta-delivery", "off", "--goal-id", GOAL, "--agent-id", AGENT, "--turn-instance-id", turn]
+
+        def read(*argv):
+            code, result = run_json_cli_result(*argv, registry_path=registry, runtime_root=runtime)
+            assert code == 0 and result["ok"], result
+            return result
+
+        navigation = read(*args)
+        command = shlex.split(navigation["first_read_command"])
+        selected = bytearray()
+        while True:
+            page = read(*command[command.index("quota"):])
+            assert page["offset"] == len(selected)
+            selected.extend(page["content"].encode())
+            if page["eof"]:
+                assert len(selected) == page["total_bytes"]
+                break
+            command = shlex.split(page["next_command"])
+        values = {row["pointer"]: row["value"] for row in json.loads(selected)["selections"]}
+        boundary = packet["goal_boundary"]
+        assert boundary["write_scope"] == scopes and boundary["requires_parent_approval"] == ["publish"]
+        assert values["/heartbeat_receipt"] == packet["heartbeat_receipt"]
+        if deferred:
+            marker = "/goal_boundary/write_scope"
+            assert values["/goal_boundary"] == {
+                **{key: value for key, value in boundary.items() if key != "write_scope"},
+                "write_scope_pointer": marker,
+            }
+            detail = values["/context_details/unread_context_index/source"]
+            restored = read("quota", "context-read", "--capture-file", detail["path"],
+                "--capture-sha256", detail["sha256"], "--select", marker)
+            assert restored["eof"]
+            assert json.loads(restored["content"])["selections"] == [{"pointer": marker, "value": scopes}]
+            if stage == "claim":
+                args[args.index("--context-delivery") + 1] = "off"
+                plain = read(*args)
+                assert plain["mode"] == "full" and plain["recovery"]["sha256"] == hashlib.sha256(raw).hexdigest()
+                assert plain["recovery"]["path"] == str(source)
+        else:
+            assert values["/goal_boundary"] == boundary
+        assert source.read_bytes() == raw and not registry.exists()
+
+    if multiple_candidates:
+        read_model_view(unbound, "selection", deferred=True)
+        read_model_view(before, "claim", deferred=True)
+
     claim_code, claim = run_json_cli_result(
         *before["execution_preparation"]["claim"]["cli_args"],
         registry_path=tmp_path / "registry.json",
@@ -586,6 +643,8 @@ def test_projected_claim_prepares_the_same_receipt_bound_turn(
     assert after["selected_todo"]["todo_id"] == TODO
     assert after["execution_preparation"]["state"] == "ready"
     assert after["normal_delivery_allowed"] is True
+    if multiple_candidates:
+        read_model_view(after, "ready", deferred=False)
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

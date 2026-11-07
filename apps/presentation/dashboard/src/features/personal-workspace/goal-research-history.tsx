@@ -11,7 +11,7 @@ import {requestJson} from "../../data/chat";
 import {sourceReadApiUrl} from "../../data/local-status-query";
 import {ContextHelp} from "./context-help";
 import type {WorkspaceGoal} from "./personal-workspace-model";
-import {groupUnlinkedHistoryQuestions, layoutExploreHistory, parseExploreHistoryPage, projectExploreHistory, type ExploreHistoryEvent} from "../../../../../../loopx/control_plane/presentation/explore_history.js";
+import {groupUnlinkedHistoryQuestions, layoutExploreHistory, mergeExploreHistoryEvents, parseExploreHistoryPage, projectExploreHistory, type ExploreHistoryEvent} from "../../../../../../loopx/control_plane/presentation/explore_history.js";
 import "./goal-research-history.css";
 import {ExploreMeasurements, formatExploreMeasurementValue} from "./explore-measurements";
 import {projectTrajectoryDisplay, trajectoryDisplaySnapshotText} from "../../../../../../loopx/control_plane/capabilities/trajectory_assessment_display.js";
@@ -196,7 +196,10 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
     const controller = new AbortController();
     setBusy(true); setError(""); setLoaded(0);
     void (async () => {
-      const events: ExploreHistoryEvent[] = [];
+      const events = new Map<string, ExploreHistoryEvent>();
+      // The server counts stored rows, including identical persisted replays.
+      // Keep their order for snapshot identity, independently of display deduplication.
+      let sourceRows: ExploreHistoryEvent[] | null = [];
       const cursors = new Set<string>();
       let total = -1;
       try {
@@ -205,21 +208,29 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
           const query = new URLSearchParams({goal_id: goalId, view: "history", ...(cursor ? {cursor} : {})});
           const page = parseExploreHistoryPage(await requestJson<unknown>(sourceReadApiUrl(readSourceUrl, `/api/chat/explore-results?${query}`), {signal: controller.signal}), originalGoalId);
           if (total !== -1 && total !== page.total) throw new Error("Explore history snapshot changed");
-          total = page.total; events.push(...page.items);
-          if (events.length > total || (page.next_cursor && (!page.items.length || cursors.has(page.next_cursor)))) throw new Error("Invalid Explore history pagination");
-          if (current) setLoaded(events.length);
+          total = page.total;
+          mergeExploreHistoryEvents(events, page.items, originalGoalId);
+          if (events.size > total || (page.next_cursor && (!page.items.length || cursors.has(page.next_cursor)))) throw new Error("Invalid Explore history pagination");
+          if (sourceRows) {
+            if (sourceRows.length + page.items.length <= total) sourceRows.push(...page.items);
+            else sourceRows = null;
+          }
+          if (current) setLoaded(sourceRows?.length ?? events.size);
           cursor = page.next_cursor ?? "";
           if (cursor) cursors.add(cursor);
           // The owning HTTP snapshot bounds size; never silently cap history here.
         } while (cursor && current);
         if (current) {
-          if (cursor || events.length !== total) throw new Error("Explore history coverage mismatch");
-          projectExploreHistory(events, originalGoalId); // Verify replay identities before replacing a valid snapshot.
-          setRead({events, total, complete: true});
+          // An overfull delivery is usable only if the excess consists entirely
+          // of exact replays and we still received every reported row as a distinct event.
+          if (cursor || (sourceRows ? sourceRows.length !== total : events.size !== total)) {
+            throw new Error("Explore history coverage mismatch");
+          }
+          setRead({events: sourceRows ?? [...events.values()], total, complete: true});
         }
       } catch (failure) {
         if (current) {
-          if (events.length) setRead(previous => previous.complete ? previous : {events, total: Math.max(total, events.length), complete: false});
+          if (events.size) setRead(previous => previous.complete ? previous : {events: [...events.values()], total: Math.max(total, events.size), complete: false});
           setError(failure instanceof Error ? failure.message : String(failure));
         }
       } finally {if (current) setBusy(false);}
@@ -468,6 +479,8 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
   };
   const readFailure = error || history.error;
   const emptyHistory = !busy && !readFailure && read.complete && read.total === 0;
+  const recordUnit = read.complete && history.canonical && read.events.length > history.canonical.events.length
+    ? (zh ? "条原始记录" : "source rows") : read.total === 1 ? copy.record : copy.records;
   const emptySourceHistory = preferHistory && emptyHistory;
   const emptyWithAnalysis = emptyHistory && Boolean(analysis.pack?.result || analysis.pack?.native_outcomes);
   const emptyHistoryMessage = zh ? "这个 Goal 尚无研究历程" : "No research history for this Goal yet";
@@ -513,7 +526,7 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
         <p>{zh ? "已保存的分析、原生测量与 Explore 历程分别读取。这个 Goal 没有已记录的 Explore 历程；已保存的结果仍可在下方阅读。" : "Saved analysis, native measurements and Explore history are read separately. This Goal has no recorded Explore history; its saved results remain readable below."}</p>
       </ContextHelp></> : <>{copy.time}{value?.startAt ? <> · <time>{timeLabel(value.startAt)}</time> — <time>{timeLabel(value.endAt)}</time></> : null} · {busy ? `${copy.reading} ${loaded}${read.total ? ` / ${read.total}` : ""}`
         : read.total === null ? (zh ? "来源尚未读到" : "Source has not been read")
-          : `${read.events.length} / ${read.total} ${read.total === 1 ? copy.record : copy.records}${read.complete ? "" : ` · ${copy.partial}`}`}</>}</div>
+          : `${read.events.length} / ${read.total} ${recordUnit}${read.complete ? "" : ` · ${copy.partial}`}`}</>}</div>
       {!readingSelection ? displayControl : null}
     </div> : null}
     {readFailure ? <div className="research-history-read-error" role="alert">
@@ -647,6 +660,7 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
     </ContextHelp> : null}
     {value?.events.length ? <details ref={records} className="research-history-all-records" open={recordsOpen} onToggle={event => setRecordsOpen(event.currentTarget.open)}><summary>{zh ? "全部已读记录" : "All loaded records"} · {value.events.length}</summary>
       {recordsOpen ? <ResearchRecordSearch key={JSON.stringify([goalId, readSourceUrl])} goalId={originalGoalId} events={history.canonical?.events ?? []}
+        nodes={history.canonical?.nodes ?? []}
         displayEvents={currentDisplay && !originalDisplay ? value.events : undefined}
         displaySections={currentDisplay && !originalDisplay ? displayProjection.sections : undefined}
         renderBody={findingBody}
