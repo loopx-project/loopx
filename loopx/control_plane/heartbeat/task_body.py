@@ -64,6 +64,11 @@ def bind_exact_turn_settlement_task_body(
             placeholder,
             render_turn_bootstrap(value=turn_instance_id),
         )
+    if bound != task_body:
+        # The producer already supplied the timestamp. Its concrete assignment
+        # and separate guard still carry the original identity on retries;
+        # only reusable wake templates need the substitution instruction.
+        bound = bound.replace(f"{HEARTBEAT_TURN_BOOTSTRAP_RULE}\n", "", 1)
     plan_path = ("writeback.settlement_plan.ordered_steps" if captured_envelope
                  else "interaction_contract.cli_channel.settlement_plan.ordered_steps")
     return (
