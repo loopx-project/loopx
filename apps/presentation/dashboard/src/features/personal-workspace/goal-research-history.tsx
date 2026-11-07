@@ -338,9 +338,9 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
   const clusterY = layout.length ? Math.max(...layout.map(item => item.y + 124)) + 24 : 24;
   const width = Math.max(600, grouped.groups.length ? 944 : 0, ...layout.map(item => item.x + 230));
   const height = Math.max(230, ...layout.map(item => item.y + 124), grouped.groups.length ? clusterY + Math.ceil(grouped.groups.length / 4) * 124 : 0);
-  const select = (next: Selection, focus = true) => {
+  const select = (next: Selection, focus = true, openingControl?: HTMLButtonElement) => {
     if (focus && (next.nodes.length || next.day !== null)) {
-      opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      opener.current = openingControl ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
       focusPending.current = true;
     }
     next = {...next, question: next.question ?? !next.finding,
@@ -426,7 +426,9 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
       </ContextHelp>
     </div> : null;
   const historyView = !value ? null : lens === "timeline" && timeline ? <div className="research-history-canvas is-timeline" ref={graph} tabIndex={-1}>
-        <GoalResearchTimeline timeline={timeline} zh={zh} selectedIds={selection.nodes} selectedEventId={selectedFinding?.event_id} selectedDay={selection.day} dayGroups={grouped.groups} onGroupSelect={day => select({nodes: [], day})} phase={phase} onPhase={next => chooseView(lens, next)} onSelect={(id, finding) => choose(id, true, finding)} onSelectMany={nodes => select({nodes, day: null})} timeLabel={fullTime} dayLabel={dayTime}/>
+        <GoalResearchTimeline timeline={timeline} zh={zh} selectedIds={selection.nodes} selectedEventId={selectedFinding?.event_id} selectedDay={selection.day} dayGroups={grouped.groups}
+          onGroupSelect={(day, button) => select({nodes: [], day}, true, button)} phase={phase} onPhase={next => chooseView(lens, next)}
+          onSelect={(id, finding) => choose(id, true, finding)} onSelectMany={(nodes, button) => select({nodes, day: null}, true, button)} timeLabel={fullTime} dayLabel={dayTime}/>
       </div> : <div className="research-history-canvas" ref={graph} tabIndex={0} aria-label={zh ? "完整已载入研究关系图；可滚动" : "Full loaded research graph; scrollable"}>
         <div className="research-history-stage" style={{width, height}}>
           <svg width={width} height={height} aria-hidden="true" className="research-history-edges">
@@ -458,7 +460,7 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
             </span> : <span className="research-node-count"><time>{timeLabel(node.updates[0]?.recorded_at)}</time>{node.updates.length > 1 ? ` · ${node.updates.length} ${copy.changes}` : ""}{node.findings.length ? ` · ${findingCopy.count(node.findings.length)}` : ""}</span>}
           </button>})}
           {grouped.groups.map((group, index) => <button type="button" key={`day:${group.day}`} className={`research-history-node research-history-group${selectedGroup === group ? " is-selected" : ""}`} style={{left: (index % 4) * 230 + 24, top: clusterY + Math.floor(index / 4) * 124}}
-            data-research-day={group.day} aria-pressed={selectedGroup === group} onClick={() => select({nodes: [], day: group.day})}>
+            data-research-day={group.day} aria-pressed={selectedGroup === group} onClick={event => select({nodes: [], day: group.day}, true, event.currentTarget)}>
             <span className="research-node-meta"><Circle size={12} aria-hidden/>{zh ? "未关联问题" : "Unlinked questions"}</span>
             <strong>{group.day ? `${group.day} UTC` : copy.unknown}</strong><span className="research-node-count">{group.nodes.length} {group.nodes.length === 1 ? copy.question : copy.questions} · {zh ? "展开全部" : "read all"}</span>
           </button>)}

@@ -251,7 +251,17 @@ export const researchRouteReadingScenario = {
         await page.emulateMedia({reducedMotion: "reduce"});
         await page.evaluate(value => localStorage.setItem("loopx-pw-locale", value), locale);
         await page.goto(url);
-        await history.locator('[data-research-day="2026-01-04"]').click();
+        const day = history.locator('[data-research-day="2026-01-04"]');
+        await day.waitFor();
+        await history.locator(".research-history-canvas").focus();
+        // WebKit can activate the button while leaving focus on the canvas.
+        await day.evaluate(button => button.click());
+        await reader.locator(".research-question-index button").nth(3).click();
+        await page.keyboard.press("Escape");
+        await reader.locator(".research-question-index").waitFor();
+        await page.keyboard.press("Escape");
+        await page.waitForFunction(() => document.activeElement?.getAttribute("data-research-day") === "2026-01-04");
+        await day.click();
         assert.equal(await reader.locator(".research-question-index li").count(), 24);
         await reader.locator(".research-question-index button").nth(3).click();
         const questions = reader.getByRole("combobox", {name: zh ? "选择同组研究问题" : "Choose a question in this group"});
