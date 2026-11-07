@@ -197,7 +197,8 @@ const SUMMARY_FIELDS = [
   "blocked_retry", "no_followup", "successor_todo_ids", "completion_continuation", "completion_recovery",
   "replan_obligation_id", "target_key", "cadence", "next_due_at", "expires_at",
   "watch_only", "last_checked_at", "result_hash", "consecutive_no_change", "material_change",
-  "material_change_generation", "max_no_change_before_replan", "route_continuation_replan_required", "route_continuation_reason", "route_id",
+  "material_change_generation", "material_change_scope", "material_change_scope_generations",
+  "max_no_change_before_replan", "route_continuation_replan_required", "route_continuation_reason", "route_id",
   "route_key", "completed_at", "updated_at", "completion_turn_key", "superseded_by", "handoff_note",
 ];
 

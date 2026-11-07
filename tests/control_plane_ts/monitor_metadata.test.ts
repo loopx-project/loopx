@@ -5,6 +5,10 @@ import { planTodoFieldUpdate, TODO_FIELD_UPDATE_REQUEST_SCHEMA } from "../../loo
 import type { JsonObject } from "../../loopx/control_plane/effect_program.ts";
 import { productionScaleCoordinationFixture } from "./production_scale_coordination_fixture.ts";
 import { parseTodoTimestampMicros } from "../../loopx/control_plane/runtime_timestamp.ts";
+import {
+  advanceMonitorScopeGeneration,
+  monitorScopeGeneration,
+} from "../../loopx/control_plane/todos/monitor_scope.ts";
 
 const existing = {todo_id: "todo_monitor", task_class: "continuous_monitor", status: "open",
   target_key: "fixture", cadence: "1h", watch_only: "true", result_hash: "before",
@@ -29,6 +33,60 @@ test("generation and no-change count follow result semantics, not mere poll coun
     assert.equal(result.transition?.material_change_applied, generation === 8);
     assert.equal(result.metadata.next_due_at, "2030-01-01T02:00:00Z");
   }
+});
+
+test("scoped material generations retain independent case and run transitions", () => {
+  const alpha = planMonitorMetadata(request({
+    observation: observation({material_change_scope: "case-a/run-1"}),
+  }));
+  assert.equal(alpha.metadata.material_change_scope, "case-a/run-1");
+  assert.equal(
+    monitorScopeGeneration(alpha.metadata.material_change_scope_generations, "case-a/run-1"),
+    8,
+  );
+  const persisted = {...existing, ...alpha.metadata};
+  const beta = planMonitorMetadata(request({
+    existing: persisted,
+    observation: observation({
+      monitor_effect_id: "effect-b",
+      generated_at: "2030-01-01T02:00:00Z",
+      result_hash: "after-b",
+      material_change_scope: "case-b/run-2",
+    }),
+  }));
+  assert.equal(beta.metadata.material_change_generation, "9");
+  assert.equal(
+    monitorScopeGeneration(beta.metadata.material_change_scope_generations, "case-a/run-1"),
+    8,
+  );
+  assert.equal(
+    monitorScopeGeneration(beta.metadata.material_change_scope_generations, "case-b/run-2"),
+    9,
+  );
+  assert.equal(beta.transition?.scoped_material_change_generation, 9);
+  assert.throws(() => planMonitorMetadata(request({
+    observation: observation({material_change: false, material_change_scope: "case-a/run-1"}),
+  })), /requires --material-change/);
+});
+
+test("scoped generation retention fails closed instead of evicting old wait evidence", () => {
+  let encoded: unknown = null;
+  for (let index = 0; index < 128; index += 1) {
+    encoded = advanceMonitorScopeGeneration(
+      encoded,
+      `case-${index}/run-1`,
+      index + 1,
+      true,
+    ).encoded;
+  }
+  assert.equal(monitorScopeGeneration(encoded, "case-0/run-1"), 1);
+  assert.throws(() => advanceMonitorScopeGeneration(
+    encoded,
+    "case-overflow/run-1",
+    129,
+    true,
+  ), /create an independent Monitor/);
+  assert.equal(monitorScopeGeneration(encoded, "case-0/run-1"), 1);
 });
 
 test("exact retry reuses counters; different effect intent cannot reuse its ID", () => {

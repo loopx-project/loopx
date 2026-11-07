@@ -72,6 +72,8 @@ QUOTA_PAYLOAD_ITEM_FIELDS = (
     "consecutive_no_change",
     "material_change",
     "material_change_generation",
+    "material_change_scope",
+    "material_change_scope_generations",
     "max_no_change_before_replan",
     "route_continuation_replan_required",
     "route_continuation_reason",
