@@ -38,6 +38,34 @@ def markdown_blockquote(value: str) -> str:
     return "\n".join(f"> {escape(line, quote=False)}" for line in value.splitlines())
 
 
+def goal_narrative_without_objective_mirror(state_text: str) -> str | None:
+    """Render the generated Goal template once; leave literal/legacy text alone.
+
+    Require the writer's header, canonical JSON string and entire generated
+    blockquote. A second metadata entry, customized heading or conflicting
+    objective is user data and does not qualify.
+    """
+    if not state_text.startswith("---\n"):
+        return None
+    header, boundary, body = state_text[4:].partition("\n---\n")
+    if not boundary:
+        return None
+    rows = header.split("\n")
+    keys = [i for i, line in enumerate(rows) if ":" in line and line.split(":", 1)[0].strip() == "objective"]
+    if len(keys) != 1:
+        return None
+    metadata, original_body = split_state_frontmatter(state_text)
+    objective = metadata.get("objective")
+    if (original_body != body or not objective
+            or "\n".join(objective.splitlines()) != objective.removesuffix("\n")
+            or rows[keys[0]] != f"objective: {markdown_frontmatter_string(objective)}"):
+        return None
+    prefix = "\n# Active Goal State\n\n## Objective\n\n"
+    if not body.startswith(prefix + markdown_blockquote(objective) + "\n\n## "):
+        return None
+    del rows[keys[0]]
+    return "---\n" + "\n".join(rows) + boundary + body
+
 def active_state_section_text(state_text: str, heading: str) -> str:
     _, body = split_state_frontmatter(state_text)
     sections = active_state_sections(
