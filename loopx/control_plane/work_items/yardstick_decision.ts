@@ -5,7 +5,8 @@ import {parseTodoTimestampMicros} from "../runtime_timestamp.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireJsonObject, type JsonObject} from "../runtime_decode.ts";
 import {isExploreEvidenceRef} from "../capabilities/explore_evidence_ref.ts";
-import type {ExploreMeasurementFeedback, ExploreMeasurementPoint} from "../capabilities/explore_measurements.ts";
+import {projectExploreMeasurementFeedback, type ExploreMeasurementFeedback,
+  type ExploreMeasurementPoint} from "../capabilities/explore_measurements.ts";
 
 export const WORK_YARDSTICK_DECISION_SCHEMA = "work_yardstick_decision_v0";
 export type WorkYardstickProfile = {metric: string; unit: string; higher_is_better: boolean;
@@ -127,12 +128,8 @@ function matchesProfile(row: ExploreMeasurementFeedback, profile: WorkYardstickP
   return Object.entries(profile).every(([key, value]) => row[key as keyof WorkYardstickProfile] === value);
 }
 
-function measuredSearchComparison(feedback: ExploreMeasurementFeedback[], decision: WorkYardstickDecision,
-  scopedFindings: Set<unknown>) {
-  const pairFor = (profile: WorkYardstickProfile) => {
-    const pair = measuredPair(feedback.find(row => matchesProfile(row, profile)));
-    return pair && scopedFindings.has(pair.previous_best.finding_id) && scopedFindings.has(pair.latest.finding_id) ? pair : null;
-  };
+function measuredSearchComparison(feedback: ExploreMeasurementFeedback[], decision: WorkYardstickDecision) {
+  const pairFor = (profile: WorkYardstickProfile) => measuredPair(feedback.find(row => matchesProfile(row, profile)));
   const goal = pairFor(decision.authoritative);
   if (!goal) return null;
   const screen = decision.proxy && pairFor(decision.proxy);
@@ -175,9 +172,15 @@ export function projectWorkYardstickCue(params: JsonObject): JsonObject | null {
   const profiles = decision.proxy ? [decision.authoritative, decision.proxy] : [decision.authoritative];
   const feedback = ((params.measurement_feedback ?? []) as ExploreMeasurementFeedback[]).filter(row =>
     row.node_id === source.node_id && profiles.some(p => matchesProfile(row, p)));
-  const scopedFindings = new Set(findings.filter(row => row.node_id === source.node_id && belongsToWork(row, params))
-    .map(row => row.finding_id));
-  const searchComparison = measuredSearchComparison(feedback, decision, scopedFindings);
+  // An earlier target can share the same evaluator profile and work identity.
+  // Filter source findings before ranking so its best cannot displace a legal pair.
+  const scopedFindings = findings.filter(row => {
+    const target = (row.work_yardstick as WorkYardstickCapture | undefined)?.decision?.target;
+    return row.node_id === source.node_id && belongsToWork(row, params) && target !== undefined
+      && target.summary === decision.target.summary && target.scope === decision.target.scope
+      && target.acceptance_ref === decision.target.acceptance_ref;
+  });
+  const searchComparison = measuredSearchComparison(projectExploreMeasurementFeedback(scopedFindings), decision);
   return {source_finding_id: source.finding_id, node_id: source.node_id, binding: capture.binding, ...decision,
     measurement_feedback: feedback,
     ...(searchComparison ? {search_comparison: searchComparison} : {}),
