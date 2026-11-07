@@ -211,12 +211,13 @@ a nonnegative safe integer smaller than `target_ms`. For example, a tolerance of
 intervals, a terminal run with a positive observed duration and a remaining gap
 at or below that tolerance is marked `within_tolerance`, rather than `covered`.
 The report retains the actual `active_ms`, `remaining_ms` and selected policy.
-Unknown duration still needs verification; planned/running rows retain their
-status, and no runtime deadline or stopping rule changes.
+Unknown duration still needs verification; short planned/running rows retain
+their status, and no runtime deadline or stopping rule changes.
 
 `within_tolerance` satisfies only the report's declared duration condition. It
 does not change run status, scores, integrity/countability, or matched-comparison
-eligibility. A cancelled or uncountable result remains excluded by those gates.
+eligibility. A cancelled result stays out of the descriptive comparison, and an
+uncountable score stays out of `qualified_common_n` even when its duration qualifies.
 The Markdown report labels the waiver and its threshold. Callers should use this
 same projection when selecting makeup work rather than rounding the raw duration
 or inventing a second threshold.
