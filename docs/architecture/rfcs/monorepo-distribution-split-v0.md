@@ -1357,6 +1357,39 @@ comparison before adopting a performance change. This checkpoint creates no
 new owner, budget, preset or default. R0's complete census, R1/minimal,
 D2/D5/D6, I3/D3, hard-lease/context/model and split-install acceptance remain
 open; independent exact-head review and required validation govern adoption.
+### 2026-11-07 — Original-Turn closeout survives automatic Todo archival
+
+The complete CLI comparison in #8257 exposed a lifecycle failure with 101
+synthetic Todos. Fresh source-console reproductions on `4a33eb4b5` retain
+`todo_archived` on both File and default SQLite after ordinary completion,
+durable writeback and one quota debit. The frozen comparison remains unchanged;
+these failed episodes are not accepted latency samples.
+
+The proposed repair stays in `todo_terminal_lifecycle.ts`. Its existing
+same-Turn fence and exact ordinary-completion receipt verification also qualify
+an archived Todo's closeout before the active-only rejection. One local helper
+owns both active and archived parent checks. Original claim/lease, task digest,
+validation declaration/receipt and provider CAS checks remain in force; archive
+selection and retention thresholds are unchanged. This permits only the
+original completion's terminal phase, without reopening archived work.
+
+Real File/SQLite console fixtures now complete the large-state sequence and
+replay completion, writeback, quota spend and terminal closeout with one debit
+and an unchanged independently verified JSON result. The durable CLI regression
+uses a real validator and ordinary hard-lease claim: premature settlement,
+unrelated archived work, another actor, claim or Turn, and changed completion
+intent are refused. Terminal closeout retains the original passed validation
+receipt, first completion time and archive state without rerunning the validator.
+Existing provider conformance retains source/digest, validation, lease and replay
+checks; an isolated real PostgreSQL suite qualifies its shared owner separately.
+
+This is a proposed lifecycle repair enabling the remaining R1/V4 journey and
+large-state comparison. Independent exact-head review, reviewed-repair wheel
+readback and remaining guard/parser characterization still govern the next
+step. It does not upgrade an installed host or qualify interruption/restart,
+split installation, full R0/V10/R1, M1/#8011, D2/D5/D6/D3, context/model,
+adoption or complete-cost benefit. I3 remains at least one minor release.
+
 ## Appendix B: Decision log
 
 | Date | Decision | Owner / approval | Alternatives | Normative sections changed |

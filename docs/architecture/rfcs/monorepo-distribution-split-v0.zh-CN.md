@@ -1016,6 +1016,34 @@ owner；采纳性能变更前必须另做匹配的真实路径对照。本 check
 预算、preset 或默认行为。R0 完整清点、R1/minimal、D2/D5/D6、I3/D3、
 hard-lease／context／model 和拆包安装验收仍开放；采纳仍受独立 exact-head
 评审及必需验证约束。
+### 2026-11-07 — 原 Turn 终结在 Todo 自动归档后仍可完成
+
+#8257 的完整 CLI 比较在 101 个合成 Todo 下暴露了生命周期故障。基于
+`4a33eb4b5` 的新源码 console 复现在 File 和默认 SQLite 上均保留同一
+`todo_archived`：普通完成、持久写回和一次额度扣账已提交。冻结比较保持原样，
+这些失败 episode 不计入验收通过的延迟样本。
+
+修复提案仍由 `todo_terminal_lifecycle.ts` 拥有。在仅限 active 的拒绝之前，
+复用已有同 Turn fence 与精确普通 completion receipt 校验，验证已归档 Todo
+的终结资格。一个文件内 helper 统一 active 和已归档路径的父 receipt 检查。
+原 claim/lease、任务 digest、validation 声明与 receipt、provider CAS 校验
+继续生效；归档选择与保留阈值保持原样。允许的只是原 completion 的终结阶段，
+不会重新开放已归档工作。
+
+真实 File/SQLite console fixture 现在可以完成大状态整轮，并回放 completion、
+写回、扣账和 terminal closeout：只有一次扣账，独立验证的 JSON 结果保持原样。
+持久 CLI 回归使用真实 validator 和普通 hard-lease claim，拒绝过早结算、
+无关归档工作、其他 actor、claim 或 Turn，以及变更后的 completion intent。
+终结保留原已通过的 validation receipt、首次完成时间和归档状态，不重复执行
+validator。既有 provider conformance 继续检查 source/digest、validation、
+lease 和 replay；隔离真实 PostgreSQL suite 单独验证其共享 owner。
+
+这是支持后续 R1/V4 journey 和大状态比较的生命周期修复提案。下一步仍需
+独立 exact-head review、审阅修复后的 wheel 回读，以及剩余 guard/parser
+刻画。它不会升级 installed host，也不验收中断/重启、split installation、
+完整 R0/V10/R1、M1/#8011、D2/D5/D6/D3、context/model、adoption 或完整成本
+收益。I3 继续保留至少一个 minor release。
+
 ## 附录 B：决策日志
 
 | 日期 | 决策 | 负责人 / 批准 | 备选 | 变更的规范章节 |
