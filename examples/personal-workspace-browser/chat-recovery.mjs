@@ -449,9 +449,26 @@ export const chatRecoveryScenario = {
         const path = `${submissionRoute}/${turnId}/events`;
         const heldEvents = [];
         await page.route(path, (route) => { heldEvents.push(route); });
-        return async () => {
-          await page.unroute(path);
-          for (const route of heldEvents) await route.fallback();
+        return {
+          async verifyAdoption() {
+            for (let attempt = 0; attempt < 200 && !heldEvents.length; attempt += 1) {
+              await page.waitForTimeout(50);
+            }
+            if (!heldEvents.length) throw new Error("Session readback did not attach the reported Turn's stream");
+            // The handoff reply is visible before the read returns as well.
+            // Check its Session and single-reply count after stream adoption.
+            await page.waitForFunction(({sessionId, turnId}) => {
+              const replies = Array.from(document.querySelectorAll(".personal-channel-timeline .personal-message button"))
+                .filter(button => button.textContent.trim() === "中断本轮");
+              return replies.length === 1
+                && replies[0].closest("[data-message-session]")?.dataset.messageSession === sessionId
+                && document.querySelector(".personal-composer-stop")?.dataset.turnId === turnId;
+            }, {sessionId: busySessionId, turnId}, {timeout: 5_000});
+          },
+          async release() {
+            await page.unroute(path);
+            for (const route of heldEvents) await route.fallback();
+          },
         };
       };
       const queuePosts = [];
@@ -478,7 +495,7 @@ export const chatRecoveryScenario = {
       };
       const foreignTurnId = `turn-foreign-${Date.now()}`;
       const foreignTurnControl = page.locator(`.personal-composer-stop[data-turn-id="${foreignTurnId}"]`);
-      const releaseForeignTurn = await holdTurnCompletion(foreignTurnId);
+      const foreignTurnEvents = await holdTurnCompletion(foreignTurnId);
       page.__loopxRuntime.turnMessages.set(foreignTurnId, "另一页面发起的中断控制回合");
       let rejectedPosts = 0;
       await page.route(submissionRoute, competeOnSubmit(foreignTurnId, () => { rejectedPosts += 1; }));
@@ -532,18 +549,14 @@ export const chatRecoveryScenario = {
       holdReads = false;
       for (const route of heldReads.splice(0)) await route.fallback();
       await page.unroute("**/api/chat/sessions?*");
-      await foreignTurnControl.waitFor({ state: "visible", timeout: 5_000 });
-      await page.getByRole("button", { name: "中断本轮" }).waitFor({ state: "visible" });
-      if (await page.getByRole("button", { name: "中断本轮" }).count() !== 1) {
-        throw new Error("The recovery added a second pending reply instead of adopting the handoff reply");
-      }
+      await foreignTurnEvents.verifyAdoption();
       if (await page.getByRole("button", { name: "调整本轮" }).count()) throw new Error("An executor without steering advertised an adjustment input");
       if (await composerInput.inputValue() !== draft) throw new Error("The draft rejected by a running Turn was not kept");
       if (await sendButton.isDisabled()) throw new Error("Send did not offer queuing after the service reported a running Turn");
       if (await page.locator(".personal-channel-timeline .personal-message").filter({ hasText: draft }).count()) {
         throw new Error("A message the service did not accept stayed in the conversation");
       }
-      await releaseForeignTurn();
+      await foreignTurnEvents.release();
       await foreignTurnControl.waitFor({ state: "hidden", timeout: 10_000 });
       if (await sendButton.isDisabled()) throw new Error("Send stayed blocked after the adopted Turn completed");
       if (rejectedPosts !== 1) throw new Error(`The composer posted ${rejectedPosts} times into a running Turn`);
@@ -555,7 +568,7 @@ export const chatRecoveryScenario = {
       // treat the failure as the Turn having ended.
       const retriedTurnId = `turn-foreign-retry-${Date.now()}`;
       const retriedTurnControl = page.locator(`.personal-composer-stop[data-turn-id="${retriedTurnId}"]`);
-      const releaseRetriedTurn = await holdTurnCompletion(retriedTurnId);
+      const retriedTurnEvents = await holdTurnCompletion(retriedTurnId);
       page.__loopxRuntime.turnMessages.set(retriedTurnId, "读取失败后仍在运行的中断控制回合");
       let retryRejectedPosts = 0;
       await page.route(submissionRoute, competeOnSubmit(retriedTurnId, () => { retryRejectedPosts += 1; }));
@@ -587,11 +600,9 @@ export const chatRecoveryScenario = {
       failReads = false;
       for (const route of heldRetryReads.splice(0)) await route.fallback();
       await page.unroute("**/api/chat/sessions?*");
-      if (await page.getByRole("button", { name: "中断本轮" }).count() !== 1) {
-        throw new Error("The retried recovery added a second pending reply instead of adopting the handoff reply");
-      }
+      await retriedTurnEvents.verifyAdoption();
       if (await composerInput.inputValue() !== draft) throw new Error("The draft rejected by a running Turn was not kept across the failed read");
-      await releaseRetriedTurn();
+      await retriedTurnEvents.release();
       await retriedTurnControl.waitFor({ state: "hidden", timeout: 10_000 });
       if (await sendButton.isDisabled()) throw new Error("Send stayed blocked after the retried recovery saw the Turn complete");
       if (retryRejectedPosts !== 1) throw new Error(`The composer posted ${retryRejectedPosts} times into a running Turn`);
