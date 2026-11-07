@@ -1600,7 +1600,11 @@ export function turnEnvelopeRoute(envelope: JsonObject, historicalText?: JsonObj
   // Size diagnostics grant no authority and do not veto a valid contract.
   const action = object(envelope.action);
   if (envelope.should_run === true) {
-    if (action.must_attempt !== true) return "blocked";
+    // An unbound native Goal Turn can require its binding command before
+    // work. That obligation cannot route a host launch, including a replan.
+    if (action.must_attempt !== true || object(envelope.writeback).turn_binding_required === true) {
+      return "blocked";
+    }
     const name = scalarString(historicalText ? historicalText.effective_action : envelope.effective_action || "", "route effective action");
     const route = Object.hasOwn(TURN_ACTION_ROUTES, name)
       ? TURN_ACTION_ROUTES[name as keyof typeof TURN_ACTION_ROUTES] : "ready_for_host";

@@ -35,6 +35,7 @@ from ..scheduler.execution_context import (
     APP_HEARTBEAT_SETTLEMENT_RUNTIME_PROFILES,
     SchedulerExecutionContextResolution,
     render_scheduler_execution_args,
+    resolve_scheduler_execution_context,
     scheduler_runtime_profile_for_execution_context,
 )
 from ..todos.contract import (
@@ -1679,6 +1680,8 @@ def _build_interaction_contract_projection(
         must_attempt
         and not selection_recovery_required
         and not selection.action_portfolio_requires_explicit_selection(payload)
+        # External Turn planning has its own launch and settlement gates.
+        and not resolve_scheduler_execution_context(scheduler_execution_context).turn_driver_owned
         and host_goal_turn_reentry_required(
             payload, scheduler_execution_context, turn_instance_id,
         )

@@ -7051,6 +7051,12 @@ def test_unbound_visible_goal_todoless_replan_reenters_through_guided_turn(
     assert envelope["writeback"]["next_cli_actions"] == actions
     assert envelope["writeback"]["spend_after_validation"] is False
     assert envelope["replan_action_packet"] is None
+    from loopx.control_plane.turn_driver import build_loopx_turn_plan
+
+    plan = build_loopx_turn_plan(envelope, host="codex-cli", execution_mode="interactive-visible")
+    assert plan["route"]["kind"] == "blocked"
+    assert plan["route"]["would_invoke_host"] is False
+    assert not any(plan["effects"].values())
 
     bound_rc, bound = _run_generated_cli(
         actions[0],
