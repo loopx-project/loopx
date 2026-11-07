@@ -520,6 +520,10 @@ def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monk
     if enabled:
         assert bound["mode"] == ("full" if compacted else "delta"), bound
         assert len(json.dumps(bound, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 32000
+        current = Path(machine_reference_oracle(bound)["recovery"]["path"])
+        captured = json.loads(current.with_name("decision.json").read_bytes())
+        required = json.loads(current.read_bytes())
+        assert json.dumps(required["quota"], sort_keys=True) == json.dumps(captured["quota"], sort_keys=True)
         delivered = consume(bound)
         if not compacted:
             assert delivered["base"]["capture_id"] == machine_reference_oracle(cold["navigation"])["target"]["capture_id"]
@@ -949,11 +953,18 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
             original_command = original["interaction_contract"]["cli_channel"]["selection_command"]["command_args_template"]
             words = shlex.split(selected["command_args_template"])
             original_words = shlex.split(original_command)
-            for option in ("--context-delivery", "--codex-context-dir", "--max-page-output-bytes"):
-                for command_words in (words, original_words):
-                    if option in command_words:
-                        index = command_words.index(option)
-                        del command_words[index:index + 2]
+            transport = {
+                "--decision-output-root": str(home / "loopx-context"),
+                "--context-delivery": "on",
+                "--delta-delivery": "auto",
+                "--codex-context-dir": str(home / "loopx-context"),
+                "--max-page-output-bytes": "32000",
+            }
+            for option, value in transport.items():
+                assert option not in original_words and words.count(option) == 1
+                index = words.index(option)
+                assert words[index + 1] == value
+                del words[index:index + 2]
             assert words == original_words
             selected["command_args_template"] = original_command
             # Main already deduplicates identical Todo rows within this exact

@@ -1737,7 +1737,12 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
   const operation = request.operation;
   if (operation === "replan_view") return replanView(request);
   if (operation === "context_select") return capturedDecisionSelection(request);
-  if (operation === "replan_cli_view") return replanCliView(requireJsonObject(request.payload, "replan CLI payload"));
+  if (operation === "replan_cli_view") {
+    const source = requireJsonObject(request.payload, "replan CLI payload");
+    if (request.source_edits !== true) return replanCliView(source);
+    return contextProjectionChanges(source,
+      replanCliView(source, contextSourceIdentity(source, request.source_number_tokens)));
+  }
   if (operation === "selected_work_todo") {
     const source = requireJsonObject(request.payload, "Turn work selection source");
     const historical = scalarString(request.historical_primary_text, "historical primary Todo");
