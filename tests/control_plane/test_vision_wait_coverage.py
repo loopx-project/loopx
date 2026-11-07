@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
+
 import json
 import shutil
 from pathlib import Path
@@ -198,7 +200,7 @@ def test_cli_wait_coverage_is_independent_of_display_size(
             )
             == 0
         )
-        authored = json.loads(capsys.readouterr().out)
+        authored = read_cli_policy_payload(capsys.readouterr().out, returncode=0)
         assert authored["ok"] is True
     else:
         run = vision_run(declared=declared)
@@ -234,7 +236,7 @@ def test_cli_wait_coverage_is_independent_of_display_size(
         "ark_managed_agent_goal",
     ]
     assert cli_main(args) == 0
-    missing = json.loads(capsys.readouterr().out)
+    missing = read_cli_policy_payload(capsys.readouterr().out, returncode=0)
     assert missing["effective_action"] == "autonomous_replan_required"
     runtime_revision = 0
 
@@ -250,14 +252,14 @@ def test_cli_wait_coverage_is_independent_of_display_size(
     state_file.write_text(state("status=open claimed_by=worker"))
     reload_source_authority()
     assert cli_main(args) == 0
-    continued = json.loads(capsys.readouterr().out)
+    continued = read_cli_policy_payload(capsys.readouterr().out, returncode=0)
     assert continued["selected_todo"]["todo_id"] == "todo_source_b"
     state_file.write_text(
         state("status=deferred claimed_by=worker resume_when=todo_done:todo_recovery")
     )
     reload_source_authority()
     assert cli_main(args) == 0
-    waiting = json.loads(capsys.readouterr().out)
+    waiting = read_cli_policy_payload(capsys.readouterr().out, returncode=0)
     assert waiting["execution_obligation"]["must_attempt_work"] is False
     assert (
         waiting["scheduler_hint"]["goal_runtime_continuation"]["disposition"] == "defer"
@@ -424,7 +426,7 @@ def test_cli_current_agent_wait_preserves_canonical_blocker_priority(
         "quota", "should-run", "--verbose", "--goal-id", GOAL, "--agent-id", AGENT,
         "--runtime-profile", "ark_managed_agent_goal",
     ]) == 0
-    result = json.loads(capsys.readouterr().out)
+    result = read_cli_policy_payload(capsys.readouterr().out, returncode=0)
     wait = result["goal_frontier_projection"]["vision_wait_state"]
     assert wait["reason_code"] == "current_agent_blocker"
     assert wait["selected_todo_id"] == "todo_source_a"

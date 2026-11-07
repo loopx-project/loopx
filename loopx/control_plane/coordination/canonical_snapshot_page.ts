@@ -5,7 +5,7 @@ import type {JsonObject} from "../effect_program.ts";
 import {requireJsonObject} from "../runtime_decode.ts";
 import {MAX_LOCAL_SNAPSHOT_BYTES} from "../effect_runtime_snapshot.ts";
 import {decodeProjectionReadback, confirmProjectionReadback} from "../todos/projection_delivery.ts";
-import {authorityStoreSourceAuthority, type AuthorityStore} from "./authority_store.ts";
+import {authorityStoreSourceAuthority, readAuthoritySnapshot, type AuthorityStore} from "./authority_store.ts";
 import {canonicalAuthoritySha256, hasExactAuthorityKeys, requireAuthorityStoreId} from "./authority_store_codec.ts";
 import {canonicalTodoCollection} from "./local_authority_read.ts";
 import {canonicalAuthorityRouteFailure, requireCanonicalAuthority} from "./local_authority_write.ts";
@@ -75,19 +75,17 @@ export async function readCanonicalSnapshotFromStore(value: unknown, store: Auth
   const source = authorityStoreSourceAuthority(store);
   const base = {schema_version: CANONICAL_SNAPSHOT_PAGE_RESULT, source_authority: source,
     decision_read_from_provider: true, legacy_fallback_used: false};
-  const identity = await store.storeIdentity();
+  const {identity, authority: head} = await readAuthoritySnapshot(store);
   if (identity.status !== "available") {
     // A promoted but absent store has the same caller contract as the old
     // single-read path: recovery must see "missing". Identity is unavailable
     // before a store exists, so distinguish absence from an identity failure
     // without opening a replacement authority.
     if (identity.status === "unavailable") {
-      const absent = await store.loadAuthority();
-      if (absent.status === "missing") return {...base, ...absent};
+      if (head.status === "missing") return {...base, ...head};
     }
     return {...base, ...identity};
   }
-  const head = await store.loadAuthority();
   if (head.status !== "loaded") return {...base, ...head};
   const query = canonicalAuthoritySha256({goal_id: goal, include_leases: input.include_leases, projection_readback: readback});
   // Fail before expensive projection work when a continuation is already stale.
