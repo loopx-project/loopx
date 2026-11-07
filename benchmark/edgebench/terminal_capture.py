@@ -5,6 +5,7 @@ It does not qualify a failed conversation, settle a Turn, or authorize recovery.
 """
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 from pathlib import PurePosixPath
@@ -59,6 +60,18 @@ class FailurePreservation:
         write_json_atomic(self.receipt_path,
                           self.receipt, mode=0o600, fsync_directory=True)
 
+    def _persist_receipt(self):
+        """Optional diagnosis cannot replace the solver or stop outcome."""
+        try:
+            self._write()
+        except OSError as error:
+            self.receipt["receipt_write_error_kind"] = type(error).__name__
+            logging.getLogger(__name__).warning(
+                "Terminal preservation receipt could not be saved (%s); "
+                "source retention and verified solver/stop outcomes remain authoritative.",
+                type(error).__name__,
+            )
+
     def finish(self, execution):
         if self.receipt is not None:
             return  # Repeated cleanup cannot capture later state under this point.
@@ -80,7 +93,7 @@ class FailurePreservation:
             "capture_attempted": False, "capture_succeeded": False,
             "restore_qualified": False, "source_retained": None, "source_stopped": False}
         try:
-            self._write()
+            self._persist_receipt()
             self.supervisor.close()
             maintenance = getattr(self.supervisor, "maintenance", None)
             if maintenance is not None and maintenance.is_alive():
@@ -90,7 +103,7 @@ class FailurePreservation:
             from .checkpoint_worker import capture_worker
             from benchmark.runtime.checkpoint_handoff import CHECKPOINT_CAPTURE_SECONDS
             self.receipt["capture_attempted"] = True
-            self._write()
+            self._persist_receipt()
             request = self.supervisor.destination / "terminal-request.json"
             write_json_atomic(request, {"container_id": self.supervisor.container.id,
                 "components": self.components, "phase_deadline_path": f"{_CONTROL}/phase-deadline"},
@@ -111,7 +124,7 @@ class FailurePreservation:
                 self.stop_source(supervisor.container)
             finally:
                 self.receipt["preservation_elapsed_seconds"] = time.monotonic() - started
-                self._write()
+                self._persist_receipt()
 
     def stop_source(self, container):
         """Release compute, never remove the only source after an uncertain save."""
@@ -136,4 +149,4 @@ class FailurePreservation:
             self.receipt["stop_error_kind"] = type(error).__name__
             raise
         finally:
-            self._write()
+            self._persist_receipt()
