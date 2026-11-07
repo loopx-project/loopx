@@ -9,8 +9,8 @@ accepting the previous contract, which is the failure the local-time owner test
 was written to prevent.
 
 Layer 1 judges folded values rather than spellings, so a copy written across
-lines, built with ``+``, interpolated into an f-string, or declared with a type
-annotation is reported too.
+lines, built with ``+``, declared with a type annotation, or interpolated from
+same-file constants into an f-string is reported too.
 Layer 2 pins the consuming module to the owner's object and checks that it keeps
 no local binding. Layer 3 records that the current and legacy receipts stay
 distinct at the boundary that reads a queued receipt.
@@ -40,12 +40,25 @@ def fold_string(node: ast.AST, constants: dict[str, str], depth: int = 0) -> str
     if isinstance(node, ast.Constant):
         return node.value if isinstance(node.value, str) else None
     if isinstance(node, ast.JoinedStr):
-        parts = [
-            value.value
-            for value in node.values
-            if isinstance(value, ast.Constant) and isinstance(value.value, str)
-        ]
-        return "".join(parts) if len(parts) == len(node.values) else None
+        parts: list[str] = []
+        for piece in node.values:
+            if isinstance(piece, ast.Constant):
+                if not isinstance(piece.value, str):
+                    return None
+                parts.append(piece.value)
+                continue
+            if (
+                isinstance(piece, ast.FormattedValue)
+                and piece.conversion in (-1, None)
+                and piece.format_spec is None
+            ):
+                folded = fold_string(piece.value, constants, depth + 1)
+                if folded is None:
+                    return None
+                parts.append(folded)
+                continue
+            return None
+        return "".join(parts)
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
         left = fold_string(node.left, constants, depth + 1)
         right = fold_string(node.right, constants, depth + 1)
@@ -192,6 +205,16 @@ OFFENDING = (
         'from typing import Final\nHEAD: Final[str] = "issue_fix_reviewer_notification_queue_"\n'
         'COPY: Final[str] = HEAD + "receipt_v1"\n',
     ),
+    (
+        "interpolated same-file constant",
+        'PREFIX: str = "issue_fix_reviewer_notification_queue_"\n'
+        'COPY: str = f"{PREFIX}receipt_v1"\n',
+    ),
+    (
+        "typed annotation over an interpolated constant",
+        'from typing import Final\nPREFIX: Final[str] = "issue_fix_reviewer_notification_queue_"\n'
+        'COPY: Final[str] = f"{PREFIX}receipt_v1"\n',
+    ),
 )
 NON_OFFENDING = (
     (
@@ -206,6 +229,21 @@ NON_OFFENDING = (
         "a typed legacy receipt is a different decision",
         'from typing import Final\n\nCOPY: Final[str] = "issue_fix_reviewer_notification_'
         'queue_receipt_v0"\n',
+    ),
+    (
+        "an interpolated legacy receipt is a different decision",
+        'PREFIX: str = "issue_fix_reviewer_notification_queue_"\n'
+        'COPY: str = f"{PREFIX}receipt_v0"\n',
+    ),
+    (
+        "a repr conversion is not the stated literal",
+        'PREFIX: str = "issue_fix_reviewer_notification_queue_"\n'
+        'COPY: str = f"{PREFIX!r}receipt_v1"\n',
+    ),
+    (
+        "a format spec is not the stated literal",
+        'PREFIX: str = "issue_fix_reviewer_notification_queue_"\n'
+        'COPY: str = f"{PREFIX:>60}receipt_v1"\n',
     ),
 )
 
@@ -268,6 +306,41 @@ def test_the_census_leaves_a_typed_legacy_receipt_alone(
     (copy_dir / "legacy.py").write_text(
         'from typing import Final\n\nCOPY: Final[str] = '
         '"issue_fix_reviewer_notification_queue_receipt_v0"\n',
+        encoding="utf-8",
+    )
+    assert collect(tmp_path) == []
+
+def test_the_census_flags_an_interpolated_copy_beside_the_real_owner(
+    tmp_path: pathlib.Path,
+) -> None:
+    owner_dir = tmp_path / "loopx" / "domain_packs"
+    owner_dir.mkdir(parents=True)
+    (owner_dir / "issue_fix.py").write_text(
+        (REPO_ROOT / OWNER_PATH).read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    copy_dir = tmp_path / "loopx" / "capabilities"
+    copy_dir.mkdir(parents=True)
+    (copy_dir / "copy.py").write_text(
+        'PREFIX: str = "issue_fix_reviewer_notification_queue_"\n'
+        'COPY: str = f"{PREFIX}receipt_v1"\n',
+        encoding="utf-8",
+    )
+    rows = collect(tmp_path)
+    assert sorted(str(row["file"]) for row in rows) == [
+        "loopx/capabilities/copy.py",
+        OWNER_PATH,
+    ]
+    assert offenders(rows) != [], offenders(rows)
+
+
+def test_the_census_leaves_an_interpolated_legacy_receipt_alone(
+    tmp_path: pathlib.Path,
+) -> None:
+    copy_dir = tmp_path / "loopx" / "capabilities"
+    copy_dir.mkdir(parents=True)
+    (copy_dir / "legacy.py").write_text(
+        'PREFIX: str = "issue_fix_reviewer_notification_queue_"\n'
+        'COPY: str = f"{PREFIX}receipt_v0"\n',
         encoding="utf-8",
     )
     assert collect(tmp_path) == []
