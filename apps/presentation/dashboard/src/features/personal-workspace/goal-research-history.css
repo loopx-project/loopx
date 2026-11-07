@@ -130,6 +130,10 @@
 .research-record-entry > summary::-webkit-details-marker { display: none; }
 .research-record-entry > summary::before { content: "▸"; position: absolute; inset-inline-start: 0; }
 .research-record-entry[open] > summary::before { content: "▾"; }
+.research-record-group-history { list-style: none; margin: 0; padding-inline-start: 18px; }
+.research-record-group-history > li { padding-block: 10px; border-top: 1px solid var(--pw-line); }
+.research-record-group-history h4 { margin: 0; overflow-wrap: anywhere; }
+.research-record-group-history > li > small { color: var(--pw-muted); }
 .research-record-sources { margin-block: 12px; }
 .research-record-search p { white-space: pre-wrap; line-height: var(--leading-prose); overflow-wrap: anywhere; }
 .research-record-search code { display: block; overflow-wrap: anywhere; font-size: var(--text-body); }
