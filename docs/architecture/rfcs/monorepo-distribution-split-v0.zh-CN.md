@@ -1549,8 +1549,11 @@ Guard 两种 role 的来源均使用 native transaction。请求字节和调用�
 完整边际成本收益**未取得资格**。后续决策保留原事务验收：独立评审，并归因剩余
 生命周期成本后再提出优化。负面结果不支持另做 leaf-RPC migration 或新增 provider。
 
-提案 rebase 到 `main@e58ba30bc` 后，受影响生产及测试文件与测量 revision 逐字节
-相同。TypeScript typecheck 与 Ruff 通过。Mypy 保留 main 已有的
+提案 rebase 到 `main@e58ba30bc`。最后 scope-fit 检查发现 read transport 的
+provenance binding 超过 decision-function budget，已把完整来源绑定和 selected-row
+evaluation 恢复提取为局部 helper；24 个聚焦 parity 用例和 maintainability ratchet
+通过。成本表仍是提取 helper 前 `66ff8bf48` 的观察，不是最终 exact head 的成本
+资格。TypeScript typecheck 与 Ruff 通过。Mypy 保留 main 已有的
 `decision_capture.py` 缺少返回类型错误；标准 premerge 也保留 main 对未修改
 benchmark 文档的 peer-boundary scanner 失败。两者均不是通过的 skip。Exact-head
 review、验证／readiness 与 maintainer merge 授权保持独立；没有合入或 installed-host
