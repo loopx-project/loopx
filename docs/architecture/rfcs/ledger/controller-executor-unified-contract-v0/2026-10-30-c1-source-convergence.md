@@ -2829,3 +2829,45 @@ provider imports. Fixtures and installed sources stayed unchanged. Default
 17-root Mypy and the integrated conversation-binding TS module's 60 tests passed.
 Earlier 357/247-case and PostgreSQL evidence retain their own versions; these
 synthetic correctness and provenance checks do not establish full-cost benefit.
+
+### Visible Goal reads and declared acceptance audits
+
+Integration `d80b3860ab` adopts main `ac62962255`. Independent review found
+that visible Goal prompts added an unconditional full-capture prerequisite,
+including ordinary/off inputs, and rejected three previously legal 4,000-character
+configurations. Captured prompts now require the needed original sections;
+ordinary/off prompts gain no capture prerequisite. Work-context and required
+reads, explicit full-read duties, original identity/recovery, transport flags,
+settlement and stop rules remain. The 4,000-character host limit is unchanged.
+Across 24 matched builder inputs, main accepts 21 and the candidate 23, losing
+none of main's legal inputs; one oversized input remains rejected in both.
+
+Both complete structured and Codex Host inputs now share the declared audit's
+original trigger: read it before judging Goal acceptance or proposing closeout.
+The eight File/SQLite counterfactuals cover both hosts with and without an audit;
+absence tests caught and rejected an initial unconditional instruction. Twelve
+synthetic historical structured-renderer cases retain exact output and input
+parity. This is scoped instruction qualification, not model-retention proof.
+
+Heartbeat consumers now validate the complete source and read the caller-owned
+original capture through its digest-checked paged reader. Original scheduler,
+selection, receipt and once-only settlement oracles remain. Installed execution
+exposed a test caller's implicit checkout working directory: refresh must run
+from its actual disposable project. The first installed cohort recorded 60
+passes and 18 failures; an unchanged-wheel control passed after correcting only
+that caller directory. No production workspace guard was weakened.
+
+The final source-stable nine-module cohort records **855 passes, two failures**;
+the complete three-module installed rerun records **80 passes, two failures**.
+Both failures retain the original raw-JSON budget: 5,519 characters exceeds
+5,400 for the two long-scope backend cases, whereas matched main passes all
+four original budget cases. No budget, fixture size or useful duty was reduced
+to hide this regression. Earlier failed cohorts and a private audit-directory
+preparation failure remain recorded. Default 17-root Mypy, six changed-path
+Ruff checks and the limited semantic advisory pass. All 1,815 Core wheel sources
+match the frozen tested and installed bytes; five observed Python processes,
+1,179 modules and six observed subprocess source paths show no checkout Core
+imports. Some children override the audit environment, so this is not an
+observation of every process. These synthetic checks qualify the repaired
+Goal/audit/caller slice; whole-C1 acceptance, the remaining budget regression,
+live App/model adoption and complete-cost benefit remain open.
