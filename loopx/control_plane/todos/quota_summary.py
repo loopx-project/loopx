@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Callable
+from copy import deepcopy
 
 
 from ..goals.goal_vision_policy import COMPLETED_TODO_CHAIN_REPLAN_THRESHOLD
@@ -494,6 +495,18 @@ def select_quota_todo_source_items(
     return todo_summary_source_items(source) if source is not None else []
 
 
+def select_quota_todo_display_views(
+    canonical_value: Any,
+    project_asset_value: Any,
+) -> dict[str, list[dict[str, Any]]]:
+    """Select the source once for the quota caller's three consumed displays."""
+    from .summary_item import todo_source_display_views
+
+    source = _select_todo_source(canonical_value, project_asset_value)
+    return (todo_source_display_views(source) if source is not None
+            else {"summary": [], "planning": [], "terminal": []})
+
+
 def select_planning_inventory_source_items(
     canonical_value: Any,
     project_asset_value: Any,
@@ -532,6 +545,7 @@ def select_task_orchestration_authority_items(
     project_asset_value: Any,
     *,
     role: str,
+    fallback_source_items: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     canonical_items = _task_orchestration_authority_items(
         canonical_value,
@@ -551,4 +565,7 @@ def select_task_orchestration_authority_items(
         )
     if selected is not None:
         return selected
+    if fallback_source_items is not None:
+        # Preserve the independent mutable display returned by the old call.
+        return deepcopy(fallback_source_items)
     return select_quota_todo_source_items(canonical_value, project_asset_value)

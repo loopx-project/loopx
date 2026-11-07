@@ -98,3 +98,30 @@ def todo_planning_source_items(value: dict[str, Any], *, include_terminal: bool 
     if not any(value.get(key) for key in TODO_PLANNING_SOURCE_KEYS):
         return []
     return _project({"source": todo_read_source(value), "include_terminal": include_terminal})
+
+
+def todo_source_display_views(value: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    """Compose displays only for a caller consuming all three existing views."""
+    from ..effect_runtime import MAX_REQUEST_BYTES, EffectRuntimeRejected, effect_runtime_result
+    from .handoff_gate import todo_summary_handoff_gates
+
+    has_summary = any(value.get(key) for key in TODO_SUMMARY_SOURCE_KEYS)
+    has_planning = any(value.get(key) for key in TODO_PLANNING_SOURCE_KEYS)
+    if not has_summary and not has_planning:
+        return {"summary": [], "planning": [], "terminal": []}
+    request = {"summary_display_views": {
+        "source": todo_read_source(value), "handoff_gates": todo_summary_handoff_gates(value),
+    }}
+    # This bounds the opt-in batch input; it does not predict response size or
+    # promise inline transport. Large sources retain the existing view limits.
+    if len(json.dumps(request, ensure_ascii=False, separators=(",", ":")).encode("utf-8", errors="backslashreplace")) > MAX_REQUEST_BYTES // 4:
+        return {"summary": todo_summary_source_items(value),
+                "planning": todo_planning_source_items(value),
+                "terminal": todo_planning_source_items(value, include_terminal=True)}
+    try:
+        result = effect_runtime_result("todo.context.page", request, large_local_snapshot=True)
+    except EffectRuntimeRejected as error:
+        raise ValueError(str(error)) from error
+    return {"summary": result["summary"] if has_summary else [],
+            "planning": result["planning"] if has_planning else [],
+            "terminal": result["terminal"] if has_planning else []}
