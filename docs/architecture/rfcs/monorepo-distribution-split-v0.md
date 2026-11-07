@@ -1085,6 +1085,175 @@ new owner, budget, preset or default. R0's complete census, R1/minimal,
 D2/D5/D6, I3/D3, hard-lease/context/model and split-install acceptance remain
 open; independent exact-head review and required validation govern adoption.
 
+### 2026-11-07 — Governed CLI composition cost and archived closeout boundary
+
+The complete small-state CLI sequence is compared on main
+`8e86f173f08bd55eb833d8cdf42360f93bf989fe` and a private experimental overlay of
+#8240 at `4df990c9e66465171f980176fba4e3602d41f826` plus #8243 at
+`668bed2f03a274f273d39c187121a1a4ede67165`. Only their seven production Python
+paths enter the candidate. The independently installed monolithic wheels have
+verified source bytes for 1,836 runtime resources each, 1,998 total files and
+approximately 8.91 MiB compressed. All environments use CPython 3.13.5,
+Node 26.0.0, real Node-owned SQLite 3.53.1 and the same 57 dependency versions
+on macOS arm64. This overlay is an author experiment; it changes neither the
+installed host nor a shipped preset, authority provider or public runtime.
+
+Inputs, code/resource/wheel hashes, workload, cache policy, instrumentation,
+serial pair order, sampling and interpretation are frozen before sampling.
+Each CLI invocation has fresh Python, an empty owned bytecode-cache prefix and
+bytecode writes disabled. Each episode starts its own cold Node service at
+prequota and reuses it for subsequent phases; compile-cache and temporary roots
+are independent. Disk cache and concurrent host load remain uncontrolled.
+Pairs alternate baseline/candidate order. The 1,500-second cap includes fixture
+setup, execution, teardown and sampling orchestration. Pilot, negative-case,
+packaging and instrumented-census costs are recorded separately.
+
+Each fixture uses ordinary hard-lease claim/admission, a separate Git worktree,
+complete contiguous native initial reads, an independently verified JSON sum
+artifact (`45`), Todo completion, fresh evidence-linked Vision/writeback, one
+spend, terminal result/readback and exact completion/writeback/spend/terminal
+retries. Global synchronization and external sinks are explicitly suppressed;
+standard fanout is outside this experiment. The small state has one active
+Todo; large state adds 100 completed background Todos with substantial text.
+Large-state failures remain failures and do not become accepted cost samples.
+
+All 60 planned observations finish in **1,164.996 seconds**, within the unchanged
+cap: 52 small-state episodes complete and eight large-state episodes retain the
+same terminal failure. Code, script and freeze inventories remain unchanged.
+Small-state groups have 8/6/6/6 serial interleaved pairs; large groups have one
+pair each and qualify only the observed compatibility failure.
+
+| Small-state path | Pairs | Baseline seconds, median / p95 | Candidate seconds, median / p95 | Median paired difference, seconds | Exploratory 95% percentile interval |
+| --- | --- | --- | --- | --- | --- |
+| Source / Sqlite | 8 | 16.942 / 17.173 | 14.986 / 15.399 | -1.806 | -2.156 to -1.669 |
+| Source / File | 6 | 16.751 / 17.036 | 14.725 / 14.917 | -2.086 | -2.159 to -1.875 |
+| Wheel / Sqlite | 6 | 17.066 / 22.878 | 15.169 / 19.378 | -1.932 | -5.246 to 2.348 |
+| Wheel / File | 6 | 16.689 / 17.454 | 14.801 / 15.195 | -1.917 | -2.491 to -1.553 |
+
+The p95 uses nearest rank and is the observed maximum at these sample sizes;
+it is not a tail bound. The interval uses 10,000 fixed-seed paired resamples.
+Differences of arm medians and median paired differences are distinct. Arm
+medians improve approximately 11–12%; wheel/SQLite's interval crosses zero and
+retains both directions of tail variation. This is scoped evidence for the
+small-state path, not a universal latency threshold or long-horizon benefit.
+
+| Small-state path | Target plus waited descendants CPU seconds, median (base → candidate) | Maximum per-invocation target/waited RSS MiB, median (base → candidate) | Owned broker CPU seconds, median (base → candidate) | Broker end RSS MiB, median (base → candidate) |
+| --- | --- | --- | --- | --- |
+| Source / Sqlite | 10.536 → 9.190 | 126.60 → 90.02 | 0.767 → 0.775 | 126.59 → 125.28 |
+| Source / File | 10.507 → 9.101 | 127.77 → 87.15 | 0.716 → 0.702 | 126.77 → 126.70 |
+| Wheel / Sqlite | 10.782 → 9.289 | 134.83 → 91.51 | 0.799 → 0.797 | 125.77 → 126.91 |
+| Wheel / File | 10.606 → 9.348 | 132.01 → 88.21 | 0.729 → 0.723 | 127.97 → 127.77 |
+
+RSS is the maximum of individual CLI invocation peaks, not a concurrent
+process-tree total. Broker counters exclude retirement and use Darwin's
+calibrated timebase. Default SQLite target/waited CPU falls about 13–14%; broker
+CPU/RSS have no consistent improvement. Source/SQLite prequota median falls
+3.425 → 1.468 seconds; guard remains 1.845 → 1.863 seconds and becomes the
+largest candidate phase. Wheel/SQLite prequota is 3.463 → 1.581 seconds, while
+guard is 1.844 → 2.033 seconds. The gain is concentrated in fresh Python
+prequota loading, not faster authority execution.
+
+Setup and retirement medians across groups are 2.15–2.29 and 0.36–0.40 seconds.
+Including setup, teardown and driver overhead, source/SQLite median is
+20.238 → 18.146 seconds and wheel/SQLite 20.393 → 19.793 seconds. Independently
+building/installing the two wheels costs 43.881 seconds. Setup, validation,
+recovery and census may overlap and must not be summed. Preparatory authoring,
+complete native/thread/process-tree I/O, model tokens, model/human costs and
+long-horizon outcomes remain incompletely measured. Kernel-observed broker disk
+writes stay at roughly 5.85 MiB per SQLite episode and 220 KiB per File episode;
+those counters are not total filesystem traffic.
+
+Across all 60 observations the artifact bytes, original bindings, complete
+settlement obligations, one writeback and one debit agree. Required native
+initial bodies are 23,498–24,442 bytes for small states; `bytes / 4` is only a
+rough token proxy, not tokenizer output or proof of model retention. The
+candidate's extra 85 source / 165 wheel bytes are path/reference presentation;
+normalized settlement obligations compare clause for clause without deletion.
+
+With 101 Todos, ordinary completion automatically archives the selected Todo
+at its original early presentation position, together with 90 background
+Todos. Validation, writeback and one spend commit, but the later original-Turn
+`todo complete --no-follow-up` rejects with `todo_archived`. All four
+source/wheel × File/SQLite pairs reproduce this on both arms. No failed episode
+is counted as accepted or used to claim a complete large-state speedup. The
+existing `todo_terminal_lifecycle.ts` and `todo_archive_selection.ts` owners
+must reconcile archival with original-receipt closeout. Related #5677 already
+owns freshness/terminal recovery; its published 0/1/4-history matrix does not
+qualify this automatic-archive case. Preserve fresh archived-Todo, changed
+actor/lease/evidence and duplicate-effect refusals when extending that owner.
+
+A separate census over all eight source/wheel × File/SQLite variants preserves
+invalid Vision/workspace refusals. Four additional failure checks per variant
+cover missing Node admission, missing provider, mismatched capture digest and
+released-claim completion: no writeback/debit commits. Prequota's soft failure
+continues to quota; it does not grant admission. These checks take 69.559 seconds;
+the instrumented census takes 90.358 seconds, with overlap between phases.
+Every sampled/census broker has observed shutdown and OS exit; pilot's initial
+wrong-source retirement/pending wait remains in history and was subsequently
+resolved in its owned namespaces.
+
+Excluding the census's two extra refusals, complete-episode RPCs are 271 → 270
+in every variant; spend alone is 83 → 82. Observed receive traffic is
+999,060–1,004,527 → 966,984–972,825 bytes; send traffic is
+1,025,077–1,037,023 → 1,026,956–1,040,098 bytes. Extra send bytes reflect the
+longer candidate paths. Parent read-opens are 13,532–13,561 → 11,700–11,728;
+write-opens 285 → 284. Instrumented prequota module graphs are source
+1,404 → 480 and wheel 1,403 → 479, including instrumentation imports; these
+are not uninstrumented loading budgets. Cold Node/readiness takes 0.217–0.249
+seconds and version probing 0.026–0.032 seconds in the census. Single census
+timings do not establish a repeated latency gain; socket coverage and open
+counts do not include all native/broker I/O.
+
+**Evidence-conditioned next action:** carry the archive case to the existing
+terminal/freshness owner and #5677 integration before qualifying the full
+large-state lifecycle. Preserve the original operation/read/receipt identity
+and every refusal boundary; do not change archive policy merely to pass this
+workload. Then characterize the remaining `quota should-run` parser/loading and
+shared projection caller before selecting another performance change. The
+small-state data support continued exact-head review of #8240/#8243, not merge
+or installed-host adoption. Retain I3 for at least one minor release and keep
+M1/#8011, full R0/V10/R1, D2/D5/D6/D3, context/model/split-install, actual adoption
+and complete-cost acceptance open. No new budget, preset, provider or authority
+is introduced.
+
+For a source replay, fetch the exact PR heads and apply only the production
+`loopx/` diffs from their recorded merge bases (`79665b97a0a453380da02e15b1b62eee895147df`
+and `97cc1e0c40e766c73193b8077526a7f565dc561b`) to an isolated archive of the
+baseline. `uv sync --extra test` supplies the console. Build the two monolithic
+wheels independently with `uv build --wheel`; validate the Chat bundle through
+its existing owner before building. Reuse the source fixtures in
+`tests/control_plane/test_quota_settlement_cli.py`: author the synthetic Goal
+and background Todos before `_initialize_fixture_authority`, select File or
+SQLite and `hard_lease`, and use ordinary claim for execution. Declare the
+artifact write scope in both the Todo and Goal boundary, and use the existing
+Git-fixture helper plus a distinct worktree. Scope every command below to that
+fixture's registry/runtime and worktree; the guard supplies the full read and
+recovery commands. Keep the same Goal, Agent, Todo, Turn and claim operation:
+
+```text
+loopx heartbeat-prompt --thin --codex-app --goal-id <fixture-goal> --agent-id <fixture-agent>
+loopx heartbeat-prequota -g <fixture-goal> -a <fixture-agent>
+loopx todo claim --goal-id <fixture-goal> --todo-id <fixture-todo> --agent-id <fixture-agent> --claimed-by <fixture-agent> --claim-operation-id <fixture-claim>
+loopx quota should-run --goal-id <fixture-goal> --agent-id <fixture-agent> --todo-id <fixture-todo> --turn-instance-id <fixture-turn> --codex-app --context-delivery on
+# Execute first_read_command and every emitted contiguous next_command.
+# Produce {"sum_0_through_9":45}; verify it independently before completion.
+loopx todo complete --goal-id <fixture-goal> --agent-id <fixture-agent> --todo-id <fixture-todo> --turn-instance-id <fixture-turn> --claim-operation-id <fixture-claim> --evidence artifact:verified-sum
+loopx refresh-state --goal-id <fixture-goal> --agent-id <fixture-agent> --todo-id <fixture-todo> --turn-instance-id <fixture-turn> --classification synthetic_cli_cost_artifact --delivery-boundary semantic_closeout --delivery-batch-scale single_surface --delivery-outcome outcome_progress --agent-vision-json <fixture-vision> --delivery-workspace-path <fixture-worktree> --no-global-sync --suppress-external-sinks
+loopx quota spend-slot --goal-id <fixture-goal> --agent-id <fixture-agent> --todo-id <fixture-todo> --turn-instance-id <fixture-turn> --slots 1 --source heartbeat --execute
+loopx todo complete --goal-id <fixture-goal> --agent-id <fixture-agent> --todo-id <fixture-todo> --turn-instance-id <fixture-turn> --claim-operation-id <fixture-claim> --evidence artifact:verified-sum --no-follow-up
+loopx todo list --goal-id <fixture-goal> --todo-id <fixture-todo> --include-archived
+```
+
+Declare the fixture's observed shell, filesystem-write, network and evidence-poll
+capabilities on admission/writeback/spend; use the actual installed console for
+generated reader commands. Repeat completion, writeback, spend and terminal with
+unchanged arguments. Missing Node uses an isolated PATH, missing provider an
+empty disposable runtime, stale source a mismatched capture digest, and stale
+claim a normally released lease. These cases must refuse before writeback/debit;
+invalid Vision/workspace also remain refusals. The temporary measurement harness
+and raw captures stay private; this recipe describes the repeated workload and
+its oracles, not a distributed benchmark runner or public reproduction receipt.
+
 ## Appendix B: Decision log
 
 | Date | Decision | Owner / approval | Alternatives | Normative sections changed |
