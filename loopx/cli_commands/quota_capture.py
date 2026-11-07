@@ -684,6 +684,38 @@ def _saved_context_read_page(args: argparse.Namespace, navigation: dict[str, Any
     return page
 
 
+def _saved_replan_presentation_source(path: Path, payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    """Recover the signed source of a persisted historical staged view."""
+    if payload.get("schema_version") != "loopx_turn_envelope_v1":
+        return str(path), payload
+    packet = payload.get("replan_action_packet")
+    obligation = payload.get("autonomous_replan_obligation")
+    if (not isinstance(packet, dict) or not isinstance(obligation, dict)
+            or "replan_context" in obligation or not isinstance(packet.get("review"), str)
+            or not isinstance(packet.get("writeback"), str)
+            or obligation.get("context_read") != packet["review"]):
+        return str(path), payload
+    original = payload.get("replan_read_path")
+    if not isinstance(original, str) or "\0" in original or not Path(original).is_absolute():
+        raise QuotaDecisionTransportError("Retained replan presentation requires its original signed decision.")
+    from ..control_plane.quota.turn_envelope import _turn_envelope_result
+    from ..control_plane.turn_driver.codex_context import _read
+
+    try:
+        source = _read(Path(original))
+        _turn_envelope_result("complete_consumer", payload=source, retained_replan_view={
+            "goal_id": payload["goal_id"], "agent_id": payload["agent_identity"]["agent_id"],
+            "turn_instance_id": payload["heartbeat_receipt"]["turn_instance_id"],
+            "contract_binding": payload.get("contract_binding"), "replan_read_path": original,
+            **{key: packet.get(key) for key in ("obligation_id", "review", "writeback")},
+        })
+    except (OSError, ValueError, EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
+        raise QuotaDecisionTransportError(
+            "Retained replan source could not be verified. Restore its original capture and do not rerun admission."
+        ) from exc
+    return original, source
+
+
 def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str | None = None) -> dict[str, Any]:
     """Present an immutable already-decided quota capture, without authority IO.
 
@@ -781,20 +813,9 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
         # Carry the now-active transport into its selection presentation, not
         # into the immutable source or a second admission. Native lifecycle
         # still owns when the following full/delta view can be published.
-        if (args.initial_read and isinstance(payload.get("replan_read_path"), str)
-                and Path(payload["replan_read_path"]).resolve() == path.resolve()):
-            # Older Hosts pass the original preflight capture here. Reuse the
-            # staged presentation without another guard. Already-derived views
-            # point to a different original file; projecting them again would
-            # bind reads to the wrong source hash.
-            from ..control_plane.quota.turn_envelope import _turn_envelope_result
-
-            try:
-                payload = _turn_envelope_result("replan_cli_view", payload=payload)
-            except (EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
-                raise QuotaDecisionTransportError(
-                    "Saved replan presentation could not be prepared; read the original capture."
-                ) from exc
+        reader_path = None
+        if args.initial_read and activation["progressive_enabled"]:
+            reader_path, payload = _saved_replan_presentation_source(path, payload)
         transport = _capture_selection_transport_template(payload, args, capture_root=root)
         prepared = prepare_codex_context(payload, directory=directory, capture_directory=cache,
             goal_id=args.goal_id, agent_id=args.agent_id,
@@ -802,7 +823,7 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
             capture_id=hashlib.sha256(raw).hexdigest(),
             continuity_generation=getattr(args, "_context_delivery_generation", None),
             progressive_enabled=activation["progressive_enabled"], selection_command_args_template=transport,
-            hook_session=hook_session)
+            captured_decision_path=reader_path, hook_session=hook_session)
         projected = prepared.delivery
         native_prepared = True
         if projected.get("schema_version") == "context_delivery_v1":

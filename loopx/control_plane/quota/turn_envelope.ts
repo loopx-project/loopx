@@ -769,8 +769,12 @@ function unboundExploreReplan(payload: JsonObject, plan: JsonObject): boolean {
 /** Move only an identical acceptance copy behind the existing captured read.
  * Different revisions, other source fields and unavailable context stay intact.
  */
-function replanWorkContext(payload: JsonObject, context: JsonObject, reads = replanReadCommands(payload)): JsonObject {
+type ReplanValueIdentity = (value: unknown, path: (string | number)[]) => string;
+
+function replanWorkContext(payload: JsonObject, context: JsonObject, reads = replanReadCommands(payload),
+    identity: ReplanValueIdentity = canonicalHash): JsonObject {
   context = resolveExploreGuidance(payload, context);
+  const corePath = ["autonomous_replan_obligation", "replan_context", "core_goal"];
   const core = object(object(object(payload.autonomous_replan_obligation).replan_context).core_goal);
   const acceptance = object(core.acceptance_contract);
   if (!reads || !Array.isArray(context.sources)) return context;
@@ -779,7 +783,7 @@ function replanWorkContext(payload: JsonObject, context: JsonObject, reads = rep
   const attachments = object(steps.find(step => step.kind === "durable_writeback")).optional_attachments;
   const explore = Array.isArray(attachments) ? attachments.map(object).filter(row => row.capability_id === "explore") : [];
   const unboundReplan = unboundExploreReplan(payload, plan);
-  return {...context, sources: context.sources.map(value => {
+  return {...context, sources: context.sources.map((value, index) => {
     const source = object(value), content = object(source.content);
     if (source.source === "turn_start_capability_hook" && source.hook_id === "explore.turn_context" &&
         source.capability_id === "explore" && explore.length === 1 && typeof reads.writeback === "string") {
@@ -790,7 +794,9 @@ function replanWorkContext(payload: JsonObject, context: JsonObject, reads = rep
       return {...source, content: omitUnboundExploreResultWriteback(content)};
     }
     if (!Object.keys(acceptance).length || source.source !== "goal_acceptance" || content.status != null && content.status !== "loaded" ||
-        canonicalHash(content.goal_acceptance_contract) !== canonicalHash(acceptance)) return value;
+        identity(content.goal_acceptance_contract,
+          ["interaction_contract", "agent_channel", "work_context", "sources", index, "content", "goal_acceptance_contract"])
+        !== identity(acceptance, [...corePath, "acceptance_contract"])) return value;
     const {goal_acceptance_contract: _contract, ...metadata} = content;
     return {...source, content: {...metadata, context_read: reads.review}};
   })};
@@ -1790,10 +1796,12 @@ function completeHostDecision(request: JsonObject): JsonObject {
 function checkedContextPresentationPlan(request: JsonObject): JsonObject {
   const context = requireJsonObject(request.context, "current projection");
   if (request.surface !== "complete_turn")
-    return progressiveContextPlan({payload: context, surface: request.surface});
+    return nativeReplanPresentation(request) ?? progressiveContextPlan({payload: context, surface: request.surface});
   const numbers = sourceNumberTokens(request, request.source_number_tokens)
     .filter(({path}) => path[0] === "context").map(({path, token}) => [path.slice(1), token]);
   requireCompleteTurnDecision(context, numbers);
+  const staged = nativeReplanPresentation(request);
+  if (staged) return staged;
   const source = {...context};
   delete source.schema_version;
   delete source.contract_binding;
@@ -2135,6 +2143,58 @@ function capturedDecisionSelection(request: JsonObject): JsonObject {
     requireJsonObject(request.context, "captured context"), INITIAL_CONTEXT_DECISION_FIELDS) : []);
 }
 
+function replanCliView(payload: JsonObject, identity: ReplanValueIdentity = canonicalHash,
+    reads = replanReadCommands(payload)): JsonObject {
+  if (!reads) return payload;
+  const obligation = {...object(payload.autonomous_replan_obligation)};
+  delete obligation.replan_context;
+  const interaction = object(payload.interaction_contract), agent = object(interaction.agent_channel);
+  const cli = object(interaction.cli_channel);
+  // Defer only authoring/settlement format, not admission or stop facts.
+  // This default captured path needs no optional native delta transport.
+  const goal = replanGoalContext(payload, reads);
+  const summary = object(payload.agent_todo_summary);
+  const originalCore = object(object(object(payload.autonomous_replan_obligation).replan_context).core_goal);
+  // Reuse the same captured acceptance index for an exact summary copy.
+  // Otherwise this legacy carrier silently restores the full deferred detail.
+  // A different revision or an existing summary index remains untouched.
+  const indexedSummary = goal.core.outcome_requirements_index &&
+    !Object.hasOwn(summary, "outcome_requirements_index") &&
+    identity(summary.goal_acceptance_contract ?? null, ["agent_todo_summary", "goal_acceptance_contract"])
+      === identity(originalCore.acceptance_contract ?? null,
+        ["autonomous_replan_obligation", "replan_context", "core_goal", "acceptance_contract"])
+    ? {...summary, goal_acceptance_contract: goal.core.acceptance_contract,
+      outcome_requirements_index: goal.core.outcome_requirements_index} : summary;
+  // Review owns the captured planning facts. The entry retains admission,
+  // current selection and stops; the mandatory reader supplies the complete
+  // Goal and horizon before the Agent chooses its next work.
+  const {core_goal: _core, planning_horizon: _horizon, ...entry} = payload;
+  return {...entry,
+    ...(indexedSummary !== summary ? {agent_todo_summary: indexedSummary} : {}),
+    interaction_contract: {...interaction, cli_channel: deferredReplanWriteback(cli), agent_channel: {...agent,
+      work_context: replanWorkContext(payload, object(agent.work_context), reads, identity)}},
+    autonomous_replan_obligation: {...obligation, context_read: reads.review},
+    replan_action_packet: replanActionPacket(payload, reads)};
+}
+
+function nativeReplanPresentation(request: JsonObject): JsonObject | undefined {
+  const path = object(request.native_projection).captured_decision_path;
+  if (typeof path !== "string") return undefined;
+  const source = requireJsonObject(request.context, "captured replan source");
+  const packet = object(source.replan_action_packet);
+  const review = object(object(source.autonomous_replan_obligation).replan_context);
+  // Existing staged files are presentation inputs. Do not derive a new source
+  // hash from them or replace their already pinned reader commands.
+  if (typeof source.replan_read_path !== "string" || packet.schema_version !== "replan_action_packet_v0"
+      || typeof packet.obligation_id !== "string"
+      || packet.obligation_id !== review.obligation_id || packet.review !== undefined
+      || packet.writeback !== undefined) return undefined;
+  const identity = contextSourceIdentity(request, request.source_number_tokens);
+  const view = replanCliView(source, (value, field) => identity(value, ["context", ...field]),
+    replanReadCommands(source, path));
+  return view === source ? undefined : {staged_context: view, deferred: [], instructions: []};
+}
+
 export function evaluateTurnEnvelope(value: unknown): JsonObject {
   const request = requireJsonObject(value, "turn envelope request");
   const operation = request.operation;
@@ -2145,45 +2205,26 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
   }
   if (operation === "replan_view") return replanView(request);
   if (operation === "context_select") return capturedDecisionSelection(request);
-  if (operation === "replan_cli_view") {
-    const payload = requireJsonObject(request.payload, "replan CLI payload");
-    const reads = replanReadCommands(payload);
-    if (!reads) return payload;
-    const obligation = {...object(payload.autonomous_replan_obligation)};
-    delete obligation.replan_context;
-    const interaction = object(payload.interaction_contract), agent = object(interaction.agent_channel);
-    const cli = object(interaction.cli_channel);
-    // Defer only authoring/settlement format, not admission or stop facts.
-    // This default captured path needs no optional native delta transport.
-    const goal = replanGoalContext(payload, reads);
-    const summary = object(payload.agent_todo_summary);
-    const originalCore = object(object(object(payload.autonomous_replan_obligation).replan_context).core_goal);
-    // Reuse the same captured acceptance index for an exact summary copy.
-    // Otherwise this legacy carrier silently restores the full deferred detail.
-    // A different revision or an existing summary index remains untouched.
-    const indexedSummary = goal.core.outcome_requirements_index &&
-      !Object.hasOwn(summary, "outcome_requirements_index") &&
-      canonicalHash(summary.goal_acceptance_contract ?? null) === canonicalHash(originalCore.acceptance_contract ?? null)
-      ? {...summary, goal_acceptance_contract: goal.core.acceptance_contract,
-        outcome_requirements_index: goal.core.outcome_requirements_index} : summary;
-    // Review owns the captured planning facts. The entry retains admission,
-    // current selection and stops; the mandatory reader supplies the complete
-    // Goal and horizon before the Agent chooses its next work.
-    const {core_goal: _core, planning_horizon: _horizon, ...entry} = payload;
-    return {...entry,
-      ...(indexedSummary !== summary ? {agent_todo_summary: indexedSummary} : {}),
-      interaction_contract: {...interaction, cli_channel: deferredReplanWriteback(cli), agent_channel: {...agent,
-        work_context: replanWorkContext(payload, object(agent.work_context))}},
-      autonomous_replan_obligation: {...obligation, context_read: reads.review},
-      replan_action_packet: replanActionPacket(payload)};
-  }
+  if (operation === "replan_cli_view") return replanCliView(requireJsonObject(request.payload, "replan CLI payload"));
   if (operation === "compose_complete") {
     const result = composeCompleteTurnDecision(request);
     return request.source_edits === true
       ? contextProjectionChanges(requireJsonObject(request.payload, "complete Turn source"), result) : result;
   }
   if (operation === "complete_consumer") {
-    requireCompleteTurnDecision(request.payload, request.source_number_tokens);
+    const source = requireCompleteTurnDecision(request.payload, request.source_number_tokens);
+    if (request.retained_replan_view !== undefined) {
+      const view = requireJsonObject(request.retained_replan_view, "retained replan presentation");
+      const reads = replanReadCommands(source);
+      if (!reads || view.replan_read_path !== source.replan_read_path ||
+          view.goal_id !== source.goal_id || view.agent_id !== object(source.agent_identity).agent_id ||
+          view.turn_instance_id !== object(source.heartbeat_receipt).turn_instance_id ||
+          view.obligation_id !== object(source.replan_action_packet).obligation_id ||
+          canonicalHash(view.contract_binding) !== canonicalHash(source.contract_binding) ||
+          view.review !== reads.review || view.writeback !== reads.writeback) {
+        throw new EffectRuntimeRequestError("retained replan presentation differs from its original decision");
+      }
+    }
     return {ok: true};
   }
   if (operation === "complete_host_lineage") {

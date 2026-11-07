@@ -248,11 +248,14 @@ const pathStartsWith = (path: Path, start: Path) => start.every((key, i) => path
 function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSourceValues,
     plan = progressiveContextPlan({payload: request.context, surface: request.surface})):
     {context: JsonObject; tokens: [Path, string][]; projected: boolean} {
-  const context = requireJsonObject(request.context, "current projection");
+  const original = requireJsonObject(request.context, "current projection");
+  const staged = jsonObject(plan.staged_context);
+  const context = staged ?? original;
   const details = requireJsonObject(request.native_projection, "supporting material reference");
   const identity = contextSourceIdentity(request, request.source_number_tokens);
-  const deferred = plan.deferred as JsonObject[], references = (plan.references ?? []) as JsonObject[];
-  const instructions = plan.instructions as JsonObject[];
+  const edits = details.progressive_enabled === false ? {deferred: [], instructions: []} : plan;
+  const deferred = edits.deferred as JsonObject[], references = (edits.references ?? []) as JsonObject[];
+  const instructions = edits.instructions as JsonObject[];
   const at = (root: unknown, path: Path): unknown => path.reduce<unknown>((row, key) =>
     row !== null && typeof row === "object" && Object.hasOwn(row, key)
       ? (row as Record<string | number, unknown>)[key] : undefined, root);
@@ -310,7 +313,8 @@ function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSour
       });
       const sourcePath: Path = ["interaction_contract", "agent_channel", "work_context", "sources"];
       const sources = at(context, sourcePath);
-      required.context_details = {...details, source_path: details.path,
+      required.context_details = {path: details.path, sha256: details.sha256,
+        command_template: details.command_template, source_path: details.path,
       unread_context_index: {
         source: {path: details.path, sha256: details.sha256},
         coverage_confirmed: false,
@@ -363,6 +367,24 @@ function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSour
     parent(selectionPath)[selectionPath.at(-1)!] = transport;
     if (signedSource && required.context_details === undefined)
       required.context_details = sourceNavigation;
+  }
+  if (staged) {
+    if (required.context_details === undefined) {
+      required = {...required, context_details: {path: details.path, sha256: details.sha256}};
+    }
+    // Staging can omit whole subtrees, but the retained numeric facts still
+    // refer to the same source fields, including in the encoded full/delta.
+    const retained = tokens.filter(([path]) => {
+      if (path[0] !== "context") return true;
+      const target = path.slice(1), value = at(required, target);
+      if (typeof value !== "number" || !Object.is(value, at(original, target))) return false;
+      const owner = at(required, target.slice(0, -1)) as object;
+      const fields = sourceValues.get(owner) ?? new Map<string, Path>();
+      fields.set(String(target.at(-1)), path);
+      sourceValues.set(owner, fields);
+      return true;
+    });
+    return {context: required, tokens: retained, projected: true};
   }
   return {context: required, tokens: projected ? remaining : tokens, projected: projected || bindTransport};
 }

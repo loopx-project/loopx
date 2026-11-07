@@ -621,6 +621,7 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                           include_initial_read_plan: bool = True,
                           progressive_enabled: bool | None = None,
                           selection_command_args_template: str | None = None,
+                          captured_decision_path: str | None = None,
                           captured_recovery: dict[str, Any] | None = None,
                           hook_session: str | None = None) -> NativeContextPreparation:
     """Commit current recovery before optional projection or candidate updates.
@@ -634,7 +635,7 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
     from ...command_invocation import current_loopx_cli_argv
     from ..quota.error_codes import QuotaDecisionTransportError
     from ..quota.turn_envelope import prepare_context_delivery
-    from ..effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
+    from ..effect_runtime import EffectRuntimeRejected, EffectRuntimeRemoteError, EffectRuntimeStartupError
 
     if directory is None:
         if not progressive_enabled:
@@ -695,6 +696,7 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                 recovery_committed = True
                 # Legacy direct native callers omitted the presentation option.
                 progressive = progressive_enabled is not False
+                presentation = progressive or selection_command_args_template is not None or surface == "complete_turn"
                 try:
                     transaction = prepare_context_delivery(payload, scope=scope, capture_id=capture_id,
                         surface=surface, baseline=request.get("baseline"),
@@ -704,18 +706,27 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                             "source_path": recovery["path"],
                             **({"selection_command_args_template": selection_command_args_template}
                                 if selection_command_args_template is not None else {}),
+                            **({"captured_decision_path": captured_decision_path}
+                                if captured_decision_path is not None else {}),
+                            **({"progressive_enabled": False} if not progressive else {}),
                             "command_template": context_capture_read_command(Path(recovery["path"]), recovery["sha256"],
                                 page_bytes=page_bytes, max_page_output_bytes=output_bytes)
                                 + " --select '<supporting_material_pointer>/sources'",
-                        } if progressive else None, consumed_pointers=state.get("consumed_pointers"),
+                        } if presentation else None, consumed_pointers=state.get("consumed_pointers"),
                         observe_first_read=progressive)
-                except (EffectRuntimeRemoteError, EffectRuntimeStartupError):
+                except (EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
+                    if surface == "complete_turn" and isinstance(exc, EffectRuntimeRejected):
+                        raise QuotaDecisionTransportError(str(exc)) from exc
+                    if captured_decision_path is not None and isinstance(payload.get("replan_read_path"), str):
+                        raise QuotaDecisionTransportError(
+                            "Saved context presentation could not be prepared. Read the original capture and do not rerun admission."
+                        ) from exc
                     return NativeContextPreparation(payload)
-                if progressive and transaction["projected"]:
+                if presentation and transaction["projected"]:
                     recovery = capture_context_projection(transaction["context"], directory=capture_directory,
                         filename="required-context.json", read_guidance=CONTEXT_CAPTURE_PAGE_GUIDANCE)
                     publish_recovery(recovery)
-                result: dict[str, Any] = transaction["delivery"] if progressive else transaction
+                result: dict[str, Any] = transaction["delivery"] if presentation else transaction
                 read_sections = transaction["read_sections"] if progressive else {}
                 result["recovery"] = recovery
                 if result.get("continuity_basis") == "captured_file" and result.get("mode") == "delta":
