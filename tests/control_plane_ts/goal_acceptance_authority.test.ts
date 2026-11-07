@@ -483,6 +483,34 @@ for (const provider of providers) {
     assert.equal((replacementHead.head.goal_acceptance as JsonObject).revision, 1);
     assert.equal(acceptanceWorkGuard(replacementHead.head, goal, "todo_first")?.allowed, true);
   });
+  test(`${provider}: Goal-only checks preserve local work and require independent verification`, options, async t => {
+    const store = await fixture(t, provider); await seed(store);
+    const doc = {...document(), scope: {kind: "goal"}, bindings: []};
+    assert.throws(() => normalizeGoalAcceptanceDocument({...doc, bindings: document().bindings}), /outside/);
+    const request = await configureRequest(store, {document: doc});
+    assert.equal((await configureGoalAcceptance(store, request)).status, "applied");
+    const before = (await head(store)).head;
+    assert.equal(projectGoalAcceptance(before, goal).status, "unverified");
+    assert.deepEqual(projectGoalAcceptance(before, goal).tasks, []);
+    for (const id of ["todo_first", "todo_second"]) {
+      assert.equal(acceptanceWorkGuard(before, goal, id), null);
+      assert.equal(acceptanceCompletionRequirements(before, goal, id), null);
+    }
+    await update(store, "todo_first", {done: true, status: "done", completion_continuation: "no_followup"});
+    assert.equal(projectGoalAcceptance((await head(store)).head, goal).status, "unverified",
+      "local completion cannot certify a Goal check");
+    const failed = await verifyRequest(store, {results: [
+      {criterion_id: "outcome", passed: false, exit_code: 1},
+      {criterion_id: "prerequisite", passed: true, exit_code: 0},
+    ]});
+    assert.equal((await commitGoalAcceptanceVerification(store, failed)).status, "applied");
+    assert.equal(projectGoalAcceptance((await head(store)).head, goal).status, "failed");
+    assert.equal((await commitGoalAcceptanceVerification(store, await verifyRequest(store))).status, "applied");
+    assert.equal(projectGoalAcceptance((await head(store)).head, goal).status, "accepted");
+    await update(store, "todo_new", todoFixtureRecord(todo("todo_new"), "native"));
+    assert.equal(acceptanceWorkGuard((await head(store)).head, goal, "todo_new"), null);
+    assert.equal(projectGoalAcceptance((await head(store)).head, goal).status, "accepted");
+  });
   test(`${provider}: selected work isolates admission and verification without weakening its own guard`, options, async t => {
     const store = await fixture(t, provider); await seed(store);
     const doc = {...document(), scope: {kind: "selected_work", todo_ids: ["todo_first"]},
