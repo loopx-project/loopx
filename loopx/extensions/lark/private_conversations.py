@@ -1315,11 +1315,7 @@ class LarkPrivateConversations:
                         continue
                     key = identity_ref(source["binding_id"], sid)
                     path = root / f"{key}.json"
-                    messages = store.messages(sid)
-                    web_turns = {message["turn_id"] for message in messages
-                                 if message.get("role") == "user" and message.get("origin") == "web"}
-                    selected = [message for message in messages if message.get("turn_id") in web_turns
-                                and message.get("role") in {"user", "agent"}]
+                    selected = self._web_projection_transcript(sid)
                     if selected:
                         with exclusive_file_lock(path, operation="discover_web_conversation_projection"):
                             row = _read_json(path) if path.exists() else {
@@ -1339,6 +1335,40 @@ class LarkPrivateConversations:
                     continue
         return [path for path in sorted(root.glob("*.json")) if _read_json(path).get("status") == "pending"]
 
+    def _web_projection_transcript(self, session_id: str, *, inputs_only: bool = False,
+                                   verify_turns: bool = False) -> list[dict[str, Any]]:
+        store = self.core.controller.store
+        messages = store.messages(session_id)
+        web_turns = {message["turn_id"] for message in messages
+                     if message.get("role") == "user" and message.get("origin") == "web"}
+        roles = {"user"} if inputs_only else {"user", "agent", "error"}
+        selected = []
+        failed_turns = set()
+        for message in messages:
+            turn_id, role = message.get("turn_id"), message.get("role")
+            if turn_id not in web_turns or role not in roles:
+                continue
+            turn = store.load_turn(session_id, turn_id) if verify_turns or role == "error" else None
+            same_turn = bool(turn and turn.get("origin") == "web" and turn.get("session_id") == session_id
+                             and turn.get("turn_id") == turn_id)
+            if role == "error":
+                # An unconfirmed stop may leave an earlier error row in the
+                # transcript. Use only the exact terminal failure, once per Turn.
+                if (not same_turn or turn_id in failed_turns or turn["status"] not in {"failed", "timed_out"}
+                        or not turn.get("completed_at") or turn.get("error") != message.get("text")
+                        or message.get("attachments")):
+                    continue
+                failed_turns.add(turn_id)
+                if turn.get("error_code") == "server_restarted":
+                    failure = "服务在处理此请求时重启，本轮未完成。详情可在 App 的原会话查看。"
+                else:
+                    _, failure = manager_failure_reply(turn)
+                message = {**message, "text": f"App 执行记录（{turn['completed_at']}）\n\n{failure}"}
+            elif verify_turns and not same_turn:
+                raise ValueError("canonical App input identity changed")
+            selected.append(message)
+        return selected
+
     def _web_projection_messages(self, row: dict[str, Any], *, inputs_only: bool = False) -> list[dict[str, Any]]:
         store = self.core.controller.store
         source = _read_json(self.root / f"{row['request_ref']}.json")
@@ -1356,23 +1386,7 @@ class LarkPrivateConversations:
                 or saved.get("source_ref") != row["source"]["source_ref"]):
             raise ValueError("original App projection audience changed")
         with self.bindings.input_context(saved, origin="web", session=session, store=store):
-            messages = store.messages(session["session_id"])
-            web_turns = {message["turn_id"] for message in messages
-                         if message.get("role") == "user" and message.get("origin") == "web"}
-            selected = []
-            for message in messages:
-                if message.get("turn_id") not in web_turns or message.get("role") not in {"user", "agent"}:
-                    continue
-                # Reactions belong to canonical user inputs. The independent
-                # body outbox still reads and validates every answer; feedback
-                # need not reload those Turns just to discard their messages.
-                if inputs_only and message["role"] != "user":
-                    continue
-                turn = store.load_turn(session["session_id"], message["turn_id"])
-                if not turn or turn.get("origin") != "web" or turn.get("session_id") != session["session_id"]:
-                    raise ValueError("canonical App input identity changed")
-                selected.append(message)
-            return selected
+            return self._web_projection_transcript(session["session_id"], inputs_only=inputs_only, verify_turns=True)
 
     @staticmethod
     def _web_projection_delivery_id(row: dict[str, Any], message: dict[str, Any]) -> str:

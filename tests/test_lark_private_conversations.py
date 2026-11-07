@@ -2336,6 +2336,83 @@ def test_app_messages_and_answers_reach_the_original_chat_once_without_new_execu
         runtime.close()
 
 
+@pytest.mark.parametrize("recovery", ["readback", "revoked"])
+def test_app_failed_turn_mirrors_only_its_terminal_notice_to_the_original_chat(ordinary, monkeypatch, recovery):  # noqa: F811
+    store, runtime, provider, transport = connect(ordinary)
+    profile = "steward-app"
+    event = provider.event(profile, "original-app-failure-source", "Original steward chat")
+    transport.admit(profile, event)
+    original = transport.core.pending()[0]
+    sid = original["session_id"]
+    try:
+        runtime.wait_for_turn(session_id=sid, turn_id=original["turn_id"], timeout_sec=10)
+        transport.reconcile()
+        with monkeypatch.context() as queued:
+            queued.setattr(runtime, "resume_session_queue", lambda **_: None)
+            status, turn = ordinary[3](f"/api/chat/sessions/{sid}/turns", {
+                "message": "App request with typed terminal failure", "client_turn_id": "app-failed-once"})
+        assert status == 202 and turn["status"] == "queued"
+        turn_id = turn["turn_id"]
+        stale = store.append_message(sid, role="error", text="Unconfirmed synthetic stop detail", turn_id=turn_id)
+        _drain_app_projection(transport, lambda: any("你（App）" in text for _, text in provider.writes))
+        transport.reconcile()
+        path, = (transport.root / "web-projections").glob("*.json")
+        original_outbox = json.loads(path.read_text())
+        assert original_outbox["status"] == "delivered"
+        runtime.resume_session_queue(session_id=sid, work_dir=ordinary[-1], objective="")
+        failed = runtime.wait_for_turn(session_id=sid, turn_id=turn_id, timeout_sec=10)
+        assert failed["status"] == "failed" and failed["error_code"] == "cyber_policy", failed
+        errors = [item for item in store.messages(sid) if item["turn_id"] == turn_id
+                  and item["role"] == "error" and item["text"] == failed["error"]]
+        canonical, = errors
+        duplicate = store.append_message(sid, role="error", text=failed["error"], turn_id=turn_id)
+        phase = "web." + canonical["message_id"]
+        turns_before = ordinary[4].read_bytes()
+        transcript = (store.sessions_root / sid / "messages.jsonl").read_bytes()
+        before = len(provider.writes)
+
+        def worker():
+            return LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+                runner=provider, cli_bin="lark-cli")
+
+        if recovery == "revoked":
+            binding = transport._binding(profile)
+            transport.bindings.disconnect(binding["binding_id"], expected_revision=transport.bindings.read()["revision"])
+            restarted = worker()
+            for _ in range(3):
+                restarted.reconcile()
+            assert len(provider.writes) == before
+            assert phase not in json.loads(path.read_text())["deliveries"]
+        else:
+            provider.verify_replies = False
+            _drain_app_projection(worker(), lambda: len(provider.writes) == before + 1)
+            attempted = json.loads(path.read_text())["deliveries"][phase]
+            assert attempted["attempt"] and not attempted.get("verified")
+            provider.verify_replies = True
+            restarted = worker()
+            _drain_app_projection(restarted, lambda: json.loads(path.read_text())["deliveries"][phase].get("verified"))
+            restarted.reconcile()
+            outbox = json.loads(path.read_text())
+            assert outbox["status"] == "delivered"
+            assert outbox["deliveries"][phase]["attempt"] == attempted["attempt"]
+            for key, old in original_outbox["deliveries"].items():
+                assert {k: v for k, v in outbox["deliveries"][key].items() if k != "feedback"} == {
+                    k: v for k, v in old.items() if k != "feedback"}
+            assert "web." + stale["message_id"] not in outbox["deliveries"]
+            assert "web." + duplicate["message_id"] not in outbox["deliveries"]
+            assert len(provider.writes) == before + 1
+            sender, body = provider.writes[-1]
+            assert sender == profile and "上游安全策略拦截" in body and failed["completed_at"] in body
+            assert failed["error"] not in body and stale["text"] not in body
+            mirror = provider.messages[attempted["attempt"]["message_ref"]]
+            assert mirror["chat_id"] == event["chat_id"]
+        assert ordinary[4].read_bytes() == turns_before
+        assert (store.sessions_root / sid / "messages.jsonl").read_bytes() == transcript
+        assert len(store.list_sessions()) == 1
+    finally:
+        runtime.close()
+
+
 @pytest.mark.parametrize("terminal", ["completed", "failed", "interrupted"])
 def test_app_mirror_feedback_tracks_turn_only_changes_and_separate_sessions(ordinary, monkeypatch, tmp_path, terminal):  # noqa: F811
     gate = tmp_path / "finish-app-input"
@@ -2407,6 +2484,8 @@ def test_app_mirror_feedback_tracks_turn_only_changes_and_separate_sessions(ordi
         transport._web_projection_scan_at = 0
         _drain_app_projection(transport, lambda: not any(ref in targets.values() and emoji == "OnIt"
                                                        for _, ref, emoji in provider.reactions.values()))
+        if terminal == "failed":
+            _drain_app_projection(transport, lambda: sum("App 执行记录" in body for _, body in provider.writes) == 2)
         assert {(profile, ref, emoji) for profile, ref, emoji in provider.reactions.values() if ref in targets.values()} == {
             (profile, ref, "Get") for profile, ref in targets.items()}
         starts = ordinary[4].read_bytes()
