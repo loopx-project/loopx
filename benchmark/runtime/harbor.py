@@ -74,6 +74,7 @@ class BenchmarkCodex(CodexOffline):
         planning_timeout_sec=None,
         turn_envelope=False,
         context_delivery=None,
+        native_child_limit=None,
         provider_request_admission=False,
         native_goal_continue=False,
         task_objective=None,
@@ -100,6 +101,7 @@ class BenchmarkCodex(CodexOffline):
             task_entry,
             turn_envelope,
             context_delivery,
+            native_child_limit,
         )
         if type(provider_request_admission) is not bool:
             raise ValueError("provider_request_admission must be a boolean opt-in")
@@ -190,6 +192,8 @@ class BenchmarkCodex(CodexOffline):
 
     def _turn_envelope_receipt(self) -> dict:
         return {**turn_envelope_receipt(explicit=self.execution.turn_envelope),
+                **({"native_child_limit": self.execution.native_child_limit}
+                   if self.execution.native_child_limit is not None else {}),
                 **({"context_delivery": "on"} if self.execution.context_delivery != "off" else {})}
 
     def _planning_receipt(self) -> dict:
@@ -478,8 +482,14 @@ class BenchmarkCodex(CodexOffline):
         )
         if pending.return_code == 0:
             raise RuntimeError("Resolve the pending Turn before entering another task phase")
+        registry_exists = await self._registry_exists(environment)
+        if registry_exists and self.execution.native_child_limit is not None:
+            retained = await self._loopx(
+                environment, ["configure-goal", "--goal-id", self.goal_id], cwd=cwd,
+            )
+            self._verify_native_child_configuration(retained.get("after") or retained.get("before") or {})
         await self._write_task_document(environment, instruction)
-        if not await self._registry_exists(environment):
+        if not registry_exists:
             await self._loopx(
                 environment,
                 [
@@ -500,6 +510,8 @@ class BenchmarkCodex(CodexOffline):
                     "--write-scope",
                     "**",
                     "--no-global-sync",
+                    *(["--spawn-allowed", "--max-children", str(self.execution.native_child_limit)]
+                      if self.execution.native_child_limit is not None else []),
                 ],
                 cwd=cwd,
             )
@@ -554,6 +566,7 @@ class BenchmarkCodex(CodexOffline):
             environment, ["configure-goal", "--goal-id", self.goal_id], cwd=cwd,
         )
         configured_state = cadence.get("after") or cadence.get("before") or {}
+        self._verify_native_child_configuration(configured_state)
         configured = configured_state.get("execution_profile", {}).get(key)
         if configured != expected:
             raise RuntimeError(
@@ -567,6 +580,15 @@ class BenchmarkCodex(CodexOffline):
             raise RuntimeError(
                 f"stride strategy readback mismatch: expected {self.stride_strategy or 'off'}, got {strategy!r}"
             )
+
+    def _verify_native_child_configuration(self, configured_state: dict) -> None:
+        if self.execution.native_child_limit is None:
+            return
+        orchestration = configured_state.get("orchestration") or {}
+        if (orchestration.get("mode") != "multi_subagent"
+                or orchestration.get("spawn_allowed") is not True
+                or orchestration.get("max_children") != self.execution.native_child_limit):
+            raise RuntimeError("Native child authorization differs from the existing Goal; use a new trial")
 
     async def _seed_phase(self, environment: BaseEnvironment, *, cwd: str) -> None:
         text = (
@@ -641,6 +663,11 @@ class BenchmarkCodex(CodexOffline):
                    if self.checkpoint_request_path is not None else {}),
                 **({"LOOPX_TURN_ENVELOPE": "1"} if self.execution.turn_envelope else {}),
                 "LOOPX_CONTEXT_DELIVERY": self.execution.context_delivery,
+                # A trial's explicit None must not inherit a container opt-in.
+                "LOOPX_NATIVE_CHILD_LIMIT": (
+                    str(self.execution.native_child_limit)
+                    if self.execution.native_child_limit is not None else ""
+                ),
                 **({"LOOPX_PROVIDER_REQUEST_ADMISSION": "on"} if self.provider_request_admission else {}),
                 **({"LOOPX_NATIVE_GOAL_CONTINUE": "1"} if self.native_goal_continue else {}),
                 "LOOPX_ITERATION_CONTEXT": self.execution.context,

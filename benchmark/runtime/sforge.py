@@ -20,7 +20,7 @@ from loopx.control_plane.goals.goal_vision_policy import DEFAULT_PLANNING_HORIZO
 from benchmark.edgebench.feedback import FEEDBACK_MODES
 from benchmark.edgebench.feedback_hook import FEEDBACK_PAYLOAD
 
-from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution, codex_settings, prepare_codex_home
+from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution, codex_settings, native_child_instructions, prepare_codex_home
 from .codex_offline import CodexOffline, MODEL_CATALOG_REMOTE, stage_portable_python
 from .harbor import (
     BenchmarkCodex, _CONTROL, _CODEX_HOME, _PYTHON, _SCHEDULER_STATE, _SRC,
@@ -93,6 +93,7 @@ class SForgeWorker(CodexAgent):
                  task_entry: str | None = None,
                  turn_envelope: bool = False,
                  context_delivery: str | None = None,
+                 native_child_limit: int | None = None,
                  provider_request_admission: bool = False,
                  native_goal_continue: bool = False,
                  replan_after_turns: int | None = None,
@@ -110,6 +111,13 @@ class SForgeWorker(CodexAgent):
         ):
             raise ValueError("turn_envelope requires a heartbeat worker")
         self.turn_envelope = turn_envelope
+        self.native_child_limit = Execution(mode="plain", native_child_limit=native_child_limit).native_child_limit
+        if native_child_limit is not None:
+            if not feedback_prompt or not workspace_instructions:
+                raise ValueError("Native child authorization requires the explicit task prompt and workspace instructions")
+            authorization = native_child_instructions(native_child_limit)
+            feedback_prompt = authorization + feedback_prompt
+            workspace_instructions = authorization + workspace_instructions
         self.context_delivery = Execution(
             mode="heartbeat" if profile.startswith("heartbeat-") else "plain",
             context_delivery=context_delivery,
@@ -305,7 +313,7 @@ class SForgeWorker(CodexAgent):
                     shutil.copyfile(os.environ["CODEX_AUTH_JSON_PATH"], home / "auth.json")
                     (home / "auth.json").chmod(0o600)
                 prepare_codex_home(
-                    home, execution=Execution(mode="plain"), workspace=Path(self.cwd),
+                    home, execution=Execution(mode="plain", native_child_limit=self.native_child_limit), workspace=Path(self.cwd),
                     model=self._config.agent_model, effort=effort,
                     base_url=runtime_base_url or "",
                     api_key=runtime_api_key or "", wire_api="responses", skills=None,
@@ -336,6 +344,7 @@ class SForgeWorker(CodexAgent):
                 task_entry=self.task_entry,
                 turn_envelope=self.turn_envelope,
                 context_delivery=self.context_delivery,
+                native_child_limit=self.native_child_limit,
                 **({"provider_request_admission": True} if self.provider_request_admission else {}),
                 native_goal_continue=self.native_goal_continue,
                 replan_after_turns=self.replan_after_turns,
@@ -428,6 +437,8 @@ class SForgeWorker(CodexAgent):
             **({"planning_timeout_seconds": None}
                if self.task_entry == "loopx-planned" else {}),
             "stop_hook": self.profile == "official",
+            **({"native_child_limit": self.native_child_limit}
+               if self.native_child_limit is not None else {}),
             **(self.runtime._turn_envelope_receipt() if self.runtime is not None else {}),
             **({"provider_request_admission": "on"} if self.provider_request_admission else {}),
             **({"native_goal_continue": True} if self.native_goal_continue else {}),
@@ -482,8 +493,11 @@ class SForgeWorker(CodexAgent):
                     # The sealed Goal, task graph, review counters and strategy
                     # are the continuing state. Do not bootstrap, seed another
                     # task, or reset an existing configuration during restore.
+                    if self.native_child_limit is not None:
+                        asyncio.run(self.runtime._verify_phase_configuration(self.environment, cwd=self.cwd))
                     asyncio.run(self.runtime._write_task_document(self.environment, result.stdout))
-                    asyncio.run(self.runtime._verify_phase_configuration(self.environment, cwd=self.cwd))
+                    if self.native_child_limit is None:
+                        asyncio.run(self.runtime._verify_phase_configuration(self.environment, cwd=self.cwd))
                 else:
                     asyncio.run(self.runtime._prepare_phase(self.environment, result.stdout, cwd=self.cwd))
                 if self.profile == "heartbeat-explore" and self.warm_start is None:
