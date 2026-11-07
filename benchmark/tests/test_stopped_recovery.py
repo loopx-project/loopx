@@ -1,7 +1,6 @@
 """A stopped source proof observes existing bytes, and grants no execution."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import io
 import json
 import os
@@ -69,10 +68,14 @@ def test_prepare_stopped_source_keeps_original_state_and_requires_unique_return(
     declaration = _source(tmp_path)
     box, client = _fake_container(monkeypatch)
     original = Path(declaration["scheduler_state"]).read_bytes()
-    if fault == "live": box.attrs["State"].update(Status="running", Running=True, Pid=42)
-    elif fault == "restart_command": box.attrs["Config"]["Cmd"] = ["run-original-job"]
-    elif fault == "mount": box.attrs["Mounts"] = [dict(Source="/writable")]
-    elif fault == "custom_hostname": box.attrs["Config"]["Hostname"] = "custom-worker"
+    if fault == "live":
+        box.attrs["State"].update(Status="running", Running=True, Pid=42)
+    elif fault == "restart_command":
+        box.attrs["Config"]["Cmd"] = ["run-original-job"]
+    elif fault == "mount":
+        box.attrs["Mounts"] = [dict(Source="/writable")]
+    elif fault == "custom_hostname":
+        box.attrs["Config"]["Hostname"] = "custom-worker"
     elif fault == "ambiguous_wake":
         second = tmp_path / "wakes/second/receipt.json"
         second.parent.mkdir()
@@ -99,15 +102,24 @@ def test_consumer_rejects_stale_or_incomplete_latest_source(tmp_path, monkeypatc
         LOOPX_AGENT_ID=declaration["agent_id"], LOOPX_PROJECT=declaration["workspace"],
         LOOPX_RUNTIME_ROOT=declaration["runtime_root"], CODEX_HOME=declaration["native_home"],
         LOOPX_REGISTRY=declaration["registry"])
-    if fault == "workspace": (tmp_path / "workspace/answer").write_text("different")
-    elif fault == "wal_removed": (tmp_path / "native/state_5.sqlite-wal").unlink()
-    elif fault == "new_journal": (tmp_path / "native/state_5.sqlite-journal").write_text("different")
-    elif fault == "session_removed": (tmp_path / "native/sessions/session.jsonl").unlink()
-    elif fault == "state": (tmp_path / "control/state.json").write_text("{}")
-    elif fault == "wrong_lane": env["LOOPX_AGENT_ID"] = "other"
-    elif fault == "copied_proof": monkeypatch.setattr(os, "uname", lambda: SimpleNamespace(nodename="b" * 12))
+    if fault == "workspace":
+        (tmp_path / "workspace/answer").write_text("different")
+    elif fault == "wal_removed":
+        (tmp_path / "native/state_5.sqlite-wal").unlink()
+    elif fault == "new_journal":
+        (tmp_path / "native/state_5.sqlite-journal").write_text("different")
+    elif fault == "session_removed":
+        (tmp_path / "native/sessions/session.jsonl").unlink()
+    elif fault == "state":
+        (tmp_path / "control/state.json").write_text("{}")
+    elif fault == "wrong_lane":
+        env["LOOPX_AGENT_ID"] = "other"
+    elif fault == "copied_proof":
+        monkeypatch.setattr(os, "uname", lambda: SimpleNamespace(nodename="b" * 12))
     elif fault == "wrong_container":
-        value = json.loads(proof.read_bytes()); value["container_id"] = "b" * 64; proof.write_text(json.dumps(value))
+        value = json.loads(proof.read_bytes())
+        value["container_id"] = "b" * 64
+        proof.write_text(json.dumps(value))
     if fault:
         with pytest.raises(ValueError):
             _stopped_source(Path(declaration["scheduler_state"]), {}, env, declaration["wake_log_dir"])
@@ -116,8 +128,17 @@ def test_consumer_rejects_stale_or_incomplete_latest_source(tmp_path, monkeypatc
         assert _stopped_source(Path(declaration["scheduler_state"]), {}, env, declaration["wake_log_dir"]) == first
 
 
+@pytest.mark.parametrize("timeout", [0, -1, float("inf"), -float("inf"), float("nan")])
+def test_stopped_recovery_rejects_invalid_archive_timeout(tmp_path, timeout):
+    output = tmp_path / "proof.json"
+    with pytest.raises(ValueError, match="timeout must be finite and positive"):
+        subject.prepare_stopped_recovery(None, container_id="a" * 64,
+            declaration=_source(tmp_path), output=output, timeout=timeout)
+    assert not output.exists()
+
+
 @pytest.mark.skipif(os.environ.get("LOOPX_EDGEBENCH_DOCKER_SMOKE") != "1", reason="Explicit disposable Docker qualification")
-def test_real_stopped_docker_proof_installation_is_inert_and_read_back(tmp_path):
+def test_real_stopped_docker_proof_installation_is_inert_and_read_back(tmp_path, monkeypatch):
     docker = pytest.importorskip("docker")
     client = docker.from_env(timeout=30)
     box = client.containers.create("python:3.12-slim", ["tail", "-f", "/dev/null"], network_disabled=True)
@@ -134,9 +155,39 @@ def test_real_stopped_docker_proof_installation_is_inert_and_read_back(tmp_path)
         box.stop(timeout=2)
         box.reload()
         original = dict(box.attrs["State"])
+        archive_requests = []
+        get = client.api._get
+
+        def observe_archive_timeout(url, **options):
+            if url.endswith("/archive"):
+                archive_requests.append((options["params"]["path"], options["timeout"]))
+            return get(url, **options)
+
+        monkeypatch.setattr(client.api, "_get", observe_archive_timeout)
+        archive_component = subject._archive_component
+        expired_output = tmp_path / "expired-proof.json"
+        with monkeypatch.context() as slow_reader:
+            def enter_after_deadline(*args, **kwargs):
+                time.sleep(0.02)
+                return archive_component(*args, **kwargs)
+
+            slow_reader.setattr(subject, "_archive_component", enter_after_deadline)
+            with pytest.raises(TimeoutError, match="capture window closed"):
+                subject.prepare_stopped_recovery(client, container_id=box.id, declaration=declaration,
+                    output=expired_output, timeout=0.001, install=True)
+        assert not expired_output.exists() and not archive_requests
+        box.reload()
+        assert box.attrs["State"] == original
+
+        allowance = 30
         proof = subject.prepare_stopped_recovery(client, container_id=box.id, declaration=declaration,
-            output=tmp_path / "proof.json", install=True)
+            output=tmp_path / "proof.json", timeout=allowance, install=True)
         assert proof["installed_proof_path"].startswith("/fixture/control/interruption-source-")
+        assert len([path for path, _ in archive_requests if path == proof["installed_proof_path"]]) == 2
+        remaining = [seconds for _, seconds in archive_requests]
+        assert all(0 < seconds <= allowance for seconds in remaining)
+        assert remaining == sorted(remaining, reverse=True)
+        monkeypatch.setattr(client.api, "_get", get)
         assert proof["execution_authority_granted"] is False
         box.reload()
         assert box.attrs["State"] == original
