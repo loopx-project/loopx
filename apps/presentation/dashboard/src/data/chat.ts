@@ -3017,12 +3017,12 @@ const exploreResultPageSchema = z.object({
   })),
 });
 export type ExploreResultPage = z.infer<typeof exploreResultPageSchema>;
-export async function fetchExploreResults(goalId: string, cursor?: string, readSourceUrl?: string) {
+export async function fetchExploreResults(goalId: string, cursor?: string, readSourceUrl?: string, originalGoalId = goalId) {
   const query = new URLSearchParams({goal_id: goalId, view: "findings", ...(cursor ? {cursor} : {})});
   const page = exploreResultPageSchema.parse(await requestJson<unknown>(sourceReadApiUrl(readSourceUrl, `/api/chat/explore-results?${query}`)));
-  if (page.goal_id !== goalId) throw new Error("Explore result Goal mismatch");
+  if (page.goal_id !== originalGoalId) throw new Error("Explore result Goal mismatch");
   for (const item of page.items) if (item.work_yardstick) normalizeWorkYardstickCapture({
-    capture: item.work_yardstick, goal_id: goalId, agent_id: item.agent_id, evidence_refs: item.evidence_refs,
+    capture: item.work_yardstick, goal_id: originalGoalId, agent_id: item.agent_id, evidence_refs: item.evidence_refs,
   });
   return page;
 }

@@ -52,18 +52,19 @@ const viewFromUrl = (goal: string) => {
 
 /** An effect-free history consumer. Its source is Explore, not raw sessions or
  * a judge. All recorded updates survive; unsupported analysis stays unavailable. */
-export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, readSourceUrl}: {goalId: string; active: boolean; zh: boolean; refreshRevision?: number; readSourceUrl?: string}) {
+export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHistory = false, active, zh, refreshRevision = 0, readSourceUrl}: {goalId: string; originalGoalId?: string; preferHistory?: boolean; active: boolean; zh: boolean; refreshRevision?: number; readSourceUrl?: string}) {
   const analysis = useResearchAnalysis(goalId, active, zh, readSourceUrl);
   const readCaseMode = () => {
     const query = new URLSearchParams(window.location.search);
-    return query.get("research_goal") !== goalId || query.get("research_reading") !== "history";
+    if (query.get("research_goal") === goalId && query.has("research_reading")) return query.get("research_reading") === "case";
+    return !preferHistory;
   };
   const [caseReading, setCaseReading] = useState(readCaseMode);
   useEffect(() => {
     const changed = () => setCaseReading(readCaseMode());
     changed(); window.addEventListener("popstate", changed);
     return () => window.removeEventListener("popstate", changed);
-  }, [goalId, readSourceUrl]);
+  }, [goalId, preferHistory, readSourceUrl]);
   const setCaseMode = (reading: boolean) => {
     const url = new URL(window.location.href);
     url.searchParams.set("research_goal", goalId);
@@ -79,16 +80,16 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
   useEffect(() => {
     if (!read.complete || !display || !displayHashSupported) return;
     let current = true;
-    const bytes = new TextEncoder().encode(trajectoryDisplaySnapshotText(read.events, goalId, displayNamespace));
+    const bytes = new TextEncoder().encode(trajectoryDisplaySnapshotText(read.events, originalGoalId, displayNamespace));
     void crypto.subtle.digest("SHA-256", bytes).then(hash => {
       if (current) setDisplayIdentity({events: read.events, namespace: displayNamespace,
         key: Array.from(new Uint8Array(hash), value => value.toString(16).padStart(2, "0")).join("")});
     }).catch(() => {if (current) setDisplayIdentity({events: read.events, namespace: displayNamespace, key: ""});});
     return () => {current = false;};
-  }, [read, goalId, displayNamespace, display?.snapshot_key, displayHashSupported]);
+  }, [read, originalGoalId, displayNamespace, display?.snapshot_key, displayHashSupported]);
   const displayKey = displayIdentity?.events === read.events && displayIdentity.namespace === displayNamespace ? displayIdentity.key : "";
   const displayCheckFailed = !displayHashSupported || (displayIdentity?.events === read.events && displayIdentity.namespace === displayNamespace && !displayIdentity.key);
-  const currentDisplay = analysis.pack?.applicability === "current" && analysis.pack.scope.goal_id === goalId
+  const currentDisplay = analysis.pack?.applicability === "current" && analysis.pack.scope.goal_id === originalGoalId
     && analysis.pack.result?.analysis_key === analysis.pack.analysis_key && analysis.pack.result.method_version === analysis.pack.method_version
     && JSON.stringify(analysis.pack.result.scope) === JSON.stringify(analysis.pack.scope)
     && display?.snapshot_key === displayKey && display.source_namespace === displayNamespace && display.language === (zh ? "zh" : "en") ? display : undefined;
@@ -198,7 +199,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
         let cursor = "";
         do {
           const query = new URLSearchParams({goal_id: goalId, view: "history", ...(cursor ? {cursor} : {})});
-          const page = parseExploreHistoryPage(await requestJson<unknown>(sourceReadApiUrl(readSourceUrl, `/api/chat/explore-results?${query}`), {signal: controller.signal}), goalId);
+          const page = parseExploreHistoryPage(await requestJson<unknown>(sourceReadApiUrl(readSourceUrl, `/api/chat/explore-results?${query}`), {signal: controller.signal}), originalGoalId);
           if (total !== -1 && total !== page.total) throw new Error("Explore history snapshot changed");
           total = page.total; events.push(...page.items);
           if (events.length > total || (page.next_cursor && (!page.items.length || cursors.has(page.next_cursor)))) throw new Error("Invalid Explore history pagination");
@@ -209,7 +210,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
         } while (cursor && current);
         if (current) {
           if (cursor || events.length !== total) throw new Error("Explore history coverage mismatch");
-          projectExploreHistory(events, goalId); // Verify replay identities before replacing a valid snapshot.
+          projectExploreHistory(events, originalGoalId); // Verify replay identities before replacing a valid snapshot.
           setRead({events, total, complete: true});
         }
       } catch (failure) {
@@ -220,14 +221,14 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
       } finally {if (current) setBusy(false);}
     })();
     return () => {current = false; controller.abort();};
-  }, [goalId, active, revision, refreshRevision, readSourceUrl]);
+  }, [goalId, originalGoalId, active, revision, refreshRevision, readSourceUrl]);
   const history = useMemo(() => {
     try {
-      const canonical = projectExploreHistory(read.events, goalId);
-      return {canonical, value: displayProjection.events === read.events ? canonical : projectExploreHistory(displayProjection.events, goalId), error: ""};
+      const canonical = projectExploreHistory(read.events, originalGoalId);
+      return {canonical, value: displayProjection.events === read.events ? canonical : projectExploreHistory(displayProjection.events, originalGoalId), error: ""};
     }
     catch (failure) {return {canonical: null, value: null, error: String(failure)};}
-  }, [read.events, displayProjection, goalId]);
+  }, [read.events, displayProjection, originalGoalId]);
   const value = history.value;
   const measurementFeedback = value?.measurementFeedback ?? [];
   const measurementSummary = (nodeId: string) => {
@@ -629,7 +630,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
     {value?.unknownKindCount ? <p className="research-history-note">{zh ? "未识别类型保留于已读记录" : "Unrecognized types remain in loaded records"} · {value.unknownKindCount}</p> : null}
     </ContextHelp> : null}
     {value?.events.length ? <details ref={records} className="research-history-all-records" open={recordsOpen} onToggle={event => setRecordsOpen(event.currentTarget.open)}><summary>{zh ? "全部已读记录" : "All loaded records"} · {value.events.length}</summary>
-      {recordsOpen ? <ResearchRecordSearch key={JSON.stringify([goalId, readSourceUrl])} goalId={goalId} events={history.canonical?.events ?? []}
+      {recordsOpen ? <ResearchRecordSearch key={JSON.stringify([goalId, readSourceUrl])} goalId={originalGoalId} events={history.canonical?.events ?? []}
         displayEvents={currentDisplay && !originalDisplay ? value.events : undefined}
         displaySections={currentDisplay && !originalDisplay ? displayProjection.sections : undefined}
         renderBody={findingBody}

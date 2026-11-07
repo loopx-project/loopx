@@ -25,18 +25,18 @@ from loopx.capabilities.explore.result_log import (
 from loopx.control_plane.status.goal_source import GoalSource
 
 
-def native_source(w):
+def native_source(w, name='original', task_text='Check the original question against its evidence', done=False):
     from loopx.control_plane.todos.active_state_todo_parser import parse_todo_source
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
     from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority
 
-    source_root = w['tmp_path'] / 'original'
+    source_root = w['tmp_path'] / name
     source_root.mkdir()
     registry, runtime = source_root / 'registry.json', source_root / 'runtime'
     state = source_root / 'active.md'
     state.write_text('---\nstatus: active\n---\n\n# Original solving Goal\n\n## Agent Todo\n\n'
-        '- [ ] Check the original question against its evidence\n'
-        '  <!-- loopx:todo todo_id=todo_original role=agent status=open -->\n')
+        f'- [{"x" if done else " "}] {task_text}\n'
+        f'  <!-- loopx:todo todo_id=todo_original role=agent status={"done" if done else "open"} -->\n')
     registry.write_text(json.dumps({'schema_version': 1, 'common_runtime_root': str(runtime), 'goals': [
         {'id': 'solver-goal', 'repo': str(source_root), 'state_file': 'active.md',
          'status': 'active', 'domain': 'source-read', 'authority_sources': [],
@@ -46,7 +46,7 @@ def native_source(w):
         todo['schema_version'] = 'todo_item_v0'
     initialize_canonical_authority(runtime, 'solver-goal', build_todo_runtime_shadow_projection(
         goal_id='solver-goal', todos=rows['agent'], handoff_mode='soft_claim'), state_path=state, provider='sqlite')
-    for goal in ('research-owner', 'other-owner'):
+    for goal in (('research-owner', 'other-owner') if name == 'original' else ()):
         initialize_canonical_authority(w['tmp_path'] / 'runtime', goal,
             build_todo_runtime_shadow_projection(goal_id=goal, todos=[], handoff_mode='soft_claim'),
             state_path=w['tmp_path'] / 'active.md', provider='sqlite')
@@ -56,7 +56,7 @@ def native_source(w):
             node_id=name, node_kind='question', title=name, summary='Original native record'))
     append_explore_result_event(log, build_explore_edge_event(goal_id='solver-goal',
         from_node='attempt', to_node='question', edge_type='depends_on'))
-    raw = {'id': 'original', 'label': 'Original experiment',
+    raw = {'id': name, 'label': 'Original experiment',
         'connection': {'kind': 'local'}, 'environment': {'kind': 'host'},
         'scope': {'goal_id': 'solver-goal'}, 'registry': str(registry), 'runtime_root': str(runtime),
         'cli': str(Path(sys.executable).with_name('loopx')), 'python': sys.executable,
@@ -410,3 +410,59 @@ def test_original_saved_findings_keep_full_text_associations_and_source_fences(w
     assert replaced.value.code == 409
     assert all(path.read_bytes() == data for path, data in before.items())
     assert not w['count'].exists()
+
+
+def test_same_named_native_goals_have_isolated_workspace_views(workspace):
+    w = workspace
+    first, request, before = native_source(w)
+    second, _, other_before = native_source(w, 'second', 'Measure the second experiment', done=True)
+    for view, raw in [('case-a', first), ('case-b', second)]:
+        assert request('/api/chat/goal-sources', {
+            'parent_goal_id': 'research-owner', 'source': raw, 'workspace_goal_id': view})['ok']
+    namespaces = [GoalSource.parse(raw).namespace for raw in (first, second)]
+    directory = request('/status.json?view=workspace-directory')
+    children = [goal for goal in directory['goals'] if goal.get('source_access')]
+    assert [goal['id'] for goal in children] == ['case-a', 'case-b']
+    assert all(goal['source_access']['original_goal_id'] == 'solver-goal' for goal in children)
+    for view, namespace, expected in [('case-a', namespaces[0], 'Check the original question against its evidence'),
+                                      ('case-b', namespaces[1], 'Measure the second experiment')]:
+        status = request('/status.json?goal_id=' + view)
+        assert status['run_history']['goals'][0]['id'] == view
+        todo = next(item for item in status['todo_index']['items'] if item['todo_id'] == 'todo_original')
+        assert todo['goal_id'] == view and todo['text'] == expected
+        query = urlencode({'goal_id': view, 'source_namespace': namespace})
+        assert request('/api/chat/todo/detail?' + query + '&todo_id=todo_original')['text'] == expected
+        history = request('/api/chat/explore-results?' + query + '&view=history')
+        assert history['goal_id'] == 'solver-goal' and history['total'] == 3
+        assert all(item['goal_id'] == 'solver-goal' for item in history['items'])
+        assert request('/api/chat/research-analysis?' + query)['catalog']['packs'] == []
+        completed = request('/api/chat/completed-todos?' + query)
+        assert completed['total'] == (1 if view == 'case-b' else 0)
+        if completed['items']:
+            assert completed['items'][0]['text'] == expected
+            assert request('/api/chat/completed-todos?' + query + '&q=absent')['total'] == 0
+    with pytest.raises(HTTPError):
+        request('/api/chat/explore-results?' + urlencode({
+            'goal_id': 'case-a', 'source_namespace': namespaces[1], 'view': 'history'}))
+    with pytest.raises(HTTPError):
+        request('/api/chat/completed-todos?' + urlencode({
+            'goal_id': 'case-a', 'source_namespace': namespaces[1]}))
+    # Packs retain their original Goal identity inside the physical source store.
+    pack = register_pack(runtime_root=w['tmp_path'] / 'runtime' / 'goal-sources' / namespaces[0],
+        owner_goal_id='solver-goal', input_path=w['tmp_path'] / 'input.json',
+        source_root=w['sources'], title='First experiment')
+    base = '/api/chat/research-analysis?'
+    first_query = urlencode({'goal_id': 'case-a', 'source_namespace': namespaces[0]})
+    assert request(base + first_query)['pack']['pack_id'] == pack['pack_id']
+    second_query = urlencode({'goal_id': 'case-b', 'source_namespace': namespaces[1]})
+    assert request(base + second_query)['pack'] is None
+    w['mode'].write_text('ok')
+    result = request(base + 'source_namespace=' + namespaces[0], dict(
+        goal_id='case-a', pack_id=pack['pack_id'], analysis_key=pack['analysis_key']))
+    assert result['job']['status'] == 'succeeded'
+    assert request(base + first_query)['pack']['scope']['goal_id'] == 'solver-goal'
+    request('/api/chat/goal-sources', dict(parent_goal_id='research-owner', goal_id='case-a',
+                                         source_namespace=namespaces[0]))
+    assert [goal['id'] for goal in request('/api/chat/goal-sources')['goals']] == ['case-b']
+    assert request('/status.json?goal_id=case-b')['run_history']['goals'][0]['id'] == 'case-b'
+    assert all(path.read_bytes() == data for path, data in {**before, **other_before}.items())
