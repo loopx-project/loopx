@@ -4,6 +4,7 @@ import {normalizeWorkYardstickDecision, normalizeWorkYardstickCapture,
   validateWorkYardstickContinuation, projectWorkYardstickCue} from "../../loopx/control_plane/work_items/yardstick_decision.ts";
 import {normalizeExploreResultAttachment} from "../../loopx/control_plane/capabilities/explore_result_writeback.ts";
 import {projectExploreTurnContext} from "../../loopx/control_plane/capabilities/explore_turn_context.ts";
+import {projectExploreMeasurementFeedback} from "../../loopx/control_plane/capabilities/explore_measurements.ts";
 
 const authoritative = {metric: "quality", unit: "points", higher_is_better: true,
   comparison_scope: "validation:fixed", input_revision: "inputs-v1", evaluation_ref: "evaluator:outcome-v1"};
@@ -51,6 +52,54 @@ test("a late replay cannot replace a newer committed choice; exact profiles sele
   assert.match(String(cue.guidance), /correctness, authorization and budget/);
   assert.equal(Object.hasOwn(cue, "required"), false);
   assert.equal(Object.hasOwn(cue, "fidelity_validated"), false);
+});
+
+test("goal and proxy join the same two candidates regardless of declared order and metric direction", () => {
+  const timeProxy = {...proxy, higher_is_better: false, unit: "seconds"};
+  const measured = {...finding, work_yardstick: {binding, decision: {...decision, proxy: timeProxy}}, measurements: [
+    {...authoritative, value: 0, candidate_ref: "candidate:a", evidence_ref: "result:goal-a"},
+    {...authoritative, value: 3, candidate_ref: "candidate:b", evidence_ref: "result:goal-b"},
+    {...timeProxy, value: 4, candidate_ref: "candidate:b", evidence_ref: "result:screen-b"},
+    {...timeProxy, value: 2, candidate_ref: "candidate:a", evidence_ref: "result:screen-a"},
+  ]};
+  const project = (row = measured) => projectWorkYardstickCue({...binding, enabled: true, findings: [row],
+    measurement_feedback: projectExploreMeasurementFeedback([row])})!.search_comparison;
+  const result = project();
+  assert.equal(result.goal.preferred_candidate_ref, "candidate:b");
+  assert.equal(result.goal.previous_best.value, 0);
+  assert.equal(result.proxy.preferred_candidate_ref, "candidate:a");
+  assert.equal(result.proxy.latest.evidence_ref, "result:screen-a");
+  assert.equal(result.proxy_order_reversed, true);
+  assert.match(result.guidance, /comparison base when available/);
+  assert.match(result.guidance, /continuing, a different mechanism or a compatible combination/);
+
+  const observations = (changeIndex: number, changed: object) => ({...measured,
+    measurements: measured.measurements.map((row, index) => index === changeIndex ? {...row, ...changed} : row)});
+  assert.equal(project(observations(1, {value: null})), undefined);
+  assert.equal(project(observations(1, {evaluation_ref: "evaluator:other"})), undefined);
+  assert.equal(project(observations(2, {candidate_ref: "candidate:unrelated"})).proxy, undefined);
+  assert.equal(project(observations(2, {comparison_scope: "validation:other"})).proxy, undefined);
+  assert.equal(project(observations(2, {input_revision: "other-inputs"})).proxy, undefined);
+
+  const cap = project({...measured, measurements: measured.measurements.map((row, index) =>
+    index < 2 ? {...row, value: 10} : row)});
+  assert.equal(cap.goal.preferred_candidate_ref, null);
+  assert.equal(cap.proxy_order_reversed, false);
+  assert.match(cap.guidance, /goal results tie under this scope/);
+  const repeat = {...measured, finding_id: "later-retest", recorded_order: 2,
+    measurements: [{...measured.measurements[1]!, value: 3}]};
+  const sameCandidate = projectWorkYardstickCue({...binding, enabled: true, findings: [repeat, measured],
+    measurement_feedback: projectExploreMeasurementFeedback([repeat, measured])})!;
+  assert.equal(sameCandidate.search_comparison, undefined);
+
+  for (const other of [{...binding, goal_id: "other"}, {...binding, agent_id: "peer"}, {...binding, todo_id: "todo_other"}]) {
+    const foreign = {...repeat, work_yardstick: {...repeat.work_yardstick, binding: other},
+      measurements: [{...repeat.measurements[0]!, candidate_ref: "candidate:foreign", value: 99}]};
+    const shared = projectWorkYardstickCue({...binding, enabled: true, findings: [foreign, measured],
+      measurement_feedback: projectExploreMeasurementFeedback([foreign, measured])})!;
+    assert.equal(shared.source_finding_id, measured.finding_id);
+    assert.equal(shared.search_comparison, undefined);
+  }
 });
 
 test("only strictly older committed replay preserves a stale predecessor as history", () => {
