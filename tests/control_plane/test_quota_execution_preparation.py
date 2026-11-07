@@ -385,6 +385,89 @@ def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("released", [False, True], ids=["same-execution", "released-execution"])
+def test_native_hook_replays_the_original_claim_after_guard_timeout(
+    tmp_path, monkeypatch, capsys, provider, released,
+):
+    import io
+    from loopx.cli import main
+    from loopx.control_plane.turn_driver import codex_context, codex_execution_preparation
+
+    tmp_path = tmp_path.resolve()
+    monkeypatch.chdir(tmp_path)
+    session, turn = "claim-replay-session", "claim-replay-turn"
+    monkeypatch.setenv("CODEX_THREAD_ID", session)
+    native = tmp_path / "native"
+    native.mkdir(mode=0o700)
+    event = {"session_id": session, "cwd": str(tmp_path),
+             "hook_event_name": "SessionStart", "source": "startup"}
+    assert codex_context.codex_context_hook(str(native), event) == {}
+    before = _run(tmp_path, monkeypatch, provider, [], "--codex-app",
+        "--turn-instance-id", turn, "--todo-id", TODO)
+    assert before["execution_preparation"]["state"] == "claim_required"
+    capture = tmp_path / "before-claim"
+    capture.mkdir(mode=0o700)
+    codex_context.prepare_codex_context(before, directory=str(native), capture_directory=capture,
+        goal_id=GOAL, agent_id=AGENT, surface="quota_packet", capture_id=turn)
+
+    run = codex_execution_preparation._default_runner
+    claims, guards = [], []
+
+    def interrupt_first_guard(command, **kwargs):
+        if "--prepared-capture-reference" in command:
+            guards.append(command[command.index("--turn-instance-id") + 1])
+            if len(guards) == 1:
+                raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        result = run(command, **kwargs)
+        if "claim" in command:
+            claims.append(json.loads(result.stdout))
+        return result
+
+    monkeypatch.setattr(codex_execution_preparation, "_default_runner", interrupt_first_guard)
+    registry, runtime = tmp_path / "registry.json", tmp_path / "runtime"
+    command = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+               "quota", "context-hook", "--codex-app", "--context-delivery", "on",
+               "--codex-context-dir", str(native)]
+
+    def hook():
+        data = json.dumps({**event, "hook_event_name": "PostToolUse"}).encode()
+        monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(data)))
+        capsys.readouterr()
+        assert main(command) == 0
+        return json.loads(capsys.readouterr().out)
+
+    def read(*args):
+        code, payload = run_json_cli_result(*args, registry_path=registry, runtime_root=runtime, cwd=tmp_path)
+        assert code == 0 and payload["ok"], payload
+        return payload
+
+    assert hook() == {}
+    original_id = claims[0]["claim_operation_id"]
+    original = read("todo", "receipt", "--goal-id", GOAL, "--operation-id", original_id)
+    lease = original["receipts"][0]["result"]["lease"]
+    if released:
+        read("task-lease", "release", "--goal-id", GOAL, "--todo-id", TODO, "--owner", AGENT,
+            "--expected-version", str(lease["version"]), "--idempotency-key", lease["idempotency_key"])
+
+    result = hook()
+    current = read("task-lease", "inspect", "--goal-id", GOAL, "--todo-id", TODO)
+    assert len(claims) == 2
+    if released:
+        assert result == {} and not claims[1]["ok"]
+        assert not current["active"] and current["lease"]["lease_epoch"] == lease["lease_epoch"]
+        assert guards == [turn]
+    else:
+        context = result["hookSpecificOutput"]["additionalContext"]
+        receipt = json.loads(context.rsplit("Receipt: ", 1)[1])
+        assert receipt["claim_operation_id"] == claims[1]["claim_operation_id"] == original_id
+        assert receipt["turn_instance_id"] == turn and receipt["execution_preparation"]["state"] == "ready"
+        assert current["active"] and current["lease"] == lease
+        assert guards == [turn, turn]
+    readback = read("todo", "receipt", "--goal-id", GOAL, "--operation-id", original_id)
+    assert readback["cursor"] == original["cursor"] and readback["receipts"] == original["receipts"]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("multiple_candidates", [False, True])
 def test_projected_claim_prepares_the_same_receipt_bound_turn(
     tmp_path, monkeypatch, provider, multiple_candidates,
