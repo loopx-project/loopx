@@ -833,4 +833,42 @@ hard-lease／context／model 和拆包安装验收仍开放；采纳仍受独立
 
 ## 附录 E：事故与评审经验
 
-暂无。
+### 生成式 Todo 指针的读取兼容性（非规范性）
+
+归档摘要和单条 Todo 活跃字段省略指针由既有 Todo 投影 owner 生成。实际观察到的
+严格 `machine_region.py` reader 与 `8d314af49` 一致：它拒绝没有可识别 Todo
+元数据的归档摘要注释，但已能通过有效的 `todo_id` 元数据接受生成的单条省略行。
+两者共享 `loopx:todo-archive-pointer` 前缀不能证明 reader 漂移；只有精确安装
+reader 确实拒绝该条生成行时，才能将单条省略故障归因于它。归档摘要 reader 修复
+已通过 [#7834](https://github.com/loopx-project/loopx/pull/7834) 进入 `main`。
+受影响的安装 reader 需要装配资格验证，不能据此重复源码修复或删除活跃投影元数据。
+
+作者在 `97cc1e0c4` 上，以相同合成 source 和真实 File/SQLite store，在 Python
+3.13、3.14 与 Node 26 下验证。旧 reader 的语法与 `8d314af49` 一致。旧快照、当前
+源码及其构建 wheel 的 36 场景只覆盖普通、归档摘要和外来叙述行，未测试单条字段
+省略。它们得到 20 个预期成功、16 个预期拒绝：4 个旧 reader 归档摘要失败和
+12 个外来叙述失败。4 个旧 reader 失败均通过当前源码按原 Turn 身份恢复
+并重放；canonical work 保持不变，quota 扣费为零。另外 8 个 source/wheel console
+场景以合成 Session 身份完成 native capture 回读；fixture 准备失败仍保留为失败，
+已提交 capture 的恢复未重跑准入。既有 region、projection 和 SQLite archive 回归
+通过（83 个场景）。
+
+评审资格验证在 runtime 基线 `ebb39f4db` 上，通过真实安装快照、源码和隔离 wheel
+的 console 入口，在 File/SQLite、Python 3.13.5 与 Node 26 下补齐单条省略对照。
+18 个场景得到 10 个成功和 8 个预期拒绝：旧 reader 拒绝 2 个归档摘要，三个发行
+形态均拒绝共 6 个外来叙述场景，6 个单条省略场景全部成功。10 个成功场景执行了
+实际发出的 native read 命令并重放原 Turn；2 个旧 reader 归档摘要失败均按同一
+身份通过源码恢复／重放。source 和 canonical work 均未改变，quota 扣费为零。
+83 个既有回归再次通过；打包 runtime 资源与源码字节一致。fixture 准备失败仍保留；
+一次初始 process-exit 等待未确认，因此保留证据目录并另查 serving retirement，
+不声称 process-exit 资格通过。
+
+36 场景矩阵耗时 135.6 秒；这是观察成本，不是速度或长程收益资格。完整 model、
+service CPU 与人工成本未测量。真实安装宿主的升级及回读仍未验证。I3 至少保留一个
+minor release。这些证据不关闭完整 R0/V10、M1/#8011、R1、context/model 或拆分安装，
+也不晋升 D2/D5/D6/D3。使用既有 self-repair lookup 中的
+`marked_todo_archive_pointer_reader_drift`，组合查询
+`quota_unexpected_collection_error non-generated content inside marked Todo region`。
+精简 Codex App 输出可能只有错误码；只读
+`loopx --format json quota status --goal-id <goal-id> --verbose` 提供详细症状。
+据此区分已交付修复和安装 reader 漂移；保留外来内容拒绝，不重写活跃状态。

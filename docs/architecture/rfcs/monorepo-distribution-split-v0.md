@@ -1115,4 +1115,57 @@ cross-package breaking change for three consecutive releases.
 
 ## Appendix E: Incident and review lessons
 
-None yet.
+### Generated Todo pointer read compatibility (non-normative)
+
+The generated archive-summary and per-Todo active-field omission pointers belong
+to the existing Todo projection owner. The observed strict `machine_region.py`
+reader matching `8d314af49` rejects the archive-summary comment, which has no
+recognized Todo metadata. It already accepts the emitted per-Todo omission row
+through valid `todo_id` metadata. Their shared `loopx:todo-archive-pointer` prefix
+does not establish reader drift; attribute an omission-row fault only after the
+exact installed reader rejects that exact generated line. The archive-summary
+reader repair is already on `main` through
+[#7834](https://github.com/loopx-project/loopx/pull/7834). An affected installed
+reader needs composition qualification, rather than another source fix or removal
+of live projection metadata.
+
+Author qualification at `97cc1e0c4` used the same synthetic source and real
+File/SQLite stores under Python 3.13 and 3.14 with Node 26. The prior reader's
+grammar matches `8d314af49`. Across the prior snapshot, current source and its
+built wheel, 36 cases covered plain, archive-summary and foreign-narrative rows;
+they did not test per-Todo omission. They produced 20 expected successes and
+16 expected refusals: four prior-reader archive-summary failures and twelve
+foreign-narrative failures. All four prior-reader failures recovered and replayed
+through the current source
+under the original Turn identity. Canonical work remained unchanged and quota
+debits stayed zero. Eight additional source/wheel console cases read the native
+capture back with synthetic Session identities; fixture preparation failures
+remain failures, and a committed capture was recovered without rerunning
+admission. The existing region, projection and SQLite archive regressions passed
+(83 cases).
+
+Review qualification on runtime baseline `ebb39f4db` filled the missing per-Todo
+comparison through the real installed-snapshot, source and isolated-wheel console
+entrypoints on File/SQLite, Python 3.13.5 and Node 26. Eighteen cases produced ten
+successes and eight expected refusals: the old reader rejected two archive
+summaries, all three distributions rejected six foreign-narrative cases, and all
+six per-Todo omission cases succeeded. Ten successful cases executed the emitted
+native read command and replayed the original Turn; both old archive-summary
+failures recovered/replayed through source with that same identity. Source and
+canonical work stayed unchanged, with zero quota debits. The 83 existing
+regressions passed again. The packaged runtime resources matched source bytes.
+Fixture preparation failures remain recorded; an initial process-exit wait was
+unconfirmed, so evidence directories were retained and serving retirement was
+checked separately. This does not claim process-exit qualification.
+
+The 36-case matrix took 135.6 seconds; this is observation cost, not a speed or
+long-horizon benefit qualification. Total model, service CPU and human costs are
+unmeasured. Actual installed-host upgrade and readback remain unqualified.
+Preserve I3 for at least one minor release. This evidence does not close full
+R0/V10, M1/#8011, R1, context/model or split installation, or promote D2/D5/D6/D3.
+Use the existing self-repair lookup for `marked_todo_archive_pointer_reader_drift`
+with the combined query `quota_unexpected_collection_error non-generated content
+inside marked Todo region`. Thin Codex App output may expose only the error code;
+read-only `loopx --format json quota status --goal-id <goal-id> --verbose` supplies
+the detailed symptom. Distinguish a shipped repair from installed-reader drift
+without weakening foreign-content rejection or rewriting active state.
