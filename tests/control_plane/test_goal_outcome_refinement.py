@@ -80,6 +80,42 @@ def test_cumulative_refinement_guides_artifact_and_independent_check(acceptance_
     assert (project / "state.md").read_bytes() == state
 
 
+
+def test_success_criterion_correction_reaches_next_turn_without_replacing_goal(acceptance_goal):
+    # Interpretation is scripted; this checks the actual persistence/next-Turn
+    # path, not whether a model independently chooses the refinement tool.
+    project, _, cli, run = acceptance_goal
+    original_state = (project / "state.md").read_bytes()
+    initial = refinement([{"id": "readable", "description": "Make the product tour readable"}], "message:initial")
+    assert record(project, cli, initial, "initial")[0][0] == 0
+    prior = cli("inspect")[1]
+    clarification = "Judge readability on a narrow display; a target word count is not required"
+    (code, corrected), args = record(project, cli, {
+        "outcome_id": "tour",
+        "requirements": [{"id": "readability-basis", "description": clarification}],
+        "source": {"ref": "message:correction", "summary": "Owner clarified the success criterion"},
+    }, "clarify-success", revision=prior["provider_revision"])
+    assert code == 0 and corrected["status"] == "applied", corrected
+    assert cli(*args)[1]["status"] == "replayed"
+    code, decision = run("quota", "should-run", "--goal-id", "goal-acceptance", "--agent-id", "agent-a")
+    assert code == 0, decision
+    acceptance = next(source["content"] for source in
+        decision["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+        if source["source"] == "goal_acceptance")
+    outcome = acceptance["goal_acceptance_contract"]["outcome_requirements"]["outcomes"][0]
+    assert outcome["objective"] == initial["objective"]
+    assert [row["description"] for row in outcome["requirements"]] == ["Make the product tour readable", clarification]
+    assert outcome["todo_ids"] == ["todo_export"]
+    assert [source["ref"] for source in outcome["sources"]] == ["message:initial", "message:correction"]
+    assert (project / "state.md").read_bytes() == original_state
+    # Reading/re-entering does not turn ordinary continuation into another
+    # requirement update, objective proposal or independent acceptance check.
+    current = cli("inspect")[1]
+    cli("inspect")
+    assert cli("inspect")[1] == current
+    assert all(row["status"] == "unverified" for row in outcome["requirements"])
+
+
 def test_native_refinement_refusals_preserve_committed_requirements(acceptance_goal):
     project, _, cli, _ = acceptance_goal
     patch = refinement([{"id": "opening", "description": "Keep the introduction"}], "message:first")

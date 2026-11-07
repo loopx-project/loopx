@@ -108,6 +108,66 @@ const current = {schema_version: "loopx_chat_conversation_bindings_v0", revision
 const request = {current, expected_revision: 0, operation: "configure", binding: row, observation,
   available_projects: [project]};
 
+test("a completed project partial result admits one restricted review while retaining business", () => {
+  const selected = {...row, grant: "workspace_write"};
+  const available = {...project, grant: "workspace_write"};
+  const configured = planConversationBinding({...request, binding: selected, available_projects: [available]}).state;
+  const source = {source_ref: "e".repeat(24), sender_ref: row.operator_ref, private_human_message: true};
+  const context = resolveBoundConversation({current: configured, binding_id: row.binding_id,
+    observation, available_projects: [available], ...source}).context;
+  const ref = "f".repeat(24), message = "Verify the requested update";
+  const work = {remaining: "Confirm the original update", dependency: "Source read failed", effects_settled: true};
+  const session = {session_id: "original", goal_id: null, agent_id: "codex", upstream_mode: "chat",
+    status: "ready", active_turn_id: null, upstream_thread_id: "native", project_context: context,
+    channel_id: `project.external.${row.binding_id}.${source.source_ref}`};
+  const completed = {session_id: "original", turn_id: "partial", client_turn_id: `external-${ref}`,
+    message, origin: "lark", status: "completed", upstream_turn_id: "native-partial",
+    completed_at: "2026-01-01T00:00:00Z", response: {schema_version: "loopx_chat_agent_response_v0",
+      message: "Only part was confirmed", proposals: [], gate: null, protected_action: null, unfinished_work: work}};
+  const proof = {thread_id: "native", turn_id: "native-partial", read_only_review: true,
+    completed_result_review: true, unfinished_work: work, visible_response: "Original partial report",
+    native_inventory_sha256: "1".repeat(64)};
+  const packet = {request: {request_ref: ref, binding_id: row.binding_id, source, session_id: "original",
+    turn_id: "partial", message, origin: "lark", command: null, status: "accepted", delivery_verified: true},
+    binding: selected, current_session: session, context_recovery: {version: 22, failed_turn: completed,
+      observed_at: "2026-01-01T00:10:00Z", source_verified: true, steering_observed: false,
+      stop_observed: false, attachments_present: false, queued_input_present: false,
+      later_equivalent_input_present: false, native_observation: proof}};
+  const plan = planBoundConversationRequest(packet);
+  assert.equal(plan.recovery_eligible, true);
+  assert.equal(plan.read_only_review, true);
+  assert.equal(plan.work_attempt, undefined);
+  assert.equal(plan.answer_review, undefined, "A project never borrows the steward runtime");
+  assert.equal(plan.client_turn_id, `external-${ref}-recovery-22-review-1`);
+  assert.equal(planBoundConversationRequest({...packet, context_recovery: {
+    ...packet.context_recovery, later_equivalent_input_present: true}}).recovery_eligible, true,
+    "A later equivalent request holds execution, not its old answer-only review");
+  for (const change of [{source_verified: false}, {stop_observed: true}, {steering_observed: true},
+    {attachments_present: true}, {queued_input_present: true}, {observed_at: "2026-01-01T00:00:59Z"},
+    ...[{thread_id: "foreign"}, {turn_id: "foreign"}, {read_only_review: false},
+      {all_effects_settled: true}, {completed_work: true}, {visible_response: ""},
+      {unfinished_work: {...work, remaining: "Different work"}}, {native_inventory_sha256: undefined}]
+      .map(value => ({native_observation: {...proof, ...value}})),
+    ...[{client_turn_id: "foreign"}, {message: "Changed"}, {origin: "web"}]
+      .map(value => ({failed_turn: {...completed, ...value}}))]) {
+    assert.notEqual(planBoundConversationRequest({...packet,
+      context_recovery: {...packet.context_recovery, ...change}}).recovery_eligible, true);
+  }
+  const reservation = {version: 22, failed_turn_id: "partial", read_only_review: true,
+    client_turn_id: plan.client_turn_id, original_turn: completed, unfinished_work: work};
+  const reviewed = {session_id: "original", turn_id: "review", client_turn_id: plan.client_turn_id,
+    message, origin: "lark", status: "completed", response: {message: "Verified existing result", proposals: [], gate: null}};
+  const retained = {request: {...packet.request, turn_id: "review", context_recovery: reservation},
+    current_session: session, pending_observation: {turn: reviewed, stop_observed: false}};
+  assert.equal(planBoundConversationRequest(retained).pending, true, "A review never settles original business effects");
+  assert.equal(planBoundConversationRequest({...retained, pending_observation: {
+    ...retained.pending_observation, turn: {...reviewed, status: "failed", response: null}}}).pending, true);
+  assert.equal(planBoundConversationRequest({...retained, pending_observation: {
+    ...retained.pending_observation, stop_observed: true}}).pending, false);
+  assert.equal(planBoundConversationRequest({...packet, request: retained.request,
+    context_recovery: {...packet.context_recovery, failed_turn: reviewed}}).recovery_candidate, false);
+});
+
 test("a restarted Codex steward retains one restricted answer instead of replaying business", () => {
   const selected = {...row, context_kind: "steward", grant: "portfolio_read", goal_ids: []};
   const configured = planConversationBinding({...request, binding: selected}).state;
@@ -995,8 +1055,14 @@ test("unfinished completed work requires typed intent and pinned settled native/
     message: packet.request.message, origin: "lark", attachments: [], status: "completed"};
   const crash = {...packet, request: {...packet.request, context_recovery: reserved},
     current_session: {...session, status: "busy", active_turn_id: admitted.turn_id},
-    context_recovery: {...packet.context_recovery, native_observation: null, admitted_turn: admitted}};
-  assert.equal(planBoundConversationRequest(crash).admitted_turn_id, admitted.turn_id);
+    context_recovery: {...packet.context_recovery, native_observation: null, admitted_turn: admitted,
+      later_equivalent_input_present: true, queued_input_present: true}};
+  const recovered = planBoundConversationRequest(crash);
+  assert.equal(recovered.admitted_turn_id, admitted.turn_id);
+  assert.equal(recovered.work_attempt, 1);
+  assert.equal(recovered.read_only_review, undefined);
+  assert.equal(planBoundConversationRequest({...crash, context_recovery: {...crash.context_recovery,
+    source_verified: false}}).recovery_eligible, false);
   assert.equal(planBoundConversationRequest({...crash, context_recovery: {...crash.context_recovery,
     admitted_turn: {...admitted, message: "Changed input"}}}).recovery_eligible, false);
   for (const status of ["completed", "failed"]) {

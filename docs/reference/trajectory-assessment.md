@@ -477,6 +477,13 @@ This records an immutable version link; it neither appends to the original
 source nor starts a model. The Agent prepares this link with the input, rather
 than asking the reader to enter internal identifiers.
 
+Use `--preserve-default` when importing another captured version for comparison
+without changing the Goal's current selection. It retains the existing default;
+the first registered capture still becomes the default. Omitting the option
+keeps the existing select-on-registration behavior. New counter reductions need
+their own registered identity and base link; a frozen preview does not establish
+that its capture is available from the live owner.
+
 The existing Goal analysis action becomes **Continue analysis**. Its inline
 version summary identifies added, corrected and removed sources/episodes,
 previous and current coverage, and changed judgments after completion. Previous

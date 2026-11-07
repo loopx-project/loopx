@@ -225,6 +225,7 @@ export async function executeCoordinationTodoUpdate(
     try { input = {...input, ...await claimExecutionProof(store, head.head, input, claimReference), claim_operation_id: undefined}; }
     catch (error) {
       const recovery = await claimExecutionRecovery(store, {...input, claim_operation_id: claimReference,
+        caller_expected_provider_revision: input.expected_provider_revision,
         expected_provider_revision: head.provider_revision}, "update", error, authoritySourcesCurrent, observeWorkspace);
       return {...rejection("claim_execution_unavailable", error instanceof Error ? error.message : "Original task claim unavailable"),
         ...(recovery === undefined ? {} : {handoff_mode: head.head.handoff_mode, recovery})};

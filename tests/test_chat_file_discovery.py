@@ -10,6 +10,7 @@ import pytest
 from loopx.chat_store import ChatSessionStore, _atomic_write_json
 from loopx.capabilities.native_chat.external_conversations import ChatExternalConversations
 from loopx.capabilities.native_chat.file_discovery import FileChatDiscovery
+from loopx.extensions.lark.private_delivery_discovery import PrivateDeliveryDiscovery
 
 
 @pytest.fixture
@@ -74,6 +75,22 @@ def test_new_queued_input_and_active_exclusion_stay_fresh(original_store):
     assert [t["turn_id"] for t in store.queued_turns(sid)] == [tid]
     store.update_session(sid, active_turn_id=tid)
     assert store.queued_turns(sid) == []
+
+
+def test_web_input_references_follow_append_and_same_mtime_replacement(original_store):
+    store, sid = original_store
+    discovery = PrivateDeliveryDiscovery(store.root / "lark-private-deliveries")
+    message = store.append_message(sid, role="user", origin="web", turn_id="original", text="App body")
+    assert discovery.web_input_turn_refs(store, sid) == [(message["message_id"], "original")]
+    newer = store.append_message(sid, role="user", origin="web", turn_id="new", text="Second App input")
+    assert discovery.web_input_turn_refs(store, sid) == [(message["message_id"], "original"), (newer["message_id"], "new")]
+    journal = store.sessions_root / sid / "messages.jsonl"
+    stamp = journal.stat()
+    replacement = journal.with_suffix(".replacement")
+    replacement.write_text(json.dumps({**newer, "origin": "lark"}) + "\n")
+    os.utime(replacement, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+    replacement.replace(journal)
+    assert discovery.web_input_turn_refs(store, sid) == []
 
 
 def test_concurrent_first_queue_observations_do_not_change_selection(original_store):

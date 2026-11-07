@@ -295,6 +295,9 @@ receipts without blocking message delivery or starting work. Unknown provider
 writes are not retried. Optional App feedback runs on at most one slot of the
 existing reply pool, outside the body outbox lock. Its final write merges only
 feedback fields, preserving concurrently delivered current and later answers.
+The idle scan reuses only App message and Turn references while the local journal
+is unchanged. It reads current Turn status each pass and uses the original
+canonical input, source and provider verification before any reaction.
 No synthetic incoming event or original-request
 settlement is used. Existing finished mirrors are not backfilled; current active
 mirrors can adopt the feedback path. `loopx chat --no-private-reactions` keeps
@@ -2024,6 +2027,32 @@ Reservation/enqueue crashes adopt the same queued Turn. A failed, partial or
 unknown review stays pending and cannot become another review or business retry.
 Other malformed actions and completed Turns without a recovered native result
 remain explicit holds; this path is not a generic action or execution replayer.
+
+### Completed private project result reviews
+
+A completed original project Turn with typed `unfinished_work` can fall back to
+one restricted result review when its effects cannot qualify writable
+continuation. The provider must read the same stable, closed native final and
+unfinished declaration; later native inputs must be correlated to Core. This
+observation does **not** certify settled effects. A failed or signal-terminated
+command cannot acquire replay authority through this route.
+
+The original worker uses its existing Session, queue and project binding. Fresh
+source and grant checks, an idle queue, the backoff, and stop/steering/attachment
+guards still apply. With a live adapter, the readback uses that same adapter
+only when it owns the exact thread and has no active or background work. The
+cold reader is used only when no adapter owns the Session. The review
+uses the existing workspace-only read permission profile without network
+access; it may inspect current local artifacts and receipts but cannot write,
+send, delegate or replace the original work declaration. References in the old
+question use its original-time Core context. The original partial Turn and
+delivery remain immutable, and the same Lark worker returns the new answer in a
+separate, idempotent phase. Reservation crashes adopt that exact queued review.
+If writable continuation was already admitted before the request journal was
+updated, the worker first recovers that same queued Turn. Dispatch still
+requires the original source, queue and native effect checks.
+The retained business obligation stays pending independently of the review's
+prose or failure; a review never starts a writable retry or another review.
 
 ### File-backed idle recovery observations
 

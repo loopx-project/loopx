@@ -44,6 +44,11 @@ events.append(build_explore_node_event(goal_id=goal,node_id='single',title='单�
 events.append(build_explore_finding_event(goal_id=goal,node_id='single',finding_id='single-finding',title='单项测量保持完整来源',
     summary='A small record uses the same reading hierarchy.',status='tentative',recorded_at='2026-01-01T03:00:00Z',
     measurements=metrics([8,12,0,None])[:1],evidence_refs=['result:synthetic-0']))
+events.append(build_explore_node_event(goal_id=goal,node_id='paired',title='同一条件下的配对候选',recorded_at='2026-01-01T04:00:00Z'))
+events.append(build_explore_finding_event(goal_id=goal,node_id='paired',finding_id='paired-finding',title='配对观测保留两项来源',
+    summary='Both candidates retain their own receipt under unchanged comparison conditions.',status='refuted',
+    recorded_at='2026-01-01T04:00:00Z',measurements=[metrics([8,12,0,None],0)[0],metrics([7,10,0,None],1)[0]],
+    evidence_refs=['result:synthetic-0','result:synthetic-1']))
 Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'合成研究 · 量化结果阅读','events':events},ensure_ascii=False))
 `, fixture], {cwd: repoRoot});
       owner = await startHistoryOwner(fixture);
@@ -59,7 +64,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'合成�
       const url = `${owner.base}/chat/`;
       const open = async node => {
         await page.goto(new URL(`?goalId=${goal}&view=research&research_goal=${goal}&research_node=${node}&statusUrl=%2Fstatus.json`, url).href, {waitUntil: "domcontentloaded"});
-        await page.locator(".research-history-coverage").filter({hasText: "5 / 5"}).waitFor();
+        await page.locator(".research-history-coverage").filter({hasText: "7 / 7"}).waitFor();
         return page.locator(".research-history-detail");
       };
       let reader = await open("comparison");
@@ -117,6 +122,23 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'合成�
       await page.reload({waitUntil: "domcontentloaded"});
       await reader.getByRole("heading", {name: "Measured results", exact: true}).waitFor();
       assert.equal(await reader.getByRole("button", {name: "About these measurements", exact: true}).count(), 1);
+      reader = await open("paired");
+      const paired = reader.locator(".research-recorded-finding .explore-measurements");
+      assert.deepEqual(await paired.locator(".explore-measurement-reading strong").allTextContents(), ["8", "7"]);
+      const pairSources = paired.locator(":scope > details");
+      await pairSources.locator(":scope > summary").click();
+      for (const width of [1440, 390]) {
+        await page.setViewportSize({width, height: 900});
+        const groups = pairSources.locator(":scope > section");
+        assert.equal(await groups.count(), 2, "Paired candidates retain separate source groups");
+        for (const [index, candidate] of ["c", "d"].entries()) {
+          const text = await groups.nth(index).innerText();
+          assert(text.includes("candidate:" + candidate.repeat(64)));
+          assert(text.includes(`result:synthetic-${index}`), "Each value keeps its own candidate/result association");
+        }
+        assert(await paired.evaluate(node => node.scrollWidth <= node.clientWidth + 1));
+        await page.screenshot({path: resolve(outputDir, `research-measurements-paired-${width}.png`), animations: "disabled"});
+      }
       const readback = await (await page.request.get(`${owner.base}/fixture/readback`)).json();
       assert(readback.source_unchanged && readback.mutation_attempts === 0, "Reading and help do not rewrite source or execute work");
       assert.deepEqual(errors, []);

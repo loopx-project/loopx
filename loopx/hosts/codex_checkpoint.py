@@ -19,13 +19,13 @@ import subprocess
 import time
 import tomllib
 from pathlib import Path
-from contextlib import contextmanager, nullcontext, redirect_stdout, redirect_stderr
+from contextlib import nullcontext, redirect_stdout, redirect_stderr
 from typing import Any
 
-from loopx.control_plane.turn_driver.codex_stdio import StdioNativeGoalTransport
+from loopx.control_plane.turn_driver.codex_stdio import StdioNativeGoalTransport, native_checkpoint_reader
 
 
-def _complete_history(request, session_id: str, *, interrupted_guard: dict | None = None) -> list[dict[str, Any]]:
+def _retained_history(request, session_id: str) -> list[dict[str, Any]]:
     turns = []
     cursor = None
     seen = set()
@@ -45,15 +45,63 @@ def _complete_history(request, session_id: str, *, interrupted_guard: dict | Non
         seen.add(cursor)
     if not turns or any(t.get("status") not in {"completed", "failed", "interrupted"} or not t.get("id") for t in turns):
         raise ValueError("native checkpoint requires complete retained turns")
+    ids = [t["id"] for t in turns]
+    if len(set(ids)) != len(ids):
+        raise ValueError("native checkpoint history contains duplicate turns")
+    return turns
+
+
+def _complete_history(request, session_id: str, *, interrupted_guard: dict | None = None) -> list[dict[str, Any]]:
+    turns = _retained_history(request, session_id)
     if interrupted_guard is None:
         if turns[-1].get("status") != "completed":
             raise ValueError("native checkpoint requires a completed final cursor")
     else:
         _verify_interrupted_guard(turns, interrupted_guard)
-    ids = [t["id"] for t in turns]
-    if len(set(ids)) != len(ids):
-        raise ValueError("native checkpoint history contains duplicate turns")
     return turns
+
+
+def native_interrupted_turn(env: dict[str, str], session_id: str, *,
+                            process_started_at: float, process_stopped_at: float,
+                            timeout: float = 30) -> dict[str, Any]:
+    """Read a stable interrupted tail; this is not checkpoint admission.
+
+    The caller proves original process termination and current session ownership.
+    No resume, fork, interruption, model call, history edit or command replay occurs.
+    A completed research-checkpoint cursor remains a separate, stricter contract.
+    """
+    if (not session_id or any(type(v) not in (int, float) or not math.isfinite(v)
+            for v in (process_started_at, process_stopped_at, timeout))
+            or process_started_at > process_stopped_at or timeout <= 0):
+        raise ValueError("Native interruption requires its original process window")
+    deadline = time.monotonic() + timeout
+    with native_checkpoint_reader(env, timeout=timeout) as transport:
+        def request(method, params):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("Native interruption readback window closed")
+            transport.response_timeout_sec = remaining
+            return transport.request(method, params)
+        _native_thread_readback(request, env, session_id)
+        turns = _retained_history(request, session_id)
+        tail = turns[-1]
+        start, end = tail.get("startedAt"), tail.get("completedAt")
+        if (tail.get("status") != "interrupted" or tail.get("error") is not None
+                or any(type(value) not in (int, float) or not math.isfinite(value)
+                       for value in (start, end))
+                # Native Turn timestamps have second resolution.
+                or not math.floor(process_started_at) <= start <= end <= math.ceil(process_stopped_at)):
+            raise ValueError("Native interruption differs from the original process window")
+        if any(item.get("status") in {"inProgress", "running", "pending"}
+               for item in tail.get("items", [])):
+            raise ValueError("Native interruption still has pending effects")
+        encoded = json.dumps(turns, sort_keys=True, separators=(",", ":")).encode()
+        reread = _retained_history(request, session_id)
+        if json.dumps(reread, sort_keys=True, separators=(",", ":")).encode() != encoded:
+            raise ValueError("Native interruption advanced during readback")
+        return {"session_id": session_id, "turn_id": tail["id"],
+                "visible_history_sha256": hashlib.sha256(encoded).hexdigest(),
+                "turn_count": len(turns)}
 
 
 def _guard_cli_arguments(command: str, guard: dict) -> list[str]:
@@ -141,20 +189,6 @@ def _verify_interrupted_guard(turns: list[dict], guard: dict) -> None:
                 raise ValueError("native pending guard is ambiguous after an earlier matching call")
     if guard.get("native_call_id") is not None and item["id"] != guard["native_call_id"]:
         raise ValueError("native pending guard call identity differs")
-
-
-@contextmanager
-def native_checkpoint_reader(env: dict[str, str], *, timeout: float):
-    """Keep one native inspection process open across a sealed capture window."""
-    with StdioNativeGoalTransport.spawn(
-        [env["CODEX_BIN"], "-c", "features.goals=false", "app-server", "--listen", "stdio://"],
-        cwd=env["LOOPX_PROJECT"], env=env, stderr=subprocess.DEVNULL,
-        response_timeout_sec=timeout,
-    ) as transport:
-        transport.request("initialize", {"clientInfo": {"name": "loopx_checkpoint", "version": "0.1.0"},
-                                          "capabilities": {"experimentalApi": True}})
-        transport.notify("initialized", {})
-        yield transport
 
 
 def _native_thread_readback(request, env: dict[str, str], session_id: str) -> None:
