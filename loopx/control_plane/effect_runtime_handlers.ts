@@ -623,6 +623,7 @@ export function createEffectRuntimeHandlers(
     ["collaboration.conversation.reply_context", lazyHandler(() => import("./collaboration/conversation_reply_context.ts"), ({projectConversationReplyContext}) => projectConversationReplyContext)],
     ["chat.turn.accept", lazyHandler(() => import("./turn_driver/chat_turn_acceptance.ts"), ({planChatTurnAcceptance}) => planChatTurnAcceptance)],
     ["chat.queue.select", lazyHandler(() => import("./turn_driver/chat_queue_steering.ts"), ({selectQueuedChatTurns}) => selectQueuedChatTurns)],
+    ["chat.queue.mention", lazyHandler(() => import("./turn_driver/chat_queue_steering.ts"), ({planNativeMentionIngress}) => planNativeMentionIngress)],
     ["chat.queue.steer", lazyHandler(() => import("./turn_driver/chat_queue_steering.ts"), ({planQueuedChatSteering}) => planQueuedChatSteering)],
     ["chat.queue.mutate", lazyHandler(() => import("./turn_driver/chat_queue_steering.ts"), ({planQueuedChatMutation}) => planQueuedChatMutation)],
     ["chat.turn.execution_allowed", lazyHandler(() => import("./turn_driver/chat_turn_acceptance.ts"), ({mayContinueChatTurn}) => mayContinueChatTurn)],

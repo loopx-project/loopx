@@ -306,6 +306,7 @@ class LarkGoalTopicRuntimeService:
                         effective_route = route
                         if (
                             route.get("conversation_kind") == "manager"
+                            and route.get("native_mention") is not True
                             and self.manager_route_reconciler is not None
                         ):
                             try:
@@ -343,9 +344,10 @@ class LarkGoalTopicRuntimeService:
                         else:
                             response_text = answer_result
                             proposal_ids = []
+                        effect_receipt = answer_result.get("effect_receipt") if isinstance(answer_result, Mapping) else None
                         return {
                             "response_text": response_text,
-                            "effect_receipt": session_turn_effect(effective_route),
+                            "effect_receipt": effect_receipt or session_turn_effect(effective_route),
                             "proposal_ids": proposal_ids,
                         }
 
@@ -415,6 +417,7 @@ class LarkGoalTopicRuntimeService:
                             stop=stop,
                             runtime_root=self.runtime_root,
                             answer=answer,
+                            capture_mention=lambda route: runtime.capture_topic_mention(route, self.runtime_controller),
                             private_admitter=(self._admit_private
                                 if self.private_conversations is not None else None),
                             proposal_deliverer=deliver_proposals,
