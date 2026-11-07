@@ -120,6 +120,8 @@ def main(argv=None):
     parser.add_argument("--worker", choices=PROFILES, required=True)
     parser.add_argument("--feedback", choices=FEEDBACK_MODES, default="native",
                         help="New-run default: native public feedback; blind/best-only are explicit controls")
+    parser.add_argument("--managed-run-json", type=Path,
+                        help="Opt-in private binding for native terminal proof, consumed by the controller")
     parser.add_argument("--turn-envelope", action="store_true",
                         help="Opt-in short heartbeat context with same-invocation full captures")
     parser.add_argument("--context-delivery", choices=("off", "on"),
@@ -133,7 +135,8 @@ def main(argv=None):
     parser.add_argument("--native-goal-continue", action="store_true",
                         help="Opt-in: when a native Goal declares completion with budget left, start "
                              "continuation Goals until the budget edge (native-goal worker only)")
-    parser.add_argument("--model", required=True)
+    # Preserve the existing unique abbreviation after adding --managed-run-json.
+    parser.add_argument("--model", "--m", required=True)
     parser.add_argument("--effort", choices=REASONING_EFFORTS, required=True)
     parser.add_argument("--provider-rate-limit-retry-seconds", type=int, default=0,
                         help="Host API gateway HTTP 429 retry window for new trials; "
@@ -194,6 +197,19 @@ def main(argv=None):
     if args.native_child_limit is not None and (
             args.native_child_limit < 1 or args.feedback != "native"):
         parser.error("--native-child-limit requires a positive limit and native feedback")
+    managed_binding = None
+    if args.managed_run_json is not None:
+        if args.feedback != "native":
+            parser.error("--managed-run-json requires native feedback")
+        from benchmark.edgebench.managed_run import (
+            persist_managed_run, publish_managed_terminal, read_managed_run, retain_managed_solver,
+        )
+        try:
+            managed_binding = read_managed_run(args.managed_run_json, run_id=args.run_id, task_id=args.task)
+        except OSError:
+            parser.error("Could not read the private managed run binding")
+        except ValueError as error:
+            parser.error(str(error))
     api_base_url = os.environ.get("OPENAI_BASE_URL") or None
     api_key = os.environ.get("OPENAI_API_KEY") if api_base_url else None
     if api_base_url and not api_key:
@@ -274,6 +290,9 @@ def main(argv=None):
     # One directory is one attempt: never reuse native registration or overwrite
     # source/profile evidence after an ambiguous launch.
     trial = args.log_dir / "runs" / args.run_id / args.task
+    if (managed_binding is not None
+            and trial.resolve() != args.log_dir.resolve() / "runs" / args.run_id / args.task):
+        parser.error("Managed run requires its exact physical attempt directory")
     if args.restore_checkpoint is None:
         trial.mkdir(parents=True, exist_ok=False)
     else:
@@ -299,6 +318,8 @@ def main(argv=None):
     task = make_task_spec(task_file, load_benchmark(args.tasks_dir))
     if args.native_child_limit is not None and task.game_mode:
         parser.error("--native-child-limit requires a non-game task with workspace instructions")
+    if managed_binding is not None and task.task_id != args.task:
+        parser.error("Managed run task specification differs from the selected task")
     research_sidecar = args.feedback == "native" and not task.game_mode
     if research_sidecar:
         from benchmark.runtime.research_artifacts import validate_research_scope, with_research_capture
@@ -507,7 +528,11 @@ def main(argv=None):
         **({"preserve_failed_worker": True} if args.preserve_failed_worker else {}),
     }
     receipt_path = trial / "runtime-receipt.json"
-    receipt_path.write_text(json.dumps(receipt, indent=2))
+    managed_launch = None
+    if managed_binding is not None:
+        managed_launch = persist_managed_run(trial, managed_binding, receipt=receipt, game_mode=task.game_mode)
+    else:
+        receipt_path.write_text(json.dumps(receipt, indent=2))
     try:
         result, was_interrupted, elapsed = _observe_run(lambda: run_agent(
             task_spec=task, agent=agent, config=config, backend=backend,
@@ -555,7 +580,19 @@ def main(argv=None):
                                task=task.task_id, run_id=args.run_id,
                                model=args.model, effort=args.effort, feedback=args.feedback,
                                native_goal_outcome=native.get("native_goal_outcome"))
-    receipt_path.write_text(json.dumps(receipt, indent=2))
+    if managed_launch is None:
+        receipt_path.write_text(json.dumps(receipt, indent=2))
+    else:
+        try:
+            solver_retained = retain_managed_solver(trial, managed_binding, managed_launch, receipt=receipt, result=result)
+        except (OSError, TypeError, ValueError) as error:
+            logger.warning("Managed solver evidence unavailable (%s)", type(error).__name__)
+        else:
+            try:
+                if not solver_retained or not publish_managed_terminal(trial, execute=True):
+                    logger.warning("Managed terminal proof withheld: native solver termination or grading drain unconfirmed")
+            except (OSError, TypeError, ValueError) as error:
+                logger.warning("Managed terminal proof unavailable (%s)", type(error).__name__)
     print(json.dumps(receipt))
     return 0 if status == "terminal" else 130 if status == "cancelled" else 1
 

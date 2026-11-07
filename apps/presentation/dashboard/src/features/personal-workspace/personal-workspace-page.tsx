@@ -2972,7 +2972,7 @@ export function PersonalWorkspacePage({
                     historyRefreshRevision={historyRefreshRevision} proposals={proposals} onPreview={createPreview} />,
                   tasks: taskBoard(!settingsOpen && selectedGoalTab === "tasks"),
                   research: !readOnly || researchReadSourceUrl
-                    ? <GoalResearchWorkbench goalId={selectedGoal.goalId} active={!settingsOpen && selectedGoalTab === "research"} zh={locale === "zh-CN"} refreshRevision={historyRefreshRevision} readSourceUrl={researchReadSourceUrl} />
+                    ? <GoalResearchWorkbench goalId={selectedGoal.goalId} goals={workspaceGoals} onSelectGoal={id => selectGoal(id, "research")} active={!settingsOpen && selectedGoalTab === "research"} zh={locale === "zh-CN"} refreshRevision={historyRefreshRevision} readSourceUrl={researchReadSourceUrl} />
                     : <ContextHelp label={locale === "zh-CN" ? "来源无研究读取入口" : "Research source unavailable"} icon={CircleHelp}><p role="status">{locale === "zh-CN" ? "此来源尚未提供研究记录的读取入口。" : "This source does not provide a research history endpoint."}</p></ContextHelp>,
                   files: goalResults(selectedGoalTab === "files" && !settingsOpen),
                   chat: agentWorkActive ? <GoalAgentWorkPage key={`${selectionScope}:${selectedWorkAgentId}`} goal={selectedGoal} agentId={selectedWorkAgentId!} readOnly={readOnly}

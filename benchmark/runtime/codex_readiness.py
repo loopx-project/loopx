@@ -64,9 +64,10 @@ def _remaining(deadline: float) -> float:
     return remaining
 
 
-def _observe_once(env: dict[str, str], deadline: float) -> dict:
+def _observe_once(env: dict[str, str], deadline: float, *, require_allowance: bool = False) -> dict:
     started = time.monotonic()
     stage = "inspection_home"
+    allowance = None
     try:
         _remaining(deadline)
         # Native app-server can install bundled skills during account-only
@@ -97,11 +98,30 @@ def _observe_once(env: dict[str, str], deadline: float) -> dict:
                 if not isinstance(usage, dict) or not usage:
                     raise _InvalidObservation("unavailable_rate_limits")
                 _remaining(deadline)
+                if require_allowance:
+                    # Reuse the optional native provider's typed availability
+                    # policy. A single observed receiver is not an account ring:
+                    # this read cannot switch login or enable API fallback.
+                    stage = "allowance"
+                    try:
+                        from loopx_codex_provider_routing.native import policy
+                    except ImportError:
+                        raise _InvalidObservation("allowance_provider_unavailable") from None
+                    observed_at = time.time()
+                    decision = policy({"now": observed_at,
+                        "policy": {"enabled": True, "slots": ["receiver"], "cooldown_seconds": 0},
+                        "active": "receiver", "observations": [{"slot": "receiver",
+                            "observed_at": observed_at, "status": "ok", "usage": usage}],
+                        "last_switch_at": None, "recovery_required": False, "login_matches": True})
+                    _remaining(deadline)
+                    if decision.get("action") != "ready":
+                        raise _InvalidObservation("allowance_unavailable")
+                    allowance = {"availability": "available", "observed_at": observed_at}
     except Exception as exc:
         error_kind, retryable = _failure(exc)
         return {"ok": False, "stage": stage, "error_kind": error_kind,
                 "retryable": retryable, "elapsed_seconds": round(time.monotonic() - started, 3)}
-    return {"ok": True, "stage": stage,
+    return {"ok": True, "stage": stage, **({"allowance": allowance} if allowance else {}),
             "elapsed_seconds": round(time.monotonic() - started, 3)}
 
 
@@ -130,6 +150,20 @@ def check_native_receiver(env: dict[str, str]) -> dict:
     if not ok:
         result["code"] = "native_receiver_unavailable"
     return result
+
+
+def require_native_receiver_allowance(env: dict[str, str]) -> dict:
+    """Fresh, account-only evidence for an explicit failed-Host continuation.
+
+    The startup probe's default behavior stays unchanged. This stricter caller
+    refuses unknown/exhausted allowance and missing optional provider support;
+    it never refreshes login, switches accounts, or starts inference.
+    """
+    observation = _observe_once(env, time.monotonic() + 25, require_allowance=True)
+    if not observation["ok"]:
+        raise ValueError("Explicit Host continuation requires fresh native allowance: "
+                         + observation["stage"] + "/" + observation["error_kind"])
+    return observation["allowance"]
 
 
 def main() -> int:

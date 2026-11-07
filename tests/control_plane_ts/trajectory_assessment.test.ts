@@ -718,3 +718,29 @@ test('synthesis revision separates new guidance while frozen and disabled reques
   assert.throws(() => prepareTrajectoryAssessment({input: input(), config: {...config,
     research_synthesis: false, research_synthesis_revision: 4}}), /enabled synthesis/);
 });
+
+test('authored reading binds to frozen source lines without changing model semantics', () => {
+  const p = prepared();
+  const citation = {source_id:'s',first_line:10,last_line:11};
+  const study = {title:'A negative result',language:'en',summary:'Evidence changed the interpretation.',citations:[citation],
+    sections:[{id:'context',title:'Context',text:'A measured failure is information, not success.',citations:[citation],
+      series:{label:'Observed utility',unit:'points',points:[{label:'A',value:-2},{label:'B',value:null}]},
+      table:{columns:['Route','Outcome'],rows:[['A','No gain']]}}], limitations:['No matched treatment effect.']};
+  const qualified = prepareTrajectoryAssessment({input:input(), config, case_study:study});
+  const {case_study, ...unchanged} = qualified;
+  assert.deepEqual(unchanged,p,'The optional reading does not alter frozen model semantics');
+  assert.deepEqual(case_study,study);
+  for (const change of [
+    d => {d.citations[0].source_id='unregistered';},
+    d => {d.sections[0].citations[0].first_line=9;},
+    d => {d.sections[0].citations[0].last_line=12;},
+    d => {d.sections[0].citations=[];},
+    d => {d.sections.push(structuredClone(d.sections[0]));},
+    d => {d.sections[0].table.rows[0].pop();},
+    d => {d.sections[0].series.points[0].value=NaN;},
+    d => {d.summary='x'.repeat(160_001);},
+  ] as Array<(d:any) => void>) {
+    const bad=structuredClone(study); change(bad);
+    assert.throws(()=>prepareTrajectoryAssessment({input:input(),config,case_study:bad}),/invalid case study/);
+  }
+});

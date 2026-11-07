@@ -1,4 +1,4 @@
-import { normalizeHostFailure } from "./host_failure.ts";
+import { normalizeHostFailure, hostFailureRetryCheck } from "./host_failure.ts";
 import transactionContract from "../turn_transaction_contract.json" with {
   type: "json",
 };
@@ -330,32 +330,10 @@ function hostRetryPolicyCheck(journal: JsonObject): TurnRecoveryCheck | null {
     if (!(error instanceof EffectRuntimeRequestError)) throw error;
     return {kind: "host_retry_policy", outcome: "failed", reason: "host_retry_contract_invalid"};
   }
-  const retry = asObject(failure.retry);
   const attempt = failure.attempt;
-  const kind = String(failure.kind);
-  const retryable = failure.retryable;
   if (journal.host_attempt_count !== attempt)
     return {kind: "host_retry_policy", outcome: "failed", reason: "host_retry_contract_invalid"};
-  if (retryable === true && Number(attempt) >= Number(retry.max_attempts)) {
-    return {
-      kind: "host_retry_policy",
-      outcome: "failed",
-      reason: "host_retry_budget_exhausted",
-    };
-  }
-  if (retryable === true) {
-    return { kind: "host_retry_policy", outcome: "passed" };
-  }
-  // A max-token terminal has no proved whole-Turn remaining budget or
-  // final-response reserve. Unlike legacy explicitly retried terminal errors,
-  // repeating it would be a blind rerun of an expensive request.
-  return kind === "output_budget_exhausted"
-    ? {
-        kind: "host_retry_policy",
-        outcome: "failed",
-        reason: "host_retry_not_available",
-      }
-    : null;
+  return hostFailureRetryCheck(failure, true) as TurnRecoveryCheck | null;
 }
 
 function recoveryDecision(
