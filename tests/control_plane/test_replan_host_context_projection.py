@@ -11,7 +11,7 @@ import pytest
 
 from loopx.control_plane.quota.cli_projection import compact_quota_should_run_cli_payload
 from loopx.control_plane.quota.turn_envelope import (
-    build_turn_envelope, quota_action_signature_document,
+    build_turn_envelope, project_captured_replan_cli_view, quota_action_signature_document,
     turn_envelope_action_signature_document,
 )
 from loopx.control_plane.testing.control_plane_composition_scenarios import (
@@ -139,9 +139,12 @@ def test_staged_replan_preserves_source_numbers_and_distinct_outcome_refs(tmp_pa
     context = source["autonomous_replan_obligation"]["replan_context"]
     core = {
         "evidence_value": 2**53 + 1,
-        "acceptance_contract": {"outcome_requirements": {"outcomes": [*outcomes, separate]}},
+        "acceptance_contract": {"outcome_requirements": {
+            "revision": 2**53 + 1, "outcomes": [*outcomes, separate],
+        }},
     }
     context["core_goal"] = core
+    source["agent_todo_summary"]["goal_acceptance_contract"] = copy.deepcopy(core["acceptance_contract"])
     context["explore_basis"] = {"availability": "available", "revision": -0.0, "values": exact}
     context["decision_followthrough"] = {"recorded_progress_count": 2**53 + 1}
     context["evidence"][0]["occurrences"] = 1.0
@@ -177,6 +180,10 @@ def test_staged_replan_preserves_source_numbers_and_distinct_outcome_refs(tmp_pa
     refs = [row["outcome_ref"] for row in index["outcomes"]]
     assert len(set(refs)) == 3
     assert envelope["action"]["core_goal"]["outcome_requirements_index"]["outcome_refs"] == refs
+    saved_entry = project_captured_replan_cli_view(source)
+    saved_index = saved_entry["agent_todo_summary"]["outcome_requirements_index"]
+    assert saved_index["outcome_refs"] == refs
+    assert saved_index["revision"] == 2**53 + 1
     for ref, outcome in zip(refs, [*outcomes, separate], strict=True):
         detail = shlex.split(index["read_action_template"].replace("{outcome_ref}", ref))
         assert detail[detail.index("quota"):][:2] == ["quota", "replan-view"]

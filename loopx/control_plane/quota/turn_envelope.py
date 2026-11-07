@@ -97,8 +97,10 @@ def _turn_envelope_result(
     staged_replan = (
         operation in {"build", "build_controller_input", "quota_signature", "replan_cli_view", "bind_capture"}
         and isinstance(payload, Mapping)
-        and payload.get("replan_action_packet")
-        and (payload.get("replan_read_path") or params.get("reader_argv"))
+        and (
+            (operation == "replan_cli_view" and params.get("source_edits") is True)
+            or (payload.get("replan_action_packet") and (payload.get("replan_read_path") or params.get("reader_argv")))
+        )
     )
     if operation == "replan_view" or staged_replan or operation == "reference_context" and (
         params.get("goal_acceptance") or params.get("vision_audit") or params.get("replan_authoring")
@@ -224,6 +226,14 @@ def bind_turn_decision_capture(
         turn_instance_id=turn_instance_id, turn_key=turn_key,
         **({"reader_argv": reader_argv} if reader_argv is not None else {}),
     )
+
+
+def project_captured_replan_cli_view(payload: dict[str, Any]) -> dict[str, Any]:
+    """Stage replan reads without round-tripping unchanged source values."""
+    if not isinstance(payload.get("replan_read_path"), str):
+        return payload
+    result = _turn_envelope_result("replan_cli_view", payload=payload, source_edits=True)
+    return _apply_context_projection_changes(payload, result)
 
 
 def prepare_context_delivery(
