@@ -39,6 +39,38 @@ def test_inventory_pins_code_revision_but_rereads_original_source(api, monkeypat
     assert len(scans) == 2, "Each HTTP read must qualify its own runtime revision"
 
 
+def test_inventory_preserves_idle_holder_and_waits_for_existing_kernel_writer(api):
+    from concurrent.futures import ThreadPoolExecutor
+    import time
+
+    from loopx.file_lock import _effect_mutation_lock_path, exclusive_file_lock, lock_holder_path
+
+    _, _, route = _source(api)
+    _, fixture, _ = api
+    path = _root(fixture["runtime"]) / "request-locks" / route["request_id"]
+    with exclusive_file_lock(path, operation="request_writer"):
+        pass
+    previous_holder = lock_holder_path(path).read_bytes()
+
+    code, first = _inventory(api, route["session_id"], view="history")
+    assert code == 200 and first["matched"] == 1
+    assert lock_holder_path(path).read_bytes() == previous_holder
+
+    # A caller that only holds the kernel fence must still exclude inventory.
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with exclusive_file_lock(path, operation="older_request_writer"):
+            reading = pool.submit(_inventory, api, route["session_id"], view="history")
+            marker = _effect_mutation_lock_path(path)
+            deadline = time.monotonic() + 3
+            while not marker.exists() and not reading.done() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert marker.exists() and not reading.done()
+        code, recovered = reading.result(timeout=5)
+    assert code == 200 and recovered["matched"] == 1
+    assert recovered["snapshot_digest"] == first["snapshot_digest"]
+    assert not marker.exists()
+
+
 def test_original_history_pins_code_revision_per_http_read_but_rereads_receipts(api, monkeypatch):
     from loopx.control_plane import effect_runtime
 
