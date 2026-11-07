@@ -51,9 +51,10 @@ def native_source(w, name='original', task_text='Check the original question aga
             build_todo_runtime_shadow_projection(goal_id=goal, todos=[], handoff_mode='soft_claim'),
             state_path=w['tmp_path'] / 'active.md', provider='sqlite')
     log = explore_result_log_path(runtime, 'solver-goal')
+    clock = '2026-01-03T00:15:00Z' if done else '2026-01-02T00:15:00Z'
     for name in ('question', 'attempt'):
         append_explore_result_event(log, build_explore_node_event(goal_id='solver-goal',
-            node_id=name, node_kind='question', title=name, summary='Original native record'))
+            node_id=name, node_kind='question', title=name, summary='Original native record', recorded_at=clock))
     append_explore_result_event(log, build_explore_edge_event(goal_id='solver-goal',
         from_node='attempt', to_node='question', edge_type='depends_on'))
     raw = {'id': name, 'label': 'Original experiment',
@@ -194,9 +195,18 @@ def test_source_failure_preserves_links_peers_and_native_recovery(workspace):
     bound = w['server'].registry_path.read_bytes()
     source_registry = Path(raw['registry'])
     request('/status.json?goal_id=solver-goal')
+    timing_url = '/api/chat/explore-results?' + urlencode({
+        'goal_id': 'solver-goal', 'source_namespace': GoalSource.parse(raw).namespace, 'view': 'history-timing',
+    })
+    assert request(timing_url)['first_recorded_at'] == '2026-01-02T00:15:00Z'
     # A real native CLI failure, including private stderr, must not become a
     # generic workspace failure or borrow a local Goal's snapshot.
     source_registry.unlink()
+    # Even the warm native status snapshot cannot authorize the timing read.
+    with pytest.raises(HTTPError) as unavailable_timing:
+        request(timing_url)
+    assert unavailable_timing.value.code == 503
+    assert str(w['tmp_path']).encode() not in unavailable_timing.value.read()
     reader = w['server'].goal_source_catalog.resolve('solver-goal')[1]
     reader._read_at = 0
     with pytest.raises(HTTPError) as unavailable:
@@ -216,6 +226,7 @@ def test_source_failure_preserves_links_peers_and_native_recovery(workspace):
     assert removed.value.code == 409
     source_registry.write_bytes(before[source_registry])
     assert request('/status.json?goal_id=solver-goal')['run_history']['goals'][0]['registry_member']
+    assert request(timing_url)['first_recorded_at'] == '2026-01-02T00:15:00Z'
     assert not w['count'].exists()
 
 
@@ -435,6 +446,10 @@ def test_same_named_native_goals_have_isolated_workspace_views(workspace):
         history = request('/api/chat/explore-results?' + query + '&view=history')
         assert history['goal_id'] == 'solver-goal' and history['total'] == 3
         assert all(item['goal_id'] == 'solver-goal' for item in history['items'])
+        timing = request('/api/chat/explore-results?' + query + '&view=history-timing')
+        expected_start = '2026-01-03T00:15:00Z' if view == 'case-b' else '2026-01-02T00:15:00Z'
+        assert timing['first_recorded_at'] == expected_start
+        assert timing['goal_id'] == 'solver-goal' and timing['source_namespace'] == namespace
         assert request('/api/chat/research-analysis?' + query)['catalog']['packs'] == []
         completed = request('/api/chat/completed-todos?' + query)
         assert completed['total'] == (1 if view == 'case-b' else 0)
@@ -444,6 +459,10 @@ def test_same_named_native_goals_have_isolated_workspace_views(workspace):
     with pytest.raises(HTTPError):
         request('/api/chat/explore-results?' + urlencode({
             'goal_id': 'case-a', 'source_namespace': namespaces[1], 'view': 'history'}))
+    with pytest.raises(HTTPError) as wrong_timing_source:
+        request('/api/chat/explore-results?' + urlencode({
+            'goal_id': 'case-a', 'source_namespace': namespaces[1], 'view': 'history-timing'}))
+    assert wrong_timing_source.value.code == 409
     with pytest.raises(HTTPError):
         request('/api/chat/completed-todos?' + urlencode({
             'goal_id': 'case-a', 'source_namespace': namespaces[1]}))
