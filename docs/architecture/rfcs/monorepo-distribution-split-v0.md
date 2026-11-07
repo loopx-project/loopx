@@ -1619,6 +1619,61 @@ invalid Vision/workspace also remain refusals. The temporary measurement harness
 and raw captures stay private; this recipe describes the repeated workload and
 its oracles, not a distributed benchmark runner or public reproduction receipt.
 
+### 2026-11-07 — Original-Turn closeout survives automatic Todo archival
+
+The complete CLI comparison in #8257 exposed a lifecycle failure with 101
+synthetic Todos. Fresh source-console reproductions on `4a33eb4b5` retain
+`todo_archived` on both File and default SQLite after ordinary completion,
+durable writeback and one quota debit. The frozen comparison remains unchanged;
+these failed episodes are not accepted latency samples.
+
+The proposed repair stays in `todo_terminal_lifecycle.ts`. Its existing
+same-Turn fence and exact ordinary-completion receipt verification also qualify
+an archived Todo's closeout before the active-only rejection. One local helper
+owns both active and archived parent checks. Original claim/lease, task digest,
+validation declaration/receipt and provider CAS checks remain in force; archive
+selection and retention thresholds are unchanged. This permits only the
+original completion's terminal phase, without reopening archived work.
+
+Real File/SQLite console fixtures now complete the large-state sequence and
+replay completion, writeback, quota spend and terminal closeout with one debit
+and an unchanged independently verified JSON result. The durable CLI regression
+uses a real validator and ordinary hard-lease claim: premature settlement,
+unrelated archived work, another actor, claim or Turn, and changed completion
+intent are refused. Terminal closeout retains the original passed validation
+receipt, first completion time and archive state without rerunning the validator.
+Existing provider conformance retains source/digest, validation, lease and replay
+checks; an isolated real PostgreSQL suite qualifies its shared owner separately.
+
+The author proposal also integrates main `abf144202` (#8161), whose explicit
+Goal-scoped checks do not gate local Todo completion. The archive regression
+covers a failed Goal commitment alongside the local validator: ordinary and
+terminal completion still preserve the original receipt and one debit, never
+rerun the Goal checker, and leave the overall check failed. This is author-side
+integration coverage; it does not replace independent review or reviewed-repair
+wheel qualification.
+
+Independent review of #8264 at `12627eff8` found that changing only `--evidence`
+could replace the archived Todo's accepted artifact while returning the old
+validation receipt. All four File/SQLite × Goal-check fixtures reproduce this
+failure on that head. The revision integrates target main `10f66ec5e` and rejects
+different supplied evidence before archived closeout. Its new archived-closeout
+receipt also retains the accepted evidence, so a changed retry cannot bypass the
+check through receipt recovery. Omitted or empty evidence with a valid completion
+note keeps the original value; the CLI's completion-note requirement still applies.
+Historical fingerprints and older receipts remain compatible; active
+completion behavior is unchanged. The regression checks canonical evidence,
+original validation and completion time, and once-only validation/writeback/debit
+before and after terminal replay. The earlier reviewed head remains unaccepted;
+the revised head still needs independent review.
+
+This is a proposed lifecycle repair enabling the remaining R1/V4 journey and
+large-state comparison. Independent exact-head review, reviewed-repair wheel
+readback and remaining guard/parser characterization still govern the next
+step. It does not upgrade an installed host or qualify interruption/restart,
+split installation, full R0/V10/R1, M1/#8011, D2/D5/D6/D3, context/model,
+adoption or complete-cost benefit. I3 remains at least one minor release.
+
 ## Appendix B: Decision log
 
 | Date | Decision | Owner / approval | Alternatives | Normative sections changed |
