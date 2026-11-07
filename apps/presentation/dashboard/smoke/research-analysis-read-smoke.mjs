@@ -9,6 +9,33 @@ import {createElement} from "react";
 import {renderToStaticMarkup} from "react-dom/server";
 import {resolveTestPython} from "../../../../scripts/test-python.mjs";
 import {readAnalysisSnapshot, ResearchAnalysisPanel} from "../src/features/personal-workspace/goal-research-analysis.tsx";
+import {ResearchCaseStudy} from "../src/features/personal-workspace/research-case-study.tsx";
+import {ResearchGoalNavigation} from "../src/features/personal-workspace/goal-research-workbench.tsx";
+
+// A case belongs to a source-scoped child Goal. Parent navigation must never
+// combine private-source siblings or turn organization into execution.
+const caseFixture = JSON.parse(await readFile(resolve('src/data/fixtures/case-study-child.json'), 'utf8'));
+const study = caseFixture.analyses[0].case_study;
+const renderedStudy = renderToStaticMarkup(createElement(ResearchCaseStudy, {
+  study, zh: false, historical: true, scope: caseFixture.analyses[0].input.scope, onCitation: () => {throw Error('read executed a citation');},
+}));
+assert.ok(renderedStudy.includes(study.title));
+assert.ok(renderedStudy.includes('Showing the saved Chinese original.'));
+assert.ok(renderedStudy.includes('not current results'));
+assert.ok(renderedStudy.includes('unknown'), 'Missing values do not become zero');
+for (const section of study.sections) assert.ok(renderedStudy.includes(section.title));
+const goals = [
+  {goalId:'parent',title:'Benchmark'},
+  {goalId:'child',parentGoalId:'parent',title:'Local case'},
+  {goalId:'foreign',parentGoalId:'parent',title:'Foreign case',sourceAccess:{namespace:'other',label:'Other',readOnly:true}},
+];
+const navigate = goalId => renderToStaticMarkup(createElement(ResearchGoalNavigation, {
+  goalId, goals, zh:false, onSelect: () => {throw Error('read navigated');},
+}));
+assert.ok(navigate('parent').includes('Local case'));
+assert.ok(!navigate('parent').includes('Foreign case'));
+assert.ok(navigate('child').includes('Benchmark'));
+assert.equal(navigate('foreign'), '', 'An absent same-source parent is not a navigation grant');
 
 // A language-specific cache miss must not hide the same registered pack's
 // older, unspecified-language result or turn a read into model execution.

@@ -57,6 +57,8 @@ def _pack_id(owner_goal_id: str, record: dict) -> str:
         identity["native_outcomes"] = record["native_outcomes"]
     if "base_pack_id" in record:
         identity["base_pack_id"] = record["base_pack_id"]
+    if "case_study" in record:
+        identity["case_study"] = record["case_study"]
     return _digest(identity)
 
 
@@ -362,6 +364,9 @@ def _summary(record: dict, reason: str | None, prepared: dict | None = None) -> 
         "config": analysis["config"],
         "availability": "unavailable" if reason else "available",
         "reason_code": reason,
+        **({"case_study_summary": {"title": record["case_study"]["title"],
+                                   "language": record["case_study"]["language"]}}
+           if "case_study" in record else {}),
         **({field: _captured_view(record, field) for field in ("solver_usage", "native_outcomes") if field in record}),
     }
 
@@ -381,6 +386,7 @@ def register_pack(
     loopx_input_json: str | None = None,
     native_outcomes_json: str | None = None,
     base_pack_id: str | None = None,
+    case_study_json: Path | None = None,
     select_default: bool = True,
 ) -> dict:
     """Trusted operator only; no HTTP/renderer path-registration endpoint."""
@@ -392,6 +398,8 @@ def register_pack(
             "input": json.loads(input_path.read_text(encoding="utf-8")),
             "config": config or DEFAULT_CONFIG,
             "generation_defaults": not config,
+            **({"case_study": json.loads(case_study_json.read_text(encoding="utf-8"))}
+               if case_study_json is not None else {}),
         },
     )
     record = {
@@ -404,6 +412,8 @@ def register_pack(
         },
     }
     _verify_sources(record)
+    if "case_study" in prepared:
+        record["case_study"] = prepared["case_study"]
     if base_pack_id is not None:
         _, previous = _resolve(runtime_root, owner_goal_id, base_pack_id)
         # The typed owner validates Goal/case/run identity before registration.
@@ -594,6 +604,7 @@ def inspect_pack(
         "episodes": record["input"]["episodes"],
         "job": _public_job(job) if job else None,
         "result": result,
+        **({"case_study": record["case_study"]} if "case_study" in record else {}),
         **({"display_request": prepared["display_request"]} if "display_request" in prepared else {}),
         **({"result_attempt": result_job["attempt"]} if prepared.get("display_request") and result is not None else {}),
         **({"result_job": _public_job(result_job)} if result is not None and result_job is not job else {}),
@@ -726,6 +737,10 @@ def read_citation(
     citations.extend(c for field in ((result or {}).get("display") or {}).get("fields", [])
                      for c in field.get("context_citations", []))
     synthesis = (result or {}).get("synthesis")
+    case_study = view.get("case_study")
+    if case_study:
+        citations.extend(case_study["citations"])
+        citations.extend(c for section in case_study["sections"] for c in section["citations"])
     if synthesis:
         citations.extend(c for item in [synthesis["summary"], *synthesis["findings"], *synthesis["next_experiments"]]
                          for c in item["citations"])

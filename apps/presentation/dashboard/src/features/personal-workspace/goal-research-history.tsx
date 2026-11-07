@@ -4,7 +4,7 @@ import {AlertCircle, ArrowLeft, ArrowRight, Circle, CircleHelp, FlaskConical, Gi
 import {Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState} from "react";
 import {defaultParseSearch} from "@tanstack/react-router";
 import {ResearchRecordSearch} from "./research-record-browser";
-import {ResearchAnalysisButton, ResearchAnalysisPanel, ResearchAnalysisStatus, ResearchCitationPanel, ResearchProgressSummary, ResearchReportSummary, useResearchAnalysis} from "./goal-research-analysis";
+import {ResearchAnalysisButton, ResearchAnalysisPanel, ResearchAnalysisStatus, ResearchCitationPanel, ResearchProgressSummary, ResearchReportSummary, ResearchCaseReading, useResearchAnalysis} from "./goal-research-analysis";
 import {buildExploreTimeline, parseExploreFindingSections, type TimelineFinding} from "../../../../../../loopx/control_plane/presentation/explore_timeline.js";
 import {GoalResearchTimeline} from "./goal-research-timeline";
 import {requestJson} from "../../data/chat";
@@ -54,6 +54,22 @@ const viewFromUrl = (goal: string) => {
  * a judge. All recorded updates survive; unsupported analysis stays unavailable. */
 export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, readSourceUrl}: {goalId: string; active: boolean; zh: boolean; refreshRevision?: number; readSourceUrl?: string}) {
   const analysis = useResearchAnalysis(goalId, active, zh, readSourceUrl);
+  const readCaseMode = () => {
+    const query = new URLSearchParams(window.location.search);
+    return query.get("research_goal") !== goalId || query.get("research_reading") !== "history";
+  };
+  const [caseReading, setCaseReading] = useState(readCaseMode);
+  useEffect(() => {
+    const changed = () => setCaseReading(readCaseMode());
+    changed(); window.addEventListener("popstate", changed);
+    return () => window.removeEventListener("popstate", changed);
+  }, [goalId, readSourceUrl]);
+  const setCaseMode = (reading: boolean) => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("research_goal", goalId);
+    url.searchParams.set("research_reading", reading ? "case" : "history");
+    window.history.pushState({}, "", url); setCaseReading(reading);
+  };
   const [read, setRead] = useState<Read>({events: [], total: null, complete: false});
   const [originalDisplay, setOriginalDisplay] = useState(false);
   const [displayIdentity, setDisplayIdentity] = useState<{events: ExploreHistoryEvent[]; namespace: string; key: string} | null>(null);
@@ -449,7 +465,10 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
   const emptyHistory = !busy && !readFailure && read.total === 0;
   const emptyWithAnalysis = emptyHistory && Boolean(analysis.pack?.result || analysis.pack?.native_outcomes);
   const emptyHistoryMessage = zh ? "这个 Goal 尚无研究历程" : "No research history for this Goal yet";
+  const hasCases = (analysis.snapshot?.catalog.packs ?? []).some(p => p.case_study_summary);
+  if (hasCases && caseReading) return <ResearchCaseReading analysis={analysis} onHistory={() => setCaseMode(false)}/>;
   return <section className="research-history" aria-label={copy.title} aria-busy={busy}>
+    {hasCases ? <button type="button" className="case-return-reader" onClick={() => setCaseMode(true)}>{zh ? "← Case 深度解读" : "← Case studies"}</button> : null}
     {progressiveOverview ? <>
       <nav className="research-reading-order" aria-label={zh ? "研究阅读" : "Research reading"}>
         <button type="button" onClick={() => jump(reportAnchor.current)}>{zh ? "汇报" : "Report"}</button><span aria-hidden>→</span>
