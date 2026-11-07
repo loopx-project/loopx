@@ -6,7 +6,9 @@ import {visionAuthoringContract} from "../goals/vision_checkpoint.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {jsonObject, requireBoolean, requireJsonObject} from "../runtime_decode.ts";
 import {GOAL_OUTCOMES_SCHEMA, OUTCOME_CONTEXT_NAVIGATION_SCHEMA} from "../goals/outcome_requirements.ts";
-import {FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE} from "../work_items/interaction_contract.ts";
+import {EXECUTION_PREPARATION_SCHEMA_VERSION} from "../work_items/execution_preparation.ts";
+import {FULL_OUTCOME_READ_GUIDANCE, INTERACTION_CONTRACT_SCHEMA_VERSION, PROGRESSIVE_OUTCOME_READ_GUIDANCE}
+  from "../work_items/interaction_contract.ts";
 import {quotaSummaryReferences, contextSourceIdentity, contextProjectionChanges,
   type ProjectionSourceValues} from "./diagnostic_projection.ts";
 import {encodeContextDelivery, fileNavigationPaths} from "./context_delivery.ts";
@@ -222,7 +224,6 @@ export function progressiveContextPlan(request: JsonObject): JsonObject {
         deferred.push({path: [...parent, "requirements", j, "agent_review", field], parent, index_key});
     });
   }
-  if (!deferred.length && !references.length) return unchanged;
   // Replace only the exact source-owned obligation. Other merged obligations,
   // objective adoption, unknown provider prose and pending reads remain intact.
   for (const listPath of deferred.length ? [sourcePath, [...agent, "required_reads"]] : []) {
@@ -236,6 +237,29 @@ export function progressiveContextPlan(request: JsonObject): JsonObject {
           row.reason.replace(FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE)});
     });
   }
+  const interaction = jsonObject(payload.interaction_contract);
+  const cli = jsonObject(interaction?.cli_channel);
+  const preparation = jsonObject(cli?.execution_preparation);
+  const boundary = jsonObject(payload.goal_boundary);
+  const scopes = boundary?.write_scope;
+  // Selection and an ordinary claim only prepare work. Keep the full list
+  // addressable before a scope decision, and inline as soon as delivery is ready.
+  if (interaction?.schema_version === INTERACTION_CONTRACT_SCHEMA_VERSION &&
+      payload.should_run === true && payload.effective_action === EffectiveAction.NORMAL_RUN &&
+      jsonObject(interaction.agent_channel)?.delivery_allowed === false &&
+      cli?.spend_allowed_now === false && cli.spend_after_validation === false &&
+      (cli.selection_required === true && !Object.hasOwn(cli, "execution_preparation") &&
+         jsonObject(cli.selection_command)?.schema_version === "action_selection_cli_command_v1" ||
+       preparation?.schema_version === EXECUTION_PREPARATION_SCHEMA_VERSION && preparation.state === "claim_required" &&
+         cli.selection_required !== true && payload.normal_delivery_allowed === false &&
+         preparation.delivery_allowed === false && jsonObject(preparation.claim)?.host_execution_allowed === true) &&
+      boundary && !Object.hasOwn(boundary, "write_scope_pointer") &&
+      Array.isArray(scopes) && scopes.length > 0 && scopes.every(scope => typeof scope === "string")) {
+    const path = ["goal_boundary", "write_scope"];
+    deferred.push({path});
+    instructions.push({path: ["goal_boundary", "write_scope_pointer"], value: pointer(path)});
+  }
+  if (!deferred.length && !references.length) return unchanged;
   if (references.length) instructions.push({path: ["context_reference_instruction"], value:
     "A Todo row with context_ref is exactly the complete row at that JSON pointer in THIS required view. "
     + "Use that row for every referenced lane; all constraints, evidence, ownership and order still apply. "
@@ -289,9 +313,12 @@ function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSour
       removed.push(["context", ...path]);
     }
     for (const edit of deferred) {
-      const path = edit.path as Path, owner = edit.parent as Path;
+      const path = edit.path as Path;
       delete parent(path)[path.at(-1)!];
-      parent([...owner, String(edit.index_key)])[String(edit.index_key)] = pointer(owner);
+      if (typeof edit.index_key === "string") {
+        const owner = edit.parent as Path;
+        parent([...owner, edit.index_key])[edit.index_key] = pointer(owner);
+      }
       removed.push(["context", ...path]);
     }
     for (const edit of instructions) {
@@ -325,7 +352,10 @@ function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSour
           return jsonObject(source)?.content !== undefined && !hasRead(path) ? [pointer(path)] : [];
         }) : [],
       },
-      instruction: "This view retains complete requirements and current review/check states. "
+      instruction: (deferred.some(edit => pointer(edit.path as Path) === "/goal_boundary/write_scope")
+        ? "If choosing work depends on write scope, select the pointer in goal_boundary.write_scope_pointer from the source below. "
+          + "Use the complete current scope from the ready decision before delivery. " : "")
+        + "This view retains complete requirements and current review/check states. "
         + "Source history, review reasoning and evidence references are supporting material. "
         + "Read them from this same immutable capture when a decision, verification or review depends on them. "
         + "For source history use supporting_material_pointer plus /sources. For review detail append "
