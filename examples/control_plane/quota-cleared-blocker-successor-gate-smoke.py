@@ -238,7 +238,7 @@ def value_successor() -> dict:
         todo_id="todo_value_successor",
         text="[P0] Continue value exploration with the reviewed connector scope.",
         claimed_by=BLOCKED_AGENT,
-        resume_when="todo_done:todo_review_gate",
+        unblocks_todo_id="todo_review_gate",
     )
 
 

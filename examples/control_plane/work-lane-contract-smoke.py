@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import shlex
 import sys
 from pathlib import Path
 
@@ -1771,12 +1772,18 @@ def assert_side_agent_replans_when_deferred_successor_is_ready() -> None:
     assert contract["cli_channel"]["spend_after_validation"] is True, contract
     actions = contract["cli_channel"]["next_cli_actions"]
     assert len(actions) == 3, actions
-    assert "todo_issue_surface_deferred" in actions[0], actions
-    assert "successor_replan_recorded" in actions[1], actions
-    assert "loopx refresh-state" in actions[1], actions
-    assert "--agent-id codex-side-bypass" in actions[1], actions
-    assert "loopx --format json quota spend-slot" in actions[2], actions
-    assert "--agent-id codex-side-bypass" in actions[2], actions
+    reopen = shlex.split(actions[0])
+    assert reopen[:3] == ["loopx", "todo", "update"], actions
+    assert reopen[reopen.index("--todo-id") + 1] == "todo_issue_surface_deferred", actions
+    assert reopen[reopen.index("--status") + 1] == "open" and "--clear-resume-when" in reopen, actions
+    reentry = shlex.split(actions[1])
+    assert reentry[:5] == ["loopx", "--format", "json", "quota", "should-run"], actions
+    assert reentry[reentry.index("--todo-id") + 1] == "todo_issue_surface_deferred", actions
+    assert reentry[reentry.index("--agent-id") + 1] == "codex-side-bypass", actions
+    assert reentry[reentry.index("--turn-instance-id") + 1] == "${LOOPX_TURN:?}", actions
+    assert "Only if it admits this same Todo" in actions[2], actions
+    assert "fresh execution claim/lease" in actions[2], actions
+    assert not any("spend-slot" in action or "refresh-state" in action for action in actions), actions
     assert guard["automation_liveness"]["automation_action"] == "execute_bounded_work", guard
     markdown = render_quota_should_run_markdown(guard)
     assert "agent_scope_frontier: action=successor_replan_required" in markdown, markdown
