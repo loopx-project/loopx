@@ -147,14 +147,16 @@ def python_distribution_install(module_path: Path) -> dict[str, Any]:
         return {"available": False}
     installer = (installed.read_text("INSTALLER") or "").strip() or "unknown"
     expected = module_path.resolve()
-    owns_module = any(
-        item.as_posix().endswith("loopx/doctor.py")
+    for item in installed.files or ():
+        record_path = item.as_posix()
+        if not record_path.endswith("loopx/doctor.py"):
+            continue
         # A RECORD entry is a POSIX string. Let the native path parser
         # interpret an absolute Windows drive before joining the install root.
-        and Path(installed.locate_file(item.as_posix())).resolve() == expected
-        for item in installed.files or ()
-    )
-    if not owns_module:
+        location = installed.locate_file(record_path)
+        if isinstance(location, (str, os.PathLike)) and Path(location).resolve() == expected:
+            break
+    else:
         return {"available": False}
     owner = resolve_python_install_owner(default_installer=installer, prefix=Path(sys.prefix))
     return {
