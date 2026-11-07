@@ -220,9 +220,10 @@ def test_saved_context_progressive_recovery_keeps_original_turn_without_native_s
         malformed = tmp_path / "malformed.json"
         args.capture_file = str(malformed)
         args.capture_sha256 = write_decision_capture(malformed, original)
+        args.initial_read = True
         result.clear()
         assert handle_native_context_command(args, print_payload=lambda value, *_: result.append(value)) == 1
-        assert result[0]["ok"] is False and "first_read_command" not in result[0]
+        assert result[0]["ok"] is False and not ({"first_read_command", "content"} & result[0].keys())
         assert result[0]["recovery"]["sha256"] == args.capture_sha256
 
 
