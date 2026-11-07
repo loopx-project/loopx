@@ -16,7 +16,11 @@ from .reward_memory import (
     reviewer_notification_before_send_gate,
 )
 from ...control_plane.content_digest import ENVELOPED_SHA256_PATTERN
-from ...domain_packs.issue_fix import REVIEWER_NOTIFICATION_LOCAL_TIME_PATTERN
+from ...domain_packs.issue_fix import (
+    REVIEWER_NOTIFICATION_LOCAL_TIME_PATTERN,
+    REVIEWER_NOTIFICATION_QUEUE_RECEIPT_SCHEMA_VERSION as
+    ISSUE_FIX_REVIEWER_NOTIFICATION_QUEUE_RECEIPT_SCHEMA_VERSION,
+)
 
 
 ISSUE_FIX_REVIEWER_NOTIFICATION_SINKS_INPUT_SCHEMA_VERSION = (
@@ -27,9 +31,6 @@ ISSUE_FIX_REVIEWER_NOTIFICATION_SINKS_RESULT_SCHEMA_VERSION = (
 )
 ISSUE_FIX_REVIEWER_NOTIFICATION_SINK_RESULT_SCHEMA_VERSION = (
     "issue_fix_reviewer_notification_sink_result_v0"
-)
-ISSUE_FIX_REVIEWER_NOTIFICATION_QUEUE_RECEIPT_SCHEMA_VERSION = (
-    "issue_fix_reviewer_notification_queue_receipt_v1"
 )
 ISSUE_FIX_REVIEWER_NOTIFICATION_LEGACY_QUEUE_RECEIPT_SCHEMA_VERSION = (
     "issue_fix_reviewer_notification_queue_receipt_v0"
