@@ -162,6 +162,12 @@ remain unavailable. There is no fallback to ordinary steward/project history,
 Session creation, executor change or model reconfiguration on this entry.
 Group audiences retain their existing boundary.
 
+For a private Lark reply, the adapter keeps the thread ID from the verified
+provider context when the incoming event omits it. This lets the App show the
+original body, exact quote and verified thread excerpt together. Redelivery
+can omit that ID and adopt the same request. A conflicting supplied ID still
+fails source verification.
+
 An owner-private steward connection also offers **Use for App steward**. Core
 stores this explicit entry preference alongside the binding set, without
 changing any audience, managed identity or execution grant. Multiple stewards

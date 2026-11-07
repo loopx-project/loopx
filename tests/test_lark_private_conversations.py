@@ -4390,6 +4390,44 @@ def test_group_outbound_joins_current_source_and_identity_before_root_read(ordin
         runtime.close()
 
 
+@pytest.mark.parametrize("captured_thread", [False, True])
+def test_private_reply_keeps_the_exact_quote_when_thread_id_is_optional(ordinary, captured_thread):  # noqa: F811
+    store, runtime, provider, transport = connect(ordinary)
+    profile = "steward-app"
+    parent = provider.event(profile, "private-quote-parent", "Original quote\n\n**Second paragraph**")
+    reply = provider.event(profile, "private-quote-reply", "My question\n\n**Keep its formatting**")
+    parent_id, reply_id = parent["message_id"], reply["message_id"]
+    thread_id = "omt_private_quote"
+    reply.update(parent_id=parent_id, root_id=parent_id, thread_id=thread_id if captured_thread else None)
+    child = provider.messages[reply_id]
+    child.update(parent_id=parent_id, root_id=parent_id, thread_id=thread_id, thread_message_position=0)
+    provider.messages[parent_id].update(thread_id=thread_id, thread_message_position=-1, thread_replies=[child])
+    try:
+        assert transport.admit(profile, reply)["status"] == "durably_accepted"
+        request, = transport.core.pending()
+        sid, tid = request["session_id"], request["turn_id"]
+        transport = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+            runner=provider, cli_bin="lark-cli")
+        redelivery = {**reply, "event_id": "redelivered-private-quote", "thread_id": None}
+        assert transport.admit(profile, redelivery)["status"] == "durably_accepted"
+        assert transport.admit(profile, {**redelivery, "thread_id": "omt_other"})["status"] == "source_conflict"
+        runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)
+        original, = [row for row in store.messages(sid) if row["role"] == "user"]
+        status, snapshot = ordinary[3](f"/api/chat/sessions/{sid}?message_limit=5&turn_id={tid}")
+        assert status == 200
+        visible = next(row for row in snapshot["messages"] if row["message_id"] == original["message_id"])
+        context = visible["reply_context"]
+        assert context["source_text"] == reply["content"]
+        assert context["parent"] == {"message_id": parent_id, "content": parent["content"], "complete": True}
+        assert context["thread"]["thread_id"] == thread_id
+        assert context["thread"]["before_message_id"] == reply_id
+        assert visible["text"] == original["text"] == request["message"]
+        transport.reconcile()
+        assert provider.topic_writes == [(reply["chat_id"], parent_id, "Runtime response.")]
+    finally:
+        runtime.close()
+
+
 def test_group_admission_source_reads_overlap_but_keep_rendered_model_input(ordinary, monkeypatch):  # noqa: F811
     _, runtime, provider, transport = connect_group(ordinary)
     try:
