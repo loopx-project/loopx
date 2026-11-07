@@ -817,6 +817,7 @@ def _receipt(
         **dict(state.contract or {}),
         "observed_tool_sequence": [step["kind"] for step in state.steps],
         "tool_call_count": len(state.steps),
+        "tool_call_limit": TERMINAL_SETTLEMENT_TOOL_BEHAVIOR_MAX_CALLS,
         "settlement_receipt_steps": list(state.receipt_steps),
         "terminal_order_observed": bool(
             passed and state.receipt_steps == _EXPECTED_RECEIPT_STEPS
@@ -1088,14 +1089,19 @@ class DoubaoTerminalSettlementToolBehaviorActor:
                         "settlement plan, including the validation step's "
                         "command_condition. Ordinary Todo completion validates the "
                         "deliverable before writeback/spend; it is distinct from "
-                        "the final --no-follow-up closeout after spend. Preserve "
+                        "the final --no-follow-up closeout after spend. When "
+                        "ordinary completion is due, run it before authoring "
+                        "any durable_writeback input. Use the resulting same-Turn "
+                        "plan to decide which inputs are required. Preserve "
                         "the projected Goal, Agent, Todo and Turn arguments. Fill "
                         "the writeback placeholders from the proof's typed fields "
                         "in the current same-Turn plan's durable_writeback command; execute the complete "
                         "projected command, not a bare command name or help lookup."
-                        " If a vision packet is needed, use the plan's "
-                        "vision_authoring schema and author a project draft under "
-                        "`.scratch/`. Draft shell calls are OS-isolated: original "
+                        " If the current step requires a vision packet, use the "
+                        "plan's vision_authoring schema and write the draft in "
+                        "one tool call under the shell's existing `.scratch/` "
+                        "directory. Correct rejected inputs using the CLI feedback. "
+                        "Draft shell calls are OS-isolated: original "
                         "inputs, authority stores, private host data and network "
                         "access are protected. Run every LoopX command directly, "
                         "one per tool call; draft shells cannot invoke LoopX."
