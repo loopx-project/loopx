@@ -739,6 +739,28 @@ function readArgument(value: unknown, label: string): string | null {
   return text;
 }
 
+/** Current executable obligations must not disappear during projection.
+ * Historical readers keep their original permissive codec; this validates
+ * the complete-source boundary without treating a pending read as fulfilled.
+ */
+export function assertInteractionRequiredReads(value: unknown): void {
+  if (value === undefined) return;
+  if (!Array.isArray(value)) throw new EffectRuntimeRequestError("required reads must be an array");
+  for (const raw of value) {
+    const read = requireJsonObject(raw, "required read");
+    // Complete sources also carry prose-only obligations. Keep their original
+    // instructions; only explicit executable coordinates require a command.
+    if (!Object.hasOwn(read, "command") && !Object.hasOwn(read, "ordering")) continue;
+    requireNonEmptyString(read.command, "required read command");
+    readArgument(read.command, "required read command");
+    // Reuse the existing pre-work ordering. An omitted historical coordinate
+    // remains compatible; a new explicit execution order is not optional data.
+    if (read.ordering !== undefined) {
+      requireStringLiteral(read.ordering, ["before_work"], "required read ordering");
+    }
+  }
+}
+
 function shellQuote(value: string): string {
   return /^[A-Za-z0-9_./:-]+$/.test(value) ? value : `'${value.replaceAll("'", `'"'"'`)}'`;
 }
@@ -840,6 +862,7 @@ export function planInteractionWorkContext(request: JsonObject): JsonObject {
       && packet.effective_action !== EffectiveAction.HEARTBEAT_SETTLED_SKIP};
 }
 
+
 export function assertGoalContextDelivered(channel: JsonObject): void {
   const reads = Array.isArray(channel.required_reads) ? channel.required_reads : [];
   if (reads.some(read => jsonObject(read)?.source === "goal_state")) {
@@ -858,8 +881,6 @@ export function assertGoalContextDelivered(channel: JsonObject): void {
   }
 }
 
-/** Deliver full registered sources once. Ordinary mixed Goals retain progressive
- * reads; native delivery can require the complete original. */
 async function readSelectedTodoContext(source: JsonObject, todoId: unknown): Promise<JsonObject> {
   if (typeof todoId !== "string" || !todoId) return {error_code: "context_source_unavailable"};
   const {readCanonicalSnapshot, CANONICAL_SNAPSHOT_PAGE_REQUEST} =
@@ -909,6 +930,38 @@ export async function readAndProjectInteractionWorkContext(request: JsonObject):
   ]});
 }
 
+/** Completion binds to the admitted body, including whitespace, never a live
+ * reread or display prefix. Both complete contracts and historical journals
+ * use this resolver; absence of the old witness retains receipt recovery. */
+export function capturedTodoTextSha256(
+  selected: JsonObject, contextValue: unknown, recommendedAction: unknown, todoId: unknown,
+): string | null {
+  if (!Object.hasOwn(selected, "text_source_verified")) return null;
+  if (selected.text_source_verified !== true || selected.todo_id !== todoId) {
+    throw new EffectRuntimeRequestError("Turn task source does not match its selected Todo");
+  }
+  const context = contextValue == null ? {} : jsonObject(contextValue);
+  if (context === null || (context.sources !== undefined && !Array.isArray(context.sources))) {
+    throw new EffectRuntimeRequestError("Turn completion requires its admitted full task source");
+  }
+  const records = (Array.isArray(context.sources) ? context.sources : [])
+    .map(value => jsonObject(value)).filter(source => source?.source === "selected_todo")
+    .map(source => jsonObject(jsonObject(source!.content)?.todo))
+    .filter(record => record?.todo_id === todoId && typeof record?.text === "string");
+  if (records.length > 1) throw new EffectRuntimeRequestError("Turn task source is ambiguous");
+  let text = records.length ? records[0]!.text : undefined;
+  if (text === undefined && (!Object.keys(context).length || context.selected_todo_ref === "selected_todo")) {
+    text = selected.text;
+    if (text == null && selected.text_ref === "action.recommended_action") text = recommendedAction;
+  }
+  if (typeof text !== "string" || !text) {
+    throw new EffectRuntimeRequestError("Turn completion requires its admitted full task source");
+  }
+  return createHash("sha256").update(text, "utf8").digest("hex");
+}
+
+/** Deliver full registered sources once. Unowned mixed Goal documents remain
+ * progressive reads; failed/changed sources forbid dependent work. */
 export function projectInteractionWorkContext(request: JsonObject): JsonObject {
   if (request.require_full_goal_source !== undefined && typeof request.require_full_goal_source !== "boolean") {
     throw new EffectRuntimeRequestError("Goal source delivery requirement must be boolean");

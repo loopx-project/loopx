@@ -20,13 +20,13 @@ from ...extensions.codex_native_child import native_child_observer
 from ..goals.first_party_host_admission import FirstPartyHostGoalAdmission
 from . import managed_operation_host as operations
 from .codex_cli import (
-    _prompt,
+    _checked_prompt_context,
     normalize_codex_stdio_mcp_server,
-    codex_cli_result_schema,
+    prepare_codex_cli_input,
     normalize_codex_result,
 )
 from .codex_sessions import _lineage, select_managed_operation_session
-from .executor import LOOPX_TURN_HOST_REQUEST_SCHEMA_VERSION
+from .host_candidate import assert_turn_host_request_version
 from .host_failure import BuiltInHostError
 from .operation_requests import (
     operation_request_source, request_reference_instruction,
@@ -53,15 +53,18 @@ def run_codex_operation_host(
     operation_request_file: Path | None = None,
     operation_request_sha256: str | None = None,
 ) -> dict[str, Any]:
-    if request.get("schema_version") != LOOPX_TURN_HOST_REQUEST_SCHEMA_VERSION:
-        raise ValueError("unsupported LoopX Turn host request schema")
+    assert_turn_host_request_version(request)
     if sandbox not in {"read-only", "workspace-write"}:
         raise ValueError("operation tools require a restricted Codex execution sandbox")
     if not model or not reasoning_effort:
         raise ValueError(
             "managed operation tools require an explicit model and reasoning effort"
         )
-    lineage = _lineage(request)
+    # Complete work/Goal preparation must precede process or session effects.
+    # Keep the later prompt preparation as a fresh check after native startup.
+    checked = (_checked_prompt_context(request, include_session_lineage=True)
+               if "work_contract" in request else None)
+    lineage = _lineage(request, checked_lineage=checked["session_lineage"] if checked is not None else None)
     if not all(lineage.values()):
         raise ValueError("managed operation tools require a Todo-bound Turn")
     mcp_server = normalize_codex_stdio_mcp_server(mcp_server)
@@ -199,8 +202,9 @@ def run_codex_operation_host(
             else:
                 goal_admission.accept_result(record_child)
 
+        input_text, result_schema = prepare_codex_cli_input(request)
         result = session.send(
-            _prompt(request)
+            input_text
             + "\nUse loopx_operation for context/pending/prepare/inspect/consume/report. "
             "Source conversations are not executor identity. context/pending/inspect do not require consumption. "
             "When the admitted task authorizes proposal preparation and supplies its terms, prepare may run before human confirmation or consume; "
@@ -214,7 +218,7 @@ def run_codex_operation_host(
                + json.dumps(continuations, sort_keys=True)
                + ". Inspect these locators through loopx_operation and consume once before any effect."
                if continuations else ""),
-            output_schema=codex_cli_result_schema(request),
+            output_schema=result_schema,
             on_event=on_event,
             turn_start_guard=lambda: launch_scope("codex_operation_turn_start"),
             on_native_item=observe_child if child_observer is not None else None,

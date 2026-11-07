@@ -46,6 +46,16 @@ def render_turn_envelope_markdown(payload: dict[str, Any]) -> str:
     from ...control_plane.effect_program import reject_retired_quota_format
 
     reject_retired_quota_format(payload)
+    if payload.get("schema_version") == "loopx_turn_envelope_v1":
+        # Keep one root field per line and complete nested values without
+        # pretty-print padding. JSON escaping retains arbitrary source text
+        # inside the same parseable block; no facts or clauses are selected.
+        fields = ",\n".join(
+            "  " + json.dumps(key, ensure_ascii=False) + ": "
+            + json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+            for key, value in payload.items()
+        )
+        return "# LoopX Turn\n\n```json\n{\n" + fields + "\n}\n```"
     action_value = payload.get("action")
     user_value = payload.get("user")
     writeback_value = payload.get("writeback")
