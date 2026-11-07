@@ -488,6 +488,60 @@ def test_default_turn_deadline_is_optional_and_real_transport_accepts_none(tmp_p
     assert result["returncode"] == 0
 
 
+@pytest.mark.parametrize("operation", ["send", "cancel"])
+def test_host_bridge_preserves_process_helper_patch_points(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str,
+) -> None:
+    from loopx.control_plane.turn_driver import host_bridge_transport as bridge_module
+
+    calls: list[str] = []
+    original_write = bridge_module.write_process_stdin_before_deadline
+    original_terminate = bridge_module.force_terminate_process
+
+    def write(*args, **kwargs):
+        calls.append("send")
+        return original_write(*args, **kwargs)
+
+    def terminate(*args, **kwargs):
+        assert kwargs["process_tree_owned"] is True
+        calls.append("cancel")
+        return original_terminate(*args, **kwargs)
+
+    monkeypatch.setattr(bridge_module, "write_process_stdin_before_deadline", write)
+    monkeypatch.setattr(bridge_module, "force_terminate_process", terminate)
+    source = """
+import json, sys
+print(json.dumps({"kind": "ready"}), flush=True)
+assert json.loads(sys.stdin.readline()) == {"message": "bridge λ😀"}
+print(json.dumps({"kind": "result", "outcome": "exited"}), flush=True)
+"""
+    with subprocess.Popen(
+        [sys.executable, "-u", "-c", source], cwd=tmp_path,
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
+        encoding="utf-8", start_new_session=True,
+    ) as process:
+        bridge = bridge_module.GuardedHostBridge(
+            process, deadline=time.monotonic() + 5, cleanup_timeout=2,
+        )
+        try:
+            if operation == "send":
+                bridge.send(json.dumps({"message": "bridge λ😀"}, ensure_ascii=False) + "\n")
+                process.wait(timeout=5)
+            bridge.cancel()
+            bridge.cancel()
+            assert calls == [operation]
+            assert process.poll() is not None
+            assert bridge.not_launched is (operation == "cancel")
+            if operation == "send":
+                assert bridge.result == {"kind": "result", "outcome": "exited"}
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
+            bridge.close_output()
+        assert not bridge.reader.is_alive() and bridge.output.closed
+
+
 @pytest.mark.parametrize("broken_observation", ["not-json", "[]"])
 def test_host_bridge_parser_failure_closes_reader_without_claiming_cleanup(broken_observation):
     from loopx.control_plane.turn_driver.host_bridge_transport import GuardedHostBridge

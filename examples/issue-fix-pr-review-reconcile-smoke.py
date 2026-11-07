@@ -307,30 +307,31 @@ def check_reconciliation(provider: str) -> None:
         cli_env = dict(os.environ)
         cli_env["HOME"] = str(home)
         cli_env["PYTHONPATH"] = str(ROOT)
-        cli = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "loopx.cli",
-                "--format",
-                "json",
-                "heartbeat-prequota",
-                "-g",
-                "example-goal",
-                "-a",
-                "codex-test",
-            ],
-            cwd=project,
-            env=cli_env,
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        assert cli.returncode == 0, cli.stderr
-        cli_payload = json.loads(cli.stdout)
-        assert cli_payload["schema_version"] == "heartbeat_pre_quota_v0", cli_payload
-        assert cli_payload["continue_to_quota"] is True, cli_payload
-        assert cli_payload["quota_spend_required"] is False, cli_payload
+        for module in ("loopx.entrypoint", "loopx.cli"):
+            cli = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    module,
+                    "--format",
+                    "json",
+                    "heartbeat-prequota",
+                    "-g",
+                    "example-goal",
+                    "-a",
+                    "codex-test",
+                ],
+                cwd=project,
+                env=cli_env,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            assert cli.returncode == 0, cli.stderr
+            cli_payload = json.loads(cli.stdout)
+            assert cli_payload["schema_version"] == "heartbeat_pre_quota_v0", cli_payload
+            assert cli_payload["continue_to_quota"] is True, cli_payload
+            assert cli_payload["quota_spend_required"] is False, cli_payload
 
         assert todo(state_file, "todo_other_provider")["status"] == "open"
         native = list_goal_todos(registry_path=registry_path, goal_id="example-goal")
