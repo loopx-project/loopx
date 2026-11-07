@@ -43,8 +43,15 @@ events.append(build_explore_finding_event(goal_id=goal,node_id='question',findin
     status='tentative',evidence_refs=['candidate:amber-v3'],run_id='run:follow-up',recorded_at='2026-01-04T00:00:00Z'))
 Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Synthetic evidence search','events':events},ensure_ascii=False))
 other='synthetic-other-research'
+negative=build_explore_finding_event(goal_id=other,node_id='other-question',finding_id='negative',title='Independent evidence scope',
+    summary='The alternative missed the target.',status='refuted',evidence_refs=['synthetic:negative'],recorded_at='2026-01-01T00:00:00Z')
 Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other synthetic research','events':[
-    build_explore_node_event(goal_id=other,node_id='other-question',title='Independent evidence scope',recorded_at='2026-01-01T00:00:00Z')]}))
+    build_explore_node_event(goal_id=other,node_id='other-question',title='Independent evidence scope',status='resolved',recorded_at='2026-01-01T00:00:00Z'),
+    negative,
+    build_explore_node_event(goal_id=other,node_id='separate-attempt',title='Independent evidence scope',recorded_at='2026-01-01T00:00:00Z'),
+    build_explore_finding_event(goal_id=other,node_id='missing-anchor',finding_id='unlinked',title='Independent evidence scope',
+        summary='This finding has an absent node.',status='tentative',recorded_at='2026-01-01T00:00:00Z'),
+    negative]}))
 `, fixture, otherFixture], {cwd: repoRoot});
       owner = await startHistoryOwner([fixture, otherFixture]);
       page = await browser.newPage({viewport: {width: 1440, height: 900}});
@@ -237,7 +244,7 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       await results.getByRole("status", {name: /^1 matches in 79 loaded records/}).waitFor();
       assert.equal((await download()).coverage.refresh_failed, false);
       await results.getByRole("button", {name: "Clear filters"}).click();
-      await results.getByRole("button", {name: /Show more records/}).click();
+      await results.getByRole("button", {name: /Show more entries/}).click();
       assert.equal(await results.locator("li").count(), 79);
       await search.fill("no such evidence");
       await readEmptyScope(page, results, "No matching records. Try another term or clear the filters.");
@@ -267,12 +274,26 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       await results.getByRole("status", {name: /^1 matches in 79 loaded records/}).waitFor();
       await page.goto(url.replace("synthetic-record-search", "synthetic-other-research"));
       await history.getByRole("button", {name: "Search research records", exact: true}).click();
-      await results.getByRole("status", {name: "1 matches in 1 loaded records", exact: true}).waitFor();
+      await results.getByRole("status", {name: "4 matches in 4 loaded records · 3 entries", exact: true}).waitFor();
       assert.equal(await search.inputValue(), "", "Another Goal starts with its own search scope");
       assert.doesNotMatch(await results.innerText(), /amber|Earlier negative/);
+      const grouped = results.locator(".research-record-entry").first();
+      const groupSummary = grouped.locator(":scope > summary");
+      assert.match(await groupSummary.innerText(), /Refuted.*Resolved.*2 records/);
+      assert.equal(await results.locator(".research-record-entry").count(), 3, "Identical titles and times leave independent attempts and absent links separate");
+      await groupSummary.press("Enter");
+      await grouped.getByRole("paragraph").filter({hasText: "The alternative missed the target."}).waitFor();
+      assert.equal(await grouped.locator(".research-record-group-history > li").count(), 2);
+      await grouped.locator(".research-record-sources > summary").last().click();
+      await grouped.getByText("synthetic:negative", {exact: true}).waitFor();
+      await groupSummary.press("Escape");
+      assert(await groupSummary.evaluate(element => element === document.activeElement && !element.parentElement.open));
       const other = await download();
       assert.equal(other.goal_id, "synthetic-other-research");
-      assert.equal(other.records.length, 1);
+      assert.deepEqual(other.coverage, {loaded_records: 4, exported_records: 4, history_complete: true, refresh_failed: false});
+      assert.equal(other.records.length, 4);
+      assert.match(await history.locator(".research-history-coverage").innerText(), /5 \/ 5 source rows/);
+      await page.screenshot({path: resolve(outputDir, "research-history-persisted-replay.png"), animations: "disabled"});
       assert.equal(await comparison.count(), 0, "A single-version Goal offers no inferred comparison");
       assert(other.records.every(record => record.goal_id === other.goal_id));
       await search.fill("amber-v1");
@@ -281,6 +302,35 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       await history.getByRole("button", {name: "Search research records", exact: true}).click();
       await search.fill("amber-v1");
       await results.getByRole("status", {name: /^1 matches in 79 loaded records/}).waitFor();
+      let firstRecord, pageMode = "replay";
+      await page.route("**/api/chat/explore-results?*", async route => {
+        const response = await route.fetch();
+        const historyPage = await response.json();
+        if (new URL(route.request().url()).searchParams.has("cursor")) {
+          if (pageMode === "short") historyPage.items.pop();
+          else historyPage.items.unshift(pageMode === "conflict" ? {...firstRecord, summary: "Conflicting replay"} : firstRecord);
+        } else [firstRecord] = historyPage.items;
+        await route.fulfill({response, json: historyPage});
+      });
+      await history.getByRole("button", {name: "Refresh history", exact: true}).click();
+      await page.waitForFunction(() => document.querySelector(".research-history")?.getAttribute("aria-busy") === "false");
+      const replayed = await download();
+      assert.equal(replayed.coverage.history_complete, true);
+      assert.equal(replayed.coverage.refresh_failed, false);
+      assert.deepEqual(replayed.records, selected.records, "Overlapping pages keep one copy per exact event ID");
+      for (const invalid of ["conflict", "short"]) {
+        pageMode = invalid;
+        const tail = page.waitForResponse(response => response.url().includes("/api/chat/explore-results?")
+          && new URL(response.url()).searchParams.has("cursor"));
+        await history.getByRole("button", {name: "Refresh history", exact: true}).click();
+        await tail;
+        await results.getByRole("status", {name: /1 matches in 79 loaded records.*Refresh failed/}).waitFor();
+        const stale = await download();
+        assert.deepEqual(stale.records, selected.records, "Invalid pages preserve the previous complete snapshot");
+        assert.equal(stale.coverage.history_complete, true, invalid);
+        assert.equal(stale.coverage.refresh_failed, true, invalid);
+      }
+      await page.unroute("**/api/chat/explore-results?*");
       // A pending refresh cannot export an intermediate mixture of pages.
       let release, observed;
       const hold = new Promise(resolve => {release = resolve;});

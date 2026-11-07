@@ -6,7 +6,8 @@ import {visionAuthoringContract} from "../goals/vision_checkpoint.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {jsonObject, requireBoolean, requireJsonObject} from "../runtime_decode.ts";
 import {GOAL_OUTCOMES_SCHEMA, OUTCOME_CONTEXT_NAVIGATION_SCHEMA} from "../goals/outcome_requirements.ts";
-import {FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE} from "../work_items/interaction_contract.ts";
+import {FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE}
+  from "../work_items/interaction_contract.ts";
 import {quotaSummaryReferences, contextSourceIdentity, contextProjectionChanges,
   type ProjectionSourceValues} from "./diagnostic_projection.ts";
 import {encodeContextDelivery, fileNavigationPaths} from "./context_delivery.ts";
@@ -165,7 +166,8 @@ function inlineReadSections(request: JsonObject, required: JsonObject): JsonObje
 
 /** Return paths instead of round-tripping the caller's JSON numeric values
  * through JS. The IO adapter performs only these typed-owner-selected edits. */
-export function progressiveContextPlan(request: JsonObject): JsonObject {
+export function progressiveContextPlan(request: JsonObject,
+    scope?: {path: Path; marker_path: Path; instruction: string}): JsonObject {
   const payload = requireJsonObject(request.payload, "captured context");
   const deferred: JsonObject[] = [], instructions: JsonObject[] = [];
   const unchanged = {deferred, instructions};
@@ -222,7 +224,6 @@ export function progressiveContextPlan(request: JsonObject): JsonObject {
         deferred.push({path: [...parent, "requirements", j, "agent_review", field], parent, index_key});
     });
   }
-  if (!deferred.length && !references.length) return unchanged;
   // Replace only the exact source-owned obligation. Other merged obligations,
   // objective adoption, unknown provider prose and pending reads remain intact.
   for (const listPath of deferred.length ? [sourcePath, [...agent, "required_reads"]] : []) {
@@ -236,6 +237,11 @@ export function progressiveContextPlan(request: JsonObject): JsonObject {
           row.reason.replace(FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE)});
     });
   }
+  if (scope) {
+    deferred.push({path: scope.path, read_instruction: scope.instruction});
+    instructions.push({path: scope.marker_path, value: pointer(scope.path)});
+  }
+  if (!deferred.length && !references.length) return unchanged;
   if (references.length) instructions.push({path: ["context_reference_instruction"], value:
     "A Todo row with context_ref is exactly the complete row at that JSON pointer in THIS required view. "
     + "Use that row for every referenced lane; all constraints, evidence, ownership and order still apply. "
@@ -289,9 +295,12 @@ function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSour
       removed.push(["context", ...path]);
     }
     for (const edit of deferred) {
-      const path = edit.path as Path, owner = edit.parent as Path;
+      const path = edit.path as Path;
       delete parent(path)[path.at(-1)!];
-      parent([...owner, String(edit.index_key)])[String(edit.index_key)] = pointer(owner);
+      if (typeof edit.index_key === "string") {
+        const owner = edit.parent as Path;
+        parent([...owner, edit.index_key])[edit.index_key] = pointer(owner);
+      }
       removed.push(["context", ...path]);
     }
     for (const edit of instructions) {
@@ -325,7 +334,8 @@ function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSour
           return jsonObject(source)?.content !== undefined && !hasRead(path) ? [pointer(path)] : [];
         }) : [],
       },
-      instruction: "This view retains complete requirements and current review/check states. "
+      instruction: deferred.map(edit => typeof edit.read_instruction === "string" ? edit.read_instruction : "").join("")
+        + "This view retains complete requirements and current review/check states. "
         + "Source history, review reasoning and evidence references are supporting material. "
         + "Read them from this same immutable capture when a decision, verification or review depends on them. "
         + "For source history use supporting_material_pointer plus /sources. For review detail append "
@@ -402,6 +412,9 @@ export function prepareProgressiveContextDelivery(request: JsonObject, legacyFie
   const codec = nativeContextContinuity({...request, context: required.context,
     ...(request.source_number_tokens === undefined ? {} : {source_number_tokens: required.tokens})});
   const delivery = encodeContextDelivery(codec, legacyFields, sourceValues, fileNavigationPaths(required.context));
+  // The Python edit adapter already reconstructs this exact required view.
+  // Full native delivery can use that copy; delta still carries its own edits.
+  if (request.source_edits === true && delivery.mode === "full") delete delivery.context;
   const observe = request.observe_first_read === true && !!jsonObject(required.context.selected_todo)?.todo_id;
   const pointers = observe ? initialContextReadPointers(required.context, decisionFields) : [];
   const observed = pointers.length ? observedFirstRead(codec, pointers) : undefined;
@@ -415,9 +428,9 @@ export function prepareProgressiveContextDelivery(request: JsonObject, legacyFie
 
 /** Stateless presentation uses the same plan without inventing a native session,
  * retained baseline or admission identity. Hosts may add delta independently. */
-export function prepareProgressiveContext(request: JsonObject): JsonObject {
+export function prepareProgressiveContext(request: JsonObject, plan?: JsonObject): JsonObject {
   const values: ProjectionSourceValues = new WeakMap();
-  const required = requiredNativeContext(request, values);
+  const required = requiredNativeContext(request, values, plan);
   const {operation: _operation, source_edits: _edits, source_number_tokens: _numbers, ...source} = request;
   return contextProjectionChanges(source, {context: required.context, projected: required.projected}, values);
 }

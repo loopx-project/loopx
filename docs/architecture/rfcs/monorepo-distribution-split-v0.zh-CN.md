@@ -1259,14 +1259,137 @@ wheel 资格验证。
 省略或空 evidence 保留原值；CLI 原有的完成说明要求继续适用。
 历史 fingerprint 和旧 receipt 继续兼容，active completion 行为保持原样。
 回归在 terminal replay 前后检查 canonical evidence、原 validation 和完成时间，
-以及只执行一次的 validation/writeback/debit。此前被审阅的 head 仍未获验收，
-修订 head 仍需独立审阅。
+以及只执行一次的 validation/writeback/debit。此前被审阅的 head 仍未获验收。
+修订 `7ec8d19b9` 已获得独立
+[APPROVE 审阅](https://github.com/loopx-project/loopx/pull/8264#pullrequestreview-5811807012)，
+#8264 已以 `172d80d63` 合入。
 
-这是支持后续 R1/V4 journey 和大状态比较的生命周期修复提案。下一步仍需
-独立 exact-head review、审阅修复后的 wheel 回读，以及剩余 guard/parser
-刻画。它不会升级 installed host，也不验收中断/重启、split installation、
-完整 R0/V10/R1、M1/#8011、D2/D5/D6/D3、context/model、adoption 或完整成本
-收益。I3 继续保留至少一个 minor release。
+基于 target main `32167518b` 的验证现在覆盖源码 console 和新构建、隔离安装的
+单体 wheel。构建 wheel 前，已通过既有 owner 构建并验证 Chat bundle。
+File/SQLite × source/wheel 四组 episode 均包含 101 个合成 Todo，使用真实
+console、普通 hard-lease claim，以及独立验证的 JSON 产物。在一次扣账提交后，
+fixture 只停止自己的 Effect 进程；新的 console 进程通过重启后的 runtime
+恢复原 terminal 结果。Canonical 回读保留已接受证据、首次完成时间和归档状态。
+Completion、写回、扣账和 terminal 重试仍保留四步已提交 receipt 和一次扣账；
+terminal commit 前和 replay 时都拒绝替换证据。最后一次原 Turn guard 不再声明
+可执行工作或执行义务。Wheel 的 console/import provenance 与源码 fixture
+准备环境分开核对。
+
+| 分发 / provider | 完整 episode | 初始 guard | 结果 |
+| --- | ---: | ---: | --- |
+| Source / File | 22.682 s | 2.148 s | 恢复原结果；一次扣账 |
+| Source / SQLite | 22.220 s | 2.219 s | 恢复原结果；一次扣账 |
+| Wheel / File | 20.929 s | 2.020 s | 恢复原结果；一次扣账 |
+| Wheel / SQLite | 24.205 s | 2.787 s | 恢复原结果；一次扣账 |
+
+这些是 macOS、Python 3.13.5、Node 26.0.0 下的单次正确性 episode，包含负例、
+回放检查和受控进程停止。它们没有重跑冻结的配对成本研究，也不证明延迟收益。
+原八组大状态失败与此前的不确定性继续保留为历史证据。三个隔离 parser 输入
+还确认 source/wheel 接受 writer 输出的 archive pointer，同时继续拒绝意外正文
+和错配 region marker。旧 reader 的 pointer 失败继续保留；这个比较不更换
+grammar owner，也不升级 installed host。
+
+本轮验证修复后的大状态 source/wheel 终结与受控 Effect 重启边界。剩余 guard
+加载／共享 projection 成本 profile 和完整比较继续由既有工作承接。
+突发中断与模型宿主 V4 recovery、split installation、完整 R0/V10/R1、
+M1/#8011、D2/D5/D6/D3、context/model、实际 adoption 与完整成本收益仍开放。
+I3 继续保留至少一个 minor release。
+
+### 2026-11-07 — Guard 加载与已结算回放诊断
+
+`6c10e61ad` 的源码 console 诊断复用上述真实 101-Todo hard-lease episode，
+隔离 File/SQLite authority 与自有 Effect 进程。新增五个 episode 均在受控重启
+后保留已验收证据、首次完成时间、四份已提交 receipt 和一次 debit；证据替换与
+已结算 Turn 的再次执行仍被拒绝。只对 guard 和不可变上下文读取做剖析。这些
+包含 profiler 开销的单次诊断观测，不是配对性能运行。
+
+| 字节码条件 / provider | 插桩 guard | import 累计 | 跟踪的 runtime 请求 | 请求耗时之和 | 已加载 LoopX 模块 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 禁用字节码 / SQLite | 3.012 秒 | 2.281 秒 | 89 | 0.370 秒 | 503 |
+| 禁用字节码 / File | 1.972 秒 | 1.255 秒 | 89 | 0.344 秒 | 503 |
+| 正常继承字节码 / SQLite | 1.584 秒 | 0.845 秒 | 89 | 0.394 秒 | 503 |
+| 正常继承字节码 / File | 1.465 秒 | 0.772 秒 | 89 | 0.342 秒 | 503 |
+
+禁用字节码时，SQLite / File 的源码编译分别占 0.634 / 0.555 秒；两次正常
+字节码观测均未调用源码编译。import、loader 读取与编译时间相互嵌套，不能
+相加。字节码条件解释了部分启动成本，加载图仍相同；这不能修正或覆盖冻结
+比较的失败。第五个正常字节码 SQLite episode 中，guard 加载 503 个模块并
+跟踪到 89 次请求，不可变上下文 reader 加载 68 个模块并跟踪到一次请求：插桩
+耗时分别为 2.140 / 0.246 秒，请求耗时之和分别为 0.389 / 0.067 秒。这是在
+刻画不同的必要操作，不代表两条路径可以互换。
+
+runtime 请求耗时包含 Python transport、共享 runtime 与 provider 工作。它只
+是这些已跟踪请求中 provider 贡献的上界，不是单独的数据库计时或完整 service
+CPU。四次 guard 观测的 source snapshot 约为 0.048–0.050 秒。因此下一步
+成本调查优先考察 decision/status 加载图，而不是新 provider 或 fingerprint
+优化。仅移动 `quota_context` import 无法省去后续 status collector 仍需要的
+工作；quota 已省略 presentation projections，不可变上下文 reader 也已有
+选择性加载路径。
+
+真实 File/SQLite Monitor episode 还验证了独立 sibling 到期时，已结算与
+关闭后回放仍保留原身份。每个原 Turn 保留一次 poll、零 debit，不调度 sibling。
+通过公开 `configure-goal --quota-compute 0` 入口，暂停仍优先并返回
+`quota_skip`。初始 probe 修改的是旧 `status` 字段，未修改 typed activation
+或 quota owner；暂停预期失败属于夹具错误，与修正后的检查分开保留。
+
+| Provider / 回放阶段 | 插桩回放 | import 累计 | 跟踪的 runtime 请求 | 请求耗时之和 | 已加载 LoopX 模块 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| SQLite / 已结算 | 1.135 秒 | 0.666 秒 | 68 | 0.150 秒 | 486 |
+| SQLite / 已关闭 | 1.149 秒 | 0.726 秒 | 62 | 0.157 秒 | 486 |
+| File / 已结算 | 1.113 秒 | 0.713 秒 | 68 | 0.143 秒 | 486 |
+| File / 已关闭 | 1.128 秒 | 0.691 秒 | 62 | 0.149 秒 | 486 |
+
+下一步仍在既有 quota/status 与 typed replay owner 内推进：先确定每类 decision
+实际需要的 live facts 和 import，再保持公开 facade 等价性，去除无用加载或
+重复共享请求。仅凭 receipt 提前返回尚未取得资格：当前暂停、scoped gates、
+独立 pending intents、actor/lease/source 检查，以及归档或关闭后的 lineage
+必须保留。实现后仍需相同的真实 source/wheel 生命周期，以及不插桩、匹配条件
+的默认 SQLite 比较；影响到其他受支持后端时，其正确性、恢复与必需的真实
+PostgreSQL 资格继续适用。本诊断没有修改生产行为、preset、budget、provider、
+authority 或 installed host。既有验收、采纳和完整成本缺口继续开放。
+
+### 2026-11-07 — Guard 成本候选取舍与 context transport 组合
+
+隔离的源码 console 反事实在函数被调用时才加载三个 Monitor adapter 依赖。
+101-Todo SQLite 生命周期仍保留原 artifact、首次完成时间、四份 receipt 与
+一次 debit。guard 从 503 个模块降至 502 个，跟踪的 runtime 调用仍为 89；
+只有 `todos.external_wait_contract` 消失。Monitor 历史查找与 quota accounting
+admission 在 guard 路径实际执行，其依赖仍然必要。因此不选择这项 import
+延迟作为下一成本缩减切片；临时 wrapper 不是生产实现或兼容性资格。
+
+既有 context transport 候选与加载缩减分别验证：
+[#8286](https://github.com/loopx-project/loopx/pull/8286) 的 `efce6cb9c` 跳过
+inactive Anti-Entropy validation；
+[#8290](https://github.com/loopx-project/loopx/pull/8290) 的 `9537687be` 从
+status-only context validation 中省略 governing source。以 runtime base
+`32167518b` 为基线的临时组合 overlay，已跑四组 File/SQLite × base/overlay
+完整源码 console episode，每组含 101 Todos。已验收证据、首次完成时间、
+受控 Effect 重启、四份已提交 receipt 和一次 debit 均保留；证据替换与已结算
+Turn 的再次执行仍被拒绝。组合源码另通过 91 个聚焦 Python 用例与 20 个
+TypeScript 用例，零 skip。验证后恢复临时变更的路径，没有新增竞争实现或合入。
+
+| Provider | guard 跟踪调用，base → overlay | JSON 参数字节，base → overlay | 加载模块，base → overlay |
+| --- | ---: | ---: | ---: |
+| SQLite | 89 → 87 | 1,904,862 → 1,772,448（−6.95%） | 503 → 503 |
+| File | 89 → 87 | 1,903,569 → 1,771,587（−6.93%） | 503 → 503 |
+
+这些单次插桩观测统计传入共享 runtime 的 UTF-8 JSON 参数，不含 transport
+header、retry、response、startup 或 service CPU；不是完整 wire 字节或延迟
+比较。SQLite base 的两个 status-only validation 输入共 134,868 字节，
+overlay 唯一保留的输入为 2,045 字节。不可变 context 与 settlement owner
+继续负责原边界。这独立验证了有界 transport delta，但不证明候选 merge、组合
+wheel、installed-host adoption 或完整任务收益。冻结成本研究没有变更。
+
+剩余最大的 guard 参数生产者是 `todo.context.page`（九次调用共 789,198
+字节）、`todo.quota_planning.project`（390,361 字节）和
+`goal.vision_wait.project`（185,559 字节）；SQLite base 与 overlay 数值
+相同。下一有界调查先在这些既有 typed projection owner 中验证 canonical
+Todo source 的复用，再实现一个完整 source-read transaction。必须保留
+source/provider revision、actor/lease fence、完整 exact read、archive/replay
+lineage、pause/gates 与 pending intents。新增更多 leaf RPC 或有损裁剪 source
+字段不能取得 transaction cutover 资格。#8123 的既有 Goal-route 工作与其未
+解决的性能 hold 保持独立。新实现仍需完整 source/wheel 正确性，以及不插桩、
+匹配条件的默认 SQLite 全路径比较；既有里程碑、采纳与完整成本缺口继续开放。
 
 ## 附录 B：决策日志
 
