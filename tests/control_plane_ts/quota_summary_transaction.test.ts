@@ -90,6 +90,12 @@ test("source provenance follows lane precedence even when equal identities carry
   assert.equal((selected[0]!.payload as JsonObject).text, "Preferred source");
 });
 
+test("native materialization preserves distant microseconds without double rounding", () => {
+  assert.equal(materializeQuotaRow({next_due_at: "2500-01-01T00:00:00.000001Z"}, null).due_at, 16725225600.000002);
+  assert.equal(materializeQuotaRow({next_due_at: "2500-01-01T00:00:00.000031Z"}, null).due_at, 16725225600.00003);
+  assert.equal(materializeQuotaRow({expires_at: "2500-01-01T00:00:00.999999Z"}, null).expires_at, 16725225600.999998);
+});
+
 test("native materialization retains microsecond clocks, profile precedence and explicit gate classification", () => {
   const row = {todo_id: "todo_monitor", index: "2_0", text: "Observe the source", priority: "P1",
     task_class: "continuous_monitor", status: "open", action_kind: "private_observation",
