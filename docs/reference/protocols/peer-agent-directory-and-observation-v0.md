@@ -392,10 +392,11 @@ is omitted, and delivery remains available through the durable hand-off path.
 
 The first producer is `loopx agent-directory --goal-id <goal> [--agent-id
 <caller>] [--cursor <agent-id>]` (`loopx/cli_commands/agent_directory.py` over
-`loopx/control_plane/agents/directory.py`). It reads the Goal's existing agent
-management projection, so identity, work, claims and staleness keep their
-current owners and the packet adds no second read of the registry or a lease
-store. It is the same surface for both audiences: a peer Agent inside the Goal
+`loopx/control_plane/agents/directory.py`, which supplies facts to the single
+`agent.directory.project` TypeScript request). It consumes the Goal's existing
+agent management projection and complete registration facts. Management work
+selection and binding-route interpretation keep their existing owners; the
+directory does not introduce a second lease store or routing resolver. It is the same surface for both audiences: a peer Agent inside the Goal
 and the steward channel call one command.
 
 What it emits, and what it refuses to imply:
@@ -437,6 +438,42 @@ What it emits, and what it refuses to imply:
 
 It writes nothing. Reading it grants no claim, no lease, no priority and no work
 edit.
+
+### Directory projection ownership and source evidence
+
+The internal request uses `peer_agent_directory_project_request_v0`; the public
+packet remains `peer_agent_directory_v0`.
+`loopx/control_plane/agents/directory.ts` owns directory membership checks,
+work-field projection, route display limits, counts, continuation, limitations,
+and the attention rollup. The rollup covers the returned page only; its category
+counts include all matching page rows even when displayed items are capped at
+eight. The Python adapter retains fact collection, the existing public-output
+safety checks, transport and compatibility validation. A failed typed request
+must not fall back to a Python implementation of directory decisions.
+
+The packet also carries the shared
+[`projection_envelope`](../contracts/projection-envelope-contract.md). This is
+a `loopx_projection_envelope_v0` envelope with projection `peer_agent_directory`,
+an intentional additive field, not a change to `peer_agent_directory_v0`'s
+existing row, scope, cursor or count semantics. The directory calls the existing
+`sealProjectionEnvelope` owner in-process during its one projection request;
+it does not add a separate sealing RPC or freshness algorithm.
+
+Upstream source rows and observation times survive composition. `collected_at`
+is the directory assembly time, not proof that its sources were just read.
+Serving or replaying a projection cannot refresh those source observations.
+Stale, unreadable and incomplete upstream evidence remains visible; absent
+upstream evidence is unknown, never freshly complete. A display page limit is
+recorded separately from missing source coverage: undisplayed registered Agents
+are not by themselves an unreadable source. Unavailable execution facts, an
+observed empty fact set and partial Agent coverage remain distinct, and an
+unknown lease must not become an absent lease.
+
+This read adds no presence, delivery, claim, lease or execution authority. No
+persisted format or provider default changes. Retire the Python adapter when
+the real directory callers and necessary fact providers can invoke the typed
+owner directly; until then it is a compatibility boundary, not a second policy
+owner. Rollback restores the prior code package without migrating business state.
 
 ## Reference Implementation: Herdr
 

@@ -3,7 +3,8 @@
 `peer_agent_directory_v0`
 (`docs/reference/protocols/peer-agent-directory-and-observation-v0.md`) answers
 what a peer Agent, or the steward Agent a person talks to, may see about the
-other Agents of one Goal. This module is that contract's first local producer.
+other Agents of one Goal. TypeScript owns the directory packet; this module
+adapts its existing sources.
 It is a re-projection: the Agent rows come from the existing agent management
 projection, so identity, work, claims and staleness keep their current owners
 and this module adds no second read of the registry, the Todo index or a lease
@@ -22,11 +23,12 @@ What it deliberately cannot do:
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from typing import Any
 
 from ..runtime.public_safety import public_safe_compact_text
 from ..runtime.time import now_utc_iso
+from ..effect_runtime import effect_runtime_result
 from ...thread_agent_binding import summarize_agent_binding_routes
 from ..runtime.public_safety import validate_public_safe_value
 from ..todos.contract import normalize_todo_id
@@ -37,12 +39,8 @@ from .management_projection import (
 
 
 PEER_AGENT_DIRECTORY_SCHEMA_VERSION = "peer_agent_directory_v0"
-PEER_AGENT_DIRECTORY_SCOPE = "goal_registered_agents"
 MAX_DIRECTORY_ROWS = 24
-MAX_OBSERVATION_REFS = 1
-MAX_DELIVERY_REFS = 1
 MAX_ROUTE_CANDIDATES = 3
-MAX_ROLLUP_AGENTS = 8
 
 # Limitation codes are contract vocabulary, not prose: a reader switches on them.
 LIMITATION_PRESENCE_PROVIDER_UNAVAILABLE = "presence_provider_unavailable"
@@ -53,10 +51,6 @@ LIMITATION_ROWS_TRUNCATED = "rows_truncated_at_cap"
 LIMITATION_ROUTE_CANDIDATE_WITHHELD = "route_candidate_withheld"
 
 GAP_AUDIENCE_NOT_AUTHORIZED = "audience_not_authorized"
-
-CLAIM_AGE_SUSPECTED_STALE = "suspected_stale"
-CLAIM_AGE_FRESH = "fresh"
-CLAIM_AGE_UNKNOWN = "unknown"
 
 
 def _as_mapping(value: Any) -> Mapping[str, Any]:
@@ -71,19 +65,17 @@ def _compact(value: Any, *, limit: int = 200) -> str | None:
     return public_safe_compact_text(value, limit=limit)
 
 
-def _compact_refs(value: Any, *, limit: int) -> list[str]:
+def _safe_refs(value: Any) -> list[str]:
     refs: list[str] = []
     for item in _as_list(value):
         text = _compact(item, limit=160)
-        if text and text not in refs:
+        if text:
             refs.append(text)
-        if len(refs) >= limit:
-            break
     return refs
 
 
-def _publishable_route(route: dict[str, Any]) -> tuple[dict[str, Any], int]:
-    """Cap the candidate list and withhold entries the public boundary rejects.
+def _publishable_route(route: dict[str, Any]) -> dict[str, Any]:
+    """Withhold entries the existing public boundary rejects, without capping.
 
     Withholding is reported, never silent: `candidate_count` keeps the withheld
     entries, so a filtered candidate cannot be read as a binding that does not
@@ -101,10 +93,10 @@ def _publishable_route(route: dict[str, Any]) -> tuple[dict[str, Any], int]:
             continue
         visible.append(candidate)
     published = {key: value for key, value in route.items() if key != "candidates"}
-    published["candidates"] = visible[:MAX_ROUTE_CANDIDATES]
+    published["candidates"] = visible
     if withheld:
         published["withheld_candidate_count"] = withheld
-    return published, withheld
+    return published
 
 
 def _projected_execution_facts(payload: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -129,71 +121,41 @@ def _projected_execution_facts(payload: Mapping[str, Any]) -> dict[str, Any] | N
     return facts
 
 
-def _work_block(agent_row: Mapping[str, Any]) -> dict[str, Any] | None:
-    """Project one Agent's bounded work facts, or nothing when it holds none."""
+def _safe_agent_facts(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Apply existing public safety, leaving directory rules to TypeScript.
 
-    todo = _as_mapping(agent_row.get("current_todo"))
+    Preserve fallback-before-compaction: a rejected preferred title must not
+    expose its fallback. This boundary supplies facts, not work classification.
+    """
+    todo = _as_mapping(row.get("current_todo"))
     todo_id = _compact(todo.get("todo_id"), limit=80)
-    if not todo_id:
-        return None
-    claimed_by = _compact(todo.get("claimed_by"), limit=120)
-    stale_hint = _as_mapping(agent_row.get("stale_claim_hint"))
-    hint_state = _compact(stale_hint.get("state"), limit=60)
-    claim_age_state = (
-        CLAIM_AGE_SUSPECTED_STALE
-        if hint_state == CLAIM_AGE_SUSPECTED_STALE
-        else CLAIM_AGE_FRESH
-        if claimed_by and _compact(todo.get("updated_at"), limit=60)
-        else CLAIM_AGE_UNKNOWN
-    )
-    lease = _as_mapping(_as_mapping(agent_row.get("execution")).get("lease"))
-    work: dict[str, Any] = {
-        "todo_id": normalize_todo_id(todo_id) or todo_id,
-        "todo_status": _compact(todo.get("status"), limit=40) or "unknown",
-        "lease_status": _compact(lease.get("status"), limit=40),
-        "lease_expired": lease.get("expired") if isinstance(lease.get("expired"), bool) else None,
-        "task_class": _compact(todo.get("task_class"), limit=60),
-        "action_kind": _compact(todo.get("action_kind"), limit=60),
-        "priority": _compact(todo.get("priority"), limit=20),
-        "claimed": bool(claimed_by),
-        "claimed_by": claimed_by,
-        "claim_age_state": claim_age_state,
-        "last_activity_at": _compact(
-            agent_row.get("last_activity_at") or todo.get("updated_at"), limit=60
-        ),
-        "title": _compact(todo.get("title") or todo.get("text"), limit=220),
-    }
-    return {key: value for key, value in work.items() if value is not None and value != ""}
-
-
-def _rollup(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
-    """A typed "who needs a decision" ordering; it assigns nothing."""
-
-    needs_decision: list[str] = []
-    stale_claims: list[str] = []
-    unclaimed: list[str] = []
-    for row in rows:
-        agent_id = _compact(row.get("agent_id"), limit=120)
-        if not agent_id:
-            continue
-        work = _as_mapping(row.get("work"))
-        if str(work.get("todo_status") or "") == "blocked":
-            needs_decision.append(agent_id)
-        if str(work.get("claim_age_state") or "") == CLAIM_AGE_SUSPECTED_STALE:
-            stale_claims.append(agent_id)
-        if not work.get("claimed"):
-            unclaimed.append(agent_id)
+    lease = _as_mapping(_as_mapping(row.get("execution")).get("lease"))
     return {
-        "basis": "typed_work_state_only",
-        "assigns_work": False,
-        "needs_decision": needs_decision[:MAX_ROLLUP_AGENTS],
-        "stale_claims": stale_claims[:MAX_ROLLUP_AGENTS],
-        "without_claim": unclaimed[:MAX_ROLLUP_AGENTS],
-        "counts": {
-            "needs_decision": len(needs_decision),
-            "stale_claims": len(stale_claims),
-            "without_claim": len(unclaimed),
+        "agent_id": _compact(row.get("agent_id"), limit=120),
+        "execution_fact_agent_id": str(row.get("agent_id") or "").strip(),
+        "agent_model": _compact(row.get("agent_model"), limit=60),
+        "current_todo": {
+            "todo_id": normalize_todo_id(todo_id) or todo_id,
+            "status": _compact(todo.get("status"), limit=40),
+            "task_class": _compact(todo.get("task_class"), limit=60),
+            "action_kind": _compact(todo.get("action_kind"), limit=60),
+            "priority": _compact(todo.get("priority"), limit=20),
+            "claimed_by": _compact(todo.get("claimed_by"), limit=120),
+            "updated_at": _compact(todo.get("updated_at"), limit=60),
+            "title": _compact(todo.get("title") or todo.get("text"), limit=220),
         },
+        "last_activity_at": _compact(
+            row.get("last_activity_at") or todo.get("updated_at"), limit=60
+        ),
+        "stale_claim_hint": {
+            "state": _compact(_as_mapping(row.get("stale_claim_hint")).get("state"), limit=60),
+        },
+        "execution": {"lease": {
+            "status": _compact(lease.get("status"), limit=40),
+            "expired": lease.get("expired") if isinstance(lease.get("expired"), bool) else None,
+        }},
+        "evidence_refs": _safe_refs(row.get("evidence_refs")),
+        "handoff_refs": _safe_refs(row.get("handoff_refs")),
     }
 
 
@@ -206,37 +168,13 @@ def build_peer_agent_directory(
     execution_facts: Any = None,
     cursor: str | None = None,
 ) -> dict[str, Any]:
-    """Return a bounded `peer_agent_directory_v0` packet for one Goal.
+    """Collect existing facts and invoke the sole typed directory owner once.
 
-    `caller_agent_id` is optional. When it is supplied the caller must be a
-    registered Agent of the Goal, since membership in this space is proven
-    against the registry rather than asserted by the caller; when it is absent
-    the packet records that the caller identity was not supplied instead of
-    inventing one.
-
-    `execution_facts` defaults to the facts the payload's management projection
-    already carries on its rows, so this re-projection reads the same lane,
-    worker and lease facts status collection did instead of reading them again.
-
-    `cursor` continues a previous page: rows follow the projection's agent-id
-    ordering and the cursor is the last id already read, so only Agents sorting
-    strictly after it are returned and `next_cursor` names the following page.
-    The default starts a fresh scan. Membership is proven by the Goal's
-    registration facts, never by the page and never by a Todo claim: paging
-    cannot deny a registered caller their scope, and a claim that outlived its
-    registration cannot admit a caller the Goal never registered.
-
-    The packet's totals keep those two apart: `registered_agent_count` counts
-    the Goal's registrations and never a claimant, while `row_count` covers
-    every row published, including the diagnostic claimant rows a work
-    relationship adds (`registered: false`). `omitted_row_count` counts the rows
-    of that same agent-id order this packet did not carry, so a capped page
-    cannot read as the whole directory.
+    Management selection and binding interpretation retain their owners. This
+    adapter normalizes inputs, applies public safety, and transports facts.
+    Failure never falls back to Python directory decisions.
     """
-
     payload = status_payload if isinstance(status_payload, Mapping) else {}
-    resolved_goal = _compact(goal_id or payload.get("goal_filter"), limit=120)
-    caller = _compact(caller_agent_id, limit=120)
     cursor_value = _compact(cursor, limit=120)
     if cursor and not cursor_value:
         raise ValueError("cursor is not a publishable agent id")
@@ -251,147 +189,38 @@ def build_peer_agent_directory(
         after_agent_id=cursor_value,
     )
     agent_rows = [row for row in _as_list(projection.get("agents")) if isinstance(row, Mapping)]
-    registered_ids = registered_agent_ids(status)
-
-    limitations = [
-        LIMITATION_PRESENCE_PROVIDER_UNAVAILABLE,
-        LIMITATION_PRESENCE_IS_ADVISORY,
-    ]
-    # The payload's published projection is itself bounded, so a page can hold
-    # Agents whose lane and lease evidence was never published. Declare that
-    # instead of letting those rows read as "no lease evidence".
-    facts_missing_for_page = facts is not None and any(
-        str(row.get("agent_id") or "").strip() not in facts for row in agent_rows
-    )
-    if facts is None or facts_missing_for_page:
-        limitations.append(LIMITATION_LEASE_STATE_NOT_PROJECTED)
-    gaps: list[dict[str, Any]] = []
-    if caller and caller not in registered_ids:
-        # An unregistered caller gets a scope gap, never a listing it has no
-        # scope over, and never a silent empty directory either.
-        gaps.append(
-            {
-                "kind": GAP_AUDIENCE_NOT_AUTHORIZED,
-                "detail": "caller_agent_id_is_not_registered_for_this_goal",
-                "caller_agent_id": caller,
-            }
-        )
-    if not caller:
-        limitations.append(LIMITATION_CALLER_IDENTITY_NOT_SUPPLIED)
-
-    # Route candidates are read from the same published bindings the management
-    # projection walks, but only the owning resolver module interprets them.
     binding_goals = _as_list(_as_mapping(payload.get("run_history")).get("goals"))
-    rows: list[dict[str, Any]] = []
-    dropped_at_cap = 0
-    withheld_route_candidates = 0
-    for row in agent_rows:
-        agent_id = _compact(row.get("agent_id"), limit=120)
-        if not agent_id:
-            continue
-        if gaps:
-            break
-        if len(rows) >= MAX_DIRECTORY_ROWS:
-            dropped_at_cap += 1
-            continue
-        work = _work_block(row)
-        peer_route, withheld_candidates = _publishable_route(
-            summarize_agent_binding_routes(binding_goals, agent_id=agent_id)
+    agents = [_safe_agent_facts(row) for row in agent_rows]
+    routes = {
+        row["agent_id"]: _publishable_route(
+            summarize_agent_binding_routes(binding_goals, agent_id=row["agent_id"])
         )
-        withheld_route_candidates += withheld_candidates
-        directory_row: dict[str, Any] = {
-            "agent_id": agent_id,
-            "registered": agent_id in registered_ids,
-            "agent_model": _compact(row.get("agent_model"), limit=60),
-            "work": work,
-            "observation_refs": _compact_refs(
-                row.get("evidence_refs"), limit=MAX_OBSERVATION_REFS
-            ),
-            "delivery_refs": _compact_refs(
-                row.get("handoff_refs"), limit=MAX_DELIVERY_REFS
-            ),
-            "peer_route": peer_route,
-        }
-        rows.append(
-            {
-                key: value
-                for key, value in directory_row.items()
-                if key in {"agent_id", "registered", "work"} or value not in (None, [], {})
-            }
-        )
-    # Registration facts are the membership total here too: this is the same
-    # set that decided the caller's scope and every row's `registered` flag, so
-    # a diagnostic claimant row can never inflate the Goal's registered count.
-    registered_count = len(registered_ids)
-    # The rows this scan reads are the Goal's whole directory: its registered
-    # Agents plus the diagnostic rows a work relationship adds. A cap applied
-    # upstream is reported as omitted rows rather than vanishing, so a reader
-    # cannot read a truncated page as "these are all the rows".
-    source_summary = _as_mapping(projection.get("source_summary"))
-    diagnostic_count = source_summary.get("diagnostic_agent_count")
-    diagnostic_count = diagnostic_count if isinstance(diagnostic_count, int) else 0
-    source_count = registered_count + diagnostic_count
-    omitted = max(0, source_count - len(rows)) if not gaps else dropped_at_cap
-    if omitted:
-        limitations.append(LIMITATION_ROWS_TRUNCATED)
-    if withheld_route_candidates:
-        limitations.append(LIMITATION_ROUTE_CANDIDATE_WITHHELD)
-
-    # A page can end before the registry does. `next_cursor` is the last id
-    # read, so the same agent-id ordering continues from exactly there instead
-    # of the 25th and later Agents becoming unreachable.
-    selected_count = source_summary.get("selected_agent_count")
-    more_rows_follow = False
-    if rows and not gaps:
-        if isinstance(selected_count, int):
-            more_rows_follow = selected_count > len(rows)
-        elif cursor_value is None:
-            more_rows_follow = source_count > len(rows)
-    next_cursor = str(rows[-1]["agent_id"]) if more_rows_follow else None
-
-    packet: dict[str, Any] = {
-        "ok": True,
-        "schema_version": PEER_AGENT_DIRECTORY_SCHEMA_VERSION,
-        "goal_id": resolved_goal,
-        "collected_at": now_utc_iso(),
-        "scope": {
-            "mode": PEER_AGENT_DIRECTORY_SCOPE,
-            "caller_agent_id": caller,
-            "caller_membership": (
-                "registered_agent"
-                if caller and caller in registered_ids
-                else "unregistered_agent"
-                if caller
-                else "local_surface"
-            ),
-            "scope_basis": "goal_registry",
-            "gaps": gaps,
-        },
-        "rows": rows,
-        "row_count": len(rows),
-        "omitted_row_count": omitted,
-        "registered_agent_count": registered_count,
-        "cursor": cursor_value,
-        "next_cursor": next_cursor,
-        "presence_coverage": {
-            "provider": None,
-            "state": "unavailable",
-            "note": (
-                "presence answers 'runnable now'; no presence provider is "
-                "registered for this Goal, so rows carry registry identity and "
-                "durable work state only"
-            ),
-        },
-        "authority": {
-            "observation_grants": [],
-            "writes": False,
-            "scheduler": False,
-            "note": "observation and delivery grant no claim, lease, priority or work edit",
-        },
-        "limitations": limitations,
+        for row in agents if row["agent_id"]
     }
-    if diagnostic_count:
-        packet["diagnostic_agent_count"] = diagnostic_count
-    if rows:
-        packet["rollup"] = _rollup(rows)
-    return packet
+    upstream_envelopes: list[Mapping[str, Any]] = []
+    for source in (payload, _as_mapping(payload.get("agent_management_projection")), projection):
+        envelope = source.get("projection_envelope")
+        if isinstance(envelope, Mapping) and envelope not in upstream_envelopes:
+            upstream_envelopes.append(envelope)
+    result = effect_runtime_result("agent.directory.project", {
+        "schema_version": "peer_agent_directory_project_request_v0",
+        "observed_at": now_utc_iso(),
+        "goal_id": _compact(goal_id or payload.get("goal_filter"), limit=120),
+        "caller_agent_id": _compact(caller_agent_id, limit=120),
+        "cursor": cursor_value,
+        "registered_agent_ids": sorted(registered_agent_ids(status)),
+        "agents": agents,
+        "source_summary": dict(_as_mapping(projection.get("source_summary"))),
+        "execution_fact_agent_ids": list(facts) if facts is not None else None,
+        "routes": routes,
+        "upstream_envelopes": upstream_envelopes,
+    })
+    if (
+        not isinstance(result, dict)
+        or result.get("schema_version") != PEER_AGENT_DIRECTORY_SCHEMA_VERSION
+        or result.get("ok") is not True
+        or not isinstance(result.get("rows"), list)
+        or not isinstance(result.get("projection_envelope"), dict)
+    ):
+        raise TypeError("invalid peer agent directory projection result")
+    return result

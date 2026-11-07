@@ -2856,3 +2856,4 @@ with shared write/read status-phase checks. See the [2026-10-02 checkpoint](ledg
 - Progress-review receipt qualification: [2026-11-02 checkpoint](ledger/typescript-control-plane-migration-v0/2026-11-02-progress-review-qualification.md).
 - Global Todo readiness complete owner cutover (both consumers): [2026-11-02 ledger](ledger/typescript-control-plane-migration-v0/2026-11-02-global-todo-readiness.md).
 - Selected Todo source read inside the context transaction: [2026-11-04](ledger/typescript-control-plane-migration-v0/2026-11-04-selected-context-source-read.md).
+- Peer directory projection and inherited source evidence: [2026-11-06 checkpoint](ledger/typescript-control-plane-migration-v0/2026-11-06-peer-directory.md).
