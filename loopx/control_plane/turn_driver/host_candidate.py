@@ -40,6 +40,19 @@ ACCEPTED_RESULT_KINDS = {
 }
 MATERIAL_KINDS = {"validated_progress", "repair_required", "replan_required"}
 
+TURN_EXECUTION_BOUNDARY_RULE = (
+    "User notification policy does not grant or cancel execution authority. "
+    "Respect the supplied must_attempt, delivery_allowed and quiet_noop_allowed; "
+    "alternatives and capability intents do not override admission or scope. "
+    "Obey execution_policy and task_orchestration_contract when supplied. "
+)
+
+GOAL_ACCEPTANCE_READ_RULE = (
+    "Read vision_continuation_audit before judging Goal acceptance or proposing "
+    "closeout; preserve its ordered required_before_closeout, evidence requirements "
+    "and current vision_gap_judge. "
+)
+
 TEXT_LIMITS = {
     "classification": 120,
     "recommended_action": 1_200,
@@ -295,6 +308,11 @@ def replan_prompt_instruction(
     )
 
 
+def goal_acceptance_prompt_instruction(authority: Mapping[str, Any]) -> str:
+    """Share the declared audit's read trigger without inventing missing reads."""
+    return GOAL_ACCEPTANCE_READ_RULE if authority.get("vision_continuation_audit") else ""
+
+
 def render_prompt(authority: Mapping[str, Any], *, allow_completion: bool = False) -> str:
     """Wrap one signed Turn authority packet in a typed JSON result request.
 
@@ -319,11 +337,11 @@ def render_prompt(authority: Mapping[str, Any], *, allow_completion: bool = Fals
             "when its contract allows it. Obey every supplied write scope, workspace "
             "restriction, approval boundary and stop condition. Checkpointed approval "
             "covers only active_write_scope; other approval gates remain.\n"
+            f"{TURN_EXECUTION_BOUNDARY_RULE}\n"
             "Read agent_context before planning; unavailable_context is a failed read, "
             "not empty context: discard affected cached context and hold dependent work "
             "until recovery. Independent work retains its existing authority.\n"
-            "Before Goal closeout, preserve vision_continuation_audit's ordered "
-            "required_before_closeout, evidence requirements and vision_gap_judge. "
+            f"{goal_acceptance_prompt_instruction(authority)}"
             "The selected Todo summary is not its full requirements, and Todo "
             "completion cannot close the Goal. Use execution_profile to size and "
             "qualify work, including artifact, validation, outcome and degradation rules.\n"
@@ -355,19 +373,18 @@ def render_prompt(authority: Mapping[str, Any], *, allow_completion: bool = Fals
             if authority.get("agent_context") else ""
         )
         replan_instruction = replan_prompt_instruction(authority)
-        acceptance_instruction = (
-            "Read vision_continuation_audit before judging Goal acceptance or proposing "
-            "closeout; preserve its ordered required_before_closeout, evidence requirements "
-            "and current vision_gap_judge. Selected Todo completion alone cannot close the Goal. "
-            "For additional acceptance or coverage evidence, use detail_ref.full_decision "
-            "only for the saved original observation identified by detail_ref.captured_decision; "
-            "check its Goal/Agent/Turn and action_signature.source_decision_hash. "
-            "Never re-enter quota admission for a detail read. Missing or invalid evidence "
-            "holds dependent closure; independent work retains its existing authority. "
-            "Do not execute its state or scheduler commands; report the semantic result "
-            "for the outer Turn executor. The audit grants no new authority.\n"
-            if authority.get("vision_continuation_audit") else ""
-        )
+        acceptance_instruction = goal_acceptance_prompt_instruction(authority)
+        if acceptance_instruction:
+            acceptance_instruction += (
+                "Selected Todo completion alone cannot close the Goal. "
+                "For additional acceptance or coverage evidence, use detail_ref.full_decision "
+                "only for the saved original observation identified by detail_ref.captured_decision; "
+                "check its Goal/Agent/Turn and action_signature.source_decision_hash. "
+                "Never re-enter quota admission for a detail read. Missing or invalid evidence "
+                "holds dependent closure; independent work retains its existing authority. "
+                "Do not execute its state or scheduler commands; report the semantic result "
+                "for the outer Turn executor. The audit grants no new authority.\n"
+            )
         work_instruction = (
             "Use execution_profile to size and qualify the work, including its required "
             "artifact, validation, outcome and degradation rules. Return the work and "

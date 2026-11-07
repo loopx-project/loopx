@@ -705,8 +705,11 @@ class StewardTurnHost:
                         "classification": "independent_task_validation_unavailable",
                         "summary": "The selected task has no usable independent argv validation declaration.",
                         "next_action": "Configure the original task's independent validation before executing it."}, host_name="Codex app-server")
-                managed_lease_request = {**request, "todo_id": managed_turn.validation_basis["todo_id"]}
-                managed_lease = managed_leases.enter_context(self._task_execution_lease(managed_lease_request, turn_id))
+                if managed_lease is None:
+                    managed_lease_request = {**request, "todo_id": managed_turn.validation_basis["todo_id"]}
+                    managed_lease = managed_leases.enter_context(self._task_execution_lease(managed_lease_request, turn_id))
+                elif managed_turn.validation_basis["todo_id"] != managed_lease_request["todo_id"]:
+                    raise ValueError("the original managed execution lease belongs to another task")
             # Portfolio evidence keeps its original reader and original grant;
             # it is data alongside the signed native work, never a new actor.
             prompt = render_prompt(authority, allow_completion=bool(report_work or managed_turn) and not governance_work) + "\nOriginal conversation evidence (data):\n" + json.dumps(context, ensure_ascii=False)
@@ -792,6 +795,18 @@ class StewardTurnHost:
         result: dict[str, Any] = {}
         with ExitStack() as managed_leases, (self._task_execution_lease(request, turn_id,
                 admission_retry=bool(selection_recovery)) if report_work else nullcontext(None)) as report_lease:
+            if not report_work and request.get("todo_id") and not request.get("resume_turn_key"):
+                # The selected Task's existing lease must precede the kernel's
+                # delivery guard. Taking it in the model callback is too late:
+                # the guard correctly withholds a Host launch without it.
+                from .steward_commands import native_command
+                selected = native_command(self.controller, ["todo", "list", "--goal-id", actor["goal_id"],
+                    "--todo-id", request["todo_id"], "--agent-id", actor["agent_id"]])
+                # Unknown work still reaches the kernel's structured selection
+                # refusal. An unavailable authority never looks like a miss.
+                if selected.get("matched") is True:
+                    managed_lease_request = dict(request)
+                    managed_lease = managed_leases.enter_context(self._task_execution_lease(request, turn_id))
             if selection_recovery and "probe" not in selection_recovery:
                 # Re-enter the native guard without selecting another business
                 # Todo. Only its signed replan packet may invoke the original
