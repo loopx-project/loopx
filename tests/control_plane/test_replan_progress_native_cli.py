@@ -347,6 +347,7 @@ def test_stalled_stride_review_drives_an_executed_mechanism_comparison(
         assert fixture["index"].read_bytes() == original_index
 
         control = admitted["replan_action_packet"]["stride_control"]
+        assert control["review_reference_limit"] == 3
         decision = {**control["minimal_example"], "basis": "unexplained_gap", "action": "verify",
             "axes": {
                 "work_slice": {"plan": "Run and compare three complete assignment methods.",
