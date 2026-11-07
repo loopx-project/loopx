@@ -216,7 +216,8 @@ export const conversationActivityScenario = {
         const answer = "检查完成，下一步已列出。";
         const runtime = page.__loopxRuntime;
         runtime.sessions.set(next.sessionId, { ...runtime.sessions.get(next.sessionId), active_turn_id: null, status: "ready" });
-        runtime.messages.get(next.sessionId).push({ message_id: `${next.turnId}-assistant`, turn_id: next.turnId, role: "assistant", text: answer });
+        runtime.messages.get(next.sessionId).push({ message_id: `${next.turnId}-assistant`, turn_id: next.turnId, role: "assistant", text: answer,
+          created_at: await page.evaluate(() => new Date().toISOString()) });
         response.end(event(5, "turn.completed", { response: { schema_version: "loopx_chat_agent_response_v0", message: answer, proposals: [], gate: null } }));
         await route.fulfill({ json: { ok: true, session_id: next.sessionId, turn_id: next.turnId, status: "completed" } });
       });
@@ -246,7 +247,8 @@ export const conversationActivityScenario = {
         const runtime = page.__loopxRuntime;
         runtime.turnMessages.set(turnId, body.message);
         runtime.sessions.set(sessionId, {...runtime.sessions.get(sessionId), active_turn_id: turnId, status: "busy"});
-        runtime.messages.get(sessionId).push({message_id: `${turnId}-user`, turn_id: turnId, role: "user", text: body.message});
+        runtime.messages.get(sessionId).push({message_id: `${turnId}-user`, turn_id: turnId, role: "user", text: body.message,
+          created_at: await page.evaluate(() => new Date().toISOString())});
         api.turnRequests.push({message: body.message, sessionId, turnId});
         let holdFirstRead = true;
         await page.route(`**/api/chat/sessions/${sessionId}`, snapshot => {

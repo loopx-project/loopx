@@ -87,7 +87,8 @@ export const turnStepsScenario = {
       const answer = "两位负责人都保留，中英文分别择时发布。";
       const runtime = page.__loopxRuntime;
       runtime.sessions.set(turn.sessionId, { ...runtime.sessions.get(turn.sessionId), active_turn_id: null, status: "ready" });
-      runtime.messages.get(turn.sessionId).push({ message_id: `${turn.turnId}-assistant`, turn_id: turn.turnId, role: "assistant", text: answer });
+      runtime.messages.get(turn.sessionId).push({ message_id: `${turn.turnId}-assistant`, turn_id: turn.turnId, role: "assistant", text: answer,
+        created_at: await page.evaluate(() => new Date().toISOString()) });
       live.end(event("turn.completed", { response: { schema_version: "loopx_chat_agent_response_v0", message: answer, proposals: [], gate: null } }));
       await page.getByRole("button", { name: "中断本轮", exact: true }).waitFor({ state: "detached" });
       const done = page.locator(".personal-message .personal-turn-steps").last();
