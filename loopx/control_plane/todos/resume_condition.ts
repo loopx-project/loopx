@@ -250,6 +250,12 @@ function requireResumeWhen(value: unknown, label: string): ResumeSpec {
   return parsed;
 }
 
+/** Project only a typed Todo dependency; a monitor scope is never part of its identity. */
+export function todoResumeDependencyId(value: unknown): string | null {
+  const spec = parseResumeWhen(value);
+  return spec?.kind === "todo_done" || spec?.kind === "monitor_changed" ? spec.target : null;
+}
+
 export function normalizeTodoResumeWhen(value: unknown): string | null {
   const request = requireJsonObject(value, "todo_resume_normalize_request");
   if (request.schema_version !== TODO_RESUME_NORMALIZE_REQUEST_SCHEMA_VERSION) {
