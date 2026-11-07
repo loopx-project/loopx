@@ -79,6 +79,14 @@ def test_native_journal_projects_one_host_execution_request(tmp_path, monkeypatc
     }
     child_event = {**event, "hook_event_name": "PostToolUse", "agent_id": "child"}
     assert context.native_execution_preparation_request(str(tmp_path), child_event) is None
+    eligible = {**event, "hook_event_name": "PostToolUse"}
+    assert context.native_execution_preparation_request(
+        str(tmp_path), eligible, readback_for="0" * 64,
+    ) is None
+    assert context.native_execution_preparation_request(str(tmp_path), eligible) == {
+        **request, "readback_only": True,
+    }
+    assert context.native_execution_preparation_request(str(tmp_path), eligible) is None
     receipt = {
         "event": "host_execution_prepared",
         "todo_id": "todo_fixture",
@@ -100,6 +108,12 @@ def test_native_journal_projects_one_host_execution_request(tmp_path, monkeypatc
     assert context.native_execution_preparation_request(
         str(tmp_path), {**event, "hook_event_name": "SessionStart"},
     )["todo_id"] == "todo_fixture"
+    payload["heartbeat_receipt"] = {"turn_instance_id": "next-turn"}
+    _, next_wire = project(tmp_path, capture_id="next", payload=payload)
+    assert next_wire["recovery"]["sha256"] != request["source_sha256"]
+    assert context.native_execution_preparation_request(str(tmp_path), eligible) == {
+        **request, "turn_instance_id": "next-turn", "source_sha256": next_wire["recovery"]["sha256"],
+    }
 
 
 def test_shared_root_read_does_not_create_unknown_session_or_follow_alias(tmp_path, monkeypatch):

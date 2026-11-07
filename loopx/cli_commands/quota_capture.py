@@ -1310,6 +1310,7 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
         )
         from ..control_plane.turn_driver.codex_execution_preparation import (
             codex_execution_preparation_context,
+            codex_execution_preparation_readback_context,
             execute_codex_execution_preparation,
         )
 
@@ -1327,11 +1328,16 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
                 directory = codex_context_directory(directory=args.codex_context_dir,
                     root=getattr(args, "codex_context_root", None), session=event.get("session_id"), create=True)
                 payload = codex_context_hook(directory, event)
+                request = None
+                additional = None
                 try:
-                    request = native_execution_preparation_request(directory, event)
+                    workspace = Path(event.get("cwd") or "")
+                    if workspace.is_absolute() and workspace.resolve() == Path.cwd().resolve():
+                        request = native_execution_preparation_request(directory, event)
                     if request is not None:
-                        workspace = Path(event.get("cwd") or "")
-                        if workspace.is_absolute() and workspace.resolve() == Path.cwd().resolve():
+                        if request.get("readback_only") is True:
+                            additional = codex_execution_preparation_readback_context(request)
+                        else:
                             capture = (
                                 Path(tempfile.mkdtemp(prefix="prepared-", dir=directory)) / "ready"
                                 if request.get("turn_instance_id") else None
@@ -1370,24 +1376,22 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
 
                                     receipt["context"]["recovery_command"] = context_capture_read_command(
                                         source, digest, reader_argv=current_loopx_cli_argv())
-                            existing = payload.get("hookSpecificOutput")
-                            existing_context = (
-                                str(existing.get("additionalContext") or "")
-                                if isinstance(existing, dict)
-                                else ""
-                            )
-                            payload["hookSpecificOutput"] = {
-                                "hookEventName": event["hook_event_name"],
-                                "additionalContext": " ".join(filter(None, [
-                                    existing_context,
-                                    codex_execution_preparation_context(receipt),
-                                ])),
-                            }
+                            additional = codex_execution_preparation_context(receipt)
                 except (OSError, RuntimeError, subprocess.SubprocessError, ValueError, TypeError, RecursionError):
-                    # Preserve the original explicit action and any context
-                    # recovery output when Host-side preparation cannot prove
-                    # its postcondition.
-                    pass
+                    # Reconcile only the attempted source. A concurrent guard
+                    # can replace recovery, so it must never be reserved here.
+                    if request is not None and request.get("turn_instance_id"):
+                        readback = native_execution_preparation_request(directory, event,
+                            readback_for=request["source_sha256"])
+                        if readback is not None:
+                            additional = codex_execution_preparation_readback_context(readback)
+                if additional is not None:
+                    existing = payload.get("hookSpecificOutput")
+                    existing_context = str(existing.get("additionalContext") or "") if isinstance(existing, dict) else ""
+                    payload["hookSpecificOutput"] = {
+                        "hookEventName": event["hook_event_name"],
+                        "additionalContext": " ".join(filter(None, [existing_context, additional])),
+                    }
             else:
                 payload = {}
         except (OSError, RuntimeError, subprocess.SubprocessError, ValueError, TypeError, RecursionError):

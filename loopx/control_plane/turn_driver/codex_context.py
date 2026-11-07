@@ -27,6 +27,7 @@ from .native_context_profile import (
     NATIVE_CONTEXT_LARGE_OUTPUT_BYTES, NATIVE_CONTEXT_HISTORY_TOKENS, NATIVE_CONTEXT_OUTPUT_ENV,
     native_context_page_budget,
 )
+from ..content_digest import BARE_SHA256_PATTERN
 from .codex_execution_preparation import compact_execution_preparation_request
 
 # Native adapter activation reuses scheduler-owned host declarations. These
@@ -391,9 +392,9 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
 
 
 def native_execution_preparation_request(
-    directory: str | None, event: dict[str, Any],
+    directory: str | None, event: dict[str, Any], *, readback_for: str | None = None,
 ) -> dict[str, Any] | None:
-    """Read one compact Host action from this exact native session journal."""
+    """Reserve one automatic try or surface one readback for the same source."""
 
     if (directory is None or not native_context_event_eligible(event)
             or event.get("hook_event_name") not in {"SessionStart", "PostToolUse"}):
@@ -411,17 +412,36 @@ def native_execution_preparation_request(
                 return None
             request = recovery.get("execution_preparation")
             source_sha256 = recovery.get("sha256")
-            if not isinstance(request, dict) or not isinstance(source_sha256, str):
+            if (not isinstance(request, dict) or not isinstance(source_sha256, str)
+                    or BARE_SHA256_PATTERN.fullmatch(source_sha256) is None):
                 return None
+            if readback_for is not None and readback_for != source_sha256:
+                return None
+            action = {**request, "source_sha256": source_sha256}
             previous = state.get("host_execution_preparation")
-            if (
-                event.get("hook_event_name") != "SessionStart"
-                and isinstance(previous, dict)
-                and previous.get("source_sha256") == source_sha256
-                and previous.get("state") == "ready"
-            ):
+            if isinstance(previous, dict) and previous.get("source_sha256") == source_sha256:
+                if previous.get("state") == "attempted":
+                    if previous.get("readback_sent") is True:
+                        return None
+                    previous["readback_sent"] = True
+                    _save(root, state)
+                    return {**action, "readback_only": True}
+                if previous.get("state") == "ready" and event.get("hook_event_name") != "SessionStart":
+                    return None
+            if readback_for is not None:
                 return None
-            return {**request, "source_sha256": source_sha256}
+            if request.get("turn_instance_id"):
+                # Commit the reservation before the ordinary claim can run.
+                # An interrupted Hook may have committed the claim; only the
+                # exact provider receipt and current lease answer that question.
+                state["host_execution_preparation"] = {
+                    "source_sha256": source_sha256,
+                    "state": "attempted",
+                    "todo_id": request.get("todo_id"),
+                    "turn_instance_id": request.get("turn_instance_id"),
+                }
+                _save(root, state)
+            return action
     except (OSError, ValueError, TypeError, RecursionError):
         return None
 

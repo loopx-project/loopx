@@ -406,7 +406,7 @@ def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("released", [False, True], ids=["same-execution", "released-execution"])
-def test_native_hook_replays_the_original_claim_after_guard_timeout(
+def test_native_hook_recovers_the_original_claim_after_guard_timeout(
     tmp_path, monkeypatch, capsys, provider, released,
 ):
     import io
@@ -449,8 +449,8 @@ def test_native_hook_replays_the_original_claim_after_guard_timeout(
                "quota", "context-hook", "--codex-app", "--context-delivery", "on",
                "--codex-context-dir", str(native)]
 
-    def hook():
-        data = json.dumps({**event, "hook_event_name": "PostToolUse"}).encode()
+    def hook(name="PostToolUse"):
+        data = json.dumps({**event, "hook_event_name": name}).encode()
         monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(data)))
         capsys.readouterr()
         assert main(command) == 0
@@ -461,29 +461,45 @@ def test_native_hook_replays_the_original_claim_after_guard_timeout(
         assert code == 0 and payload["ok"], payload
         return payload
 
-    assert hook() == {}
+    context = hook()["hookSpecificOutput"]["additionalContext"]
+    request = json.loads(context.rsplit("Receipt: ", 1)[1])
+    assert request["event"] == "host_execution_preparation_readback_required"
+    assert (request["goal_id"], request["agent_id"], request["todo_id"], request["turn_instance_id"]) == (
+        GOAL, AGENT, TODO, turn,
+    )
     original_id = claims[0]["claim_operation_id"]
-    original = read("todo", "receipt", "--goal-id", GOAL, "--operation-id", original_id)
+    assert request["claim_operation_id"] == original_id
+    assert original_id.startswith("todo-claim:codex-capture:")
+
+    def projected_read(name):
+        result = subprocess.run(shlex.split(request[name]), cwd=tmp_path, capture_output=True,
+                                check=True, text=True)
+        return json.loads(result.stdout)
+
+    original = projected_read("receipt_command")
     lease = original["receipts"][0]["result"]["lease"]
     if released:
         read("task-lease", "release", "--goal-id", GOAL, "--todo-id", TODO, "--owner", AGENT,
             "--expected-version", str(lease["version"]), "--idempotency-key", lease["idempotency_key"])
 
-    result = hook()
-    current = read("task-lease", "inspect", "--goal-id", GOAL, "--todo-id", TODO)
-    assert len(claims) == 2
+    assert hook() == {}
+    assert hook() == {}
+    resume = hook("SessionStart").get("hookSpecificOutput", {}).get("additionalContext", "")
+    assert "host_execution_preparation_readback_required" not in resume
+    assert len(claims) == 1 and guards == [turn]
+
+    current = projected_read("lease_command")
     if released:
-        assert result == {} and not claims[1]["ok"]
         assert not current["active"] and current["lease"]["lease_epoch"] == lease["lease_epoch"]
-        assert guards == [turn]
     else:
-        context = result["hookSpecificOutput"]["additionalContext"]
-        receipt = json.loads(context.rsplit("Receipt: ", 1)[1])
-        assert receipt["claim_operation_id"] == claims[1]["claim_operation_id"] == original_id
-        assert receipt["turn_instance_id"] == turn and receipt["execution_preparation"]["state"] == "ready"
         assert current["active"] and current["lease"] == lease
-        assert guards == [turn, turn]
-    readback = read("todo", "receipt", "--goal-id", GOAL, "--operation-id", original_id)
+        ready = read("quota", "should-run", "--goal-id", GOAL, "--agent-id", AGENT,
+            "--context-delivery", "off", "--codex-app", "--turn-instance-id", turn, "--todo-id", TODO)
+        assert ready["execution_preparation"]["state"] == "ready"
+        assert ready["heartbeat_receipt"]["turn_instance_id"] == turn
+        assert projected_read("lease_command")["lease"] == lease
+
+    readback = projected_read("receipt_command")
     assert readback["cursor"] == original["cursor"] and readback["receipts"] == original["receipts"]
 
 

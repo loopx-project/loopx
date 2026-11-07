@@ -394,10 +394,13 @@ After a Host claim, the ready guard uses the private
 returns its writer digest with the fields needed to verify the same Todo and
 Turn. The hook verifies that digest when it opens the original file. If the
 file changed, the receipt preserves the claim and pins recovery to the original
-bytes before work can continue. If readiness is interrupted, retrying the
-same signed capture reuses its managed claim operation. The authority owner
-checks the original lease on replay. A retired lease needs a fresh eligible
-preparation capture.
+bytes before work can continue.
+The private native journal reserves automatic preparation before claiming a
+bound capture. If readiness is interrupted, the hook offers one readback
+for the original claim receipt and current lease. Follow the captured readiness
+check for the same Todo and Turn once the active lease matches. An authorized
+retry of the same capture uses the same managed claim operation. A retired
+lease needs a fresh eligible preparation capture.
 
 The Goal availability adapter still reads and UTF-8-validates the complete file
 and hashes all bytes for its revision. With native context delivery off, only the path and revision of unmarked or mixed sources cross the
