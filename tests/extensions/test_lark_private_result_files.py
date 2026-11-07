@@ -6,6 +6,7 @@ import asyncio
 import subprocess
 import sys
 from pathlib import Path
+from copy import deepcopy
 
 import pytest
 from test_lark_private_manager_returns import private_return, return_root  # noqa: F401
@@ -61,7 +62,8 @@ def file_return(private_return):  # noqa: F811
             args[index] = json.dumps(content)
         result = original_runner(args, cwd, timeout)
         if state["remapped_key"] and "--attachment" in args and "--dry-run" not in args:
-            message = provider.messages["om_out_worker"]
+            message_ref = json.loads(result["stdout"])["data"]["message_id"]
+            message = provider.messages[message_ref]
             content = json.loads(message["body"]["content"])
             content["files"][0]["key"] = "file_message_fixture"
             message["body"]["content"] = json.dumps(content)
@@ -121,19 +123,23 @@ def test_file_completion_feedback_waits_for_verified_bytes(file_return, monkeypa
 def test_route_failure_after_send_preserves_attempt_without_resending(file_return, monkeypatch, update_id):
     from datetime import datetime, timedelta, timezone
 
-    sender, _, _, route, _, _, transport, replies, _, _, publish, uploads, _, state = file_return
+    sender, _, _, route, _, provider, transport, replies, _, _, publish, uploads, _, state = file_return
     store = transport.core.controller.store
     if update_id is not None:
         publish(refs=[])
         drain(sender.root, sender.server.registry_path, store, sender)
     prior_replies = len(replies)
+    prior_messages = deepcopy(provider.messages)
     state["download_available"] = False
     published = publish(update_id=update_id)
     drain(sender.root, sender.server.registry_path, store, sender)
     key = published.get("result_key", "conclusion")
     path = _root(sender.root) / "replies" / route["request_id"] / (key + ".delivery.json")
     before = json.loads(path.read_text())
-    assert before["attempt"]["message_ref"] == "om_out_worker"
+    created = set(provider.messages) - prior_messages.keys()
+    assert len(created) == 1
+    assert before["attempt"]["message_ref"] == created.pop()
+    assert all(provider.messages[ref] == message for ref, message in prior_messages.items())
     original = transport.return_inbox
     def unavailable(**kwargs):
         raise ValueError("source unavailable")
@@ -261,20 +267,8 @@ def test_split_file_result_recovers_all_posts_and_downloads_only_the_last(file_r
     from datetime import datetime, timedelta, timezone
 
     sender, session, turn, route, _, provider, transport, replies, workspace, raw, _, uploads, downloads, state = file_return
-    original = transport.runner
-    def unique_posts(args, cwd=None, timeout=None):
-        # Older one-message fixtures reuse an ID. Model distinct remote posts
-        # here without replacing the real source, Core return pump or file IO.
-        prior = provider.messages.get("om_out_worker")
-        result = original(args, cwd, timeout)
-        if ("+messages-reply" in args or "+messages-send" in args) and "--content" in args and "--dry-run" not in args:
-            ref = f"om_out_split_{len(replies)}"
-            provider.messages[ref] = {**provider.messages["om_out_worker"], "message_id": ref}
-            if prior is not None:
-                provider.messages["om_out_worker"] = prior
-            result = {**result, "stdout": json.dumps({"data": {"message_id": ref}})}
-        return result
-    transport.runner = unique_posts
+    # The shared provider already records distinct remote posts in send order.
+    prior_messages = deepcopy(provider.messages)
     body = "## Complete result\n\n" + "完整字段。" * 3000
     report(sender.root, route["goal_id"], route["agent_id"], route["request_id"],
         "conclusion", body, registry=sender.server.registry_path,
@@ -288,7 +282,9 @@ def test_split_file_result_recovers_all_posts_and_downloads_only_the_last(file_r
         "journals": [{k: json.loads(p.read_text()).get(k) for k in ("delivery_parts_sent", "last_delivery_status", "delivery_part_started", "delivery_part_attempt")} for p in transport.runtime_root.glob("**/manager-delivery/parts/*.json")],
     }
     assert reply_status(sender.root, route)[0]["status"] == "verification_required"
-    messages = [provider.messages[f"om_out_split_{i}"] for i in range(1, count + 1)]
+    messages = [message for ref, message in provider.messages.items() if ref not in prior_messages]
+    assert len(messages) == count
+    assert all(provider.messages[ref] == message for ref, message in prior_messages.items())
     content = [json.loads(message["body"]["content"]) for message in messages]
     assert all(message["msg_type"] == "post" for message in messages)
     assert all("files" not in part for part in content[:-1])
@@ -298,4 +294,4 @@ def test_split_file_result_recovers_all_posts_and_downloads_only_the_last(file_r
         now=datetime.now(timezone.utc) + timedelta(minutes=10))
     assert reply_status(sender.root, route)[0]["status"] == "delivered"
     assert len(replies) == count and uploads == [raw] and len(downloads) == 2
-    assert all(call[call.index("--message-id") + 1] == f"om_out_split_{count}" for call in downloads)
+    assert all(call[call.index("--message-id") + 1] == messages[-1]["message_id"] for call in downloads)

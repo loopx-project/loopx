@@ -19,6 +19,7 @@ from loopx.capabilities.benchmark_toolkit.experiment_board import (
     normalize_benchmark_experiment_board_row,
 )
 from .feedback_hook import FEEDBACK_PAYLOAD
+from .result_publication import native_grading_complete
 
 
 def _validate_feedback_payload(runner, profile):
@@ -234,6 +235,8 @@ def export(runs_root: Path, selection: list, output: Path, *, observed_at: str):
             "completed",
         }:
             raise ValueError("Only terminal, scored runs can be exported")
+        if not native_grading_complete(final):
+            raise ValueError("Native grading is not complete; terminal execution alone cannot be exported")
         for source in (receipt, final):
             if (
                 source["run_id"] != run

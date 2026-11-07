@@ -9,8 +9,12 @@ import copy
 import gzip
 import hashlib
 import io
+import json
+import re
+import subprocess
 import sys
 import tarfile
+import tempfile
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -182,6 +186,87 @@ def verify_manifest(dist_dir: Path, checksum_file: Path, identity: ReleaseIdenti
     print(f"verified {checksum_file} for {len(files)} distributions")
 
 
+def gh(*args: str) -> bytes:
+    return subprocess.check_output(["gh", *args])
+
+
+def verify_publication_run(repo: str, run_id: str, tag: str, commit: str) -> None:
+    """Only reuse a successful tagged build from this repository's release workflow."""
+    if not re.fullmatch(r"[1-9][0-9]*", run_id):
+        raise ReleaseArtifactError("validated run id must be a positive integer")
+    run = json.loads(gh("api", f"repos/{repo}/actions/runs/{run_id}"))
+    if (
+        run["repository"]["full_name"] != repo
+        or run["event"] != "release"
+        or run["path"] != ".github/workflows/release-artifacts.yml"
+        or run["head_sha"] != commit
+        or run["head_branch"] != tag
+    ):
+        raise ReleaseArtifactError("recovery run does not match the tagged product build")
+    jobs = json.loads(gh("api", f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100"))
+    builds = [job for job in jobs["jobs"] if job["name"] == "build"]
+    if len(builds) != 1 or builds[0]["conclusion"] != "success":
+        raise ReleaseArtifactError("recovery requires the original successful build job")
+    print(f"verified successful build {run_id} for {tag}@{commit}")
+
+
+def publication_files(dist_dir: Path, identity: ReleaseIdentity) -> tuple[Path, ...]:
+    files = (*distribution_files(dist_dir / "packages", identity),
+             dist_dir / "SHA256SUMS", dist_dir / "RELEASE-SOURCES.json",
+             *sorted((dist_dir / "runtime").iterdir()))
+    if any(path.is_symlink() or not path.is_file() for path in files):
+        raise ReleaseArtifactError("publication inputs must be regular files")
+    if len({path.name.casefold() for path in files}) != len(files):
+        raise ReleaseArtifactError("publication names collide ignoring case")
+    verify_manifest(dist_dir / "packages", dist_dir / "SHA256SUMS", identity)
+    return tuple(files)
+
+
+def upload_immutable(dist_dir: Path, identity: ReleaseIdentity, repo: str,
+                     *, recover: bool = False, dry_run: bool = False) -> None:
+    files = publication_files(dist_dir, identity)
+    if recover:
+        commit = gh("api", f"repos/{repo}/commits/{identity.tag}", "--jq", ".sha").decode().strip()
+        sources = json.loads((dist_dir / "RELEASE-SOURCES.json").read_text())
+        if sources["product_tag"] != identity.tag or sources["product_commit"] != commit:
+            raise ReleaseArtifactError("bundle product identity differs from the release tag")
+        for path in files:
+            gh("attestation", "verify", str(path), "--repo", repo,
+               "--signer-workflow", f"{repo}/.github/workflows/release-artifacts.yml",
+               "--source-digest", commit, "--source-ref", f"refs/tags/{identity.tag}",
+               "--deny-self-hosted-runners")
+    release = json.loads(gh("api", f"repos/{repo}/releases/tags/{identity.tag}"))
+    assets = json.loads(gh("api", "--paginate", "--slurp",
+                          f"repos/{repo}/releases/{release['id']}/assets?per_page=100"))
+    remote = {}
+    for asset in (asset for page in assets for asset in page):
+        key = asset["name"].casefold()
+        if key in remote:
+            raise ReleaseArtifactError("remote release names collide ignoring case")
+        remote[key] = asset
+    missing = []
+    # Check every existing asset before the first upload; never delete or clobber.
+    for path in files:
+        asset = remote.get(path.name.casefold())
+        if asset is None:
+            missing.append(path)
+            continue
+        if asset["name"] != path.name:
+            raise ReleaseArtifactError(f"release name collision: {asset['name']} / {path.name}")
+        with tempfile.TemporaryFile() as downloaded:
+            subprocess.run(["gh", "api", f"repos/{repo}/releases/assets/{asset['id']}",
+                            "-H", "Accept: application/octet-stream"],
+                           stdout=downloaded, check=True)
+            downloaded.seek(0)
+            actual = hashlib.file_digest(downloaded, "sha256").hexdigest()
+        if asset["size"] != path.stat().st_size or actual != sha256(path):
+            raise ReleaseArtifactError(f"immutable release asset differs: {path.name}")
+    if missing and not dry_run:
+        gh("release", "upload", identity.tag, *(str(path) for path in missing), "--repo", repo)
+    print(f"verified {len(files) - len(missing)} existing assets; "
+          f"{'would upload' if dry_run else 'uploaded'} {len(missing)} missing assets")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project-root", type=Path, default=Path.cwd())
@@ -202,6 +287,16 @@ def build_parser() -> argparse.ArgumentParser:
     verify = subparsers.add_parser("verify-checksums", help="verify a canonical SHA256SUMS file")
     verify.add_argument("--dist-dir", type=Path, required=True)
     verify.add_argument("--checksum-file", type=Path, required=True)
+
+    recovery = subparsers.add_parser("verify-publication-run", help="verify a tagged build for publication recovery")
+    recovery.add_argument("--repo", required=True)
+    recovery.add_argument("--run-id", required=True)
+    recovery.add_argument("--commit", required=True)
+    upload = subparsers.add_parser("upload-immutable", help="resume publication without replacing existing bytes")
+    upload.add_argument("--repo", required=True)
+    upload.add_argument("--dist-dir", type=Path, required=True)
+    upload.add_argument("--recover", action="store_true")
+    upload.add_argument("--dry-run", action="store_true")
     return parser
 
 
@@ -224,6 +319,11 @@ def main(argv: list[str] | None = None) -> int:
             write_manifest(args.dist_dir, args.output, identity)
         elif args.command == "verify-checksums":
             verify_manifest(args.dist_dir, args.checksum_file, identity)
+        elif args.command == "verify-publication-run":
+            verify_publication_run(args.repo, args.run_id, identity.tag, args.commit)
+        elif args.command == "upload-immutable":
+            upload_immutable(args.dist_dir, identity, args.repo,
+                             recover=args.recover, dry_run=args.dry_run)
         else:
             parser.error(f"unsupported command: {args.command}")
     except ReleaseArtifactError as exc:

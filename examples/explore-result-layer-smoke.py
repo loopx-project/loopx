@@ -791,7 +791,7 @@ def check_todo_branch_prediction_contract() -> None:
     rejected = {item["todo_id"]: item for item in plan["rejected_candidates"]}
     assert rejected["todo_conflict"]["selection_status"] == "rejected_hazard", plan
     assert rejected["todo_other"]["selection_status"] == "blocked_claimed_by_other", plan
-    assert any("task-lease acquire" in command for command in plan["selected_branches"][0]["suggested_commands"]), plan
+    assert not any("task-lease" in command for command in plan["selected_branches"][0]["suggested_commands"]), plan
 
     worker_plan = build_explore_worker_branch_plan(
         goal_id=goal_id,

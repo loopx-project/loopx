@@ -195,6 +195,7 @@ def inspect_goal_acceptance(
     agent_id: str | None = None,
     todo_id: str | None = None,
     include_work_details: bool = True,
+    context_agent_id: str | None = None,
     delivery_workspace: Mapping[str, Any] | None = None,
     validation_workspace_path: Path | None = None,
 ) -> dict[str, Any]:
@@ -205,13 +206,20 @@ def inspect_goal_acceptance(
         {**route, "registered_agents": registered_agent_ids_for_goal(goal),
          **({"agent_id": agent_id} if agent_id is not None else {}),
          **({"todo_id": todo_id} if todo_id is not None else {}),
+         **({"context_agent_id": context_agent_id} if context_agent_id is not None else {}),
          **({"include_work_details": False} if not include_work_details else {})},
     )
+    from copy import deepcopy
+    captured_contract = deepcopy(basis["goal_acceptance_contract"]) if "outcome_context" in basis else None
     basis["goal_acceptance_contract"] = observe_goal_acceptance_oracles(
         registry_path=registry_path, goal_id=goal_id,
         contract=basis["goal_acceptance_contract"], criteria=(basis.get("contract") or {}).get("criteria", []),
         task_repository=(basis.get("todo") or {}).get("task_repository"),
         delivery_workspace=delivery_workspace, validation_workspace_path=validation_workspace_path)
+    if captured_contract is not None and basis["goal_acceptance_contract"] != captured_contract:
+        # The optional navigation binds the exact owner's observation. Do not
+        # reuse it after host-side oracle readback changes those facts.
+        basis.pop("outcome_context", None)
     return basis
 
 

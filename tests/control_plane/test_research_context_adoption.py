@@ -15,6 +15,7 @@ from loopx.control_plane.effect_runtime import effect_runtime_result
 from loopx.hosts.research_checkpoint import canonical_context, research_context, verify_context_sources, adopt_todo_context, _encoded
 from canonical_authority_fixture import assert_todo_read_unchanged, isolate_sqlite_runtime
 from loopx.control_plane.turn_driver.codex_sessions import _store_codex_cli_session
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 
 
 @pytest.fixture(autouse=True)
@@ -45,7 +46,7 @@ def test_retained_context_is_adopted_only_with_fresh_current_ownership(tmp_path,
             code = main([*prefix,*args])
             output = capsys.readouterr().out
             assert code == 0, output
-            return json.loads(output)
+            return read_cli_policy_payload(output, returncode=code)
         run('bootstrap','--project',str(workspace),'--goal-id',name,'--objective','Investigate synthetic candidates.',
             '--adapter-kind','read_only_project_map_v0','--adapter-status','connected-read-only','--write-scope','**','--no-global-sync')
         run('configure-goal','--goal-id',name,'--registered-agent',agent,'--agent-work-mode',agent+'=active',
@@ -283,14 +284,14 @@ def _ordinary_review_and_work(run, workspace, tmp_path, todo, digest, monkeypatc
             'observed_reality': 'The current ordinary Goal reads the inherited rejected candidate.',
             'retained': ['Candidate 3 is rejected; keep candidate 7.'], 'evidence_refs': ['checkpoint:' + digest]}}
     initial = run('quota', 'should-run', *actor, '--todo-id', todo, '--turn-instance-id', 'ordinary-preparation',
-        '--runtime-profile', 'generic_cli', '--available-capability', 'shell')
+        '--runtime-profile', 'generic_cli', '--context-delivery', 'off', '--available-capability', 'shell')
     assert initial['interaction_contract']['agent_channel']['delivery_allowed']
     settle('ordinary-preparation', vision)
     review = run('quota', 'should-run', *actor, '--turn-instance-id', 'ordinary-review',
-        '--runtime-profile', 'generic_cli', '--available-capability', 'shell')
+        '--runtime-profile', 'generic_cli', '--context-delivery', 'off', '--available-capability', 'shell')
     assert review['interaction_contract']['mode'] == 'autonomous_replan'
     review = run('quota', 'should-run', *actor, '--todo-id', todo, '--turn-instance-id', 'ordinary-review',
-        '--runtime-profile', 'generic_cli', '--available-capability', 'shell')
+        '--runtime-profile', 'generic_cli', '--context-delivery', 'off', '--available-capability', 'shell')
     control = review['replan_action_packet']['stride_control']
     assert any(row['finding_id'] == 'negative-3' for row in control['explore_basis']['finding_refs'])
     decision = json.loads(json.dumps(control['minimal_example']))
@@ -321,7 +322,7 @@ def _ordinary_review_and_work(run, workspace, tmp_path, todo, digest, monkeypatc
     assert actual_decision['explore_review']['considered_refs'] == ['negative-3']
     # The accepted decision is read from canonical history, not the submitted JSON.
     following = run('quota', 'should-run', *actor, '--todo-id', todo, '--turn-instance-id', 'ordinary-experiment',
-        '--runtime-profile', 'generic_cli', '--available-capability', 'shell')
+        '--runtime-profile', 'generic_cli', '--context-delivery', 'off', '--available-capability', 'shell')
     assert following['interaction_contract']['agent_channel']['delivery_allowed']
     # Source history and operational observations are never used as current work.
     result_path = workspace / 'complete-experiment.json'

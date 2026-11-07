@@ -139,16 +139,33 @@ def assert_parseable_agent_todos(agent_todos: dict, *, hot_path: bool = False) -
         assert first_open["archive_state"] == "active", first_open
         assert first_open["source_section"] == "Agent Todo", first_open
     assert first_open["text"] == FIRST_OPEN_TODO, first_open
-    if not hot_path:
-        assert (
-            first_open["title"]
-            == "Add a parseable todo fixture when discovered planning work cannot be represented by the current Markdown parser."
-        ), first_open
+    assert (
+        first_open["title"]
+        == "Add a parseable todo fixture when discovered planning work cannot be represented by the current Markdown parser."
+    ), first_open
     assert str(first_open["todo_id"]).startswith("todo_"), first_open
+
+    # Structured resume conditions stay complete even in diagnostic lanes.
+    deferred_by_id = {item["todo_id"]: item for item in agent_todos["deferred_items"]}
+    assert set(deferred_by_id) == {"todo_deferred_surface", "todo_pr_deferred"}, agent_todos
+    deferred = deferred_by_id["todo_deferred_surface"]
+    assert deferred["status"] == "deferred", deferred
+    assert deferred["resume_when"] == "todo_done:todo_done_cli", deferred
+    assert deferred["resume_ready"] is True, deferred
+    assert deferred["resume_condition"]["target_status"] == "done", deferred
+    pr_deferred = deferred_by_id["todo_pr_deferred"]
+    assert pr_deferred["resume_when"] == "pr_merged:#532", pr_deferred
+    assert pr_deferred["resume_ready"] is True, pr_deferred
+    assert pr_deferred["resume_condition"]["kind"] == "pr_merged", pr_deferred
+    assert pr_deferred["resume_condition"]["pr_number"] == 532, pr_deferred
+    assert pr_deferred["resume_condition"]["pr_repo"] == "huangruiteng/loopx", pr_deferred
+    assert pr_deferred["resume_condition"]["repository_binding_source"] == (
+        "task_repository"
+    ), pr_deferred
+    assert pr_deferred["resume_condition"]["matched_pr_ref"] == "huangruiteng/loopx#532", pr_deferred
 
     if hot_path:
         assert "first_open_items" not in agent_todos, agent_todos
-        assert "deferred_items" not in agent_todos, agent_todos
         assert agent_todos["payload_compaction"]["schema_version"] == (
             "quota_cli_todo_summary_compaction_v0"
         ), agent_todos
@@ -168,23 +185,6 @@ def assert_parseable_agent_todos(agent_todos: dict, *, hot_path: bool = False) -
         assert handoff_note["evidence_refs"] == ["todo:todo_handoff_review:evidence"], handoff_note
 
 
-    deferred_by_id = {item["todo_id"]: item for item in agent_todos["deferred_items"]}
-    assert set(deferred_by_id) == {"todo_deferred_surface", "todo_pr_deferred"}, agent_todos
-    deferred = deferred_by_id["todo_deferred_surface"]
-    assert deferred["status"] == "deferred", deferred
-    assert deferred["resume_when"] == "todo_done:todo_done_cli", deferred
-    assert deferred["resume_ready"] is True, deferred
-    assert deferred["resume_condition"]["target_status"] == "done", deferred
-    pr_deferred = deferred_by_id["todo_pr_deferred"]
-    assert pr_deferred["resume_when"] == "pr_merged:#532", pr_deferred
-    assert pr_deferred["resume_ready"] is True, pr_deferred
-    assert pr_deferred["resume_condition"]["kind"] == "pr_merged", pr_deferred
-    assert pr_deferred["resume_condition"]["pr_number"] == 532, pr_deferred
-    assert pr_deferred["resume_condition"]["pr_repo"] == "huangruiteng/loopx", pr_deferred
-    assert pr_deferred["resume_condition"]["repository_binding_source"] == (
-        "task_repository"
-    ), pr_deferred
-    assert pr_deferred["resume_condition"]["matched_pr_ref"] == "huangruiteng/loopx#532", pr_deferred
     resume_candidate_ids = {item["todo_id"] for item in agent_todos["deferred_resume_candidates"]}
     assert {"todo_deferred_surface", "todo_pr_deferred"} <= resume_candidate_ids, agent_todos
     if "items" in agent_todos:

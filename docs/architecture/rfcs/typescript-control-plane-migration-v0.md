@@ -301,10 +301,16 @@ Canonical summaries prepare recovery history only for role groups that contain
 a resume condition. Succession still uses complete active and archived lineage.
 Role summaries reuse request-local lineage facts and the succession owner's
 existing context fields. That owner validates and indexes the complete graph
-before materializing requested evaluations. Source fingerprinting still reads
-every admitted byte and rechecks freshness; sequential reads avoid starting a
-thread pool in each process. Healthy read commands use canonical registry/path
-owners and defer mutation error imports until needed.
+before materializing requested evaluations. Source fingerprinting hashes every
+admitted byte and rechecks freshness; sequential reads avoid a thread pool. On
+POSIX, a private per-user digest keyed by release, interpreter and complete
+source metadata lets later processes skip reopening unchanged sources. Only
+sources unchanged for two seconds are recorded; a key mismatch or untrusted
+record rereads every byte. A different file matching size, mtime and ctime,
+such as a retargeted symlink, or a filesystem that does not maintain ctime can
+hide a change; other hosts reread in every process.
+Healthy read commands use canonical registry/path owners and defer mutation
+error imports until needed.
 Exact detail queries push selection into the existing source projection after
 complete source validation. Queries that report unfiltered counts retain the
 complete first projection.
@@ -799,6 +805,14 @@ the shared [authoring example](../../reference/protocols/goal-vision-replan-cont
 carries a complete evidence-linked continuation. Real CLI write/read negatives
 qualify that guidance seam; avoided model retries and sustained cost remain open.
 
+Vision prepare now collects independent numeric budget failures in its existing
+TypeScript owner. Optional bounded request-error details cross the shared runtime
+transport; Python renders them without duplicating validation. Limits, original
+packet contents, first-error compatibility and pre-write refusal remain intact.
+File/SQLite CLI rejection, corrected-packet readback and fixed-caller base/head
+comparison qualify this recovery seam separately from model adoption, billing,
+installed behavior and sustained long-horizon benefit.
+
 ### Delivery semantics: correctness before migration
 
 The replan obligation outcome policy now lives in
@@ -974,6 +988,16 @@ this slice reduces semantic owners, not crossing count. Native transactions stay
 in-process. Fold the remaining crossings into that complete transaction rather
 than extending these adapters field by field.
 
+The automatic-wait read model now qualifies all canonical witnesses before
+display compaction. `pending_resume_count` extends the existing quiet path only
+when it covers every waiting successor; clock-only frontiers use the earliest
+deadline. The interaction adapter reuses the scoped notice-only classifier so
+an optional user action does not replace that proven wait. Actual gates,
+unknown sources, Turn bindings and strict monitor-poll identity checks remain.
+File/SQLite CLI initial/replay, preserved state and no-debit checks qualify
+this source slice; installed adoption and long-running Host behavior remain
+separate acceptance.
+
 The waiting/resume planning slice now uses `todos/resume_planning.ts` for the
 complete deferred, resume-blocked, monitor-repair and blocked-successor selection.
 Quota composes capacity evaluation with these lanes in one request per source summary, reusing the
@@ -1102,8 +1126,9 @@ closure, not completion of all Todo fields or Goal promotion.
 Bounded prerequisite: `todos/public_update.ts` now composes authoring scope,
 external-wait topology and Monitor/field planning over one locked source.
 The public Python writer no longer sequences their leaf RPCs or derives the
-Monitor wait baseline. `update_source.py` supplies complete compact active/archive
-facts, never a display-limited inventory. A partial topology edit validates its
+Monitor wait baseline. Correction (2026-11-02): `update_source.py` had no
+remaining caller and is removed; planning still requires complete compact
+active/archive facts, never a display-limited inventory. A partial topology edit validates its
 retained wait; copy-only edits preserve the original fence without re-arming it.
 Explicitly clearing the condition still permits changing its former topology.
 Locked completion proof is checked before this pure plan, so a stale proof wins
@@ -1450,6 +1475,16 @@ unknown-effect policy are unchanged; decoded expansion uses the existing
 64 MiB local-snapshot bound before copying records. This is internal transport,
 not a new capability, setting, authority source or installed-runtime claim.
 
+The resume-planning input uses a co-deployed v1 record table for repeated source
+lanes. It retains every v0 payload fact before typed decisions, rather than a
+consumer-specific field allowlist or a second Python restoration pass. Existing
+v0 callers remain valid; conflicting same-id facts are not merged. Both quota
+planning and its subsequent Vision-wait projection opt into the existing private,
+digest-verified local snapshot transport for unique histories beyond 2 MiB;
+the 64 MiB snapshot/expanded-response bounds and ordinary RPC limits remain.
+File/SQLite qualification must reach the public quota result, preserve the source
+and select tail work, not stop after the first oversized request is repaired.
+
 Current bounded delivery: shared-goal alignment and amendment admission use one
 `shared_goal_work_source.py` snapshot per decision, reusing the canonical Todo
 summary after promotion. The same provider read optionally supplies leases at
@@ -1466,9 +1501,12 @@ migrate all T3 consumers or grant amendment commit/whole-Goal promotion authorit
 
 Standing-decision consumer closure: `todos/standing_decision.ts` owns reusable
 receipt eligibility and chronology, shared by status/quota reads and archive
-selection. Python decodes legacy metadata and submits one batch; its old receipt
-selector and the archive-local TS eligibility copy are removed. Canonical reads
-use the complete Todo snapshot, including retained archived decisions, before
+selection. Python decodes legacy metadata for the composed `todo.read` batch;
+its old receipt selector and the archive-local TS eligibility copy are removed.
+The unused `build_standing_decision_authority` wrapper and its standalone
+`todo.standing_decision.project` handler/request decoder are now removed; tests
+and the example use the composed read, while the shared TS owner remains.
+Canonical reads use the complete Todo snapshot, including retained archived decisions, before
 assigning display indexes. Later rejection/cancellation is ordered by decision
 time, not Todo ID; contradictory unresolved chronology yields a diagnostic and
 no active receipt. Explicit user-gate metadata replaces notification heuristics
@@ -2809,3 +2847,12 @@ The native query now owns recovery lookup and completion capability evidence,
 with shared write/read status-phase checks. See the [2026-10-02 checkpoint](ledger/typescript-control-plane-migration-v0/2026-10-02-turn-journal-readback.md) for compatibility, measured cost, validation boundaries and facade exit.
 
 - Summary-display final-head qualification and preserved tail cohorts: [2026-10-27 follow-up](ledger/typescript-control-plane-migration-v0/2026-10-27-todo-summary-qualification.md).
+- Quota summary composition in one `todo.quota_planning.project` crossing with source references: [2026-11-02 cutover](ledger/typescript-control-plane-migration-v0/2026-11-02-quota-summary-transaction.md).
+- Complete global summary and gate read transactions: [2026-11-02 checkpoint](ledger/typescript-control-plane-migration-v0/2026-11-02-global-manager-reads.md).
+- Complete global-risk read ownership: [2026-11-02](ledger/typescript-control-plane-migration-v0/2026-11-02-global-risks-read.md).
+- Complete durable-completion evidence read: [2026-11-02 owner and crossings ledger](ledger/typescript-control-plane-migration-v0/2026-11-02-completion-evidence-read.md).
+- Complete status task-graph composition: [2026-11-02 checkpoint](ledger/typescript-control-plane-migration-v0/2026-11-02-status-task-graph.md).
+- Complete adaptive child admission decision: [2026-11-02 checkpoint](ledger/typescript-control-plane-migration-v0/2026-11-02-adaptive-child-admission.md).
+- Progress-review receipt qualification: [2026-11-02 checkpoint](ledger/typescript-control-plane-migration-v0/2026-11-02-progress-review-qualification.md).
+- Global Todo readiness complete owner cutover (both consumers): [2026-11-02 ledger](ledger/typescript-control-plane-migration-v0/2026-11-02-global-todo-readiness.md).
+- Selected Todo source read inside the context transaction: [2026-11-04](ledger/typescript-control-plane-migration-v0/2026-11-04-selected-context-source-read.md).

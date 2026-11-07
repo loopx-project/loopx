@@ -109,6 +109,11 @@ export const completedHistoryIsolationScenario = {
       await submit.click();
       await lane.getByText("历史加载失败，已显示的内容仍可查看。", {exact: true}).waitFor();
       await lane.getByRole("button", {name: "重新加载", exact: true}).click();
+      await lane.getByText("已显示全部完成记录", {exact: true}).waitFor();
+      await lane.getByText("11 条匹配", {exact: true}).waitFor();
+      // Clicking the footer retry scrolls it into view. Return to the top of
+      // the recovered virtual window before asserting its first result.
+      await scroll.evaluate(element => { element.scrollTop = 0; });
       await lane.getByText("Retained task 29", {exact: true}).waitFor();
       assert.equal(await search.inputValue(), "task 2");
       await lane.getByRole("button", {name: "清除", exact: true}).click();
@@ -154,8 +159,26 @@ export const completedHistoryIsolationScenario = {
       const remoteUrl = new URL(url);
       remoteUrl.searchParams.set("statusUrl", "http://127.0.0.1:8976/status.json");
       const localHistoryReads = [];
+      let remoteGoalId;
       const remote = await openWorkspacePage(browser, remoteUrl.href, {beforeGoto: async (_api, remotePage) => {
         const snapshot = JSON.parse(await readFile(resolve(repoRoot, "examples/status.example.json"), "utf8"));
+        const goal = snapshot.attention_queue.items[0];
+        remoteGoalId = goal.goal_id;
+        const completed = [
+          ["alpha-one", "Alpha first completion", "example-alpha"],
+          ["alpha-two", "Alpha second completion", "example-alpha"],
+          ["beta-one", "Beta completion", "example-beta"],
+          ["unassigned", "Unassigned completion", null],
+        ].map(([id, text, owner], index) => ({
+          todo_id: `todo-readonly-${id}`, goal_id: remoteGoalId, text, title: text,
+          claimed_by: owner, role: "agent", status: "done", done: true,
+          task_class: "advancement_task", index, completed_at: "2026-08-01T00:00:00Z",
+        }));
+        goal.agent_todos = {items: completed, total_count: 4, open_count: 0, done_count: 4, advancement_done_count: 4};
+        goal.project_asset = {owner: "example-alpha", gate: "none", next_action: "Read retained completed tasks", stop_condition: "Read-only snapshot",
+          agent_todos: {items: [], recent_completed_advancement_items: completed, total: 4, open: 0, done: 4, advancement_done_count: 4}};
+        snapshot.todo_index.items = completed;
+        snapshot.agent_management_projection.agents = [];
         await remotePage.route("http://127.0.0.1:8976/status.json*", route => route.fulfill({json: snapshot}));
         remotePage.on("request", request => {
           if (new URL(request.url()).pathname === "/api/chat/completed-todos") localHistoryReads.push(request.url());
@@ -167,7 +190,40 @@ export const completedHistoryIsolationScenario = {
         const remoteSearch = remote.page.getByRole("searchbox", {name: "搜索完成历史"});
         await remoteSearch.waitFor();
         assert.equal(await remoteSearch.isDisabled(), true);
+        // Reopen the overview with a saved owner/query scope. A read-only
+        // source cannot fetch missing rows, so clearing/changing this query
+        // must recover the complete loaded owner snapshot without a remount.
+        const savedSearch = new URL(remote.page.url());
+        savedSearch.searchParams.set("goalId", remoteGoalId);
+        savedSearch.searchParams.set("view", "overview");
+        savedSearch.searchParams.set("workGoal", remoteGoalId);
+        savedSearch.searchParams.set("workSource", "http://127.0.0.1:8976/status.json");
+        savedSearch.searchParams.set("taskOwner", "example-alpha");
+        savedSearch.searchParams.set("taskQuery", "first");
+        await remote.page.goto(savedSearch.href, {waitUntil: "domcontentloaded"});
+        const rail = remote.page.locator('[data-goal-panel="overview"] .goal-all-work.is-inline');
+        const listedSearch = rail.getByRole("searchbox", {name: "搜索当前已列出的任务"});
+        await listedSearch.waitFor();
+        assert.equal(await listedSearch.inputValue(), "first");
+        const completedLane = rail.getByTestId("completed-task-lane");
+        await completedLane.getByRole("button", {name: "已完成", exact: false}).click();
+        const displayedIds = () => completedLane.locator("button[data-todo-id]").evaluateAll(elements => elements.map(element => element.dataset.todoId).sort());
+        await completedLane.getByText("Alpha first completion", {exact: true}).waitFor();
+        assert.deepEqual(await displayedIds(), ["todo-readonly-alpha-one"]);
+        await listedSearch.fill("second");
+        await completedLane.getByText("Alpha second completion", {exact: true}).waitFor();
+        assert.deepEqual(await displayedIds(), ["todo-readonly-alpha-two"]);
+        await listedSearch.fill("");
+        await completedLane.getByText("Alpha first completion", {exact: true}).waitFor();
+        assert.deepEqual(await displayedIds(), ["todo-readonly-alpha-one", "todo-readonly-alpha-two"], "Clearing a saved search restores every loaded completion for the selected owner");
+        await remote.page.screenshot({path: resolve(outputDir, "completed-history-readonly-search.png"), animations: "disabled"});
+        await rail.getByRole("combobox", {name: "筛选任务负责人"}).selectOption("");
+        await completedLane.getByRole("button", {name: "已完成", exact: false}).click();
+        await completedLane.getByText("Unassigned completion", {exact: true}).waitFor();
+        assert.deepEqual(await displayedIds(), ["todo-readonly-unassigned"], "Owner changes keep unassigned completions separate");
         assert.deepEqual(localHistoryReads, [], "Remote source never queries local completed history");
+        assert.equal(remote.api.turnRequests.length, 0);
+        assert.equal(remote.api.actionApplies.length, 0);
       } finally { await remote.close(); }
       const inspection = await command("inspect");
       assert.equal(inspection.store_unchanged, true);
@@ -175,7 +231,7 @@ export const completedHistoryIsolationScenario = {
       assert.equal(api.turnRequests.length, 0);
       assert.equal(api.actionApplies.length, 0);
       assert.deepEqual(context.errors.filter(error => !error.includes("503")), []);
-      return {coverageEntries: context.coverageEntries, note: "Real HTTP cached history progresses independently; 503 recovery retains rows, reaches all85 results and starts no Turn."};
+      return {coverageEntries: context.coverageEntries, note: "Real HTTP cached history progresses independently; 503 recovery retains rows and reaches all 85 results. Read-only saved-query changes restore loaded completions within the selected owner, without local history reads or writes."};
     } catch (error) {
       console.error(error);
       if (context) await context.page.screenshot({path: resolve(outputDir, "completed-history-isolation-failed.png"), animations: "disabled"});

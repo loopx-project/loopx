@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 import os
 import shutil
 from contextlib import ExitStack
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 from .history import load_registry
 from .paths import (
@@ -275,7 +276,7 @@ def render_archive_runtime_markdown(payload: dict[str, Any]) -> str:
     ]
     if payload.get("error"):
         lines.append(f"- error: {payload.get('error')}")
-    checks = payload.get("checks") if isinstance(payload.get("checks"), list) else []
+    checks = cast(list[Any], payload.get("checks")) if isinstance(payload.get("checks"), list) else []
     if checks:
         lines.extend(["", "## Checks"])
         lines.extend(f"- {check}" for check in checks)

@@ -146,6 +146,90 @@ test("an ambiguous expired external admission never dispatches another send", as
   } finally { await f.close(); }
 });
 
+const deadlineCases = [
+  {label: "offset before", now: "2026-01-02T04:00:00+01:00", deadline: "2026-01-02T03:30:00+00:00", due: false},
+  {label: "offset due", now: "2026-01-02T03:30:00Z", deadline: "2026-01-02T04:00:00+01:00", due: true},
+  {label: "microsecond before", now: "2026-01-02T03:30:00Z", deadline: "2026-01-02T03:30:00.000001+00:00", due: false},
+  {label: "fraction precision before", now: "2026-01-02T03:30:00.1Z", deadline: "2026-01-02T03:30:00.100001+00:00", due: false},
+  {label: "equal instant", now: "2026-01-02T03:30:00+01:00", deadline: "2026-01-02T02:30:00Z", due: true},
+  {label: "offset seconds due", now: "2026-01-02T03:30:00.123457Z", deadline: "2026-01-02T04:30:30.123456+01:00:30", due: true},
+];
+
+for (const clock of deadlineCases) {
+  for (const exact of [false, true]) {
+    test(`return retry clock uses instants: ${clock.label} (${exact})`, async () => {
+      const f = await fixture(exact, true);
+      try {
+        await f.put(f.statePath, {status: "retry_pending", retry_at: clock.deadline});
+        const bytes = await readFile(f.statePath);
+        const scanned = await f.run("scan", {now: clock.now,
+          candidates: [{request_id: id, result_key: "conclusion"}]});
+        assert.deepEqual(scanned.candidates, clock.due ? [{request_id: id, result_key: "conclusion"}] : []);
+        assert.equal(scanned.unavailable_count, 0);
+        assert.deepEqual(await readFile(f.statePath), bytes);
+        assert.equal((await f.run("prepare", {now: clock.now})).action, clock.due ? "send" : "skip");
+        if (!clock.due) assert.deepEqual(await readFile(f.statePath), bytes);
+      } finally { await f.close(); }
+    });
+  }
+
+  test(`return admission clock retains the original attempt: ${clock.label}`, async () => {
+    const f = await fixture(true, true);
+    try {
+      await f.put(f.statePath, {status: "admitted", goal_ref: ref, attempt,
+        admission: {token: "prior-send", prior_status: "verification_required", expires_at: clock.deadline}});
+      const bytes = await readFile(f.statePath);
+      const scanned = await f.run("scan", {now: clock.now,
+        candidates: [{request_id: id, result_key: "conclusion"}]});
+      assert.deepEqual(scanned.candidates, clock.due ? [{request_id: id, result_key: "conclusion"}] : []);
+      assert.deepEqual(await readFile(f.statePath), bytes);
+      const plan = await f.run("prepare", {now: clock.now});
+      assert.equal(plan.action, clock.due ? "verify" : "skip");
+      if (clock.due) {
+        assert.deepEqual(plan.attempt, attempt);
+        await f.run("settle", {...plan, now: clock.now, outcome: {kind: "verified",
+          verification: {verification_performed: true, reply_verified: true}}});
+        assert.equal((await f.state()).status, "delivered");
+        assert.equal((await f.state()).provider_receipt, attempt.provider_receipt);
+      } else {
+        assert.deepEqual(await readFile(f.statePath), bytes);
+      }
+    } finally { await f.close(); }
+  });
+}
+
+for (const field of ["retry_at", "expires_at"]) {
+  for (const malformed of ["not-a-clock", "2026-02-30T03:04:05Z", 42, {}]) {
+    test(`return clock damage is unavailable without rewriting ${field}: ${JSON.stringify(malformed)}`, async () => {
+      const f = await fixture(true, true);
+      try {
+        await f.put(f.statePath, field === "retry_at"
+          ? {status: "retry_pending", retry_at: malformed}
+          : {status: "admitted", admission: {expires_at: malformed}, attempt});
+        const bytes = await readFile(f.statePath);
+        const scanned = await f.run("scan", {candidates: [{request_id: id, result_key: "conclusion"}]});
+        assert.deepEqual(scanned.candidates, []);
+        assert.equal(scanned.unavailable_count, 1);
+        assert.equal((await f.run("prepare")).action, "skip");
+        assert.deepEqual(await readFile(f.statePath), bytes);
+      } finally { await f.close(); }
+    });
+  }
+}
+
+test("return clock admission rechecks a due scan after another writer defers it", async () => {
+  const f = await fixture(true, true);
+  try {
+    const candidates = [{request_id: id, result_key: "conclusion"}];
+    await f.put(f.statePath, {status: "retry_pending", retry_at: "2026-01-02T03:00:00Z"});
+    assert.deepEqual((await f.run("scan", {candidates})).candidates, candidates);
+    await f.put(f.statePath, {status: "retry_pending", retry_at: "2026-01-02T04:04:05.123457+01:00"});
+    const bytes = await readFile(f.statePath);
+    assert.equal((await f.run("prepare")).action, "skip");
+    assert.deepEqual(await readFile(f.statePath), bytes);
+  } finally { await f.close(); }
+});
+
 test("invalid transaction addresses and phases refuse before changing evidence", async () => {
   const f = await fixture(false);
   try {
@@ -271,4 +355,62 @@ for (const [clock, retry] of [
       assert.equal((await f.state()).retry_at, retry);
     } finally { await f.close(); }
   });
+}
+
+for (const exact of [false, true]) {
+  for (const accepted of [false, true]) {
+    test(`initial receipt conflict preserves its cause and original return (${exact}, accepted=${accepted})`, async () => {
+      const f = await fixture(exact, true);
+      try {
+        if (accepted) {
+          const plan = await f.run("prepare");
+          await f.run("attempt", { ...plan, attempt });
+        }
+        const sourcePaths = [
+          f.entryPath, join(f.folder, "roundtrips", id + ".json"),
+          join(f.folder, "replies", id, "conclusion.json"),
+        ];
+        const original = await Promise.all(sourcePaths.map(path => readFile(path)));
+        const before = accepted ? await readFile(f.statePath) : null;
+        const initial = f.facts.initial_delivery as JsonObject;
+        const conflicting = { ...f.facts, initial_delivery: { ...initial,
+          turn: { ...(initial.turn as JsonObject), context_handoff_receipt: {
+            request_id: "f".repeat(64), goal_id: "research", agent_id: "another-worker",
+          } },
+        } };
+        const result = await f.run("prepare", { facts: conflicting,
+          now: "2026-01-02T03:06:05.123456+00:00" });
+        assert.equal(result.action, "skip", "a different receiver's receipt cannot authorize a return");
+        if (exact) {
+          assert.equal(result.source_unavailable, true);
+          if (before) assert.deepEqual(await readFile(f.statePath), before);
+          else await assert.rejects(readFile(f.statePath));
+        } else {
+          const held = await f.state();
+          assert.equal(held.error, "initial_delivery_receipt_unavailable");
+          assert.equal(held.status, accepted ? "explicit_unverified" : "retry_pending");
+          if (accepted) {
+            assert.deepEqual(held.attempt, attempt, "an accepted write is never reset into a fresh send");
+            assert.equal((await f.run("prepare", { now: "2026-01-03T03:06:05Z" })).processed, 0);
+            assert.deepEqual(await f.state(), held);
+          } else {
+            const bytes = await readFile(f.statePath);
+            assert.equal((await f.run("prepare", { now: "2026-01-02T03:06:06Z" })).processed, 0);
+            assert.deepEqual(await readFile(f.statePath), bytes, "unchanged source honors the original backoff");
+            const restored = { ...f.facts, initial_delivery: { ...initial,
+              turn: { ...(initial.turn as JsonObject), context_handoff_receipt: initial.request },
+            } };
+            const plan = await f.run("prepare", { facts: restored, now: "2026-01-02T03:06:16Z" });
+            assert.equal(plan.action, "send");
+            await f.run("settle", { ...plan, facts: restored, now: "2026-01-02T03:06:16Z",
+              outcome: { kind: "sent", reply_verified: true, idempotency_key: attempt.provider_receipt } });
+            assert.equal((await f.state()).message_id, plan.message_id);
+            assert.equal((await f.run("prepare", { facts: restored, now: "2026-01-03T03:06:16Z" })).processed, 0);
+          }
+        }
+        const retained = await Promise.all(sourcePaths.map(path => readFile(path)));
+        assert.deepEqual(retained, original, "diagnosis never rewrites the request, source route or result");
+      } finally { await f.close(); }
+    });
+  }
 }

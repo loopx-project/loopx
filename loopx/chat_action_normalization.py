@@ -577,6 +577,8 @@ class ChatActionNormalizationMixin:
             for field in ("agent_id", "workspace_ref"):
                 if values.get(field):
                     result[field] = _opaque(values[field], field=field)
+            if result.get("completion_criteria") and not result.get("agent_id"):
+                raise ValueError("completion_criteria require the Goal's selected Agent")
             if result.get("agent_id"):
                 # A creation's Agent is refused as a typed gate, so a fresh install
                 # learns which Agent is missing instead of reading a protocol sentence.

@@ -10,6 +10,9 @@ from loopx.capabilities.configuration_ui import (
 from loopx.capabilities.machine_configuration.builtins import (
     build_builtin_machine_configuration_registry,
 )
+from loopx.capabilities.steward_executor.machine_defaults import (
+    steward_executor_endpoints,
+)
 from loopx.configuration_catalog import (
     build_configuration_capability_descriptors,
     build_goal_configuration_catalog,
@@ -55,6 +58,7 @@ def test_periodic_report_editor_is_shared_across_machine_and_goal_scopes() -> No
     assert editor["supported_scopes"] == ["machine", "goal"]
     assert [field["key"] for field in editor["fields"]] == [
         "enabled",
+        "review_required",
         "profile_preset",
         "route_ref",
         "timezone",
@@ -134,7 +138,7 @@ def test_steward_executor_editor_is_machine_only_and_typed() -> None:
     # The form offers exactly the choices the owning namespace accepts, so a
     # submission cannot name an executor the channel has no contract for.
     assert fields["executor_endpoint"]["input_kind"] == "select"
-    assert fields["executor_endpoint"]["options"] == ["codex", "dsh"]
+    assert fields["executor_endpoint"]["options"] == sorted(steward_executor_endpoints())
     assert fields["executor_endpoint"]["required"] is True
     assert fields["selection_policy"]["options"] == [
         "preferred",

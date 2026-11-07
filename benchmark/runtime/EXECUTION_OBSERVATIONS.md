@@ -39,6 +39,25 @@ merely to produce an attachment. Configuration and readback invoke neither a
 probe nor a model. Runtime receipts record the selected producer, which does
 not attest execution, adoption or improvement.
 
+Choose the settlement plan's ordinary `command_template` for in-flight progress
+without new decision evidence. Use `semantic_closeout_command_template` for new
+evidence from this admitted work, a route change or Todo completion; bind the
+evaluated artifact/input and actual decision in a fresh Vision/path_delta,
+including `continue`/`no_change` when retaining the route. Keep the original
+Goal/Todo/Turn, follow the remaining writeback/spend steps and yield for freshly
+guarded Host continuation; an unfinished Todo stays open. Prior-feedback
+readback, bookkeeping and deterministic rechecks without new information are
+context, not new progress: use them to advance the task first. Unchanged polls
+alone need no checkpoint; neither feedback counts nor this command enables Stride.
+
+For explicitly continuing optimization, candidate usability alone is not completion: before
+stopping, weigh acceptance gaps, plausible headroom and feasible next work's full marginal
+cost against accepted stops, recording evidence in path_delta. Continue/replan
+useful authorized work; preserve Stop, budget/permission limits and genuine waits,
+and never infer completion or invent work, pivots or successors from submission
+or unused budget alone. This is Agent guidance, not automatic tool-result classification;
+native-model adoption, long-Turn supervision and outcome benefit remain unqualified.
+
 ## Retiring the bundled research treatment
 
 `research_loop` and `LOOPX_RESEARCH_LOOP` have been removed. Any presence of
@@ -169,6 +188,18 @@ Stop、原预算和真实阻塞继续有效，不为填满时长制造任务。
 证据路径必须新建，原始输出留在本地；不提交原生评测，不读取隐藏评测。候选
 变化拒绝归因；文件清单哈希不是原生归档哈希，只覆盖明确选择的文件及探针
 边界，不覆盖传递依赖或独立写入者，结果仍须证明对应实际评测快照和输入版本。
+
+当前授权工作实际产生或取得新的决策证据后，才进入相应工作段的检查点。旧反馈读回、
+记账和没有新增信息的确定性重复验证只是上下文，应先用于推进原任务。使用当前
+settlement plan 的 `durable_writeback.semantic_closeout_command_template`，
+保留原 Turn、Todo、Goal 身份，填写实际结果和 Vision，再按同一 plan 的剩余
+步骤结算并让宿主接续；未完成的 Todo 保持 open。即使路线不变，也在既有
+Vision/path delta 中记录被评估版本、输入和决策。下一次 guard 继续同一 Goal/session
+或执行已有到期复核；反馈数量与这个命令都不启用 Stride。未变化轮询、记账本身
+无需新 checkpoint。明确持续优化的目标不能因已有可用候选就自动收尾；结束前
+评估剩余验收、改进空间、可行实验、完整边际成本和原停止条件。合理时可停止，
+不强制换路或用满时间。这是 Agent 执行指导，不是自动分类工具结果或模型已采用的证明。
+原生模型采用、自动长轮次监督和结果收益仍未取得资格，脚本路径通过不能替代这些证据。
 
 观测通过既有 Explore 写回、replan 和研究历程保留，输入版本与引用必须属于
 该 finding，计划/实际方法不同须记录理由。finding 引用及观测的 `evidence_refs`、

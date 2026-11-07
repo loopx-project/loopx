@@ -76,14 +76,13 @@ def run_archive_installer(
                     max(1, int(remaining))
                 )
                 try:
-                    return subprocess.run(
-                        ["bash", str(script)],
-                        check=False,
-                        text=True, encoding="utf-8", errors="replace",
-                        capture_output=True,
-                        env=installer_env,
-                        timeout=remaining,
-                    ), observation
+                    if installer_env.get("LOOPX_UPDATE_EVENTS") == "1":
+                        from .cli_commands.update_artifact import run_installer
+                        return run_installer(["bash", str(script)], env=installer_env,
+                            timeout=remaining, progress=progress), observation
+                    return subprocess.run(["bash", str(script)], check=False, text=True,
+                        encoding="utf-8", errors="replace", capture_output=True,
+                        env=installer_env, timeout=remaining), observation
                 except subprocess.TimeoutExpired:
                     return subprocess.CompletedProcess(
                         [],

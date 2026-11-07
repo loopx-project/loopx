@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from typing import Any, TypeGuard, cast
+
+
 from collections.abc import Iterable
-from typing import Any
 
 from ...todos.contract import (
     TODO_TASK_CLASS_ADVANCEMENT,
@@ -25,7 +27,7 @@ from .long_todo_chain import (
 )
 
 
-def autonomous_replan_ack_has_frontier_delta(ack: dict[str, Any] | None) -> bool:
+def autonomous_replan_ack_has_frontier_delta(ack: dict[str, Any] | None) -> TypeGuard[dict[str, Any]]:
     if not isinstance(ack, dict) or ack.get("recorded") is not True:
         return False
     semantic_delta = ack.get("semantic_delta")
@@ -105,7 +107,7 @@ def replan_successor_transition_ack(
         return None
     if agent_todo_items is None:
         source_items = (
-            agent_todo_summary.get("first_executable_items")
+            cast(list[Any], agent_todo_summary.get("first_executable_items"))
             if isinstance(agent_todo_summary, dict)
             and isinstance(agent_todo_summary.get("first_executable_items"), list)
             else []

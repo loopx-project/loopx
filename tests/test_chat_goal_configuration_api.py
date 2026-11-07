@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from loopx.chat_goal_configuration_api import (
+from loopx.chat.goal_configuration_api import (
     CHAT_GOAL_CONFIGURATION_APPLY_PATH,
     CHAT_GOAL_CONFIGURATION_PATH,
     CHAT_GOAL_CONFIGURATION_PREVIEW_PATH,

@@ -71,6 +71,48 @@ def test_default_fallback_is_unchanged():
 
 
 @pytest.mark.parametrize("provider", ["sqlite", "file"])
+@pytest.mark.parametrize("choice_exists", [True, False])
+def test_generated_heartbeat_known_choice_uses_one_current_guard(tmp_path, provider, choice_exists):
+    from loopx.heartbeat_prompt import build_heartbeat_prompt
+    from tests.control_plane.test_quota_settlement_cli import (
+        AGENT_ID, ALTERNATIVE_TODO_ID, GOAL_ID, TURN_ID,
+        _configure_selectable_alternative, _heartbeat_receipt_count,
+        _initialize_fixture_authority, _run_generated_cli, _spend_run_count, _write_fixture,
+    )
+
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    prompt = build_heartbeat_prompt(
+        goal_id=GOAL_ID, agent_id=AGENT_ID, registered_agents=[AGENT_ID],
+        runtime_profile="codex_app_heartbeat", turn_instance_id=TURN_ID,
+        registry_path=registry, runtime_root=runtime, thin=True,
+    )
+    body = prompt["task_body"]
+    for obligation in ("Known new-Turn choice", "--todo-id <id>", "first guard",
+                       "identities/effect ids", "selection_command"):
+        assert obligation in body
+    command = prompt["quota_guard_command"].replace('"${LOOPX_TURN:?}"', shlex.quote(TURN_ID))
+    assert "--todo-id" not in command  # Generation must not silently choose work.
+    chosen = ALTERNATIVE_TODO_ID if choice_exists else "todo_missing"
+    rc, result = _run_generated_cli(command + " --todo-id " + chosen,
+                                    registry_path=registry, cwd=project)
+    if choice_exists:
+        assert rc == 0, json.dumps(result)
+        assert result["selected_todo"]["todo_id"] == chosen
+        channel = result["interaction_contract"]
+        assert channel["agent_channel"]["delivery_allowed"]
+        assert channel["agent_channel"]["work_context"]["complete"]
+        assert not channel["cli_channel"].get("selection_required", False)
+        assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
+    else:
+        assert rc != 0, result
+        assert not result["interaction_contract"]["agent_channel"]["delivery_allowed"], json.dumps(result)
+        assert _heartbeat_receipt_count(runtime, TURN_ID) == 0
+    assert _spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("provider", ["sqlite", "file"])
 def test_cli_begin_selects_once_and_replay_keeps_original_identity(tmp_path, provider):
     from tests.control_plane.test_quota_settlement_cli import (
         AGENT_ID, ALTERNATIVE_TODO_ID, GOAL_ID, TODO_ID,

@@ -106,7 +106,7 @@ def prepared_request_ref(messages):
 @pytest.mark.parametrize("request_transport", ["inline", "frozen"])
 @pytest.mark.parametrize("authority_provider", ["file", "sqlite"])
 @pytest.mark.parametrize(
-    "connection_lifetime", ["retained", "restarted", "missing", "unreadable"]
+    "connection_lifetime", ["retained", "restarted", "missing", "unreadable", "fresh", "replaced"]
 )
 def test_real_sdk_native_prepare_confirmation_consume_report_and_profile_revocation(
     tmp_path, monkeypatch, authority_provider, connection_lifetime, request_transport
@@ -159,6 +159,8 @@ def test_real_sdk_native_prepare_confirmation_consume_report_and_profile_revocat
         return rows[0]
 
     def arguments(index):
+        if connection_lifetime == "fresh" and index == 4:
+            return {"action": "context"}
         if index == 0:
             return {"action": "context"}
         if index == 1:
@@ -196,7 +198,7 @@ def test_real_sdk_native_prepare_confirmation_consume_report_and_profile_revocat
                 assert index < 9, "bounded scripted request budget exceeded"
                 steps.append(index)
                 provider_messages.append(body["messages"])
-                if index in {3, 8}:
+                if index in {3, 8} or (connection_lifetime == "fresh" and index == 5):
                     delta = {
                         "role": "assistant",
                         "content": json.dumps(
@@ -351,6 +353,9 @@ def test_real_sdk_native_prepare_confirmation_consume_report_and_profile_revocat
             first = host.run(turn, **options, on_notification=notifications.append)
             assert first["result_kind"] == "wait", (first, errors)
             assert len(steps) == 4, (steps, errors)
+            original_binding = load_codex_cli_session(
+                options["runtime_root"], lineage=_lineage(turn), host="dsh"
+            )
             proposal = operation()
             assert proposal["operation"].get("agent_handoff") is None
             delivered = store.record_operation_delivery(
@@ -368,6 +373,46 @@ def test_real_sdk_native_prepare_confirmation_consume_report_and_profile_revocat
                 host = hosts.enter_context(OwnedDshOperationHost())
             turn["session"]["action"] = "resume"
             turn["turn_key"] = "sha256:" + "b" * 64
+            if connection_lifetime == "fresh":
+                turn["session"] = {"action": "start_new", "context_policy": {"mode": "fresh"}}
+                second = host.run(turn, **options, on_notification=notifications.append)
+                assert second["result_kind"] == "wait", (second, errors)
+                binding = load_codex_cli_session(
+                    options["runtime_root"], lineage=_lineage(turn), host="dsh"
+                )
+                assert binding["session_id"] != original_binding["session_id"]
+                assert len(steps) == 6 and not errors
+                assert operation()["operation"].get("host_start") is None
+                assert operation()["operation"].get("agent_handoff") is None
+                contexts = [row for row in tool_results(notifications) if "executor" in row]
+                assert {row["executor"]["session_id"] for row in contexts} == {
+                    original_binding["session_id"], binding["session_id"],
+                }
+                return
+            if connection_lifetime == "replaced":
+                from deepseek_harness import DeepSeekHarness
+                from loopx.control_plane.turn_driver.codex_sessions import _session_path
+
+                original_enter = DeepSeekHarness.__enter__
+                processes = []
+                replacement = {**original_binding, "session_id": "concurrent-dsh-session"}
+                path = _session_path(options["runtime_root"], _lineage(turn))
+
+                def concurrent_enter(client):
+                    result = original_enter(client)
+                    processes.append(result.client._proc)
+                    path.write_text(json.dumps(replacement))
+                    return result
+
+                monkeypatch.setattr(DeepSeekHarness, "__enter__", concurrent_enter)
+                with pytest.raises(ValueError, match="binding changed during SDK initialization"):
+                    host.run(turn, **options, confirmed_operation_id=proposal["proposal_id"])
+                assert json.loads(path.read_text()) == replacement
+                assert not host.connection.path.exists()
+                assert len(processes) == 1 and processes[0].poll() is not None
+                assert len(steps) == 4 and not errors
+                assert operation()["operation"].get("host_start") is None
+                return
             if connection_lifetime in {"missing", "unreadable"}:
                 original_binding = load_codex_cli_session(
                     options["runtime_root"], lineage=_lineage(turn), host="dsh"

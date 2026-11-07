@@ -1156,7 +1156,7 @@ def test_large_usage_real_cli_register_readback_and_replay(pack, monkeypatch):
     )
     assert (
         len(json.dumps(params, separators=(",", ":")).encode())
-        > effect_runtime.MAX_REQUEST_BYTES
+        > 2 * 1024 * 1024  # Keep the original complete 4,500-Turn counter history.
     )
     registry = sources.parent / "registry.json"
     registry.write_text('{"projects":{}}')
@@ -1220,7 +1220,9 @@ def test_large_usage_real_cli_register_readback_and_replay(pack, monkeypatch):
     assert "solver_usage" not in inspect_pack(**scope, pack_id=old["pack_id"])
     assert view["job"] is None and view["result"] is None
 
-    # The method opts into a bounded channel, not a larger ordinary RPC wire.
+    # Keep the original 2 MiB refusal and reduced private-channel negative.
+    # The complete counter history above qualifies the current default wire.
+    monkeypatch.setattr(effect_runtime, "MAX_REQUEST_BYTES", 2 * 1024 * 1024)
     with pytest.raises(
         effect_runtime.EffectRuntimeRejected, match="request is oversized"
     ):
@@ -1366,3 +1368,42 @@ def test_loopx_input_attribution_real_transport_and_privacy(pack, monkeypatch, c
     assert path.read_bytes() == original
     assert view["job"] is None and view["result"] is None
     assert "loopx_input" not in inspect_pack(**scope, pack_id=old["pack_id"]).get("solver_usage", {}).get("projection", {})
+
+
+@pytest.mark.parametrize("incomplete", [False, True])
+def test_turn_counter_evidence_preserves_baseline_and_excludes_content(pack, incomplete):
+    from loopx.capabilities.benchmark_toolkit.trajectory_assessment_store import read_usage_turn
+
+    scope, _, old, input_path, sources, _ = pack
+    rows = [json.loads(line) for line in _usage_fixture().splitlines()]
+    for row in rows:
+        row["payload"]["private_prompt"] = "MUST_NOT_REACH_BROWSER"
+    if incomplete:
+        rows.pop()
+    capture = sources / "usage.jsonl"
+    capture.write_text("\n".join(map(json.dumps, rows)) + "\n")
+    registered = register_pack(**scope, input_path=input_path, source_root=sources,
+        title=old["title"], usage_jsonl="usage.jsonl", usage_session_id="solver-session",
+        include_incomplete_usage=incomplete)
+    operation = dict(**scope, pack_id=registered["pack_id"], analysis_key=registered["analysis_key"])
+    before = {path: path.read_bytes() for path in scope["runtime_root"].rglob("*") if path.is_file()}
+    evidence = read_usage_turn(**operation, turn_id="b")
+    events = json.loads(evidence["text"])["events"]
+    assert [event["line"] for event in events] == ([3, 5, 6] if incomplete else [3, 5, 6, 7])
+    assert events[0]["payload"]["info"]["total_token_usage"]["input_tokens"] == 100
+    assert events[2]["payload"]["info"]["total_token_usage"]["input_tokens"] == 140
+    assert "MUST_NOT_REACH_BROWSER" not in json.dumps(evidence)
+    assert evidence["evidence_kind"] == "usage_counters"
+    assert not list(scope["runtime_root"].rglob("receipt.json"))
+    assert all(path.read_bytes() == content for path, content in before.items())
+    for changes, reason in [({"turn_id": "other"}, "usage_turn_not_captured"),
+                            ({"analysis_key": "0" * 64}, "analysis_key_mismatch"),
+                            ({"owner_goal_id": "other-owner"}, "pack_not_registered")]:
+        with pytest.raises(PackUnavailable, match=reason):
+            read_usage_turn(**(operation | {"turn_id": "b"} | changes))
+    capture.write_text(capture.read_text() + "{}\n")
+    with pytest.raises(PackUnavailable, match="source_changed"):
+        read_usage_turn(**operation, turn_id="b")
+    capture.unlink()
+    with pytest.raises(PackUnavailable, match="source_unavailable"):
+        read_usage_turn(**operation, turn_id="b")

@@ -24,7 +24,7 @@ from loopx.capabilities.explore.turn_context import (
 from loopx.capabilities.configuration_inspection import inspect_machine_namespaces, project_goal_configuration
 from loopx.capabilities.machine_configuration.builtins import build_builtin_machine_configuration_registry
 from loopx.capabilities.machine_configuration.store import configure_machine_configuration
-from loopx.chat_goal_configuration_api import _goal_capability_options
+from loopx.chat.goal_configuration_api import _goal_capability_options
 from loopx.configure_goal import configure_goal
 from loopx.control_plane.coordination.goal_storage_initialization import initialize_goal_storage_target
 from loopx.history import collect_history

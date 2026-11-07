@@ -492,8 +492,10 @@ skip a control-plane receipt.
 
 Native private project Chat and steward conversations present persisted Core
 Turn events as a mutable, source-bound Markdown reply. Answer chunks are coalesced at a two-second interval; changes only to fixed
-activity labels are coalesced at ten seconds to avoid message churn. Reasoning,
-tool arguments and command output are excluded. The transport does not run models.
+activity labels are coalesced at ten seconds to avoid message churn. The private
+owner sees the same bounded reasoning-summary strategy as Codex; unqualified
+reasoning, tool/command titles, arguments and output are excluded. The transport
+does not run models.
 
 The conservative edit budget applies to each draft, rather than the whole Turn.
 When it is exhausted, the transport verifies a short continuation notice on the

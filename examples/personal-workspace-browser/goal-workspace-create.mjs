@@ -37,14 +37,22 @@ export const goalWorkspaceCreateScenario = {
       const now=page.getByRole('region',{name:'当前工作',exact:true});await now.waitFor();
       await now.getByRole('button',{name:'添加任务',exact:true}).click();
       const task=now.getByRole('textbox',{name:'任务内容',exact:true});
+      const review=now.getByRole('button',{name:'检查任务',exact:true});
+      for (const count of [399,400,401]) {
+        await task.fill('🌱'.repeat(count));
+        assert.equal(await review.isEnabled(),count<=400,'Inline task admission counts code points');
+      }
+      await task.fill('\u0085\u001c');assert.equal(await review.isEnabled(),false,'Python-only whitespace is empty');
+      await task.fill('a'+'\ufeff'.repeat(500)+'b');assert.equal(await review.isEnabled(),false,'BOM is content, not collapsible whitespace');
       const text='Verify the packaged workspace task creation result';
-      await task.fill(text);await now.getByRole('button',{name:'检查任务',exact:true}).click();
+      const rawText='\u0085Verify'+ '\u0085'.repeat(500) +'the packaged workspace task creation result\u001c';
+      await task.fill(rawText);await review.click();
       const drawer=page.locator('.personal-context-drawer');await drawer.waitFor();
       assert.equal(requests.length,1);assert.equal(requests[0].normalized_parameters.text,text);
       assert.equal(requests[0].normalized_parameters.priority,undefined,'Ordinary creation leaves priority to the Todo owner');
       await drawer.locator('.personal-primary-action').click();
       await drawer.getByText(/失败/).first().waitFor();
-      await page.locator('.personal-drawer-close').click();assert.equal(await task.inputValue(),text);
+      await page.locator('.personal-drawer-close').click();assert.equal(await task.inputValue(),rawText);
       refuseApply=false;
       await now.getByRole('button',{name:'检查任务',exact:true}).click();
       // The action owner may require regenerating the preview after failure.

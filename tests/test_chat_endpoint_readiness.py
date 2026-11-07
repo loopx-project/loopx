@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from loopx.chat_endpoint_catalog import builtin_chat_endpoints
+from loopx.chat.endpoint_catalog import builtin_chat_endpoints
 
 
 def _rows(monkeypatch, tmp_path: Path, **bins: str) -> dict[str, dict]:

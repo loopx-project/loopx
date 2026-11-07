@@ -238,7 +238,7 @@ def _choice(value: Any, *, choices: set[str], default: str, field: str) -> str:
 def build_explore_node_event(
     *,
     goal_id: str,
-    title: str,
+    title: object,
     node_id: str | None = None,
     node_kind: str | None = None,
     status: str | None = None,
@@ -297,9 +297,9 @@ def build_explore_node_event(
 def build_explore_edge_event(
     *,
     goal_id: str,
-    from_node: str,
-    to_node: str,
-    edge_type: str,
+    from_node: object,
+    to_node: object,
+    edge_type: object,
     summary: str | None = None,
     confidence: float | None = None,
     agent_id: str | None = None,
@@ -338,7 +338,7 @@ def build_explore_edge_event(
 def build_explore_finding_event(
     *,
     goal_id: str,
-    title: str,
+    title: object,
     finding_id: str | None = None,
     node_id: str | None = None,
     status: str | None = None,
@@ -352,6 +352,7 @@ def build_explore_finding_event(
     recorded_at: str | None = None,
     execution_observation: Mapping[str, Any] | None = None,
     measurements: Sequence[Mapping[str, Any]] | None = None,
+    _check_execution_measurements: bool = True,
 ) -> dict[str, Any]:
     safe_goal_id = _safe_goal_id(goal_id)
     safe_title = _compact_text(title, limit=TITLE_LIMIT, field="title")
@@ -394,7 +395,10 @@ def build_explore_finding_event(
 
         if not node_id:
             raise ValueError("measurements require an explicit node")
-        measured = normalize_measurements(measurements)
+        measured = normalize_measurements(
+            measurements, **({"execution_observation": event.get("execution_observation")}
+                if _check_execution_measurements else {}),
+        )
         if any(item["evidence_ref"] not in event.get("evidence_refs", []) for item in measured):
             raise ValueError("measurement evidence must be included in the finding's evidence_refs")
         event["measurements"] = measured
@@ -406,7 +410,7 @@ def _base_event(
     *,
     goal_id: str,
     event_kind: str,
-    title: str,
+    title: object,
     summary: str | None,
     agent_id: str | None,
     run_id: str | None,
@@ -456,6 +460,8 @@ def validate_explore_result_event(
     unknown fields, invalid ids, unsafe text, forged boundary flags, and stale
     event ids. Persisted text has its own bounded compatibility budget: it is
     validated and restored before hashing, never clipped to the writer default.
+    This structural read validation preserves older attribution contradictions;
+    writers reject new contradictions, and current views exclude their numbers.
     """
 
     payload = dict(event)
@@ -471,7 +477,7 @@ def validate_explore_result_event(
         raise ValueError("explore result event must declare the public-safe boundary")
 
     summary = _persisted_text(payload.get("summary"), field="summary")
-    common = {
+    common: dict[str, Any] = {
         "goal_id": goal_id,
         "summary": None,
         "agent_id": payload.get("agent_id"),
@@ -518,6 +524,10 @@ def validate_explore_result_event(
             supersedes=payload.get("supersedes"),
             execution_observation=payload.get("execution_observation"),
             measurements=payload.get("measurements"),
+            # Canonical history predates the stricter new-write rule. Keep
+            # original bytes/identities auditable; current views qualify the
+            # folded result separately, and append rechecks new writes below.
+            _check_execution_measurements=False,
         )
     if summary:
         rebuilt["summary"] = summary
@@ -527,8 +537,17 @@ def validate_explore_result_event(
     return rebuilt
 
 
+def validate_explore_result_event_attribution(event: Mapping[str, Any]) -> None:
+    """Check typed measurement attribution after canonical event validation."""
+    if "measurements" in event:
+        from .measurements import normalize_measurements
+
+        normalize_measurements(event["measurements"], execution_observation=event.get("execution_observation"))
+
+
 def append_explore_result_event(path: Path, event: Mapping[str, Any]) -> dict[str, Any]:
     validated = validate_explore_result_event(event)
+    validate_explore_result_event_attribution(validated)
     log_path = path.expanduser()
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with exclusive_file_lock(log_path):
@@ -598,6 +617,36 @@ def append_explore_result_events(
     if require_ordered_prefix and create_only_node_ids:
         raise ValueError("ordered prefix replay cannot skip existing node revisions")
     validated = [validate_explore_result_event(event, expected_goal_id=expected_goal_id) for event in events]
+    # Ordered replay restores an audited historical prefix, not new evidence.
+    # Its old contradictions remain visible only as archival facts/diagnostics.
+    if not require_ordered_prefix:
+        for event in validated:
+            validate_explore_result_event_attribution(event)
+    return _append_validated_explore_result_events(
+        path, validated, expected_goal_id=expected_goal_id,
+        create_only_node_ids=create_only_node_ids,
+        require_ordered_prefix=require_ordered_prefix,
+        expected_event_ids=expected_event_ids,
+    )
+
+
+def _append_validated_explore_result_events(
+    path: Path,
+    validated: Sequence[dict[str, Any]],
+    *,
+    expected_goal_id: str,
+    create_only_node_ids: Sequence[str] = (),
+    require_ordered_prefix: bool = False,
+    expected_event_ids: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    """Shared file effect after the owning caller qualifies the events.
+
+    Ordinary writes validate new attribution above. Source reconciliation
+    preflights the same attribution after checking its registered baseline and
+    missing result ids, then binds execution to the exact canonical snapshot.
+    This internal seam adds no public validation switch or historical-prefix
+    claim.
+    """
     requested_ids = [str(event["event_id"]) for event in validated]
     if len(requested_ids) != len(set(requested_ids)):
         raise ValueError("Explore result event batch contains duplicate event ids")
@@ -616,6 +665,11 @@ def append_explore_result_events(
             if current_events[:len(validated)] != validated[:len(current_events)]:
                 raise ValueError("Explore result history differs from the required initial prefix")
             existing_by_id = {str(row["event_id"]): row for row in current_events}
+        elif expected_event_ids is not None:
+            existing_by_id = {
+                str(row["event_id"]): row for row in
+                load_explore_result_events_strict(log_path, goal_id=expected_goal_id)
+            }
         elif log_path.exists():
             for line in log_path.read_text(encoding="utf-8").split("\n"):
                 try:
@@ -732,7 +786,7 @@ def load_explore_result_events_strict(
     return events
 
 
-def explore_history_rows(events, *, goal_id=None):
+def explore_history_rows(events: Sequence[Mapping[str, Any]], *, goal_id: str | None = None) -> list[dict[str, Any]]:
     """Shared read projection: preserve history without exposing arbitrary payloads."""
     if goal_id is not None:
         events = [validate_explore_result_event(event, expected_goal_id=goal_id) for event in events]
@@ -841,10 +895,19 @@ def _materialized_parent_edges(
 
 
 def _finding_view(event: Mapping[str, Any]) -> dict[str, Any]:
+    measured: dict[str, Any] = {}
+    if "measurements" in event:
+        try:
+            validate_explore_result_event_attribution(event)
+        except ValueError as error:
+            # Quarantine contradictory historical quantities in the current
+            # view, not the append-only history. Runtime failure propagates.
+            measured["measurement_error"] = str(error)
+        else:
+            measured.update(measurements=event["measurements"], recorded_order=event["_recorded_order"])
     return {
         **({"execution_observation": event["execution_observation"]} if "execution_observation" in event else {}),
-        **({"measurements": event["measurements"], "recorded_order": event["_recorded_order"]}
-           if "measurements" in event else {}),
+        **measured,
         "finding_id": str(event.get("result_id") or ""),
         "finding": str(event.get("title") or ""),
         "summary": str(event.get("summary") or ""),
@@ -896,7 +959,7 @@ def _build_tree(
 
     def branch(node_id: str, *, depth: int, seen: frozenset[str]) -> dict[str, Any]:
         node = node_by_id[node_id]
-        view = {
+        view: dict[str, Any] = {
             "node_id": node_id,
             "title": str(node.get("title") or ""),
             "status": str(node.get("status") or NODE_STATUS_OPEN),
@@ -1094,11 +1157,14 @@ def build_explore_result_projection(
         _edge_view(event) for event in _fold_by_result_id(scoped, event_kind=EVENT_KIND_EDGE)
     ]
     edges = [*edges, *_materialized_parent_edges(nodes, edges)]
-    findings = sorted(
-        (_finding_view(event) for event in folded_findings),
-        key=lambda item: chronology_key(item["last_updated_at"]),
+    # Whole-second source clocks can tie. Folding retains creation order, so
+    # break equal chronology keys with the existing latest-append ordinal
+    # before bounding any consumer; do not rewrite the stored evidence clock.
+    findings = [_finding_view(event) for event in sorted(
+        folded_findings,
+        key=lambda item: (chronology_key(item["last_updated_at"]), item["_recorded_order"]),
         reverse=True,
-    )
+    )]
 
     nodes_by_status: dict[str, int] = {status: 0 for status in sorted(NODE_STATUSES)}
     for node in nodes:

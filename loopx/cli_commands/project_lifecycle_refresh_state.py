@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
@@ -29,6 +30,7 @@ from ..control_plane.goals.first_party_host_admission import (
     capture_first_party_host_goal_ref,
 )
 from ..control_plane.goals.source_session_registry_state import exact_goal_ref
+from ..control_plane.goals.vision_checkpoint import prepare_vision_refresh
 from ..control_plane.quota.settlement import (
     attach_settlement_progress,
     read_heartbeat_settlement,
@@ -78,6 +80,7 @@ from .quota_reward_memory import (
     reward_memory_candidate_details,
     stage_reward_memory_outcome_candidate,
 )
+from ..control_plane.quota.cli_projection import compact_refresh_state_cli_payload
 
 
 def register_refresh_state_command(
@@ -408,6 +411,10 @@ def register_refresh_state_command(
         help="After verified writeback, execute the owed quota step once for this exact Turn; replay never creates another debit.",
     )
     refresh_state_parser.add_argument(
+        "--settlement-receipt", action="store_true",
+        help="With --settle-turn, retain successful supporting snapshots in an immutable result and print controls plus exact receipts.",
+    )
+    refresh_state_parser.add_argument(
         "--no-global-sync",
         action="store_true",
         help="Do not refresh the shared global registry after writing the state run.",
@@ -481,6 +488,8 @@ def handle_refresh_state_command(
     outcome_update_result = None
     goal_acceptance_preview = None
     try:
+        if getattr(args, "settlement_receipt", False) and (not args.settle_turn or fmt != "json"):
+            raise ValueError("--settlement-receipt requires --settle-turn and --format json")
         if getattr(args, "settle_turn", False) and not (
             args.agent_id and args.turn_instance_id and bool(args.todo_id) != bool(args.replan_obligation_id)
         ):
@@ -515,6 +524,21 @@ def handle_refresh_state_command(
                 turn_instance_id=args.turn_instance_id,
             ),
         )
+        if agent_vision_packet is not None and (
+            outcome_update is not None or not merge_agent_vision_patch
+        ):
+            # Reject malformed complete input before any history lock or outcome
+            # refinement. Inline patches without an outcome update still merge
+            # with current history first. Reuse the typed owner; this preflight
+            # cannot authorize a transition or replace the original packet.
+            # Refresh still checks merged history and policy against current
+            # state, including whether a terminal stride is actually enabled.
+            prepare_vision_refresh(
+                agent_vision_packet, goal_id=args.goal_id, agent_id=args.agent_id,
+                existing_agent_vision=None, merge_patch=False,
+                require_path_delta_for_durable_change=False,
+                allow_terminal_stride_path=True,
+            )
         progress_observation = inline_progress_observation(args)
         reward_memory_reflection_json = str(
             getattr(args, "reward_memory_reflection_json", None) or ""
@@ -647,6 +671,17 @@ def handle_refresh_state_command(
                 agent_id=args.agent_id,
                 runtime_root=args.runtime_root,
             )
+            recovery = transition.get("context_recovery")
+            if fmt == "json" and os.name == "posix" and isinstance(recovery, dict):
+                from .context_machine import capture_context_recovery
+
+                reference = capture_context_recovery(recovery,
+                    runtime_root=resolve_runtime_root(load_registry(registry_path), args.runtime_root))
+                transition["context_recovery"] = {
+                    "received_context_id": recovery["received_context_id"],
+                    "current_context_id": recovery["replan_context"]["context_id"],
+                    "instruction": recovery["instruction"], **reference,
+                }
             payload["replan_transition"] = transition
             if transition["next_cli_actions"]:
                 payload["error"] += " Required transition: " + "; ".join(
@@ -784,7 +819,13 @@ def handle_refresh_state_command(
                 raise RuntimeError(
                     "exact settlement readback unexpectedly returned not-found"
                 )
-            settlement_result = settlement_readback.delivery
+            # A combined retry may already be settled, with no owed child to
+            # dispatch. Retain its complete receipts from the same typed read.
+            settlement_result = (
+                settlement_readback.settlement
+                if getattr(args, "settle_turn", False) and settlement_readback.spend.failure is None
+                else settlement_readback.delivery
+            )
             attach_settlement_progress(
                 payload, settlement_readback, registry_path=registry_path, runtime_root=runtime_root,
                 goal_ref=goal_ref,
@@ -843,7 +884,7 @@ def handle_refresh_state_command(
             )
         if not material_refresh_ready:
             _settle_requested_refresh(payload, args, registry_path, goal_ref)
-            print_payload(payload, fmt, render_state_refresh_markdown)
+            print_payload(compact_refresh_state_cli_payload(payload) if fmt == "json" else payload, fmt, render_state_refresh_markdown)
             return 0 if payload.get("ok") else 1
         if payload.get("explore_result") is not None:
             from ..capabilities.explore.result_writeback import deliver_result_attachment
@@ -933,17 +974,32 @@ def handle_refresh_state_command(
             ),
         )
     _settle_requested_refresh(payload, args, registry_path, goal_ref)
-    print_payload(payload, fmt, render_state_refresh_markdown)
+    print_payload(compact_refresh_state_cli_payload(payload) if fmt == "json" else payload, fmt, render_state_refresh_markdown)
     return 0 if payload.get("ok") else 1
 
 
 def _settle_requested_refresh(payload, args, registry_path, goal_ref):
     if not getattr(args, "settle_turn", False):
         return
-    from .refresh_settlement import settle_refreshed_turn
+    from .refresh_settlement import present_settled_refresh, settle_refreshed_turn
 
     settle_refreshed_turn(payload, registry_path=registry_path,
         runtime_root=resolve_runtime_root(load_registry(registry_path), args.runtime_root),
         goal_id=args.goal_id, agent_id=args.agent_id, todo_id=args.todo_id,
         replan_obligation_id=args.replan_obligation_id,
-        turn_instance_id=args.turn_instance_id, goal_ref=goal_ref)
+        turn_instance_id=args.turn_instance_id, goal_ref=goal_ref,
+        delivery_workspace_path=(
+            Path(args.delivery_workspace_path)
+            if args.delivery_workspace_path else None
+        ))
+    if getattr(args, "settlement_receipt", False):
+        from ..control_plane.quota.error_codes import QuotaDecisionTransportError
+        try:
+            view = present_settled_refresh(payload, runtime_root=resolve_runtime_root(
+                load_registry(registry_path), args.runtime_root))
+        except QuotaDecisionTransportError as exc:
+            payload.update(ok=False, error=str(exc))
+            return  # Exact committed receipts stay visible; never re-admit.
+        if view is not payload:
+            payload.clear()
+            payload.update(view)

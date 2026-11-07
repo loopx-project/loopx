@@ -25,6 +25,10 @@ const acceptanceDetails: Record<NonNullable<DelegationPreflight["acceptance_reas
 };
 
 const acceptanceActions: Record<Exclude<NonNullable<DelegationPreflight["acceptance_next_action"]>, "none">, {en: string; zh: string}> = {
+  review_original_request_validation: {
+    en: "Next: ask the original configuration owner to review the independent request validation declaration, then recheck",
+    zh: "下一步：请原配置责任人核对请求独立验收声明，再重新检查",
+  },
   review_original_todo_validation: {
     en: "Next: ask the original configuration owner to review the Todo validation declaration, then recheck",
     zh: "下一步：请原配置责任人核对任务验收声明，再重新检查",
@@ -40,6 +44,13 @@ const acceptanceActions: Record<Exclude<NonNullable<DelegationPreflight["accepta
 };
 
 export function DelegationPreflightStatus({check, zh}: {check: DelegationPreflight; zh: boolean}) {
+  const request = check.binding?.todo_id === null;
+  const label = request && check.state === "turn_blocked" && check.request_required === true
+    ? {en: "Awaiting original request", zh: "等待原请求"}
+    : request && check.state === "acceptance_unavailable"
+    ? {en: "Request validation unavailable", zh: "请求验收不可用"}
+    : request && check.state === "turn_blocked"
+      ? {en: "Request admission blocked", zh: "当前请求未获准执行"} : labels[check.state];
   const lane = check.state === "turn_blocked" && check.turn_eligible === false
     && check.turn_lane?.scope === "native_turn_lane" ? check.turn_lane.state : null;
   const busy = lane === "live";
@@ -47,7 +58,10 @@ export function DelegationPreflightStatus({check, zh}: {check: DelegationPreflig
   const laneLabel = busy ? (zh ? "执行通道正在处理工作" : "Execution lane is busy")
     : unknown ? (zh ? "执行通道状态无法确认" : "Execution lane state is unknown") : null;
   const workspaceDetail = check.workspace_state ? workspaceDetails[check.workspace_state] : null;
-  const acceptanceDetail = check.state === "acceptance_unavailable" && check.acceptance_reason_code
+  const acceptanceDetail = request && check.state === "acceptance_unavailable"
+    && check.acceptance_reason_code === "independent_delegation_validation_required"
+    ? {en: "Independent request validation is required", zh: "原请求缺少独立验收声明"}
+    : check.state === "acceptance_unavailable" && check.acceptance_reason_code
     && Object.hasOwn(acceptanceDetails, check.acceptance_reason_code) ? acceptanceDetails[check.acceptance_reason_code] : null;
   const acceptanceAction = check.state === "acceptance_unavailable" && check.acceptance_next_action
     && check.acceptance_next_action !== "none" && Object.hasOwn(acceptanceActions, check.acceptance_next_action)
@@ -82,7 +96,7 @@ export function DelegationPreflightStatus({check, zh}: {check: DelegationPreflig
       ? (zh ? "下一步：修复规范 Authority 读回" : "Next: repair canonical authority readback")
       : acceptanceAction ? (zh ? acceptanceAction.zh : acceptanceAction.en) : null;
   return <p role="status">
-    {laneLabel ?? (zh ? labels[check.state].zh : labels[check.state].en)}
+    {laneLabel ?? (zh ? label.zh : label.en)}
     {detail ? ` · ${detail}` : ""}
     {operationDetail ? ` · ${operationDetail}` : ""}
     {nextAction ? ` · ${nextAction}` : ""}

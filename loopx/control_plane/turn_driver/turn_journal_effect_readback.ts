@@ -40,8 +40,7 @@ export function recordedTurnEffects(
   // An attempt is persisted BEFORE confirmation/host launch. It proves neither
   // launch nor non-launch until the host checkpoint is durable.
   const hostCount = journal.host_attempt_count;
-  const hostUncertain = hostCount !== undefined
-    && (!Number.isInteger(hostCount) || Number(hostCount) !== 0);
+  const hostUncertain = hostCount !== 0;
   return {
     host_invoked: completed.has("host_execute") ? true : hostUncertain ? null : false,
     state_written: completed.has("durable_writeback") ? true

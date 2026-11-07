@@ -97,6 +97,49 @@ def test_actual_source_request_correction_cancel_and_same_operation_recovery(sou
     assert cancelled["view"]["terminal_effects"] == []
 
 
+def test_native_inbox_preserves_unconsumed_results_across_corrections(source_goal):
+    from loopx.capabilities.manager_context.roundtrip import report
+    from loopx.control_plane.collaboration.peers import consume_return, read_inbox
+    from loopx.control_plane.collaboration.turn_context_observation import read_delegation_turn_context
+    from loopx.control_plane.testing.canary_harness import run_json_cli_result
+
+    f = source_goal
+    root, registry, goal = f["runtime"], f["registry"], f["ref"]["goal_id"]
+    rid = _request(f)["request_id"]
+    acknowledge(root, goal, "agent-a", rid, "adopt", "Check the original evidence", registry=registry)
+    report(root, goal, "agent-a", rid, "conclusion", "Original checked result", registry=registry)
+    view = _control(f, rid, "inspect")["view"]
+    revised = _control(f, rid, "revise", {"operation_id": "correct-return", **_basis(view),
+        "brief": {**BRIEF, "purpose": "Check the corrected contract"}, "reason": "The requirement changed"})["view"]
+    acknowledge(root, goal, "agent-a", rid, "adopt", "Check the corrected evidence", registry=registry,
+        request_revision=2, request_revision_digest=revised["revision_digest"])
+    result = report(root, goal, "agent-a", rid, "conclusion", "Corrected checked result", registry=registry, request_revision=2)
+    key = result["result_key"]
+    returned = read_inbox(root, registry, goal, "agent-b")["peer_returns"]["items"]
+    assert {item.get("result_key", "conclusion") for item in returned} == {"conclusion", key}
+    consume_return(root, goal, "agent-b", rid, registry=registry, result_key=key)
+    before = {p.relative_to(_root(root)): p.read_bytes() for p in _root(root).rglob("*.json")}
+    # Consecutive native Inbox reads must retain the same original result
+    # obligation without executing, re-delivering or consuming anything.
+    for _ in range(2):
+        code, packet = run_json_cli_result("manager-inbox", "read", "--goal-id", goal,
+            "--agent-id", "agent-b",
+            registry_path=registry, runtime_root=root)
+        assert code == 0, packet
+        agenda = packet["unfinished_delegations"]
+        assert agenda["outgoing_count"] == 1, agenda
+        row = agenda["items"][0]
+        assert row["request_id"] == rid and row["request_revision"] == 2
+        assert row["purpose"] == "Check the corrected contract"
+        assert row["step"] == "consume_peer_result" and row["unconsumed_return_count"] == 1
+        old = next(item for item in row["returns"] if item["result_key"] == "conclusion")
+        assert old["request_revision"] == 1 and old["consumed"] is False
+    assert {p.relative_to(_root(root)): p.read_bytes() for p in _root(root).rglob("*.json")} == before
+    consume_return(root, goal, "agent-b", rid, registry=registry)
+    for actor in ("agent-a", "agent-b"):
+        assert read_delegation_turn_context(root, registry, goal, actor)["unfinished_delegations"]["items"] == []
+
+
 def test_request_control_refuses_wrong_actor_namespace_and_untrusted_effect_facts(source_goal, tmp_path):
     f = source_goal
     rid = _request(f)["request_id"]
@@ -495,7 +538,10 @@ def test_turn_agenda_follows_current_request_revision_and_cancellation(source_go
     assert current["request_id"] == rid and current["request_revision"] == 2
     assert current["purpose"] == "Inspect the corrected current contract"
     assert current["step"] == "assess_request"
-    assert "returns" not in current  # The old answer does not settle revised work.
+    assert current["receipt_state"] == "pending"  # The old answer does not settle revised work.
+    assert current["returns"] == [{"result_key": "conclusion", "request_revision": 1,
+        "status": "queued", "consumed": False}]
+    assert current["pending_return_count"] == current["unconsumed_return_count"] == 1
     assert agenda("agent-b")["items"][0]["step"] == "await_peer_result"
     _control(f, rid, "cancel", {"operation_id": "agenda-cancel", **_basis(revised), "reason": "Stop current request"})
     assert agenda("agent-a")["items"] == []

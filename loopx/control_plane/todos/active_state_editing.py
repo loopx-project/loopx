@@ -12,8 +12,6 @@ from .contract import (
     todo_done_for_status,
     todo_marker_for_status,
 )
-from .text import normalize_new_todo
-from .todo_summary import normalize_todo_text
 from .machine_region import find_todo_source_regions, visible_markdown_lines
 from .todo_block_codec import decode_todo_blocks
 
@@ -83,35 +81,6 @@ def set_todo_marker(lines: list[str], block: dict[str, Any], status: str) -> boo
     if updated == lines[index]:
         return False
     lines[index] = updated
-    return True
-
-
-def set_todo_text(
-    lines: list[str],
-    block: dict[str, Any],
-    text: str,
-    *,
-    status: str,
-) -> bool:
-    normalized = normalize_new_todo(text)
-    if normalize_todo_text(str(block.get("text") or "")) == normalized:
-        return False
-
-    start = int(block["start"])
-    end = int(block["end"])
-    marker = todo_marker_for_status(status)
-    replacement = f"- [{marker}] {normalized}"
-    continuation_indexes = [
-        index
-        for index in range(start + 1, end)
-        if lines[index].startswith((" ", "\t"))
-        and parse_todo_metadata_line(lines[index]) is None
-    ]
-    lines[start] = replacement
-    for index in reversed(continuation_indexes):
-        del lines[index]
-    block["text"] = normalized
-    block["end"] = end - len(continuation_indexes)
     return True
 
 

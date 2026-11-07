@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 import copy
 import hashlib
 import re
 from pathlib import Path
-from typing import Any
 from urllib.parse import urlparse
 
 from .control_plane.projects.registry_codec import (
@@ -219,7 +220,7 @@ def render_authority_source_markdown(payload: dict[str, Any]) -> str:
     if payload.get("error"):
         lines.append(f"- error: {payload.get('error')}")
         return "\n".join(lines)
-    entry = payload.get("entry") if isinstance(payload.get("entry"), dict) else {}
+    entry = cast(dict[str, Any], payload.get("entry")) if isinstance(payload.get("entry"), dict) else {}
     lines.extend(
         [
             f"- registry: `{payload.get('registry')}`",
@@ -313,7 +314,7 @@ def render_doc_registry_authority_import_markdown(payload: dict[str, Any]) -> st
     if payload.get("error"):
         lines.append(f"- error: {payload.get('error')}")
         return "\n".join(lines)
-    entry = payload.get("entry") if isinstance(payload.get("entry"), dict) else {}
+    entry = cast(dict[str, Any], payload.get("entry")) if isinstance(payload.get("entry"), dict) else {}
     lines.extend(
         [
             f"- source_ref_redacted: `{entry.get('source_ref_redacted')}`",
@@ -536,7 +537,7 @@ def import_doc_registry_authority(
     )
     entry["schema_version"] = DOC_REGISTRY_AUTHORITY_IMPORT_VERSION
     default_entries = [str(item) for item in contract.get("default_entry_docs") or []]
-    topic_authority = contract.get("topic_authority") if isinstance(contract.get("topic_authority"), dict) else {}
+    topic_authority = cast(dict[str, Any], contract.get("topic_authority")) if isinstance(contract.get("topic_authority"), dict) else {}
     imported_topics: dict[str, str] = {}
     if import_topic_prefix:
         prefix = public_safe_optional("import_topic_prefix", import_topic_prefix) or ""

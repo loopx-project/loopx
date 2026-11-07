@@ -17,8 +17,105 @@ export type Account = {
   secondary_used: number | null;
   credits_available: boolean | null;
 };
+export type ApiRole = "disabled" | "fallback" | "primary";
 export type Policy = { enabled: boolean; slots: string[]; cooldown_seconds: number;
-  restart_clients?: boolean; force_quit_clients?: boolean };
+  restart_clients?: boolean; force_quit_clients?: boolean; api_fallback?: boolean;
+  steward_api_role?: ApiRole };
+
+/** Billing priority belongs to the consumer, not the model or credential. */
+export function apiRole(policy: Policy | undefined, consumer: string): ApiRole {
+  if (!policy) return "disabled";
+  if (consumer === "worker") return policy.api_fallback === true ? "fallback" : "disabled";
+  if (consumer !== "steward") return "disabled";
+  const role = policy.steward_api_role;
+  if (role === undefined) return policy.api_fallback === true ? "fallback" : "disabled";
+  return role === "primary" || role === "fallback" ? role : "disabled";
+}
+
+export function modelRoute(input: {consumer: string; native: Record<string, any>; api_ready: boolean}) {
+  const native = input.native;
+  const role = apiRole(native.policy, input.consumer);
+  const primary = input.consumer === "steward" && role === "primary" && input.api_ready;
+  const fallback = role === "fallback" && native.policy.enabled === true
+    && native.policy.api_fallback === true && native.api_active === true
+    && native.login_matches === true && native.recovery_required === false && native.action === "api_active";
+  return {role, api: primary || fallback};
+}
+
+/** The steward's endpoint pool is separate from the native account ring.
+ * Selection observes allowance only; it never changes a login or retries work.
+ */
+export function stewardRoute(input: {
+  now: number; primary: string; pool: string[]; current: string;
+  native: Record<string, any>; primary_capacity: Record<string, any> | null;
+  blocked_primary?: Record<string, any> | null;
+  api_ready?: boolean;
+}) {
+  const no = {endpoint: null, blocked_primary: input.blocked_primary ?? null};
+  if (!Number.isFinite(input.now) || !["antigravity", "codex"].includes(input.current)
+      || input.primary !== "antigravity" || !Array.isArray(input.pool)
+      || input.pool.length !== 2 || new Set(input.pool).size !== 2
+      || !input.pool.includes("antigravity") || !input.pool.includes("codex")) return no;
+  const validCapacity = (row: Record<string, any> | null | undefined) => row
+    && Number.isFinite(row.observed_at) && typeof row.account_ref === "string" && /^[a-f0-9]{64}$/.test(row.account_ref)
+    && typeof row.model_id === "string" && row.model_id.length > 0
+    && Number.isFinite(row.remaining_fraction) && row.remaining_fraction >= 0 && row.remaining_fraction <= 1
+    && typeof row.reset_time === "string" && Number.isFinite(Date.parse(row.reset_time))
+    && typeof row.execution_id === "string" && row.execution_id.length > 0
+    && typeof row.quota_exhausted === "boolean" && typeof row.normal_completion === "boolean"
+    && row.quota_exhausted !== row.normal_completion;
+  if (input.blocked_primary != null && !validCapacity(input.blocked_primary)) return no;
+  if (modelRoute({consumer: "steward", native: input.native, api_ready: input.api_ready === true}).api
+      && apiRole(input.native.policy, "steward") === "primary") return {endpoint: "codex", blocked_primary: input.blocked_primary ?? null};
+  const capacity = input.primary_capacity;
+  if (!validCapacity(capacity) || !capacity || input.now < capacity.observed_at
+      || input.now - capacity.observed_at > 120) return no;
+  let blocked = input.blocked_primary ?? null;
+  if (capacity.quota_exhausted && (!blocked || blocked.execution_id !== capacity.execution_id)) blocked = capacity;
+  const restored = blocked && (blocked.account_ref !== capacity.account_ref
+    || blocked.model_id !== capacity.model_id || blocked.reset_time !== capacity.reset_time
+    || input.now >= Date.parse(blocked.reset_time) / 1000);
+  if (capacity.remaining_fraction > 0 && (!blocked || restored) && (!capacity.quota_exhausted || restored)) {
+    return {endpoint: "antigravity", blocked_primary: blocked};
+  }
+  const native = input.native;
+  // API connection/model-list checks do not prove generation allowance. An
+  // already active, explicitly authorized API route remains the native owner's
+  // selection; its pre-output key failover retains that owner's own guards.
+  const current = Array.isArray(native.accounts)
+    ? native.accounts.find((a: any) => a.slot === native.active_slot) : null;
+  const fresh = current && Number.isFinite(current.observed_at)
+    && current.observed_at <= input.now && input.now - current.observed_at <= 120;
+  const usable = native.policy?.enabled === true && native.login_matches === true
+    && native.recovery_required === false && (native.api_active === true
+      ? modelRoute({consumer: "steward", native, api_ready: input.api_ready === true}).api
+      : native.action === "ready" && fresh && current.availability === "available");
+  return {endpoint: usable ? "codex" : null, blocked_primary: blocked};
+}
+
+/** Diagnostic liveness only; this never grants switching or process authority. */
+export type ObserverHealthState = "unavailable" | "stopped" | "unverified" | "upgrade_required"
+  | "overdue" | "retrying" | "healthy";
+export function observerHealth(input: {
+  now: number; owner_locked: boolean | null; build: string;
+  heartbeat: { checked_at?: number; deadline_at?: number; next_check_at?: number;
+    build?: string; phase?: string } | null;
+}) {
+  const row = input.heartbeat;
+  const result = (state: ObserverHealthState) => ({state,
+    checked_at: Number.isFinite(row?.checked_at) ? row!.checked_at : null,
+    next_check_at: Number.isFinite(row?.next_check_at) ? row!.next_check_at : null});
+  if (input.owner_locked === null) return result("unavailable");
+  if (!input.owner_locked) return result("stopped");
+  if (!row || !Number.isFinite(row.checked_at) || !Number.isFinite(row.deadline_at)
+      || row.checked_at! > input.now + 5 || row.deadline_at! <= row.checked_at!
+      || row.deadline_at! > row.checked_at! + 600
+      || typeof row.build !== "string"
+      || !["checking", "waiting", "retrying"].includes(row.phase ?? "")) return result("unverified");
+  if (row.build !== input.build) return result("upgrade_required");
+  if (row.deadline_at! < input.now) return result("overdue");
+  return result(row.phase === "retrying" ? "retrying" : "healthy");
+}
 
 const number = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 const percent = (v: unknown): number | null => number(v) && v >= 0 && v <= 100 ? v : null;
@@ -69,21 +166,25 @@ export function decide(input: {
   now: number; policy: Policy; active: string | null; observations: Observation[];
   last_switch_at: number | null; recovery_required: boolean; login_matches: boolean;
   manual_slot?: string;
+  api?: { slot: string; ready: boolean };
 }) {
   const accounts = input.observations.map(o => account(o, input.now));
+  const onApi = input.api?.slot === input.active;
   const output = (action: string, target: string | null = null, retry_at: number | null = null) =>
     ({ action, target, retry_at, accounts,
       restart_clients: action === "switch" && input.policy.restart_clients === true,
       force_quit_clients: action === "switch" && input.policy.restart_clients === true
         && input.policy.force_quit_clients === true,
       valid_until: action === "switch" && !input.manual_slot
-        ? Math.min(...accounts.filter(a => a.slot === input.active || a.slot === target).map(a => a.observed_at + 120))
+        ? Math.min(...accounts.filter(a => target === input.api?.slot
+          ? a.slot === input.active || input.policy.slots.includes(a.slot)
+          : a.slot === input.active || a.slot === target).map(a => a.observed_at + 120))
         : null });
   if (input.recovery_required) return output("recovery_required");
   if (!input.login_matches || !input.active) return output("selection_changed");
   if (!input.manual_slot && !input.policy.enabled) return output("disabled");
   const current = accounts.find(a => a.slot === input.active);
-  if (!input.manual_slot && current?.availability !== "exhausted") {
+  if (!input.manual_slot && !onApi && current?.availability !== "exhausted") {
     return output(current?.availability === "available" ? "ready"
       : current?.availability === "auth_required" ? "auth_required" : "quota_unknown", null, input.now + 60);
   }
@@ -104,6 +205,13 @@ export function decide(input: {
     ? [input.manual_slot].find(slot => slot !== input.active && allowed.includes(slot))
     : candidates.sort((a, b) => b.remaining - a.remaining)[0]?.slot;
   if (target) return output("switch", target);
+  if (!input.manual_slot && onApi) return output(input.policy.api_fallback ? "api_active" : "api_disabled_active", null, input.now + 60);
+  // A failed/stale subscription read is not permission to incur API costs.
+  // Every authorized subscription must have fresh, measured exhaustion.
+  if (!input.manual_slot && input.policy.api_fallback === true && input.api?.ready
+      && allowed.length > 0 && allowed.every(slot => accounts.find(a => a.slot === slot)?.availability === "exhausted")) {
+    return output("switch", input.api.slot);
+  }
   const resets = accounts.filter(a => allowed.includes(a.slot) && a.availability === "exhausted")
     .flatMap(a => a.reset_at && a.reset_at > input.now ? [a.reset_at] : []);
   const uncertain = accounts.some(a => allowed.includes(a.slot) && a.availability === "unknown");

@@ -64,16 +64,19 @@ same receipt and never increment the generation beyond `1`.
 - Once due, quota returns the existing `successor_replan_required` lifecycle
   action. A receipt is proof of the condition transition, not execution
   authority and not an implicit reopen.
-- Managed Turn interprets the same quota packet. Heartbeat runs do not own a
-  separate timer or readiness cache.
+- Managed Turn and the external CLI worker take their next check from the
+  scheduler's projection of the scoped Todo. A verified future wait keeps the
+  worker alive across unchanged checks, including when the Goal has no Vision
+  record. The worker sleeps for the shorter of its observation interval and
+  the remaining time, then requests fresh admission. This check spends no quota.
+  A stop, user gate or reassignment still controls the next decision.
 - The frontend extends the existing Todo defer/details surface with pending,
   ready, and receipt information. It does not add another configuration owner.
 - Lark requires no condition-specific state owner: the Goal Channel consumes
   the same status/interaction projection and may render the receipt through its
   normal presentation sink.
 
-This protocol does not alter periodic-report policy, scheduler cadence, or the
-user's notification preference.
+The periodic-report and notification policies govern user-facing notices.
 
 ## Acceptance
 

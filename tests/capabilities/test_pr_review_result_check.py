@@ -333,8 +333,9 @@ def test_public_cli_judges_current_coverage_without_erasing_history(
 
 
 @pytest.mark.parametrize("coverage", ["passed", "pending", "unverified", "failed"])
-def test_public_cli_separates_pending_ci_from_decisive_review_coverage(
-    tmp_path, monkeypatch, capsys, coverage,
+@pytest.mark.parametrize("ci_status", ["pending", "unverified", "failed", "skipped"])
+def test_public_cli_separates_unknown_or_red_ci_from_decisive_review_coverage(
+    tmp_path, monkeypatch, capsys, coverage, ci_status,
 ):
     monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
     monkeypatch.delenv("CODEX_SESSION_ID", raising=False)
@@ -350,12 +351,13 @@ def test_public_cli_separates_pending_ci_from_decisive_review_coverage(
     )
     matrix.append({
         "case_id": "remote_ci_observation",
-        "invariant_or_case": "Branch-protection jobs remain queued; no current failure observed.",
-        "command_or_check": "Available exact-head GitHub checks",
-        "status": "pending",
-        "result": "CI is pending; this observation does not establish or refute recovery.",
+        "invariant_or_case": "Remote job outcome has no inspected failure payload or causal attribution.",
+        "command_or_check": "Previously supplied exact-head GitHub summary, not fetched here",
+        "status": ci_status,
+        "result": "Unknown CI evidence does not establish or refute the independently tested recovery invariant.",
         "required": False,
         "skip_or_failure_reason": "Separate configured merge-readiness hold; local coverage judged above.",
+        "failure_attribution": {"disposition": "unresolved"},
     })
     packet_path, result_path = tmp_path / "packet.json", tmp_path / "result.json"
     packet_path.write_text(json.dumps(packet))
@@ -438,6 +440,28 @@ def test_external_required_failure_is_review_only_when_independently_attributed(
     assert check_review_result(packet, result)["approval_consistent"]
     del row["failure_attribution"]["independent_evidence"]
     assert not check_review_result(packet, result)["approval_consistent"]
+
+
+@pytest.mark.parametrize("required", [True, False])
+def test_confirmed_pr_regression_cannot_be_downgraded_to_ci_diagnostics(required):
+    packet, result = _review()
+    result["evidence"]["validation_matrix"]["items"].append({
+        "case_id": "remote_ci_observation",
+        "invariant_or_case": "A stale owner must not overwrite the accepted result.",
+        "command_or_check": "Exact-head stale-owner rejection test",
+        "status": "failed",
+        "result": "The PR removes the ownership check; the stale write succeeds.",
+        "required": required,
+        "skip_or_failure_reason": "Confirmed changed-path regression, not unknown CI.",
+        "failure_attribution": {
+            "disposition": "pr_regression",
+            "causal_scope_analysis": "The changed writer omits the existing owner fence.",
+            "affected_invariant_evidence": "The same stale write rejects on base and succeeds on head.",
+        },
+    })
+    checked = check_review_result(packet, result)
+    assert not checked["approval_consistent"]
+    assert "validation_matrix:remote_ci_observation:attributable_or_unresolved_failure" in checked["approval_blockers"]
 
 
 def _outcome_review(dimension):

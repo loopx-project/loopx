@@ -10,7 +10,7 @@
  * this rule, so it lives here rather than in either caller.
  */
 import type { JsonObject } from "../effect_program.ts";
-import {settlementIdentity, type SettlementIdentity} from "../effect_program.ts";
+import {executionRequestSubject, settlementIdentity, type SettlementIdentity, type ExecutionRequestSubject} from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { jsonObject } from "../runtime_decode.ts";
 import {nativeChildReportAdmission} from "../capabilities/native_child_admission.ts";
@@ -49,7 +49,7 @@ export function normalizeHeartbeatReplanObligationId(
 }
 
 export interface HeartbeatReceiptBinding extends JsonObject {
-  binding_kind: "todo" | "autonomous_replan";
+  binding_kind: "todo" | "autonomous_replan" | "request";
   /** The Todo id or autonomous replan obligation id, per `binding_kind`. */
   binding_id: string;
   /**
@@ -77,6 +77,7 @@ export interface HeartbeatReceiptFact extends JsonObject {
   run_id: string | null;
   todo_id: string | null;
   replan_obligation_id: string | null;
+  request_subject?: ExecutionRequestSubject | null;
   settlement_effect_id: string | null;
   closeout_required: boolean;
 }
@@ -92,6 +93,9 @@ export function heartbeatReceiptFactFromEvent(
     replan_obligation_id: optionalHeartbeatString(
       eventDetails.replan_obligation_id,
     ),
+    ...(!Object.hasOwn(eventDetails, "request_id") ? {} : {request_subject: executionRequestSubject({
+      request_id: eventDetails.request_id, request_revision: eventDetails.request_revision,
+      request_digest: eventDetails.request_digest, execution_scope_sha256: eventDetails.execution_scope_sha256})}),
     settlement_effect_id: optionalHeartbeatString(
       eventDetails.settlement_effect_id,
     ),
@@ -115,17 +119,18 @@ export function heartbeatReceiptBinding(
     fact.replan_obligation_id,
   );
   const declaredEffectId = optionalHeartbeatString(fact.settlement_effect_id);
-  if (declaredTodoId && replanObligationId) {
+  const requestSubject = executionRequestSubject(fact.request_subject);
+  if ([declaredTodoId, replanObligationId, requestSubject].filter(Boolean).length > 1) {
     throw receiptIdentityConflict(
       "heartbeat receipt has conflicting Todo and autonomous replan bindings",
     );
   }
-  if (declaredEffectId && !declaredTodoId && !replanObligationId) {
+  if (declaredEffectId && !declaredTodoId && !replanObligationId && !requestSubject) {
     throw receiptIdentityConflict(
       "heartbeat receipt has an effect identity without a Todo or autonomous replan binding; refuse to infer or upgrade it",
     );
   }
-  if (!declaredTodoId && !replanObligationId) return null;
+  if (!declaredTodoId && !replanObligationId && !requestSubject) return null;
   // A Todo-binding the settlement authority cannot address is not a binding we
   // may act on: acting on the raw string would create a recovery obligation
   // whose identity no other reader can reproduce, and dropping it would let a
@@ -141,12 +146,10 @@ export function heartbeatReceiptBinding(
     agent_id: agentId,
     todo_id: todoId,
     turn_instance_id: fact.run_id ?? "",
-    replan_obligation_id: replanObligationId,
+    replan_obligation_id: replanObligationId, request_subject: requestSubject,
   });
   return {
-    binding_kind: identity.binding_kind === "todo"
-      ? "todo"
-      : "autonomous_replan",
+    binding_kind: identity.binding_kind as HeartbeatReceiptBinding["binding_kind"],
     binding_id: identity.binding_id,
     settlement_effect_id: declaredEffectId,
     identity_key: `${identity.binding_kind}\u0000${identity.binding_id}\u0000${

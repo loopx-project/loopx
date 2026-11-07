@@ -178,7 +178,7 @@ def source_execution_bindings(
 def require_delegation_source_execution(runtime_root: Path, registry_path: Path, *,
         goal_id: str, requester_agent_id: str, source_request_id: str,
         binding: dict[str, Any], caller_goal_ref: dict[str, Any] | None,
-        policy_locked: bool = False) -> None:
+        policy_locked: bool = False) -> dict[str, str]:
     """Reobserve the original Chat source; the existing TS owner decides its grant.
 
     A return address only locates frozen evidence. It never grants execution,
@@ -211,13 +211,15 @@ def require_delegation_source_execution(runtime_root: Path, registry_path: Path,
                 raise ValueError("original source execution context is no longer authorized")
             source_execution_bindings(runtime_root, registry_path, session, turn,
                 required_binding={**target, "requester_agent_id": requester_agent_id, "binding_id": binding["id"]})
+            return {"session_id": session["session_id"], "turn_id": turn["turn_id"]}
     except (OSError, ValueError, KeyError, TypeError, EffectRuntimeRejected) as exc:
         raise ValueError("original source execution authority is unavailable or revoked") from exc
 
 
-def read_delegation_source_execution(service, binding_id: str, operation_id: str, *,
-        source_request_id: str, brief: dict, conversation: dict) -> dict:
-    """Observe the existing exact-Goal sources for the typed replay comparison.
+def verify_delegation_source_execution(service, binding_id: str, operation_id: str, *,
+        source_request_id: str, brief: dict, conversation: dict,
+        policy_locked: bool = False) -> None:
+    """Reobserve exact source/peer work before replay or worker-owned effects.
 
     This performs no request publication, worker submission or result adoption.
     Legacy sources retain their legacy lifetime profile; they are not promoted.
@@ -231,9 +233,9 @@ def read_delegation_source_execution(service, binding_id: str, operation_id: str
     goal_id, requester_agent_id = service.goal_id, service.agent_id
     caller_goal_ref = service._caller_goal_ref()
     binding = service.binding(binding_id, require_active=True)
-    require_delegation_source_execution(runtime_root, registry_path, goal_id=goal_id,
+    source_conversation = require_delegation_source_execution(runtime_root, registry_path, goal_id=goal_id,
         requester_agent_id=requester_agent_id, source_request_id=source_request_id,
-        binding=binding, caller_goal_ref=caller_goal_ref)
+        binding=binding, caller_goal_ref=caller_goal_ref, policy_locked=policy_locked)
     record = _read(service.path(operation_id))
     with collaboration_goal_scope(registry_path, goal_id=goal_id,
             agents=(requester_agent_id, binding["agent_id"]),
@@ -249,10 +251,16 @@ def read_delegation_source_execution(service, binding_id: str, operation_id: str
                 "goal_id": goal_id, "goal_ref": scope.record_identity().get("goal_ref"), "record": record,
                 "operation_id": operation_id, "source_request_id": source_request_id,
                 "source_request": original, "peer_request": peer, "peer_operation": _read(operation_path),
-                "brief": brief, "conversation": conversation,
+                "brief": brief, "conversation": conversation, "source_conversation": source_conversation,
             })
         except EffectRuntimeRejected as exc:
-            raise ValueError("delegation operation identity conflict") from exc
+            raise ValueError("delegation operation identity conflict in original source execution") from exc
+
+
+def read_delegation_source_execution(service, binding_id: str, operation_id: str, *,
+        source_request_id: str, brief: dict, conversation: dict) -> dict:
+    verify_delegation_source_execution(service, binding_id, operation_id,
+        source_request_id=source_request_id, brief=brief, conversation=conversation)
     return service.read(operation_id)
 
 

@@ -5,13 +5,15 @@ import { resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { resolveTestPython } from "../../../../scripts/test-python.mjs";
 import { acceptChatTurn, conversationContextKey, conversationContextOfKey, conversationSupportsStatusProjection, createChatSession,
-  discoverBoundChatSession, fetchChatHistory, fetchChatProjects, resolveBoundChatSession, resolveBoundConversation } from "../src/data/chat";
+  discoverBoundChatSession, fetchChatHistory, fetchChatProjects, fetchChatSessionHistory, resolveBoundChatSession, resolveBoundConversation } from "../src/data/chat";
 
 // Invariant: continuation and refreshed history retain the verified original
 // Session. An absent/ignored selector, changed source or closed Session cannot
 // create a replacement, disclose unrelated history, or redirect a message.
 const repoRoot = resolve(process.cwd(), "../../..");
-const child = spawn(resolveTestPython({ repoRoot }), ["-u", "apps/presentation/dashboard/smoke/bound-conversation-http-fixture.py"],
+const fallback = process.env.LOOPX_BOUND_STEWARD_FALLBACK === "1";
+const child = spawn(resolveTestPython({ repoRoot }), ["-u", "apps/presentation/dashboard/smoke/bound-conversation-http-fixture.py",
+  ...(fallback ? ["--steward-fallback"] : [])],
   { cwd: repoRoot, stdio: ["pipe", "pipe", "pipe"] });
 const exited = once(child, "exit");
 const output = createInterface({ input: child.stdout });
@@ -50,8 +52,10 @@ try {
   assert.equal(original.session.session_id, sessionId);
   assert.equal(original.source.binding_id, bindingId);
   assert.equal(original.source.audience, "owner");
-  assert.equal(original.source.context_kind, "project");
+  assert.equal(original.source.context_kind, fallback ? "steward" : "project");
   assert.equal(original.source.project_title, "project");
+  assert.equal(original.source.executor_endpoint_id, fallback ? "antigravity" : "codex");
+  assert.equal(original.session.agent_id, "codex");
   assert.deepEqual(calls, [{path: `/api/chat/sessions?conversation_binding_id=${bindingId}`, method: "GET"}],
     "Opening an original conversation uses one source-qualified read, independent of settings health");
   child.stdin.write("settings-unavailable\n");
@@ -74,12 +78,43 @@ try {
   await fetchChatHistory(options, history);
   assert.equal(calls.length, 1, "Quiet refresh verifies the source using only its compact index");
   assert.equal(calls[0].path, `/api/chat/sessions?conversation_binding_id=${bindingId}`);
-  child.stdin.write("source\n");
-  assert.equal((await next()).source_turn_status, "completed");
-  const updated = await fetchChatHistory(options, history);
-  assert.equal(updated.messages.filter(row => row.text === "A new synthetic message from the original private source.").length, 1);
-  const accepted = await acceptChatTurn(sessionId, "Continue from the desktop.", "synthetic-web-update");
-  assert.equal(accepted.session_id, sessionId);
+  const routedRead = globalThis.fetch;
+  if (!fallback) {
+    // Real HTTP responses beyond the old interactive deadline must still hydrate
+    // the complete original history. Source verification keeps its own deadline.
+    child.stdin.write("slow-history\n");
+    assert.equal((await next()).slow_history, true);
+    const slow = await fetchChatHistory(options);
+    assert.deepEqual(slow.messages, history.messages);
+    assert.deepEqual(slow.unavailableSessionIds, []);
+    // Delay only the post-history fresh source check, not initial discovery.
+    const beforeSlowSource = calls.length;
+    globalThis.fetch = async (input, init) => {
+      const response = await routedRead(input, init);
+      if (String(input).startsWith(`/api/chat/sessions/${sessionId}?`)) {
+        child.stdin.write("slow-history-source\n");
+        assert.equal((await next()).slow_history_source, true);
+      }
+      return response;
+    };
+    const sourceSlow = await fetchChatHistory(options);
+    assert.deepEqual(sourceSlow.messages, history.messages);
+    assert.deepEqual(sourceSlow.unavailableSessionIds, []);
+    assert.ok(calls.slice(beforeSlowSource).every(row => row.method === "GET"));
+    globalThis.fetch = routedRead;
+    child.stdin.write("slow-history-cancel\n");
+    assert.equal((await next()).slow_history, true);
+    await assert.rejects(() => fetchChatSessionHistory(original.session, AbortSignal.timeout(50)));
+  }
+  let updated = history;
+  if (!fallback) {
+    child.stdin.write("source\n");
+    assert.equal((await next()).source_turn_status, "completed");
+    updated = await fetchChatHistory(options, history);
+    assert.equal(updated.messages.filter(row => row.text === "A new synthetic message from the original private source.").length, 1);
+    const accepted = await acceptChatTurn(sessionId, "Continue from the desktop.", "synthetic-web-update");
+    assert.equal(accepted.session_id, sessionId);
+  }
   child.stdin.write("deny\n");
   assert.equal((await next()).source_verified, false);
   await assert.rejects(() => fetchChatHistory(options, updated));
@@ -89,13 +124,23 @@ try {
   assert.equal((await resolveBoundChatSession(target)).session_id, sessionId);
   const routedFetch = globalThis.fetch;
   for (const source of [undefined, {...original.source, binding_id: "f".repeat(24)},
-    {...original.source, audience: "group"}, {...original.source, context_available: false},
-    {...original.source, executor_endpoint_id: "another-executor"}]) {
+    {...original.source, audience: "group"}, {...original.source, context_available: false}]) {
     globalThis.fetch = async () => new Response(JSON.stringify({ok: true,
       conversation_binding_id: bindingId, sessions: history.sessions, conversation_source: source}));
     await assert.rejects(() => resolveBoundConversation(target));
   }
   globalThis.fetch = routedFetch;
+  if (fallback) {
+    for (const fault of ["fallback-invalid-allocation", "fallback-wrong-configured-endpoint"]) {
+      child.stdin.write(`${fault}\n`);
+      assert.equal((await next()).fallback_state, fault);
+      assert.equal((await originalFetch(new URL(`/api/chat/sessions?conversation_binding_id=${bindingId}`, origin))).status, 409);
+      await assert.rejects(() => resolveBoundConversation(target));
+      child.stdin.write("fallback-restore\n");
+      assert.equal((await next()).fallback_state, "fallback-restore");
+      assert.equal((await resolveBoundConversation(target)).session.session_id, sessionId);
+    }
+  }
   const projects = await fetchChatProjects();
   assert.ok(projects.projects.length > 0, "The production workspace response is accepted");
   for (const malformed of [{ok: true}, {ok: true, projects: null},
@@ -120,15 +165,24 @@ try {
   await assert.rejects(() => createChatSession(context, "codex"));
   child.stdin.write("inspect\n");
   const inspected = await next();
-  assert.equal(inspected.sessions, 2, "No discovery or denial creates a replacement Session");
+  assert.equal(inspected.sessions, fallback ? 3 : 2, "No discovery or denial creates a replacement Session");
   assert.equal(inspected.original_thread, "durable-thread");
   assert.equal(inspected.messages.filter((row: any) => row.text === "Must not execute.").length, 0);
   child.stdin.write("stop\n");
   const [code] = await exited;
   assert.equal(code, 0, stderr);
-  console.log("bound-conversation: passed (real HTTP/SQLite/Core, exact original history, no fallback/create, source and Web input, denial/recovery, closed and old-service refusal)");
+  console.log(fallback
+    ? "bound-conversation: passed (real HTTP/SQLite/Core steward fallback readback, original identity, invalid allocation/configured endpoint and revoked-source refusal; no model transition simulated)"
+    : "bound-conversation: passed (real HTTP/SQLite/Core, exact original history, no fallback/create, source and Web input, denial/recovery, closed and old-service refusal)");
 } finally {
   globalThis.fetch = originalFetch;
   output.close();
   if (child.exitCode === null) { child.kill("SIGINT"); await exited; }
+}
+if (!fallback) {
+  const alternate = spawn(process.execPath, [process.argv[1]], {
+    env: {...process.env, LOOPX_BOUND_STEWARD_FALLBACK: "1"}, stdio: "inherit",
+  });
+  const [code] = await once(alternate, "exit");
+  assert.equal(code, 0, "The same original-conversation journey must pass after quota fallback");
 }

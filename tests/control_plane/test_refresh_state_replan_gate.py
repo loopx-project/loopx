@@ -11,6 +11,7 @@ import pytest
 from canonical_authority_fixture import initialize_canonical_source_fixture
 
 from loopx.cli import main as cli_main
+from loopx.control_plane.effect_runtime import EffectRuntimeRejected
 from loopx.control_plane.status.autonomous_replan_projection import (
     AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD,
 )
@@ -197,6 +198,23 @@ def test_turn_guard_keeps_its_exact_replan_target_strict() -> None:
         )
 
 
+@pytest.mark.parametrize("run_count", [0, AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD])
+def test_selected_replan_cannot_write_when_its_source_cannot_be_reconstructed(run_count: int) -> None:
+    # Deferring an obligation not selected by an ordinary Turn is legal. Losing
+    # the exact source of an already selected replan must instead fail closed.
+    with pytest.raises(EffectRuntimeRejected, match="identity conflicts"):
+        enforce_open_replan_writeback(
+            newest_first_runs=_durable_runs(run_count), state_text=STATE_TEXT,
+            agent_id=AGENT_ID, goal_id=GOAL_ID, guard_scoped=True,
+            guard_semantic_replan_obligation_id="replan-1111111111111111",
+            progress_observation={
+                "schema_version": "typed_progress_observation_v0",
+                "result_class": "blocked", "work_item_id": "replan-1111111111111111",
+                "blocker_id": "blocker:source-missing", "evidence_ids": ["evidence:source-read"],
+            },
+        )
+
+
 def _typed_repeat_runs() -> list[dict]:
     """Two consecutive identical blocked observations (external-wait stall).
 
@@ -339,6 +357,7 @@ def _replan_gate_tmp_fixture(
                         "status": "active",
                         "repo": str(project),
                         "state_file": str(state.relative_to(project)),
+                        "execution_profile": {"stride_strategy": "off"},
                         "coordination": {
                             "agent_model": "peer_v1",
                             "registered_agents": [AGENT_ID],
@@ -997,7 +1016,9 @@ def test_todo_lifecycle_rejection_projects_exact_direct_settlement() -> None:
     assert all("spend-slot" not in action for action in actions)
 
 
+@pytest.mark.parametrize("independent_deferred", [False, True])
 def test_todo_complete_then_refresh_cli_projects_direct_settlement(
+    independent_deferred: bool,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -1092,6 +1113,15 @@ def test_todo_complete_then_refresh_cli_projects_direct_settlement(
         for index in (1, 2)
     ]
 
+    independent = None
+    if independent_deferred:
+        independent = add_goal_todo(
+            registry_path=registry_path, goal_id=GOAL_ID, role="agent",
+            text="Evaluate independent work when its window opens.",
+            task_class="advancement_task", claimed_by=AGENT_ID,
+            status="deferred", resume_when="resume_at:2099-01-01T00:00:00Z",
+        )
+
     for todo in todos:
         assert cli_main(
             [
@@ -1165,6 +1195,16 @@ def test_todo_complete_then_refresh_cli_projects_direct_settlement(
     assert all("refresh-state" not in action for action in actions)
     assert all("spend-slot" not in action for action in actions)
 
+    if independent:
+        assert cli_main([
+            "--registry", str(registry_path), "--format", "json", "todo", "complete",
+            "--goal-id", GOAL_ID, "--todo-id", str(todos[0]["todo_id"]),
+            "--agent-id", AGENT_ID, "--successor-todo-id", str(independent["todo_id"]),
+        ]) == 1
+        rejected = json.loads(capsys.readouterr().out)
+        assert "operation id already names a different coordination request" in rejected["error"]
+        assert any("terminal Todo cannot accept new successor links" in action for action in actions)
+
     for action in lifecycle_actions:
         tokens = shlex.split(action)
         loopx_index = tokens.index("loopx")
@@ -1196,7 +1236,22 @@ def test_todo_complete_then_refresh_cli_projects_direct_settlement(
     terminal_quota = json.loads(capsys.readouterr().out)
     assert terminal_exit == 1
     assert terminal_quota["should_run"] is False
-    assert terminal_quota["effective_action"] == "terminal_no_followup"
+    if independent_deferred:
+        assert terminal_quota["effective_action"] != "terminal_no_followup"
+    else:
+        assert terminal_quota["effective_action"] == "terminal_no_followup"
+    if independent:
+        assert cli_main(["--registry", str(registry_path), "--format", "json",
+                         "todo", "list", "--goal-id", GOAL_ID,
+                         "--todo-id", str(independent["todo_id"])]) == 0
+        readback = json.loads(capsys.readouterr().out)
+        # Full readback must keep the independent wait, not merely avoid a
+        # terminal recommendation by replacing it with an invented blocker.
+        retained = readback["todo"]
+        assert retained["todo_id"] == independent["todo_id"]
+        assert retained["status"] == "deferred"
+        assert retained["resume_when"] == "resume_at:2099-01-01T00:00:00Z"
+        assert retained["claimed_by"] == AGENT_ID
 
 
 @pytest.mark.parametrize(

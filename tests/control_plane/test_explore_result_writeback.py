@@ -185,7 +185,7 @@ def test_partial_link_failure_replays_without_duplicate_or_primary_rollback(
     assert second["ok"] and second["graph"]["appended_event_count"] == 0
 
 
-@pytest.mark.parametrize("case", ["disabled", "null", "invalid", "blank-status", "conflict", "off-without-result",
+@pytest.mark.parametrize("case", ["disabled", "null", "invalid", "blank-status", "conflict", "cross-result", "off-without-result",
                                 "path-disabled", "path-missing", "path-no-evidence", "path-overflow"])
 def test_real_cli_inline_validation_precedes_primary_commit(tmp_path, case):
     from canonical_authority_fixture import initialize_canonical_authority
@@ -230,6 +230,22 @@ def test_real_cli_inline_validation_precedes_primary_commit(tmp_path, case):
         packet["explore_result"]["evidence_refs"] = []
     if case == "blank-status":
         packet["explore_result"]["status"] = ""
+    if case == "cross-result":
+        attachment = packet["explore_result"]
+        attachment["evidence_refs"] = ["result:a", "result:b"]
+        attachment["execution_observation"] = {
+            "schema_version": "explore_execution_observation_v0",
+            "candidate_sha256": "a" * 64, "input_revision": attachment["input_revision"],
+            "planned_method_id": "probe", "executed_method_id": "probe", "change_reason": None,
+            "elapsed_seconds": 1, "limit_seconds": 10, "search_iterations": None,
+            "stop_reason": "process_exit:0", "evidence_refs": ["result:a"],
+            "result_ref": "result:a", "result_candidate_sha256": "a" * 64,
+        }
+        attachment["measurements"] = [{
+            "metric": "quality", "value": 8, "unit": "points", "higher_is_better": True,
+            "comparison_scope": "validation:budget", "input_revision": attachment["input_revision"],
+            "evaluation_ref": "evaluator:v1", "candidate_ref": "candidate:b", "evidence_ref": "result:b",
+        }]
     if case.startswith("path-"):
         packet["explore_result"] = {
             key: ATTACHMENT[key] for key in
@@ -270,6 +286,8 @@ def test_real_cli_inline_validation_precedes_primary_commit(tmp_path, case):
     else:
         assert rc == 1 and not result["appended"], result
         assert (index.read_bytes() if index.exists() else b"") == before
+        if case == "cross-result":
+            assert "executed candidate's result reference" in result["error"]
     assert not explore_result_log_path(runtime, GOAL_ID).exists()
 
 
@@ -834,7 +852,7 @@ def test_real_cli_open_capture_release_order_and_readback_replay(tmp_path, provi
                      ]
     guard = run(*guard_command)
     hint = guard["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"][1]["optional_attachments"][0]
-    assert "release only after explore_result_delivery.ok=true" in hint["guidance"]
+    assert "end that execution only after explore_result_delivery.ok=true" in hint["guidance"]
     lease_binding = ["--goal-id", GOAL_ID, "--todo-id", TODO_ID, "--owner", AGENT_ID]
     early = run("task-lease", "acquire", *lease_binding, "--idempotency-key", "early-release")["lease"]
     run("task-lease", "release", *lease_binding, "--idempotency-key", "early-release",
@@ -862,6 +880,9 @@ def test_real_cli_open_capture_release_order_and_readback_replay(tmp_path, provi
     current = run("task-lease", "acquire", *lease_binding, "--idempotency-key", "recovery")["lease"]
     captured = run(*refresh)
     assert captured["appended"] and captured["explore_result_delivery"]["ok"]
+    display_input = captured["explore_result_delivery"]["hook"]["intents"][0]["payload"]
+    assert display_input == {"attachment_ref": "$.explore_result"}
+    assert captured["explore_result"] == ATTACHMENT
     assert len(load_explore_result_events(log)) == 2
     committed_index, committed_log = index.read_bytes(), log.read_bytes()
     rows = list_goal_todos(registry_path=path, goal_id=GOAL_ID)["todos"]
@@ -875,6 +896,8 @@ def test_real_cli_open_capture_release_order_and_readback_replay(tmp_path, provi
     assert leases[0]["status"] == "released"
     replay = run(*refresh)
     assert replay["idempotent_replay"] and replay["explore_result_delivery"]["idempotent_replay"]
+    assert replay["explore_result"] == captured["explore_result"]
+    assert replay["explore_result_delivery"]["hook"]["intents"][0]["payload"] == display_input
     assert index.read_bytes() == committed_index and log.read_bytes() == committed_log
     assert list_goal_todos(registry_path=path, goal_id=GOAL_ID)["todos"] == rows
     assert read_canonical_todos_if_promoted(

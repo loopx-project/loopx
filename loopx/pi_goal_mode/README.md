@@ -21,7 +21,8 @@ into a LoopX-governed visible goal loop.
   activation token and locks its Goal, Agent, registry and capabilities, so
   inspecting a project first cannot constrain a later startup.
   `/loopx resume` re-arms auto-continuation after a user-driven pause or an
-  aborted run.
+  aborted run and immediately checks fresh quota admission when Pi is idle.
+  A busy Pi session waits for its next `agent_settled` event.
 - **`loopx_goal_activate`** — agent-callable tool. Binds the current session to
   the host-verified Pi startup/session packet using its one-time
   `activationToken`, plus the heartbeat `objective`/task_body, then starts the
@@ -229,9 +230,12 @@ boundary.
 
 An explicit host abort or Core `stop_until_explicit_resume` disarms automatic
 continuation and cancels its timer. Idle events and ordinary prompts do not
-re-arm it. Resolve the Core Goal/quota stop, then use `/loopx resume`; the next
-idle evaluation must obtain fresh admission. Pause/resume advances the existing
-binding generation, so a late pre-pause result cannot send a task afterward.
+re-arm it. Resolve the Core Goal/quota stop, then use `/loopx resume`; an idle
+session immediately obtains fresh admission without another prompt or settle
+event. A dependency wait restores bounded checks, and a Core stop pauses again
+without sending a task. A pre-pause probe cannot delay or replace the fresh
+check. Pause/resume advances the existing binding generation, so a late
+pre-pause result cannot send a task afterward.
 Use `/loopx status` and `loopx quota should-run --goal-id <goal_id> --agent-id
 <agent_id>` to distinguish host binding from Core permission. Validated
 no-follow-up stops; dependency waits retain bounded checks without model calls.

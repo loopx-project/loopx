@@ -1,6 +1,7 @@
 """Disposable read-only HTTP owner for a captured Explore event log.
 
-The default is three real EdgeBench research checkpoints. The history route
+The default is the complete saved Explore log from a recent Grid benchmark run.
+Older real checkpoints and synthetic boundary cases use explicit fixtures. The history route
 and pagination are production code; execution state is never restored and
 model dispatch is never called. Explicit fixture paths support regressions.
 """
@@ -53,9 +54,7 @@ def main():
         help="Serve the production directory for scoped Goal navigation tests.")
     args = parser.parse_args()
     fixtures = Path(__file__).resolve().parents[2] / "apps/presentation/dashboard/src/data/fixtures"
-    sources = args.fixture or [fixtures / name for name in (
-        "edgebench-research-history.json", "edgebench-graph-checkpoint-history.json",
-        "edgebench-ad-checkpoint-history.json")]
+    sources = args.fixture or [fixtures / "edgebench-grid-context-on-20261103-history.json"]
     captures = []
     original = {}
     for source in sources:
@@ -66,6 +65,11 @@ def main():
         assert capture["goal_id"] not in {item["goal_id"] for item in captures}, "Duplicate captured Goal"
         captures.append(capture)
         original[source] = source_bytes
+        # Frozen API responses retain real analysis identity and usage without
+        # registering execution state or launching a synthetic analysis job.
+        for record in [*capture.get("analysis_readbacks", {}).values(), *capture.get("analysis_citations", [])]:
+            encoded = json.dumps(record["response"], ensure_ascii=False, separators=(",", ":")).encode()
+            assert hashlib.sha256(encoded).hexdigest() == record["response_sha256"], "Changed analysis readback"
     goal_id = captures[0]["goal_id"]
     source_digests = {capture["goal_id"]: hashlib.sha256(original[source]).hexdigest()
         for source, capture in zip(sources, captures)}
@@ -92,7 +96,7 @@ def main():
         registry = root / "registry.json"
         registry.write_text(json.dumps({"schema_version": 1, "common_runtime_root": str(runtime), "goals": goals}))
         original[registry] = registry.read_bytes()
-        # Optional synthetic analysis uses the real pack verifier, process/job
+        # Optional boundary-test analysis uses the real pack verifier, process/job
         # owner and HTTP reader. It never enables model dispatch from the page.
         fixture_config = {**DEFAULT_CONFIG, "research_synthesis": False}
         fixture_config.pop("research_synthesis_revision", None)
@@ -103,8 +107,15 @@ def main():
                 scope = dict(runtime_root=runtime, owner_goal_id=capture["goal_id"])
                 registered = register_pack(**scope, input_path=input_path, source_root=source_root, title=analysis["title"],
                                            config=analysis.get("config", fixture_config),
+                                           usage_jsonl=analysis.get("usage_jsonl"),
+                                           usage_session_id=analysis.get("usage_session_id"),
+                                           include_incomplete_usage=analysis.get("include_incomplete_usage", False),
+                                           include_tool_context=analysis.get("include_tool_context", False),
                                            native_outcomes_json=analysis.get("native_outcomes_json"))
                 for language, output in analysis["outputs"].items():
+                    # Exercise saved artifacts from before language-scoped
+                    # generation without rewriting their registered identity.
+                    language = None if language == "original" else language
                     provider = write_python_host_fixture(root / f"analysis-provider-{index}-{language}",
                         ("#!python\n" if sys.platform == "win32" else f"#!{sys.executable}\n")
                         + "import sys\nfrom pathlib import Path\n"
@@ -112,7 +123,7 @@ def main():
                         "print('{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":10,\"output_tokens\":5}}')\n")
                     selected = inspect_pack(**scope, pack_id=registered["pack_id"], output_language=language)
                     execute_pack(**scope, pack_id=registered["pack_id"], analysis_key=selected["analysis_key"], output_language=language, codex=str(provider))
-        metrics = {"history_reads": 0, "mutation_attempts": 0}
+        metrics = {"history_reads": 0, "analysis_reads": 0, "citation_reads": 0, "mutation_attempts": 0}
 
         class Handler(ChatRequestHandler):
             def _send_json(self, payload, *, status=200):
@@ -140,9 +151,27 @@ def main():
                         "fixture_sha256": source_digests[goal_id], "fixtures": source_digests})
                 if path == "/api/chat/explore-results":
                     metrics["history_reads"] += 1
+                query = parse_qs(parsed.query)
+                capture = next((item for item in captures if query.get("goal_id") == [item["goal_id"]]), None)
+                if capture and capture.get("analysis_readbacks") and path.startswith("/api/chat/research-analysis"):
+                    if path == "/api/chat/research-analysis":
+                        metrics["analysis_reads"] += 1
+                        language = query.get("output_language", ["original"])[0]
+                        record = capture["analysis_readbacks"].get(language)
+                        if "pack_id" in query:
+                            record = next((item for item in capture["analysis_readbacks"].values()
+                                if query == parse_qs(urlparse(item["request_path"]).query)), None)
+                        if record and ("compare_pack_id" in query or query.get("pack_id", [record["response"]["pack"]["pack_id"]]) == [record["response"]["pack"]["pack_id"]]):
+                            return self._send_json(record["response"])
+                    elif path == "/api/chat/research-analysis/citation":
+                        metrics["citation_reads"] += 1
+                        for record in capture.get("analysis_citations", []):
+                            if query == parse_qs(urlparse(record["request_path"]).query):
+                                return self._send_json(record["response"])
+                    return self._send_error("This readback was not captured; the fixture cannot recover the original source.", status=404)
                 if path in {"/healthz", "/status.json", "/api/chat/explore-results",
                     "/api/chat/capabilities", "/api/chat/endpoints", "/api/chat/sessions", "/api/chat/goal-configuration",
-                    "/api/chat/research-analysis", "/api/chat/research-analysis/citation",
+                    "/api/chat/research-analysis", "/api/chat/research-analysis/citation", "/api/chat/research-analysis/usage-turn",
                     "/api/actions", "/api/chat/goals/contexts", "/api/chat/goal-results",
                     "/api/chat/sidebar-goal-order", "/api/chat/usage-statistics", "/api/chat/todo/detail",
                     "/api/chat/delivery-review", "/api/chat/goal-acceptance", "/api/chat/projects",
@@ -157,6 +186,7 @@ def main():
 
             do_PUT = do_POST
             do_DELETE = do_POST
+            do_PATCH = do_POST
 
         server = ChatHTTPServer(("127.0.0.1", args.port), Handler)
         server.registry_path, server.runtime_root = registry, runtime
@@ -180,7 +210,7 @@ def main():
         print(json.dumps({"port": server.server_port, "goal_id": goal_id,
             "goal_ids": [item["goal_id"] for item in captures],
             "event_count": sum(len(item["events"]) for item in captures),
-            "url": f"http://127.0.0.1:{server.server_port}/chat/?goalId={goal_id}&view=overview"}), flush=True)
+            "url": f"http://127.0.0.1:{server.server_port}/chat/?goalId={goal_id}&view=research"}), flush=True)
         try:
             server.serve_forever()
         finally:

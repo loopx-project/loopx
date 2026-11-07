@@ -6,11 +6,35 @@ import os
 import queue
 import signal
 import subprocess
+import sys as _sys
 import threading
 import time
 from typing import Any
+from typing import TYPE_CHECKING as _TYPE_CHECKING
 
-from ...extensions.process_runtime import force_terminate_process, write_process_stdin_before_deadline
+if _TYPE_CHECKING:
+    from ...extensions.process_runtime import (
+        force_terminate_process as force_terminate_process,
+        write_process_stdin_before_deadline as write_process_stdin_before_deadline,
+    )
+
+# Preview needs the bridge type; process helpers belong to execution or an
+# explicit caller import. Keep their existing identity and patch seams.
+_PROCESS_EXPORTS = ("force_terminate_process", "write_process_stdin_before_deadline")
+
+
+def __getattr__(name: str) -> Any:
+    if name not in _PROCESS_EXPORTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    from ...extensions import process_runtime
+
+    value = getattr(process_runtime, name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(_PROCESS_EXPORTS))
 
 
 class GuardedHostBridge:
@@ -21,19 +45,27 @@ class GuardedHostBridge:
         self.output = process.stdout
         self.process, self.deadline, self.cleanup_timeout = process, deadline, cleanup_timeout
         self.pending: queue.Queue[str | BaseException | None] = queue.Queue(maxsize=1)
+        self._stop_reading = threading.Event()
         self.requested = self.cancelled = self.not_launched = False
         self.result: dict[str, Any] | None = None
         self.reader = threading.Thread(target=self._read, name="loopx-host-bridge-reader", daemon=True)
         self.reader.start()
 
+    def _publish(self, item: str | BaseException | None) -> bool:
+        if self._stop_reading.is_set():
+            return False
+        self.pending.put(item)
+        return not self._stop_reading.is_set()
+
     def _read(self) -> None:
         try:
             for line in self.output:
-                self.pending.put(line)
+                if not self._publish(line):
+                    break
         except BaseException as error:
-            self.pending.put(error)
+            self._publish(error)
         finally:
-            self.pending.put(None)
+            self._publish(None)
 
     def next(self, *, deadline: float | None = None) -> dict[str, Any] | None:
         try:
@@ -53,8 +85,8 @@ class GuardedHostBridge:
         if self.next(deadline=self.deadline) != {"kind": "ready"}:
             raise RuntimeError("managed Host bridge did not become ready")
         self.requested = True
-        write_process_stdin_before_deadline(self.process, frame, deadline=self.deadline,
-            cancel_and_reap=self.cancel)
+        write_stdin = getattr(_sys.modules[__name__], "write_process_stdin_before_deadline")
+        write_stdin(self.process, frame, deadline=self.deadline, cancel_and_reap=self.cancel)
 
     def cancel(self) -> None:
         if self.cancelled:
@@ -65,7 +97,8 @@ class GuardedHostBridge:
             if not self.requested:
                 # No request bytes have been sent, so this bridge cannot own a
                 # Host. This also handles suspension before JS handlers exist.
-                force_terminate_process(self.process, process_tree_owned=True)
+                getattr(_sys.modules[__name__], "force_terminate_process")(
+                    self.process, process_tree_owned=True)
                 self.not_launched = True
             elif self.process.poll() is None:
                 self.process.terminate()
@@ -90,10 +123,21 @@ class GuardedHostBridge:
             # Killing the bridge alone cannot certify an unobserved detached
             # Host. Retain the launching record and fail instead of claiming it.
             if self.process.poll() is None:
-                force_terminate_process(self.process, process_tree_owned=True)
+                getattr(_sys.modules[__name__], "force_terminate_process")(
+                    self.process, process_tree_owned=True)
             raise RuntimeError("managed Host bridge cleanup unconfirmed") from error
 
     def close_output(self) -> None:
+        self._stop_reading.set()
+        # No caller remains to consume frames after cleanup fails. Release the
+        # one blocked producer before joining; this does not certify Host exit.
+        try:
+            self.pending.get_nowait()
+        except queue.Empty:
+            pass
         self.reader.join(timeout=self.cleanup_timeout)
         if not self.reader.is_alive():
             self.output.close()
+
+
+__all__ = [name for name in globals() if not name.startswith("_")] + list(_PROCESS_EXPORTS)

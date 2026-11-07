@@ -9,6 +9,7 @@ from loopx.control_plane.quota import refresh_external_delivery as bridge
 from loopx.control_plane.quota.settlement import SettlementIdentity
 from loopx.state_refresh import refresh_state_run
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 from tests.control_plane.test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, TODO_ID, TURN_ID, _write_fixture, _initialize_fixture_authority,
 )
@@ -29,7 +30,7 @@ def session(tmp_path, monkeypatch, capsys, request):
         rc = cli.main(["--format", "json", *prefix, *args])
         stdout = capsys.readouterr().out
         assert rc == expected, stdout
-        return json.loads(stdout)
+        return read_cli_policy_payload(stdout, returncode=rc)
 
     assert run(["quota", "should-run", "--codex-app", *binding,
                 ])["decision"] == "run"

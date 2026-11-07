@@ -1,8 +1,53 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { account, decide } from "../src/loopx_codex_provider_routing/native_policy.ts";
+import { account, apiRole, decide, modelRoute, observerHealth, stewardRoute } from "../src/loopx_codex_provider_routing/native_policy.ts";
 
 const now = 1000;
+test("consumer API roles never make a working Agent API primary", () => {
+  const policy = {enabled: false, slots: [], cooldown_seconds: 300, api_fallback: false, steward_api_role: "primary"};
+  const native = {policy, active_slot: "a", api_active: false};
+  assert.equal(apiRole(policy, "worker"), "disabled");
+  assert.equal(apiRole({...policy, api_fallback: true}, "worker"), "fallback");
+  assert.equal(apiRole(policy, "unrecognized-consumer"), "disabled");
+  assert.equal(apiRole({...policy, api_fallback: true, steward_api_role: "corrupt-role"}, "steward"), "disabled");
+  assert.equal(modelRoute({consumer: "worker", native, api_ready: true}).api, false);
+  assert.equal(modelRoute({consumer: "steward", native, api_ready: true}).api, true);
+  assert.equal(modelRoute({consumer: "steward", native, api_ready: false}).api, false);
+  assert.equal(stewardRoute({now, primary: "antigravity", pool: ["antigravity", "codex"],
+    current: "antigravity", native, api_ready: true, primary_capacity: null}).endpoint, "codex");
+  assert.equal(stewardRoute({now, primary: "antigravity", pool: ["antigravity"],
+    current: "antigravity", native, api_ready: true, primary_capacity: null}).endpoint, null);
+  assert.equal(stewardRoute({now, primary: "antigravity", pool: ["antigravity", "codex"],
+    current: "antigravity", native, api_ready: true, primary_capacity: null, blocked_primary: {corrupt: true}}).endpoint, null);
+  for (const role of ["disabled", "fallback", "corrupt-role"]) {
+    assert.equal(modelRoute({consumer: "steward", native: {...native, policy: {...policy, steward_api_role: role}}, api_ready: true}).api, false);
+  }
+  // Legacy fallback remains the account owner's already admitted route.
+  const fallback = {...native, policy: {...policy, enabled: true, api_fallback: true, steward_api_role: "fallback"},
+    api_active: true, login_matches: true, recovery_required: false, action: "api_active"};
+  assert.equal(modelRoute({consumer: "steward", native: fallback, api_ready: true}).api, true);
+  assert.equal(modelRoute({consumer: "steward", native: {...fallback, recovery_required: true}, api_ready: true}).api, false);
+  assert.equal(modelRoute({consumer: "steward", native: {...fallback, policy: {...fallback.policy, steward_api_role: "disabled"}}, api_ready: true}).api, false);
+});
+test("observer health requires a held owner and a fresh matching build heartbeat", () => {
+  const healthy = {now, owner_locked: true, build: "current",
+    heartbeat: {checked_at: now, deadline_at: now + 75, next_check_at: now + 60,
+      build: "current", phase: "waiting"}};
+  assert.equal(observerHealth(healthy).state, "healthy");
+  assert.equal(observerHealth({...healthy, owner_locked: false}).state, "stopped");
+  assert.equal(observerHealth({...healthy, owner_locked: null}).state, "unavailable");
+  assert.equal(observerHealth({...healthy, heartbeat: null}).state, "unverified");
+  assert.equal(observerHealth({...healthy, now: now + 76}).state, "overdue");
+  assert.equal(observerHealth({...healthy, heartbeat: {...healthy.heartbeat, build: "old"}}).state, "upgrade_required");
+  assert.equal(observerHealth({...healthy, heartbeat: {...healthy.heartbeat, phase: "retrying"}}).state, "retrying");
+  assert.equal(observerHealth({...healthy, heartbeat: {...healthy.heartbeat, checked_at: now + 6}}).state, "unverified");
+  assert.equal(observerHealth({...healthy, heartbeat: {...healthy.heartbeat, deadline_at: Infinity}}).state, "unverified");
+  const corrupt = observerHealth({...healthy, heartbeat: {...healthy.heartbeat,
+    checked_at: "private marker detail", next_check_at: {private: "detail"}}});
+  assert.equal(corrupt.state, "unverified");
+  assert.equal(corrupt.checked_at, null);
+  assert.equal(corrupt.next_check_at, null);
+});
 const sample = (slot, used = 10, extra = {}) => ({ slot, observed_at: now, status: "ok", usage: {
   rate_limit: { primary_window: { used_percent: used, reset_at: 2000 },
     secondary_window: { used_percent: 20, reset_at: 9000 } }, credits: { has_credits: false, balance: "0" }, ...extra,
@@ -102,4 +147,16 @@ test("normal client restart needs its own permission and the quota proof expires
   assert.equal(decide(input({ policy: allowed, observations: [sample("a"), sample("b")] })).restart_clients, false);
   assert.equal(decide(input({ policy: allowed, manual_slot: "b" })).valid_until, null,
     "An explicit sign-in choice is not an automatic quota decision");
+});
+
+test("API is opt-in and strictly after every measured subscription; recovery returns to subscriptions", () => {
+  const api = {slot: "openai-api", ready: true};
+  const enabled = {enabled: true, slots: ["a", "b", "c"], cooldown_seconds: 300, api_fallback: true};
+  const exhausted = [sample("a", 100), sample("b", 100), sample("c", 100)];
+  assert.equal(decide(input({policy: enabled, api})).target, "b", "API never outranks an available subscription");
+  assert.equal(decide(input({policy: enabled, api, observations: exhausted})).target, api.slot);
+  assert.equal(decide(input({api, observations: exhausted})).target, null, "Absent opt-in preserves subscription-only behavior");
+  assert.equal(decide(input({policy: enabled, api, observations: [sample("a", 100), sample("b", 100), {...sample("c", 100), observed_at: now - 121}]})).target, null);
+  assert.equal(decide(input({policy: enabled, api, active: api.slot, observations: exhausted})).action, "api_active");
+  assert.equal(decide(input({policy: enabled, api, active: api.slot, observations: [sample("a", 80), sample("b", 20), sample("c", 100)]})).target, "b");
 });

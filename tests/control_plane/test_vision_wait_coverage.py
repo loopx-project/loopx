@@ -105,9 +105,9 @@ def test_vision_wait_composition_uses_one_runtime_crossing(monkeypatch) -> None:
     methods = []
     original = goal_vision_wait.effect_runtime_result
 
-    def counted(method, request):
+    def counted(method, request, **kwargs):
         methods.append(method)
-        return original(method, request)
+        return original(method, request, **kwargs)
 
     monkeypatch.setattr(goal_vision_wait, "effect_runtime_result", counted)
     decision()

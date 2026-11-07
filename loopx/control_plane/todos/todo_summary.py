@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from typing import Any, Callable, Optional, cast
+
 from datetime import datetime
 import re
-from typing import Any, Callable, Optional
 
 from ..goals.goal_vision_wait_projection import attach_active_vision_waits
 from .contract import (
@@ -112,7 +113,7 @@ TASK_ORCHESTRATION_USER_BLOCKER_FIELDS = (
 )
 
 
-def normalize_todo_text(text: str, *, limit: int | None = 500) -> str:
+def normalize_todo_text(text: object, *, limit: int | None = 500) -> str:
     """Normalize whitespace; source codecs explicitly opt out of display limits."""
     compact = " ".join(str(text or "").strip().split())
     if limit is None or len(compact) <= limit:
@@ -152,8 +153,8 @@ def active_state_todo_attention_item(
 ) -> dict[str, Any] | None:
     """Surface active-state todos even when the latest run classification is passive."""
 
-    user_todos = fields.get("user_todos") if isinstance(fields.get("user_todos"), dict) else None
-    agent_todos = fields.get("agent_todos") if isinstance(fields.get("agent_todos"), dict) else None
+    user_todos = cast(dict[str, Any], fields.get("user_todos")) if isinstance(fields.get("user_todos"), dict) else None
+    agent_todos = cast(dict[str, Any], fields.get("agent_todos")) if isinstance(fields.get("agent_todos"), dict) else None
     active_next_action = public_safe_compact_text(
         fields.get("active_state_next_action"),
         limit=320,
@@ -268,21 +269,21 @@ def sync_connected_attention_action_from_todos(
     if item.get("status") != "connected_without_run":
         return
     agent_lane_action = (
-        item.get("agent_lane_next_action")
+        cast(dict[str, Any], item.get("agent_lane_next_action"))
         if isinstance(item.get("agent_lane_next_action"), dict)
         else None
     )
     if agent_lane_action is None and isinstance(item.get("project_asset"), dict):
         project_asset = item["project_asset"]
         agent_lane_action = (
-            project_asset.get("agent_lane_next_action")
+            cast(dict[str, Any], project_asset.get("agent_lane_next_action"))
             if isinstance(project_asset.get("agent_lane_next_action"), dict)
             else None
         )
     agent_action = normalize_todo_text(agent_lane_action.get("text")) if agent_lane_action else None
     if not agent_action:
         agent_action = first_open_todo_text(
-            item.get("agent_todos") if isinstance(item.get("agent_todos"), dict) else None
+            cast(dict[str, Any], item.get("agent_todos")) if isinstance(item.get("agent_todos"), dict) else None
         )
     if not agent_action:
         return
@@ -851,7 +852,7 @@ def compact_todo_group(
     if include_task_orchestration_authority:
         summary["task_orchestration_authority"] = _task_orchestration_authority(
             projected["orchestration"], role=role)
-    return summary
+    return cast(dict[str, Any] | None, summary)
 
 
 
@@ -887,4 +888,4 @@ def compact_evaluated_todo_group(
     if include_task_orchestration_authority:
         summary["task_orchestration_authority"] = _task_orchestration_authority(
             projected["orchestration"], role=role)
-    return summary
+    return cast(dict[str, Any] | None, summary)

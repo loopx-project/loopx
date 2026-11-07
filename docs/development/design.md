@@ -192,6 +192,12 @@ the chart. Show one finding at a time with its declared status and full text;
 keep all findings selectable and failed or tentative counts visible. Preserve
 the exact finding on reload and Back. Offer the whole recorded history in place
 and through the existing return action, without letting it bury the chosen text.
+When opening a specific finding, put its parent question in accessible contextual
+help rather than another collapsed title row. Opening a route's question still
+reveals that complete question directly; these two reading intents are distinct.
+
+打开具体结论时，所属研究问题放进可悬浮、聚焦和点按的上下文帮助，避免再堆一行
+折叠标题；从路线打开问题时仍直接显示完整问题，不增加必经操作。
 
 Decision history groups records by their recorded question identity, with the
 question title once above its successive decisions. Matching titles alone do
@@ -200,6 +206,21 @@ with their outcome, change and recorded status; retain stopped/retained evidence
 and expose earlier records in place. Counts and date spans describe the selected
 time range. Keep negative and tentative record counts visible when older rows
 are folded, and open each row's exact finding in the existing reader.
+
+Reading a question from a day or nearby-point group keeps that collection as
+navigation context. Offer a compact question selector and previous/next controls
+inside the reader, rather than requiring repeated trips through a long list.
+Distinguish question navigation from successive findings of the same question.
+Keep the complete question in contextual help beside the selector instead of
+repeating its title in another collapsed row.
+Reload and Back/Forward retain the collection and exact finding; returning to
+the list restores the current question's focus. A group is only a reading scope,
+never an inferred research relationship. Missing members remain unavailable.
+
+从日期或相邻点分组打开问题后，在阅读器内紧凑切换同组问题，避免反复返回长列表。
+问题切换与同一问题的多条结论分别标明；完整问题放进选择器旁的按需帮助，避免
+再重复一行折叠标题。刷新、前进后退保留分组与准确结论，返回
+列表时聚焦当前问题。分组仅用于阅读，不推断研究关联；缺失条目不借用其他来源。
 
 Route captions distinguish start and end and wrap as readable entries. If a
 long title is clamped in that list, one activation opens its complete original

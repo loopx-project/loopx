@@ -164,17 +164,19 @@ export const goalActivityScenario = {
       assert.equal(claimedLane.title, "宿主已领取");
       assert.equal(claimedLane.count, 1);
       assert.match(claimedLane.text, /Product Release/);
-      assert.equal(
-        await page.getByTestId("personal-brief-needs").locator(".personal-brief-row").count(),
-        await page.getByTestId("personal-home-lane-needs_you").locator(".personal-home-goal-card").count(),
-        "The brief and the needs-you lane agree",
-      );
+      const needs = await briefTile(page, "needs");
+      assert.equal(needs.title, "已列待处理事项");
+      assert.equal(needs.count, needs.rows, "The compact fixture counts native attention items, not affected Goals");
+      assert.equal(await page.getByTestId("personal-brief-needs").locator("[data-operation-id]").count(), 0,
+        "Operation delivery has its own unit and never inflates the attention count");
       assert.deepEqual(
         await page.getByTestId("personal-brief-completed").locator(".personal-brief-row strong").allTextContents(),
         ["Newest cross-goal result", "Completed B", "Completed C"],
         "Recent work survives status parsing and is sorted across Goals before taking three rows",
       );
       await page.screenshot({ path: resolve(outputDir, "goal-activity-sidebar.png"), animations: "disabled" });
+      await page.locator(".personal-home-lanes").scrollIntoViewIfNeeded();
+      await page.screenshot({ path: resolve(outputDir, "goal-activity-home-ledger.png"), animations: "disabled" });
       await running.locator(".personal-goal-link").click();
       await page.getByTestId("goal-vitals").locator(".goal-vital-value", { hasText: "执行中" }).first().waitFor();
       await page.screenshot({ path: resolve(outputDir, "goal-activity-running-goal.png"), animations: "disabled" });

@@ -6,7 +6,7 @@ import {fetchLoopXTeamWork, inspectLoopXMember, delegationState, delegationState
 import {GoalTeamEvidence} from "./goal-team-evidence";
 import {DelegationPreflightStatus} from "./delegation-preflight-status";
 
-type Member = {id: string; agent_id: string; todo_id: string};
+type Member = {id: string; agent_id: string; todo_id: string | null};
 type DelegationRecord = DelegationInventory["items"][number];
 type PulseBucket = "executing" | "validating" | "accepted" | "attention" | "stopped" | "dispatched" | "unknown";
 type CheckTone = "unchecked" | "ready" | "unverified" | "blocked";

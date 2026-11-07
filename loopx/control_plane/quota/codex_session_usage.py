@@ -145,12 +145,22 @@ def _read_codex_session_usage(
         raw_payload = item.get("payload")
         payload = raw_payload if isinstance(raw_payload, dict) else {}
         if kind == "session_meta":
-            session_id = str(
+            metadata_session_id = str(
                 payload.get("session_id") or payload.get("id") or ""
             ).strip()
-            session_started_at = _parse_timestamp(
-                payload.get("timestamp") or item.get("timestamp")
-            )
+            if not metadata_session_id:
+                raise CodexSessionUsageError(
+                    f"codex session rollout has no session_meta id: {path}"
+                )
+            if session_id and metadata_session_id != session_id:
+                raise CodexSessionUsageError(
+                    f"codex session rollout has conflicting session_meta ids: {path}"
+                )
+            if not session_id:
+                session_id = metadata_session_id
+                session_started_at = _parse_timestamp(
+                    payload.get("timestamp") or item.get("timestamp")
+                )
         elif kind == "turn_context":
             model_text = str(payload.get("model") or "").strip()
             if model_text:
@@ -162,6 +172,10 @@ def _read_codex_session_usage(
             info = raw_info if isinstance(raw_info, dict) else {}
             totals = info.get("total_token_usage")
             if isinstance(totals, Mapping):
+                if not session_id:
+                    raise CodexSessionUsageError(
+                        f"codex session rollout has usage before session_meta: {path}"
+                    )
                 last_totals = totals
                 last_totals_at = str(item.get("timestamp") or "").strip()
                 # The model labels this cumulative snapshot only if it was

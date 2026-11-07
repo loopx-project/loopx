@@ -271,6 +271,7 @@ def test_pr_list_paginates_files_when_graphql_detail_is_truncated(monkeypatch) -
         {"filename": f"src/file_{index}.py", "additions": index, "deletions": 0}
         for index in range(101)
     ]
+    row.update(additions=sum(item["additions"] for item in rest_files), deletions=0)
     calls: list[list[str]] = []
 
     def fake(args: list[str], *, cwd: Path | None = None):
@@ -278,6 +279,8 @@ def test_pr_list_paginates_files_when_graphql_detail_is_truncated(monkeypatch) -
         if args[:2] == ["pr", "list"]:
             return [row]
         if args[:2] == ["pr", "view"]:
+            if "files" not in args[args.index("--json") + 1].split(","):
+                return dict(row)
             details = _fake_run_gh_json(args, cwd=cwd)
             details["files"] = details["files"] * 100
             return details
@@ -296,6 +299,74 @@ def test_pr_list_paginates_files_when_graphql_detail_is_truncated(monkeypatch) -
     assert len(scan["pull_requests"][0]["files"]) == 101
     assert scan["pull_requests"][0]["files"][-1]["path"] == "src/file_100.py"
     assert ["api", "--paginate", "--slurp"] in [call[:3] for call in calls]
+
+
+@pytest.mark.parametrize("exact_target", [False, True])
+@pytest.mark.parametrize("drift", [
+    None, "headRefOid", "baseRefOid", "changedFiles", "additions", "deletions",
+    "unavailable", "duplicate_path",
+])
+def test_paginated_files_require_a_complete_unchanged_snapshot(
+    monkeypatch, exact_target: bool, drift: str | None,
+) -> None:
+    listed = _rows()[0] | {"changedFiles": 101, "additions": 101, "deletions": 0}
+    rest_files = [
+        {"filename": f"src/file_{index}.py", "additions": 1, "deletions": 0}
+        for index in range(101)
+    ]
+    if drift == "duplicate_path":
+        rest_files[-1] = dict(rest_files[0])
+    inventory_read = False
+    calls = []
+
+    def github(args, *, cwd=None):
+        nonlocal inventory_read
+        calls.append(args)
+        assert "statusCheckRollup" not in ",".join(args)
+        if args[:2] == ["pr", "list"]:
+            return [dict(listed)]
+        if args[:3] == ["api", "--paginate", "--slurp"]:
+            inventory_read = True
+            return [rest_files[:100], rest_files[100:]]
+        fields = args[args.index("--json") + 1].split(",")
+        if "files" in fields:
+            # The initial detail belongs to the original head; the REST pages
+            # can come from a later revision with the same number of files.
+            return _fake_run_gh_json(args, cwd=cwd) | {"files": [{}] * 100}
+        current = dict(listed)
+        if inventory_read:
+            if drift == "unavailable":
+                raise RuntimeError("version readback unavailable")
+            if drift in {"headRefOid", "baseRefOid"}:
+                current[drift] = "d" * 40
+            elif drift in {"changedFiles", "additions", "deletions"}:
+                current[drift] += 1
+        return current
+
+    if exact_target:
+        def scan():
+            return github_source_module.scan_github_pull_request_targets(
+                repository="owner/repo", exact_heads=[f"1@{HEAD_1}"],
+                run_gh_json=github, wait_for_ci=False,
+            )
+
+        if drift is not None:
+            with pytest.raises(RuntimeError, match="detail read was incomplete"):
+                scan()
+            return
+        result = scan()
+    else:
+        monkeypatch.setattr(pr_review_module, "_run_gh_json", github)
+        result = pr_review_module.scan_github_pull_requests(
+            repo="owner/repo", limit=10, wait_for_ci=False,
+        )
+        if drift is not None:
+            assert result["complete"] is False
+            assert result["states"][0]["detail_read_failures"] == 1
+            assert "files" not in result["pull_requests"][0]
+            return
+    assert result["complete"] is True
+    assert len(result["pull_requests"][0]["files"]) == 101
 
 
 def test_pr_list_marks_source_incomplete_when_rest_files_are_still_truncated(
@@ -857,16 +928,48 @@ def test_head_drift_observation_does_not_suppress_the_new_remote_head(
     assert item["merge_readiness_observation"] is None
 
 
-def test_merge_readiness_requires_goal_scope() -> None:
+@pytest.mark.parametrize("hold", [None, "head", "review", "ci", "thread", "pagination"])
+def test_standalone_merge_readiness_keeps_all_gates_without_goal_writes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    hold: str | None,
+) -> None:
+    pull_request = _merge_ready_pr()
+    threads = _complete_review_threads()
+    if hold == "head":
+        pull_request["headRefOid"] = HEAD_2
+    elif hold == "review":
+        pull_request["reviews"] = []
+    elif hold == "ci":
+        pull_request["statusCheckRollup"][0]["conclusion"] = "FAILURE"
+    elif hold == "thread":
+        threads = _complete_review_threads(1)
+    elif hold == "pagination":
+        threads["complete"] = False
+    monkeypatch.setattr(pr_review_cli_module, "resolve_current_github_login", lambda: "maintainer")
+    monkeypatch.setattr(pr_review_cli_module, "fetch_github_pull_request", lambda **_kwargs: pull_request)
+    monkeypatch.setattr(pr_review_cli_module, "fetch_github_review_thread_summary", lambda **_kwargs: threads)
+
+    def no_goal_access(**_kwargs):
+        raise AssertionError("Standalone readiness cannot read or write Goal observations")
+
+    monkeypatch.setattr(pr_review_cli_module, "read_readiness_observations", no_goal_access)
+    monkeypatch.setattr(pr_review_cli_module, "record_readiness_observation", no_goal_access)
     out: list[dict[str, object]] = []
     result = pr_review_cli_module.handle_pr_review_command(
         _merge_readiness_args(goal_id=None),
+        runtime_root=tmp_path,
         output_format=lambda _args: "json",
         print_payload=_capture_payload(out),
     )
 
-    assert result == 1
-    assert out[0]["error"] == "merge readiness requires --goal-id"
+    assert result == (0 if hold is None else 1)
+    assert out[0]["ready"] is (hold is None)
+    assert out[0]["source"] == "github_cli"
+    assert out[0]["expected_exact_head"] == f"4110@{HEAD_1}"
+    assert out[0]["local_goal_observation_write_performed"] is False
+    assert "readiness_observation" not in out[0]
+    assert not list(tmp_path.iterdir())
 
 
 def test_pr_review_cli_uses_machine_capability_priority_when_flag_is_omitted(
@@ -1030,7 +1133,42 @@ def test_merge_readiness_binds_review_body_checks_and_threads_to_exact_head() ->
     assert ready["ready"] is True, ready
     assert ready["blocking_reasons"] == [], ready
     assert ready["authority"]["grants_merge_authority"] is False, ready
+    assert ready["authority"]["admin_bypass_overrides_this_gate"] is True, ready
+    assert ready["authority"]["admin_bypass_scope"] == (
+        "readiness_and_github_review_policy"
+    ), ready
     assert ready["review_conclusion"]["verdict"] == "APPROVE", ready
+
+
+def test_explicit_admin_bypass_may_override_a_readiness_policy_hold() -> None:
+    pr = _merge_ready_pr(review_decision="REVIEW_REQUIRED")
+    pr["mergeStateStatus"] = "BLOCKED"
+    readiness = merge_readiness_module.build_pr_merge_readiness_packet(
+        pull_request=pr,
+        repository="owner/repo",
+        expected_exact_head=f"4110@{HEAD_1}",
+        reviewer_login="maintainer",
+        review_threads=_complete_review_threads(),
+        source="fixture",
+        wait_for_ci=False,
+    )
+
+    assert readiness["ready"] is False, readiness
+    assert readiness["blocking_reasons"] == ["github_review_decision_not_approved"]
+    assert readiness["admin_bypass_required"] is True
+    assert readiness["authority"] == {
+        "grants_merge_authority": False,
+        "admin_bypass_overrides_this_gate": True,
+        "admin_bypass_scope": "readiness_and_github_review_policy",
+        "admin_bypass_requires": [
+            "explicit_user_or_maintainer_merge_authorization",
+            "valid_exact_head_review_and_required_validation",
+            "complete_review_threads_without_unresolved_findings",
+            "open_unchanged_mergeable_head",
+        ],
+        "required_timing": "immediately_before_merge",
+        "head_change_action": "restart_review_and_rerun_gate",
+    }
 
 
 def test_merge_readiness_rejects_review_text_for_pre_update_head() -> None:
@@ -1051,6 +1189,7 @@ def test_merge_readiness_rejects_review_text_for_pre_update_head() -> None:
 
     assert stale["ready"] is False, stale
     assert "current_head_review_missing_or_invalid" in stale["blocking_reasons"]
+    assert stale["authority"]["admin_bypass_overrides_this_gate"] is False
     assert (
         "review_body_missing_standalone_bilingual_format"
         in (stale["review_conclusion"]["invalid_reasons"])

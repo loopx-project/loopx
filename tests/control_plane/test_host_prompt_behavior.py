@@ -54,7 +54,10 @@ def test_probe_uses_current_production_prompts_and_hidden_independent_oracle():
             assert "heartbeat_recommendation.agent_must_attempt" in body
             assert "projected monitor/continuation" in body
             assert "no invented successor" in body
-            assert "no wait spend" in body.lower()
+            assert "no wait spend" in body.lower() or "no spend for waiting alone." in body.lower()
+            assert "resume_at:<RFC3339>" in body
+            assert "yield to host scheduler" in body
+            assert "Fresh admission on resume." in body
             assert "--codex-app" in body
             assert "LOOPX_TURN=<current_time_iso>" in body
             assert case["id"] not in json.dumps(messages)

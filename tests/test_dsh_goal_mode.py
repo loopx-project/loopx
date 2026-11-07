@@ -16,7 +16,7 @@ from loopx.control_plane.quota.turn_envelope import (
     turn_envelope_action_signature_document,
 )
 from loopx.control_plane.turn_driver.executor import validate_loopx_turn_host_result
-from loopx.control_plane.turn_driver.codex_cli import codex_cli_result_schema
+from loopx.control_plane.turn_driver.codex_cli import codex_cli_result_schema, normalize_codex_result
 from loopx.control_plane.turn_driver.host_failure import (
     BuiltInHostError,
     build_host_failure_record,
@@ -733,16 +733,17 @@ def test_stop_candidates_cannot_declare_work_or_validation_evidence(kind: str) -
 
 
 @pytest.mark.parametrize("kind", ["wait", "user_action_required", "iteration_failed"])
-def test_codex_schema_stop_with_required_empty_path_fields_passes_executor(kind: str) -> None:
-    request = _signed_request()
+@pytest.mark.parametrize("with_profile", [False, True])
+@pytest.mark.parametrize("evidence", [None, [], False, ["artifact:unexpected"]])
+def test_codex_schema_stop_with_required_empty_path_fields_passes_executor(kind, with_profile, evidence) -> None:
+    request = _signed_request(execution_profile={"work_kind": "engineering_change"} if with_profile else None)
     schema = codex_cli_result_schema(request)
     required = schema["required"]
     properties = schema["properties"]
     assert "path_delta_mode" in required and "agent_vision_json" in required
     assert properties["path_delta_mode"]["type"] == "string"
     assert properties["agent_vision_json"]["type"] == "string"
-    assert "work_evidence" not in required
-    assert "validation_evidence" not in required
+    assert "work_evidence" in required and "validation_evidence" in required
     value = {field: "" for field in required}
     value.update(
         {
@@ -752,40 +753,47 @@ def test_codex_schema_stop_with_required_empty_path_fields_passes_executor(kind:
             "completed_phases": ["host_execute", "typed_result"],
             "classification": "bounded stop",
             "next_action": "Await the next authorized iteration.",
+            "work_evidence": evidence,
+            "validation_evidence": evidence,
         }
     )
 
-    verdict = validate_loopx_turn_host_result(_turn_plan(request), value)
-    assert verdict["ok"], verdict["errors"]
+    adapted = normalize_codex_result(request, value)
+    verdict = validate_loopx_turn_host_result(_turn_plan(request), adapted)
+    assert verdict["ok"] is (evidence is None), verdict["errors"]
+    # Only null placeholders disappear; real/invalid evidence remains visible.
+    assert value["work_evidence"] is evidence
+    if evidence is not None:
+        assert adapted == value
+    else:
+        assert "work_evidence" not in adapted and "validation_evidence" not in adapted
 
 
-def test_codex_schema_requires_profile_evidence_only_for_material_results() -> None:
-    request = _signed_request(
-        execution_profile={"minimum_scale": "multi_surface_or_implementation"}
-    )
-    schema = codex_cli_result_schema(request)
-
-    assert "work_evidence" not in schema["required"]
-    assert "validation_evidence" not in schema["required"]
-    assert schema["allOf"] == [
-        {
-            "if": {
-                "properties": {
-                    "result_kind": {
-                        "enum": [
-                            "validated_progress",
-                            "repair_required",
-                            "replan_required",
-                        ]
-                    }
-                },
-                "required": ["result_kind"],
-            },
-            "then": {
-                "required": ["work_evidence", "validation_evidence"],
-            },
-        }
-    ]
+@pytest.mark.parametrize("kind", ["validated_progress", "repair_required", "replan_required"])
+@pytest.mark.parametrize("with_profile", [False, True])
+@pytest.mark.parametrize("field", ["work_evidence", "validation_evidence"])
+@pytest.mark.parametrize("evidence", ["missing", None, [], False, {}, ["artifact:checked"]])
+def test_codex_material_evidence_keeps_profile_and_legacy_rules(kind, with_profile, field, evidence):
+    request = _signed_request(execution_profile={"work_kind": "engineering_change"} if with_profile else None)
+    value = turn_host_adapter.build_result(request, {
+        "result_kind": kind, "classification": "artifact_checked",
+        "next_action": "Continue the accepted task.",
+        "vision_unchanged_reason": "The accepted Goal remains unchanged.",
+        "work_evidence": ["artifact:checked"], "validation_evidence": ["check:independent"],
+    })
+    if evidence == "missing":
+        value.pop(field)
+    else:
+        value[field] = evidence
+    if with_profile and (evidence is None or evidence == "missing"):
+        with pytest.raises(BuiltInHostError, match="codex_material_result_missing_evidence"):
+            normalize_codex_result(request, value)
+        return
+    adapted = normalize_codex_result(request, value)
+    assert adapted == value
+    verdict = validate_loopx_turn_host_result(_turn_plan(request), adapted)
+    expected = evidence is None or evidence == "missing" or isinstance(evidence, list) and bool(evidence)
+    assert verdict["ok"] is expected, verdict["errors"]
 
 
 def _turn_plan(request: dict) -> dict:

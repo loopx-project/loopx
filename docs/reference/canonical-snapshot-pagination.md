@@ -23,8 +23,9 @@ continuation, so a large valid population remains readable without raising a
 transport limit or retrying a lost oversized response. The standalone wire-only
 `coordination.local_authority.todo_snapshot_page` endpoint remains compatible.
 Its pages, and capacity fallback pages, contain up to 4,096 Todo/lease records and
-1,792 KiB of UTF-8 JSON. The generic RPC response ceiling remains 2 MiB, leaving 256 KiB for its
-envelope. Normal collections can still complete in one page. A record
+1,792 KiB of UTF-8 JSON. That page budget still fits the original 2 MiB wire
+with 256 KiB for its envelope; it does not grow with the shared 8 MiB RPC ceiling
+described below. Normal collections can still complete in one page. A record
 and its acceptance guard travel together; records are never shortened to meet a
 budget. Archived dependency/decision records remain in the full collection.
 
@@ -118,3 +119,68 @@ This closes the bounded collection-read part of T3/L5. It does not establish D1
 permanent projection freshness, SQLite D2 durability/soak, D3 whole-Goal
 migration, or default-on qualification. See the
 [remaining PR sequence](../architecture/rfcs/shared-goal-authority-state-provider-v0.md).
+
+## Shared RPC byte budget
+
+Ordinary Python/TypeScript Effect requests and inline responses admit up to
+8 MiB, including the newline-delimited envelope. Python emits compact UTF-8
+JSON instead of ASCII-escaping every non-ASCII character. JSON values, escaped
+control characters and lone-surrogate compatibility remain intact. The server
+counts UTF-8 bytes and searches each new socket chunk for the delimiter, then
+parses the complete first frame once. Earlier chunks cannot contain that
+delimiter; repeatedly searching the accumulated string needlessly flattens it.
+
+This is an intentional increase from 2 MiB. A complete digest-bound source
+containing Chinese text and emoji occupied 1,000,387 UTF-8 parameter bytes but
+2,400,387 ASCII-escaped bytes: the old ordinary call refused before dispatch,
+while the explicitly allowed snapshot call wrote the inflated parameters.
+The UTF-8 call returns the same complete source, including its final constraint.
+It does not shorten Goal text or remove required reads to fit a budget.
+
+The capacity decision compared 2, 4 and 8 MiB on the same disposable Node 24
+worker with the UTF-8 encoder held fixed. Each trial read complete, hash-bound
+1/3/6 MiB sources, then four concurrent 6 MiB sources; a separate Python process
+sent small pings. Three uninstrumented trials per variant gave:
+
+| Ordinary cap and delimiter scan | 6 MiB warm roundtrip (ms) | Worker peak RSS (MiB) | Busy ping observed p95 (ms) |
+| --- | ---: | ---: | ---: |
+| 2 MiB, accumulated string; snapshot fallback | 68.7–79.5 | 196.8–218.0 | 20.8–26.8 |
+| 8 MiB, accumulated string; inline | 79.5–85.8 | 254.7–320.7 | 154.7–203.5 |
+| 8 MiB, new chunk only; inline | 57.7–60.0 | 214.6–222.4 | 28.0–66.8 |
+
+Raising the cap alone was rejected. V8 samples identified the repeated data
+callback work; changing only the delimiter scan removed that hotspot, and the
+uninstrumented comparison confirmed lower cost. The selected 8 MiB cap lets
+the complete 3/6 MiB sources stay inline. The 4 MiB candidate still sent the
+6 MiB source through a private file. Larger inline calls retain a concurrency
+cost: in a separate four-by-3 MiB workload, busy ping maxima were 72–101 ms
+with 8 MiB versus 17–19 ms with 2 MiB and snapshot fallback. These short local
+samples are observations, not a stable tail-latency SLO or long-horizon/model
+qualification. Roundtrip includes encoding, safe refusal/fallback when needed,
+transport and result validation; it excludes fixture preparation and startup.
+Peak RSS covers the worker's whole trial, including startup. The four large
+callers share one Python process; only the ping caller runs independently.
+
+The 64 MiB opt-in private-file capacity, method allowlist, same-UID ownership,
+permissions, digests, cleanup, deadlines and ambiguous-response recovery remain
+unchanged. Over-limit ordinary requests still refuse before dispatch; a possible
+commit followed by an oversized or lost response still requires receipt recovery.
+Pagination budgets and frozen experiment/promotion criteria remain independent.
+These transport changes add no capability, setting, execution or merge authority.
+Existing consumers that derive a limit from `MAX_REQUEST_BYTES` follow the same
+8 MiB budget: context-capture/native-input file and event readers, Todo summary
+and handoff batches, and task-graph/replan-history transport selection. Their
+source identity, file/privacy, digest and replay checks remain in force. Host
+loading limits, progressive presentation budgets and frozen experiment bounds
+are separate; increasing the shared wire does not change them.
+
+普通 Effect RPC 的请求和内联响应上限从 2 MiB 放宽到 8 MiB，按包含换行封包的
+实际 UTF-8 字节计量。保留完整正文、JSON 值及孤立代理项兼容，不删约束或必要读取。
+同时只扫描新增 socket 块中的换行，避免反复展开累积正文；单独提高上限的内存和
+延迟回退保留为失败对照。8 MiB 可让完整 3/6 MiB 来源走内联路径，但并发大请求仍
+可能增加小请求等待；以上为短时本机观测，不代表稳定尾延迟、真实模型或长程收益
+已验收。64 MiB 私有文件容量、方法和权限边界、摘要、清理、超时及不确定结果恢复
+不变；分页预算与已冻结实验／晋升条件独立，不追认历史失败。
+既有引用共享常量的上下文捕获／原生输入读取、Todo 批次与 task-graph/replan-history
+传输选择同步沿用 8 MiB；来源身份、文件隐私、摘要和重放检查保留。宿主加载和渐进
+展示预算各自独立，不随 RPC 上限放宽。

@@ -6,6 +6,7 @@ import {
   VISION_REFRESH_PREPARED_SCHEMA_VERSION,
   VISION_REFRESH_REQUEST_SCHEMA,
   visionAuthoringContract,
+  normalizeGoalPathDelta,
 } from "../../loopx/control_plane/goals/vision_checkpoint.ts";
 
 function finalizeRequest(overrides: Record<string, unknown> = {}) {
@@ -193,7 +194,7 @@ test("structured replans have a bounded 1800-character budget including path evi
     }})), /path_delta.observed_reality uses 321 chars; limit is 320/);
     assert.throws(() => buildVisionCheckpoint(prepareRequest({agent_vision_packet: {
       ...packet, path_delta: {...packet.path_delta, changed: [character.repeat(35)]},
-    }})), /total_agent_vision uses 1801 chars; limit is 1800/);
+    }})), /total_agent_vision uses 1801 chars; limit is 1800; usage: vision_patch=1120, path_delta=681, stride_decision=0, fallback_declarations=0/);
   }
 });
 
@@ -305,6 +306,85 @@ test("prepare rejects identity drift, private text, and typed budget overflow", 
       return true;
     },
   );
+});
+
+test("prepare reports independent text and list budget failures together without changing input", () => {
+  const packet = {
+    vision_patch: {vision_summary: "Retain the accepted objective.", last_patch_summary: "s".repeat(244)},
+    path_delta: {outcome: "continue", prior_assumption: "The route remains viable.",
+      observed_reality: "o".repeat(354), retained: ["a", "b", "c", "d"],
+      changed: ["Measured a change.", "c".repeat(178)], evidence_refs: ["a", "b", "c", "d", "e"]},
+  };
+  const original = structuredClone(packet);
+  assert.throws(() => buildVisionCheckpoint(prepareRequest({agent_vision_packet: packet})),
+    (error: unknown) => {
+      const rejection = error as {code: string; message: string; details: string[]};
+      assert.equal(rejection.code, "vision_budget_exceeded");
+      const diagnostic = [rejection.message, ...rejection.details].join("\n");
+      for (const message of ["last_patch_summary uses 244 chars; limit is 240",
+        "path_delta.observed_reality uses 354 chars; limit is 320",
+        "path_delta.retained has 4 items; limit is 3",
+        "path_delta.changed[1] uses 178 chars; limit is 120",
+        "path_delta.evidence_refs has 5 items; limit is 4"]) {
+        assert.ok(diagnostic.includes(message), message);
+      }
+      // Oversized lists retain count-before-content rejection; a partial count
+      // must never masquerade as a complete total.
+      assert.doesNotMatch(diagnostic, /total_agent_vision/);
+      return true;
+    });
+  assert.deepEqual(packet, original);
+  // Shared non-prepare consumers keep the original first-error contract.
+  assert.throws(() => normalizeGoalPathDelta(packet.path_delta), (error: unknown) => {
+    assert.match((error as Error).message, /path_delta.observed_reality uses 354/);
+    assert.equal((error as {details?: string[]}).details, undefined);
+    return true;
+  });
+  const corrected = {...packet, vision_patch: {...packet.vision_patch, last_patch_summary: "Verified change."},
+    path_delta: {...packet.path_delta, observed_reality: "Fresh evidence supports continuing.",
+      retained: ["Keep existing acceptance."], changed: ["Measured a change."], evidence_refs: ["evidence:checked"]}};
+  const prepared = buildVisionCheckpoint(prepareRequest({agent_vision_packet: corrected}));
+  assert.deepEqual((prepared.agent_vision as Record<string, unknown>).path_delta,
+    {schema_version: "goal_path_delta_v0", ...corrected.path_delta});
+});
+
+test("prepare reports complete total usage beside field overages and keeps structural rejection", () => {
+  const packet = {vision_patch: {vision_summary: "v".repeat(421), role_scope: "r".repeat(280),
+    acceptance_summary: "a".repeat(420), last_patch_summary: "s".repeat(240)},
+    path_delta: {outcome: "continue", prior_assumption: "p".repeat(320),
+      observed_reality: "o".repeat(320), retained: ["Keep acceptance."]}};
+  assert.throws(() => buildVisionCheckpoint(prepareRequest({agent_vision_packet: packet})), (error: unknown) => {
+    assert.match((error as {details: string[]}).details.join("\n"), /total_agent_vision uses 2025 chars; limit is 1800/);
+    return true;
+  });
+  for (const path_delta of [{...packet.path_delta, outcome: "invented"},
+    {...packet.path_delta, retained: "invalid"}, {...packet.path_delta, observed_reality: "Read /Users/owner/private.txt"}]) {
+    assert.throws(() => buildVisionCheckpoint(prepareRequest({agent_vision_packet: {...packet, path_delta}})),
+      /must be one of|must be a JSON array|private-looking/);
+  }
+});
+
+test("prepare keeps an over-budget enum's own budget error before enum decoding", () => {
+  const packet = {vision_patch: {advancement_policy: "x".repeat(41)}};
+  assert.throws(() => buildVisionCheckpoint(prepareRequest({agent_vision_packet: packet})), (error: unknown) => {
+    assert.equal((error as {code: string}).code, "vision_budget_exceeded");
+    assert.equal((error as Error).message, 'vision_budget_exceeded: advancement_policy uses 41 chars; limit is 32; suggested compact value: "' + "x".repeat(29) + '..."');
+    return true;
+  });
+  assert.throws(() => buildVisionCheckpoint(prepareRequest({agent_vision_packet: {advancement_policy: "invalid"}})), (error: unknown) => {
+    assert.equal((error as {code: string}).code, "invalid_request");
+    return true;
+  });
+  const valid = buildVisionCheckpoint(prepareRequest({agent_vision_packet: {advancement_policy: "as_needed"}}));
+  assert.deepEqual((valid.agent_vision as Record<string, unknown>).vision_patch, {advancement_policy: "as_needed"});
+  // A collected enum budget failure must not defer unrelated shape/privacy checks.
+  for (const path_delta of [{outcome: "invalid"}, {outcome: "continue", prior_assumption: "Retain the route.",
+    observed_reality: "Read /Users/owner/private.txt", retained: ["Keep acceptance."]}]) {
+    assert.throws(() => buildVisionCheckpoint(prepareRequest({agent_vision_packet: {...packet, path_delta}})), (error: unknown) => {
+      assert.equal((error as {code: string}).code, "invalid_request");
+      return true;
+    });
+  }
 });
 
 test("prepare rejects incomplete and over-wide path deltas", () => {

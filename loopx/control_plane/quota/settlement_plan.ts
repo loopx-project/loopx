@@ -6,10 +6,11 @@ import {
 } from "../effect_program.ts";
 import {VISION_MATERIAL_CLOSEOUT_HINT, visionAuthoringContract} from "../goals/vision_checkpoint.ts";
 import {parseExactGoalRef} from "../goals/goal_instance_identity.ts";
-import {requireBoolean, requireJsonObject, requireNonEmptyString, requireStringArray} from "../runtime_decode.ts";
+import {requireBoolean, requireJsonObject, requireNonEmptyString, requireStringArray, requireStringLiteral} from "../runtime_decode.ts";
 import {MATERIAL_DELIVERY_OUTCOMES} from "../work_items/delivery_outcome.ts";
 import {DELIVERY_BOUNDARIES} from "../turn_driver/delivery_continuity.ts";
 import {PROGRESS_RESULT_CLASSES} from "../work_items/replan_history.ts";
+import {HANDOFF_MODES} from "../coordination/handoff_mode_vocabulary.ts";
 
 export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan {
   const identity = settlementIdentity(
@@ -18,6 +19,8 @@ export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan 
   const commands = requireJsonObject(params.command_templates, "command_templates");
   const writeback = requireNonEmptyString(commands.durable_writeback, "durable_writeback");
   const spend = requireNonEmptyString(commands.quota_spend, "quota_spend");
+  const semanticWriteback = commands.semantic_closeout === undefined ? null
+    : requireNonEmptyString(commands.semantic_closeout, "semantic_closeout");
   // Scale remains CLI-owned. Project its actual accepted inputs rather than
   // copying another enum or asking callers to load the entire command help.
   const scales = requireStringArray(params.delivery_batch_scale_choices, "delivery_batch_scale_choices");
@@ -29,6 +32,9 @@ export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan 
     "continue authorized work within existing limits or report a genuine typed blocker. " +
     "Set --delivery-boundary " + DELIVERY_BOUNDARIES.join("|") + " for the applicable case above. " +
     "Typed evidence: --progress-result-class " + PROGRESS_RESULT_CLASSES.join("|") +
+    ". For no_followup or exploration_exhausted, also pass --progress-coverage-scope-id; " +
+    "exploration_exhausted also needs --progress-coverage-complete. " +
+    "Todo completion alone does not establish scope coverage" +
     ". For blocked outcome_gap, --progress-work-item-id must match this plan's Todo/obligation id " +
     "and --progress-blocker-id names the blocker. Repeat --progress-evidence-id for evidence. " +
     "IDs are 1-128 characters, start with an ASCII letter/digit, then letters/digits or ._:/- " +
@@ -49,35 +55,55 @@ export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan 
     throw new Error("settlement plan GoalRef is invalid or does not match identity");
   }
   const inFlight = params.delivery_boundary === "in_flight_continuation";
-  const autonomousReplan = params.autonomous_replan === undefined ? false
-    : requireBoolean(params.autonomous_replan, "autonomous_replan");
+  const autonomousReplan = (params.autonomous_replan === undefined ? false
+    : requireBoolean(params.autonomous_replan, "autonomous_replan")) || identity.binding_kind === "autonomous_replan";
+  const mode = params.handoff_mode == null ? null
+    : requireStringLiteral(params.handoff_mode, HANDOFF_MODES, "handoff_mode");
+  const managedClaim = identity.binding_kind === "todo" && mode === "hard_lease";
+  const proofSupplied = params.completion_proof_supplied === undefined ? false
+    : requireBoolean(params.completion_proof_supplied, "completion_proof_supplied");
+  const completionProof = managedClaim && !proofSupplied
+    ? " --claim-operation-id '<original claim_operation_id>'" : "";
   const validation: SettlementStep = {
     kind: "validation", owner: "agent", idempotency_key_ref: "$.identity.effect_id",
     expected_receipt: "validation_receipt",
     precondition: "delivery result is independently validated",
   };
   if (identity.binding_kind === "todo") {
-    validation.command_template = requireNonEmptyString(commands.todo_completion, "todo_completion");
+    validation.command_template = requireNonEmptyString(commands.todo_completion, "todo_completion") + completionProof;
     validation.command_condition = "todo_deliverable_complete";
-    validation.precondition = "validate the original Todo deliverable; when complete, run ordinary Todo completion " +
+    const claimHint = managedClaim ? "Before task execution, prepare it with ordinary Todo claim: `" +
+      requireNonEmptyString(commands.todo_claim, "todo_claim") +
+      "`. Reuse an already accepted current claim or explicit lease proof; keep the original " +
+      "claim_operation_id for managed progress/completion retries. claimed_by alone is not an execution lease. " +
+      "An expired, released or replaced execution requires normal ownership recovery; " +
+      "this plan neither acquires nor renews execution. " : "";
+    validation.precondition = claimHint + "validate the original Todo deliverable; when complete, run ordinary Todo completion " +
       "with its original declaration and current lease before writeback/spend. Use --evidence for " +
       "an artifact pointer; --result-file requires approved Goal acceptance criteria bound to this Todo, " +
-      "not merely a Todo validator. No invented successor " +
+      "not merely a Todo validator. Link known follow-up work with --successor-todo-id <existing-id>. No invented successor " +
       "or --no-follow-up is required. Todo done does not settle the Turn. " +
-      (inFlight ? "For unfinished bounded progress, keep the Todo open with its original declaration. " +
-        "The projected in-flight boundary is not an instruction to retain completed work: " +
-        "when complete or changing route, use --delivery-boundary semantic_closeout with an " +
-        "evidence-linked vision decision on this same Turn; no new guard or binding is needed." : "");
+      "Keep an unfinished Todo open with its original declaration.";
   }
   const steps: SettlementStep[] = [
     validation,
     {
       kind: "durable_writeback", owner: "agent",
-      precondition: (inFlight || identity.binding_kind !== "todo" ? "validation succeeded"
-        : "validation succeeded; " + VISION_MATERIAL_CLOSEOUT_HINT +
-          " Pass a new packet with --agent-vision-json.") +
-        " Route elimination needs evidence; failure alone is not progress. " +
-        "outcome_progress may use in_flight_continuation; outcome_gap requires " +
+      precondition: "validation succeeded; " +
+        (autonomousReplan ? "Autonomous replan uses --delivery-boundary semantic_closeout even while its Todo remains open. " +
+            "Bind new decision evidence from this admitted work to its artifact/input; follow the remaining plan, " +
+            "then yield for freshly guarded continuation. "
+          : (inFlight ? "Choose one: command_template for ordinary in_flight_continuation without new decision evidence; "
+              : "Use command_template for semantic_closeout; ") +
+            (semanticWriteback !== null ? "semantic_closeout_command_template" : "--delivery-boundary semantic_closeout") +
+            " for new decision evidence, route change or Todo completion. " +
+            "Bind new evidence produced or obtained by this admitted work to its artifact/input in fresh Vision/path_delta " +
+            "with --agent-vision-json, including continue/no_change when retaining the route. " +
+            "Use this same Turn; no new guard or binding. Follow the remaining plan, then yield for freshly guarded continuation. ") +
+        "Prior-feedback readback, bookkeeping and deterministic repetition without new information are context, " +
+        "not this Turn's progress; use them to advance the task first. " +
+        (!inFlight && identity.binding_kind === "todo" ? VISION_MATERIAL_CLOSEOUT_HINT + " " : "") +
+        "Route elimination needs evidence; failure alone is not progress. outcome_gap requires " +
         "semantic_closeout plus blocked + blocker/evidence IDs and continuation checks. " +
         "For an admitted open continuous Monitor whose observation is unavailable, " +
         "use this original identity for typed blocked outcome_gap; it settles without " +
@@ -85,15 +111,19 @@ export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan 
         "An already committed Monitor poll needs neither refresh nor spend." + inputHint,
       idempotency_key_ref: "$.identity.effect_id", expected_receipt: "durable_writeback_receipt",
       command_template: writeback,
-      // In-flight continuation uses its projected flags without a material vision packet.
+      ...(identity.binding_kind === "todo" && !autonomousReplan && semanticWriteback !== null
+        ? {semantic_closeout_command_template: semanticWriteback} : {}),
+      // The same open Todo can reach a semantic feedback checkpoint. Deliver
+      // its existing authoring contract with the executable command variant.
       // Autonomous replan already carries this owner in its writeback contract.
-      ...(identity.binding_kind === "todo" && !inFlight
+      ...(identity.binding_kind === "todo" && (!inFlight || semanticWriteback !== null)
         ? {vision_authoring: visionAuthoringContract(autonomousReplan)} : {}),
     },
     {
       kind: "quota_spend", owner: "agent",
-      precondition: "matching durable writeback exists and any declared completion validation " +
-        "has completed the Todo, or the same Turn has qualified in-flight/replan progress; " +
+      precondition: "exact original-identity durable writeback receipt exists; any declared completion validation " +
+        "has completed the Todo, or that receipt qualifies same-Turn in-flight/replan progress " +
+        "or a fresh open-Todo semantic checkpoint. Progress does not waive terminal completion validation; " +
         "skip this step after typed_blocked_writeback_no_spend",
       idempotency_key_ref: "$.identity.effect_id", expected_receipt: "quota_spend_receipt",
       command_template: spend,
@@ -104,7 +134,7 @@ export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan 
     precondition: "the selected Todo is final with no runnable successor and matching " +
       "writeback and quota spend receipts exist",
     idempotency_key_ref: "$.identity.effect_id", expected_receipt: "terminal_closeout_receipt",
-    command_template: requireNonEmptyString(commands.terminal_closeout, "terminal_closeout"),
+    command_template: requireNonEmptyString(commands.terminal_closeout, "terminal_closeout") + completionProof,
     conditional: true,
   });
   return {

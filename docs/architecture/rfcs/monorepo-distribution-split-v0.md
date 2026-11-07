@@ -1,11 +1,11 @@
-# RFC: Monorepo Distribution Split (v0)
+# RFC: Monorepo Distribution and Small-Kernel Runtime Composition (v0)
 
-- **RFC status:** Accepted, proposal only (open decisions D1–D4 remain unapproved)
+- **RFC status:** Accepted, proposal only (open decisions D1–D7 remain unapproved)
 - **Delivery maturity:** Proposal
 - **Authors / owners:** LoopX maintainers
 - **Created:** 2026-09-26
-- **Last normative revision:** 2026-10-22
-- **Implementation baseline:** `2f3d13ae9`
+- **Last normative revision:** 2026-10-29
+- **Implementation baseline:** packaging inventory `2f3d13ae9`; runtime composition audit `9cae3b28939f72fa4aadab5cfe49e19bcbdab372`
 - **Related contracts:** [TypeScript Control-Plane Migration v0](typescript-control-plane-migration-v0.md), [Extensions reference](../../reference/extensions.md), [Capability catalog](../../../loopx/capabilities/README.md), [Overall Roadmap v0](loopx-overall-roadmap-v0.md) (S2, S8, S12), [import-boundary tests](../../../tests/architecture/test_control_plane_import_boundaries.py)
 - **Tracking issue:** [#5072](https://github.com/loopx-project/loopx/issues/5072)
 - **Supersedes / closes:** none
@@ -18,6 +18,12 @@ normative delivery plan. Section 12 lists unresolved decisions; proposed answers
 are not approval. Appendices are non-normative. This RFC ships an English
 document and a `.zh-CN.md` semantic mirror; a difference between them is a
 defect.
+
+This is the single design for directory ownership, installable distributions
+and runtime composition. Its original filename and tracking issue remain
+stable. Merge accepts a design basis; it does not establish runtime delivery,
+performance, host qualification or a new default. Historical measurements below
+retain their original baselines.
 
 ---
 
@@ -45,11 +51,23 @@ defect.
 7. **Not approved here:** graduating any package to its own repository, changing
    licences per package, or reducing any schema.
 
+The distribution tiers compose **one governance implementation** into minimal
+and standard presets. Minimal must execute and recover a real governed task;
+standard adds the product composition around the same kernel. A research
+configuration freezes one of these compositions plus declared experimental
+changes, without becoming a third governance implementation.
+
+Smallness is measured separately in installed dependencies, loaded code,
+activated services and model-visible context. The package table defines what
+can be installed, not what every command must load. Installing standard grants
+no service activation or permission. Existing defaults and machine-enforced
+work obligations remain until a qualified, explicitly disclosed migration.
+
 ## 2. Problem and motivation
 
 A developer who wants a CLI-only or kernel-only LoopX installs the same wheel as
 someone running the desktop workspace, the Lark manager, and every built-in
-capability. On the baseline:
+capability. Historical packaging inventory on `2f3d13ae9`:
 
 | Fact | Baseline value |
 | --- | --- |
@@ -85,6 +103,27 @@ The owners of these surfaces cannot fix this locally: a capability author cannot
 decide the kernel's packaging, and the kernel cannot decide which capabilities
 are optional without a repository-level rule.
 
+Directory and package changes also need an execution contract. A short CLI read
+should not initialize a research stack or IM service; an embedded managed task
+should not require an interactive App. Smaller installed code alone does not
+prevent eager imports, idle polling or excessive context on every model call.
+Section 9 therefore qualifies both structural moves and useful task journeys.
+
+The design must support these observable journeys:
+
+| Journey | Required outcome | Composition implication |
+| --- | --- | --- |
+| Bounded managed task | Start without an interactive App, execute, settle and read back the result | Minimal includes one qualified host path and durable authority |
+| Long-horizon research | Produce a useful first result, then evidence-backed revisions or new outcomes as work continues | Optional planning, research and memory strategies; progress is more than elapsed time or repeated summaries |
+| Two or three cooperating peers | Return evidence to the coordinator, record adoption, recover ownership after interruption | Reuse shared work/lease authority; peer lifetime and result adoption are distinct |
+| App or IM request | Pause, correct, resume and receive the accepted result at the original destination | Frontends and delivery providers compose around the same work identity |
+| Hardware or external operations | Execute several steps, reconcile uncertain effects, and verify stopping at the relevant boundary | An explicitly activated operation provider owns readback, interlocks and safe retry |
+| Reproducible benchmark | Compare qualified product compositions with native controls and complete costs | Freeze experiment inputs; keep native runner, verifier and scoring ownership |
+
+These are shared product requirements, not a commitment to ship every journey
+or every combination at once. Content, office and engineering capabilities
+use the same boundaries without becoming mandatory startup dependencies.
+
 ### Invariants
 
 - I1. One repository, one PR, one CI run for any cross-package change.
@@ -103,6 +142,15 @@ are optional without a repository-level rule.
   diagnostic.
 - I6. No public/private boundary rule, schema field, or licence changes as a
   side effect of a move.
+- I7. Unselected optional components do not initialize, register timers/hooks,
+  use the network or inject model instructions. Missing execution prerequisites
+  fail before dispatch instead of falling back to ungoverned execution.
+- I8. Required context remains complete and fresh; smaller prompts cannot drop
+  requirements, required reads or stop conditions. Replay reconciles durable
+  identities and external evidence before retry.
+- I9. Performance and outcome claims name the measured composition, baseline,
+  environment and scope. File-count reduction and faster help do not establish
+  better task outcomes.
 
 ## 3. Scope and non-goals
 
@@ -116,6 +164,8 @@ are optional without a repository-level rule.
   `CapabilityRegistry` provider boundary.
 - Optional-extra or bundled delivery of the Node effect runtime for
   `loopx-core`.
+- Minimal/standard composition, demand loading, activation, context boundaries
+  and matched product/benchmark qualification using the same typed owners.
 
 ### Non-goals
 
@@ -125,6 +175,9 @@ are optional without a repository-level rule.
 - Any change to kernel semantics, TS migration order, or stable protocols.
 - Removing legacy compatibility facades (`loopx.status`, `loopx.quota`); their
   retirement stays governed by the migration RFC.
+- A new model loop, scheduler, plugin system, memory database, benchmark-native
+  runner, storage migration, device framework or mandatory daemon. No benchmark
+  run, device operation or host promotion is authorized by this proposal.
 
 ## 4. Current-system contract
 
@@ -148,6 +201,29 @@ Facts audited on `2f3d13ae9`:
   contract while an extension is a delivery unit. This RFC applies that rule
   to the kernel wheel itself.
 
+Runtime composition audit on `9cae3b28939f72fa4aadab5cfe49e19bcbdab372`:
+
+- [entrypoint.py](../../../loopx/entrypoint.py) has a small version path and
+  selected native scheduler follow-ups. [cli_runtime.py](../../../loopx/cli_runtime.py)
+  dispatches selected commands and retains a full-parser fallback.
+  `performance-diagnosis` is registry-optional but outside the selected-command
+  set: a bounded loading seam, not proof all startup is lazy.
+- The [unified controller/executor RFC](controller-executor-unified-contract-v0.md)
+  owns the governed work contract; [session modes](agent-session-execution-modes-v0.md)
+  own managed/attached admission; [DSH/Pi selection](harness-selection-dsh-pi-v0.md)
+  owns host qualification. Composition reuses these contracts.
+- [Benchmark toolkit](../../../loopx/capabilities/benchmark_toolkit/README.md)
+  owns reusable permissions, concurrency and integrity. [Benchmark policy](../../../benchmark/README.md)
+  keeps native execution/evaluation with the benchmark; no second launcher is restored.
+- The [three-layer protocol](https://github.com/loopx-project/loopx/blob/910ff3bca5c8ff5ee52bd691ae924cc37dbaf05f/docs/reference/protocols/multi-agent-three-layer-minimality-v0.md)
+  uses “kernel” for a broader reusable layer. Here, governance kernel names the
+  authority boundary and boot closure names a selected entrypoint's required code.
+  A reusable runner or presentation facility need not enter every boot closure.
+
+> The tmux multi-agent and auto-research demos are retired. Demo-contract links
+> above are pinned to the pre-retirement revision for historical design context;
+> they do not describe current entrypoints or shared runtime ownership.
+
 ## 5. Proposed architecture
 
 ### Ownership and authority
@@ -159,10 +235,59 @@ Facts audited on `2f3d13ae9`:
 | `loopx-capability-<name>` (in `packages/`) | one capability's contract, providers, CLI subcommands, docs | Capability owner from CODEOWNERS | `loopx-core`; optionally other capability packages |
 | `loopx` (meta) | no code | Release owner | all of the above, pinned to one release train |
 
+This is an installation layout. CLI handlers and host facilities inside
+`loopx-core` are not thereby part of every startup dependency closure. Optional
+provider distributions keep the existing `packages/<package-id>/` convention;
+the capability-package row does not require one capability per provider.
+
 Authority does not move: the kernel remains the only writer of Goal/Todo/claim/
 lease/quota/effect state. A capability package may only register providers,
 capability contracts and CLI subcommands through `CapabilityRegistry`; it never
 imports kernel-private modules.
+
+### Governance and runtime ownership
+
+| Boundary | Existing owner and responsibility | Excluded responsibility |
+| --- | --- | --- |
+| Bootstrap | Entrypoint/CLI routes resolve commands and installed metadata | Goal decisions or provider activation during discovery |
+| Governance kernel | Typed Goal, work, quota, runtime and coordination owners: requirements, admission, lease, budget, stop, effect, receipt, settlement and recovery | Model/tool loop, task strategy, UI, transport or scoring |
+| Host | Admitted managed/attached provider: model/tools, session lifecycle and observations | A second work ledger or independent permission authority |
+| Capability strategy | Nearest outcome owner: planning, context selection, research, recall and review | Overriding mandatory transitions, leases, stop or budget |
+| Extension and product surface | Existing lifecycle/registry; frontends and delivery providers consume public-safe projections and submit commands | New plugin machinery or deriving authority from display/private source text |
+
+Placement introduces no capability or provider id: governance remains in
+`control_plane`, generic lifecycle in `extensions`, task behavior in its nearest
+capability, and optional distributions in `packages/`. Keep new domain-neutral
+rules in the existing typed TypeScript owner; Python may adapt but must not
+reimplement state rules. A new capability needs an independently useful
+provider-neutral caller contract. A real host/device integration owns its
+provider-specific execution and recovery, without creating a generic framework.
+
+A planner can recommend work or stride; the owning transition decides admission
+and obligations. Presets cannot turn a machine-enforced `must_attempt_work`
+contract into prose guidance. The kernel is a cohesive set of domains, not one
+large file. The adjacent refactor should localize the next change and preserve
+characterized behavior.
+
+### Presets over the distribution tiers
+
+| Composition | Required content | Explicit optional content |
+| --- | --- | --- |
+| Minimal | Bootstrap, same governance implementation, one supported authority provider, one qualified execution path, compact status/result readback and recovery | Task capabilities, persistent recall, observers, connectors, workspace UI |
+| Standard | Same kernel and compatible ordinary-product composition | Load/activate only the capabilities, hosts, UI/IM services and connectors required by the chosen workflow |
+| Research configuration | Pinned minimal or standard composition plus a declared experiment overlay | Only instrumentation or ablations named in the experimental design |
+
+The `loopx` meta-package retains installation compatibility; installed standard
+content is not an activation list. Minimal is an executable composition, not a
+flag applied after standard fully initializes. A host-free read-only kernel
+library does not qualify that executable preset. Exact contents and the first
+supported host/authority combination are D2/D5 decisions.
+
+Keep composition, managed/attached mode, host provider, one/two model sessions,
+storage provider and benchmark arm independent. Minimal does not imply attached,
+standard does not require two model sessions, and research does not mean
+ungoverned. Publish only tested combinations and preserve existing mode defaults;
+changing composition must not silently change a binding's execution owner.
 
 ### Supported host integration decision
 
@@ -180,6 +305,23 @@ not permission for arbitrary package-to-kernel imports. The import ratchet
 records both edges. Existing Ark/JEV private edges remain migration debt and
 receive no new exemption. The facade forwards existing behavior; it must not
 copy candidate, acceptance, process-lifetime or locking decisions.
+
+The independently installed Codex provider-routing host uses
+`loopx.extensions.chat_service_guard` for its existing authorized restart of
+managed Chat consumers. The facade exports only `managed_chat_activation_guard`
+and `RuntimeActivationDeferred` from the current runtime activation owner.
+Accepted-work observation, exact service identity and the ingress lock stay
+with that owner; the package neither reads private Goal state nor copies the
+decision. Missing or unsupported Core defers the service restart. The no-service
+path remains independent of Core. This one supported public edge is pinned;
+it grants no authority to stop a service or add other kernel imports.
+
+The guard's refusal is exactly as narrow as that observation. It holds the
+ingress admission lock and refuses to continue while a non-terminal Turn
+exists. A pending ingress receipt reserves external input before the provider
+delivers it, so it is not a Turn, and the guard does not read the ingress
+receipt ledger. A pending `loopx_queue` or `loopx_inbox` receipt therefore
+passes through, while a queued Turn is refused with `chat_work_pending`.
 
 The stdio relay cancels its owned process group on parent EOF, SIGTERM or
 SIGINT and waits for the existing supervisor's cleanup before exiting. POSIX
@@ -245,6 +387,81 @@ features. The kernel-caller inventory is the 52 import sites named in Section
 2; each one is either retargeted to a registry lookup or documented as a
 retained core capability (D2).
 
+### Demand loading and context
+
+1. **Resolve:** read local versioned metadata generated at build/install or
+   explicit extension registration. Top-level help, command listing and unknown
+   command rejection must not scan repositories, import every provider or use
+   the network. Duplicate registrations and stale/incompatible metadata are
+   reported; precedence is explicit, never import-order dependent.
+2. **Load:** import the selected command and its dependency closure. Detailed
+   command help may load its own parser, but not activate execution services.
+   Optional imports stay behind their owning route, including fallback paths.
+3. **Activate:** validate installed/enabled/ready state and scoped permissions,
+   then start required services through their existing lifecycle owner. Missing
+   optional code reports how to install/enable it. Missing required authority
+   or runtime fails closed. Kernel import/help must not require Node; effectful
+   commands retain this RFC's typed `node_unavailable` boundary.
+4. **Provide context:** render the existing governed work contract for the
+   selected work and executor. Reuse full-first, differential continuation and
+   recovery semantics from the unified controller/executor design. Required
+   reads and source completeness remain binding.
+
+Context reuse must be invalidated by relevant source/requirement revisions,
+session generation changes, compaction or lost acknowledgements. A smaller
+packet cannot be treated as proof the executor has the prior context. Recover
+through the owning contract when continuity is unknown. Capability instructions
+are supplied when applicable; authority is never inferred from prompt text.
+
+Optional observers consume committed events or bounded projections. Their
+latency must not enter admission/settlement transactions unless the existing
+contract explicitly requires their receipt. Batch best-effort telemetry only;
+do not defer authoritative receipt persistence, weaken fsync/transaction
+guarantees or cache stale permission/lease decisions to meet a timing target.
+
+### Governed lifecycle and external effects
+
+Use existing Goal/Agent/work/Turn identities, revisions, leases, effect ids and
+receipts through the unified work contract. Resolve composition, verify
+requirements and authority, admit work, execute through the bound host, validate
+and persist evidence, settle once, then deliver/read back through the owning
+channel. Each step uses its existing legal transitions and replay rules;
+this description adds no competing status enum or transaction coordinator.
+
+An executor crash, a lost effect acknowledgement and a lost result-delivery
+acknowledgement are different recovery cases. An operation provider must expose
+whether an effect can be reconciled and retried safely. Unknown external state
+holds further dependent effects for readback or intervention; “not observed”
+does not mean “not executed.” Device idempotency, physical interlocks and
+compensation remain provider responsibilities, not invented kernel guarantees.
+
+Model cancellation, process termination and confirmed device stop are separate
+facts. A stopped model must not produce a “device stopped” claim without device
+evidence. Providers needing persistent supervision cannot be unloaded while
+effects are unresolved. Result acceptance, transport delivery and the user's
+readback must also retain their existing distinct evidence.
+
+### Product and benchmark execution
+
+Follow the [long-horizon research program](long-horizon-harness-benchmark-research-program-v0.md):
+native/plain controls, passive observation, governed execution and ablations
+have explicit identities. A native control receives no LoopX instructions or
+hooks. Passive observation must qualify non-interference. Governed arms use
+the same qualified composition and transitions as product tasks; an ablation
+that changes governance is a named experimental variant, never a product default.
+
+Freeze product/host versions, resolved composition, model and sampling settings,
+skills/tools, initial state, budget, checkpoint/recovery policy, dataset and
+verifier versions. Scope memory by run/arm and prohibit cross-arm contamination.
+Report controller, executor, compaction, retry, recovery and human-intervention
+costs as well as task outcomes. Native runners/verifiers retain task semantics
+and scoring. Performance work cannot bypass toolkit permission/integrity checks
+or publish raw tasks, trajectories or verifier logs as public product evidence.
+
+Long-horizon product qualification additionally needs evidence that later work
+improves an already useful initial result or changes a decision. Deliberately
+weakening the initial result, adding more text or running longer is not progress.
+
 ## 6. Alternatives and design choices
 
 | Alternative | Why not chosen now |
@@ -253,6 +470,22 @@ retained core capability (D2).
 | **Keep one wheel, add extras only** | Reduces install weight but leaves the flat namespace and the two packaging conventions in place; contributors still cannot find boundaries. |
 | **Move everything to `packages/` at once** | Breaks I3 for many callers simultaneously and mixes behavioural risk into a structural change. Per-group moves with I3 compatibility are cheaper to review and to roll back. |
 | **Bundle Node into `loopx-core` unconditionally** | Solves I5 but makes the kernel wheel platform-specific and large. Kept as option D1 alongside the optional-extra approach. |
+| **Separate minimal and standard engines** | Duplicates state transitions and breaks product/benchmark parity. |
+| **Make every governance rule a plugin** | Budget, stop, lease and settlement could disappear with a preset. |
+| **Use an upstream agent runtime as the LoopX kernel** | Model execution can be a host provider; it does not replace LoopX work authority. |
+| **Require one daemon or remote service for every composition** | Adds lifecycle and deployment cost to bounded local use; any optional daemon remains under its existing contract. |
+
+Pi demonstrates a small agent core with tool/event execution and explicit
+context transformation separate from the coding product. DSH demonstrates
+shared runtime composition through multiple presets and a self-contained
+minimal SDK bundle. At the pinned revision, DSH web minimal and standard use
+the same agent-preset package with different plugin lists; minimal includes
+persistent shell, image reading and compaction. Its SDK minimal also supplies
+working-directory state and persistence with optional configured MCP resources.
+These are composition examples, not evidence that DSH has exactly two engines
+or that LoopX's headless adapter and DSH plugin correspond to those presets.
+Borrow the explicit boundaries, without adopting Cordis, upstream permission
+defaults or a new LoopX model loop. Pinned sources are in Appendix C.
 
 ## 7. Safety, privacy, and compatibility
 
@@ -269,6 +502,15 @@ retained core capability (D2).
 - **Fail-closed:** an effectful command without the runtime extra fails with
   `node_unavailable`; it never proceeds without the TS kernel.
 
+Host availability, installation and capability declarations are observations,
+not grants. Preserve Goal/Agent/workspace/delivery scope through provider calls.
+No required context or stop/budget rule becomes optional with a preset.
+Unmigrated CLI routes retain fallback until parsing, global options, output,
+errors and exit codes qualify; incompatible versions fail before dispatch.
+Retire the full parser only after every supported command has migrated and
+help and diagnostic parity pass. Never run two writers against one binding
+to make a mixed-version rollout appear available.
+
 ## 8. Migration and rollback
 
 | Step | Gate | Rollback |
@@ -280,8 +522,15 @@ retained core capability (D2).
 | Capability package moves | per capability, kernel-caller inventory resolved | revert one package |
 | Shim removal | one minor release after the move; deprecation recorded in update notes | not applicable; requires migration by callers |
 
-Rollback requires no data migration at any step because no canonical record
-changes.
+Before changing an active binding's composition, check compatibility, quiesce
+its execution owner and reconcile outstanding effects. Verify the new owner
+and resolved composition before resuming; never hot-swap across an active
+lease. Rollback uses the same reconciliation and retains durable state.
+Any later irreversible data change needs a separate migration/export gate.
+
+Rollback of these structural/composition changes requires no data migration.
+Default changes need explicit owner decisions and release notes; this proposal
+changes no current default.
 
 ## 9. Validation and acceptance
 
@@ -295,8 +544,33 @@ changes.
 | No kernel truth duplicated | import-boundary tests + review of `packages/*/src` for kernel-private imports; interim guard: `tests/architecture/test_package_kernel_import_ratchet.py` pins every `loopx.*` import under `packages/*/src`, fails on an unreviewed new edge, and requires a retired edge to lower the pin in the same PR | zero private-kernel violations | Static imports only. The 13 pre-existing edges in Ark, Finance and JEV remain tracked migration debt, separate from MemT's 2 supported public integration imports. A green ratchet does not retire that debt or establish this row; supported public edges need not disappear |
 | Meta-package parity | `pip install loopx` then existing full smoke | identical to pre-split smoke | — |
 
-Deterministic conformance rows above are required for each milestone; no live
-qualification or performance claim is made by this RFC.
+The seven structural rows above remain required for their move/package
+milestones. Runtime and journey qualification adds the following rows.
+
+These rows are proposed acceptance criteria, not claims of passing evidence.
+Deterministic fixtures cover semantics independently of observed implementation
+output. Live, performance and promotion evidence are reported separately.
+
+| Id / claim | Test or evidence | Required result | Boundary |
+| --- | --- | --- | --- |
+| V1 / demand loading | Import/process/network tracing for import, help, listing, unknown command and a selected route, under both presets | Only declared dependency closure; no optional activation | Does not prove execution performance |
+| V2 / authority parity | Characterization and negative tests for requirements, stale claims, stop, budget, replay and settlement | Identical legal/illegal transitions in both presets, exactly one settlement | No authority bypass in minimal |
+| V3 / CLI compatibility | Differential supported-command corpus, including fallback and missing Node/provider cases | Stable parsing, output contract, exit codes and actionable failures | Unmigrated routes are explicitly listed |
+| V4 / managed minimal | One real managed task, injected interruption, restart, evidence validation and result readback | Same identity and reconciled effects; no duplicate dispatch of confirmed work or settlement; recovery costs recorded; accepted result reachable | One qualified host is enough initially; mock-only execution is insufficient |
+| V5 / context continuity | Initial context, unchanged continuation, source revision, compaction and lost-ACK cases | Complete required context or explicit recovery; stale context rejected | Token reduction measured separately |
+| V6 / standard journey | Original App/IM request, correction/pause, resume, completion and return | One execution owner; visible accepted result and costs; no silent destination change | Each frontend/provider qualifies separately |
+| V7 / research and peers | Useful initial result followed by evidence-backed improvement; peer result return and adoption after owner recovery | New outcome or justified decision revision with attributable evidence | More time, peers or prose alone cannot pass |
+| V8 / benchmark fidelity | Frozen matched runs, native/passive/governed boundaries, memory isolation and full cost ledger | Native semantics intact; C0–C4 evidence follows the research/diagnostics owners | No score or causal benefit is claimed by this RFC |
+| V9 / physical effects | Simulator/fault injection, then explicitly authorized provider-specific live qualification | Lost ACK reconciled, duplicate actuation prevented where guaranteed, device stop independently confirmed | No universal exactly-once or emergency-stop guarantee |
+| V10 / overhead | Repeated paired cold-process and warm-path measurements on a named environment | Report median/p95, RSS, modules, file I/O, Node startup/IPC, bytes and model tokens; no durability regression | R0 sets numeric budgets; no paid task run required for CLI baselines |
+
+Candidate local-development targets are import below 50 ms, top-level help below
+100 ms and selected command help below 200 ms at p95. They are D6 proposals,
+not verified results or portable CI thresholds. Define interpreter startup and
+cache conditions, sample count and machine/runtime versions before adopting
+them. Measure real status/admission/settlement latency separately on
+representative small and large state, including SQLite contention/recovery;
+do not apply a CLI-help target to those operations or subtract their required I/O.
 
 ## 10. Operational contract
 
@@ -307,16 +581,35 @@ qualification or performance claim is made by this RFC.
 - Release notes name public import moves and each retained shim’s expiry release.
 - No new daemon, storage or network surface is introduced.
 
+Readback also names the resolved composition/versions, selected host and
+session mode, required versus optional providers and why a component loaded.
+Reuse current diagnostics/projections; do not add a status database. Distinguish
+missing prerequisites, stale authority and uncertain effects. Record startup
+and Turn overhead separately; observer failure does not rewrite committed
+results, while required evidence/delivery receipts remain governed by their
+owner. Capacity/backpressure and recovery retain existing work/host contracts.
+
 ## 11. Normative delivery plan
 
 | Milestone | Shipped behavior | Entry gate | Exit evidence | Rollback |
 | --- | --- | --- | --- | --- |
-| M0 | Budget fixture and test at the current count; RFC index entry | this RFC accepted | budget test green; count pinned | delete test |
+| M0 | Budget fixture and test at the current count; RFC index entry | this RFC accepted; remeasure the fixture baseline | budget test green; count pinned | delete test |
+| R0 | Characterized `performance-diagnosis` selected route and measured loading seam | Current route/owner/dependency map; D6 measurement decision; independent of package publication | V1/V3 for this route, V10 baseline; unchanged behavior | Revert route extraction |
 | M1 | `loopx/chat_*` → `loopx/chat/` with I3 compatibility; budget lowered by net reduction | M0 | Section 9 rows 1–2 | revert |
 | M2 | `loopx/*_goal_mode` → `loopx/hosts/` with I3 compatibility | M0 | rows 1–2 | revert |
-| M3 | `loopx-core` + `loopx-workspace` + meta `loopx` published as pre-release; Node as extra or bundle per D1 | M1, M2; D1 decided | rows 3–4, 7 | unpublish pre-release |
+| M3 | `loopx-core` + `loopx-workspace` + meta `loopx` published as pre-release; Node as extra or bundle per D1 | M1, M2; D1 decided; selected D2/D5 composition mapped | rows 3–4, 7; repeat qualified R1/R2 journeys against clean split-package install | Unpublish pre-release |
+| R1 | Opt-in executable minimal with one real managed Turn, restart and result readback | R0; selected D2 contents and D5 host/authority; may qualify source composition before M3 | V1–V5/V10 for the supported combination; source evidence alone does not qualify split-package installation | Return to previous qualified composition after reconciliation |
+| R2 | Standard uses the same kernel and activates one chosen product workflow | R1; existing frontend/session admission; may qualify source composition before M3 | V2/V5/V6/V10 and feature-off parity; repeat cold-install journey at M3 before claiming split-package qualification | Disable opt-in composition, retain state |
 | M4 | First capability without kernel callers moved to `packages/` | M3; D2 inventory | rows 5–6 | revert package |
 | M5 | Remaining eligible capabilities moved; public shims from M1/M2 removed after the documented compatibility window | M4 | full smoke identical | not applicable |
+| R3 | Matched product-path benchmark and a long-horizon/peer journey | R1 or R2 for the selected surface; frozen design and separate run authorization | V7/V8, complete costs, privacy and existing C0–C4 qualification | Retire experimental overlay, retain bounded evidence |
+| R4 | One real external-operation provider with reconciliation and stop readback | D7; named operation owner and explicit operation authorization | V9 plus inherited governance gates | Quiesce/reconcile before disabling |
+
+M0–M5 retain the original distribution milestones; R0–R4 are their runtime and
+journey qualification slices in this same plan. R0 can ship before directory
+moves; it does not qualify the kernel. R3/R4 are optional and do not block a
+qualified CLI or managed task. No unused provider, field or framework is added
+ahead of its real caller. Report the applied/deferred adjacent refactor in each PR.
 
 ## 12. Open decisions
 
@@ -328,13 +621,34 @@ qualification or performance claim is made by this RFC.
 2. **D2 — Which capabilities remain in core.** Owner: kernel + capability
    maintainers. Input: the 52 kernel-side import sites. Recommendation: keep
    only capabilities that the Turn driver, quota or heartbeat prompt require at
-   runtime; everything else is a package. Deadline: before M4.
+   runtime; everything else is a package. Resolve accidental eager imports
+   through the registry rather than treating their existence as proof of core
+   need. Record exact install/load/activation closures for minimal and standard.
+   Deadline: selected composition before R1/M3; full inventory before M4.
 3. **D3 — Shim lifetime.** Owner: release owner. Options: one minor release
    (recommended) or two. Deadline: M1.
 4. **D4 — Index placement.** Whether this RFC is listed under "Control-Plane
    Kernel, State, And Migration" or "Runtime, Capability, And Collaboration
    Integration". Recommendation: kernel section, since the budget test and
    `loopx-core` boundary are kernel-owned.
+
+5. **D5 — First executable composition.** Owner: runtime/host and authority
+   maintainers. Choose the exact minimal host/storage combination and standard
+   mapping under the existing package scheme. Recommend opt-in minimal and
+   the smallest already qualified managed path, retaining current defaults.
+   DSH/Pi qualification stays with its selection RFC. Evidence: V4 recovery and
+   session continuity before R1 exit, package readback before M3.
+6. **D6 — Performance budgets.** Owner: performance maintainers. Choose
+   machine-specific p95 budgets or relative regression limits; recommend the
+   Section 9 candidate budgets with explicit process/cache/sample conditions.
+   Evidence: reproducible R0 baseline; derive real Turn budgets independently.
+7. **D7 — External operation caller.** Owner: operation-provider maintainer.
+   Choose one concrete caller or defer physical qualification. Recommend no
+   device framework before a real caller. Scope, idempotency/readback/stop
+   contract and operation authorization are required before R4.
+
+The added recommendations do not close D1–D4 or approve any new default.
+Approval needs a reviewed decision, not implementation progress or silence.
 
 ---
 
@@ -403,6 +717,374 @@ qualification or performance claim is made by this RFC.
 - **Remaining:** the wider M1–M5 distribution and zero-private-import acceptance
   is not closed; D1–D4 stay open. No packaging or authority decision changes.
 
+### 2026-10-30 — Codex provider-routing activation guard boundary
+
+- **Baseline:** `10c84d1c0c`.
+- **Delivered:** the Section 5 seam for the Codex provider-routing host now
+  states what its guard actually refuses. It holds the ingress admission lock
+  and refuses to continue while a non-terminal Turn exists. A pending ingress
+  receipt reserves external input before the provider delivers it, so it is not
+  a Turn, and the guard does not read the ingress receipt ledger.
+- **Boundary repair:** a pending `loopx_queue` or `loopx_inbox` receipt passes
+  through, while a queued Turn is refused with `chat_work_pending`. The
+  package's supported edge stays the single pinned
+  `loopx.extensions.chat_service_guard` import; this entry changes no import,
+  permission, default or persisted format.
+- **Evidence:** `tests/test_chat_runtime_activation.py::
+  test_a_pending_ingress_receipt_alone_does_not_defer_the_restart` and
+  `test_a_queued_turn_still_defers_the_restart_with_a_pending_ingress_receipt`
+  read both sides of the boundary through a real temporary Session and ingress
+  store, against the real guard.
+- **Remaining:** the wider M1–M5 distribution and zero-private-import acceptance
+  is not closed; D1–D4 stay open. A pending ingress receipt remains uncovered
+  by the guard, and covering it would be a runtime change with its own
+  acceptance, not a documentation change.
+
+### 2026-11-03 — Selected host-mode discovery loading
+
+- **Baseline:** `6a6a8590e`. Earlier selected routes for `performance-diagnosis`
+  and `goal-acceptance` are already on this baseline; the Section 4 audit above
+  remains historical, not the current implementation inventory.
+- **Delta:** `host-mode-plan` uses its existing registrar and handler through
+  `cli_runtime`, without loading the full CLI or Chat graph on valid requests.
+  Rejected syntax retains the full-parser diagnostic path. The host selector,
+  preview commands, readiness and authority rules do not move or change.
+- **M1 integration:** [#7878](https://github.com/loopx-project/loopx/pull/7878)
+  is merged at `ffe84a693`: 17 internal-only Chat owners are under `loopx/chat/`,
+  with the top-level count and budget both 128 (145 before this move group).
+  This is a structural delta, not a performance or full-M1 qualification.
+- **Evidence:** `tests/test_cli_entrypoint.py` checks owner-only help, JSON and
+  Markdown parity, unavailable-host previews, invalid requests and zero process,
+  network or file-write activation. A separately installed wheel exercises help,
+  ready/unavailable previews and rejection without Node or a live registry.
+  Local paired fresh-process measurements use 20 samples per revision/workload,
+  one discarded warm-up and alternating order, with telemetry off and warm file
+  caches. On macOS arm64/Python 3.13.5, the help/preview LoopX closure falls
+  from 1,149 to 57 modules; byte-identical output is retained. Timing/RSS belong
+  to the PR's scoped evidence, not a portable threshold or task-outcome claim.
+- **Remaining:** this extends R0-style loading qualification to discovery;
+  it does not complete R0's full V10 census, M1 public-import migration, split
+  packaging or R1 managed minimal. D1–D7 remain open. No new preset or default.
+
+### 2026-11-03 — M1 public status compatibility characterization
+
+- **Boundary:** `ChatStatusRequestMixin` and `goal_read_runtime_root` still live
+  in `loopx.chat_status_api`. The Chat HTTP handler and Todo detail are active
+  consumers. This is a characterization prerequisite, not a relocated owner.
+- **Compatibility evidence:** `tests/test_chat_status_public_compatibility.py`
+  protects historical imports in three fresh-process import orders, historical
+  pickle lookups, reload with already-imported references, and live registry,
+  collector and host-observation patch points through the real HTTP handler.
+  Discovery tolerates a missing registry, not unreadable or invalid metadata.
+  A copied-export facade mutation fails the source-bound Todo-consumer patch
+  oracle: re-exported functions alone do not preserve legacy module globals.
+- **Next reviewed slice:** move the complete status owner under `loopx/chat/`
+  with an identity-compatible public bridge and documented I3 deprecation.
+  Retarget both the exact loader path and `_discovery_registry` exception in
+  `tests/architecture/test_source_session_registry_denial.py` together, retaining
+  metadata-only discovery and executable source-session refusal. The present
+  slice leaves that owner and oracle unchanged; do not split ownership or relax
+  the denial oracle just to make a partial move pass.
+- **Remaining:** status relocation and its installed-wheel integration are not
+  delivered by characterization. I3 retains at least one minor release; D3's
+  exact expiry remains a release-owner decision. M1 is open. No module-count,
+  loading-performance, split-package or R1 managed-Turn benefit is claimed.
+
+### 2026-11-04 — Capability discovery selected loading
+
+- **Baseline:** `79b781865`. `capability list` / `show` and command help now
+  reuse the existing capability registrar and catalog handler without loading
+  the full CLI or Chat. `inspect`, `bind` and `invoke` execution, the explicit
+  full-CLI handler patch point, registry routing and canonical rejected-request
+  diagnostics retain their existing paths. The local discovery set reuses CLI
+  vocabulary; it creates no capability, provider, protocol or authority owner.
+- **Evidence:** `tests/test_cli_entrypoint.py` covers output/help parity,
+  declared-but-absent and real installed-disabled providers, hidden helpers,
+  missing/invalid manifests and no process/network/write activation. The five
+  loading oracles fail on the baseline and pass on the candidate. All 23 focused
+  cases also pass against an independently installed wheel outside the checkout
+  with Node absent; this does not upgrade an existing host. Eight additional
+  immutable base/candidate rejection pairs preserve output and exit status.
+- **Measured closure:** three fresh-process help/list/show workloads use 20
+  samples per revision, one discarded warm-up and alternating order on macOS
+  arm64/Python 3.13.5. Both source snapshots have warm filesystem caches and no
+  bytecode; Node and telemetry are absent. The real `main()` path loads 362
+  LoopX modules instead of 1,149, with 832 read-open observations instead of
+  2,494. Output bytes are identical; observed writes, process starts, network
+  connections and thread starts are zero. Timing and RSS evidence includes
+  equal instrumentation and interpreter startup; it is scoped PR evidence,
+  not a portable D6 threshold or installed-host/task-benefit claim.
+- **Validation holds:** the broader source selection has 320 passing cases and
+  one failing `test_settlement_plan_import_does_not_load_native_capture_io`.
+  The immutable baseline fails identically. Configured mypy likewise reports
+  the same 789 errors in 126 files on both revisions. Neither failure is waived
+  or relabeled as a pass; focused parity does not certify all required checks.
+- **Remaining:** this extends R0-style discovery qualification, independently
+  of the public-status proposal #8011. It does not close full R0/V10, M1, split
+  installation, R1 managed minimal or D1–D7. No preset, frontend operation,
+  permission or persisted state changes; protected execution keeps its owner.
+
+### 2026-11-06 — Selected Turn host loading seam
+
+Following the generic-cli/SQLite candidate in
+[#8180](https://github.com/loopx-project/loopx/pull/8180), the source proposal
+`9b80cf7d6` defers DSH builders at `turn_run_once` until a caller selects DSH
+or explicitly requests their established exports. Named imports, original
+builder identity, static types, `dir()`, star imports and the CLI's builder
+patch points remain available. The existing host/authority owners are reused;
+this does not select a minimal preset or adopt D2/D5.
+
+- **Observed delta:** the real generic-cli/SQLite task path loads 533 LoopX
+  modules instead of 538 at `62e234c93`. The five removed modules are
+  `turn_dsh_host`, `turn_driver.host_candidate`, `dsh_goal_mode` and its
+  `host_failure_map`/`turn_host_adapter`. No module is added. The cold-import
+  oracle fails at the baseline and passes at the proposal; the existing DSH
+  CLI fixture also proves the public builder patch point is used.
+- **Real-path parity:** the same private harness runs ordinary completion,
+  interruption after typed host-result persistence, original-journal resume
+  and committed replay on isolated SQLite fixtures at both revisions. Each
+  fixture ends with one host invocation/attempt, one writeback and one debit;
+  replay repeats none. Independent argv validators accept identical artifact
+  bytes. Each arm uses an isolated native broker whose shutdown and OS exit are
+  verified. This remains deterministic transport evidence, not model-host V4
+  or normal hard-lease V2 qualification.
+- **Observed costs:** one ordinary instrumented invocation per revision records
+  2.962 → 3.169 seconds, parent CPU 0.737 → 0.775 seconds and parent peak RSS
+  65.6 → 64.6 MiB; output remains 3,474 bytes. Waited-child CPU is
+  0.567 → 0.599 seconds. Cache, run order and competing work are not controlled;
+  these observations establish neither a latency improvement nor a regression
+  threshold. Broker RSS observations and waited-child usage do not measure
+  complete tree peaks, full wire/context bytes or model cost. The loading delta
+  is small; long-horizon benefit and D6 qualification remain unproven.
+- **Historical validation limits at `bc59a9ed4`:** the wider source selection records 596 passed and one
+  failed preview cold-import test; the baseline independently fails the same
+  test because `host_bridge_transport` eagerly imports
+  `extensions.process_runtime`. Owner-scoped mypy with `--follow-imports=skip`
+  reports the same 29 diagnostics at both revisions after line normalization;
+  it is not the full configured mypy suite. Neither failure is waived or
+  relabeled as passing. The process-helper seam below repairs that preview
+  failure in the same author proposal while retaining the type-check limitation.
+- **Remaining:** independent review, required validation and exact-head merge
+  readiness still govern adoption. Opt-in minimal selection, D2/D5 decisions,
+  full R0/V10/R1, hard-lease/context/model parity and split installation remain
+  open; the separate #8011 status proposal retains its limits. No authority,
+  provider, default, installed-host or release change is introduced.
+
+### 2026-11-06 — Preview process helpers remain with execution
+
+The follow-on runtime proposal `a44e27d96` repairs the unchanged preview import
+oracle. Deferring the bridge helpers first exposes a second eager import in
+`doctor_git`; both adapters now resolve the existing `process_runtime` owner
+at execution/cleanup or explicit import. Named/star imports, original function
+identity, static aliases, `dir()` and public patch points remain compatible.
+The TypeScript Host lifetime and process/permission decisions do not move.
+
+- **Observable result:** importing the preview command loads 337 LoopX modules
+  instead of 338 at `bc59a9ed4`, removing only `extensions.process_runtime`.
+  Successful real Git reads likewise leave cleanup unloaded. Actual generic-cli
+  execution still loads 533 modules in both arms because it needs those helpers.
+  This fixes a loading boundary; it establishes no speedup or long-horizon benefit.
+- **Real paths:** the same isolated SQLite harness passes ordinary completion,
+  typed-result interruption, original-journal recovery and committed replay at
+  both immutable runtime revisions. Artifacts remain identical; each fixture
+  has one host invocation/attempt, writeback and debit, with no replayed effect.
+  Both owned brokers stop with verified OS exit. Real bridge send/cancel,
+  backpressure, deadline and unconfirmed-cleanup cases retain their behavior;
+  real Git timeout/terminal cancellation retire the query's helpers. A cleanup
+  error retains the unknown diagnostic through the existing patch point.
+- **Limits:** seven Windows Job Object cases are skipped on macOS. One combined
+  validation attempt fails because the Git fixture's hook did not start within
+  its existing budget; the isolated Git selection subsequently passes without
+  changing that budget or oracle. Owner-scoped mypy checks all three touched
+  loading adapters and retains the same 29 diagnostics at base and proposal.
+  Full configured mypy, packaged/split installation, minimal selection, D2/D5,
+  complete R0/R1/V10, hard-lease/context/model parity and full-cost benefit remain
+  unqualified. Independent exact-head review and required validation still govern
+  adoption; the historical failures above remain historical failures.
+
+### 2026-11-06 — Paired cost campaign remains unqualified
+
+The bounded campaign at `a9485073f` versus `86d9c542d` produces useful negative
+evidence, not an attributable speedup. It ends at the frozen 20-minute sampling
+wall limit with 499 accepted observations: eight source groups have 30 pairs
+each; wheel JSON-version has nine pairs and one unmatched candidate observation.
+The other wheel groups were not sampled. The original criteria and every
+observation remain retained; neither the cap nor the incomplete groups become
+a passing qualification. Later integration of target `cd677182c` is outside
+these immutable measurements.
+
+The experiment uses macOS arm64, CPython 3.13.5, Node 26.0.0 and the real
+Node-owned SQLite 3.53.1 backend. Source and disposable monolithic `loopx` 2.2.0
+wheel environments have the same 57 dependency versions and verified import
+provenance. The public entrypoint exercises JSON version, selected
+`performance-diagnosis` help, status, quota admission and deterministic
+generic-cli work on the existing `_write_live_fixture(provider="sqlite")` owner.
+Order is fixed: source before wheel, that command order, cold before warm,
+alternating baseline/candidate order by pair. Each task has fresh synthetic
+state. Cold uses a fresh Python process and retired owned broker; warm uses a
+fresh Python process and retained broker. Filesystem caches are uncontrolled
+and bytecode writes are disabled; this is not a cold-disk claim.
+
+**Cache limitation:** existing bytecode was not normalized. A subsequent
+inventory finds 7 versus 1,241 LoopX `.pyc` files and 2 versus 344 dependency
+`.pyc` files in the source arms. JSON version loads the same 1,157 LoopX modules
+at both revisions; its parent read-open census is 2,402 versus 1,253. This
+invalidates attribution of the observed source reductions to the five-module
+loading change. The numbers below describe these cache conditions only.
+
+| Source operation | Broker condition | Baseline seconds, median / p95 | Candidate seconds, median / p95 |
+| --- | --- | --- | --- |
+| JSON version | absent | 3.092 / 3.394 | 1.707 / 2.110 |
+| Selected help | absent | 0.093 / 0.174 | 0.101 / 0.165 |
+| Status | cold | 2.104 / 2.437 | 1.832 / 2.074 |
+| Status | warm | 1.304 / 1.422 | 0.985 / 1.115 |
+| Quota admission | cold | 2.481 / 2.720 | 2.029 / 2.331 |
+| Quota admission | warm | 1.785 / 1.881 | 1.313 / 1.460 |
+| Generic-cli task | cold | 3.910 / 4.158 | 3.446 / 3.803 |
+| Generic-cli task | warm | 2.837 / 3.025 | 2.424 / 2.635 |
+
+- **Covered costs:** cold task CPU for the target and waited descendants is
+  1.769 / 1.832 versus 1.283 / 1.388 seconds, median / p95; their maximum RSS
+  is 79.2 / 87.4 versus 75.5 / 78.7 MiB. Separate broker CPU is 0.720 / 0.780
+  versus 0.735 / 0.800 seconds, with end RSS 126.6 / 129.7 versus
+  128.3 / 133.5 MiB. These are not a concurrent tree peak or complete CPU ledger.
+  Outputs remain 81, 325, 21,829, 23,795 and 3,557 bytes for the five operations.
+  One-minute host load ranges from 5.00 to 14.42; this is a named-host observation.
+- **Separate instrumentation:** task loading remains 538 → 533 in source and
+  wheel. Cold task parent read/write-open counts are 2,179/284 → 1,643/284 in
+  source and 2,184/284 → 2,173/284 in wheel. All four captures make 238 local
+  IPC connections; covered socket send/receive bytes are 895,335/391,794 and
+  895,339/391,794 in source, 894,790/391,543 in both wheels. These cover the
+  observed Python sockets, not all context, transport or descendant I/O.
+  A separate source cold-task audit records parent/waited-child CPU
+  1.234/0.560 → 0.802/0.582 seconds and maximum RSS
+  88.7/75.3 → 63.4/75.4 MiB; these instrumented samples are not timing evidence.
+  The existing performance-diagnosis recipes inspect separate Pyinstrument
+  and actual Node-worker CPU profiles. Parent waits, workspace capture and
+  reads, and worker startup/retirement remain investigation leads; profile
+  elapsed/idle weights do not enter the timing table. Full JSON version uses
+  the full parser/export graph, while `--version` loads two LoopX modules.
+- **Semantic readback:** all sampled tasks independently accept the same eight
+  squared integers. Source and wheel at both revisions pass ordinary committed
+  replay, interruption after typed-result persistence, original-journal resume
+  and replay. Each accepted fixture has one host attempt/invocation, writeback
+  and debit; replay repeats none. Dropping the last square makes all four
+  independent validators reject, with one dispatch and zero writebacks/debits.
+  Owned brokers finish with OS PID-exit readback. One seed shutdown initially
+  targets a different interpreter-alias fingerprint; its failure is retained
+  and recovery uses the verified owned locator, without touching host state.
+- **Complete-cost limits and next work:** setup/orchestration is 888 seconds,
+  including 194 seconds of fixture preparation and a 98-second successful
+  preflight; unsuccessful bundle-build, invocation and preflight attempts remain
+  failures. Sampling target elapsed totals 1,001 seconds inside the 20-minute
+  wall cap. Separate semantic validation takes 39 seconds; artifact rejection
+  plus diagnosis/cleanup recovery takes 184 seconds; the instrumented census
+  takes 108 seconds, and task/version profiling 58/20 seconds. Subsequent
+  authoring/tool/model costs, complete native/thread work and full-tree peaks
+  remain incompletely covered. Both wheels contain 1,997 files and
+  approximately 8.9 MiB compressed; no split install is qualified. The next
+  cost experiment must match bytecode conditions and choose a feasible
+  representative source/wheel corpus from measured setup and invocation costs
+  before freezing it. Further loading edits await that comparison. R0/V10,
+  R1/minimal, D2/D5/D6, I3/D3, model/context/hard-lease and installation gaps
+  retain their existing owners and gates; this checkpoint closes none of them.
+
+### 2026-11-06 — Matched-bytecode representative cost checkpoint
+
+A new frozen comparison of `546c08c0d3f22358ef09b13e69f7edaa806121b8`
+and `0df5ad7921faab3b9ab8ec809f2fd71060692cce` completes all six selected
+source/wheel groups, each with 30 interleaved pairs: 360 accepted observations
+in 948.573 seconds, within the unchanged 1,200-second sampling cap. E7 remains
+an incomplete, cache-confounded experiment; these are separate observations.
+The measured proposal includes target main through `546c08c0d`. Later target
+integration is outside this immutable cost comparison.
+
+The environment remains macOS arm64, CPython 3.13.5, Node 26.0.0 and real
+Node-owned SQLite 3.53.1. All four source/monolithic-wheel environments have
+verified provenance and identical 57 dependency versions. Before freezing,
+each arm compiles stdlib, dependencies and all 1,421 LoopX Python sources into
+an owned `PYTHONPYCACHEPREFIX`; timestamp-header inventories find no missing or
+invalid own/dependency caches. Relative source sets match within each
+distribution. Inventories and frozen harness hashes remain identical after
+sampling, recovery and profiles. Targets disable bytecode writes. Source runs
+before wheel, selected help before task, cold before warm; even pairs use
+baseline/candidate order and odd pairs reverse it. Every invocation has fresh
+Python; cold retires the owned broker and warm retains it. Disk cache remains
+uncontrolled. One-minute host load ranges from 8.35 to 88.73; retain every tail
+observation, without attributing the source cold p95 difference to the code.
+
+| Selected operation | Broker | Baseline seconds, median / p95 | Proposal seconds, median / p95 | Median paired proposal minus baseline, seconds |
+| --- | --- | --- | --- | --- |
+| Source help | absent | 0.136 / 0.193 | 0.138 / 0.168 | +0.0010 |
+| Source SQLite task | cold | 3.579 / 5.997 | 3.617 / 9.234 | -0.0195 |
+| Source SQLite task | warm | 2.673 / 3.019 | 2.657 / 2.979 | -0.0602 |
+| Wheel help | absent | 0.087 / 0.107 | 0.083 / 0.116 | -0.0033 |
+| Wheel SQLite task | cold | 3.722 / 4.266 | 3.663 / 4.430 | -0.0847 |
+| Wheel SQLite task | warm | 2.707 / 3.111 | 2.797 / 3.156 | -0.0457 |
+
+The p95 uses nearest rank. Median paired differences and differences of arm
+medians are different statistics. No material latency or CPU benefit is
+demonstrated: arm medians and tails have mixed directions, and task CPU remains
+similar. These data qualify the representative comparison's completion and
+semantic parity, not a speed threshold, full V10 or long-horizon benefit.
+
+| Task path | Target plus waited descendants CPU seconds, median (base → proposal) | Target/waited peak RSS MiB, median (base → proposal) | Owned broker CPU seconds, median (base → proposal) | Broker end RSS MiB, median / p95 (base → proposal) |
+| --- | --- | --- | --- | --- |
+| Source cold | 1.311 → 1.325 | 75.75 → 75.58 | 0.770 → 0.775 | 127.9 / 134.8 → 128.6 / 133.5 |
+| Source warm | 1.235 → 1.226 | 76.15 → 76.16 | 0.180 → 0.185 | 146.5 / 148.4 → 129.8 / 148.7 |
+| Wheel cold | 1.353 → 1.369 | 75.94 → 76.56 | 0.805 → 0.810 | 129.5 / 134.4 → 130.1 / 134.1 |
+| Wheel warm | 1.273 → 1.260 | 76.05 → 76.69 | 0.190 → 0.180 | 100.4 / 136.3 → 101.4 / 140.2 |
+
+These RSS observations are not concurrent process-tree peaks; warm broker
+end RSS also reflects its retained lifetime. Help target/waited median RSS is
+17.56–17.85 MiB and median CPU is 0.046–0.056 seconds. Uninstrumented stdout is
+325 bytes for help, 3,557 for source tasks and 3,550 for wheel tasks in both
+arms; stderr is empty. Target/waited block-I/O counters do not measure all
+broker/native I/O.
+
+Separate instrumentation confirms task loading 538 → 533 in both distributions,
+with only the previously named five DSH modules removed; help stays at 12.
+Parent read-open counts are source cold 1,680 → 1,675, source warm 1,269 → 1,264,
+wheel cold 1,683 → 1,677 and wheel warm 1,272 → 1,267. Task write-opens stay at
+284 cold and 279 warm, with 238 observed parent local socket connections.
+Covered task send/receive bytes range from 893,698–894,864 / 392,608–392,859;
+the source proposal removes five send bytes and wheel bytes are unchanged.
+Help opens 31 files in source and 32 in wheel, with no writes or socket traffic.
+Instrumented task parent CPU is 0.635–0.774 seconds and peak RSS 62.3–65.5 MiB;
+waited-child CPU is 0.528–0.573 seconds and peak RSS 76.1–78.6 MiB. These single
+captures are a census, separate from the repeated timing results.
+
+The same isolated real SQLite fixtures at all four variants pass ordinary
+committed replay, interruption immediately after typed-result persistence,
+original-journal recovery and committed replay. Independent squared-integer
+artifact/transition oracles retain identical artifact bytes and one host
+invocation/attempt, one writeback and one debit. Resume does not redispatch;
+replay repeats no effect. Removing the final square produces exit 1 / failed
+with one dispatch and zero writebacks/debits in every variant. All owned
+brokers have shutdown/OS-exit readback; no experimental broker remains live.
+
+Setup/orchestration costs 1,018.786 seconds, including overlapping build,
+installation, fixture and cache work; those phases must not be summed.
+The separate rejection phase costs 16.056 seconds, instrumentation 39.116 and
+eight parent/actual-Node profile captures 54.880. Recovery/replay target time
+is recorded separately; its complete orchestration cost remains uncovered.
+Existing `performance-diagnosis` recipes report workspace capture, journal
+checkpoints, Git probes and quota preparation among Python observations; Node
+profiles include startup, request dispatch, idle and retirement. Sampled stack
+weights are neither benchmark latency nor proof of a root cause; inclusive
+weights, warmup and retirement cannot be added as task savings. Full context
+and process-tree/native/thread/model costs remain unknown. Monolithic wheels
+remain approximately 8.9 MiB; this does not qualify split installation.
+
+**Evidence-conditioned next action:** retain the tested compatibility/loading
+seams, and stop expanding these helpers for an unproven speedup. Prioritize a
+bounded characterization of the existing full-parser/export closure or the
+measured workspace/journal/bridge owner, then require a new matched real-path
+comparison before adopting a performance change. This checkpoint creates no
+new owner, budget, preset or default. R0's complete census, R1/minimal,
+D2/D5/D6, I3/D3, hard-lease/context/model and split-install acceptance remain
+open; independent exact-head review and required validation govern adoption.
+
 ## Appendix B: Decision log
 
 | Date | Decision | Owner / approval | Alternatives | Normative sections changed |
@@ -416,6 +1098,11 @@ qualification or performance claim is made by this RFC.
 | E1 | 148 top-level modules | `2f3d13ae9` | `ls loopx/*.py \| wc -l` | 148 | counts files, not public API |
 | E2 | 52 kernel-side capability imports | `2f3d13ae9` | `rg -l "loopx\.capabilities\|from \.\.capabilities\|from \.capabilities" loopx/control_plane loopx/cli_commands loopx/*.py` | 52 | static imports only |
 | E3 | 80 capability → control_plane imports | `2f3d13ae9` | `rg -l control_plane loopx/capabilities` | 80 | includes docs strings; upper bound |
+| E4 | Selected CLI loading seam | `9cae3b28939f72fa4aadab5cfe49e19bcbdab372` | Linked entrypoint/CLI in Section 4 | Source-audited | No new timing claim |
+| E5 | DSH composition example | Pinned upstream commit | [`minimal.patch.yml`](https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/bundle/web-app/presets/minimal.patch.yml), [`standard.patch.yml`](https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/bundle/web-app/presets/standard.patch.yml), [`sdk-minimal`](https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/bundle/sdk-minimal/README.md) | Source-audited | Shared preset composition and a self-contained SDK bundle; not a LoopX host qualification or permission recommendation |
+| E6 | Pi core/context example | Pinned upstream commit | [`agent` core](https://github.com/badlogic/pi-mono/blob/f14813e96510a7cf7562a120e809c6a134af073d/packages/agent/README.md) | Source-audited | Agent/tool/event core with `transformContext`, `convertToLlm`, `prepareRequest` and `finishTurn` seams; no LoopX authority or performance claim |
+| E7 | Bounded paired cost campaign | `a9485073f` / `86d9c542d`; named environment above | Paired cost checkpoint above; existing entrypoint/SQLite fixture and performance-diagnosis owners | 499 observations; source groups complete, wheel incomplete; cache attribution unqualified | Aggregate public-safe evidence only; no speedup, full V10, split-install or model-cost qualification |
+| E8 | Matched-bytecode representative comparison | `546c08c0d` / `0df5ad792`; named environment above | Matched-bytecode checkpoint above; same CLI/SQLite and performance-diagnosis owners | Six groups × 30 pairs; 360 observations; parity/rejection and cache readback pass; no demonstrated material benefit | Aggregate public-safe evidence only; later integration, full V10, minimal, split install and model costs unqualified |
 
 ## Appendix D: Rejected or superseded alternatives
 

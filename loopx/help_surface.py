@@ -135,10 +135,6 @@ COMMAND_GROUPS: list[dict[str, object]] = [
             },
             {"command": "loopx todo --help", "purpose": "Show todo lifecycle commands."},
             {
-                "command": "loopx task-lease --help",
-                "purpose": "Acquire, renew, transfer, release, or inspect a hard per-todo lease.",
-            },
-            {
                 "command": "loopx coordination-shadow --help",
                 "purpose": "Inspect, bootstrap, or revision-fenced rollback the default-off Stage 2C file shadow.",
             },
@@ -263,6 +259,10 @@ COMMAND_GROUPS: list[dict[str, object]] = [
     {
         "title": "Maintainer and adapter commands",
         "commands": [
+            {
+                "command": "loopx task-lease --help",
+                "purpose": "Host/adapter execution ownership protocol; ordinary task work uses todo claim and update.",
+            },
             {"command": "loopx check", "purpose": "Run contract and public/private boundary checks."},
             {
                 "command": "loopx change-quality --help",
@@ -325,7 +325,6 @@ COMMAND_GROUPS: list[dict[str, object]] = [
                 "command": "loopx periodic-report",
                 "purpose": "Resolve a portable weekly profile, evaluate report triggers, and compose provider-neutral run receipts.",
             },
-            {"command": "loopx auto-research", "purpose": "Project public-safe research frontiers."},
             {
                 "command": "loopx deepresearch",
                 "purpose": "Run a bounded, citation-auditable research ledger and report workflow.",
@@ -334,7 +333,6 @@ COMMAND_GROUPS: list[dict[str, object]] = [
                 "command": "loopx agent-turn-recall",
                 "purpose": "Prepare goal-scoped memory guidance for one admitted autonomous agent turn.",
             },
-            {"command": "loopx multi-agent", "purpose": "Launch visible role-scoped Codex TUI agents."},
             {"command": "loopx canary", "purpose": "Plan or run catalog-informed smoke profiles."},
             {
                 "command": "loopx performance-diagnosis --help",
@@ -368,6 +366,7 @@ COMMAND_GROUPS: list[dict[str, object]] = [
 MANPAGE_COMMAND_HELP_ONLY = frozenset(
     {
         "agent-context",
+        "anti-entropy",
         "archive-runtime",
         "automation-prompts",
         "automation-cadence",
@@ -504,7 +503,6 @@ def render_concise_help(program: str = "loopx") -> str:
             "  loopx status                   Show current goals, gates, and next action.",
             "  loopx diagnose --goal-id ID    Build a compact evidence packet.",
             "  loopx todo --help              Add, claim, complete, update, or archive todos.",
-            "  loopx task-lease --help        Manage a hard per-todo lease.",
             "  loopx coordination-shadow --help",
             "                                  Inspect, bootstrap, or roll back the default-off file shadow.",
             "  loopx quota should-run         Decide whether the next agent turn should run.",

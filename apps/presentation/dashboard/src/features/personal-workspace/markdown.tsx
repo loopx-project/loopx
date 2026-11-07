@@ -1,5 +1,7 @@
-import { Fragment, type ReactNode } from "react";
+import { Fragment, useId, useMemo, type ReactNode } from "react";
 import { LinkifyIt } from "linkify-it";
+import {markdownOutline, parseMarkdownBlocks} from "./markdown-blocks";
+import "./markdown.css";
 
 /**
  * Minimal, safe Markdown renderer for visible Agent prose.
@@ -114,105 +116,26 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
   return nodes;
 }
 
-type Block =
-  | { type: "code"; text: string }
-  | { type: "table"; headers: string[]; rows: string[][] }
-  | { type: "heading"; level: number; text: string }
-  | { type: "list"; ordered: boolean; items: string[] }
-  | { type: "paragraph"; lines: string[] };
-
-const UNORDERED = /^\s*[-*•]\s+(.*)$/;
-const ORDERED = /^\s*\d{1,2}[.、)]\s+(.*)$/;
-
-function tableCells(line: string) {
-  return line.trim().replace(/^\|/, "").replace(/(?<!\\)\|$/, "").split(/(?<!\\)\|/).map(cell => cell.trim().replace(/\\\|/g, "|"));
-}
-
-function parseBlocks(text: string): Block[] {
-  const lines = text.split("\n");
-  const blocks: Block[] = [];
-  let paragraph: string[] = [];
-  const flushParagraph = () => {
-    if (paragraph.length > 0) {
-      blocks.push({ type: "paragraph", lines: paragraph });
-      paragraph = [];
-    }
-  };
-
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i];
-    if (/^\s*```/.test(line)) {
-      flushParagraph();
-      const buffer: string[] = [];
-      i += 1;
-      while (i < lines.length && !/^\s*```/.test(lines[i])) {
-        buffer.push(lines[i]);
-        i += 1;
-      }
-      i += 1; // closing fence, or end of text
-      blocks.push({ type: "code", text: buffer.join("\n") });
-      continue;
-    }
-    const heading = line.match(/^\s{0,3}#{1,4}\s+(.*)$/);
-    if (heading) {
-      flushParagraph();
-      const marks = line.trimStart().match(/^#+/)?.[0].length ?? 1;
-      blocks.push({ type: "heading", level: marks, text: heading[1].trim() });
-      i += 1;
-      continue;
-    }
-    if (line.includes("|") && i + 1 < lines.length) {
-      const headers = tableCells(line), separators = tableCells(lines[i + 1]);
-      if (headers.length === separators.length && separators.every(cell => /^:?-{3,}:?$/.test(cell))) {
-        flushParagraph();
-        const rows: string[][] = [];
-        i += 2;
-        while (i < lines.length && lines[i].includes("|")) {
-          const cells = tableCells(lines[i]);
-          if (cells.length !== headers.length) break;
-          rows.push(cells); i++;
-        }
-        blocks.push({type: "table", headers, rows});
-        continue;
-      }
-    }
-    if (UNORDERED.test(line) || ORDERED.test(line)) {
-      flushParagraph();
-      const ordered = ORDERED.test(line);
-      const pattern = ordered ? ORDERED : UNORDERED;
-      const items: string[] = [];
-      while (i < lines.length) {
-        const item = lines[i].match(pattern);
-        if (!item) break;
-        items.push(item[1]);
-        i += 1;
-      }
-      blocks.push({ type: "list", ordered, items });
-      continue;
-    }
-    if (line.trim() === "") {
-      flushParagraph();
-      i += 1;
-      continue;
-    }
-    paragraph.push(line);
-    i += 1;
-  }
-  flushParagraph();
-  return blocks;
-}
-
-export function MarkdownText({ text }: { text: string }) {
+export function MarkdownText({text, headingPrefix, headingLevel = 2}: {
+  text: string;
+  headingPrefix?: string;
+  headingLevel?: 1 | 2 | 3 | 4 | 5 | 6;
+}) {
+  const instanceId = useId();
+  const blocks = useMemo(() => parseMarkdownBlocks(text), [text]);
+  const headings = markdownOutline(blocks, headingPrefix ?? `md-${instanceId}`, headingLevel);
+  const headingsByBlock = new Map(headings.map(heading => [heading.blockIndex, heading]));
   return (
     <div className="personal-md">
-      {parseBlocks(text).map((block, index) => {
+      {blocks.map((block, index) => {
         const key = `b${index}`;
         if (block.type === "code") {
-          return <pre className="personal-md-pre" key={key}><code>{block.text}</code></pre>;
+          return <pre className="personal-md-pre" tabIndex={0} key={key}><code>{block.text}</code></pre>;
         }
         if (block.type === "heading") {
-          return <p className={`personal-md-heading is-h${block.level}`} key={key}>{renderInline(block.text, key)}</p>;
+          const heading = headingsByBlock.get(index)!;
+          const Heading = `h${heading.level}` as "h1" | "h2" | "h3" | "h4" | "h5" | "h6";
+          return <Heading id={heading.id} tabIndex={-1} className={`personal-md-heading is-h${block.level}`} key={key}>{renderInline(block.text, key)}</Heading>;
         }
         if (block.type === "table") {
           return <div className="personal-md-table-scroll" tabIndex={0} key={key}><table>

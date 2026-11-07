@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import shlex
+import sys
 
 import pytest
 
@@ -39,8 +40,10 @@ def test_cli_pages_reconstruct_unicode_capture_without_goal_or_runtime(tmp_path)
             break
         assert page["next_offset"] == offset
         command = shlex.split(page["next_command"])
-        assert command[:3] == ["loopx", "--format", "json"]
-        args = command[3:]
+        # Follow the source-selected interpreter rather than an ambient CLI.
+        assert command[:3] == [sys.executable, "-m", "loopx.entrypoint"]
+        assert command[3:5] == ["--format", "json"]
+        args = command[5:]
     assert b"".join(chunks) == raw and json.loads(b"".join(chunks)) == original
     assert path.read_bytes() == raw and not runtime.exists() and not registry.exists()
 

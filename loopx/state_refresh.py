@@ -106,6 +106,10 @@ from .control_plane.goals.vision_checkpoint import (
     prepare_vision_refresh,
 )
 from .control_plane.goals.goal_frontier import latest_agent_vision_from_runs
+from .control_plane.goals.goal_frontier.outcome_continuity import (
+    acceptance_gaps_from_outcome_checkpoint,
+    outcome_vision_checkpoint_from_run,
+)
 from .control_plane.goals.checkpoint_context_io import (
     checkpoint_commit_guard, commit_checkpoint_run, require_complete_checkpoint_index, inspect_checkpoint_replay,
 )
@@ -344,6 +348,8 @@ def build_state_refresh_record(
     if settlement_identity:
         record["settlement_identity"] = settlement_identity.as_dict()
         record["turn_instance_id"] = settlement_identity.turn_instance_id
+        if settlement_identity.request_subject is not None:
+            record["request_subject"] = dict(settlement_identity.request_subject)
         if settlement_identity.todo_id:
             record["todo_id"] = settlement_identity.todo_id
         if settlement_identity.replan_obligation_id:
@@ -602,6 +608,10 @@ def render_state_refresh_markdown(payload: dict[str, Any]) -> str:
                 "- vision_checkpoint_required_resolution: "
                 f"{','.join(str(item) for item in required_resolution)}"
             )
+        for gap in vision_checkpoint.get("acceptance_gaps", []):
+            if isinstance(gap, dict):
+                failed = [name for name, passed in (gap.get("component_checks") or {}).items() if not passed]
+                lines.append(f"- outcome qualification gap: {', '.join(failed)}. {gap.get('resolution_hint', '')}")
         lines.extend(render_first_refresh_checkpoint_hint(payload))
 
     projection_gap = (
@@ -782,10 +792,23 @@ def refresh_state_run(
     if explore_result is not None:
         from .capabilities.explore.result_writeback import normalize_result_attachment
         normalized_explore_result = normalize_result_attachment(explore_result)
+    request_work_id = None
+    if not todo_id and not normalized_replan_obligation_id and turn_instance_id and normalized_agent_id:
+        # Reuse only this exact committed guard. Missing input cannot select a
+        # Todo or manufacture a request; the original receipt owns restoration.
+        from .control_plane.quota.heartbeat_receipt import find_heartbeat_receipt, heartbeat_receipt_request_subject
+        request_registry = load_registry(registry_path)
+        request_runtime = resolve_runtime_root(request_registry, runtime_root_override, registry_path=registry_path)
+        request_receipt = find_heartbeat_receipt(request_runtime, goal_id=safe_goal_id,
+            agent_id=normalized_agent_id, turn_instance_id=turn_instance_id, goal_ref=goal_ref)
+        request_subject = heartbeat_receipt_request_subject(request_receipt)
+        if request_subject is not None:
+            request_work_id = SettlementIdentity(goal_id=safe_goal_id, agent_id=normalized_agent_id,
+                todo_id=None, turn_instance_id=turn_instance_id, request_subject=request_subject).binding_id
     normalized_progress_observation = (
         normalize_progress_observation(
             progress_observation,
-            work_item_id=todo_id or normalized_replan_obligation_id,
+            work_item_id=todo_id or normalized_replan_obligation_id or request_work_id,
         )
         if progress_observation is not None
         else None
@@ -800,7 +823,7 @@ def refresh_state_run(
     turn_scoped_settlement_qualified = qualifies_turn_scoped_settlement(
         normalized_delivery_outcome,
         normalized_progress_observation,
-        work_item_id=todo_id,
+        work_item_id=todo_id or request_work_id,
         replan_obligation_id=normalized_replan_obligation_id,
     )
     # A refusal has to name the typed input the writer still owes; the diagnosis
@@ -811,7 +834,7 @@ def refresh_state_run(
         else explain_turn_scoped_settlement_gap(
             normalized_delivery_outcome,
             normalized_progress_observation,
-            work_item_id=todo_id,
+            work_item_id=todo_id or request_work_id,
             replan_obligation_id=normalized_replan_obligation_id,
         )
         or TURN_SCOPED_SETTLEMENT_GAP_FALLBACK
@@ -1190,21 +1213,6 @@ def refresh_state_run(
         # mutations and conflicting vision decisions before this fence. The
         # supplement repairs only the missing vision decision, so terminal
         # validation remains attached to the original Todo completion.
-        if (
-            normalized_delivery_outcome in ACCOUNTABLE_DELIVERY_OUTCOMES
-            and not checkpoint_supplement
-        ):
-            require_accountable_completion_validation(
-                state_text,
-                todo_fields=todo_fields,
-                todo_id=(settlement_identity.todo_id if settlement_identity else None),
-                agent_id=normalized_agent_id or None,
-                delivery_boundary=normalized_delivery_boundary,
-                delivery_outcome=normalized_delivery_outcome,
-                semantic_replan_recorded=(
-                    effective_autonomous_replan_recorded
-                ),
-            )
         vision_checkpoint = build_vision_checkpoint(
             agent_id=normalized_agent_id or None,
             agent_vision=agent_vision,
@@ -1218,6 +1226,31 @@ def refresh_state_run(
             autonomous_replan_recorded=effective_autonomous_replan_recorded,
             blocked_retry=blocked_retry,
         )
+        if (
+            normalized_delivery_outcome in ACCOUNTABLE_DELIVERY_OUTCOMES
+            and not checkpoint_supplement
+        ):
+            require_accountable_completion_validation(
+                state_text,
+                todo_fields=todo_fields,
+                todo_id=(settlement_identity.todo_id if settlement_identity else None),
+                agent_id=normalized_agent_id or None,
+                delivery_boundary=normalized_delivery_boundary,
+                delivery_outcome=normalized_delivery_outcome,
+                semantic_replan_recorded=effective_autonomous_replan_recorded,
+                goal_id=safe_goal_id,
+                progress_writeback=({
+                    "goal_id": safe_goal_id,
+                    "agent_id": normalized_agent_id,
+                    "todo_id": settlement_identity.todo_id,
+                    "turn_instance_id": settlement_identity.turn_instance_id,
+                    "settlement_identity": settlement_identity.as_dict(),
+                    "delivery_outcome": normalized_delivery_outcome,
+                    "vision_checkpoint": vision_checkpoint,
+                    "agent_vision": agent_vision,
+                    "completion_todo_id": completion_todo_id,
+                } if settlement_identity is not None else None),
+            )
         if checkpoint_supplement and not vision_checkpoint.get("satisfied"):
             raise ValueError(
                 "checkpoint supplement did not satisfy the missing decision; "
@@ -1341,6 +1374,17 @@ def refresh_state_run(
             settlement_identity=settlement_identity,
             todo_fields=todo_fields,
         )
+        # Report qualification gaps in the write receipt, using the same owner
+        # as quota/history. A committed checkpoint is not outcome acceptance;
+        # this read-only diagnostic neither rejects nor repairs the write.
+        outcome_checkpoint = outcome_vision_checkpoint_from_run(
+            record, goal_id=safe_goal_id, agent_id=normalized_agent_id or None,
+        )
+        outcome_gaps = acceptance_gaps_from_outcome_checkpoint(
+            agent_vision or existing_agent_vision, outcome_checkpoint,
+        )
+        if outcome_gaps:
+            record["vision_checkpoint"] = {**vision_checkpoint, "acceptance_gaps": outcome_gaps}
         source_snapshot = (
             prior_writeback_run.get("todo_source")
             if checkpoint_supplement and prior_writeback_run

@@ -13,7 +13,6 @@ from .cli_commands.automation_cadence import (
     register_automation_cadence_command, handle_automation_cadence_command,
 )
 
-import argparse
 import sys
 
 from .cli_commands.agent_capabilities import register_agent_capabilities
@@ -89,7 +88,6 @@ from .capabilities.external_research.cli import (
     register_external_evidence_commands,
 )
 from .capabilities.performance_diagnosis.cli import (
-    handle_performance_diagnosis_command,
     register_performance_diagnosis_commands,
 )
 from .cli_commands import (
@@ -177,14 +175,15 @@ from .cli_commands.shared_goal_alignment import (
     handle_shared_goal_alignment_command,
     register_shared_goal_alignment_command,
 )
-from .cli_commands.goal_acceptance import (
-    handle_goal_acceptance_command,
-    register_goal_acceptance_command,
-)
+from .cli_commands.goal_acceptance import register_goal_acceptance_command
 from .cli_commands.goal_direction import register_goal_direction, handle_goal_direction
 from .cli_commands.goal_amendment_proposal import (
     handle_goal_amendment_proposal_command,
     register_goal_amendment_proposal_command,
+)
+from .cli_commands.anti_entropy import (
+    handle_anti_entropy_command,
+    register_anti_entropy_commands,
 )
 from .cli_commands.reliability_diagnostics import (
     handle_reliability_diagnostics_command,
@@ -218,46 +217,6 @@ from .cli_runtime import (
 )
 
 
-def _demo_not_available_message(command: str) -> str:
-    return (
-        f"`{command}` is a LoopX **demo** showcase that ships only with a "
-        "source checkout (demo/), not in installed builds. Clone the loopx "
-        "repository to run it."
-    )
-
-
-def _register_demo_commands(
-    subparsers: argparse._SubParsersAction,
-    add_subcommand_format,
-) -> None:
-    """Register demo-only commands backed by the non-shipped demo/ package.
-
-    In a source checkout the full demo command surface is wired; in an
-    installed build the demo package is absent, so only a stub is registered and
-    dispatch reports the demo is not available.
-    """
-
-    for demo_command, module, register_name in (
-        ("auto-research", "demo.auto_research.cli", "register_auto_research_commands"),
-        ("multi-agent", "demo.multi_agent_cli", "register_multi_agent_commands"),
-    ):
-        try:
-            register = getattr(
-                __import__(module, fromlist=[register_name]),
-                register_name,
-            )
-            register(subparsers, add_subcommand_format)
-        except Exception:
-            stub = subparsers.add_parser(
-                demo_command,
-                help=(
-                    f"(demo) {demo_command} showcase — requires a loopx "
-                    "source checkout"
-                ),
-            )
-            add_subcommand_format(stub)
-
-
 def build_parser() -> LoopXArgumentParser:
     parser, sub = build_cli_parser()
 
@@ -285,6 +244,8 @@ def build_parser() -> LoopXArgumentParser:
     register_canary_commands(sub, add_subcommand_format)
 
     register_capability_commands(sub, add_subcommand_format)
+
+    register_anti_entropy_commands(sub, add_subcommand_format)
 
     register_reliability_diagnostics_commands(sub, add_subcommand_format)
 
@@ -330,8 +291,6 @@ def build_parser() -> LoopXArgumentParser:
     register_performance_diagnosis_commands(sub, add_subcommand_format)
 
     register_ml_experiment_commands(sub, add_subcommand_format)
-
-    _register_demo_commands(sub, add_subcommand_format)
 
     register_turn_commands(sub, add_subcommand_format)
     register_host_mode_plan_command(sub, add_subcommand_format)
@@ -394,12 +353,6 @@ def _main(argv: list[str] | None = None) -> int:
     if top_level_help_requested(raw_argv):
         print(render_concise_help(sys.argv[0] if argv is None else "loopx"), end="")
         return 0
-    try:
-        from demo.auto_research.cli import rewrite_auto_research_question_argv
-
-        raw_argv = rewrite_auto_research_question_argv(raw_argv)
-    except Exception:
-        pass  # demo package absent in installed builds; no question rewrite
     parser = build_parser()
     args = parser.parse_args(raw_argv)
     from .usage_ping import select_operation
@@ -492,6 +445,16 @@ def _main(argv: list[str] | None = None) -> int:
     )
     if capability_result is not None:
         return capability_result
+
+    anti_entropy_result = handle_anti_entropy_command(
+        args,
+        registry_path=registry_path,
+        runtime_root_arg=args.runtime_root,
+        output_format=output_format,
+        print_payload=print_payload,
+    )
+    if anti_entropy_result is not None:
+        return anti_entropy_result
 
     reliability_diagnostics_result = handle_reliability_diagnostics_command(
         args,
@@ -708,12 +671,6 @@ def _main(argv: list[str] | None = None) -> int:
     if external_evidence_result is not None:
         return external_evidence_result
 
-    performance_diagnosis_result = handle_performance_diagnosis_command(
-        args, output_format=output_format, print_payload=print_payload,
-    )
-    if performance_diagnosis_result is not None:
-        return performance_diagnosis_result
-
     registry_admin_result = handle_registry_admin_command(
         args,
         registry_path=registry_path,
@@ -851,13 +808,6 @@ def _main(argv: list[str] | None = None) -> int:
     if authority_shadow_result is not None:
         return authority_shadow_result
 
-    goal_acceptance_result = handle_goal_acceptance_command(
-        args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
-        output_format=output_format, print_payload=print_payload,
-    )
-    if goal_acceptance_result is not None:
-        return goal_acceptance_result
-
     shared_goal_alignment_result = handle_shared_goal_alignment_command(
         args,
         registry_path=registry_path,
@@ -880,35 +830,5 @@ def _main(argv: list[str] | None = None) -> int:
     )
     if goal_amendment_proposal_result is not None:
         return goal_amendment_proposal_result
-
-    if args.command == "auto-research":
-        try:
-            from demo.auto_research.cli import handle_auto_research_command
-
-            return handle_auto_research_command(
-                args,
-                registry_path=registry_path,
-                runtime_root_arg=args.runtime_root,
-                output_format=output_format,
-                print_payload=print_payload,
-            )
-        except Exception:
-            print(_demo_not_available_message("auto-research"))
-            return 1
-
-    if args.command == "multi-agent":
-        try:
-            from demo.multi_agent_cli import handle_multi_agent_command
-
-            return handle_multi_agent_command(
-                args,
-                registry_path=registry_path,
-                runtime_root_arg=args.runtime_root,
-                output_format=output_format,
-                print_payload=print_payload,
-            )
-        except Exception:
-            print(_demo_not_available_message("multi-agent"))
-            return 1
 
     return 2

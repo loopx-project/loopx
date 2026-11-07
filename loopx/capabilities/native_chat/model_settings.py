@@ -5,7 +5,7 @@ These are bounded visible provider values, not LoopX entity or file names.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, TYPE_CHECKING
+from typing import Any, Mapping, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ...chat_runtime import ChatRuntimeController, ChatRuntimeAdapter
@@ -15,6 +15,24 @@ _AGENT_MODEL_ID_MAX_LENGTH = 160
 MODEL_SELECTION_UNSET = object()
 
 
+def native_adapter_configuration(controller: ChatRuntimeController, *, agent_id: str,
+        goal_id: str | None, objective: str, manager_runtime: Mapping[str, Any] | None,
+        executor_model: Mapping[str, Any] | None, agent_config: Mapping[str, str] | None,
+        execution_mode: bool) -> tuple[dict[str, Any] | None, str, dict[str, Any]]:
+    """Share native-provider selection; the existing manager owner decides policy."""
+    from ...chat_manager import MANAGER_AGENT_GOAL_ID, manager_agent_objective, manager_model_config
+    profile = (dict(manager_runtime or controller.manager_runtime_profile())
+               if goal_id == MANAGER_AGENT_GOAL_ID else None)
+    if profile is not None:
+        objective = manager_agent_objective(str(profile["runtime_profile"]))
+    model = (executor_model or manager_model_config(
+        endpoint=agent_id, machine_defaults=controller.steward_executor_defaults())
+        if goal_id == MANAGER_AGENT_GOAL_ID and not execution_mode else executor_model or {})
+    return profile, objective, {**model, **{
+        key: agent_config[key] for key in ("model", "reasoning_effort", "service_tier")
+        if agent_config and agent_config.get(key)}}
+
+
 def session_model_settings_supported(session: dict[str, Any]) -> bool:
     """Project the same current-Session boundary used by the save operation.
 
@@ -22,7 +40,7 @@ def session_model_settings_supported(session: dict[str, Any]) -> bool:
     configuration owner. A model choice must never trigger their thread replay.
     Imports are local because the Session store also uses these normalizers.
     """
-    from ...chat_coordination import PROJECT_CONTEXT_VERSION
+    from ...chat.coordination import PROJECT_CONTEXT_VERSION
     from ...chat_manager import is_manager_channel
     from ...chat_store import CHAT_SESSION_MODE_MANAGED
 
@@ -114,6 +132,32 @@ def inspect_agent_model_options(controller: ChatRuntimeController, agent_id: str
                 ],
             },
         }
+    if agent_id == "antigravity":
+        from .antigravity_adapter import ANTIGRAVITY_DEFAULT_MODEL, ANTIGRAVITY_MODEL_OPTIONS
+        return {
+            "agent_id": agent_id,
+            "supported": True,
+            "model": {
+                "id": "model",
+                "label": "Model",
+                "selected": ANTIGRAVITY_DEFAULT_MODEL,
+                "options": [
+                    {
+                        "value": str(item["id"]),
+                        "label": str(item["display_name"]),
+                        "description": str(item.get("description") or ""),
+                        "is_default": bool(item.get("is_default")),
+                        "default_reasoning_effort": str(item.get("default_reasoning_effort") or "high"),
+                        "reasoning_efforts": [
+                            str(effort["reasoning_effort"])
+                            for effort in (item.get("supported_reasoning_efforts") or [])
+                            if isinstance(effort, dict) and effort.get("reasoning_effort")
+                        ],
+                    }
+                    for item in ANTIGRAVITY_MODEL_OPTIONS
+                ],
+            },
+        }
     if str(capability.get("adapter_kind")) != "acp":
         return {"agent_id": agent_id, "model": None, "supported": False}
     adapter = controller._start_adapter(
@@ -174,10 +218,15 @@ def configure_session_model(controller: ChatRuntimeController, session_id: str, 
 def observed_model_settings(adapter: ChatRuntimeAdapter, requested_effort: str | None = None,
                              requested_model: str | None = None) -> dict[str, Any]:
     from ...chat_acp import ACPStdioAdapter
+    from .antigravity_adapter import AntigravityAdapter
     from .codex_adapter import CodexAppServerAdapter
     from ...chat_agent import CodexChatAgentError
-    settings = adapter.model_settings if isinstance(adapter, (ACPStdioAdapter, CodexAppServerAdapter)) else {}
-    if requested_model and isinstance(adapter, (ACPStdioAdapter, CodexAppServerAdapter)) and adapter.current_model_id != requested_model:
+    settings = adapter.model_settings if isinstance(adapter, (ACPStdioAdapter, CodexAppServerAdapter, AntigravityAdapter)) else {}
+    confirmed_model = requested_model
+    if isinstance(adapter, AntigravityAdapter) and requested_model:
+        from .antigravity_adapter import resolve_antigravity_model_placeholder
+        confirmed_model, _ = resolve_antigravity_model_placeholder(requested_model, requested_effort)
+    if confirmed_model and isinstance(adapter, (ACPStdioAdapter, CodexAppServerAdapter, AntigravityAdapter)) and adapter.current_model_id != confirmed_model:
         raise CodexChatAgentError("The Agent did not confirm the requested model; no message was sent.",
                                   error_code="unsupported_configuration", gate=None)
     if requested_effort and settings.get("agent_reasoning_effort") != requested_effort:
@@ -193,3 +242,15 @@ def session_model_settings_pending(session: dict[str, Any]) -> bool:
         session.get(requested) is not None and session[requested] != session.get(observed)
         for requested, observed in (("requested_agent_model_id", "agent_model_id"),
                                     ("requested_agent_reasoning_effort", "agent_reasoning_effort"))))
+
+
+def normalize_session_model_changes(changes: dict[str, object]) -> None:
+    """Normalize the existing mutable store fields through their shared grammar."""
+    if "agent_model_id" in changes:
+        changes["agent_model_id"] = normalize_agent_model_id(changes["agent_model_id"]) if changes["agent_model_id"] else None
+    for field in ("requested_agent_model_id", "requested_agent_reasoning_effort"):
+        if field in changes:
+            changes[field] = normalize_agent_model_id(changes[field]) if changes[field] is not None else None
+    for key in ("agent_reasoning_effort", "agent_service_tier"):
+        if key in changes:
+            changes[key] = normalize_agent_model_id(changes[key]) if changes[key] else None

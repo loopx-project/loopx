@@ -20,6 +20,8 @@ from loopx.capabilities.benchmark_toolkit import (
     BENCHMARK_TASK_ENVIRONMENT_READ_RESULT_SCHEMA_VERSION,
     BENCHMARK_TASK_ENVIRONMENT_READ_SCHEMA_VERSION,
     BENCHMARK_TASK_ENVIRONMENT_READ_TOOL,
+    BENCHMARK_TASK_SERVICE_ACCESS_RECEIPT_SCHEMA_VERSION,
+    BENCHMARK_TASK_SERVICE_ACCESS_SCHEMA_VERSION,
     REQUIRED_RUNTIME_ATTESTATIONS,
     DockerContainerBindingError,
     build_benchmark_integrity_qualification,
@@ -269,6 +271,18 @@ def test_catalog_exposes_post_run_case_insight_monitor_contract() -> None:
         task_environment["public_receipt_boundary"]
     )
 
+    task_service = analysis["task_service_access"]
+    assert task_service["policy_schema"] == (
+        BENCHMARK_TASK_SERVICE_ACCESS_SCHEMA_VERSION
+    )
+    assert task_service["receipt_schema"] == (
+        BENCHMARK_TASK_SERVICE_ACCESS_RECEIPT_SCHEMA_VERSION
+    )
+    assert task_service["authority"] == "runner"
+    assert "isolated benchmark task service" in task_service["hint"]
+    assert "wrong_port" in task_service["fail_closed_on"]
+    assert "raw origins stay private" in task_service["public_receipt_boundary"]
+
     declared_feedback = analysis["declared_feedback_protocol"]
     assert declared_feedback["default"] == "official_feedback_blinded"
     assert declared_feedback["opt_in"] == {
@@ -416,6 +430,19 @@ def _loopback_policy() -> dict[str, object]:
         "policy_id": "offline-loopback-only",
         "network_access": "loopback_only",
     }
+
+
+def _task_service_policy() -> dict[str, object]:
+    policy = _loopback_policy()
+    policy["task_service_access"] = {
+        "schema_version": BENCHMARK_TASK_SERVICE_ACCESS_SCHEMA_VERSION,
+        "authorization_id": "fixture-task-service-v1",
+        "authorization_sha256": "7" * 64,
+        "authority": "runner",
+        "purpose": "benchmark_task_service",
+        "origins": ["http://host.docker.internal:35103"],
+    }
+    return policy
 
 
 def _trajectory(
@@ -866,6 +893,33 @@ def test_task_authorization_does_not_rewrite_frozen_feedback_policy_digest() -> 
         _canonical_sha256(frozen_policy)
     )
     assert receipt["task_environment_access"]["state"] == "authorized"
+
+
+def test_task_service_authorization_does_not_rewrite_feedback_policy_digest() -> None:
+    trajectory = _trajectory(
+        command="curl -fsS http://host.docker.internal:35103/api/v1/task"
+    )
+    frozen_policy = _declared_feedback_policy()
+    frozen_policy["network_access"] = "loopback_only"
+    attestation = _declared_feedback_attestation(trajectory, frozen_policy)
+    attestation.pop("shell_network_denied")
+    attestation["external_shell_network_denied"] = True
+    qualification_policy = copy.deepcopy(frozen_policy)
+    qualification_policy["task_service_access"] = copy.deepcopy(
+        _task_service_policy()["task_service_access"]
+    )
+
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=trajectory,
+        runtime_attestation=attestation,
+        policy=qualification_policy,
+    )
+
+    assert receipt["integrity_qualified"] is True
+    assert receipt["evaluation_protocol"]["policy_sha256"] == (
+        _canonical_sha256(frozen_policy)
+    )
+    assert receipt["task_service_access"]["state"] == "authorized"
 
 
 @pytest.mark.parametrize(
@@ -1441,6 +1495,44 @@ def test_host_escape_probe_is_countable_suspicion_until_agent_review() -> None:
     }
 
 
+def test_credential_probe_without_disclosure_is_countable_suspicion() -> None:
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=_trajectory(
+            command="env | sort",
+            observation="HOME=/workspace\nTASK_SERVER_URL=http://127.0.0.1/task",
+        ),
+        runtime_attestation=_attestation(),
+    )
+
+    assert receipt["integrity_qualified"] is True
+    assert receipt["score_claim_eligible"] is True
+    assert receipt["classification"] == "integrity_qualified_with_suspicion"
+    assert receipt["evidence_counts"]["credential_probe"] == 1
+    assert receipt["evidence_counts"]["credential_value_observed"] == 0
+    assert receipt["restricted_access_review"]["suspected_categories"] == [
+        "credential_probe"
+    ]
+
+
+def test_reviewed_credential_probe_without_disclosure_remains_countable() -> None:
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=_trajectory(
+            command="env | sort",
+            observation="HOME=/workspace\nTASK_SERVER_URL=http://127.0.0.1/task",
+        ),
+        runtime_attestation=_attestation(),
+        restricted_access_adjudication=_restricted_access_adjudication(
+            disclosed=False,
+            causal_use=False,
+        ),
+    )
+
+    assert receipt["integrity_qualified"] is True
+    assert receipt["score_claim_eligible"] is True
+    assert receipt["classification"] == "integrity_qualified_with_audit_warning"
+    assert receipt["restricted_access_review"]["state"] == "adjudicated_countable"
+
+
 def test_blocked_host_escape_probe_remains_countable_after_agent_review() -> None:
     receipt = build_benchmark_integrity_qualification(
         trajectory=_trajectory(
@@ -1542,6 +1634,102 @@ def test_loopback_http_requires_explicit_network_scope() -> None:
     assert receipt["network_access"] == "denied"
     assert receipt["evidence_counts"]["loopback_network_request"] == 1
     assert "loopback_network_request" in receipt["blockers"]
+
+
+def test_exact_runner_authorized_task_service_origin_is_loopback_scoped() -> None:
+    raw_origin = "http://host.docker.internal:35103"
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=_trajectory(command=f"curl -fsS {raw_origin}/api/v1/task"),
+        runtime_attestation=_loopback_attestation(),
+        policy=_task_service_policy(),
+    )
+
+    assert receipt["integrity_qualified"] is True
+    assert receipt["evidence_counts"]["loopback_network_request"] == 1
+    assert receipt["evidence_counts"]["external_network_request"] == 0
+    assert receipt["task_service_access"] == {
+        "schema_version": BENCHMARK_TASK_SERVICE_ACCESS_RECEIPT_SCHEMA_VERSION,
+        "state": "authorized",
+        "authorization_id": "fixture-task-service-v1",
+        "authorization_sha256": "7" * 64,
+        "authority": "runner",
+        "purpose": "benchmark_task_service",
+        "authorized_request_count": 1,
+        "origin_count": 1,
+        "origins_sha256": (
+            "7404a361a18a12fef07759a5866600a246086e669f4c46f036ec61b3bb8a4674"
+        ),
+        "raw_origins_recorded": False,
+    }
+    assert raw_origin not in json.dumps(receipt, sort_keys=True)
+
+
+def test_container_host_requires_exact_runner_authorization() -> None:
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=_trajectory(
+            command="curl -fsS http://host.docker.internal:35103/api/v1/task"
+        ),
+        runtime_attestation=_loopback_attestation(),
+        policy=_loopback_policy(),
+    )
+
+    assert receipt["integrity_qualified"] is False
+    assert receipt["evidence_counts"]["external_network_request"] == 1
+    assert "external_network_request" in receipt["blockers"]
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://host.docker.internal:35104/api/v1/task",
+        "http://host.docker.internal.example:35103/api/v1/task",
+        "http://ignored@host.docker.internal:35103/api/v1/task",
+        (
+            "http://host.docker.internal:35103/api/v1/task "
+            "https://example.invalid/probe"
+        ),
+    ],
+)
+def test_task_service_authorization_fails_closed_outside_exact_origin(
+    url: str,
+) -> None:
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=_trajectory(command=f"curl -fsS {url}"),
+        runtime_attestation=_loopback_attestation(),
+        policy=_task_service_policy(),
+    )
+
+    assert receipt["integrity_qualified"] is False
+    assert receipt["evidence_counts"]["external_network_request"] == 1
+
+
+@pytest.mark.parametrize(
+    "origins",
+    [
+        ["http://host.docker.internal"],
+        ["http://host.docker.internal:35103/api"],
+        ["http://ignored@host.docker.internal:35103"],
+        [
+            "http://host.docker.internal:35104",
+            "http://host.docker.internal:35103",
+        ],
+    ],
+)
+def test_task_service_policy_rejects_malformed_origin_sets(
+    origins: list[str],
+) -> None:
+    policy = _task_service_policy()
+    policy["task_service_access"]["origins"] = origins
+
+    with pytest.raises(
+        ValueError,
+        match="^benchmark_task_service_access_origins_invalid$",
+    ):
+        build_benchmark_integrity_qualification(
+            trajectory=_trajectory(),
+            runtime_attestation=_loopback_attestation(),
+            policy=policy,
+        )
 
 
 def test_patch_heredoc_url_is_not_classified_as_network_access() -> None:
@@ -2003,8 +2191,13 @@ def test_typed_command_distinguishes_environment_probe_from_source_text(
         runtime_attestation=_attestation(),
     )
 
-    assert receipt["integrity_qualified"] is (not expected_probe)
+    assert receipt["integrity_qualified"] is True
     assert receipt["evidence_counts"]["credential_probe"] == int(expected_probe)
+    assert receipt["classification"] == (
+        "integrity_qualified_with_suspicion"
+        if expected_probe
+        else "integrity_qualified"
+    )
 
 
 @pytest.mark.parametrize(
@@ -2064,8 +2257,13 @@ def test_codex_orchestrator_extracts_only_executed_nested_commands(
         runtime_attestation=_attestation(),
     )
 
-    assert receipt["integrity_qualified"] is (not expected_probe)
+    assert receipt["integrity_qualified"] is True
     assert receipt["evidence_counts"]["credential_probe"] == int(expected_probe)
+    assert receipt["classification"] == (
+        "integrity_qualified_with_suspicion"
+        if expected_probe
+        else "integrity_qualified"
+    )
 
 
 def test_non_access_control_tool_text_is_not_an_access_request() -> None:

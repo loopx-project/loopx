@@ -2,7 +2,8 @@
 import {createHash} from "node:crypto";
 import type {JsonObject} from "../effect_program.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
-import {requireJsonObject, requireNonEmptyString, requireStringArray, requireStringLiteral} from "../runtime_decode.ts";
+import {jsonObject, requireJsonObject, requireNonEmptyString, requireStringArray, requireStringLiteral} from "../runtime_decode.ts";
+import {contextSourceIdentity} from "../quota/diagnostic_projection.ts";
 import {normalizeGoalPathDelta} from "../goals/vision_checkpoint.ts";
 import {normalizeExploreExecutionObservation} from "./explore_execution_observation.ts";
 import {isExploreEvidenceRef} from "./explore_evidence_ref.ts";
@@ -17,10 +18,10 @@ export const EXPLORE_WRITEBACK_SUMMARY_LIMIT = 2000;
 // before authoring. Keep them in the entry even when attachment syntax is read
 // later. The full standalone guidance retains its original order and bytes.
 const EXPLORE_BEFORE_WORK = {
-  openLease: "For an open Todo under hard_lease, keep the active task lease through refresh-state and Explore graph/Todo-link delivery; release only after explore_result_delivery.ok=true.",
-  leaseRecovery: "If already released, re-enter the normal guard/claim/lease path before retrying.",
-  completedLease: "A completed Todo under hard_lease permits only its existing additive evidence-link exception with the owner's retained released lease key and current version; this grants no new execution authority.",
-  deliveryReplay: "An exact replay of already-successful delivery is readback-only and needs no new lease; unfinished delivery still requires the applicable claim/lease proof.",
+  openLease: "When execution fencing applies to an open Todo, keep its claimed execution through refresh-state and Explore graph/Todo-link delivery; end that execution only after explore_result_delivery.ok=true. The writeback resolves and checks execution proof internally.",
+  leaseRecovery: "If execution has ended or expired, re-enter the normal guard and todo claim path before retrying; a stale task reference cannot resume execution.",
+  completedLease: "When execution fencing applies to a completed Todo, only its existing owner-scoped additive evidence-link exception is permitted. Writeback checks retained execution history internally; this grants no new execution authority.",
+  deliveryReplay: "An exact replay of already-successful delivery is readback-only and needs no new claim; unfinished delivery still requires current ownership and execution checks.",
   optionalFinding: "Routine work needs no attachment; do not invent findings.",
   optionalCapture: "Capture is optional, not a settlement obligation.",
   negativeEvidence: "A stopped route does not imply refuted status, and a score alone does not prove refutation.",
@@ -193,6 +194,9 @@ function normalizeAttachment(value: unknown, visionPacket?: unknown, linkedScope
     throw new EffectRuntimeRequestError("measurement_context requires measurements");
   }
   const measurements = Object.hasOwn(row, "measurements")
+    // Transport also reconstructs already committed inputs before replay is
+    // identified. New writes bind measurements in their precommit event plan;
+    // a new ingestion intent repeats that check below, never during replay.
     ? normalizeExploreMeasurements(row.measurements, row.measurement_context) : null;
   if (measurements?.some(item => item.input_revision !== text(row.input_revision, "input_revision", 160)
     || !refs.includes(item.evidence_ref))) {
@@ -314,6 +318,9 @@ export function planExploreQuestionEvolution(params: JsonObject): JsonObject {
 export function produceExploreResultIntent(params: JsonObject): JsonObject {
   const projection = requireJsonObject(params.projection, "writeback projection");
   const attachment = normalizeExploreResultAttachment({attachment: projection.explore_result});
+  if (attachment.measurements !== undefined) {
+    normalizeExploreMeasurements(attachment.measurements, undefined, attachment.execution_observation);
+  }
   const receipt = requireJsonObject(params.receipt, "writeback receipt");
   const source = text(receipt.event_id, "source receipt", 200);
   const key = createHash("sha256").update(source).digest("hex");
@@ -322,4 +329,33 @@ export function produceExploreResultIntent(params: JsonObject): JsonObject {
     intent: {schema_version: "loopx_capability_intent_v0", intent_kind: "explore.result_ingestion",
       idempotency_key: `explore-result:${key}`, source_receipt_id: source,
       payload: {attachment}, requested_write_scope: []}};
+}
+
+/** Only the final display shares the successful hook's identical input. The
+ * complete attachment stays inline; durable intents and retry inputs never change. */
+export function referenceExploreResultDelivery(source: JsonObject, numberTokens?: unknown): JsonObject {
+  const attachment = jsonObject(source.explore_result), delivery = jsonObject(source.explore_result_delivery);
+  const hook = jsonObject(delivery?.hook);
+  if (attachment?.schema_version !== EXPLORE_RESULT_ATTACHMENT_SCHEMA ||
+      Object.hasOwn(attachment, "attachment_ref") || delivery?.ok !== true ||
+      delivery.retryable !== false || delivery.primary_committed !== true ||
+      hook?.schema_version !== "loopx_post_writeback_capability_hook_dispatch_v0" ||
+      hook.phase !== "post_writeback" || !Array.isArray(hook.failures) || hook.failures.length ||
+      !Array.isArray(hook.intents)) return source;
+  const identity = contextSourceIdentity(source, numberTokens);
+  const original = identity(attachment, ["explore_result"]);
+  const reference = {attachment_ref: "$.explore_result"};
+  if (Buffer.byteLength(JSON.stringify({attachment})) <= Buffer.byteLength(JSON.stringify(reference))) return source;
+  let changed = false;
+  const intents = hook.intents.map((value, index) => {
+    const intent = jsonObject(value), payload = jsonObject(intent?.payload);
+    if (intent?.schema_version !== "loopx_capability_intent_v0" ||
+        intent.intent_kind !== "explore.result_ingestion" || !payload ||
+        Object.hasOwn(payload, "attachment_ref") || !jsonObject(payload.attachment) ||
+        identity(payload.attachment, ["explore_result_delivery", "hook", "intents", index, "payload", "attachment"]) !== original) return value;
+    const {attachment: _duplicate, ...other} = payload;
+    changed = true;
+    return {...intent, payload: {...other, ...reference}};
+  });
+  return changed ? {...source, explore_result_delivery: {...delivery, hook: {...hook, intents}}} : source;
 }

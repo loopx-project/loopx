@@ -53,7 +53,7 @@ def configuration_summary(goal: Mapping[str, Any]) -> dict[str, Any] | None:
 
 
 def normalize_configuration(value: Mapping[str, Any]) -> dict[str, Any]:
-    allowed = {"enabled", "profile_preset", "route_ref", "timezone", "schedule", "task"}
+    allowed = {"enabled", "profile_preset", "route_ref", "timezone", "schedule", "task", "review_required"}
     unknown = sorted(set(value) - allowed)
     if unknown:
         raise ValueError(
@@ -82,6 +82,12 @@ def normalize_configuration(value: Mapping[str, Any]) -> dict[str, Any]:
         "route_ref": route_ref or None,
         "timezone": timezone,
     }
+    if "review_required" in value:
+        if type(value["review_required"]) is not bool:
+            raise TypeError("periodic_report.review_required must be a boolean")
+        if value["review_required"] and (profile_preset != "weekly-progress" or managed_session_report_destination(value) is None):
+            raise ValueError("automatic report review requires the original managed Session weekly-progress report route")
+        normalized["review_required"] = value["review_required"]
     if profile_preset == "session-task":
         if managed_session_report_destination(value) is None:
             raise ValueError("a scheduled task requires its exact original managed Session")

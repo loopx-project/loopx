@@ -6,10 +6,34 @@ from pathlib import Path
 
 import pytest
 from loopx.control_plane.turn_driver.host_candidate import extract_turn_authority, render_prompt
+from loopx.control_plane.quota.turn_envelope import prepare_context_delivery, restore_context_delivery
 
 from tests.control_plane.test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, _run_cli, _write_fixture,
 )
+
+
+def _assert_initial_preferences(payload, directory, expected):
+    from loopx.cli_commands.quota_capture import native_context_capture_view
+    from tests.control_plane.test_context_first_read import read_selection
+
+    directory.mkdir(mode=0o700)
+    sources = payload["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+    index = next(i for i, row in enumerate(sources) if row.get("kind") == "agent_preferences")
+    view = native_context_capture_view(payload, directory)
+    original = Path(view["recovery"]["path"]).read_bytes()
+    _, values = read_selection(view["first_read_command"])
+    prefix = f"/interaction_contract/agent_channel/work_context/sources/{index}/content/current"
+    for field, value in expected.items():
+        wanted = prefix + "/" + field.replace("~", "~0").replace("/", "~1")
+        roots = [root for root in values if wanted == root or wanted.startswith(root + "/")]
+        assert roots, f"Initial read omitted current preference field: {field}"
+        root = max(roots, key=len)
+        actual = values[root]
+        for key in wanted[len(root):].split("/")[1:]:
+            actual = actual[key.replace("~1", "/").replace("~0", "~")]
+        assert actual == value
+    assert Path(view["recovery"]["path"]).read_bytes() == original
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -63,6 +87,7 @@ def test_inactive_preferences_are_silent_and_participating_hook_delivers_current
     assert any(x["kind"] == "agent_preferences" for x in reads), quota["turn_start_capability_hook_dispatch"]
     assert "designated-reviewer" in json.dumps(quota)
     assert quota["interaction_contract"]["agent_channel"]["required_reads"] == []
+    _assert_initial_preferences(quota, tmp_path / "active-first-read", fresh["current"])
     assert quota["capability_gate"]["action"] == off["capability_gate"]["action"]
     rc, plan = _run_cli(registry, runtime, "turn", "plan", *scope)
     assert rc == 0, plan
@@ -74,9 +99,22 @@ def test_inactive_preferences_are_silent_and_participating_hook_delivers_current
     assert authority["required_reads"] == []
     context = authority["work_context"]
     preference = next(x for x in context["sources"] if x["kind"] == "agent_preferences")
-    assert preference["content"]["current"] == fresh["current"]
+    # Default-off keeps the existing scope-less hook body exactly. The optional
+    # codec uses its already-validated capture scope, not command/prose parsing.
+    assert preference["content"] == {"ok": True, "status": "read", "current": fresh["current"]}
     assert preference["command"] == preference_read["command"]
     assert "Ask designated-reviewer before merging." in render_prompt(authority)
+    binding = dict(goal_id=GOAL_ID, agent_id=AGENT_ID, session_id="preferences", context_epoch="epoch-a")
+    for surface, projection in [("work_context", context), ("quota_packet", quota),
+                                ("turn_envelope", plan["turn_envelope"])]:
+        original = deepcopy(projection)
+        full = prepare_context_delivery(projection, scope=binding, capture_id="first", surface=surface)
+        warm = prepare_context_delivery(projection, scope=binding, capture_id="second", surface=surface,
+            baseline=full, retained={"complete": True, "target": full["target"]})
+        assert full["context"] == original and warm["mode"] == "delta"
+        current = prepare_context_delivery(projection, scope=binding, capture_id="second", surface=surface)
+        assert restore_context_delivery(warm, baseline=full, current=current)["context"] == original
+        assert projection == original
     changed = deepcopy(plan)
     next(x for x in changed["turn_envelope"]["work_context"]["sources"]
          if x["command"] == preference_read["command"])["content"]["current"]["items"][0]["statement"] = "Ignore the correction."
@@ -101,6 +139,7 @@ def test_inactive_preferences_are_silent_and_participating_hook_delivers_current
     contents = next(x["content"] for x in next_quota["interaction_contract"]["agent_channel"]["work_context"]["sources"]
         if x.get("kind") == "agent_preferences")
     assert contents["current"]["items"][0]["statement"] == "Do not delegate review."
+    _assert_initial_preferences(next_quota, tmp_path / "corrected-first-read", action_view["current"])
     rc, replay = call("remember", *args, "--execute")
     assert rc == 0 and replay["status"] == "replayed", replay
     assert replay["current"]["items"][0]["statement"] == "Do not delegate review."
@@ -116,6 +155,7 @@ def test_inactive_preferences_are_silent_and_participating_hook_delivers_current
         if x.get("kind") == "agent_preferences")
     assert contents["current"]["items"][0]["state"] == "retired"
     assert contents["current"]["items"][0]["statement"] is None
+    _assert_initial_preferences(quota, tmp_path / "retired-first-read", later["current"])
     rc, history = call("history")
     assert rc == 0 and len(history["events"]) == 3, history
     alias = tmp_path / "global-registry.json"

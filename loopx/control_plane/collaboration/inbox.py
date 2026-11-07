@@ -156,6 +156,18 @@ def normalize_request(value: Any) -> dict | None:
         raise ValueError(str(exc)) from exc
 
 
+def normalize_handoff(value: Any) -> dict | list[dict] | None:
+    """Adapt the typed multi-recipient contract without enabling ordinary IO."""
+    if value is None:
+        return None
+    from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
+
+    try:
+        return effect_runtime_result("collaboration.handoff.normalize", {"handoff": value})["handoff"]
+    except EffectRuntimeRejected as exc:
+        raise ValueError(str(exc)) from exc
+
+
 def normalize_source_context(value: str) -> str:
     """The shared typed owner qualifies source text before persistence."""
     from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
@@ -423,6 +435,7 @@ def record_result(
     update_id: str | None = None,
     attachments: list[dict[str, Any]] | None = None,
     request_revision: int | None = None,
+    remaining_work: dict[str, str] | None = None,
 ):
     """Persist a receiver conclusion; the transport adapter validates its audience."""
     request_id = row["request_id"]
@@ -450,6 +463,7 @@ def record_result(
                 "decision": decision.get("decision"), "update_id": update_id,
                 "request_revision": request_revision, "legacy_assessment": decision or None,
                 "attachments": attachments,
+                "remaining_work": remaining_work,
                 "results": observations,
             })
         except EffectRuntimeRejected as exc:
@@ -487,6 +501,7 @@ def inspect_result_identity(reply, row, path):
             "request": row, "phase": reply.get("phase"), "text": reply.get("text"),
             "decision": reply.get("decision"), "update_id": reply.get("update_id"),
             "attachments": reply.get("attachments"),
+            "remaining_work": reply.get("remaining_work"),
             "request_revision": reply.get("request_revision"), "legacy_assessment": legacy.get("value"),
             "results": observations,
         })
@@ -509,7 +524,7 @@ def _result_observation(key, value):
         "value": {field: value[field] for field in (
             "request_id", "goal_id", "agent_id", "source_id", "goal_ref", "phase",
             "decision", "result_key", "previous_result_key", "update_id", "attachments",
-            "request_revision", "request_revision_digest", "recipient", "requester",
+            "request_revision", "request_revision_digest", "recipient", "requester", "remaining_work", "return_format_version",
         ) if field in value},
         "text_chars": len(text),
         "text_sha256": hashlib.sha256(text.encode()).hexdigest(),

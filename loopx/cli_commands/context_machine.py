@@ -9,8 +9,23 @@ import argparse
 import os
 from pathlib import Path
 import stat
+import tempfile
+from typing import Any
 
 from ..control_plane.turn_driver.codex_context import context_delivery_for_arguments
+
+
+def has_explicit_context_read_source(args: argparse.Namespace) -> bool:
+    """Captured pages and explicit native locations need no Goal/default route.
+
+    Partial capture arguments also belong to the reader's existing validation;
+    unrelated machine discovery must not replace their recovery errors.
+    """
+    return getattr(args, "quota_command", None) == "context-read" and any(
+        getattr(args, key, None) for key in (
+            "capture_file", "capture_sha256", "reference_file", "codex_context_dir", "codex_context_root"
+        )
+    )
 
 
 def _private_transport_root(runtime_root: Path) -> str:
@@ -27,6 +42,31 @@ def _private_transport_root(runtime_root: Path) -> str:
     return str(root)
 
 
+def capture_context_recovery(value: dict[str, Any], *, runtime_root: Path) -> dict[str, Any]:
+    """Publish exact write-time facts through the existing generic file reader.
+
+    This does not present a delta, advance a native baseline or rerun admission.
+    A failed publication leaves the rejected operation and any earlier effects
+    unchanged; retry that same operation after repairing its private transport.
+    """
+    from ..control_plane.turn_driver.decision_capture import (
+        capture_context_projection, context_capture_read_command,
+    )
+
+    try:
+        directory = Path(tempfile.mkdtemp(prefix="recovery-", dir=_private_transport_root(runtime_root)))
+        reference = capture_context_projection(value, directory=directory, filename="required-context.json")
+        path, digest = Path(reference["path"]), reference["sha256"]
+        return {"path": str(path), "sha256": digest,
+            "index_command": context_capture_read_command(path, digest, list_fields=True, list_depth=2),
+            "select_command": context_capture_read_command(path, digest, select=["<pointer>"])}
+    except (OSError, ValueError) as error:
+        return {"available": False, "error_kind": type(error).__name__,
+            "instruction": "Repair the private context transport, then retry the original unchanged operation "
+                "to obtain its current recovery reference. Do not rerun admission, substitute an old capture, "
+                "or repeat an already committed effect."}
+
+
 def apply_context_machine_options(
     args: argparse.Namespace, *, registry_path: Path, runtime_root_arg: str | None,
     heartbeat: bool = False,
@@ -38,41 +78,77 @@ def apply_context_machine_options(
     No hook, trust, tracing or automation is installed.
     """
     explicit = getattr(args, "context_delivery", None)
-    if explicit == "off":
+    if explicit == "off" and getattr(args, "delta_delivery", None) != "auto":
         return
     args.context_delivery = explicit or "off"
     # Existing benchmark workers retain their explicit opt-out. A machine
     # default must not silently change a frozen worker's disabled transport.
     # An environment on alone still supplies no activation or host proof.
     if explicit is None and os.environ.get("LOOPX_CONTEXT_DELIVERY") == "off":
+        args.delta_delivery = "off"
         return
     command = getattr(args, "quota_command", None)
     if not heartbeat and command not in {"should-run", "context-config", "context-project", "context-hook", "context-read"}:
         return
-    if command == "context-read" and any(getattr(args, key, None) for key in (
-        "capture_file", "capture_sha256", "codex_context_dir", "codex_context_root"
-    )):
+    if has_explicit_context_read_source(args):
         return
     from ..paths import effective_runtime_root
     runtime_root = effective_runtime_root(registry_path, runtime_root_arg)
+    using_default = False
+    value: dict[str, Any] = {}
     if explicit is None:
         from ..capabilities.machine_configuration.builtins import build_builtin_machine_configuration_registry
         from ..capabilities.machine_configuration.store import read_machine_configuration
 
-        configuration = read_machine_configuration(runtime_root, registry=build_builtin_machine_configuration_registry())
+        machine_registry = build_builtin_machine_configuration_registry()
+        configuration = read_machine_configuration(
+            runtime_root, registry=machine_registry, namespace_ids=("context_delivery",),
+        )
         value = (configuration or {}).get("namespaces", {}).get("context_delivery")
-        if value is None or value["mode"] == "off":
-            return
+        using_default = value is None
+        if using_default:
+            value = machine_registry.resolve("context_delivery").public_descriptor()["configuration_template"]
+        if value["mode"] == "off":
+            from ..capabilities.machine_configuration.context_delivery import INDEPENDENT_CONTEXT_SCHEMA
+
+            if value["schema_version"] != INDEPENDENT_CONTEXT_SCHEMA:
+                args.delta_delivery = "off"
+                return
+    # Presentation is host-neutral. Only Delta needs declared lifecycle
+    # continuity. A read-only query must not manufacture an admitted Turn.
+    args.context_delivery = explicit or ("auto" if value["mode"] == "on" else "off")
+    if getattr(args, "delta_delivery", None) is None:
+        args.delta_delivery = value.get("delta_delivery", "auto")
+    if args.context_delivery == "off" and args.delta_delivery == "off":
+        return
+    if ((command == "should-run" and not (getattr(args, "turn_instance_id", None)
+            or bool(getattr(args, "begin_turn", False)))) or os.name != "posix") and explicit != "on":
+        args.delta_delivery = "off"
     # Recovery does not activate a run mode or create a missing session.
     if command != "context-read":
-        args.context_delivery = "on"
-        if not context_delivery_for_arguments(args, codex_machine_preference=explicit is None)["enabled"]:
-            args.context_delivery = "off"
-            return
-        if command == "should-run" and args.format != "json":
+        try:
+            enabled = context_delivery_for_arguments(args, codex_machine_preference=explicit is None)["enabled"]
+        except ValueError:
+            if not using_default:
+                raise
+            # An absent preference enables only the supported native hosts.
+            # Ordinary CLI and unknown declarations retain their original path;
+            # explicit on still rejects an unsupported or conflicting host.
+            enabled = False
+        if command == "should-run" and args.format != "json" and enabled:
             raise ValueError("native Codex context delivery needs JSON and a capture destination")
     if explicit is None:
         args._context_delivery_machine_runtime = str(runtime_root.expanduser().resolve())
+    if command == "should-run" and args.format == "json":
+        args._progressive_context_runtime = str(runtime_root.expanduser().resolve())
+    if command != "context-read" and not enabled:
+        return  # Stateless presentation needs neither a journal nor native setup.
+    if (heartbeat and explicit != "on" and any(getattr(args, field, False) for field in ("brief", "compact", "full"))
+            and not any(getattr(args, field, None) for field in ("codex_context_dir", "codex_context_root",
+                "decision_output_dir", "decision_output_root", "decision_handoff_socket"))):
+        # Rendering an expanded prompt does not start native transport. Its
+        # generated guard retains AUTO and resolves paths when actually run.
+        return
     # An off/on round trip can miss lifecycle events. Store replacement
     # invalidates reuse even when its content hash returns to the old value.
     # This metadata only narrows reuse; it is not retention or work authority.

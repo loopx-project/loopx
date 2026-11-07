@@ -228,8 +228,10 @@ from .control_plane.todos.todo_summary import (
     attach_dependency_blockers,
     compact_todo_group as compact_todo_group,
     compact_todo_item as compact_todo_item,
+    open_todo_items as open_todo_items,
+    todo_item_task_class as todo_item_task_class,
     first_open_todo_text,
-    open_todo_items,
+    open_todo_items as open_todo_items,
     project_asset_todo_summary,
     sync_connected_attention_action_from_todos as _sync_connected_attention_action_from_todos_read_model,
     todo_lane_items as todo_lane_items,
@@ -237,7 +239,7 @@ from .control_plane.todos.todo_summary import (
     todo_item_is_due_monitor as todo_item_is_due_monitor,
     todo_item_missing_monitor_schedule as todo_item_missing_monitor_schedule,
     todo_item_next_due_at as todo_item_next_due_at,
-    todo_item_task_class,
+    todo_item_task_class as todo_item_task_class,
     todo_projection_sort_key as todo_projection_sort_key,
 )
 from .control_plane.todos.todo_index import (
@@ -254,11 +256,7 @@ from .state_projection import (
     state_projection_gap_warning,
 )
 from .control_plane.todos.contract import (
-    TODO_STATUS_OPEN,
-    TODO_TASK_CLASS_USER_GATE,
-    normalize_todo_status,
     normalize_todo_task_class as normalize_todo_task_class,
-    todo_done_for_status,
 )
 from .control_plane.todos.todo_semantics import (
     todo_item_is_expired_monitor as todo_item_is_expired_monitor,
@@ -273,6 +271,8 @@ _PUBLIC_COMPAT_REEXPORTS = {
     "project_asset_summary_is_public_safe": "loopx.control_plane.work_items.project_asset",
     "compact_todo_group": "loopx.control_plane.todos.todo_summary",
     "compact_todo_item": "loopx.control_plane.todos.todo_summary",
+    "open_todo_items": "loopx.control_plane.todos.todo_summary",
+    "todo_item_task_class": "loopx.control_plane.todos.todo_summary",
     "todo_lane_items": "loopx.control_plane.todos.todo_summary",
     "todo_item_is_deferred": "loopx.control_plane.todos.todo_summary",
     "todo_item_is_due_monitor": "loopx.control_plane.todos.todo_summary",
@@ -1059,14 +1059,7 @@ def build_task_graph_projection(
         goal=goal,
         goal_latest_runs=goal_latest_runs,
         public_safe_compact_text=public_safe_compact_text,
-        normalize_todo_status=normalize_todo_status,
-        todo_done_for_status=todo_done_for_status,
-        todo_status_open=TODO_STATUS_OPEN,
-        open_todo_items=open_todo_items,
         max_status_todos_per_role=MAX_STATUS_TODOS_PER_ROLE,
-        todo_item_task_class=todo_item_task_class,
-        user_gate_task_class=TODO_TASK_CLASS_USER_GATE,
-        todo_summary_open_count=todo_summary_open_count,
         latest_run=latest_run,
     )
 
@@ -1099,6 +1092,7 @@ def build_attention_queue(
     todo_snapshot: _CanonicalTodoSnapshot | None = None,
     current_registry: dict[str, Any] | None = None,
     registry_path: Path | None = None,
+    include_goal_channel_projection: bool = True,
 ) -> dict[str, Any]:
     def request_active_state_todo_fields(
         goal: dict[str, Any],
@@ -1166,6 +1160,7 @@ def build_attention_queue(
         include_task_graph=include_task_graph,
         goal_id_filter=goal_id_filter,
         include_stopped_goal_context=include_stopped_goal_context,
+        include_goal_channel_projection=include_goal_channel_projection,
     )
     if runtime_root is not None:
         for item in queue.get("items") or []:
@@ -1363,6 +1358,7 @@ def collect_status(
     activation_state_filter: str | None = None,
     agent_lane_id: str | None = None,
     allow_missing_registry: bool = False,
+    include_presentation_projections: bool = True,
 ) -> dict[str, Any]:
     with effect_runtime_request_scope():
         return _collect_status_read_model(
@@ -1380,5 +1376,6 @@ def collect_status(
             include_zcode_goal_eligibility=include_zcode_goal_eligibility,
             activation_state_filter=activation_state_filter,
             agent_lane_id=agent_lane_id,
+            include_presentation_projections=include_presentation_projections,
             context=build_status_collection_context(),
         )

@@ -47,6 +47,7 @@ def goals(tmp_path, request):
     return registry, runtime, project
 
 
+@pytest.mark.parametrize("goals", ["file", "sqlite"], indirect=True)
 @pytest.mark.parametrize("mode", ["status", "plan"])
 def test_selected_goal_excludes_unrelated_broken_goal(goals, mode):
     registry, runtime, project = goals
@@ -65,6 +66,27 @@ def test_selected_goal_excludes_unrelated_broken_goal(goals, mode):
                                             registry_path=registry, runtime_root=runtime)
     assert "goal_filter" not in global_payload
     assert {row["goal_id"] for group in global_payload["groups"].values() for row in group} == {"selected", "unrelated"}
+
+
+@pytest.mark.parametrize("goals", ["legacy"], indirect=True)
+@pytest.mark.parametrize("mode", ["status", "plan"])
+def test_unmigrated_selected_goal_retains_authority_recovery(goals, mode):
+    registry, runtime, project = goals
+    before = (project / "state.md").read_bytes()
+    code, payload = run_json_cli_result("quota", mode, "--goal-id", "selected",
+                                        registry_path=registry, runtime_root=runtime)
+    assert code == 1 and payload["ok"] is False, payload
+    assert payload["error_code"] == "canonical_authority_required"
+    assert payload["goal_id"] == "selected"
+    assert payload["recovery"] == {"action": "migrate_goal_authority", "backup_required": True}
+    assert payload["write_admitted"] is False
+    assert payload["decision_read_from_provider"] is False
+    assert payload["legacy_fallback_used"] is False
+    assert not payload["groups"]
+    assert "back up and migrate" in render_quota_markdown(payload)
+    assert (project / "state.md").read_bytes() == before
+    assert not (runtime / "authority").exists()
+    assert not list((runtime / "goals" / "selected" / "runs").glob("*.json*"))
 
 
 def test_unknown_goal_does_not_become_a_successful_empty_or_global_plan(goals):
@@ -91,6 +113,8 @@ def test_scope_reaches_collector_and_cache_identity(tmp_path, mode, goal_id):
 
     def collect(**kwargs):
         calls.append(kwargs["goal_id"])
+        # Quota decisions never read the status presentation projections.
+        assert kwargs["include_presentation_projections"] is False
         now = now_utc_iso()
         envelope = seal_projection_envelope(projection="status", observed_at=now,
             sources=[source_fact("registry", last_read_at=now)],

@@ -16,6 +16,7 @@ from ..coordination.local_authority import (
     LOCAL_AUTHORITY_SOURCES,
     LocalCoordinationAuthorityRejection,
     LocalCoordinationAuthorityUnavailable,
+    claim_worktree_candidate,
     raise_canonical_write_failure,
     read_canonical_todos_if_promoted,
 )
@@ -258,9 +259,9 @@ def update_canonical_todo_if_promoted(
         normalized_note = compact_todo_text(note)
         if normalized_note:
             patch["note"] = normalized_note
-    if claim_operation_id is not None and (completion_validation_revision is not None or monitor_observation is not None
+    if claim_operation_id is not None and (monitor_observation is not None
             or str((planning_intent or {}).get("status", "")).lower() == "done"):
-        raise ValueError("Claim execution progress does not change validators or observe Monitors; use todo complete for completion")
+        raise ValueError("Claim execution progress does not observe Monitors; use todo complete for completion")
     completion = None
     validation_revision = None
     if completion_validation_revision is not None:
@@ -285,6 +286,7 @@ def update_canonical_todo_if_promoted(
                 registry_path=registry_path, goal_id=goal_id, todo_id=todo_id, role=role,
                 persist_if_resolved=not dry_run)
         completion = {"validation_declaration": declaration}
+    worktree = claim_worktree_candidate() if claim_operation_id is not None else None
     request = {
         "schema_version": ("loopx_local_coordination_todo_update_request_v6" if claim_operation_id is not None
                            else "loopx_local_coordination_todo_update_request_v5" if validation_revision is not None
@@ -302,6 +304,7 @@ def update_canonical_todo_if_promoted(
                          (monitor_observation.monitor_effect_id if monitor_observation else None)
                          or f"todo-update:{uuid4().hex}"),
         **({"claim_operation_id": claim_operation_id} if claim_operation_id is not None else {}),
+        **({"write_worktree": str(worktree)} if worktree is not None else {}),
         "lease_idempotency_key": task_lease_idempotency_key,
         "lease_expected_version": task_lease_expected_version,
         "patch": patch, "clear_fields": [], "dry_run": dry_run,
@@ -333,7 +336,7 @@ def update_canonical_todo_if_promoted(
         # an unrelated Goal when this call used an explicit registry/runtime.
         recovery = result.get("recovery")
         if isinstance(recovery, dict):
-            for step in ("inspect", "retry", "acquire", "release"):
+            for step in ("claim", "inspect", "retry", "acquire", "release"):
                 descriptor = recovery.get(step)
                 if isinstance(descriptor, dict) and isinstance(descriptor.get("cli_args"), list):
                     descriptor["cli_args"] = [f"--registry={registry_path}",

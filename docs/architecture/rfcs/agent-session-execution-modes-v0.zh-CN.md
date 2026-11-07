@@ -7,7 +7,7 @@
 - **作者 / 负责人：** 由维护者指示整理的契约。它把桌面端提案中已有的会话归属决策
   抽取并规范化。会话归属与宿主接入决策需要维护者接受。
 - **创建日期：** 2026-09-15
-- **最近规范性修订：** 2026-10-27
+- **最近规范性修订：** 2026-10-29
 - **实现基线：** `6c3da75ca`
 - **相关契约：** [桌面执行前端](desktop-execution-frontends-v0.zh-CN.md)、
   [单属主本地守护进程](single-owner-local-daemon-v0.md)、
@@ -195,6 +195,13 @@ claim 与完成回执，以及"只有经过验证的回写才推进工作"这一
 它通过既有受限操作访问 Core，host 强制把 Core 凭据/写工具排除在 executor 权限之外。
 角色变化、Stop、迟到结果及 controller 恢复须保留原 request/attempt 和结算绑定。
 该 profile 合格前，已有绑定行为不变；不隐式转换或提升 host。
+
+对于 C6/C8 的[执行期间人机交互](controller-executor-unified-contract-v0.zh-CN.md#human-interaction-during-execution)，
+唯一已准入 executor 工作时，controller 的对话队列仍须可用。询问、主动汇报和预览
+复用当前会话、受众及投递绑定，不准入另一个业务 attempt。反馈在 Stop、重启和迟到
+结果后仍保留有序 request revision 及真实消费/采用 readback。Host 无法支持这种并发
+或 fencing 时须明示限制；已有串行 Chat 或一次有界 runtime 调用成功，不能证明双会话
+旅程合格。
 
 ### 可复用的 Agent 操作与续跑归属
 

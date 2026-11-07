@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-import os
 import re
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
-from ...registry import atomic_write_json, read_json
+from ...registry import read_json
 from ...file_lock import exclusive_cross_runtime_file_lock
-from ..runtime.document_io import fsync_state_directory
+from ..runtime.document_io import atomic_write_private_json as atomic_write_json, fsync_state_directory
+from ..runtime.file_paths import windows_extended_path
+from ..runtime.private_permissions import protect_private_path
 from .completion_validation_projection import (
     completion_validation_declaration,
     completion_validation_declaration_sha256,
@@ -31,7 +32,7 @@ def _require_public_id(value: str, label: str) -> str:
 def completion_validation_declaration_path(
     *, runtime_root: Path, goal_id: str, todo_id: str
 ) -> Path:
-    return (
+    return windows_extended_path(
         runtime_root.expanduser().resolve(strict=False)
         / "goals"
         / _require_public_id(goal_id, "goal_id")
@@ -67,9 +68,7 @@ def persist_completion_validation_declaration(
             "declaration_sha256": digest,
             "declaration": normalized,
         },
-        preserve_mode=True,
     )
-    os.chmod(path, 0o600)
     return digest
 
 
@@ -96,6 +95,8 @@ def prepare_completion_validation_declaration(
                 raise ValueError("prepared validation declaration digest mismatch")
         else:
             atomic_write_json(path, payload)
+        protect_private_path(path.parent, directory=True)
+        protect_private_path(path)
         # Also re-establish directory durability on an idempotent retry.
         fsync_state_directory(path)
     return digest

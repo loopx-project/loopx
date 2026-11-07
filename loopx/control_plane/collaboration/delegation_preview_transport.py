@@ -141,7 +141,7 @@ class DelegationPreviewTransport:
 
     def preview(self, *, command: list[str], workspace: Path, release: Path,
                 environment: dict[str, str], registry: Path, runtime_root: Path,
-                goal_id: str, agent_id: str, todo_id: str,
+                goal_id: str, agent_id: str, todo_id: str | None,
                 argv: tuple[str, ...], timeout: float) -> dict[str, Any]:
         started = time.monotonic()
         if not self._lock.acquire(timeout=timeout):
@@ -174,7 +174,7 @@ class DelegationPreviewTransport:
                     self._send({"kind": "start", "request": {
                         "argv": [*command, "--registry", str(registry), "--runtime-root",
                                  str(runtime_root), "--goal-id", goal_id, "--agent-id",
-                                 agent_id, "--todo-id", todo_id],
+                                 agent_id, *(["--todo-id", todo_id] if todo_id is not None else [])],
                         "cwd": str(workspace), "input": "", "timeout_ms": 60000,
                         "drain_timeout_ms": 2000, "stdout_limit_bytes": 1_048_576,
                     }}, started + timeout, timeout)

@@ -4,6 +4,7 @@ import json
 import shlex
 from typing import Any
 
+from ..quota.settlement import render_settlement_progress_markdown
 from .contract import TODO_STATUS_OPEN, todo_marker_for_status
 
 
@@ -12,12 +13,26 @@ def _render_lease_recovery(payload: dict[str, Any]) -> list[str]:
     recovery = payload.get("recovery")
     if not isinstance(recovery, dict) or not recovery.get("reason") or not payload.get("handoff_mode"):
         return []
-    lines = [f"- handoff_mode: `{payload['handoff_mode']}`", f"- recovery: {recovery['reason']}"]
-    for step in ("inspect", "acquire", "retry", "release"):
+    retry = recovery.get("retry")
+    retry_args = retry.get("cli_args", []) if isinstance(retry, dict) else []
+    complete_claim_recovery = (recovery.get("action") == "claim_task"
+        and isinstance(retry_args, list)
+        and any(retry_args[i:i + 2] == ["todo", "complete"] for i in range(len(retry_args) - 1)))
+    lines = ([] if complete_claim_recovery
+        else [f"- handoff_mode: `{payload['handoff_mode']}`"])
+    lines.append(f"- recovery: {recovery['reason']}")
+    for step in ("claim", "inspect", "acquire", "retry", "release"):
         instruction = recovery.get(step)
         if isinstance(instruction, dict) and instruction.get("command"):
             arguments = instruction.get("cli_args")
-            command = shlex.join(["loopx", *arguments]) if isinstance(arguments, list) else instruction["command"]
+            command = instruction["command"]
+            if isinstance(arguments, list):
+                try:
+                    program = shlex.split(command)[0]
+                except (ValueError, IndexError):
+                    pass  # Keep the original diagnostic when guidance is malformed.
+                else:
+                    command = shlex.join([program, *arguments])
             lines.append(f"- {step}: `{command}`")
             if instruction.get("requires_flags"):
                 lines.append(f"  - supply: `{', '.join(instruction['requires_flags'])}`")
@@ -38,6 +53,8 @@ def _render_settlement_plan(plan: object) -> list[str]:
         lines.append(f"- {step.get('kind')}: {step.get('precondition')}")
         if step.get("command_template"):
             lines.append(f"  - command{f' ({condition})' if condition else ''}: `{step['command_template']}`")
+        if step.get("semantic_closeout_command_template"):
+            lines.append(f"  - semantic closeout: `{step['semantic_closeout_command_template']}`")
     return lines
 
 
@@ -144,12 +161,44 @@ def _render_thin_todo_list(payload: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _render_queue_summary(payload: dict[str, Any]) -> str:
+    projection = payload["todo_list_summary_projection"]
+    authority = payload.get("authority_read") or {}
+    lines = ["# LoopX Todo List Summary", "",
+             f"- goal_id: `{payload.get('goal_id')}`",
+             f"- shown: `{payload.get('returned_todo_count')}` / `{payload.get('matched_todo_count')}`; omitted: `{payload.get('omitted_todo_count')}`",
+             f"- item_limit_per_role: `{projection['item_limit_per_role']}`", ""]
+
+    def cell(value: Any) -> str:
+        return " ".join(str(value if value is not None else "—").split()).replace("|", "\\|")
+
+    if payload["todos"]:
+        lines.extend(["| Role | Priority | Status | Claimed by | Todo | ID |",
+                      "| --- | --- | --- | --- | --- | --- |"])
+        for item in payload["todos"]:
+            cells = [cell(item.get(key)) for key in (
+                "role", "priority", "status", "claimed_by", "title", "todo_id")]
+            if item.get("title_truncated"):
+                cells[4] += " *"
+            lines.append("| " + " | ".join(cells) + " |")
+    else:
+        lines.append("No matching Todos.")
+    if any(item.get("title_truncated") for item in payload["todos"]):
+        lines.extend(["", r"\* Title truncated; the exact read retains the full requirement."])
+    lines.extend(["", f"- source: `{authority.get('source_authority')}` @ `{authority.get('provider_revision')}`",
+                  f"- full_detail: `{projection['full_detail_cold_paths'][0]}`",
+                  f"- readback: {projection['readback']}"])
+    return "\n".join(lines)
+
+
 def render_todo_markdown(payload: dict[str, Any]) -> str:
     if payload.get("todo_detail_projection"):
         return _render_todo_detail(payload)
     if payload.get("command") == "project-markdown":
         return _render_todo_projection(payload)
     if payload.get("command") == "list":
+        if payload.get("summary"):
+            return _render_queue_summary(payload)
         if payload.get("thin"):
             return _render_thin_todo_list(payload)
 
@@ -311,16 +360,17 @@ def render_todo_markdown(payload: dict[str, Any]) -> str:
         lines.extend(_render_settlement_plan(payload["settlement_plan"]))
     if not payload.get("error") and payload.get("execution_managed"):
         lines.extend(["", f"- claim_operation_id: `{payload['claim_operation_id']}`"])
+    if not payload.get("error"):
+        lines.extend(render_settlement_progress_markdown(payload))
+    if not payload.get("error") and (payload.get("execution_managed") or payload.get("settlement_progress")):
         for command in payload.get("next_cli_actions", []):
             lines.extend(["", "```sh", command, "```"])
     correctness = payload.get("local_state_write_correctness")
     if isinstance(correctness, dict):
-        intent = correctness.get("write_intent") if isinstance(correctness.get("write_intent"), dict) else {}
-        apply_result = (
-            correctness.get("apply_result")
-            if isinstance(correctness.get("apply_result"), dict)
-            else {}
-        )
+        intent_value = correctness.get("write_intent")
+        intent = intent_value if isinstance(intent_value, dict) else {}
+        apply_result_value = correctness.get("apply_result")
+        apply_result = apply_result_value if isinstance(apply_result_value, dict) else {}
         lines.extend(
             [
                 "",

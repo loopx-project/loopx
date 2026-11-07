@@ -49,10 +49,10 @@ export const navigationSortingScenario = {
       if (body.includes("接下来")) throw new Error("Manager home still exposes the ambiguous 接下来 label");
       if (body.includes("stale-browser-goal")) throw new Error("An unregistered historical Goal remained interactive");
       if (await page.locator(".personal-home-history:not(.is-stopped)").count()) throw new Error("An empty history section consumed home space");
-      const needsYouCount = await page.getByTestId("personal-home-lane-needs_you").locator(".personal-home-goal-card").count();
+      const needsYouGoalCount = await page.getByTestId("personal-home-lane-needs_you").locator(".personal-home-goal-card").count();
       const greeting = await page.locator(".personal-manager-greeting").innerText();
-      if (!greeting.includes(`你有 ${needsYouCount} 项需要处理`)) {
-        throw new Error(`Manager greeting count disagrees with the needs-you lane: count=${needsYouCount}; greeting=${greeting}`);
+      if (!greeting.includes(`有 ${needsYouGoalCount} 个目标需要你关注`)) {
+        throw new Error(`Manager greeting Goal count disagrees with the needs-you Goal lane: count=${needsYouGoalCount}; greeting=${greeting}`);
       }
       if (await page.locator(".personal-manager-channels").count()) throw new Error("Sidebar still exposes state lanes as duplicate navigation channels");
       if (await page.locator(".personal-digest-stats button").count()) throw new Error("Away digest still behaves like hidden channel navigation");
@@ -179,8 +179,8 @@ export const navigationSortingScenario = {
       const usageVitals = page.getByTestId("goal-vitals").locator(".goal-vital-cell")
         .filter({ has: page.locator(".goal-vital-label", { hasText: /^(Agent 用时|成本)$/ }) });
       const unknownUsage = await usageVitals.locator(".goal-vital-value").allTextContents();
-      if (unknownUsage.length !== 2 || unknownUsage.some(value => value !== "—")) {
-        throw new Error(`Unknown usage became a zero or disappeared: ${unknownUsage}`);
+      if (unknownUsage.length !== 2 || unknownUsage.some(value => value !== "未采集")) {
+        throw new Error(`Unknown usage lost its explicit unmeasured state: ${unknownUsage}`);
       }
       for (const label of ["Agent 用时", "成本"]) {
         const cell = usageVitals.filter({ has: page.getByText(label, { exact: true }) });

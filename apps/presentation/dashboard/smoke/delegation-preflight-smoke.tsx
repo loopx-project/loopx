@@ -36,6 +36,24 @@ for (const [zh, expectedLabel, expectedBoundary] of [
 }
 if (Object.values(unavailable.effects).some(Boolean)) throw new Error("authority-unavailable response must report zero effects");
 
+// A configured request binding can be inspected before a source is selected.
+// It must remain readable without inventing a Todo or claiming a launch.
+for (const zh of [true, false]) {
+  const request: DelegationPreflight = {...unavailable, binding: {id: "request", agent_id: "receiver", todo_id: null},
+    state: "turn_blocked", request_required: true, authority_ready: true, authority_reason: null,
+    authority_state: "promoted", authority_next_action: "none"};
+  const html = renderToStaticMarkup(<DelegationPreflightStatus check={request} zh={zh}/>);
+  if (!html.includes(zh ? "等待原请求" : "Awaiting original request")) throw new Error("missing original request state");
+  if (/Todo|任务验收|启动条件已满足|prerequisites met/.test(html)) throw new Error("request inspection invented task readiness");
+  const missing: DelegationPreflight = {...request, request_required: false, state: "acceptance_unavailable",
+    acceptance_reason_code: "independent_delegation_validation_required",
+    acceptance_next_action: "review_original_request_validation"};
+  const refused = renderToStaticMarkup(<DelegationPreflightStatus check={missing} zh={zh}/>);
+  if (!refused.includes(zh ? "请求验收不可用" : "Request validation unavailable")) throw new Error("missing request validation state");
+  if (!refused.includes(zh ? "请求独立验收声明" : "independent request validation declaration")) throw new Error("wrong request repair owner");
+  if (/Todo|任务验收/.test(refused)) throw new Error("request repair requires an unrelated Todo");
+}
+
 for (const workspace_state of ["missing", "not_directory", "unavailable"] as const) {
   const check: DelegationPreflight = {...unavailable, state: "workspace_unavailable",
     workspace_state, workspace_next_action: "review_operator_workspace_binding",

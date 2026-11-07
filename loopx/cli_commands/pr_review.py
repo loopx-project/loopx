@@ -255,7 +255,10 @@ def handle_pr_review_command(
         target_exact_heads=target_exact_heads,
     )
     try:
-        machine_configuration = (read_machine_configuration(runtime_root, registry=build_builtin_machine_configuration_registry()) if runtime_root is not None else None)
+        machine_configuration = (read_machine_configuration(
+            runtime_root, registry=build_builtin_machine_configuration_registry(),
+            namespace_ids=("pull_request_review",),
+        ) if runtime_root is not None else None)
         goal = None
         goal_id = getattr(args, "goal_id", None)
         if goal_id:
@@ -341,9 +344,6 @@ def handle_pr_review_command(
             )
             return 0 if payload["ok"] else 1
         if args.check_merge_readiness:
-            if not goal_id:
-                raise ValueError("merge readiness requires --goal-id")
-            assert runtime_root is not None  # the Goal configuration guard already checked this
             if (
                 args.autonomous_observation
                 or args.observation_state_file
@@ -416,25 +416,28 @@ def handle_pr_review_command(
                 source=source,
                 wait_for_ci=wait_for_ci,
             )
-            observation = record_readiness_observation(
-                runtime_root=runtime_root,
-                goal_id=goal_id,
-                readiness=payload,
-            )
-            payload["readiness_observation"] = {
-                key: observation[key]
-                for key in (
-                    "schema_version",
-                    "goal_id",
-                    "repository",
-                    "exact_head",
-                    "material_fingerprint",
-                    "ready",
-                    "blocking_reasons",
-                    "observed_at",
+            payload["local_goal_observation_write_performed"] = False
+            if goal_id:
+                assert runtime_root is not None  # checked with the Goal configuration above
+                observation = record_readiness_observation(
+                    runtime_root=runtime_root,
+                    goal_id=goal_id,
+                    readiness=payload,
                 )
-            }
-            payload["local_goal_observation_write_performed"] = True
+                payload["readiness_observation"] = {
+                    key: observation[key]
+                    for key in (
+                        "schema_version",
+                        "goal_id",
+                        "repository",
+                        "exact_head",
+                        "material_fingerprint",
+                        "ready",
+                        "blocking_reasons",
+                        "observed_at",
+                    )
+                }
+                payload["local_goal_observation_write_performed"] = True
             print_payload(
                 payload,
                 output_format(args),

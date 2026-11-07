@@ -140,52 +140,285 @@ function optionalInteger(value: unknown, label: string): number | null {
   return value;
 }
 
-function classMatch(
-  pattern: string,
-  start: number,
-  value: string,
-): { end: number; matches: boolean } | null {
-  const end = characterClassEnd(pattern, start);
-  if (end < 0) return null;
-  let body = pattern.slice(start + 1, end);
-  const negated = body.startsWith("!");
-  if (negated) body = body.slice(1);
-  let matches = false;
-  for (let index = 0; index < body.length; index += 1) {
-    if (index + 2 < body.length && body[index + 1] === "-") {
-      if (body[index] <= value && value <= body[index + 2]) matches = true;
-      index += 2;
-    } else if (body[index] === value) {
-      matches = true;
-    }
+/**
+ * Canonical fold for one code point, iterated until it is stable. Host case
+ * aliases are symmetric (Σ/ς, K/KELVIN SIGN) and some change length (ß -> ss),
+ * so one upper/lower pass is not an equivalence relation on its own.
+ */
+function foldCharacter(character: string): string {
+  let folded = character;
+  // Two passes settle every code point in current Unicode data; the bound only
+  // guards against a future mapping that never reaches a fixed point.
+  for (let pass = 0; pass < 4; pass += 1) {
+    const next = folded.toUpperCase().toLowerCase();
+    if (next === folded) return folded;
+    folded = next;
   }
-  return { end, matches: negated ? !matches : matches };
+  return folded;
 }
 
-function fnmatchcase(value: string, pattern: string): boolean {
+/**
+ * Folding one code point at a time keeps the fold composable across a path, so a
+ * comparison-only view can fold substrings without changing the retained
+ * spelling or the immutable request identity.
+ */
+function caseFold(value: string): string {
+  let folded = "";
+  for (const character of value) folded += foldCharacter(character);
+  return folded;
+}
+
+/** The code point of single-character text, or null for longer text. */
+function singleCodePoint(value: string): string | null {
+  const code = value.codePointAt(0);
+  if (code === undefined) return null;
+  const character = String.fromCodePoint(code);
+  return character.length === value.length ? character : null;
+}
+
+type GlobToken =
+  | {kind: "literal"; folded: string}
+  | {kind: "star"}
+  | {kind: "question"}
+  | {kind: "class"; body: string; negated: boolean};
+
+function globTokens(pattern: string, fold = true): GlobToken[] {
+  const tokens: GlobToken[] = [];
+  let literal = "";
+  const flushLiteral = () => {
+    if (literal.length === 0) return;
+    tokens.push({kind: "literal", folded: fold ? caseFold(literal) : literal});
+    literal = "";
+  };
+  for (let index = 0; index < pattern.length; index += 1) {
+    const character = pattern[index];
+    if (character === "*") {
+      flushLiteral();
+      tokens.push({kind: "star"});
+      continue;
+    }
+    if (character === "?") {
+      flushLiteral();
+      tokens.push({kind: "question"});
+      continue;
+    }
+    if (character === "[") {
+      const end = characterClassEnd(pattern, index);
+      if (end >= 0) {
+        flushLiteral();
+        let body = pattern.slice(index + 1, end);
+        const negated = body.startsWith("!");
+        if (negated) body = body.slice(1);
+        tokens.push({kind: "class", body, negated});
+        index = end;
+        continue;
+      }
+    }
+    literal += character;
+  }
+  flushLiteral();
+  return tokens;
+}
+
+type CharacterClass = {
+  literals: readonly string[];
+  ranges: readonly (readonly [number, number])[];
+};
+
+/** Class members are code points, and a range keeps its original interval bounds. */
+function characterClass(body: string): CharacterClass {
+  const members = [...body];
+  const literals: string[] = [];
+  const ranges: Array<readonly [number, number]> = [];
+  for (let index = 0; index < members.length; index += 1) {
+    const high = index + 2 < members.length && members[index + 1] === "-"
+      ? members[index + 2].codePointAt(0)
+      : undefined;
+    const low = high === undefined ? undefined : members[index].codePointAt(0);
+    if (low !== undefined && high !== undefined) {
+      ranges.push([low, high]);
+      index += 2;
+    } else {
+      literals.push(members[index]);
+    }
+  }
+  return {literals, ranges};
+}
+
+function classContains(members: CharacterClass, character: string): boolean {
+  const code = character.codePointAt(0);
+  if (code === undefined) return false;
+  return members.literals.includes(character) ||
+    members.ranges.some(([low, high]) => low <= code && code <= high);
+}
+
+/**
+ * Code points whose canonical fold is not themselves, grouped by fold value.
+ * Class membership needs this inverse: walking an interval is unbounded, while a
+ * fold class holds at most a handful of code points, so an interval of any width
+ * is decided by a few comparisons. The inverse is only discoverable by folding
+ * the code space, so it is built once on first use.
+ */
+let foldPreimages: ReadonlyMap<string, readonly string[]> | null = null;
+
+function foldPreimagesByFold(): ReadonlyMap<string, readonly string[]> {
+  const cached = foldPreimages;
+  if (cached !== null) return cached;
+  const preimages = new Map<string, string[]>();
+  for (let start = 0; start <= 0x10ffff; start += 0x400) {
+    const end = Math.min(start + 0x3ff, 0x10ffff);
+    let block = "";
+    for (let code = start; code <= end; code += 1) {
+      if (code < 0xd800 || code > 0xdfff) block += String.fromCodePoint(code);
+    }
+    // A block without a case mapping cannot hold a non-identity fold.
+    if (block.toUpperCase() === block && block.toLowerCase() === block) continue;
+    for (let code = start; code <= end; code += 1) {
+      if (code >= 0xd800 && code <= 0xdfff) continue;
+      const character = String.fromCodePoint(code);
+      const folded = foldCharacter(character);
+      if (folded === character) continue;
+      const bucket = preimages.get(folded);
+      if (bucket === undefined) preimages.set(folded, [character]);
+      else bucket.push(character);
+    }
+  }
+  foldPreimages = preimages;
+  return preimages;
+}
+
+/** Longest fold one code point expands to; derived rather than assumed. */
+let foldConsumptionLimit = 0;
+
+function maximumFoldConsumption(): number {
+  if (foldConsumptionLimit === 0) {
+    let limit = 1;
+    for (const folded of foldPreimagesByFold().keys()) {
+      limit = Math.max(limit, [...folded].length);
+    }
+    foldConsumptionLimit = limit;
+  }
+  return foldConsumptionLimit;
+}
+
+/**
+ * A class member covers the compared text when the two share a fold value, so
+ * `[Σ]` covers ς, `[ß]` covers SS, and `[ß-…]` covers both through its own
+ * bounds. Fold classes are compared instead of walking interval members, so a
+ * wide range costs the same as a narrow one.
+ */
+function classMemberMatches(body: string, candidate: string): boolean {
+  const members = characterClass(body);
+  const folded = caseFold(candidate);
+  const preimages = foldPreimagesByFold().get(folded) ?? [];
+  if (preimages.some((character) => classContains(members, character))) return true;
+  // A single code point whose fold is itself is its own preimage.
+  const own = singleCodePoint(folded);
+  return own !== null && classContains(members, own);
+}
+
+/**
+ * A class consumes one code point by default, and several when the compared text
+ * folds to the same value as a member (ß/SS, ﬃ/FFI).
+ */
+function classMatchLengths(body: string, symbols: readonly string[], start: number): number[] {
+  const lengths: number[] = [];
+  for (let length = 1; length <= maximumFoldConsumption() && start + length <= symbols.length; length += 1) {
+    if (classMemberMatches(body, symbols.slice(start, start + length).join(""))) {
+      lengths.push(length);
+    }
+  }
+  return lengths;
+}
+
+/** A folded span can stand for one code point when it is a one-code-point fold or a mapped character. */
+function singleCharacterMatchLengths(symbols: readonly string[], start: number): number[] {
+  const lengths: number[] = [];
+  const preimages = foldPreimagesByFold();
+  for (let length = 1; length <= maximumFoldConsumption() && start + length <= symbols.length; length += 1) {
+    const candidate = symbols.slice(start, start + length).join("");
+    if ((length === 1 && caseFold(candidate) === candidate) || preimages.has(candidate)) {
+      lengths.push(length);
+    }
+  }
+  return lengths;
+}
+
+/** Whether a class can supply a character after the known directory prefix. */
+function classHasMatch(body: string, negated: boolean): boolean {
+  const members = characterClass(body);
+  const intervals = [...members.ranges, ...members.literals.map(character => {
+    const code = character.codePointAt(0)!;
+    return [code, code] as const;
+  })].filter(([low, high]) => low <= high).sort(([left], [right]) => left - right);
+  if (!negated) return intervals.length > 0;
+  // Only inspect gaps, never enumerate a wide class. A gap character can still
+  // be excluded by a case-fold alias inside the class (for example A versus a).
+  let candidate = 0;
+  for (const [low, high] of [...intervals, [0x110000, 0x110000]]) {
+    for (; candidate < low; candidate += 1) {
+      if (!classMemberMatches(body, String.fromCodePoint(candidate))) return true;
+    }
+    candidate = Math.max(candidate, high + 1);
+  }
+  return false;
+}
+
+/**
+ * Match against the compared path's folded code points. One original code point
+ * may fold to several symbols (ß/SS), so token boundaries intentionally operate
+ * on the folded stream rather than assuming one symbol per host character.
+ * A literal directory can accept a matching continuation after its final slash.
+ * No multi-symbol character fold crosses that slash, so the existing character
+ * transitions also decide prefix reachability without splitting a folded atom.
+ */
+function fnmatchcase(value: string, pattern: string, descendants = false, fold = true): boolean {
+  const symbols = [...(fold ? caseFold(value) : value)];
+  const tokens = globTokens(pattern, fold);
+  const suffixPossible: boolean[] = [];
+  if (descendants) {
+    suffixPossible[tokens.length] = true;
+    for (let index = tokens.length - 1; index >= 0; index -= 1) {
+      const token = tokens[index];
+      suffixPossible[index] = suffixPossible[index + 1] &&
+        (token.kind !== "class" || classHasMatch(token.body, token.negated));
+    }
+  }
   const memo = new Map<string, boolean>();
-  const match = (valueIndex: number, patternIndex: number): boolean => {
-    const key = `${valueIndex}:${patternIndex}`;
+  const match = (valueIndex: number, tokenIndex: number): boolean => {
+    const key = `${valueIndex}:${tokenIndex}`;
     const cached = memo.get(key);
     if (cached !== undefined) return cached;
     let result: boolean;
-    if (patternIndex === pattern.length) {
-      result = valueIndex === value.length;
-    } else if (pattern[patternIndex] === "*") {
-      result = match(valueIndex, patternIndex + 1) ||
-        (valueIndex < value.length && match(valueIndex + 1, patternIndex));
-    } else if (valueIndex === value.length) {
-      result = false;
-    } else if (pattern[patternIndex] === "?") {
-      result = match(valueIndex + 1, patternIndex + 1);
-    } else if (pattern[patternIndex] === "[") {
-      const characterClass = classMatch(pattern, patternIndex, value[valueIndex]);
-      result = characterClass === null
-        ? value[valueIndex] === "[" && match(valueIndex + 1, patternIndex + 1)
-        : characterClass.matches && match(valueIndex + 1, characterClass.end + 1);
+    if (descendants && valueIndex === symbols.length) {
+      result = suffixPossible[tokenIndex];
+    } else if (tokenIndex === tokens.length) {
+      result = valueIndex === symbols.length;
     } else {
-      result = value[valueIndex] === pattern[patternIndex] &&
-        match(valueIndex + 1, patternIndex + 1);
+      const token = tokens[tokenIndex];
+      if (token.kind === "star") {
+        result = match(valueIndex, tokenIndex + 1) ||
+          (valueIndex < symbols.length && match(valueIndex + 1, tokenIndex));
+      } else if (valueIndex === symbols.length) {
+        result = false;
+      } else if (token.kind === "question") {
+        result = (fold ? singleCharacterMatchLengths(symbols, valueIndex) : [1])
+          .some((length) => match(valueIndex + length, tokenIndex + 1));
+      } else if (token.kind === "class") {
+        const lengths = fold ? classMatchLengths(token.body, symbols, valueIndex)
+          : classContains(characterClass(token.body), symbols[valueIndex]) ? [1] : [];
+        result = token.negated
+          ? (fold ? singleCharacterMatchLengths(symbols, valueIndex) : [1]).some((length) =>
+            !lengths.includes(length) && match(valueIndex + length, tokenIndex + 1))
+          : lengths.some((length) => match(valueIndex + length, tokenIndex + 1));
+      } else {
+        const literal = [...token.folded];
+        const end = valueIndex + literal.length;
+        const compared = literal.slice(0, symbols.length - valueIndex);
+        result = compared.every((symbol, index) => symbols[valueIndex + index] === symbol) &&
+          (end <= symbols.length ? match(end, tokenIndex + 1)
+            : descendants && suffixPossible[tokenIndex + 1]);
+      }
     }
     memo.set(key, result);
     return result;
@@ -201,32 +434,36 @@ function scopeLiteralPrefix(scope: string): string {
 }
 
 function scopePairOverlaps(left: string, right: string): boolean {
-  if (left === right) return true;
+  const equal = (first: string, second: string) => first === second ||
+    caseFold(first) === caseFold(second);
+  if (equal(left, right)) return true;
   if (["*", "**", "./"].includes(left) || ["*", "**", "./"].includes(right)) {
     return true;
   }
   const leftGlob = ["*", "?", "["].some((token) => left.includes(token));
   const rightGlob = ["*", "?", "["].some((token) => right.includes(token));
   if (leftGlob && !rightGlob) {
+    if (right.endsWith("/")) return fnmatchcase(right, left, true);
     const prefix = scopeLiteralPrefix(left);
     return fnmatchcase(right, left) ||
-      (prefix.endsWith("/") && right.replace(/\/$/u, "") === prefix.replace(/\/$/u, ""));
+      (prefix.endsWith("/") && equal(right.replace(/\/$/u, ""), prefix.replace(/\/$/u, "")));
   }
   if (rightGlob && !leftGlob) {
+    if (left.endsWith("/")) return fnmatchcase(left, right, true);
     const prefix = scopeLiteralPrefix(right);
     return fnmatchcase(left, right) ||
-      (prefix.endsWith("/") && left.replace(/\/$/u, "") === prefix.replace(/\/$/u, ""));
+      (prefix.endsWith("/") && equal(left.replace(/\/$/u, ""), prefix.replace(/\/$/u, "")));
   }
   if (leftGlob && rightGlob) {
-    const leftPrefix = scopeLiteralPrefix(left);
-    const rightPrefix = scopeLiteralPrefix(right);
+    const leftPrefix = caseFold(scopeLiteralPrefix(left));
+    const rightPrefix = caseFold(scopeLiteralPrefix(right));
     return !leftPrefix || !rightPrefix || leftPrefix.startsWith(rightPrefix) ||
       rightPrefix.startsWith(leftPrefix);
   }
-  const leftRoot = left.replace(/\/$/u, "");
-  const rightRoot = right.replace(/\/$/u, "");
-  return (left.endsWith("/") && right.startsWith(`${leftRoot}/`)) ||
-    (right.endsWith("/") && left.startsWith(`${rightRoot}/`));
+  const leftRoot = caseFold(left.replace(/\/$/u, ""));
+  const rightRoot = caseFold(right.replace(/\/$/u, ""));
+  return (left.endsWith("/") && caseFold(right).startsWith(`${leftRoot}/`)) ||
+    (right.endsWith("/") && caseFold(left).startsWith(`${rightRoot}/`));
 }
 
 function writeScopesOverlap(left: readonly string[], right: readonly string[]): boolean {
@@ -250,6 +487,42 @@ export function evaluateTaskLeaseWriteScopesOverlap(value: unknown): JsonObject 
       decisionStringArray(input.right, "right"),
     ),
   };
+}
+
+/** Literal segments before the first wildcard, folded for comparison. */
+function schedulingScopeRoot(scope: string): string {
+  const parts: string[] = [];
+  for (const part of scope.replace(/^\/+|\/+$/gu, "").split("/")) {
+    if (part.includes("*") || part.includes("?") || part.includes("[")) break;
+    parts.push(part);
+  }
+  return caseFold(parts.join("/"));
+}
+
+function schedulingScopePairOverlaps(left: string, right: string): boolean {
+  if (scopePairOverlaps(left, right)) return true;
+  const leftRoot = schedulingScopeRoot(left);
+  const rightRoot = schedulingScopeRoot(right);
+  return Boolean(leftRoot && rightRoot && (
+    leftRoot === rightRoot ||
+    leftRoot.startsWith(`${rightRoot}/`) ||
+    rightRoot.startsWith(`${leftRoot}/`)
+  ));
+}
+
+/**
+ * Quota scheduling keeps its own subtree rule: a literal scope owns the paths
+ * below it even without a trailing slash. That rule is wider than the canonical
+ * lease rule, so this entry point composes the two instead of restating the
+ * case fold or the glob matcher.
+ */
+export function evaluateQuotaSchedulingWriteScopesOverlap(value: unknown): JsonObject {
+  const input = requireJsonObject(value, "quota scheduling write-scope overlap");
+  const left = comparisonWriteScopes(decisionStringArray(input.left, "left"));
+  const right = comparisonWriteScopes(decisionStringArray(input.right, "right"));
+  const overlap = left.length > 0 && right.length > 0 &&
+    left.some((first) => right.some((second) => schedulingScopePairOverlaps(first, second)));
+  return {overlap};
 }
 
 function decisionBoolean(value: unknown, label: string): boolean {
@@ -512,4 +785,9 @@ export function materializeTaskLeaseAcquire(identity: {goal_id: string; todo_id:
     acquired_at: at, updated_at: at,
     expires_at: new Date(now.valueOf() + command.ttl_seconds * 1000).toISOString().replace(/\.\d{3}Z$/u, "Z"),
     status: "active"};
+}
+
+/** Goal allow scopes use case-sensitive fnmatch, unlike folded lease overlap. */
+export function schedulingWriteScopeAllowed(required: string, allowed: readonly string[]): boolean {
+  return !required || allowed.some(pattern => pattern === required || fnmatchcase(required, pattern, false, false));
 }

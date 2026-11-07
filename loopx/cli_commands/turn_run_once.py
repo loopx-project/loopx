@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import sys as _sys
 from collections.abc import Callable, Mapping
 from pathlib import Path
+from typing import TYPE_CHECKING as _TYPE_CHECKING
 from typing import Any
 
 from ..capabilities.explore.composition_frontier import (
@@ -27,14 +29,7 @@ from ..control_plane.quota.spend_sources import quota_spend_source_for_execution
 from ..control_plane.work_items.autonomous_replan_obligation import (
     replan_obligation_id_from_packet,
 )
-from ..control_plane.todos.durable_completion import (
-    project_durable_completion_intent,
-    project_durable_completion_outcome,
-    project_durable_terminal_completion_readback,
-    read_persisted_todo_record,
-    read_persisted_todo_record_with_source,
-)
-from ..control_plane.todos.completion_fence import evaluate_todo_completion_fence
+from ..control_plane.todos.durable_completion import read_durable_completion_evidence
 from ..control_plane.turn_driver import (
     build_loopx_turn_command_validator,
     codex_cli_session_binding,
@@ -47,16 +42,38 @@ from ..quota import spend_quota_slot
 from ..state_refresh import refresh_state_run
 from ..control_plane.todos.path_resolution import resolve_todo_state_path
 from .turn_cadence import managed_cadence_start
-from .turn_host_request import prepare_turn_host_request
+from .turn_host_request import build_codex_cli_host_runner, prepare_turn_host_request
 from .turn_decision import collect_turn_status_payload, current_turn_host_launch_decision
-from .turn_dsh_host import build_dsh_host_runner, build_dsh_operation_host_runner
 from .turn_rendering import build_turn_error_payload
 from .turn_post_writeback import drain_committed_turn_post_writeback_hooks
 from .turn_todo_writeback import captured_todo_text_sha256, write_turn_validated_completion
 
+if _TYPE_CHECKING:
+    from .turn_dsh_host import (
+        build_dsh_host_runner as build_dsh_host_runner,
+        build_dsh_operation_host_runner as build_dsh_operation_host_runner,
+    )
+
 EXACT_SETTLEMENT_READBACK_NOT_FOUND = (
     "exact settlement readback unexpectedly returned not-found"
 )
+
+# Keep the existing import and patch seams without loading an unselected host.
+_DSH_HOST_EXPORTS = ("build_dsh_host_runner", "build_dsh_operation_host_runner")
+
+
+def __getattr__(name: str) -> Any:
+    if name not in _DSH_HOST_EXPORTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    from . import turn_dsh_host
+
+    value = getattr(turn_dsh_host, name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(_DSH_HOST_EXPORTS))
 
 
 def execute_turn_run_once(
@@ -80,6 +97,12 @@ def execute_turn_run_once(
     """Adapt one prepared CLI Turn plan to the bounded Turn driver."""
     execution_started = False
     try:
+        if args.execute and goal_admission is None:
+            # Cached-result recovery still requires the current Goal lifetime.
+            goal_admission = FirstPartyHostGoalAdmission.for_plan(
+                registry_path=registry_path, goal_id=args.goal_id,
+                planned_goal_ref=goal_ref,
+            )
         project, raw_argv, task_validator, envelope = prepare_turn_host_request(
             args, payload, native_host_runner=native_host_runner,
             native_session_binding_resolver=native_session_binding_resolver,
@@ -119,6 +142,7 @@ def execute_turn_run_once(
             ),
             replan_obligation_id=(raw_identity.get("replan_obligation_id")
                                   if isinstance(raw_identity, Mapping) else None),
+            request_subject=raw_identity.get("request_subject"),
         )
         persisted_effect_id = str(raw_identity.get("effect_id") or "")
         if (
@@ -322,17 +346,9 @@ def execute_turn_run_once(
                 project=None,
                 state_file=None,
             )
-            durable_todo, existing_todo_ids = read_persisted_todo_record(
-                state_file,
-                todo_id=todo_id,
-                registry_path=registry_path,
-                goal_id=args.goal_id,
-                runtime_root=runtime_root,
-            )
-            return project_durable_completion_intent(
-                todo=durable_todo,
-                expected_todo_id=todo_id,
-                existing_todo_ids=existing_todo_ids,
+            return read_durable_completion_evidence(
+                state_file, todo_id=todo_id, registry_path=registry_path,
+                goal_id=args.goal_id, runtime_root=runtime_root, operation="intent",
             )
 
         def todo_completion(
@@ -379,17 +395,9 @@ def execute_turn_run_once(
                     ),
                 }
             try:
-                durable_todo, existing_todo_ids = read_persisted_todo_record(
-                    Path(state_file),
-                    todo_id=todo_id,
-                    registry_path=registry_path,
-                    goal_id=args.goal_id,
-                    runtime_root=runtime_root,
-                )
-                completion_outcome = project_durable_completion_outcome(
-                    todo=durable_todo,
-                    expected_todo_id=todo_id,
-                    existing_todo_ids=existing_todo_ids,
+                completion_outcome = read_durable_completion_evidence(
+                    Path(state_file), todo_id=todo_id, registry_path=registry_path,
+                    goal_id=args.goal_id, runtime_root=runtime_root, operation="outcome",
                 )
             except ValueError as exc:
                 return {
@@ -492,12 +500,12 @@ def execute_turn_run_once(
                 execute=True,
                 source=(quota_spend_source_for_execution_context(
                     payload.get("scheduler_execution_context"),
-                ) if settlement_identity.replan_obligation_id else "adapter"),
+                ) if settlement_identity.replan_obligation_id or settlement_identity.request_subject is not None else "adapter"),
                 agent_id=args.agent_id,
                 workspace_path=delivery_workspace_path,
                 replan_obligation_id=settlement_identity.replan_obligation_id,
                 turn_instance_id=(settlement_identity.turn_instance_id
-                                  if settlement_identity.replan_obligation_id else None),
+                                  if settlement_identity.replan_obligation_id or settlement_identity.request_subject is not None else None),
                 available_capabilities=args.available_capabilities,
                 scheduler_execution_context=(
                     payload.get("scheduler_execution_context")
@@ -548,23 +556,10 @@ def execute_turn_run_once(
                     project=None,
                     state_file=None,
                 )
-                durable_todo, existing_todo_ids, projection_source = read_persisted_todo_record_with_source(
-                    state_file,
-                    todo_id=todo_id,
-                    registry_path=registry_path,
-                    goal_id=args.goal_id,
-                    runtime_root=runtime_root,
-                )
-                evaluate_todo_completion_fence(
-                    todo=durable_todo,
-                    projection_source=projection_source,
+                return read_durable_completion_evidence(
+                    state_file, todo_id=todo_id, registry_path=registry_path,
+                    goal_id=args.goal_id, runtime_root=runtime_root, operation="outcome",
                     completion_turn_key=settlement_identity.turn_instance_id,
-                    no_followup=False,
-                )
-                return project_durable_completion_outcome(
-                    todo=durable_todo,
-                    expected_todo_id=todo_id,
-                    existing_todo_ids=existing_todo_ids,
                 )
             except (OSError, ValueError):
                 return None
@@ -579,23 +574,10 @@ def execute_turn_run_once(
                 project=None,
                 state_file=None,
             )
-            (
-                durable_todo,
-                existing_todo_ids,
-                projection_source,
-            ) = read_persisted_todo_record_with_source(
-                state_file,
-                todo_id=todo_id,
-                registry_path=registry_path,
-                goal_id=args.goal_id,
-                runtime_root=runtime_root,
-            )
-            readback = project_durable_terminal_completion_readback(
-                todo=durable_todo,
-                expected_todo_id=todo_id,
-                expected_completion_turn_key=settlement_identity.turn_instance_id,
-                projection_source=projection_source,
-                existing_todo_ids=existing_todo_ids,
+            readback = read_durable_completion_evidence(
+                state_file, todo_id=todo_id, registry_path=registry_path,
+                goal_id=args.goal_id, runtime_root=runtime_root, operation="terminal",
+                completion_turn_key=settlement_identity.turn_instance_id,
             )
             if readback["kind"] == "absent":
                 return None
@@ -796,7 +778,6 @@ def execute_turn_run_once(
             def native_launch_decision(current_registry: Path) -> Mapping[str, Any]:
                 return current_turn_host_launch_decision(args, registry_path=current_registry,
                     runtime_root=runtime_root, identity=settlement_identity,
-                    replan_obligation_id=replan_obligation_id,
                     planned_effective_action=payload["turn_envelope"].get("effective_action"),
                     scheduler_execution_context=payload.get("scheduler_execution_context") or {},
                     operator_inbox_urgency_projector=operator_inbox_urgency_projector,
@@ -820,7 +801,7 @@ def execute_turn_run_once(
                 # when its mirror still advertises old quota or health.
                 return current_turn_host_launch_decision(
                     args, registry_path=current_registry, runtime_root=runtime_root,
-                    identity=settlement_identity, replan_obligation_id=replan_obligation_id,
+                    identity=settlement_identity,
                     planned_effective_action=payload["turn_envelope"].get("effective_action"),
                     scheduler_execution_context=payload.get("scheduler_execution_context") or {},
                     operator_inbox_urgency_projector=operator_inbox_urgency_projector,
@@ -829,47 +810,13 @@ def execute_turn_run_once(
                     goal_ref=goal_ref,
                 )
 
-            def run_built_in_host(
-                request: Mapping[str, Any],
-            ) -> dict[str, Any]:
-                options = {
-                    "runtime_root": runtime_root,
-                    "project": project,
-                    "codex_bin": args.codex_bin,
-                    "sandbox": args.codex_sandbox,
-                    "model": args.codex_model,
-                    "reasoning_effort": args.codex_reasoning_effort,
-                    "mcp_server": args.codex_mcp_server_json,
-                    "timeout_seconds": None if args.timeout_seconds is None else max(1.0, args.timeout_seconds - 5.0),
-                }
-                options["goal_admission"] = (
-                    goal_admission or FirstPartyHostGoalAdmission.for_plan(
-                        registry_path=registry_path, goal_id=args.goal_id,
-                        planned_goal_ref=goal_ref,
-                    )
-                ).with_launch_decision(current_launch_decision)
-                if getattr(args, "codex_operation_tools", False):
-                    from ..control_plane.turn_driver.codex_operation_host import (
-                        run_codex_operation_host,
-                    )
-
-                    return run_codex_operation_host(
-                        request,
-                        registry_path=registry_path,
-                        confirmed_operation_id=getattr(
-                            args, "codex_confirmed_operation_id", None
-                        ),
-                        source_route=getattr(
-                            args, "codex_operation_source_route_json", None
-                        ),
-                        operation_request_file=(Path(args.operation_request_file)
-                            if getattr(args, "operation_request_file", None) else None),
-                        operation_request_sha256=getattr(args, "operation_request_sha256", None),
-                        **options,
-                    )
-                return run_codex_cli_host(request, registry_path=registry_path, **options)
-
-            host_runner = run_built_in_host
+            host_runner = build_codex_cli_host_runner(
+                args, runtime_root=runtime_root, project=project,
+                registry_path=registry_path, goal_ref=goal_ref,
+                goal_admission=goal_admission,
+                current_launch_decision=current_launch_decision,
+                run_codex_cli_host=run_codex_cli_host,
+            )
 
             def resolve_built_in_session_binding(
                 turn_envelope: Mapping[str, Any],
@@ -893,7 +840,7 @@ def execute_turn_run_once(
             session_binding_resolver = resolve_built_in_session_binding
         elif args.host == "dsh":
             if getattr(args, "dsh_operation_module", None):
-                host_runner = build_dsh_operation_host_runner(
+                host_runner = getattr(_sys.modules[__name__], "build_dsh_operation_host_runner")(
                     args, runtime_root=runtime_root, registry_path=registry_path,
                     workspace=project, environ=operator_environ,
                     goal_admission=goal_admission,
@@ -906,11 +853,26 @@ def execute_turn_run_once(
 
                 session_binding_resolver = resolve_dsh_operation_session
             else:
-                host_runner = build_dsh_host_runner(
+                host_runner = getattr(_sys.modules[__name__], "build_dsh_host_runner")(
                     args, workspace=project, environ=operator_environ,
                 )
 
+        request_locator = payload.get("delegation_operation_locator")
+        settlement_admission = None
+        if settlement_identity.request_subject is not None:
+            if not isinstance(request_locator, dict):
+                raise ValueError("request Turn is missing its original delegation locator")
+            from ..control_plane.collaboration.delegation_context import (
+                require_current_request_operation, request_settlement_lifetime,
+            )
+            def settlement_admission():
+                return request_settlement_lifetime(request_locator, settlement_identity,
+                    registry_path=registry_path, runtime_root=runtime_root, workspace=project)
+
         def on_managed_start_admitted() -> None:
+            if settlement_identity.request_subject is not None:
+                require_current_request_operation(request_locator, settlement_identity,
+                    registry_path=registry_path, runtime_root=runtime_root, workspace=project)
             replan_packet = stable_envelope.get("replan_action_packet")
             capability_guard = (
                 replan_packet.get("capability_guard")
@@ -950,6 +912,7 @@ def execute_turn_run_once(
             execute=bool(args.execute),
             retry_failed=bool(args.retry_failed_turn),
             task_validator=task_validator,
+            settlement_admission=settlement_admission,
             writeback=writeback if args.execute else None,
             completion_writeback=completion_writeback if args.execute else None,
             completion_intent=completion_intent if args.execute else None,
@@ -998,3 +961,6 @@ def execute_turn_run_once(
             execution_started=execution_started,
             journal_readback=journal_readback,
         )
+
+
+__all__ = [name for name in globals() if not name.startswith("_")] + list(_DSH_HOST_EXPORTS)

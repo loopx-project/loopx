@@ -107,10 +107,45 @@ def test_invalid_optional_observation_cannot_erase_native_counters_or_escape_roo
     assert usage["projection"]["loopx_input"]["status"] == "unavailable"
 
 
-def test_real_cli_registers_recorded_component_without_model_execution(tmp_path):
+@pytest.mark.parametrize('wrapper', [
+    'const r = await tools.exec_command({cmd: "loopx quota context-read"}); text(r.output);',
+    'text(await tools.exec_command({cmd: "loopx quota context-read"}))',
+    'text((await tools.exec_command({cmd: "loopx quota context-read"})).output)',
+])
+def test_tool_inventory_is_opt_in_separate_and_retains_native_counter_identity(tmp_path, wrapper):
+    _, rows = native_trace(tmp_path)
+    tool = [{'type': 'response_item', 'payload': {'type': 'custom_tool_call',
+        'name': 'exec', 'call_id': 'tool', 'input': wrapper}},
+        {'type': 'response_item', 'payload': {'type': 'custom_tool_call_output',
+         'call_id': 'tool', 'output': '状态已保存'}}]
+    path = tmp_path / 'usage.jsonl'
+    path.write_text('\n'.join(map(json.dumps, rows[:2] + tool + rows[2:])))
+    raw = path.read_bytes()
+    old = _usage_capture(tmp_path, 'usage.jsonl', 'session')
+    assert 'tool_context' not in old['projection']
+    measured = _usage_capture(tmp_path, 'usage.jsonl', 'session', include_tool_context=True)
+    inventory = measured['projection'].pop('tool_context')
+    footprint = measured['projection'].pop('loopx_requests')
+    assert footprint['status'] == 'observed' and footprint['recognized_requests'] == 0
+    assert footprint['unmatched_calls'] == 1, 'A return before its request receipt stays unassociated'
+    assert measured == old
+    assert inventory['status'] == 'observed'
+    assert inventory['loopx_tool_output_bytes'] == 15
+    assert inventory['operations'] == [{'operation': 'quota context-read', 'calls': 1, 'bytes': 15}]
+    assert path.read_bytes() == raw
+
+
+@pytest.mark.parametrize("direct_call", [False, True])
+def test_real_cli_registers_recorded_component_without_model_execution(tmp_path, direct_call):
     from loopx.capabilities.benchmark_toolkit.trajectory_assessment_store import inspect_pack
 
-    source, _ = native_trace(tmp_path)
+    source, rows = native_trace(tmp_path)
+    if direct_call:
+        call = {"type": "custom_tool_call", "call_id": "tool", "name": "exec",
+                "input": 'text(await tools.exec_command({cmd: "loopx status"}))'}
+        reply = {"type": "custom_tool_call_output", "call_id": "tool", "output": "saved"}
+        items = [{"type": "response_item", "payload": item} for item in (call, reply)]
+        (tmp_path / "usage.jsonl").write_text("\n".join(map(json.dumps, rows[:2] + [items[0], rows[2], items[1]] + rows[3:])))
     evidence = "Synthetic fixed negative result."
     (tmp_path / "evidence.txt").write_text(evidence)
     data = {"schema_version": "trajectory_assessment_input_v1",
@@ -130,9 +165,21 @@ def test_real_cli_registers_recorded_component_without_model_execution(tmp_path)
         "--runtime-root", str(runtime), "--format", "json", "benchmark", "trajectory-pack-register",
         "--goal-id", "research", "--input-json", str(path), "--source-root", str(tmp_path),
         "--title", "Synthetic recorded input", "--usage-jsonl", "usage.jsonl", "--usage-session-id", "session",
-        "--loopx-input-json", str(source.relative_to(tmp_path))], capture_output=True, text=True, check=True)
+        "--loopx-input-json", str(source.relative_to(tmp_path)), "--include-tool-context"], capture_output=True, text=True, check=True)
     registered = json.loads(result.stdout)
     view = inspect_pack(runtime_root=runtime, owner_goal_id="research", pack_id=registered["pack_id"])
     assert view["solver_usage"]["projection"]["loopx_input"]["input_fraction"] == 0.02
+    inventory = view["solver_usage"]["projection"]["tool_context"]
+    footprint = view["solver_usage"]["projection"]["loopx_requests"]
+    assert footprint["status"] == "observed"
+    if direct_call:
+        assert inventory["operations"] == [{"operation": "status", "calls": 1, "bytes": 5}]
+        assert inventory["loopx_tool_output_fraction"] == 1.0
+        assert footprint["recognized_requests"] == 1
+        assert footprint["tokens"]["input_tokens"] == 100
+        assert footprint["input_fraction"] == 1.0  # Whole request, distinct from the packet estimate above.
+    else:
+        assert inventory["loopx_tool_output_fraction"] is None
+        assert footprint["recognized_requests"] == 0
     assert view["job"] is None and view["result"] is None
     assert "hello world" not in json.dumps(view)

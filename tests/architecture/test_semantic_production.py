@@ -28,6 +28,41 @@ def test_literal_scan_rejects_invalid_syntax_without_a_field_mention():
     source = SourceFile('loopx/broken_probe.py', '.py', 'def broken(')
     with pytest.raises(SyntaxError):
         python_production.python_literal_uses(source, 'action')
+    with pytest.raises(SyntaxError):
+        python_production.scan_python_production(source, field='action', enums={})
+
+
+@pytest.mark.parametrize('text,options,expected', [
+    ("def choose():\n return 'run'", {'return_functions': frozenset({'choose'})},
+     {('return', frozenset({'run'}), False)}),
+    ("class Action:\n RUN='run'\ndef choose():\n return Action.RUN",
+     {'enums': {'loopx/field_absence.py::Action': {'RUN': 'run'}}},
+     {('enum_result', frozenset({'run'}), False)}),
+    ("def pack(result):\n return result\npack('run')",
+     {'call_arguments': {'loopx/field_absence.py::pack': {'result': 0}}},
+     {('call_argument', frozenset({'run'}), False)}),
+    ("def choose(value):\n return value", {'return_functions': frozenset({'choose'})},
+     {('return', frozenset(), True)}),
+])
+def test_field_absence_preserves_registered_and_enum_evidence(text, options, expected):
+    source = SourceFile('loopx/field_absence.py', '.py', text)
+    assert 'action' not in text
+    rows = python_production.scan_python_production(source, **{'field': 'action', 'enums': {}, **options})
+    assert {(row.form, row.values, row.unresolved) for row in rows} == expected
+
+
+def test_field_presence_tracks_source_changes_despite_hash_collisions():
+    class CollidingText(str):
+        def __hash__(self):
+            return 0
+
+    for text, expected in [
+        ("other = 'wait'", set()),
+        (r"packet['\x61ction'] = 'run'", {'run'}),
+        ("other = 'run'", set()),
+    ]:
+        source = SourceFile('loopx/field_presence.py', '.py', CollidingText(text))
+        assert python_production.python_literal_uses(source, 'action') == expected
 
 
 @pytest.mark.parametrize('first_text,second_text', [
@@ -153,7 +188,7 @@ def test_declared_return_is_scanned_in_real_python_syntax():
 
 
 @pytest.mark.parametrize('vocabulary_name, module, original', [
-    ('turn_route', 'loopx/control_plane/turn_driver/driver.py', 'return LoopXTurnRoute.CONTRACT_ERROR'),
+    ('turn_route', 'loopx/control_plane/quota/turn_envelope.ts', 'return "user_action_required";'),
     ('loop_disposition', 'loopx/control_plane/turn_driver/turn_contract_generated.py', 'return LoopDisposition(value)'),
 ])
 def test_real_return_producer_rejects_an_unregistered_result(vocabulary_name, module, original):
@@ -291,11 +326,11 @@ def test_registered_consumer_cannot_replace_a_removed_writer():
 def test_real_reexported_turn_owner_is_attributed_through_one_hop():
     import json
     from loopx.semantics.inventory import load_sources
-    # loop_controller imports LoopXTurnRoute from driver, which re-exports the
-    # generated owner; the registered return producer must still resolve.
+    # driver imports LoopXTurnRoute from the generated owner and re-exports it;
+    # the registered return producer must still resolve through that one hop.
     v = json.loads((ROOT / 'loopx/semantics/vocabulary_v0.json').read_text(encoding='utf-8'))['vocabularies']['turn_route']
     rows = collect_production(ROOT, v, load_sources(ROOT))
-    site = 'loopx/control_plane/turn_driver/loop_controller.py::_envelope_route'
+    site = 'loopx/control_plane/turn_driver/driver.py::_typed_route'
     resolved = {value for r in rows if r.site == site and not r.unresolved for value in r.values}
     assert 'user_action_required' in resolved
 

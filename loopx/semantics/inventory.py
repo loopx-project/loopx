@@ -116,7 +116,7 @@ def _assigned_name(node: ast.AST) -> tuple[str, ast.AST] | None:
     return None
 
 
-def parse_python(source: SourceFile) -> ast.AST:
+def parse_python(source: SourceFile) -> ast.Module:
     """Parse one tracked Python source, rejecting an unparseable one by path.
 
     Deliberately not cached. Caching the trees would hold roughly two million

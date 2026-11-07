@@ -21,6 +21,8 @@ from loopx.capabilities.manager_context import (
 from loopx.control_plane.collaboration import delegation_results, delegation_validation
 from loopx.control_plane.collaboration.inbox import _read
 from loopx.control_plane.collaboration.source_policy_fence import source_policy_fence
+from loopx.control_plane.collaboration.goal_instance_scope import collaboration_goal_scope
+from loopx.control_plane.collaboration.peers import _operation_address
 from test_independent_delegation_validation import independent_binding
 from test_local_delegation import demo, service as delegation_service  # noqa: F401
 from test_manager_context_execution import source
@@ -38,6 +40,7 @@ def saved_handoff(delegation_service, monkeypatch, request):  # noqa: F811
     service.registry.write_text(json.dumps(data))
     values = source(service.root, service.registry, goal_id=service.goal_id,
                     agent_id="analyst", requester="lead", binding="analysis",
+                    original_message=request.param if isinstance(getattr(request, "param", None), str) else None,
                     chat_root=root / "source-chat" if getattr(request, "param", False) else None)
     store, session, turn, request, receipt, _ = values
     deliver(service.root, service.registry, session=session, turn=turn,
@@ -59,6 +62,86 @@ def run_worker(worker, operation):
         "--agent-id", worker.agent_id, "--execution-config", str(worker.config),
         "--operation-id", operation], capture_output=True, text=True, timeout=60)
     assert completed.returncode == 0, completed.stderr
+
+
+def changed_source_work(worker, binding, operation, source_id, change):
+    """Corrupt only disposable provenance; the real worker must not adopt it."""
+    row = _read(worker.path(operation))
+    if change == "conversation":
+        row["conversation"] = {"session_id": "another-session", "turn_id": "another-turn"}
+        _write(worker.path(operation), row)
+        return
+    if change in {"peer_operation", "operation_missing"}:
+        with collaboration_goal_scope(worker.registry, goal_id=worker.goal_id, agents=(),
+                caller_goal_ref=worker._caller_goal_ref()) as scope:
+            _, path = _operation_address(worker.root, scope, worker.agent_id, operation)
+    else:
+        request_id = source_id if change == "source_brief" else row["identity"]["request_id"]
+        path = next((_root(worker.root) / "entries").glob("*/" + request_id + ".json"))
+    original = path.read_bytes()
+    if change == "operation_missing":
+        path.unlink()
+        return path, original
+    entry = _read(path)
+    entry["brief"]["constraints"].append("Changed after the original dispatch")
+    _write(path, entry)
+    return path, original
+
+
+@pytest.mark.parametrize("change", ["source_brief", "peer_brief", "peer_operation", "operation_missing", "conversation"])
+def test_worker_checks_original_work_without_a_chat_replay(saved_handoff, change):
+    root, worker, binding, (_, _, _, _, receipt, _), operation = saved_handoff
+    tasks_before = demo.canonical_tasks(root)
+    changed_source_work(worker, binding, operation, receipt["request_id"], change)
+    run_worker(worker, operation)
+    assert not (Path(binding["workspace"]) / "host-invocations").exists()
+    assert not list((worker.root / "goals" / worker.goal_id / "turns").glob("*.json"))
+    assert demo.canonical_tasks(root) == tasks_before
+    row = _read(worker.path(operation))
+    assert row["status"] == "rejected"
+    assert "source execution" in row["error"]
+    assert worker.read(operation)["operation_id"] == operation
+
+
+@pytest.mark.parametrize("change", ["source_brief", "peer_brief", "peer_operation"])
+def test_worker_rechecks_original_work_after_host_before_acceptance(saved_handoff, monkeypatch, change):
+    root, worker, binding, (_, _, _, _, receipt, _), operation = saved_handoff
+    tasks_before = demo.canonical_tasks(root)
+    cli = worker._cli
+    changed = False
+    original_sources = []
+
+    def change_after_host(current_binding, *args, **kwargs):
+        nonlocal changed
+        result = cli(current_binding, *args, **kwargs)
+        if not changed and args[:2] == ("turn", "run-once") and "--execute" in args:
+            changed = True
+            original_sources.append(changed_source_work(worker, binding, operation, receipt["request_id"], change))
+        return result
+
+    monkeypatch.setattr(worker, "_cli", change_after_host)
+    worker.execute(operation)
+    assert changed
+    assert (Path(binding["workspace"]) / "host-invocations").read_text() == "1"
+    assert demo.canonical_tasks(root) == tasks_before
+    journals = list((worker.root / "goals" / worker.goal_id / "turns").glob("*.json"))
+    assert len(journals) == 1
+    journal = _read(journals[0])
+    assert "quota_spend" not in journal["completed_phases"]
+    assert journal["task_validation"]["ok"] is True
+    assert _read(worker.path(operation))["status"] != "accepted"
+    # Restore only the original disposable source. The saved validated Turn,
+    # not a second Host, must finish its original completion and settlement.
+    for path, original in original_sources:
+        path.write_bytes(original)
+    worker.execute(operation)
+    settled = _read(worker.path(operation))
+    assert settled["status"] == "accepted", settled
+    assert settled["turn_key"] == journal["turn_key"]
+    assert demo.canonical_tasks(root)[binding["todo_id"]]["done"]
+    assert _read(journals[0])["completed_phases"].count("quota_spend") == 1
+    worker.execute(operation)
+    assert (Path(binding["workspace"]) / "host-invocations").read_text() == "1"
 
 
 @pytest.mark.parametrize("change", ["revoke", "sender", "blocked", "requester", "binding",

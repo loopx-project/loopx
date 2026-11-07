@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -185,6 +186,30 @@ def test_unknown_stale_lossy_or_unbound_observation_never_reuses(tmp_path, failu
         original = tmp_path / "original.jsonl"
         trace.rename(original)
         trace.symlink_to(original)
+    assert not codex_context_in_active_input(observation, baseline=baseline, session_id="session")
+
+
+def test_trace_link_swapped_after_containment_is_refused_before_the_read(tmp_path, monkeypatch):
+    """The path is replaced at open time, past the checks the bundle passed."""
+    observation, baseline, request, rows = fixture(tmp_path)
+    trace = Path(observation["trace_bundle"]) / "trace.jsonl"
+    outside = tmp_path / "outside.jsonl"
+    outside.write_text(trace.read_text(encoding="utf-8"), encoding="utf-8")
+    # The reader resolves the bundle first, so compare against the resolved entry.
+    resolved = trace.resolve()
+    real_open = os.open
+
+    def swapping(target, flags, *args, **kwargs):
+        if os.fspath(target) == os.fspath(resolved) and not trace.is_symlink():
+            trace.unlink()
+            try:
+                trace.symlink_to(outside)
+            except (OSError, NotImplementedError):
+                pytest.skip("this host cannot create a file symlink")
+        return real_open(target, flags, *args, **kwargs)
+
+    monkeypatch.delattr(os, "O_NOFOLLOW", raising=False)
+    monkeypatch.setattr(os, "open", swapping)
     assert not codex_context_in_active_input(observation, baseline=baseline, session_id="session")
 
 

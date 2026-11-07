@@ -1104,7 +1104,9 @@ def test_manager_scope_reads_policy_from_coordination_root_when_chat_root_overri
     assets = tmp_path / "assets"
     assets.mkdir()
     (assets / "index.html").write_text("fixture", encoding="utf-8")
-    monkeypatch.setattr(chat_server, "build_lark_goal_topic_runtime_snapshot", lambda **_: snapshot)
+    from loopx import chat_lark_api
+
+    monkeypatch.setattr(chat_lark_api, "build_lark_goal_topic_runtime_snapshot", lambda **_: snapshot)
     monkeypatch.setattr(
         chat_server,
         "resolve_lark_cli_for_runtime",

@@ -11,6 +11,7 @@ from ..control_plane.turn_driver.post_settlement import (
     PostSettlement,
     registered_post_settlement,
 )
+from .anti_entropy.turn_context import anti_entropy_context_registration
 from .reward_memory.turn_hooks import (
     memory_context_registration,
     memory_settlement_registration,
@@ -30,6 +31,14 @@ def attach_turn_context(
         payload,
         (
             memory_context_registration(
+                payload,
+                registry_path=registry_path,
+                goal_id=goal_id,
+                agent_id=agent_id,
+                decision=decision,
+                turn_instance_id=turn_instance_id,
+            ),
+            anti_entropy_context_registration(
                 payload,
                 registry_path=registry_path,
                 goal_id=goal_id,

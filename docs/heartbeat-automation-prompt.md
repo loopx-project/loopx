@@ -73,6 +73,14 @@ static refresh/spend sequence: after validated work it follows the current
 compatibility, not as a stale fallback. Todo acceptance alone is not Turn
 settlement or terminal vision closure. The brief base budget is 4,800 characters; reward-memory headroom remains separate.
 
+Markdown prints a complete guard command once when the successful task body
+already contains that exact command as a whole line. Generator Inputs then
+points to the body; JSON fields remain complete. Missing, different, partial or
+failed bodies retain the complete diagnostic command.
+
+成功正文已按完整行包含同一 guard 命令时，Markdown 诊断区指向正文，避免重复长命令；
+JSON 字段保留全文。正文缺失、不同、仅匹配前缀或生成失败时，诊断区仍打印完整命令。
+
 Brief 与 thin 共用完整执行义务路径；full、compact、brief 均移除固定结算配方，而不是
 删除结算义务。真实 App preflight、registry scope、完整 guard 和静态安全规则
 均保留；结算顺序与身份以本轮动态 contract 为准，vision replan 不由历史成功清账。
@@ -433,7 +441,7 @@ loopx-canary heartbeat-prompt \
 
 ### Opt-in native context delivery
 
-`--context-delivery {off,on}` is experimental and defaults to `off`. It reuses
+`--context-delivery {off,on}` defaults to `on` for supported native Codex App/SSH and benchmark heartbeat entries; save the machine setting as off or pass `--context-delivery off` to disable. An explicitly saved off is preserved. Other hosts and ordinary CLI keep full delivery. It reuses
 existing scheduler-owned host declarations and the benchmark worker's explicit
 execution settings; it does not guess a host from process names or ambient native
 session variables. These declared run modes can activate it:
@@ -458,6 +466,16 @@ use the explicit original capture reference. If preparation fails before that
 can be established, or invalidation also fails, the CLI reports
 `quota_decision_transport_failed` with the saved decision and receipt. Do not
 rerun admission to recover a presentation failure.
+
+When the caller also selects `--record-host-poll`, the existing liveness owner
+records that observation once before the original capture. The saved decision,
+ordinary/envelope output and native recovery view retain the same
+`host_poll_receipt`, including an unreadable-receipt diagnostic. A capture or
+handoff failure still reports an already-recorded poll; its count can advance
+even when presentation fails. Reading the original evidence never records
+another poll, launches work or spends quota. Without this flag, capture and
+context delivery do not create a liveness receipt.
+
 `off` creates no native journal, hook configuration or input
 observation; directories alone never turn it on. This declaration check is not
 host authentication, execution authority or proof of retained input. Native
@@ -689,6 +707,19 @@ For every automatic heartbeat turn, the agent-facing checklist is:
 
 1. Guard first: `quota should-run --turn-instance-id <HEARTBEAT_TURN_ID>` using
    this trigger's `<current_time_iso>` and reusing it for same-heartbeat retries.
+   If the caller has already chosen the unfinished work for this new Turn,
+   append `--todo-id <chosen-id>` to that first guard. This requests current
+   qualification and complete required context in one call; it does not adopt
+   the previous Turn's authority, read coverage or settlement. Read the current
+   contract before work and follow rejection/recovery when the choice is stale
+   or gated. When the choice is unknown, discover candidates and then use the
+   returned `selection_command`. Never guess a Todo or change an existing Turn
+   binding to avoid a read. Same-Turn compaction alone does not start this flow.
+   若本次新 Turn 已明确继续哪项未完成工作，可在首次 guard 中直接附加
+   `--todo-id <chosen-id>`，一次取得当前资格及必要上下文。旧任务引用不继承旧
+   权限、阅读覆盖或结算身份；仍须读取当前合同，过期或受限时按返回结果恢复。
+   尚未选定工作则先发现候选，再用 `selection_command`；不猜测任务、不为少读
+   一次而更换既有 Turn 绑定，同一 Turn 的压缩恢复也不触发这条新准入路径。
    If `loopx` is not initially on PATH, export `$HOME/.local/bin:$PATH`
    and run the local installer fallback before declaring preflight failure.
 2. If `should_run=false` with `state=operator_gate`, ask the user/controller the

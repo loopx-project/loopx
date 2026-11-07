@@ -8,6 +8,18 @@ export const chatRecoveryScenario = {
   async run({ browser, collectCoverage, url }) {
     const context = await openWorkspacePage(browser, url, { collectCoverage });
     const { api, checkpointCoverage, page } = context;
+    // An overview intentionally renders no pending reply. Wait on the native
+    // Session/message owner before sending the next ordinary question.
+    const backgroundReply = async prefix => {
+      const deadline = Date.now() + 10000;
+      while (Date.now() < deadline) {
+        const turn = api.turnRequests.findLast(row => row.message.includes(prefix));
+        if (turn && !page.__loopxRuntime.sessions.get(turn.sessionId)?.active_turn_id
+          && page.__loopxRuntime.messages.get(turn.sessionId)?.some(row => row.turn_id === turn.turnId && row.role !== "user")) return;
+        await page.waitForTimeout(50);
+      }
+      throw new Error(`Background reply did not complete: ${prefix}`);
+    };
     const failures = [];
     const notes = [];
     const observations = [];
@@ -50,30 +62,35 @@ export const chatRecoveryScenario = {
         await new Promise((resolveWait) => setTimeout(resolveWait, 50));
       }
       if (!api.turnRequests.some((turn) => turn.message.includes("汇总所有活跃 Goal 的最新进展与阻塞"))) throw new Error("Progress report shortcut did not send a useful scoped request");
+      await backgroundReply("汇总所有活跃 Goal");
       await page.locator(".personal-message-pending").waitFor({ state: "hidden" });
-      await page.locator(".personal-manager-conversation-tray").waitFor({ state: "visible" });
+      if (await page.locator(".personal-manager-conversation-tray").count()) throw new Error("A reply covered the manager overview");
       if (!(await page.locator(".personal-home-lanes").isVisible())) throw new Error("Manager send replaced the home lane overview");
       const managerUrlBefore = page.url();
       // This is a fresh question, not an instruction to the shortcut's active Turn.
       await page.getByLabel("向 LoopX 发送消息").fill("我现在该做什么？只读回答，不要创建或修改任何状态。");
       await page.getByRole("button", { name: "发送", exact: true }).click();
+      await backgroundReply("我现在该做什么？");
+      if (page.url() !== managerUrlBefore) throw new Error("A background reply navigated away from the overview");
+      if (!(await page.locator(".personal-home-lanes").isVisible())) throw new Error("A background reply hid the overview");
+      if (await page.locator(".personal-manager-conversation-tray").count()) throw new Error("A reply reopened a floating conversation");
+      await page.screenshot({path: resolve(outputDir, "manager-overview-after-reply.png"), animations: "disabled"});
+      await managerNavigation.getByRole("button", {name: "对话", exact: true}).click();
       await page.getByText("管家已读取当前授权范围的 Goal 证据。", { exact: true }).waitFor({ state: "visible" });
       // The steward answers as the LoopX Manager. The executor that served the
       // turn belongs to the machine-capability chip, so an answer must never be
       // labelled with the CLI brand the agent picker happens to hold.
       const answerIdentity = (
-        await page.locator(".personal-manager-conversation-tray article.is-assistant strong").last().innerText()
+        await page.locator(".personal-channel-timeline article.is-assistant header strong").last().innerText()
       ).trim();
       if (answerIdentity !== "LoopX 管家") {
         throw new Error(`Manager answer was labelled as its executor instead of the steward: ${answerIdentity}`);
       }
       if (!api.turnRequests.some((turn) => turn.message.startsWith("我现在该做什么？"))) throw new Error("Manager question bypassed the global runtime");
-      await page.getByText("查看完整对话", { exact: true }).waitFor({ state: "visible" });
-      if (page.url() !== managerUrlBefore) throw new Error(`Manager send navigated away from the overview: ${managerUrlBefore} -> ${page.url()}`);
-      const managerConversationType = await page.locator(".personal-manager-conversation-tray").evaluate((tray) => {
-        const message = getComputedStyle(tray.querySelector("article p, article .personal-md"));
-        const role = getComputedStyle(tray.querySelector("article > strong"));
-        const action = getComputedStyle(tray.querySelector(".personal-manager-conversation-link"));
+      const managerConversationType = await page.locator(".personal-channel-timeline").evaluate((timeline) => {
+        const message = getComputedStyle(timeline.querySelector("article.is-assistant p, article.is-assistant .personal-md"));
+        const role = getComputedStyle(timeline.querySelector("article.is-assistant header strong"));
+        const action = getComputedStyle(document.querySelector(".personal-goal-tabs button"));
         return {
           actionFontSize: Number.parseFloat(action.fontSize),
           messageFontSize: Number.parseFloat(message.fontSize),
@@ -85,15 +102,14 @@ export const chatRecoveryScenario = {
         || managerConversationType.messageLineHeight < 20
         || managerConversationType.roleFontSize < 12
         || managerConversationType.actionFontSize < 14) {
-        throw new Error(`Manager conversation receipt typography is below the readable UI scale: ${JSON.stringify(managerConversationType)}`);
+        throw new Error(`Manager conversation typography is below the readable UI scale: ${JSON.stringify(managerConversationType)}`);
       }
-      await page.screenshot({ path: resolve(outputDir, "manager-conversation-tray-compact.png"), fullPage: false, animations: "disabled" });
+      await page.screenshot({ path: resolve(outputDir, "manager-conversation-reading-desktop.png"), fullPage: false, animations: "disabled" });
       await page.setViewportSize({ width: 390, height: 844 });
-      const compactTrayOverflow = await page.locator(".personal-manager-conversation-tray").evaluate((tray) => tray.scrollWidth - tray.clientWidth);
-      if (compactTrayOverflow > 1) throw new Error(`Manager conversation receipt has ${compactTrayOverflow}px horizontal overflow at mobile width`);
-      await page.screenshot({ path: resolve(outputDir, "manager-conversation-tray-mobile.png"), fullPage: false, animations: "disabled" });
+      const conversationOverflow = await page.locator(".personal-channel-timeline").evaluate((timeline) => timeline.scrollWidth - timeline.clientWidth);
+      if (conversationOverflow > 1) throw new Error(`Manager conversation has ${conversationOverflow}px horizontal overflow at mobile width`);
+      await page.screenshot({ path: resolve(outputDir, "manager-conversation-reading-mobile.png"), fullPage: false, animations: "disabled" });
       await page.setViewportSize({ width: 1512, height: 982 });
-      await page.getByText("查看完整对话", { exact: true }).click();
       await page.getByRole("navigation", { name: "管家视图" }).waitFor({ state: "visible" });
       if (await page.locator(".personal-home-board").isVisible()) throw new Error("Full manager Chat left the Goal overview visible behind the conversation");
       if (await page.locator(".personal-manager-conversation-tray").count()) throw new Error("Full manager Chat kept the compact home tray visible");
@@ -156,6 +172,16 @@ export const chatRecoveryScenario = {
       await page.screenshot({ path: resolve(outputDir, "collaboration-unreadable-mobile.png"), fullPage: false, animations: "disabled" });
       await page.setViewportSize({ width: 1512, height: 982 });
       if (api.turnRequests.length !== turnsBeforeReturn) throw new Error("Disposition readback started another model turn");
+      delegatedMessage.collaboration.returns = [{ phase: "conclusion", status: "retry_pending", error: "initial_delivery_receipt_unavailable_extra" }];
+      await collaboration.getByText("回复送达尚未核验", { exact: true }).waitFor({ state: "visible" });
+      delegatedMessage.collaboration.returns[0].error = "initial_delivery_receipt_unavailable";
+      await collaboration.getByText("原始交接待核验", { exact: true }).waitFor({ state: "visible" });
+      await collaboration.evaluate((node) => node.scrollIntoView({ block: "start" }));
+      await page.screenshot({ path: resolve(outputDir, "collaboration-original-handoff-desktop.png"), fullPage: false, animations: "disabled" });
+      await page.setViewportSize({ width: 390, height: 844 });
+      if (await collaboration.evaluate((node) => node.scrollWidth > node.clientWidth + 1)) throw new Error("Original handoff explanation overflows on mobile");
+      await page.screenshot({ path: resolve(outputDir, "collaboration-original-handoff-mobile.png"), fullPage: false, animations: "disabled" });
+      await page.setViewportSize({ width: 1512, height: 982 });
       pass("collaboration-brief", "Original conversation preserves context, constraints, inputs and receiver decision without a new turn");
 
       const returnText = "处理结论：已核验新约束并关联现有计划，无需再次追问。";
@@ -189,13 +215,20 @@ export const chatRecoveryScenario = {
       await page.screenshot({ path: resolve(outputDir, "manager-automatic-conclusion.png"), fullPage: false, animations: "disabled" });
       const returnedMessage = page.__loopxRuntime.messages.get(returnSessionId)
         .find((message) => message.message_id === "handoff.browser-fixture");
+      returnedMessage.return_delivery = { schema_version: "manager_return_delivery_status_v0", phase: "conclusion",
+        status: "retry_pending", error: "initial_delivery_receipt_unavailable_extra" };
+      await richConclusion.getByText("等待回传", { exact: true }).waitFor({ state: "visible" });
+      returnedMessage.return_delivery.error = "initial_delivery_receipt_unavailable";
+      await richConclusion.getByText("原始交接待核验", { exact: true }).waitFor({ state: "visible" });
       returnedMessage.return_delivery = {
         schema_version: "manager_return_delivery_status_v0",
         phase: "conclusion",
         status: "delivered",
         verification: "reconciled_after_restart",
+        error: "initial_delivery_receipt_unavailable",
       };
       await page.getByText("恢复后已核验送达", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+      if ((await richConclusion.innerText()).includes("原始交接待核验")) throw new Error("A stale error cannot override verified delivery");
       await page.setViewportSize({ width: 390, height: 844 });
       await page.getByText(returnText, { exact: true }).waitFor({ state: "visible" });
       await richConclusion.scrollIntoViewIfNeeded();
@@ -207,13 +240,13 @@ export const chatRecoveryScenario = {
       await page.getByRole("button", { name: "总览", exact: true }).click();
       await page.locator(".personal-home-board").waitFor({ state: "visible" });
       if (await page.locator(".personal-manager-conversation-tray").count()) {
-        throw new Error("Manager conversation receipt stayed permanently visible after returning to the overview");
+        throw new Error("Manager conversation stayed permanently visible after returning to the overview");
       }
 
       await page.locator(".personal-composer-tools > summary").click();
       const [fileChooser] = await Promise.all([
         page.waitForEvent("filechooser"),
-        page.getByRole("button", { name: "添加图片" }).click(),
+        page.getByRole("button", { name: "添加附件" }).click(),
       ]);
       await fileChooser.setFiles({
         buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z8WQAAAAASUVORK5CYII=", "base64"),
@@ -222,7 +255,7 @@ export const chatRecoveryScenario = {
       });
       await page.getByRole("img", { name: "loopx-smoke.png" }).waitFor({ state: "visible" });
       if (await page.getByRole("button", { name: "发送", exact: true }).isDisabled()) throw new Error("A valid image attachment did not enable the composer send action");
-      await page.getByRole("button", { name: "移除图片 loopx-smoke.png" }).click();
+      await page.getByRole("button", { name: "移除附件 loopx-smoke.png" }).click();
       pass(18, "The visible attachment button opens a file chooser; a valid PNG renders a preview and enables send.");
 
       await page.getByLabel("向 LoopX 发送消息").evaluate((target) => {
@@ -233,7 +266,7 @@ export const chatRecoveryScenario = {
         target.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: transfer }));
       });
       await page.getByRole("img", { name: "loopx-pasted.png" }).waitFor({ state: "visible" });
-      await page.getByRole("button", { name: "移除图片 loopx-pasted.png" }).click();
+      await page.getByRole("button", { name: "移除附件 loopx-pasted.png" }).click();
       pass(19, "Pasting a clipboard PNG attaches through the same validated composer path.");
       await page.locator(".personal-goal-link").first().click();
       const goalNavigation = page.getByRole("navigation", { name: "Goal 视图" });
@@ -373,13 +406,14 @@ export const chatRecoveryScenario = {
       await page.getByRole("button", { name: "发送", exact: true }).click();
       while (api.turnRequests.length === turnsBeforeRunningCheck) await page.waitForTimeout(50);
       const unsupportedSessionId = api.turnRequests.at(-1).sessionId;
+      const recoveredTurnId = api.turnRequests.at(-1).turnId;
       page.__loopxRuntime.sessions.set(unsupportedSessionId, { ...page.__loopxRuntime.sessions.get(unsupportedSessionId), adapter_kind: "external" });
       await page.reload({ waitUntil: "domcontentloaded" });
       await page.getByTestId("personal-goal-home").waitFor({ state: "visible" });
       await page.locator(".personal-goal-link").first().click();
       await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
-      const turnRunningHint = page.locator(".personal-composer-status", { hasText: "本轮进行中" });
-      await turnRunningHint.waitFor({ state: "visible", timeout: 5_000 });
+      const currentTurnControl = page.locator(`.personal-composer-stop[data-turn-id="${recoveredTurnId}"]`);
+      await currentTurnControl.waitFor({ state: "visible", timeout: 5_000 });
       await page.getByLabel("向 LoopX 发送消息").fill("回合进行中不应发送");
       if (await page.getByRole("button", { name: "发送", exact: true }).isDisabled()) {
         throw new Error("Recovered work did not offer explicit next-Turn queuing");
@@ -390,12 +424,12 @@ export const chatRecoveryScenario = {
       await page.locator(".personal-goal-link").nth(1).click();
       await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
       await page.getByLabel("向 LoopX 发送消息").waitFor({ state: "visible" });
-      if (await turnRunningHint.count()) throw new Error("Another Goal's composer waited for this Goal's running Turn");
+      if (await currentTurnControl.count()) throw new Error("Another Goal's composer controlled this Goal's running Turn");
       await page.locator(".personal-goal-link").first().click();
       await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
-      await turnRunningHint.waitFor({ state: "visible", timeout: 5_000 });
+      await currentTurnControl.waitFor({ state: "visible", timeout: 5_000 });
       await page.getByLabel("向 LoopX 发送消息").fill("回合进行中不应发送");
-      await turnRunningHint.waitFor({ state: "hidden", timeout: 10_000 });
+      await currentTurnControl.waitFor({ state: "hidden", timeout: 10_000 });
       if (await page.getByRole("button", { name: "发送", exact: true }).isDisabled()) {
         throw new Error("Composer stayed blocked after the running Turn completed");
       }
@@ -408,6 +442,7 @@ export const chatRecoveryScenario = {
       // controls and keep the draft; the owner can explicitly queue it next.
       const busySessionId = api.turnRequests.at(-1).sessionId;
       const foreignTurnId = `turn-foreign-${Date.now()}`;
+      const foreignTurnControl = page.locator(`.personal-composer-stop[data-turn-id="${foreignTurnId}"]`);
       page.__loopxRuntime.turnMessages.set(foreignTurnId, "另一页面发起的中断控制回合");
       page.__loopxRuntime.sessions.set(busySessionId, { ...page.__loopxRuntime.sessions.get(busySessionId), active_turn_id: foreignTurnId, status: "busy" });
       let rejectedPosts = 0;
@@ -448,7 +483,7 @@ export const chatRecoveryScenario = {
       holdReads = false;
       for (const route of heldReads.splice(0)) await route.fallback();
       await page.unroute("**/api/chat/sessions?*");
-      await turnRunningHint.waitFor({ state: "visible", timeout: 5_000 });
+      await foreignTurnControl.waitFor({ state: "visible", timeout: 5_000 });
       await page.getByRole("button", { name: "中断本轮" }).waitFor({ state: "visible" });
       if (await page.getByRole("button", { name: "中断本轮" }).count() !== 1) {
         throw new Error("The recovery added a second pending reply instead of adopting the handoff reply");
@@ -459,7 +494,7 @@ export const chatRecoveryScenario = {
       if (await page.locator(".personal-channel-timeline .personal-message").filter({ hasText: draft }).count()) {
         throw new Error("A message the service did not accept stayed in the conversation");
       }
-      await turnRunningHint.waitFor({ state: "hidden", timeout: 10_000 });
+      await foreignTurnControl.waitFor({ state: "hidden", timeout: 10_000 });
       if (await sendButton.isDisabled()) throw new Error("Send stayed blocked after the adopted Turn completed");
       if (rejectedPosts !== 1) throw new Error(`The composer posted ${rejectedPosts} times into a running Turn`);
       await page.unroute(`**/api/chat/sessions/${busySessionId}/turns`);
@@ -469,6 +504,7 @@ export const chatRecoveryScenario = {
       // Turn, so the handoff must retain it and read again rather than
       // treat the failure as the Turn having ended.
       const retriedTurnId = `turn-foreign-retry-${Date.now()}`;
+      const retriedTurnControl = page.locator(`.personal-composer-stop[data-turn-id="${retriedTurnId}"]`);
       page.__loopxRuntime.turnMessages.set(retriedTurnId, "读取失败后仍在运行的中断控制回合");
       page.__loopxRuntime.sessions.set(busySessionId, { ...page.__loopxRuntime.sessions.get(busySessionId), active_turn_id: retriedTurnId, status: "busy" });
       let retryRejectedPosts = 0;
@@ -500,7 +536,7 @@ export const chatRecoveryScenario = {
       if (!failedReads) throw new Error("The 409 did not make the page re-read the Session");
       if (!heldRetryReads.length) throw new Error("A failed Session read was not retried while the reported Turn could still run");
       if (await sendButton.isDisabled()) throw new Error("The retried Session read hid explicit next-Turn queuing");
-      await turnRunningHint.waitFor({ state: "visible", timeout: 5_000 });
+      await retriedTurnControl.waitFor({ state: "visible", timeout: 5_000 });
       await page.getByRole("button", { name: "中断本轮" }).waitFor({ state: "visible" });
       if (retryRejectedPosts !== 1) throw new Error(`The composer posted ${retryRejectedPosts} times while the Session read was failing`);
       failReads = false;
@@ -510,7 +546,7 @@ export const chatRecoveryScenario = {
         throw new Error("The retried recovery added a second pending reply instead of adopting the handoff reply");
       }
       if (await composerInput.inputValue() !== draft) throw new Error("The draft rejected by a running Turn was not kept across the failed read");
-      await turnRunningHint.waitFor({ state: "hidden", timeout: 10_000 });
+      await retriedTurnControl.waitFor({ state: "hidden", timeout: 10_000 });
       if (await sendButton.isDisabled()) throw new Error("Send stayed blocked after the retried recovery saw the Turn complete");
       if (retryRejectedPosts !== 1) throw new Error(`The composer posted ${retryRejectedPosts} times into a running Turn`);
       await page.unroute(`**/api/chat/sessions/${busySessionId}/turns`);
@@ -524,6 +560,7 @@ export const chatRecoveryScenario = {
       // The pending reply shows Adjust/Interrupt from the 409 on, so before any
       // Session read returns, both must act on the exact reported Turn.
       const controlledTurnId = `turn-foreign-controls-${Date.now()}`;
+      const controlledTurnControl = page.locator(`.personal-composer-stop[data-turn-id="${controlledTurnId}"]`);
       page.__loopxRuntime.turnMessages.set(controlledTurnId, "交接期间可调整和中断的中断控制回合");
       page.__loopxRuntime.sessions.set(busySessionId, { ...page.__loopxRuntime.sessions.get(busySessionId), active_turn_id: controlledTurnId, status: "busy" });
       let controlRejectedPosts = 0;
@@ -550,6 +587,7 @@ export const chatRecoveryScenario = {
       await sendButton.click();
       for (let attempt = 0; attempt < 100 && (!controlRejectedPosts || !heldControlReads.length); attempt += 1) await page.waitForTimeout(50);
       if (!heldControlReads.length) throw new Error("The 409 did not make the page re-read the Session");
+      await controlledTurnControl.waitFor({ state: "visible", timeout: 5_000 });
       const handoffReply = page.locator(".personal-message").filter({ has: page.getByRole("button", { name: "中断本轮", exact: true }) });
       await handoffReply.getByRole("button", { name: "调整本轮", exact: true }).click();
       await composerInput.fill("交接期间先核对依赖。");
@@ -566,7 +604,7 @@ export const chatRecoveryScenario = {
         throw new Error(`Interrupt during the handoff did not reach the reported Turn: ${JSON.stringify(interrupted)}`);
       }
       await page.locator(".personal-message").filter({ hasText: "已中断。你可以在当前会话继续发送消息。" }).last().waitFor({ timeout: 5_000 });
-      await turnRunningHint.waitFor({ state: "hidden", timeout: 5_000 });
+      await controlledTurnControl.waitFor({ state: "hidden", timeout: 5_000 });
       if (await composerInput.inputValue() !== "") throw new Error("The accepted shared-composer adjustment did not clear");
       await composerInput.fill("中断后的后续消息草稿");
       if (await sendButton.isDisabled()) throw new Error("A new follow-up draft stayed blocked after interruption");

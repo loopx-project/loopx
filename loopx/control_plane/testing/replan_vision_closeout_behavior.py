@@ -10,7 +10,7 @@ import json
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Callable
 
-from .model_tool_behavior import argument_value, loopx_command_tokens
+from .model_tool_behavior import QuotaToolContext, argument_value, loopx_command_tokens
 from .model_behavior_qualification import model_behavior_semantic_contract_from_packet
 from ..quota.effective_action import EffectiveAction
 
@@ -180,10 +180,10 @@ def dispatch_vision_closeout(
     if state.vision_closeout is None:
         raise ValueError("vision_closeout_spend_before_writeback")
     output = execute(command, fixture=state.fixture, turn_instance_id=state.turn_instance_id)
-    replay = json.loads(execute(state.fixture.quota_guard_command, fixture=state.fixture,
-                                turn_instance_id=state.turn_instance_id))
-    following = json.loads(execute(state.fixture.quota_guard_command, fixture=state.fixture,
-                                   turn_instance_id=f"{state.turn_instance_id}-readback"))
+    replay = QuotaToolContext.from_output(execute(state.fixture.quota_guard_command, fixture=state.fixture,
+                                turn_instance_id=state.turn_instance_id)).packet
+    following = QuotaToolContext.from_output(execute(state.fixture.quota_guard_command, fixture=state.fixture,
+                                   turn_instance_id=f"{state.turn_instance_id}-readback")).packet
     spends = [row for row in _rows(state) if row.get("classification") == "quota_slot_spent"]
     if replay.get("effective_action") != EffectiveAction.HEARTBEAT_SETTLED_SKIP.value or len(spends) != 1:
         raise ValueError("vision_closeout_settlement_readback_failed")

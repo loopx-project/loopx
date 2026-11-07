@@ -1,7 +1,7 @@
 import type { GoalDraft } from "../../../../../../loopx/control_plane/collaboration/goal_draft.js";
 import type { TurnStep } from "../../data/turn-steps";
 import type { ChatProject, CollaborationReadback, LoopXModeSettings } from "../../data/chat-model";
-import type { BoundConversationTarget, ChatSessionSummary, BoundConversationSource } from "../../data/chat";
+import type { BoundConversationTarget, ChatSessionSummary, BoundConversationSource, ChatReplyContext } from "../../data/chat";
 import type { TeamPlanAppliedOutcome } from "./team-plan-preview";
 import type { ActionReviewPlan } from "../../../../../../loopx/control_plane/presentation/action_review_plan.js";
 import type { GoalAcceptanceObservation } from "../../data/goal-acceptance-observation";
@@ -211,6 +211,9 @@ export type WorkspaceGoal = {
   latestActivity?: string;
   needsYou?: string | null;
   needsYouBlocking?: boolean;
+  /** Exact full-source capability-action count and bounded display rows. */
+  reportReviewAttention?: WorkspaceAttention[];
+  reportReviewCount?: number;
   attentionSummary?: DigestAttentionSummary;
   nextSentence: string;
   repository?: WorkspaceRepositoryContext;
@@ -340,6 +343,8 @@ export type WorkspaceSchedule = {
 export type WorkspaceActionPreview = {
   /** Exact Todo target from the stored action, used only for display joins. */
   todoId?: string;
+  /** Stored Todo operation for result wording; never grants execution authority. */
+  todoOperation?: string;
   reviewPlan?: ActionReviewPlan;
   actionKind:
     | "goal.create"
@@ -393,11 +398,16 @@ export type WorkspaceActionPreview = {
 };
 
 export type WorkspaceMessage = {
+  queueInputCancelled?: true;
+  /** A native queue receipt, not an assistant answer or active execution. */
+  queued?: boolean;
+  replyContext?: ChatReplyContext;
   createdAt?: string;
   goalDraft?: GoalDraft | null;
   activity?: string[];
   steps?: TurnStep[];
   collaboration?: CollaborationReadback;
+  collaborations?: CollaborationReadback[];
   agentLabel?: string;
   attachments?: WorkspaceImageAttachment[];
   id: string;
@@ -423,6 +433,7 @@ export type WorkspaceReturnDelivery = {
   request_revision?: number | null;
 };
 
+// Existing attachment wire shape; MIME distinguishes images and UTF-8 documents.
 export type WorkspaceImageAttachment = {
   dataUrl: string;
   id: string;
@@ -530,7 +541,7 @@ export type WorkspaceDrawerSelection =
   | { item: WorkspaceRun; kind: "run" }
   | { item: WorkspaceOutput; kind: "output" }
   | { item: WorkspaceActionPreview; kind: "proposal" }
-  | { goalId?: string; kind: "settings"; scope?: "machine" | "goal"; tab?: "appearance" | "capabilities" | "language" | "lark" | "machine" | "provider" | "steward" | "conversation" | "cadence" | "ownership" }
+  | { goalId?: string; kind: "settings"; scope?: "machine" | "goal"; tab?: "appearance" | "capabilities" | "language" | "lark" | "machine" | "provider" | "steward" | "conversation" | "cadence" | "ownership" | "background" }
   | {
       item: WorkspaceSchedule;
       kind: "schedule";
@@ -570,6 +581,7 @@ export type PersonalWorkspaceCallbacks = {
   onInterruptConversationTurn?: (contextId: string, turnId: string) => Promise<void>;
   onSteerConversationTurn?: (contextId: string, turnId: string, message: string, ingressId: string) => Promise<void>;
   onQueueConversationTurn?: (contextId: string, sessionId: string, message: string, ingressId: string, attachments?: WorkspaceImageAttachment[]) => Promise<void>;
+  onObserveConversationTurn?: (contextId: string, sessionId: string, turnId: string) => Promise<void>;
   onOpenGoal?: (goalId: string) => void | Promise<void>;
   onOpenGoalView?: (tab: WorkspaceGoalTab) => void;
   onOpenRunSession?: (run: WorkspaceRun) => void | Promise<void>;
@@ -627,7 +639,7 @@ export type PersonalWorkspaceCallbacks = {
   onSelectGoal?: (goalId: string | null, view: WorkspaceGoalTab) => void;
   onSelectTodo?: (todoId: string | null) => void;
   onSelectView?: (view: WorkspaceGoalTab) => void;
-  onSelectWorkAgent?: (agentId: string | null) => void;
+  onSelectWorkAgent?: (agentId: string | null, sessionId?: string) => void;
   onSelectWorkSession?: (sessionId: string, replace?: boolean) => void;
   onOpenNotificationSettings?: (goalId?: string) => void;
   onFetchNotificationTargets?: () => Promise<Array<{ enabled: boolean; provider: string; target_name: string }>>;

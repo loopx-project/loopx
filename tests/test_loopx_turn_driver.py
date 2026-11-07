@@ -14,8 +14,10 @@ import pytest
 
 import loopx.cli_commands.turn_run_once as turn_run_once_command
 from loopx.cli_commands.turn_rendering import render_loopx_turn_execution_markdown
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 from tests.control_plane.canonical_authority_fixture import (
     initialize_canonical_authority,
+    isolate_sqlite_runtime,
 )
 from loopx.cli import main as cli_main
 from loopx.control_plane.coordination.runtime_shadow import (
@@ -1327,7 +1329,7 @@ def test_signed_governance_can_run_while_normal_delivery_remains_withheld(hold):
 
 
 @pytest.mark.parametrize("invalid_signature", [False, True])
-def test_turn_plan_missing_todo_does_not_bypass_contract_errors(
+def test_turn_plan_without_todo_requires_signature_and_scoped_binding(
     invalid_signature: bool,
 ) -> None:
     envelope = _envelope(
@@ -1340,9 +1342,13 @@ def test_turn_plan_missing_todo_does_not_bypass_contract_errors(
         envelope, host="generic-cli", execution_mode="isolated-headless",
     )
 
-    assert payload["ok"] is False
-    assert payload["route"]["kind"] == "contract_error"
+    assert payload["ok"] is (not invalid_signature)
+    assert payload["route"]["kind"] == ("contract_error" if invalid_signature else "blocked")
     assert payload["route"]["would_invoke_host"] is False
+    assert payload["route"]["host_invocation_allowed"] is False
+    assert payload["session"]["action"] == "none"
+    assert payload["transaction"]["status"] == "not_applicable"
+    assert not any(payload["effects"].values())
 
 
 def test_turn_plan_preserves_safe_bypass_when_user_action_is_visible() -> None:
@@ -1565,7 +1571,7 @@ def test_quota_cli_projects_outer_controller_without_codex_app_action(
             ]
         )
 
-    payload = json.loads(output.getvalue())
+    payload = read_cli_policy_payload(output.getvalue(), returncode=exit_code)
     hint = payload["scheduler_hint"]
     assert exit_code == 0, payload
     assert hint["execution_context"]["codex_app_applicability"] == "not_applicable"
@@ -1599,7 +1605,7 @@ def test_quota_cli_without_scheduler_context_fails_closed(tmp_path: Path) -> Non
             ]
         )
 
-    payload = json.loads(output.getvalue())
+    payload = read_cli_policy_payload(output.getvalue(), returncode=exit_code)
     hint = payload["scheduler_hint"]
     assert exit_code == 0, payload
     assert hint["action"] == "repair_scheduler_execution_context"
@@ -1636,13 +1642,16 @@ def test_quota_cli_codex_app_profile_is_explicit_and_applicable(
                 "loopx-turn-fixture",
                 "--agent-id",
                 "codex-fixture",
+                # Inspect the raw scheduler contract, independent of native presentation.
+                "--context-delivery",
+                "off",
                 *profile_args,
             ]
         )
 
     payload = json.loads(output.getvalue())
-    hint = payload["scheduler_hint"]
     assert exit_code == 0, payload
+    hint = payload["scheduler_hint"]
     assert "execution_context" not in hint
     assert "execution_phase" not in hint
     assert hint["codex_app"]["applicability"] == "applicable"
@@ -1679,7 +1688,7 @@ def test_quota_cli_short_context_flags_preserve_all_typed_fields(
             ]
         )
 
-    payload = json.loads(output.getvalue())
+    payload = read_cli_policy_payload(output.getvalue(), returncode=exit_code)
     context = payload["scheduler_hint"]["execution_context"]
     assert exit_code == 0, payload
     assert context["host_surface"] == "generic_cli"
@@ -2265,9 +2274,174 @@ raise SystemExit(0 if artifact.read_text(encoding="utf-8") == "validated" else 7
     ]
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("fault", [
+    "initial_before", "initial_after", "attempt_before", "attempt_after",
+    "confirm_before", "confirm_after",
+])
+def test_managed_start_interruption_preserves_reservation_and_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, fault: str,
+) -> None:
+    from loopx.cli_commands import turn_cadence
+    from loopx.control_plane.effect_runtime import effect_runtime_result
+    from loopx.control_plane.turn_driver import executor
+
+    project, runtime, registry = _write_live_fixture(tmp_path, provider=provider)
+    scope = {"runtime_root": str(runtime), "goal_id": "loopx-turn-fixture",
+             "agent_id": "codex-fixture", "automation_id": None}
+    configured = effect_runtime_result("quota.automation_cadence.manage", {
+        **scope, "operation": "configure", "min_interval_minutes": 3,
+        "expected_revision": 0, "owner_reference": "fixture-owner", "execute": True,
+    })
+    assert configured["eligible_now"] is True
+    now_ns = turn_cadence.time.time_ns()
+    monkeypatch.setattr(turn_cadence.time, "time_ns", lambda: now_ns)
+    marker = project / "host-starts.txt"
+    host_script = (
+        "from pathlib import Path; import sys; sys.stdin.read(); "
+        f"p=Path({str(marker)!r}); p.write_text(p.read_text()+'x' if p.exists() else 'x'); "
+        "raise SystemExit(7)"
+    )
+    args = ["--registry", str(registry), "--runtime-root", str(runtime),
+            "--format", "json", "turn", "run-once", "--host", "generic-cli",
+            "--goal-id", scope["goal_id"], "--agent-id", scope["agent_id"],
+            "--turn-instance-id", "start-checkpoint-fixture", "--project", str(project),
+            "--host-adapter-command-json", json.dumps([sys.executable, "-c", host_script]),
+            "--no-global-sync", "--execute"]
+    persist, make_cadence = executor._write_journal, turn_cadence.managed_cadence_start
+    interrupted = False
+    attempts, admissions, confirmations = [], [], []
+
+    def interrupt() -> None:
+        nonlocal interrupted
+        interrupted = True
+        raise RuntimeError("fixture start interruption")
+
+    def checkpoint(path, journal):
+        phase = "initial" if journal["host_attempt_count"] == 0 else "attempt"
+        if not interrupted and fault == phase + "_before":
+            interrupt()
+        persist(path, journal)
+        if not interrupted and fault == phase + "_after":
+            interrupt()
+
+    def fresh_cadence(**kwargs):
+        cadence = make_cadence(**kwargs)
+
+        def admit(identity):
+            attempts.append(dict(identity))
+            admission = cadence.admit(identity)
+            admissions.append(dict(admission))
+            return admission
+
+        def confirm():
+            # Confirmation must observe the independently durable attempt.
+            assert _turn_journal(runtime)["host_attempt_count"] == 1
+            if not interrupted and fault == "confirm_before":
+                interrupt()
+            cadence.confirm()
+            confirmations.append(True)
+            if not interrupted and fault == "confirm_after":
+                interrupt()
+
+        return turn_cadence.ManagedCadenceStart(admit, confirm)
+
+    monkeypatch.setattr(executor, "_write_journal", checkpoint)
+    monkeypatch.setattr(turn_run_once_command, "managed_cadence_start", fresh_cadence)
+
+    def run(extra=()):
+        invocation = list(args)
+        if "--resume-turn-key" in extra:
+            index = invocation.index("--turn-instance-id")
+            del invocation[index:index + 2]
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = cli_main([*invocation, *extra])
+        return code, json.loads(output.getvalue())
+
+    code, failure = run()
+    assert code == 1 and interrupted, failure
+    assert not marker.exists()
+    first = effect_runtime_result("quota.automation_cadence.manage", {
+        **scope, "operation": "read",
+    })
+    next_eligible = first["next_eligible_at_ms"]
+    assert next_eligible is not None
+    capture_path = runtime / "goals" / scope["goal_id"] / "turns" / "decisions" / (
+        attempts[0]["turn_key"].removeprefix("sha256:") + ".json"
+    )
+    original_capture = capture_path.read_bytes()
+    now_ns += 1_000_000_000
+    if fault == "initial_before":
+        resume = ()  # No journal was committed; the original Turn identity remains.
+        state = project / ".codex/goals/loopx-turn-fixture/ACTIVE_GOAL_STATE.md"
+        state.write_text(state.read_text() + "\n## Constraints\n\nPreserve the revised fixture requirement.\n")
+    else:
+        saved = _turn_journal(runtime)
+        resume = ("--resume-turn-key", saved["turn_key"])
+    code, resumed = run(resume)
+    assert code == 1, resumed
+    assert attempts[0]["attempt"] == 1
+    durable_attempt = fault in {"attempt_after", "confirm_before", "confirm_after"}
+    if fault == "initial_before":
+        # No journal can pin the original plan. Regenerating a capture must
+        # refuse changed observations rather than overwrite its commitment.
+        if len(attempts) == 2:
+            # A source-bound plan may give the revised work a different key.
+            # Its fresh reservation must still respect the original interval.
+            assert attempts[1]["turn_key"] != attempts[0]["turn_key"]
+            assert admissions[-1]["admitted"] is False
+            assert resumed["status"] == "interval_wait"
+        else:
+            assert len(attempts) == 1
+            assert "capture does not match the original observation" in resumed["error"]
+        assert not marker.exists()
+        assert not list((runtime / "goals" / scope["goal_id"] / "turns").glob("*.json"))
+        assert capture_path.read_bytes() == original_capture
+    elif durable_attempt:
+        # The recovery owner cannot infer non-execution from a missing reply.
+        # It refuses before another reservation, confirmation or Host attempt.
+        assert len(attempts) == 1
+        assert resumed["recovery_decision"]["reason"] == "host_outcome_unknown"
+        assert resumed["recovery_decision"]["reinvoke_host"] is False
+        assert not marker.exists()
+        assert len(confirmations) == (1 if fault == "confirm_after" else 0)
+    else:
+        assert len(attempts) == 2, resumed
+        assert attempts[1]["turn_key"] == attempts[0]["turn_key"]
+        assert attempts[1]["attempt"] == 1
+        assert admissions[-1]["resumed"] is True
+        assert resumed["effects"]["host_invoked"] is True
+        assert marker.read_text() == "x"
+        assert len(confirmations) == 1
+        code, replay = run(("--resume-turn-key", resumed["resume_turn_key"]))
+        assert code == 1 and replay["replayed"] is True, replay
+        assert replay["effects"]["host_invoked"] is False
+        assert marker.read_text() == "x"
+    if fault != "initial_before":
+        assert _turn_journal(runtime)["host_attempt_count"] == 1
+    current = effect_runtime_result("quota.automation_cadence.manage", {
+        **scope, "operation": "read",
+    })
+    assert current["next_eligible_at_ms"] == next_eligible
+    # A CLI exception correctly leaves effect observation unknown. The fixture
+    # separately observes no settlement record, rather than changing it to 0.
+    index_path = runtime / "goals" / scope["goal_id"] / "runs" / "index.jsonl"
+    assert not index_path.exists()
+
+
 def test_turn_run_once_cli_dsh_fresh_sessions_and_iteration_failure(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    original_builder = turn_run_once_command.build_dsh_host_runner
+    builder_calls: list[Path] = []
+
+    def patched_builder(*args: Any, **kwargs: Any) -> Any:
+        builder_calls.append(kwargs["workspace"])
+        return original_builder(*args, **kwargs)
+
+    monkeypatch.setattr(turn_run_once_command, "build_dsh_host_runner", patched_builder)
     project, runtime, registry = _write_live_fixture(tmp_path)
     host_project = tmp_path / "isolated-dsh-workspace"
     host_project.mkdir()
@@ -2342,6 +2516,7 @@ def run_dsh_turn(**kwargs):
     run("fresh-fixture-2", "fresh")
     run("resume-fixture-1", "resume")
     run("resume-fixture-2", "resume")
+    assert builder_calls == [host_project] * 4
 
     session_ids = (host_project / "dsh-session-ids.txt").read_text(
         encoding="utf-8"
@@ -2611,11 +2786,14 @@ raise SystemExit(0 if artifact.read_text(encoding="utf-8") == "completed" else 7
     assert not any(replayed["effects"].values())
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_promoted_turn_completion_replays_after_commit_before_journal_crash(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    provider: str,
 ) -> None:
-    project, runtime, registry = _write_live_fixture(tmp_path)
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_live_fixture(tmp_path, provider=provider)
     host_project = project / "isolated-host-workspace"
     host_project.mkdir()
     host_script, validation_script = _completion_host_and_validation_scripts()
@@ -2946,13 +3124,18 @@ def test_turn_run_once_cli_projects_durable_no_followup_continuation(
     [None, "sha256:different-turn"],
     ids=["missing-turn-key", "different-turn-key"],
 )
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_turn_run_once_cli_terminal_recovery_ignores_stale_display_identity(
     tmp_path: Path,
     display_completion_turn_key: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
 ) -> None:
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_live_fixture(
         tmp_path,
         todo_metadata_extra="no_followup=true",
+        provider=provider,
     )
     host_project = project / "isolated-host-workspace"
     host_project.mkdir()

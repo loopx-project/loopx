@@ -5,7 +5,7 @@ import os
 
 import pytest
 
-from loopx.chat_goal_configuration_api import _goal_capability_options
+from loopx.chat.goal_configuration_api import _goal_capability_options
 from loopx.configure_goal import configure_goal
 from loopx.control_plane.goals.goal_frontier.outcome_continuity import (
     acceptance_gaps_from_todo_completion_checkpoint,

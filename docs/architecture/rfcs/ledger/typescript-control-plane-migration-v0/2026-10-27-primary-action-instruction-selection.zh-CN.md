@@ -43,6 +43,9 @@ facade。仅当最后一个 Python text/label 消费者退出，且完整 typed 
 Python coercion、Unicode、截断及 trace 等价时，才删除 scalar/label codec 和 facts
 carrier。本切片不宣称这些 owner 已退役。
 
+更正（2026-11-02）：`protocol_monitor_action` 已无剩余调用方，现已删除。
+resolution trace 仍在使用。
+
 ## 词汇预算
 
 registry 的 `meaning` 写明 "module_budget counts modules under loopx/ whose text carries the standalone field token" 和 "the token count stays until Q11 decides whether the syntactic metric replaces it"；这一刻意保守的词法代理用于防止潜在字段 reader 数量出现无解释增长。

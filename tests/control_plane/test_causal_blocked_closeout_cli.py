@@ -15,6 +15,7 @@ from test_quota_settlement_cli import (
     _configure_selectable_alternative, _initialize_git_checkout, _spend_run_count, _write_fixture,
 )
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 
 MONITOR_ID = "todo_causal_monitor"
 
@@ -39,7 +40,7 @@ def test_pending_causal_wait_settles_once_and_releases_independent_work(
             context.chdir(cwd)
             rc = cli_main(["--registry", str(registry), "--runtime-root", str(runtime),
                            "--format", "json", *args])
-            return rc, json.loads(capsys.readouterr().out)
+            return rc, read_cli_policy_payload(capsys.readouterr().out, returncode=rc)
 
     state = _configure_completion_validation_todo(project)
     _configure_selectable_alternative(project)

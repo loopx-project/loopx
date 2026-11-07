@@ -76,6 +76,10 @@ release_dir=""
 release_tmp=""
 install_lock=""
 install_lock_owned=0
+previous_loopx=""
+previous_rrule=""
+activation_started=0
+activation_verified=0
 skill_install_lock=""
 skill_install_lock_owned=0
 legacy_line=""
@@ -109,6 +113,18 @@ PY
 }
 
 cleanup_install_lock() {
+  local result=$?
+  if [[ "$result" != "0" && "$activation_started" == "1" && "$activation_verified" != "1" ]]; then
+    # Restore executable links owned by this activation only. Data migration
+    # receipts/backups are independent and are deliberately never rolled back.
+    if [[ -n "$previous_loopx" && "$(readlink "$bin_dir/loopx" 2>/dev/null || true)" == "$release_dir/scripts/loopx" ]]; then
+      install_symlink "$previous_loopx" "$bin_dir/loopx" || true
+      echo "loopx installer: restored the previous executable after activation failure; migration backups retained" >&2
+    fi
+    if [[ -n "$previous_rrule" && "$(readlink "$bin_dir/loopx-apply-rrule" 2>/dev/null || true)" == "$release_dir/scripts/loopx-apply-rrule" ]]; then
+      install_symlink "$previous_rrule" "$bin_dir/loopx-apply-rrule" || true
+    fi
+  fi
   if [[ -n "$release_tmp" && -d "$release_tmp" ]]; then
     rm -rf "$release_tmp"
   fi
@@ -117,6 +133,12 @@ cleanup_install_lock() {
   fi
   if [[ "$skill_install_lock_owned" == "1" && -n "$skill_install_lock" && -d "$skill_install_lock" ]]; then
     rm -rf "$skill_install_lock"
+  fi
+}
+
+update_stage() {
+  if [[ "${LOOPX_UPDATE_EVENTS:-0}" == "1" ]]; then
+    printf 'LOOPX_UPDATE_EVENT {"stage":"%s"}\n' "$1" >&2
   fi
 }
 
@@ -769,6 +791,11 @@ if [[ "$promote_default" == "1" ]]; then
   mkdir -p "$releases_dir"
   run_under_install_guard "$@"
 fi
+update_stage frontend
+if [[ "${LOOPX_PREBUILT_RUNTIME:-0}" == "1" ]]; then
+  # A release may not silently turn a missing/corrupt bundle into a local build.
+  "${LOOPX_PYTHON:-python3}" "$repo_root/scripts/chat_bundle.py" verify --source
+fi
 chat_bundle_args=(ensure)
 if [[ -L "$bin_dir/loopx" ]]; then
   previous_chat_assets="$("${LOOPX_PYTHON:-python3}" - "$bin_dir/loopx" <<'PYTHON'
@@ -819,6 +846,7 @@ if [[ -z "$legacy_line" ]]; then
   legacy_line="- legacy command disabled: not present"
 fi
 reserve_release_id
+update_stage copy
 copy_path "$repo_root/loopx" "$release_tmp/loopx"
 copy_path "$repo_root/scripts" "$release_tmp/scripts"
 copy_path "$repo_root/skills" "$release_tmp/skills"
@@ -829,6 +857,8 @@ copy_apps "$repo_root/apps" "$release_tmp/apps"
 copy_path "$repo_root/.github" "$release_tmp/.github"
 copy_path "$repo_root/README.md" "$release_tmp/README.md"
 copy_path "$repo_root/LICENSE" "$release_tmp/LICENSE"
+copy_path "$repo_root/NOTICE" "$release_tmp/NOTICE"
+copy_path "$repo_root/LICENSE-MIT" "$release_tmp/LICENSE-MIT"
 copy_path "$repo_root/pyproject.toml" "$release_tmp/pyproject.toml"
 copy_path "$repo_root/setup.py" "$release_tmp/setup.py"
 copy_path "$repo_root/MANIFEST.in" "$release_tmp/MANIFEST.in"
@@ -849,6 +879,7 @@ PYTHONPATH="$release_tmp" "${LOOPX_PYTHON:-python3}" \
 chmod +x "$release_tmp/scripts/loopx" "$release_tmp/scripts/loopx-apply-rrule"
 mv "$release_tmp" "$release_dir"
 release_tmp=""
+update_stage validate
 if ! validate_release_candidate "$release_dir"; then
   rm -rf "$release_dir"
   exit 1
@@ -859,10 +890,15 @@ if ! preflight_workflow_skills "$release_dir/skills" "$release_dir" "$bin_dir/lo
 fi
 # Data upgrade is a separate, resumable operation. Never delete its backups or
 # roll migrated stores back merely because a later launcher/skill step fails.
+update_stage migrate
 if ! "$release_dir/scripts/loopx" --format json authority-archive upgrade --all-known --execute; then
   echo "loopx installer error: authority format upgrade failed; backups are retained. Retry with this candidate before activation." >&2
   exit 1
 fi
+update_stage activate
+previous_loopx="$(readlink "$bin_dir/loopx" 2>/dev/null || true)"
+previous_rrule="$(readlink "$bin_dir/loopx-apply-rrule" 2>/dev/null || true)"
+activation_started=1
 install_symlink "$release_dir/scripts/loopx" "$bin_dir/loopx"
 install_symlink "$release_dir/scripts/loopx-apply-rrule" "$bin_dir/loopx-apply-rrule"
 verify_default_promotion
@@ -923,6 +959,7 @@ fi
 
 export PATH="$bin_dir:$PATH"
 "$bin_dir/loopx" doctor --installation-only >/dev/null
+activation_verified=1
 if [[ "${LOOPX_INSTALL_REVALIDATE_EXTENSIONS:-1}" != "0" ]] && ! "$bin_dir/loopx" --format json extension doctor --all-enabled --execute >/dev/null; then
   echo "loopx installer warning: one or more enabled extensions failed post-install doctor revalidation" >&2
   echo "Run 'loopx extension doctor --all-enabled --execute' after repairing the provider." >&2
@@ -931,6 +968,7 @@ if [[ "$install_canary" != "0" ]]; then
   "$bin_dir/loopx-canary" doctor --installation-only >/dev/null
 fi
 
+update_stage skills
 install_workflow_skills "$release_dir/skills" "$release_dir" "$bin_dir/loopx"
 
 slash_line="- slash commands: skipped"

@@ -90,7 +90,7 @@ def _bound_bank(folder: Path, reference: dict) -> dict:
     witnessed = _physical(folder / "manifest.sha256").read_text()
     packet = json.loads(raw)
     if (digest != reference["manifest_sha256"] or witnessed != digest or
-            packet.get("schema_version") != "sforge_judge_checkpoint_v1" or
+            packet.get("schema_version") not in {"sforge_judge_checkpoint_v1", "sforge_judge_checkpoint_v2"} or
             any(packet.get(key) != reference[key] for key in (
                 "task_id", "source_run_id", "opportunity", "incumbent"))):
         raise ValueError("Native bank bytes differ from the captured reference")

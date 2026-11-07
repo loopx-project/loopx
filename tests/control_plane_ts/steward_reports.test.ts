@@ -127,6 +127,69 @@ function original() {
   return {...params, binding: {...binding, managed_actor: actor}, actor, goal_active: true, source};
 }
 
+function allocatedFallback() {
+  const p = original();
+  const binding = {...p.binding, executor_endpoint_id: "antigravity"};
+  const session = {...p.session, executor_endpoint_id: "codex",
+    steward_context: {...p.session.steward_context, executor_endpoint_id: "antigravity"},
+    manager_executor_allocation: {schema_version: "manager_executor_allocation_v0", selection_policy: "flexible",
+      configured_endpoint: "antigravity", executor_endpoint: "codex", configuration_revision: "original-profile",
+      allocation_reason: "flexible_availability_fallback", eligible_endpoints: ["antigravity", "codex"]},
+    upstream_context_history: [{agent_id: "antigravity", thread_id: "original-native-thread",
+      manager_context_version: null, agent_model_id: "gemini-4-argon-high"}]};
+  return {...p, binding, session};
+}
+
+test("a Core-qualified Codex fallback retains report consent and native report identity", () => {
+  const p = allocatedFallback();
+  const route = {binding_id: p.binding.binding_id, source_ref: p.source, session_id: p.session.session_id,
+    provider_ref: p.binding.provider_ref, operator_ref: p.binding.operator_ref};
+  const proposed = {enabled: true, profile_preset: "portfolio-progress",
+    route_ref: `steward-private:${p.binding.binding_id}:${p.source}`};
+  const input = {...p, configuration: null, proposed, route, operation: "enable"};
+  const before = structuredClone(input);
+  assert.deepEqual(planStewardReport(input).actor, p.actor);
+  assert.deepEqual(input, before);
+  const window = {window_id: "cadence_original", subscription_revision: "sha256:original",
+    goal_id: p.actor.goal_id, agent_id: p.actor.agent_id};
+  const request = {operation: "native_turn", host: "codex-app-server", actor: p.actor,
+    turn_instance_id: `report.${window.window_id}`, todo_id: "todo_report", validation_command: ["validate"],
+    work_kind: "report", report_window_id: window.window_id, report_subscription_revision: window.subscription_revision};
+  const params = {...p, request, report_window: window,
+    report_subscription: {...proposed, effective_revision: window.subscription_revision},
+    report_todo: {todo_id: request.todo_id, target_key: window.window_id, action_kind: "generate_periodic_report",
+      claimed_by: "steward", status: "open"}};
+  assert.deepEqual(admitStewardManagedTurn(params).actor, p.actor);
+  for (const changed of [{binding: {...p.binding, enabled: false}}, {binding: {...p.binding, audience: "group"}},
+    {session: {...p.session, status: "closed"}}, {queued_turn_count: 1}, {goal_active: false},
+    {report_subscription: {...params.report_subscription, enabled: false}},
+    {report_window: {...window, window_id: "another-window"}},
+    {observation: {...p.observation, operator_ref: "0".repeat(24)}}]) {
+    assert.throws(() => admitStewardManagedTurn({...params, ...changed}));
+  }
+});
+
+test("a configured preference alone cannot qualify a different native report executor", () => {
+  const p = allocatedFallback();
+  const proposed = {enabled: true, profile_preset: "portfolio-progress",
+    route_ref: `steward-private:${p.binding.binding_id}:${p.source}`};
+  const route = {binding_id: p.binding.binding_id, source_ref: p.source, session_id: p.session.session_id,
+    provider_ref: p.binding.provider_ref, operator_ref: p.binding.operator_ref};
+  const input = {...p, configuration: null, proposed, route, operation: "enable"};
+  const allocation = p.session.manager_executor_allocation;
+  for (const changed of [{selection_policy: "pinned"}, {configured_endpoint: "codex"},
+    {executor_endpoint: "antigravity"}, {allocation_reason: "configured_preference"},
+    {configuration_revision: ""}, {eligible_endpoints: ["codex"]},
+    {eligible_endpoints: ["codex", "antigravity", "other"]}]) {
+    assert.throws(() => planStewardReport({...input,
+      session: {...p.session, manager_executor_allocation: {...allocation, ...changed}}}));
+  }
+  for (const changed of [{upstream_context_history: []}, {executor_endpoint_id: "antigravity"},
+    {agent_id: "antigravity"}, {session_mode: "attached_host"}]) {
+    assert.throws(() => planStewardReport({...input, session: {...p.session, ...changed}}));
+  }
+});
+
 test("report consent fixes the original actor, source and private audience without starting work", () => {
   const p = original();
   const proposed = {enabled: true, profile_preset: "portfolio-progress",
@@ -306,17 +369,21 @@ test("a retained pre-publication launch refusal can resume only its original nat
   const key = "sha256:" + "a".repeat(64);
   const request = {...prior, resume_turn_key: key};
   const result = {schema_version: "loopx_turn_execution_v0", mode: "run_once", ok: false,
-    error_code: "stale_goal_authority", error: "first-party Host runtime rejected: stale_goal_authority",
-    effects_scope: "current_invocation", effects: {host_invoked: null, state_written: null, quota_spent: null},
+    status: "failed", result_kind: "host_failure", reason: "first-party Host runtime rejected: stale_goal_authority",
+    host_failure: {schema_version: "loopx_turn_host_failure_v0", kind: "contract_rejected", attempt: 1, retryable: false},
+    effects: {host_invoked: true, state_written: false, quota_spent: false, scheduler_acknowledged: false},
     resume_turn_key: key};
   const source = {session_id: p.session.session_id, status: "completed", origin: "native_loopx", loopx_execution: true,
     delta_count: 0, upstream_turn_id: null, loopx_request: prior, response: {native_loopx: result}};
   const inspection = {schema_version: "loopx_turn_journal_inspection_v1", ok: true,
     goal_matches: true, owner_matches: true, turn_key_matches: true, journal_consistent: true,
-    journal_status: "in_progress", completed_phases: [],
+    journal_status: "failed", completed_phases: [],
     recorded_effects: {host_invoked: null, state_written: false, quota_spent: false, scheduler_acknowledged: false},
     recovery_decision: {action: "continue", reinvoke_host: true, resume_from: "host_execute"}};
-  const proof = {original: source, inspection, turn_key: key, host_attempt_count: 1, generation_present: false};
+  const journal = {status: "failed", result_kind: "host_failure", reason: result.reason,
+    turn_key: key, host_attempt_count: 1, completed_phases: [], host_failure: result.host_failure,
+    receipt: {failed_phase: "host_execute"}};
+  const proof = {original: source, inspection, journal, turn_key: key, host_attempt_count: 1, generation_present: false};
   const input = {...p, request, report_launch_recovery: proof,
     report_window: {window_id: prior.report_window_id, subscription_revision: prior.report_subscription_revision,
       goal_id: p.actor.goal_id, agent_id: p.actor.agent_id},
@@ -338,8 +405,12 @@ test("a retained pre-publication launch refusal can resume only its original nat
     {...input, report_launch_recovery: {...proof, original: {...source, upstream_turn_id: "actual-start"}}},
     {...input, report_launch_recovery: {...proof, original: {...source,
       loopx_request: {...prior, todo_id: "todo_other"}}}},
-    ...["transport_lost", "goal_launch_not_allowed", "unknown"].map(error_code => ({...input,
-      report_launch_recovery: {...proof, original: {...source, response: {native_loopx: {...result, error_code}}}}})),
+    ...["transport_lost", "goal_launch_not_allowed", "unknown"].map(reason => ({...input,
+      report_launch_recovery: {...proof, original: {...source, response: {native_loopx: {...result, reason}}}}})),
+    {...input, report_launch_recovery: {...proof, journal: {...journal, status: "in_progress"}}},
+    {...input, report_launch_recovery: {...proof, journal: {...journal, host_result: {result_kind: "wait"}}}},
+    {...input, report_launch_recovery: {...proof, journal: {...journal, host_failure: {...journal.host_failure, kind: "unknown"}}}},
+    {...input, report_launch_recovery: {...proof, journal: {...journal, receipt: {failed_phase: "validation"}}}},
     {...input, report_launch_recovery: {...proof, original: {...source, response: {native_loopx:
       {...result, effects: {state_written: true}}}}}},
     ...["goal_matches", "owner_matches", "turn_key_matches", "journal_consistent"].map(key => ({...input,

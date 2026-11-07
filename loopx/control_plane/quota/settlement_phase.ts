@@ -60,6 +60,18 @@ export function isAcceptedBlockedReplanWriteback(
     });
 }
 
+/** A legacy observation may need qualification, never acceptance by inference.
+ * Callers separately prove its guard/writeback receipts and absence of debit. */
+export function isUnqualifiedBlockedReplanWriteback(value: unknown, identity: SettlementIdentity): boolean {
+  const run = jsonObject(value);
+  return identity.binding_kind === "autonomous_replan" && identity.replan_obligation_id !== null &&
+    !!run && run.goal_id === identity.goal_id && run.agent_id === identity.agent_id &&
+    run.turn_instance_id === identity.turn_instance_id && run.replan_obligation_id === identity.replan_obligation_id &&
+    run.delivery_outcome === "outcome_gap" &&
+    isTurnScopedSettlementOutcome(run.delivery_outcome, run.progress_observation, identity.replan_obligation_id) &&
+    jsonObject(run.autonomous_replan_ack)?.recorded !== true;
+}
+
 /** Classify persisted Run facts for history selection, without granting a
  * settlement, debit or execution right. Reuse the settlement owner's exact
  * semantic qualification; a caller-supplied "administrative" flag is no proof.
@@ -263,7 +275,7 @@ export type ReceiptBoundReplayPhase =
   (typeof RECEIPT_BOUND_REPLAY_PHASES)[number];
 
 export interface ReceiptBoundReplaySettlementState {
-  binding_kind?: "todo" | "autonomous_replan" | "unbound";
+  binding_kind?: "todo" | "autonomous_replan" | "request" | "unbound";
   /** A validated writeback discharges the binding without Todo completion. */
   writeback_completes_binding?: boolean;
   completion_receipt_present: boolean;
@@ -278,7 +290,7 @@ export interface ReceiptBoundReplaySettlementState {
 export function receiptBoundReplayPhase(
   state: ReceiptBoundReplaySettlementState,
 ): ReceiptBoundReplayPhase {
-  const bindingComplete = state.binding_kind === "autonomous_replan" ||
+  const bindingComplete = state.binding_kind === "autonomous_replan" || state.binding_kind === "request" ||
       state.writeback_completes_binding === true
     ? state.durable_writeback_present
     : state.completion_receipt_present ||

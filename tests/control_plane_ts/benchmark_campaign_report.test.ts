@@ -68,3 +68,151 @@ test('real CLI writes all reports and rejects malformed input without output',()
     writeFileSync(input,'{}');command[command.length-1]=join(dir,'invalid');assert.notEqual(spawnSync(process.execPath,command).status,0);assert.equal(existsSync(join(dir,'invalid.json')),false);
   } finally {rmSync(dir,{recursive:true,force:true});}
 });
+
+test('missing terminal audit is unreviewed, not verified zero failure', () => {
+  const r=buildReport(fixture());
+  assert.equal(r.summary[0].first_attempt_execution.unreviewed,3);
+  assert.equal(r.summary[0].first_attempt_execution.audited,0);
+  assert.match(renderMarkdown(r),/未审计/);
+  assert.match(renderMarkdown(r),/缺失记录不证明没有故障/);
+});
+test('idle with unknown goal verdict remains unknown even with a valid score', () => {
+  const d=fixture();
+  d.execution_audit=[{arm_id:'b',case_id:'one',run_id:'b-one',initial_attempt:true,
+    outcome:'unknown',attribution:'not_applicable',goal_verdict:'unavailable',evidence_refs:['event:idle']}];
+  const r=buildReport(d),e=r.summary[1].first_attempt_execution;
+  assert.equal(e.outcomes.unknown,1);assert.equal(e.outcomes.normal_end,0);
+  assert.equal(e.goal_verdict_observed,0);assert.equal(e.unreviewed,2);
+  assert.deepEqual(r.comparisons,buildReport(fixture()).comparisons);
+  d.execution_audit[0].outcome='normal_end';
+  assert.throws(()=>buildReport(d),/satisfied verdict/);
+});
+test('first attempts stay distinct from recovered replacements and ownership', () => {
+  const d=fixture();
+  d.execution_audit=[
+    {arm_id:'a',case_id:'one',run_id:'a-first',initial_attempt:true,outcome:'runtime_failure',attribution:'unknown',goal_verdict:'unavailable',evidence_refs:['receipt:terminal']},
+    {arm_id:'a',case_id:'one',run_id:'a-one',initial_attempt:false,outcome:'normal_end',attribution:'not_applicable',goal_verdict:'satisfied',evidence_refs:['receipt:replacement']},
+    {arm_id:'a',case_id:'two',run_id:'a-two',initial_attempt:true,outcome:'budget_exhausted',attribution:'not_applicable',goal_verdict:'unavailable',evidence_refs:['receipt:budget']},
+    {arm_id:'a',case_id:'three',run_id:'a-three',initial_attempt:true,outcome:'operator_cancelled',attribution:'not_applicable',goal_verdict:'unavailable',evidence_refs:['receipt:interrupt']},
+  ];
+  const e=buildReport(d).summary[0].first_attempt_execution;
+  assert.equal(e.audited,3);assert.equal(e.outcomes.runtime_failure,1);
+  assert.equal(e.unattributed_runtime_failures,1);assert.equal(e.confirmed_product_failures,0);
+  assert.equal(e.outcomes.normal_end,0);assert.equal(e.outcomes.budget_exhausted,1);assert.equal(e.outcomes.operator_cancelled,1);
+});
+test('audit requires unique initial identity and evidence', () => {
+  const d=fixture();const row={arm_id:'a',case_id:'one',run_id:'first',initial_attempt:true,
+    outcome:'runtime_failure' as const,attribution:'product' as const,goal_verdict:'failed' as const,evidence_refs:['event:failure']};
+  d.execution_audit=[row,{...row,run_id:'other'}];assert.throws(()=>buildReport(d),/duplicate first/);
+  d.execution_audit=[{...row,evidence_refs:[]}];assert.throws(()=>buildReport(d),/evidence/);
+  d.execution_audit=[{...row,run_id:'b-one'}];assert.throws(()=>buildReport(d),/identity mismatch/);
+});
+test('same-attempt recovered error is not a terminal failure', () => {
+  const d=fixture();d.execution_audit=[{arm_id:'a',case_id:'one',run_id:'a-one',initial_attempt:true,
+    outcome:'normal_end',attribution:'not_applicable',goal_verdict:'satisfied',evidence_refs:['event:transient-error','event:recovered-completion']}];
+  const e=buildReport(d).summary[0].first_attempt_execution;
+  assert.equal(e.outcomes.normal_end,1);assert.equal(e.outcomes.runtime_failure,0);
+});
+
+test('effort and score-time samples preserve coverage and unknowns', () => {
+  const d=fixture();
+  d.selection[0].effort={duration_ms:3_600_000,token_count:1200,model_request_count:null,evidence_ref:'usage:a-one'};
+  d.selection[0].score_samples=[
+    {elapsed_ms:60_000,value:10,normalization_id:'scale-one',evidence_ref:'score:first'},
+    {elapsed_ms:3_600_000,value:40,normalization_id:'scale-one',evidence_ref:'score:last'},
+  ];
+  const r=buildReport(d);
+  assert.deepEqual(r.summary[0].effort,{duration_known_runs:1,duration_ms:3_600_000,
+    token_known_runs:1,token_count:1200,model_request_known_runs:0,model_request_count:0,complete_runs:0});
+  assert.equal(r.score_time_series.length,2);assert.equal(r.score_time_series[1].run_id,'a-one');
+  assert.match(renderMarkdown(r),/1\.00/);assert.match(renderMarkdown(r),/未知不按零计/);
+  assert.match(renderMarkdown(r),/0\/3 \| — \| 0\/3 \| —/);
+  assert.match(renderCsv(r),/3600000/);
+});
+
+test('effort and score-time samples reject malformed measurements', () => {
+  const d=fixture();
+  d.selection[0].effort={duration_ms:null,token_count:null,model_request_count:null,evidence_ref:'usage:none'};
+  assert.throws(()=>buildReport(d),/entirely unknown/);
+  d.selection[0].effort={duration_ms:1,token_count:2,model_request_count:3,evidence_ref:'usage:ok'};
+  d.selection[0].score_samples=[
+    {elapsed_ms:2,value:10,normalization_id:'scale-one',evidence_ref:'score:2'},
+    {elapsed_ms:1,value:20,normalization_id:'scale-one',evidence_ref:'score:1'},
+  ];
+  assert.throws(()=>buildReport(d),/elapsed time must increase/);
+});
+
+test('configuration profiles preserve unknowns and split heterogeneous runs', () => {
+  const d=fixture();
+  d.selection[0].configuration={source_revision_id:'source@one',scorer_revision_id:'scorer@one',
+    model_id:'model-one',budget_ms:64_800_000,active_submission_cooldown_ms:3_600_000,
+    background_evaluation_interval_ms:300_000,resource_profile:'cpu4-mem16g',evidence_ref:'manifest:a-one'};
+  d.selection[1].configuration={source_revision_id:'source@two',scorer_revision_id:'scorer@one',
+    model_id:'model-one',budget_ms:64_800_000,active_submission_cooldown_ms:3_600_000,
+    background_evaluation_interval_ms:null,resource_profile:null,evidence_ref:'manifest:a-two'};
+  const r=buildReport(d);
+  const a=r.configuration_profiles.filter(p=>p.arm_id==='a');
+  assert.equal(a.length,3);assert.deepEqual(a.map(p=>p.run_count).sort(),[1,1,1]);
+  assert.equal(a.find(p=>p.source_revision_id==='source@two')?.background_evaluation_interval_ms,null);
+  assert.equal(a.find(p=>p.configuration_supplied===false)?.run_count,1);
+  const markdown=renderMarkdown(r);
+  assert.match(markdown,/运行配置矩阵/);assert.match(markdown,/未知/);assert.match(markdown,/同一组出现多行/);
+  assert.match(renderCsv(r),/source_revision_id/);assert.match(renderCsv(r),/manifest:a-one/);
+});
+
+test('configuration requires typed public-safe fields and evidence', () => {
+  const d=fixture();
+  d.selection[0].configuration={source_revision_id:'source',scorer_revision_id:'scorer',model_id:'model',
+    budget_ms:1,active_submission_cooldown_ms:2,background_evaluation_interval_ms:3,
+    resource_profile:'cpu4',evidence_ref:''};
+  assert.throws(()=>buildReport(d),/configuration evidence/);
+  d.selection[0].configuration.evidence_ref='manifest:one';
+  d.selection[0].configuration.budget_ms=-1;
+  assert.throws(()=>buildReport(d),/configuration numeric/);
+});
+
+test('opt-in HTML separates the record trajectory from all samples and splits different scales', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'campaign-curve-'));
+  try {
+    const input = fixture();
+    input.arms[0].label = 'A <script>';
+    input.selection[0].score_samples = [95, 2, 97, 96].map((value, i) => ({
+      elapsed_ms: i * 3600000, value, normalization_id: 'scale-a', evidence_ref: 'receipt:sample',
+    }));
+    input.selection[3].score_samples = [{elapsed_ms: 0, value: 92, normalization_id: 'scale-b', evidence_ref: 'receipt:b'}];
+    const path = join(dir, 'selection.json'), prefix = join(dir, 'report');
+    writeFileSync(path, JSON.stringify(input));
+    const run = spawnSync(process.execPath, ['--experimental-strip-types', resolve('scripts/benchmark-campaign-report.ts'),
+      path, prefix, '--score-curves'], {encoding:'utf8'});
+    assert.equal(run.status, 0, run.stderr);
+    const html = readFileSync(prefix + '.html', 'utf8');
+    assert.equal(html.includes('<script>'), false);
+    const charts = [...html.matchAll(/<svg\b.*?<\/svg>/gs)].map(match => match[0]);
+    assert.match(html, /\.plot\{overflow-x:auto\}.*svg\{display:block;width:960px;max-width:none;height:auto\}/);
+    assert.equal([...html.matchAll(/class="plot" tabindex="0" role="region"/g)].length, 4);
+    assert.deepEqual(charts.map(chart => [...chart.matchAll(/<circle /g)].length), [2, 4, 1, 1]);
+    assert.doesNotMatch(charts[0], /1\.00 h · 2</);
+    assert.match(charts[1], /1\.00 h · 2</);
+    assert.match(charts[0], /H932\.00"/); // retain the best through the last observed regression
+  } finally { rmSync(dir, {recursive: true, force: true}); }
+});
+
+test('duration policy checks every selected arm and only accepts verified voluntary goal completion', () => {
+  const input = fixture();
+  input.duration_policy = {target_ms: 100, allow_goal_completion: ['b']};
+  input.selection[0].active_intervals = [[0,30],[10,40],[80,100]].map(([start_ms,end_ms]) =>
+    ({start_ms,end_ms,evidence_ref:'solver:segment'}));
+  input.selection[1].active_intervals = [{start_ms:10,end_ms:110,evidence_ref:'solver:segment'}];
+  input.selection[2].active_intervals = [];
+  input.execution_audit = [{case_id:'one', arm_id:'b', run_id:'b-one',initial_attempt:true,
+    outcome:'normal_end',goal_verdict:'satisfied',attribution:'not_applicable',evidence_refs:['receipt:goal']}];
+  const report = buildReport(input);
+  const rows = report.duration_coverage!;
+  assert.equal(rows.length,6);
+  assert.deepEqual(rows.map(row => row.disposition), ['needs_makeup','covered','needs_makeup','goal_completed','verify_duration','verify_duration']);
+  assert.deepEqual(rows.map(row => row.remaining_ms),[40,0,100,null,null,null]);
+  assert.equal(report.comparisons[0].qualified_common_n,0);
+  assert.match(renderMarkdown(report),/needs_makeup/);
+  input.selection[0].active_intervals[0].end_ms = -1;
+  assert.throws(() => buildReport(input),/observed solver interval/);
+});

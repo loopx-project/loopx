@@ -568,7 +568,6 @@ def check_lifecycle(provider: str) -> None:
             if item["todo_id"] == "todo_merge_gate_1716"
         )
         assert gate_item["status"] == "done", gate_item
-        assert "state=MERGED" in gate_item["evidence"], gate_item
         assert_public_safe(reconciled_gate)
 
         repeated_gate = json.loads(
@@ -696,7 +695,6 @@ def check_lifecycle(provider: str) -> None:
         )
         assert review_item["status"] == "done", review_item
         assert review_item["no_followup"] is True, review_item
-        assert "state=MERGED" in review_item["evidence"], review_item
         assert_public_safe(reconciled_review)
 
         repeated_review = json.loads(
@@ -796,6 +794,7 @@ def check_lifecycle(provider: str) -> None:
         for todo_id in ("todo_merge_gate_1716", "todo_review_action_1716"):
             assert rows[todo_id]["status"] == "done", rows[todo_id]
             assert rows[todo_id]["last_actor_agent_id"] == "codex-test", rows[todo_id]
+            assert "state=MERGED" in rows[todo_id]["evidence"], rows[todo_id]
 
 
 def main() -> int:

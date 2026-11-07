@@ -1,3 +1,4 @@
+import {createHash} from "node:crypto";
 import assert from "node:assert/strict";
 import test from "node:test";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
@@ -73,11 +74,166 @@ function warm(value: JsonObject, baseline: JsonObject): JsonObject {
 const recover = (delivery: JsonObject, baseline: JsonObject, value: JsonObject): JsonObject =>
   restoreContextDelivery({delivery, baseline, current: full(value, "capture-2")});
 
+test("candidate requirements reuse exact retained text while eligibility remains current", () => {
+  const row = (id: string) => ({schema_version: "todo_item_v0", todo_id: id,
+    text: `Complete ${id}; preserve the tail condition. `.repeat(120),
+    title: `Full objective for ${id}. `.repeat(80), note: "Evidence is not acceptance. ".repeat(80),
+    content_revision: "revision-a", status: "open", claimed_by: "agent",
+    required_capabilities: ["shell"], missing_capabilities: [], capability_action: "run",
+    unknown_control: {stop: false}, handoff_note: {intent: "implement", evidence_refs: ["evidence:a"]}});
+  const original = {capability_gate: {schema_version: "capability_gate_v0", action: "run",
+    runnable_candidates: [row("one"), row("two")], blocked_candidates: [row("blocked")],
+    resolution_bindings: [{capability: "shell", owner: "user", blocked_todo_ids: ["blocked"]}]}};
+  const saved = structuredClone(original);
+  const args = {scope, surface: "quota_packet", capture_id: "current"};
+  const baseline = prepareContextDelivery({...args, context: original, capture_id: "base"});
+  assert.deepEqual(baseline.context, original); // Cold still contains every candidate and full body.
+  const project = (context: JsonObject, extra = {}) => prepareContextDelivery({...args, context,
+    baseline, retained: {complete: true, target: baseline.target}, ...extra});
+  const delta = project(original);
+  assert.equal(delta.mode, "delta");
+  for (const lane of ["runnable_candidates", "blocked_candidates"] as const) {
+    for (const [i, candidate] of original.capability_gate[lane].entries()) {
+      for (const [key, value] of Object.entries(candidate)) {
+        const visible = inline(delta, ["capability_gate", lane, i, key]);
+        if (["text", "title", "note"].includes(key)) assert.equal(visible, undefined);
+        else assert.deepEqual(visible, value);
+      }
+    }
+  }
+  assert.deepEqual(inline(delta, ["capability_gate", "resolution_bindings"]), original.capability_gate.resolution_bindings);
+  assert.ok(JSON.stringify(delta).length < JSON.stringify(baseline).length / 2);
+  const changed = structuredClone(original);
+  changed.capability_gate.action = "ask_owner";
+  changed.capability_gate.runnable_candidates[0].text += "New final condition: do not execute.";
+  changed.capability_gate.runnable_candidates[0].claimed_by = "peer";
+  changed.capability_gate.runnable_candidates[0].unknown_control.stop = true;
+  const moved = structuredClone(original);
+  moved.capability_gate.blocked_candidates.push(moved.capability_gate.runnable_candidates.shift()!);
+  moved.capability_gate.runnable_candidates.reverse();
+  const removed = structuredClone(original); removed.capability_gate.runnable_candidates = [];
+  for (const current of [original, changed, moved, removed]) {
+    const delivery = project(current), full = prepareContextDelivery({...args, context: current});
+    assert.deepEqual(restoreContextDelivery({delivery, baseline, current: full}).context, current);
+  }
+  assert.equal(inline(project(changed), ["capability_gate", "action"]), "ask_owner");
+  assert.equal(inline(project(changed), ["capability_gate", "runnable_candidates", 0, "text"]),
+    changed.capability_gate.runnable_candidates[0].text);
+  for (const retention of [undefined, {complete: false, target: baseline.target}])
+    assert.deepEqual(project(original, {retained: retention}).context, original);
+  assert.equal(project(original, {scope: {...scope, context_epoch: "after-compaction"}}).mode, "full");
+  // Unknown or ambiguous identity cannot authorize reuse of a candidate body.
+  const unknownGate = structuredClone(original); unknownGate.capability_gate.schema_version = "future";
+  const unknownRow = structuredClone(original); unknownRow.capability_gate.runnable_candidates[0].schema_version = "future";
+  const duplicate = structuredClone(original); duplicate.capability_gate.runnable_candidates[1].todo_id = "one";
+  const malformed = structuredClone(original) as JsonObject;
+  ((malformed.capability_gate as JsonObject).runnable_candidates as JsonObject[])[0].text = {stop: true};
+  for (const current of [unknownGate, unknownRow, duplicate, malformed]) {
+    const gate = current.capability_gate as JsonObject, first = (gate.runnable_candidates as JsonObject[])[0];
+    const delivery = project(current);
+    const visible = delivery.mode === "full" ? (delivery.context as JsonObject).capability_gate
+      : {runnable_candidates: [{text: inline(delivery, ["capability_gate", "runnable_candidates", 0, "text"])}]};
+    assert.deepEqual(((visible as JsonObject).runnable_candidates as JsonObject[])[0].text, first.text);
+  }
+  assert.deepEqual(original, saved);
+});
+
+test("scoped preferences reuse complete prose while every current lifecycle fact stays inline", () => {
+  const preferences = {ok: true, status: "read", current: {schema_version: "agent_preferences_v1",
+    revision: "revision-a", authority: "advisory_only",
+    instructions: "Read the current scoped view; preferences never grant authority. ".repeat(15),
+    items: Array.from({length: 8}, (_, i) => ({key: `preference-${i}`, state: "active",
+      statement: "Keep the explicitly requested review constraint. ".repeat(20),
+      source_kind: "user_instruction", source_ref: "owner:explicit-message",
+      source_quote: "Keep my explicit instruction and its original scope. ".repeat(20),
+      operation_id: `remember-${i}`, supersedes_operation_id: null,
+      recorded_at: "2030-01-01T00:00:00Z", expires_at: "2030-01-02T00:00:00Z",
+      unknown_control: {must_read: true}}))}};
+  const work = {complete: true, sources: [{source: "turn_start_capability_hook",
+    hook_id: "semantic_preference.agent_context", capability_id: "semantic-preference", kind: "agent_preferences",
+    command: "read-current-preferences", content: preferences}]};
+  for (const surface of ["work_context", "quota_packet", "turn_envelope"]) {
+    const wrap = (value: unknown): JsonObject => surface === "quota_packet"
+      ? {interaction_contract: {agent_channel: {work_context: value}}}
+      : surface === "turn_envelope" ? {work_context: value} : value as JsonObject;
+    const root = surface === "quota_packet" ? ["interaction_contract", "agent_channel", "work_context"]
+      : surface === "turn_envelope" ? ["work_context"] : [];
+    const path = [...root, "sources", 0, "content", "current"];
+    const original = wrap(work), saved = structuredClone(original);
+    const baseline = prepareContextDelivery({context: original, scope, capture_id: "a", surface});
+    assert.deepEqual(baseline.context, original); // No producer or cold representation change.
+    const request = {context: original, scope, capture_id: "b", surface};
+    const delta = prepareContextDelivery({...request, baseline, retained: {complete: true, target: baseline.target}});
+    assert.equal(delta.mode, "delta");
+    assert.ok(JSON.stringify(delta).length < JSON.stringify(baseline).length / 2);
+    for (const key of ["schema_version", "revision", "authority"])
+      assert.deepEqual(inline(delta, [...path, key]), preferences.current[key as keyof typeof preferences.current]);
+    for (const [i, item] of preferences.current.items.entries()) {
+      for (const key of ["key", "state", "expires_at", "operation_id", "supersedes_operation_id", "recorded_at", "unknown_control"])
+        assert.deepEqual(inline(delta, [...path, "items", i, key]), item[key as keyof typeof item]);
+      for (const key of ["statement", "source_ref", "source_quote"])
+        assert.equal(inline(delta, [...path, "items", i, key]), undefined);
+    }
+    assert.equal(inline(delta, [...path, "instructions"]), undefined);
+    const changed = structuredClone(work);
+    changed.sources[0].content.current.revision = "revision-b";
+    changed.sources[0].content.current.items[0].statement = "Use the corrected constraint.";
+    changed.sources[0].content.current.items[0].source_quote = "The owner corrected the earlier instruction.";
+    const cases: JsonObject[] = [changed];
+    for (const state of ["retired", "expired"]) {
+      // Expiry can change the current view without a journal revision change.
+      const next = structuredClone(work) as JsonObject;
+      const current = source(next, 0).current as JsonObject;
+      (current.items as JsonObject[])[0] = {...(current.items as JsonObject[])[0], state, statement: null};
+      cases.push(next);
+    }
+    const reordered = structuredClone(work); reordered.sources[0].content.current.items.reverse(); cases.push(reordered);
+    const removed = structuredClone(work); removed.sources[0].content.current.items.splice(2, 1); cases.push(removed);
+    const empty = structuredClone(work); empty.sources[0].content.current.items = []; cases.push(empty);
+    for (const next of cases) {
+      const args = {...request, context: wrap(next)};
+      const wire = prepareContextDelivery({...args, baseline, retained: {complete: true, target: baseline.target}});
+      const capture = prepareContextDelivery(args);
+      assert.deepEqual(restoreContextDelivery({delivery: wire, baseline, current: capture}).context, wrap(next));
+      if (wire.mode === "delta") {
+        const view = source(next, 0).current as typeof preferences.current;
+        assert.equal(inline(wire, [...path, "revision"]), view.revision);
+        if (view.items.length) assert.equal(inline(wire, [...path, "items", 0, "state"]), view.items[0].state);
+        else assert.deepEqual(inline(wire, [...path, "items"]), []);
+      }
+    }
+    for (const field of ["goal_id", "agent_id", "context_epoch"]) {
+      assert.equal(prepareContextDelivery({...request, scope: {...scope, [field]: "different"}, baseline,
+        retained: {complete: true, target: baseline.target}}).mode, "full");
+    }
+    for (const field of ["hook_id", "capability_id", "kind"]) {
+      const unknown = structuredClone(work); (unknown.sources[0] as JsonObject)[field] = "unknown";
+      const wire = prepareContextDelivery({...request, context: wrap(unknown), baseline,
+        retained: {complete: true, target: baseline.target}});
+      assert.equal(wire.mode, "full");
+    }
+    for (const content of [{...preferences, ok: false}, {...preferences, status: "unavailable"},
+      {...preferences, goal_id: "other-goal"}, {...preferences, agent_id: "other-agent"},
+      {...preferences, current: {...preferences.current, schema_version: "unknown"}},
+      {...preferences, current: {...preferences.current, authority: "execution_grant"}},
+      {...preferences, current: {...preferences.current, items: [preferences.current.items[0], preferences.current.items[0]]}}]) {
+      const failed = structuredClone(work); failed.sources[0].content = content;
+      const wire = prepareContextDelivery({...request, context: wrap(failed), baseline,
+        retained: {complete: true, target: baseline.target}});
+      assert.equal(wire.mode, "full");
+    }
+    assert.deepEqual(original, saved);
+  }
+});
+
 // Read an inline value from the wire, without borrowing any baseline content.
 // Tests use this independent walker to verify controls really reach each input.
 function inline(delivery: JsonObject, path: (string | number)[]): unknown {
   let node = delivery.changes as JsonObject;
   for (let i = 0; ; i++) {
+    // An overlay's inherited body is unavailable to this literal-only reader.
+    // Inspect only its current edit when checking fresh control delivery.
+    if (node?.from && node.edit) node = node.edit as JsonObject;
     if (!node) return undefined;
     if (Object.hasOwn(node, "value")) {
       let value = node.value;
@@ -93,6 +249,36 @@ function inline(delivery: JsonObject, path: (string | number)[]): unknown {
     node = ((node.changed ?? node.items) as Record<string | number, JsonObject>)?.[path[i]];
   }
 }
+
+test("complete original Goal text reuses the same integrity witness as Host dispatch", () => {
+  const goal = {state_file: "goal.md", text: long, full_source: true,
+    revision: `sha256:${createHash("sha256").update(long, "utf8").digest("hex")}`};
+  const value = {complete: true, sources: [{source: "goal_state", content: goal}]};
+  const baseline = full(value);
+  const delta = warm(value, baseline);
+  assert.equal(delta.mode, "delta");
+  assert.ok(!JSON.stringify(delta.changes).includes(long), "A verified complete Goal is already in the retained input");
+  assert.equal(inline(delta, ["sources", 0, "content", "full_source"]), true);
+  assert.equal(inline(delta, ["sources", 0, "content", "revision"]), goal.revision);
+  assert.deepEqual(recover(delta, baseline, value).context, value);
+  for (const changed of [
+    {...goal, text: long + "Corrected final stop."},
+    {...goal, revision: `sha256:${"a".repeat(64)}`},
+    {...goal, read_complete: false}, {...goal, full_source: false},
+  ]) {
+    const current = {complete: true, sources: [{source: "goal_state", content: changed}]};
+    const wire = warm(current, baseline);
+    const text = wire.mode === "full"
+      ? ((wire.context as JsonObject).sources as JsonObject[])[0].content as JsonObject
+      : {text: inline(wire, ["sources", 0, "content", "text"])};
+    assert.equal(text.text, changed.text);
+    assert.deepEqual(recover(wire, baseline, current).context, current);
+  }
+  const corrected = {...goal, text: long + "Corrected final stop."};
+  corrected.revision = `sha256:${createHash("sha256").update(corrected.text, "utf8").digest("hex")}`;
+  const current = {complete: true, sources: [{source: "goal_state", content: corrected}]};
+  assert.deepEqual(recover(warm(current, baseline), baseline, current).context, current);
+});
 
 test("full first; unsupported or uncertain retention never becomes an Agent gate", () => {
   const original = context(), saved = structuredClone(original), baseline = full(original);
@@ -127,7 +313,9 @@ test("fresh control with exact warm bodies; changed source revisions do not rese
 test("cumulative acceptance evidence reuses exact history while current judgments stay inline on every surface", () => {
   const evidence = "artifact:validation/" + "evidence-segment/".repeat(80);
   const outcome = {id: "result", objective: "Preserve the original goal.", revision: 1,
-    sources: [{ref: "owner:original", summary: long, unknown_source_control: {must_read: true}}],
+    sources: [{ref: "owner:original-" + "source-segment-".repeat(6), summary: long,
+      unknown_source_control: {must_read: true}, unknown_empty_control: {}},
+      {ref: "owner:second", summary: "A second source."}],
     requirements: Array.from({length: 12}, (_, i) => ({id: `r${i}`, description: "Verify the result.",
       status: "unverified", planning_satisfied: false,
       agent_review: {id: `r${i}`, conclusion: "uncertain", basis_current: false,
@@ -156,10 +344,15 @@ test("cumulative acceptance evidence reuses exact history while current judgment
     assert.equal(inline(delta, [...row, "status"]), "unverified");
     assert.equal(inline(delta, [...row, "planning_satisfied"]), false);
     assert.deepEqual(inline(delta, [...root, "outcomes", 0, "sources", 0, "unknown_source_control"]), {must_read: true});
+    assert.deepEqual(inline(delta, [...root, "outcomes", 0, "sources", 0, "unknown_empty_control"]), {});
+    assert.equal(inline(delta, [...root, "outcomes", 0, "sources", 0, "ref"]), undefined);
+    assert.equal(inline(delta, [...root, "outcomes", 0, "sources", 1, "ref"]), undefined);
     assert.deepEqual(restoreContextDelivery({delivery: delta, baseline, current: prepareContextDelivery(args)}).context, wrap(current));
     assert.deepEqual(baseline.context, original);
     // Changed, reordered, removed and empty evidence never inherit an old claim.
     updated.outcomes[0].sources[0].summary = "A new owner correction.";
+    updated.outcomes[0].sources[0].ref = "owner:corrected";
+    updated.outcomes[0].sources.reverse();
     updated.outcomes[0].requirements.reverse();
     updated.outcomes[0].requirements[0].agent_review.note = "";
     updated.outcomes[0].requirements[0].agent_review.evidence_refs = ["artifact:new"];
@@ -168,6 +361,18 @@ test("cumulative acceptance evidence reuses exact history while current judgment
     const edited = {...args, context: wrap(current)};
     const next = prepareContextDelivery({...edited, baseline, retained: {complete: true, target: baseline.target}});
     assert.deepEqual(restoreContextDelivery({delivery: next, baseline, current: prepareContextDelivery(edited)}).context, wrap(current));
+    for (const sources of [updated.outcomes[0].sources.slice(0, 1), [],
+      [{ref: {unknown_authority: "Do not reuse this control record."}, summary: long}]]) {
+      const changed = structuredClone(current) as JsonObject;
+      const outcomes = ((source(changed, 0).goal_acceptance_contract as JsonObject)
+        .outcome_requirements as JsonObject).outcomes as JsonObject[];
+      outcomes[0].sources = sources;
+      const args = {context: wrap(changed), scope, capture_id: "changed", surface};
+      const delta = prepareContextDelivery({...args, baseline, retained: {complete: true, target: baseline.target}});
+      assert.deepEqual(restoreContextDelivery({delivery: delta, baseline, current: prepareContextDelivery(args)}).context, wrap(changed));
+      if (sources.length && typeof sources[0].ref !== "string")
+        assert.deepEqual(inline(delta, [...root, "outcomes", 0, "sources", 0, "ref"]), sources[0].ref);
+    }
   }
   // An unavailable source is not historical evidence eligible for omission.
   const unavailable = structuredClone(work) as JsonObject;
@@ -262,6 +467,65 @@ test("relocated immutable records reuse complete subtrees without hiding fresh d
   assert.equal(inline(second, ["planning_horizon", "core_goal", "objective"]), long);
   assert.deepEqual(restoreContextDelivery({delivery: second, baseline: first,
     current: prepareContextDelivery(request)}).context, request.context);
+});
+
+test("relocated evidence overlays keep current controls literal without repeating reference paths", () => {
+  const requirements = Array.from({length: 24}, (_, i) => ({id: `r${i}`,
+    description: `Requirement ${i}: ${long}`, status: "unverified", planning_satisfied: false,
+    unknown_control: {may_publish: false},
+    agent_review: {conclusion: "uncertain", basis_current: false,
+      independently_verified: false, note: `Evidence ${i}: ${long}`, evidence_refs: [`artifact:${i}`]}}));
+  const acceptance = {outcome_requirements: {revision: 1,
+    outcomes: [{id: "outcome", objective: long, requirements}]}};
+  const work = {complete: true, sources: [{source: "goal_acceptance", content: {
+    provider_revision: "current", goal_acceptance_contract: acceptance}}]};
+  // Actual callers relocate acceptance from planning into the admitted source.
+  const original = {planning_horizon: {core_goal: {objective: long, acceptance_contract: acceptance}}};
+  const current = {interaction_contract: {agent_channel: {work_context: work}}};
+  const initial = prepareContextDelivery({context: original, scope, capture_id: "a", surface: "quota_packet"});
+  const args = {context: current, scope, capture_id: "b", surface: "quota_packet"};
+  const delta = prepareContextDelivery({...args, baseline: initial, retained: {complete: true, target: initial.target}});
+  assert.equal(delta.mode, "delta");
+  const overlays: JsonObject[] = [];
+  const walk = (value: unknown) => {
+    if (!value || typeof value !== "object") return;
+    const item = value as JsonObject;
+    if (item.from && item.edit) overlays.push(item);
+    Object.values(item).forEach(walk);
+  };
+  walk(delta.changes);
+  assert.ok(overlays.length > 0, "relocated evidence should share a base with literal current overrides");
+  const path = ["interaction_contract", "agent_channel", "work_context", "sources", 0, "content",
+    "goal_acceptance_contract", "outcome_requirements"];
+  assert.equal(inline(delta, [...path, "revision"]), 1);
+  requirements.forEach((row, i) => {
+    const prefix = [...path, "outcomes", 0, "requirements", i];
+    assert.equal(inline(delta, [...prefix, "status"]), row.status);
+    assert.equal(inline(delta, [...prefix, "planning_satisfied"]), row.planning_satisfied);
+    assert.equal(inline(delta, [...prefix, "unknown_control", "may_publish"]), false);
+    for (const field of ["conclusion", "basis_current", "independently_verified"])
+      assert.equal(inline(delta, [...prefix, "agent_review", field]), (row.agent_review as JsonObject)[field]);
+  });
+  assert.deepEqual(restoreContextDelivery({delivery: delta, baseline: initial,
+    current: prepareContextDelivery(args)}).context, current);
+  assert.deepEqual(initial.context, original);
+  // Losing a current override, redirecting the base, or adding a patch-local
+  // reference must recover the current original, never revive inherited control.
+  for (const mutate of [(item: JsonObject) => { delete item.edit; },
+    (item: JsonObject) => { item.from = ["constructor", "prototype"]; },
+    (item: JsonObject) => { item.edit = {from: ["changes"]}; }]) {
+    const damaged = structuredClone(delta), found: JsonObject[] = [];
+    const find = (value: unknown) => {
+      if (!value || typeof value !== "object") return;
+      const item = value as JsonObject;
+      if (item.from && item.edit) found.push(item);
+      Object.values(item).forEach(find);
+    };
+    find(damaged.changes); mutate(found[0]);
+    const result = restoreContextDelivery({delivery: damaged, baseline: initial, current: prepareContextDelivery(args)});
+    assert.equal(result.mode, "full");
+    assert.deepEqual(result.context, current);
+  }
 });
 
 test("exact-base source and requirement reorders preserve current positions", () => {
@@ -655,4 +919,63 @@ test("legacy quota fields are bound by the existing adapter, never caller data",
   assert.deepEqual(restored.context, value);
   // A direct codec call has no legacy binding and conservatively refreshes it.
   assert.deepEqual(inline(prepareContextDelivery(request), ["heartbeat_recommendation"]), value.heartbeat_recommendation);
+});
+
+test("verified file deltas inherit unchanged controls within an epoch without retained-input claims", () => {
+  const original = {ok: true, goal_id: "goal", controls: {stop: false, owner: "agent"},
+    context_details: {unread_context_index: {pointers: ["/support"]}},
+    opaque_control: "Unknown controls also remain available in the exact file. ".repeat(400)};
+  const baseline = full(original);
+  const nextScope = {...scope};
+  const current = {...original, controls: {...original.controls, stop: true}};
+  const args = {context: current, scope: nextScope, capture_id: "capture-2"};
+  const continuity = {basis: "captured_file", target: baseline.target, capture_bytes_verified: true};
+  const delta = prepareContextDelivery({...args, baseline, continuity});
+  assert.equal(delta.mode, "delta");
+  assert.equal(delta.continuity_basis, "captured_file");
+  assert.ok(JSON.stringify(delta).length < JSON.stringify(current).length / 3);
+  const restored = restoreContextDelivery({delivery: delta, baseline, current: prepareContextDelivery(args)});
+  assert.equal(restored.mode, "delta");
+  assert.deepEqual(restored.context, current);
+  for (const key of ["goal_id", "agent_id", "session_id", "context_epoch", "continuity_generation"]) {
+    assert.equal(prepareContextDelivery({...args, scope: {...nextScope, [key]: "other"}, baseline, continuity}).mode, "full");
+  }
+  for (const invalid of [undefined, {...continuity, capture_bytes_verified: false}, {...continuity, target: {}}]) {
+    assert.equal(prepareContextDelivery({...args, baseline, continuity: invalid}).mode, "full");
+  }
+  const corrupted = {...delta, changes: {value: original}};
+  const fallback = restoreContextDelivery({delivery: corrupted, baseline, current: prepareContextDelivery(args)});
+  assert.equal(fallback.reason, "automatic_full_recovery");
+  assert.deepEqual(fallback.context, current);
+});
+
+test("file epochs survive ordinary resume but rotate once for an actual compaction", () => {
+  const state = {session_id: "native", cwd: "/workspace", context_epoch: "original",
+    recovery: {continuity_basis: "captured_file", target: {context_epoch: "original"}}, pending: {}};
+  const event = {hook_event_name: "SessionStart", source: "resume", session_id: "native", cwd: "/workspace"};
+  const resumed = updateNativeContextLifecycle({state, event, new_epoch: "unused", pages: []});
+  assert.equal(resumed.context_epoch, "original");
+  assert.equal(resumed.pending, undefined);
+  assert.equal(resumed.candidate, undefined);
+  const compacted = updateNativeContextLifecycle({state: resumed,
+    event: {...event, hook_event_name: "PostCompact"}, new_epoch: "next", pages: []});
+  assert.equal(compacted.context_epoch, "next");
+  const repeated = updateNativeContextLifecycle({state: compacted,
+    event: {...event, source: "compact"}, new_epoch: "do-not-rotate-again", pages: []});
+  assert.deepEqual(repeated, compacted);
+});
+
+test("file delta recovery preserves inherited numeric leaves across sibling edits", () => {
+  const original = {body: long, state: {number: 1, a: false, b: false, c: false}, array: [0, "old"]};
+  const current = {...original, state: {...original.state, a: true, b: true, c: true}, array: [0, "new"]};
+  const baseline = full(original), complete = full(current, "capture-2");
+  const delta = prepareContextDelivery({context: current, scope, capture_id: "capture-2", baseline,
+    continuity: {basis: "captured_file", target: baseline.target, capture_bytes_verified: true}});
+  assert.equal(delta.mode, "delta");
+  const changes = delta.changes as {changed: Record<string, JsonObject>};
+  assert.deepEqual(changes.changed.state, {values: {a: true, b: true, c: true}});
+  assert.deepEqual(changes.changed.array, {items: {"1": {value: "new"}}});
+  const restored = restoreContextDelivery({delivery: delta, baseline, current: complete});
+  assert.equal(restored.mode, "delta");
+  assert.deepEqual(restored.context, current);
 });

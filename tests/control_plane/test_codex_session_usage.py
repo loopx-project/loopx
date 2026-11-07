@@ -138,6 +138,54 @@ def test_read_codex_session_usage_extracts_cumulative_totals(tmp_path: Path) -> 
     assert "cost_usd" not in observation  # unmeasured stays unknown, not zero
 
 
+@pytest.mark.parametrize("position", [0, 2, 3])
+def test_read_codex_session_usage_rejects_conflicting_session_metadata(
+    tmp_path: Path, position: int,
+) -> None:
+    lines = _fixture_rollout(tmp_path).read_text(encoding="utf-8").splitlines()
+    lines.insert(position, _rollout_header(OTHER_SESSION_ID)[0])
+    rollout = _write_rollout(tmp_path / "rollout-mixed-sessions.jsonl", lines)
+
+    with pytest.raises(CodexSessionUsageError, match="conflicting session_meta ids"):
+        read_codex_session_usage(rollout)
+
+
+@pytest.mark.parametrize("id_key", ["id", "session_id"])
+def test_read_codex_session_usage_retains_first_same_session_clock(
+    tmp_path: Path, id_key: str,
+) -> None:
+    rollout = _fixture_rollout(tmp_path)
+    original = read_codex_session_usage(rollout)
+    lines = rollout.read_text(encoding="utf-8").splitlines()
+    repeated = json.loads(_rollout_header()[0])
+    repeated["payload"].pop("session_id")
+    repeated["payload"][id_key] = SESSION_ID
+    repeated["payload"]["timestamp"] = "2026-08-26T01:06:00.000Z"
+    lines.append(json.dumps(repeated))
+    _write_rollout(rollout, lines)
+
+    assert read_codex_session_usage(rollout) == original
+
+
+def test_read_codex_session_usage_rejects_unidentified_metadata(tmp_path: Path) -> None:
+    lines = _fixture_rollout(tmp_path).read_text(encoding="utf-8").splitlines()
+    lines.insert(0, json.dumps({"type": "session_meta", "payload": {}}))
+    rollout = _write_rollout(tmp_path / "rollout-unidentified-session.jsonl", lines)
+
+    with pytest.raises(CodexSessionUsageError, match="no session_meta id"):
+        read_codex_session_usage(rollout)
+
+
+def test_read_codex_session_usage_requires_metadata_before_counters(tmp_path: Path) -> None:
+    lines = _fixture_rollout(tmp_path).read_text(encoding="utf-8").splitlines()
+    rollout = _write_rollout(
+        tmp_path / "rollout-late-session.jsonl", [lines[1], lines[2], lines[0]]
+    )
+
+    with pytest.raises(CodexSessionUsageError, match="usage before session_meta"):
+        read_codex_session_usage(rollout)
+
+
 def test_read_codex_session_usage_binds_model_when_token_snapshot_is_observed(
     tmp_path: Path,
 ) -> None:
@@ -597,6 +645,48 @@ def test_refresh_state_codex_session_produces_non_zero_usage_summary(
     assert totals["output_tokens_24h"] == 300
     assert totals["cache_tokens_24h"] == 200
     assert totals["duration_ms_24h"] == 300_000
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_refresh_state_rejects_session_rebinding_and_recovers_without_rebooking(
+    tmp_path: Path, provider: str,
+) -> None:
+    registry_path, project, runtime_root = _goal_fixture(tmp_path, provider=provider)
+    rollout = _fixture_rollout(tmp_path)
+    lines = rollout.read_text(encoding="utf-8").splitlines()
+    _refresh(
+        registry_path=registry_path, runtime_root=runtime_root,
+        project=project, usage_codex_session=rollout,
+    )
+    index_path = runtime_root / "goals" / GOAL_ID / "runs" / "index.jsonl"
+    before = index_path.read_bytes()
+    totals = _summary_totals(runtime_root)
+    _write_rollout(rollout, [*lines, _rollout_header(OTHER_SESSION_ID)[0]])
+
+    with pytest.raises(CodexSessionUsageError, match="conflicting session_meta ids"):
+        _refresh(
+            registry_path=registry_path, runtime_root=runtime_root,
+            project=project, usage_codex_session=rollout,
+        )
+
+    assert index_path.read_bytes() == before
+    assert _summary_totals(runtime_root) == totals
+    assert session_usage_baseline(index_path, OTHER_SESSION_ID) is None
+
+    repeated = json.loads(_rollout_header()[0])
+    repeated["payload"]["timestamp"] = "2026-08-26T01:06:00.000Z"
+    _write_rollout(rollout, [*lines, json.dumps(repeated)])
+    result = _refresh(
+        registry_path=registry_path, runtime_root=runtime_root,
+        project=project, usage_codex_session=rollout,
+    )
+
+    assert result["ok"] is True
+    assert result["usage"]["measurement_kind"] == "delta"
+    for field in ("input_tokens", "output_tokens", "cache_tokens", "duration_ms"):
+        assert result["usage"][field] == 0
+    assert len(_index_runs(runtime_root)) == 2
+    assert _summary_totals(runtime_root)["input_tokens_24h"] == totals["input_tokens_24h"]
 
 
 def test_refresh_state_replaying_same_snapshot_does_not_double_count(

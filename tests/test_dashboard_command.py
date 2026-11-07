@@ -76,6 +76,10 @@ def _copy_dashboard_launcher(scripts_dir: Path) -> None:
     source_scripts = Path(__file__).resolve().parents[1] / "scripts"
     for name in ("dashboard-dev.sh", "loopx-python.sh"):
         shutil.copy2(source_scripts / name, scripts_dir / name)
+    contract = Path("loopx/control_plane/runtime/node_version.ts")
+    target = scripts_dir.parent / contract
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source_scripts.parent / contract, target)
 
 
 def test_release_runtime_identity_uses_immutable_manifest_fields(tmp_path: Path) -> None:
@@ -259,6 +263,31 @@ def test_probe_existing_chat_accepts_exact_loopx_fingerprint() -> None:
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+
+def test_probe_legacy_chat_falls_back_once_and_keeps_capability_checks():
+    from loopx.dashboard_launcher import _probe_existing_chat
+    paths = []
+    class Legacy(_CapabilitiesHandler):
+        def do_GET(self):
+            paths.append(self.path)
+            if self.path == "/api/chat/readiness":
+                self.send_response(404)
+                self.end_headers()
+            else:
+                super().do_GET()
+    server, thread = _serve_capabilities(Legacy)
+    try:
+        assert _probe_existing_chat("127.0.0.1", server.server_port) == "matching"
+        assert paths == ["/api/chat/readiness", "/api/chat/capabilities"]
+        paths.clear()
+        assert _probe_existing_chat("127.0.0.1", server.server_port,
+            goal_subagent_configuration_enabled=False) == "matching"
+        assert paths == ["/api/chat/capabilities"]
+    finally:
+        server.shutdown()
+        thread.join(5)
+        server.server_close()
 
 
 @pytest.mark.parametrize(

@@ -3,23 +3,68 @@
 This research adapter calls SForge's native `run_agent`. Task images, prompts,
 submission cooldowns, judge isolation and scoring remain owned by the pinned
 EdgeBench checkout. Best-only adds host capture/admission scheduling; native and
-blind retain native automatic evaluation. The CLI defaults to the shared
+blind retain native automatic evaluation. The CLI defaults to a reviewed commit
+from the shared
 [EdgeBench integration branch](https://github.com/huangruiteng/EdgeBench/tree/codex/edgebench-integration),
 maintained jointly by `huangruiteng` and `loopx-agent`. The canonical repository
-and branch live in [`source-default.json`](source-default.json).
+and revision/compatibility-patch pair live in [`source-default.json`](source-default.json).
 Run the controller on Linux with Docker and native SForge
 iptables permissions; a macOS Docker socket alone does not provide that boundary.
 
 ## Select and freeze the native provider
 
-The first CLI entry for a log directory fetches the selected branch into
-`.edgebench-source/checkout` and atomically records its exact commit in
+The first CLI entry for a log directory fetches the selected revision into
+`.edgebench-source/checkout` and atomically freezes the effective source in
 `.edgebench-source/receipt.json`. Concurrent worker/judge startup shares that lock.
-Later entries reuse the frozen checkout without fetching, even if the branch or
-repository default changes. Dirty/moved source, conflicting explicit selection,
-and existing runs without a source receipt fail before model/container entry.
-Use a new log directory to adopt a newer integration revision; never repin an
-active or historical cohort.
+Later entries reuse the frozen checkout without fetching, even if the branch,
+repository default, or bundled compatibility patch changes. Dirty/moved source,
+conflicting explicit selection, and existing runs without a source receipt fail
+before model/container entry. Use a new log directory to adopt a newer source;
+never repin an active or historical cohort.
+
+For a **new cohort with no explicit source options**, `source-default.json`
+selects the reviewed provider commit
+[`118f9257d39c71d0805bb5b9cd4eb85d13a1e6d2`](https://github.com/huangruiteng/EdgeBench/commit/118f9257d39c71d0805bb5b9cd4eb85d13a1e6d2)
+and the versioned
+[`nonfinite-checkpoint-v2` compatibility patch](compatibility/nonfinite-checkpoint-v2.patch).
+This LoopX-owned patch fixes the native checkpoint representation of nonfinite
+released scores and metrics. Native scoring, report values and selection remain
+unchanged. The upstream revision fixes ordinary HTTP feedback serialization;
+checkpoint encoding is a separate boundary and still requires this patch.
+Preparation verifies the asset digest and each touched file's exact
+upstream blob and mode, applies the patch before provider import/installation,
+and creates a clean, reproducible Git commit with the fetched commit as its
+parent. The snapshot uses an explicit LoopX compatibility identity and the
+upstream commit time; it does not attribute the patch to an upstream author.
+The default revision and patch are one reviewed pair: advancing the integration
+branch does not change a new default cohort. Updating the pair requires reviewing
+the new source and qualifying the native checkpoint transport again. A changed
+patch preimage, including a later upstream implementation of the fix, still stops
+preparation without publishing a source directory. Explicit branch/revision
+selection remains available and uses unmodified provider code; it does not
+silently inherit the default patch or its qualification.
+
+Patched sources use `edgebench_source_v2` receipts. `upstream_commit` is the
+fetched remote revision; `compatibility_patch` records the patch ID and SHA-256;
+`commit` is the **effective local derived revision** actually imported and bound
+by native checkpoint provenance. This derived SHA is not an upstream revision
+that a fresh remote fetch can retrieve. The frozen `compatibility.patch` copy,
+Git parent/tree, complete upstream-to-effective diff, and deterministic commit
+contents are cross-checked on reuse. Verification uses the frozen copy rather
+than the current LoopX asset, so later asset changes do not invalidate an older
+cohort. Preserve the complete `.edgebench-source` directory for offline reuse or
+exact patched-source replay. Older `edgebench_source_v1` cohorts retain their
+original unmodified source and receipt; preparation never upgrades them.
+
+The bundled patch uses one-line unified context and Git's
+`diff.suppressBlankEmpty=true` representation. This keeps its full-index file
+identities and changed content readable while avoiding unrelated example text
+and trailing-space context markers in the containing repository. Validation
+accepts that exact canonical form or the original three-line, space-prefixed
+context form retained by earlier v2 cohorts; it does not ignore arbitrary
+whitespace. Changing the representation changes its digest and derived commit,
+even when the provider tree is identical. Existing cohorts keep their original
+patch bytes, receipt and commit and remain verifiable offline.
 
 Prepare dependencies in an isolated environment before starting a study:
 
@@ -51,8 +96,14 @@ or a full `--sforge-revision SHA` on the first entry (including preparation).
 For example, `--sforge-repository https://github.com/ByteDance-Seed/EdgeBench.git
 --sforge-ref refs/heads/main` selects upstream instead. These source options also
 apply to the online judge CLI; `SFORGE_LOG_DIR` is equivalent to `--log-dir` there.
-Use an explicit SHA to replay a known revision. A server in another log directory
-is a separate cohort: the launcher cannot attest a remote server's loaded code.
+**Any explicit repository, ref, or revision selects unmodified source for a new
+cohort**, even when it names the default repository/branch. These selections use
+the original v1 receipt contract and do not apply the bundled patch. Use an
+explicit upstream SHA to replay an unmodified known revision; retain its native
+checkpoint limitations. For an already frozen cohort, options only assert that
+its existing selection matches; they cannot apply/remove a patch or change its
+commit. A server in another log directory is a separate cohort: the launcher
+cannot attest a remote server's loaded code.
 
 These defaults apply to the LoopX EdgeBench CLI. Direct `sforge serve` and imported
 Python APIs remain caller-managed compatibility entrypoints; use them only with
@@ -265,9 +316,18 @@ do not publish `final_result.json`. Keep their captures and failure evidence;
 do not count an initial artifact's score as a solver outcome.
 For native Goals with positive runtime, `partial_result.json` preserves the full
 scoring result and its `runtime_status` / `native_goal_outcome` without making
-SForge's visualizer count the attempt as done. Handled terminal stops retain
-`final_result.json`; its presence does not independently qualify a score. Use
-new source pins for new attempts and leave frozen histories unchanged; see the
+SForge's visualizer count the attempt as done. A handled terminal stop records
+completed execution, not necessarily completed grading. When the native result
+includes `grading_status`, only `complete` permits `final_result.json`; explicit
+`pending`, `unknown` or other values remain in `partial_result.json`, preserving
+the native grading reason, scores and `runtime_status: terminal`. The report
+exporter also rejects explicit incomplete grading, including older attempts that
+already wrote a final marker. Sources predating `grading_status` retain their
+existing completion behavior; absence does not add a new grading attestation.
+Result publication does not rescore submissions, replace the current final
+archive with a historical best, or rewrite native history. A final marker still
+does not independently qualify a score. Use new source pins for new attempts and
+leave frozen histories unchanged; see the
 [native outcome contract](../runtime/RUNTIME.md) for rollback and classification.
 
 New native archive-submission trials default to **no periodic auto-evaluation**
@@ -467,6 +527,17 @@ uniform offline record over evaluation reuse. The original native final result
 covers online submissions only; use the complete offline result for post-run
 qualification. Neither report by itself certifies integrity or score countability.
 No offline result is routed to the worker.
+
+Offline score files, the combined result and the command's summary retain native
+non-finite scores and nested metrics. Finite documents keep their existing JSON.
+Other documents use the local `sforge_nonfinite_json: 1` transport envelope:
+`value` contains JSON data with each non-finite number replaced by `null`, and
+`nonfinite_values` records its path and `positive_infinity`, `negative_infinity`
+or `nan` kind. Use `benchmark.runtime.sforge_json.loads` to read either form.
+Restart decodes saved scores before calling the unchanged native selector;
+it does not turn these results into zero, missing feedback or grading errors.
+Literal marker-shaped metrics remain data, including an escaped root marker.
+Malformed paths, duplicate keys and unmarked non-finite constants are rejected.
 
 The first completed valid finite score establishes a silent baseline. The task's
 native selection policy is the sole improvement criterion among valid scored

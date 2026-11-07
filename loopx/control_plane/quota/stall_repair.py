@@ -1,7 +1,8 @@
 from __future__ import annotations
+
+from typing import Any, cast
 from .effective_action import EffectiveAction
 
-from typing import Any
 
 from .. import compact_control_plane_policy, control_plane_self_repair_allows
 from ..agents.capability_gate import (
@@ -70,7 +71,7 @@ def standing_decision_authority_from_status_item(
     authority = item.get("standing_decision_authority")
     if not isinstance(authority, dict):
         authority = (
-            project_asset.get("standing_decision_authority")
+            cast(dict[str, Any], project_asset.get("standing_decision_authority"))
             if project_asset
             and isinstance(project_asset.get("standing_decision_authority"), dict)
             else None
@@ -189,7 +190,7 @@ def build_runtime_capability_user_gate_repair_hint(
         if not _runtime_recovery_action(gate.get("action_kind")):
             continue
         target_todo_id = normalize_todo_id(gate.get("unblocks_todo_id"))
-        target = agent_items_by_id.get(target_todo_id)
+        target = agent_items_by_id.get(cast(str, target_todo_id))
         if not target:
             continue
         target_owner = normalize_todo_claimed_by(target.get("claimed_by"))
@@ -257,7 +258,7 @@ def build_quota_stall_self_repair_hint(
     available_capabilities: Any = None,
 ) -> dict[str, Any] | None:
     coordination = (
-        item.get("coordination") if isinstance(item.get("coordination"), dict) else {}
+        cast(dict[str, Any], item.get("coordination")) if isinstance(item.get("coordination"), dict) else {}
     )
     decision_scope_consistency = build_required_decision_scope_consistency(
         agent_todo_summary,

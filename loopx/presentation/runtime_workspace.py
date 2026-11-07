@@ -181,7 +181,7 @@ class RuntimeWorkspaceHandler(ResearchAnalysisRequestMixin, BaseHTTPRequestHandl
                     self._json(self.server.reader.findings(goal_id, cursor, projector=_finding_rows))
                 else:
                     self._json({"ok": False, "error": "Unknown Explore view."}, 400)
-            elif parsed.path in {RESEARCH_ANALYSIS_PATH, RESEARCH_ANALYSIS_PATH + "/citation"}:
+            elif parsed.path in {RESEARCH_ANALYSIS_PATH, RESEARCH_ANALYSIS_PATH + "/citation", RESEARCH_ANALYSIS_PATH + "/usage-turn"}:
                 if self.server.analysis_execution_enabled:
                     self._research_analysis_read()
                 else:

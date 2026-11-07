@@ -137,6 +137,7 @@ def resolve_exact_heartbeat_turn_identity(
         SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP,
         SchedulerRuntimeProfile.CODEX_APP_HEARTBEAT,
         SchedulerRuntimeProfile.TRAE_APP,
+        SchedulerRuntimeProfile.ANTIGRAVITY_APP,
     }:
         raise ValueError(
             "--turn-instance-id requires runtime-profile generic_cli or "

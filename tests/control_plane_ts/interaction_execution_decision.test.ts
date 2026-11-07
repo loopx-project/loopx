@@ -107,6 +107,20 @@ test("should_run is not an execution-permission input", () => {
   assert.deepEqual(projected.normalization_diagnostics, []);
 });
 
+test("independent fallback retains workspace repair before delivery", () => {
+  const packet = projectInteractionExecution(executionFacts({
+    effective_action: EffectiveAction.AGENT_WORKSPACE_REPAIR,
+    state: "operator_gate", user_required: true, notify_user_on_gate: true,
+    scoped_user_gate_fallback: true,
+    canonical_execution: {kind: "agent_workspace_repair",
+      must_attempt_work: true, delivery_allowed: false},
+  }));
+  assert.equal(packet.mode, EffectiveAction.AGENT_WORKSPACE_REPAIR);
+  assert.equal(packet.must_attempt, true);
+  assert.equal(packet.delivery_allowed, false);
+  assert.equal(packet.quiet_noop_allowed, false);
+});
+
 test("canonical null and false stop compatibility fallback", () => {
   for (const canonicalDelivery of [null, false]) {
     const projected = projectInteractionExecution(executionFacts({

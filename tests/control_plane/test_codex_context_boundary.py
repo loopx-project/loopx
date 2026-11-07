@@ -127,13 +127,18 @@ def _native_fixture(tmp_path):
     home.mkdir()
     workspace.mkdir()
     env = {k: v for k, v in os.environ.items() if k in {
-        "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "LC_ALL", "SYSTEMROOT"}}
+        "PATH", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "LC_ALL", "SYSTEMROOT"}}
     # Authority fixtures isolate temp files below tmp_path. Native release
     # helpers refuse a CODEX_HOME inside their temp root, which otherwise
     # breaks Linux sandbox dispatch. Keep both private, as sibling directories.
     temporary = tmp_path / "native-tmp"
     temporary.mkdir(mode=0o700)
     env.update({key: str(temporary) for key in ("TMPDIR", "TEMP", "TMP")})
+    # Codex can also discover skills in the OS user's home. Isolate both
+    # roots so a developer's personal skills cannot enter the measured input.
+    user_home = tmp_path / "user-home"
+    user_home.mkdir(mode=0o700)
+    env["HOME"] = env["USERPROFILE"] = str(user_home)
     env["CODEX_HOME"] = str(home)
     return binary, env, workspace, home
 
@@ -177,15 +182,19 @@ def test_native_reader_requires_complete_hook_output_even_when_model_saw_page(tm
         name: [{"hooks": [handler]}] for name in ("SessionStart", "PostToolUse")}}))
     publish = workspace / "publish.py"
     publish.write_text(
-        "import json, pathlib, time\n"
-        "from loopx.control_plane.turn_driver.codex_context import project_codex_context\n"
+        "import json, pathlib, time, subprocess, shlex\n"
+        "from loopx.control_plane.turn_driver.codex_context import prepare_codex_context\n"
         "from loopx.cli_commands.quota_capture import native_context_capture_view\n"
         f"capture=pathlib.Path({str(capture)!r})\n"
         "body={'complete':True,'sources':[{'source':'selected_todo','content':{'todo':"
         "{'todo_id':'todo_fixture','text':'Preserve the original requirement. '*40,'status':'open'}}}]}\n"
-        f"full=project_codex_context(body,directory={str(root)!r},capture_directory=capture,"
-        "goal_id='fixture',agent_id='agent',surface='work_context',capture_id='fixture-capture')\n"
+        f"full=prepare_codex_context(body,directory={str(root)!r},capture_directory=capture,"
+        "goal_id='fixture',agent_id='agent',surface='work_context',capture_id='fixture-capture').delivery\n"
         f"view=native_context_capture_view(full,capture,context_directory={str(root)!r})\n"
+        # Read the returned reference through its real command. The test still
+        # needs an actual page in model input to isolate complete-hook coverage.
+        "view=json.loads(subprocess.run(shlex.split(view['command']),check=True,"
+        "capture_output=True,text=True).stdout)\n"
         "text=json.dumps(view,separators=(',',':'))\n"
         f"pathlib.Path({str(view_file)!r}).write_text(text)\n"
         "print(text,flush=True)\n"
@@ -322,9 +331,22 @@ def test_native_shared_delta_with_small_compact_recovery_reference(tmp_path, hos
             "id": "outcome", "requirements": [{"id": "requirement", "status": "unverified",
                 "agent_review": {"conclusion": "uncertain", "evidence_refs": [
                     f"artifact:validation-{i:03d}" for i in range(60)]}}]}]}}}})
+    source["sources"].append({"source": "turn_start_capability_hook", "kind": "agent_preferences",
+        "hook_id": "semantic_preference.agent_context", "capability_id": "semantic-preference",
+        "content": {"ok": True, "status": "read", "current": {"schema_version": "agent_preferences_v1",
+            "revision": "preference-a", "authority": "advisory_only",
+            "instructions": "Use the current scoped view; retired or expired preferences are not actionable.",
+            "items": [{"key": "review", "state": "active", "statement": "Consult the designated reviewer.",
+                "source_ref": "owner:review", "source_quote": "Keep this explicit review instruction. " * 20,
+                "operation_id": "remember-review", "expires_at": "2030-01-02T00:00:00Z"}]}}})
     target_source = json.loads(json.dumps(source))
     target_source["sources"][0]["content"]["todo"]["note"] = "Stop before publishing or deploying."
-    target_source["sources"].reverse()
+    preference = target_source["sources"][-1]["content"]["current"]
+    preference["revision"] = "preference-b"
+    preference["items"][0].update(state="expired", statement=None)
+    # Move every source; reversing three would leave the structured acceptance
+    # evidence at its old index and stop exercising its relocated reference.
+    target_source["sources"] = target_source["sources"][1:] + target_source["sources"][:1]
     def projection(context):
         if surface == "quota_packet":
             return {"goal_id": "fixture", "agent_id": "agent", "should_run": True,

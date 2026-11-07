@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
-from .doctor_git import git_metadata_for_root
+from .doctor_git import GitSourceState, git_source_metadata
 
 
 RELEASE_MANIFEST_SCHEMA_VERSION = "loopx_release_manifest_v0"
@@ -126,9 +126,13 @@ def _manifest_source_metadata(source_root: Path | None) -> dict[str, Any]:
 
 
 def _source_metadata(source_root: Path | None) -> dict[str, Any]:
-    git_metadata = git_metadata_for_root(source_root)
+    git_metadata, git_state = git_source_metadata(source_root)
     git_metadata.pop("root")
-    if any(git_metadata.get(key) is not None for key in ("git_commit", "git_ref", "git_dirty")):
+    if git_state is not GitSourceState.ABSENT:
+        # A checkout with a `.git` of its own is its own source of truth. When
+        # Git cannot answer this run, the `release.json` next to it describes an
+        # earlier install, so it must not be written back as this one: an
+        # unanswered read stays unknown instead of claiming the old commit.
         return {
             **git_metadata,
             "kind": None,
@@ -155,7 +159,7 @@ def build_release_manifest(
     archive_url = source_env.get("LOOPX_ARCHIVE_URL") or source_metadata.get("archive_url")
     archive_sha256 = source_env.get("LOOPX_ARCHIVE_SHA256") or source_metadata.get("archive_sha256")
     repo = source_env.get("LOOPX_REPO") or source_metadata.get("repo")
-    ref = source_env.get("LOOPX_REF") or source_metadata.get("ref")
+    ref = source_env.get("LOOPX_UPDATE_CHANNEL") or source_env.get("LOOPX_REF") or source_metadata.get("ref")
     source_kind = "github_archive" if archive_url else (source_metadata.get("kind") or "local_checkout")
     promotion_mode = source_env.get("LOOPX_PROMOTION_MODE") or source_metadata.get("promotion_mode")
     skills_root = release_root / "skills"

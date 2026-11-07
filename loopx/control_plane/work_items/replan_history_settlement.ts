@@ -68,7 +68,9 @@ export async function projectSettledReplanHistory(value: unknown): Promise<JsonO
       // negative work is not excluded merely because it produced no improvement.
       if (jsonObject(settlement.progress)?.state === "settled" &&
           settlement.replay_phase === "settled" && settlement.writeback_run != null &&
-          settlement.monitor_phase !== "settled") qualified.add(key);
+          settlement.monitor_phase !== "settled") {
+        qualified.add(key);
+      }
     }
     return projectReplanHistory({...request, runs}, qualified);
   });

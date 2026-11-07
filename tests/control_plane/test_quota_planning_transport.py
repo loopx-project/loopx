@@ -62,8 +62,27 @@ def test_current_wire_keeps_legacy_full_source_decisions(owned_runtime, monkeypa
 
     def compare(method, params, **options):
         wire = native(method, params, **options)
-        legacy = native(method, {**params, "schema_version": "todo_quota_planning_request_v3"}, **options)
-        assert _decode_quota_planning_wire(wire) == legacy
+        if "summary_request" in params:
+            from loopx.control_plane.todos.summary_item import todo_summary_source_items
+            from loopx.control_plane.todos.todo_semantics import todo_presentation_sort_key
+
+            source = params["summary_request"]["source"]["record"]
+            items = sorted(todo_summary_source_items(source), key=todo_presentation_sort_key)
+            selection = params["selection"]
+            # Exercise the old full-source planning carrier as well as the new
+            # final-summary carrier, preserving the legacy decision oracle.
+            planning = project_quota_planning(
+                source, all_open_items=items, source_open_count=source.get("open_count", len(items)),
+                agent_identity={"agent_id": selection["agent_id"], "agent_profile": selection["profile"]},
+                filter_user_gate_blocks_agent=selection["user_gate_scope"],
+                available_capabilities=selection["available"], resolve_capacity=True,
+                current_time=params["current_time"],
+            )
+            assert wire["summary"]["work_counts"] == planning["work_counts"]
+            assert wire["summary"]["first_open_items"] == planning["lanes"]["display_open_items"][:3]
+        else:
+            legacy = native(method, {**params, "schema_version": "todo_quota_planning_request_v3"}, **options)
+            assert _decode_quota_planning_wire(wire) == legacy
         return wire
 
     monkeypatch.setattr(quota_selection, "effect_runtime_result", compare)

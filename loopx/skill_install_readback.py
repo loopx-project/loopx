@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any, Mapping, Sequence, cast
+
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -8,10 +10,10 @@ from email.parser import Parser
 from pathlib import Path
 import shutil
 import tempfile
-from typing import Any, Mapping, Sequence
 
 from . import __version__
 from .doctor_git import git_metadata_for_root
+from .slash_command_files import MANAGED_MARKER_PREFIX as LOOPX_MANAGED_SLASH_COMMAND_MARKER
 
 SKILL_INSTALL_READBACK_SCHEMA_VERSION = "loopx_skill_install_readback_v1"
 SKILL_INSTALL_READBACK_FILENAME = ".loopx-skill-install.json"
@@ -36,7 +38,6 @@ SKILL_INSTALL_PROFILES = {
         PYTHON_DISTRIBUTION_SKILL_INSTALL_MODE,
     ),
 }
-LOOPX_MANAGED_SLASH_COMMAND_MARKER = "<!-- loopx-managed-slash-command:v1"
 PACKAGED_HOST_SKILL_IDS = [
     "loopx-project",
     "loopx-pr-program",
@@ -308,7 +309,7 @@ def _source_readback(
     except (OSError, json.JSONDecodeError):
         release_manifest = {}
     release_source = (
-        release_manifest.get("source")
+        cast(dict[str, Any], release_manifest.get("source"))
         if isinstance(release_manifest.get("source"), dict)
         else {}
     )
@@ -334,12 +335,12 @@ def _source_readback(
 
     for metadata_path in sorted(source_root.glob("loopx-*.dist-info/METADATA")):
         try:
-            metadata = Parser().parsestr(metadata_path.read_text(encoding="utf-8"))
+            package_metadata = Parser().parsestr(metadata_path.read_text(encoding="utf-8"))
         except OSError:
             continue
-        if metadata.get("Name", "").strip().lower() != "loopx":
+        if package_metadata.get("Name", "").strip().lower() != "loopx":
             continue
-        version = metadata.get("Version", "").strip()
+        version = package_metadata.get("Version", "").strip()
         if version:
             return {
                 "kind": "python_distribution",
@@ -554,6 +555,7 @@ def inspect_skill_install_readback(
 
     root = skills_dir.expanduser()
     manifest_path = root / SKILL_INSTALL_READBACK_FILENAME
+    manifest_error: str | None
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -572,12 +574,12 @@ def inspect_skill_install_readback(
     )
     missing_ids = sorted(set(required_ids) - set(materialized_ids))
     manifest_skills = (
-        manifest.get("skills")
+        cast(dict[str, Any], manifest.get("skills"))
         if isinstance(manifest, dict) and isinstance(manifest.get("skills"), dict)
         else {}
     )
     manifest_items = (
-        manifest_skills.get("items")
+        cast(dict[str, Any], manifest_skills.get("items"))
         if isinstance(manifest_skills.get("items"), dict)
         else {}
     )
@@ -587,13 +589,13 @@ def inspect_skill_install_readback(
         if manifest_items.get(skill_id) != hash_skill_tree(root / skill_id)
     ]
     manifest_ids = (
-        {str(skill_id) for skill_id in manifest.get("materialized_skill_ids")}
+        {str(skill_id) for skill_id in cast(list[Any], manifest.get("materialized_skill_ids"))}
         if isinstance(manifest, dict)
         and isinstance(manifest.get("materialized_skill_ids"), list)
         else set()
     )
     source = (
-        manifest.get("source")
+        cast(dict[str, Any], manifest.get("source"))
         if isinstance(manifest, dict) and isinstance(manifest.get("source"), dict)
         else {}
     )

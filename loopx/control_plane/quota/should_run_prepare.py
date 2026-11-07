@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from typing import Any, TYPE_CHECKING, cast
+
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from ..goals.goal_frontier.fallback_source import FallbackTodoSource
@@ -319,12 +320,12 @@ def _blocked_priority_fallback(
     if not isinstance(agent_todo_summary, dict):
         return None
     first_open = (
-        agent_todo_summary.get("first_open_items")
+        cast(list[Any], agent_todo_summary.get("first_open_items"))
         if isinstance(agent_todo_summary.get("first_open_items"), list)
         else []
     )
     first_executable = (
-        agent_todo_summary.get("first_executable_items")
+        cast(list[Any], agent_todo_summary.get("first_executable_items"))
         if isinstance(agent_todo_summary.get("first_executable_items"), list)
         else []
     )
@@ -447,7 +448,7 @@ def _outcome_floor_blocker_already_projected(
         return False
 
     executable_items = (
-        agent_todo_summary.get("first_executable_items")
+        cast(list[Any], agent_todo_summary.get("first_executable_items"))
         if isinstance(agent_todo_summary.get("first_executable_items"), list)
         else []
     )
@@ -458,7 +459,7 @@ def _outcome_floor_blocker_already_projected(
         return False
 
     first_open = (
-        agent_todo_summary.get("first_open_items")
+        cast(list[Any], agent_todo_summary.get("first_open_items"))
         if isinstance(agent_todo_summary.get("first_open_items"), list)
         else []
     )
@@ -499,20 +500,20 @@ def _agent_monitor_only(agent_identity: Mapping[str, Any] | None) -> bool:
 
 
 def _build_agent_work_lane(
-    item: Mapping[str, Any],
+    item: dict[str, Any],
     *,
-    status_payload: Mapping[str, Any],
-    project_asset: Mapping[str, Any],
+    status_payload: dict[str, Any],
+    project_asset: dict[str, Any],
     goal_id: str,
     agent_id: str | None,
-    goal_boundary: Mapping[str, Any],
-    agent_identity: Mapping[str, Any] | None,
-    agent_todo_summary: Mapping[str, Any],
+    goal_boundary: dict[str, Any] | None,
+    agent_identity: dict[str, Any] | None,
+    agent_todo_summary: dict[str, Any] | None,
     agent_todo_source_items: list[dict[str, Any]],
     user_todo_source_items: list[dict[str, Any]],
     available_capabilities: Any,
-    monitor_debt_arbitration: Mapping[str, Any] | None,
-) -> tuple[bool, dict[str, Any], dict[str, Any] | None]:
+    monitor_debt_arbitration: dict[str, Any] | None,
+) -> tuple[bool, dict[str, Any] | None, dict[str, Any] | None]:
     monitor_only = _agent_monitor_only(agent_identity)
     work_lane = build_quota_work_lane_contract(
         item,
@@ -532,16 +533,16 @@ def _build_agent_work_lane(
         agent_identity=agent_identity,
         agent_todo_summary=agent_todo_summary,
         raw_agent_todo_summary=(
-            item.get("agent_todos")
+            cast(dict[str, Any], item.get("agent_todos"))
             if isinstance(item.get("agent_todos"), dict)
-            else project_asset.get("agent_todos")
+            else cast(dict[str, Any], project_asset.get("agent_todos"))
             if isinstance(project_asset.get("agent_todos"), dict)
             else None
         ),
         raw_user_todo_summary=(
-            item.get("user_todos")
+            cast(dict[str, Any], item.get("user_todos"))
             if isinstance(item.get("user_todos"), dict)
-            else project_asset.get("user_todos")
+            else cast(dict[str, Any], project_asset.get("user_todos"))
             if isinstance(project_asset.get("user_todos"), dict)
             else None
         ),
@@ -550,7 +551,7 @@ def _build_agent_work_lane(
         available_capabilities=available_capabilities,
         parent_goal_id=goal_id,
         agent_management_projection=(
-            status_payload.get("agent_management_projection")
+            cast(dict[str, Any], status_payload.get("agent_management_projection"))
             if isinstance(status_payload.get("agent_management_projection"), dict)
             else None
         ),
@@ -596,7 +597,7 @@ def _pending_receipt_resume_is_ready(
     return pending and goal_health_ok and state == "eligible" and any(
         normalize_todo_id(candidate.get("todo_id")) == todo_id
         for candidate in _agent_scope_deferred_resume_candidates(
-            summary,
+            cast(dict[str, Any], summary),
             agent_id=normalize_todo_claimed_by((identity or {}).get("agent_id")),
         )
     )
@@ -614,6 +615,43 @@ def _receipt_delivery_continuity(
     todo = next((candidate for candidate in todos
                  if normalize_todo_id(candidate.get("todo_id")) == todo_id), None)
     return anchor, todo
+
+
+def _prepare_gate_selection_candidates(
+    *, agent_identity: dict[str, Any] | None,
+    source_items: list[dict[str, Any]], planning_items: list[dict[str, Any]],
+    available_capabilities: Any, requested_todo_id: str | None,
+    receipt_bound_todo_id: str | None,
+) -> tuple[dict[str, Any] | None, str | None, dict[str, Any] | None]:
+    """Transport exact candidates through the existing selection/gate owners."""
+    # Resolve the exact choice before selecting a gate-independent route. The
+    # ranked fallback is advice, not an additional permission boundary.
+    requested_action_candidate = (
+        build_explicit_advancement_next_action(
+            agent_identity=agent_identity,
+            agent_todo_items=planning_items,
+            available_capabilities=available_capabilities,
+            todo_id=requested_todo_id,
+            selection_binding="pending_action_selection",
+        )
+        if requested_todo_id
+        else None
+    )
+    # Recovery keeps the committed work identity. Requalify that exact work
+    # against the current gate instead of borrowing an unrelated default's
+    # independence after the explicit selection has become a receipt.
+    fallback_todo_id = receipt_bound_todo_id or requested_todo_id
+    fallback_candidate = (
+        build_receipt_bound_advancement_next_action(
+            agent_identity=agent_identity,
+            agent_todo_items=source_items,
+            available_capabilities=available_capabilities,
+            receipt_bound_todo_id=receipt_bound_todo_id,
+        ) if receipt_bound_todo_id else requested_action_candidate
+    )
+    source_candidate = next((item for item in source_items
+        if item.get("todo_id") == fallback_todo_id), None) if fallback_candidate else None
+    return requested_action_candidate, fallback_todo_id, source_candidate
 
 
 def _prepare_quota_should_run_item(
@@ -644,7 +682,7 @@ def _prepare_quota_should_run_item(
     receipt_bound_guard_recorded_at: str | None = None,
     receipt_bound_replan_review: Mapping[str, Any] | None = None,
 ) -> _QuotaDecisionPreparation:
-    quota = item.get("quota") if isinstance(item.get("quota"), dict) else {}
+    quota = cast(dict[str, Any], item.get("quota")) if isinstance(item.get("quota"), dict) else {}
     state = str(quota.get("state") or "unknown")
     normal_delivery_allowed = goal_health_ok and state == "eligible"
     recovery_allowed = _recovery_delivery_allowed(quota, plan_ok=goal_health_ok)
@@ -817,18 +855,14 @@ def _prepare_quota_should_run_item(
     if task_orchestration_contract_is_actionable(task_orchestration_contract):
         capability_monitor_contract = capability_monitor_fallback = None
     work_lane_contract = capability_monitor_contract or work_lane_contract
-    # Resolve the exact choice before selecting a gate-independent route. The
-    # ranked fallback is advice, not an additional permission boundary.
-    requested_action_candidate = (
-        build_explicit_advancement_next_action(
-            agent_identity=agent_identity,
-            agent_todo_items=agent_todo_planning_source_items,
+    requested_action_candidate, fallback_todo_id, fallback_source_candidate = (
+        _prepare_gate_selection_candidates(
+            agent_identity=agent_identity, source_items=agent_todo_source_items,
+            planning_items=agent_todo_planning_source_items,
             available_capabilities=effective_available_capabilities,
-            todo_id=requested_action_todo_id,
-            selection_binding="pending_action_selection",
+            requested_todo_id=requested_action_todo_id,
+            receipt_bound_todo_id=receipt_bound_todo_id,
         )
-        if requested_action_todo_id
-        else None
     )
     scoped_user_gate_fallback = _scoped_user_gate_fallback(
         user_todo_summary,
@@ -836,11 +870,8 @@ def _prepare_quota_should_run_item(
         capability_gate=capability_gate,
         allow_unrelated_gate=bool(quota.get("safe_bypass_allowed")),
         monitor_debt_backoff_active=bool(monitor_debt_arbitration.get("active")),
-        requested_todo_id=requested_action_todo_id,
-        requested_candidate=next((
-            item for item in agent_todo_planning_source_items
-            if item.get("todo_id") == requested_action_todo_id
-        ), None) if requested_action_candidate is not None else None,
+        requested_todo_id=fallback_todo_id,
+        requested_candidate=fallback_source_candidate,
     )
     work_lane_contract = (
         scoped_user_gate_due_monitor_contract(
@@ -970,7 +1001,7 @@ def _prepare_quota_should_run_item(
     )
     replan_scope = goal_frontier_context.get("replan_scope") or {}
     goal_frontier_projection = (
-        goal_frontier_context.get("goal_frontier_projection")
+        cast(dict[str, Any], goal_frontier_context.get("goal_frontier_projection"))
         if isinstance(goal_frontier_context.get("goal_frontier_projection"), dict)
         else {}
     )

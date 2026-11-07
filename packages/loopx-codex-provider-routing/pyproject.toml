@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "loopx-codex-provider-routing"
-version = "0.12.10"
+version = "0.15.3"
 description = "Native Codex account slots and exhausted-account handoff for LoopX"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -13,9 +13,10 @@ requires-python = ">=3.11"
 loopx-cpa-operator = "loopx_codex_provider_routing.operator:main"
 loopx-codex-provider-routing = "loopx_codex_provider_routing.cli:main"
 loopx-codex-accounts = "loopx_codex_provider_routing.native:main"
+loopx-native-account-provider = "loopx_codex_provider_routing.provider:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-loopx_codex_provider_routing = ["*.ts"]
+loopx_codex_provider_routing = ["*.ts", "*.toml"]

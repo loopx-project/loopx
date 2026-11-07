@@ -1,4 +1,4 @@
-"""Full Goal availability checks do not transport an unconsumed source body."""
+"""Progressive quota and complete host delivery retain their distinct IO contracts."""
 from __future__ import annotations
 
 import contextlib
@@ -6,23 +6,26 @@ from copy import deepcopy
 from hashlib import sha256
 import io
 import json
+import shlex
 
 import pytest
 
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
 from loopx.cli import main
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
-from loopx.control_plane.effect_runtime import MAX_REQUEST_BYTES
 from loopx.control_plane.testing.canary_harness import write_fixture_registry
 from loopx.control_plane.work_items import context_readback
+from tests.control_plane.codex_checkpoint_fixture import reference_metadata_oracle
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_goal_availability_transport_preserves_full_read_and_recovery(tmp_path, monkeypatch, provider):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
+    monkeypatch.chdir(tmp_path)
     runtime, registry, state = tmp_path / "runtime", tmp_path / "registry.json", tmp_path / "state.md"
     goal, todo_id = "goal-context", "todo_export"
     initial = b"---\nstatus: active\n---\n# Goal\n## Objective\nPreserve the export contract.\n"
+    initial += "\n<!-- Original source comment. -->\n## Unknown section\n停止条件：不得发布。\n".encode()
     state.write_bytes(initial)
     write_fixture_registry(project=tmp_path, runtime_root=runtime, registry_path=registry,
         goal_id=goal, domain="software", adapter_kind="generic_project_goal_v0",
@@ -37,13 +40,17 @@ def test_goal_availability_transport_preserves_full_read_and_recovery(tmp_path, 
     source_args = dict(registry_path=registry, runtime_root=runtime, goal_id=goal, todo_id=todo_id)
     original_effect = context_readback.effect_runtime_result
     requests, plans = [], []
+    omit_delivery_profile = [False]
 
     def observe(operation, request, **kwargs):
         if operation == "work_item.context.plan":
             plans.append(deepcopy(request["packet"]))
         if operation == "work_item.context.project":
             requests.append(deepcopy(request))
-        return original_effect(operation, request, **kwargs)
+        result = original_effect(operation, request, **kwargs)
+        if operation == "work_item.context.project" and omit_delivery_profile[0]:
+            result.pop("source_delivery_profile", None)
+        return result
 
     monkeypatch.setattr(context_readback, "effect_runtime_result", observe)
 
@@ -58,9 +65,53 @@ def test_goal_availability_transport_preserves_full_read_and_recovery(tmp_path, 
 
     small_channel = guard()
     small_request = requests[-1]
+    from loopx.cli import build_parser
+    from loopx.cli_commands.quota_capture import read_context_capture
+    from loopx.control_plane.turn_driver import codex_context
+
+    monkeypatch.setenv("CODEX_THREAD_ID", "complete-goal-native")
+    native = tmp_path / "native"
+    native.mkdir(mode=0o700)
+    captures = tmp_path / "captures"
+    captures.mkdir()
+    codex_context.codex_context_hook(str(native), {"hook_event_name": "SessionStart",
+        "source": "startup", "session_id": "complete-goal-native", "cwd": str(tmp_path)})
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        code = main(["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+            "quota", "should-run", "--goal-id", goal, "--agent-id", "agent-a", "--codex-app",
+            "--todo-id", todo_id, "--turn-instance-id", "native-goal-material",
+            "--context-delivery", "on", "--codex-context-dir", str(native),
+            "--decision-output-root", str(captures)])
+    page, raw = json.loads(output.getvalue()), bytearray()
+    assert code == 0 and page["ok"], (page.get("reason"), page.get("error"), page.get("error_code"))
+    digest = reference_metadata_oracle(page)["sha256"]
+    if page.get("schema_version") != "context_capture_page_v1":
+        from test_context_delivery_cli import _native_reader_args
+
+        args = _native_reader_args(page["command"])
+        args.page_bytes = 3072
+        page = read_context_capture(args)
+        assert page["ok"], page
+    while True:
+        assert page["offset"] == len(raw) and page["sha256"] == digest
+        raw.extend(page["content"].encode())
+        if page["eof"]:
+            assert len(raw) == page["total_bytes"]
+            break
+        page = read_context_capture(build_parser().parse_args(shlex.split(page["next_command"])[1:]))
+    assert sha256(raw).hexdigest() == digest
+    native_channel = json.loads(raw)["interaction_contract"]["agent_channel"]
+    delivered = [row["content"] for row in native_channel["work_context"]["sources"]
+        if row.get("source") == "goal_state"]
+    assert len(delivered) == 1, "Native delivery must include the complete registered Goal"
+    assert delivered[0] == {"state_file": str(state), "revision": "sha256:" + sha256(initial).hexdigest(),
+        "text": initial.decode(), "full_source": True}
+    assert not any(row.get("source") == "goal_state" for row in native_channel["required_reads"])
+    assert state.read_bytes() == initial
     large = initial + b"\n## Evidence\n" + b"Prior evidence remains available. " * 100_000
     large += "\n## Stop Conditions\n未经授权不得发布。\n".encode()
-    assert len(large) > MAX_REQUEST_BYTES
+    assert len(large) > 2 * 1024 * 1024  # Preserve the original source regression.
     state.write_bytes(large)
     large_channel = guard()
     large_request = requests[-1]
@@ -77,6 +128,16 @@ def test_goal_availability_transport_preserves_full_read_and_recovery(tmp_path, 
     assert len(json.dumps(small_request).encode()) == len(json.dumps(large_request).encode())
     content = context_readback._source_content({"source": "goal_state"}, **source_args)
     assert content == {"state_file": str(state), "revision": "sha256:" + sha256(large).hexdigest()}
+    full = context_readback._source_content(
+        {"source": "goal_state"}, **source_args, inline_goal_source=True)
+    assert full == {**content, "text": large.decode("utf-8"), "full_source": True}
+    omit_delivery_profile[0] = True
+    try:
+        with pytest.raises(RuntimeError, match="unsupported by this runtime"):
+            context_readback.attach_work_context(deepcopy(captured_plan), registry_path=registry,
+                runtime_root=runtime, hook_dispatch=None, inline_goal_source=True)
+    finally:
+        omit_delivery_profile[0] = False
     # Independently compare the current typed projector with the former full
     # source input. Removing the transport must not weaken its obligations.
     legacy_request = deepcopy(large_request)
@@ -111,5 +172,8 @@ def test_goal_availability_transport_preserves_full_read_and_recovery(tmp_path, 
         assert channel["delivery_allowed"] is False
         assert channel["work_context"]["complete"] is False
         assert any(row.get("source") == "goal_state" for row in channel["required_reads"])
+        with pytest.raises(RuntimeError, match="Goal source"):
+            context_readback.attach_work_context(deepcopy(captured_plan), registry_path=registry,
+                runtime_root=runtime, hook_dispatch=None, inline_goal_source=True)
         state.write_bytes(large)
         assert guard() == large_channel

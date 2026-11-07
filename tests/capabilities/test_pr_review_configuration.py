@@ -8,7 +8,7 @@ import pytest
 
 from loopx.cli import main
 from loopx.configure_goal import configure_goal
-from loopx.chat_goal_configuration_api import _goal_capability_options
+from loopx.chat.goal_configuration_api import _goal_capability_options
 from loopx.capabilities.pr_review_queue.goal_configuration import (
     apply_change,
     configuration_summary,
@@ -53,6 +53,42 @@ def test_ci_configuration_rejects_non_boolean_input(invalid) -> None:
         )
     with pytest.raises(TypeError, match="boolean"):
         apply_change({}, {"wait_for_ci": invalid}, clear=False)
+
+
+def test_review_reads_its_own_machine_policy_without_reconfiguring_siblings(tmp_path, capsys):
+    runtime = tmp_path / "runtime"
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({"goals": []}))
+    config = runtime / "machine/configuration.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(json.dumps({
+        "schema_version": "loopx_machine_configuration_v0",
+        "namespaces": {
+            "pull_request_review": {
+                "schema_version": "pull_request_review_machine_defaults_v0",
+                "wait_for_ci": False,
+            },
+            "steward_executor": {
+                "schema_version": "steward_executor_machine_defaults_v1",
+                "executor_endpoint": "future_executor",
+            },
+        },
+    }))
+    original = config.read_bytes()
+    fixtures = runpy.run_path(str(Path(__file__).parents[1] / "test_pr_review_github_scan.py"))
+    pr = fixtures["_merge_ready_pr"]()
+    pr["statusCheckRollup"] = [{"name": "test", "status": "IN_PROGRESS"}]
+    pr["review_thread_summary"] = {"complete": True, "total_count": 0, "unresolved_count": 0}
+    fixture = tmp_path / "prs.json"
+    fixture.write_text(json.dumps({"repository": "owner/repo", "pull_requests": [pr]}))
+    code = main([
+        "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json", "pr-review",
+        "--fixture", str(fixture),
+    ])
+    packet = json.loads(capsys.readouterr().out)
+    assert code == 0, packet
+    assert packet["request"]["review_configuration"]["wait_for_ci"] is False
+    assert config.read_bytes() == original
 
 
 def test_goal_editor_save_clear_and_cli_observe_the_same_policy(

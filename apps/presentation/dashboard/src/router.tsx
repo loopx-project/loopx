@@ -49,6 +49,14 @@ const searchSchema = z.object({
   workAgent: z.string().regex(/^[A-Za-z0-9._:-]{0,200}$/).optional().catch(undefined),
   workSession: z.unknown().transform(value => typeof value === "string" ? value : JSON.stringify(value)).optional(),
   todo: z.string().regex(/^[A-Za-z0-9._:-]{1,200}$/).optional().catch(undefined),
+  // UI-only work browsing; the feature reader fences it to its exact Goal/source.
+  workGoal: z.string().optional().catch(undefined),
+  workSource: z.string().optional().catch(undefined),
+  workLens: z.enum(["owner", "board", "map"]).optional().catch(undefined),
+  taskView: z.enum(["board", "list"]).optional().catch(undefined),
+  taskOwner: z.string().max(200).optional().catch(undefined),
+  taskFilter: z.enum(["all", "needsYou", "open", "blocked", "done"]).optional().catch(undefined),
+  taskQuery: z.string().max(256).optional().catch(undefined),
   // Scopes the steward conversation to a host-granted workspace; selecting a Goal clears it.
   workspace: z.string().regex(/^[A-Za-z0-9]{1,80}$/).optional().catch(undefined),
   // Preserve malformed/partial addresses so they fail closed in the source
@@ -59,6 +67,8 @@ const searchSchema = z.object({
   view: z.enum(["conversation", "overview", "tasks", "research", "files"]).optional(),
   reportSessionId: z.string().regex(/^[A-Za-z0-9._-]{1,160}$/).optional(),
   reportMessageId: z.string().regex(/^[A-Za-z0-9._-]{1,160}$/).optional(),
+  messageSession: z.string().regex(/^[A-Za-z0-9._-]{1,160}$/).optional().catch(undefined),
+  message: z.string().regex(/^[A-Za-z0-9._-]{1,160}$/).optional().catch(undefined),
 });
 
 const frontstageSearchSchema = z.object({

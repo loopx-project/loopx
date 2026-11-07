@@ -8,7 +8,7 @@ import os
 import pytest
 
 from examples import operation_action_fixtures as fixtures
-from loopx.control_plane.turn_driver.codex_operation_host import operation_tool_handler
+from loopx.control_plane.turn_driver.managed_operation_host import operation_tool_handler
 from loopx.control_plane.turn_driver.codex_sessions import _store_codex_cli_session
 from loopx.control_plane.turn_driver.operation_requests import (
     OperationRequestSource, operation_request_source,

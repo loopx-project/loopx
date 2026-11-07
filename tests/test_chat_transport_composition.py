@@ -168,9 +168,67 @@ def test_return_rechecks_actual_typed_binding_after_owner_disconnect(ordinary): 
     assert len(external.calls) == before
 
 
+def test_http_queue_pins_source_revision_but_rechecks_inputs_and_authority(ordinary, monkeypatch):  # noqa: F811
+    import loopx.control_plane.effect_runtime as effect
+    from loopx.capabilities.native_chat.conversation_bindings import ChatConversationBindings
+
+    store, runtime, contexts, request, _, _, _ = ordinary
+    external = Transport("external-owner")
+    composed = ChatConversationTransports(observe_default=lambda ref: {}, transports=(external,))
+    bindings = ChatConversationBindings(root=store.root, project_contexts=contexts, observe=composed.observe)
+    composed.bindings = bindings
+    contexts.conversation_bindings = bindings
+    row = bindings.configure(transport_ref=external.transport_ref,
+        project_ref=contexts.available()[0]["project_ref"], executor_endpoint_id="codex",
+        context_kind="steward", goal_scope="selected")
+    selected = bindings.resolve(binding_id=row["binding_id"], source_ref="c" * 24,
+        sender_ref=row["operator_ref"], private_human_message=True)
+    session = store.create_session(goal_id="loopx-manager", agent_id="codex", adapter_kind="codex",
+        upstream_thread_id="synthetic-thread", channel_id=selected["channel_id"],
+        steward_context=selected["context"])
+    sid = session["session_id"]
+    first, _ = store.create_queued_turn(sid, client_turn_id="first", message="First original input")
+    fingerprint = effect._runtime_fingerprint
+    qualifications = []
+
+    def qualify():
+        revision = fingerprint()
+        qualifications.append(revision)
+        return revision
+
+    monkeypatch.setattr(effect, "_runtime_fingerprint", qualify)
+
+    def read_queue():
+        qualifications.clear()
+        return request(f"/api/chat/sessions/{sid}/queue")
+
+    try:
+        status, payload = read_queue()
+        assert status == 200 and [turn["turn_id"] for turn in payload["turns"]] == [first["turn_id"]]
+        assert len(qualifications) == 1
+        second, _ = store.create_queued_turn(sid, client_turn_id="second", message="New original input")
+        status, payload = read_queue()
+        assert status == 200 and {turn["turn_id"] for turn in payload["turns"]} == {first["turn_id"], second["turn_id"]}
+        assert len(qualifications) == 1
+        external.available = False
+        status, payload = read_queue()
+        assert status == 400 and "turns" not in payload
+        external.available = True
+        bindings.disconnect(row["binding_id"], expected_revision=bindings.read()["revision"])
+        status, payload = read_queue()
+        assert status == 400 and "turns" not in payload
+        qualifications.clear()
+        assert request("/healthz")[0] == 200
+        assert qualifications == []
+        assert {turn["turn_id"] for turn in store.queued_turns(sid)} == {first["turn_id"], second["turn_id"]}
+    finally:
+        runtime.close()
+
+
 @pytest.mark.parametrize("installed", [False, True])
 def test_real_chat_entrypoint_composes_one_store_controller_and_return_service(tmp_path, monkeypatch, installed):
     import loopx.chat_server as chat
+    import loopx.chat.endpoint_catalog as endpoints
     from loopx.cli import build_parser
     from loopx.cli_commands.support_control_chat import chat_server_options
     from loopx.extensions.lark.cli_resolution import LarkCliResolution
@@ -185,6 +243,17 @@ def test_real_chat_entrypoint_composes_one_store_controller_and_return_service(t
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(chat, "build_lark_goal_topic_runtime_snapshot", lambda **kwargs: {})
     monkeypatch.setattr(chat, "resolve_lark_cli_for_runtime", lambda **kwargs: LarkCliResolution(None, False, "missing", None, "lark_cli_not_installed"))
+    observations = []
+
+    def observe_endpoint():
+        available = len(observations) % 2 == 0
+        observations.append(available)
+        return {"available": available, "executable": "synthetic-endpoint"}
+
+    monkeypatch.setattr(endpoints, "_antigravity_readiness", observe_endpoint)
+    monkeypatch.setattr(endpoints, "_executable_readiness", lambda executable: {
+        "available": executable == "unavailable-fixture", "executable": executable,
+    })
     entered = threading.Event()
     captured = []
     external = Transport("external-owner")
@@ -217,6 +286,32 @@ def test_real_chat_entrypoint_composes_one_store_controller_and_return_service(t
         server = captured[0]
         with urlopen(f"http://127.0.0.1:{server.server_port}/healthz", timeout=8) as response:
             assert json.load(response)["ok"] is True
+        from loopx.capabilities.machine_configuration.builtins import build_builtin_machine_configuration_registry
+        from loopx.capabilities.machine_configuration.store import configure_machine_configuration
+
+        configuration = {"schema_version": "loopx_machine_configuration_v0", "namespaces": {
+            "steward_executor": {"schema_version": "steward_executor_machine_defaults_v1",
+                "selection_policy": "flexible", "eligible_endpoints": ["antigravity", "codex"],
+                "executor_endpoint": "antigravity", "executor_model": "gemini-4-argon-high",
+                "executor_reasoning_effort": "high"}}}
+        configuration_args = {"runtime_root": server.runtime_root, "configuration": configuration,
+            "registry": build_builtin_machine_configuration_registry()}
+        preview = configure_machine_configuration(**configuration_args, execute=False)
+        configure_machine_configuration(**configuration_args, execute=True,
+            expected_plan_revision=preview["plan_revision"])
+        observations.clear()
+        for expected in (True, False, True):
+            with urlopen(f"http://127.0.0.1:{server.server_port}/api/chat/capabilities", timeout=8) as response:
+                capabilities = json.load(response)
+            available = {item["agent_id"]: item["available"] for item in capabilities["adapters"]}
+            assert available["antigravity"] is expected
+            # The channel must choose from the same observation shown in Settings,
+            # including when the preferred endpoint disappears and later returns.
+            selected = capabilities["manager"]["channel_binding"]["executor_endpoint"]
+            assert selected == ("antigravity" if expected else "codex")
+            assert available[selected] is True
+        assert observations == [True, False, True]
+        assert server.chat_store.list_sessions() == []
         assert server.runtime_controller.startup_timeout_sec == 30.0
         assert server.runtime_controller.acp_startup_timeout_sec is None
         if server.codex_account_service.provider is not None:

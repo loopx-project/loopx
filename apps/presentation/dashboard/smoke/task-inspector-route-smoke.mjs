@@ -22,7 +22,10 @@ try {
   browser = await launchBrowser(loadPlaywright().chromium);
   await mkdir(outputDir, { recursive: true });
   for (const { height, width } of viewports) {
-    const workspace = await openWorkspacePage({ newPage: options => browser.newPage({ locale: "zh-CN", ...options }) }, url, { viewport: { width, height } });
+    const workspace = await openWorkspacePage({ newPage: options => browser.newPage({ locale: "zh-CN", ...options }) }, url, {
+      viewport: { width, height }, gotoWaitUntil: "domcontentloaded",
+      beforeGoto: (_api, page) => {page.setDefaultTimeout(10000); page.setDefaultNavigationTimeout(15000);},
+    });
     const { page, api } = workspace;
     try {
       await page.emulateMedia({ reducedMotion: "reduce" });
@@ -33,15 +36,15 @@ try {
       await activeTab.filter({ hasText: "概览" }).waitFor();
       const goalLink = new URL(page.url());
       goalLink.searchParams.delete("view");
-      await page.goto(goalLink.href, { waitUntil: "networkidle" });
+      await page.goto(goalLink.href, { waitUntil: "domcontentloaded" });
       await activeTab.filter({ hasText: "概览" }).waitFor();
-      await page.reload({ waitUntil: "networkidle" });
+      await page.reload({ waitUntil: "domcontentloaded" });
       await activeTab.filter({ hasText: "概览" }).waitFor();
       await page.screenshot({ path: resolve(outputDir, `goal-default-overview-${width}.png`), animations: "disabled" });
       for (const [view, label] of [["conversation", "对话"], ["files", "成果"], ["tasks", "任务"]]) {
         const explicitLink = new URL(goalLink);
         explicitLink.searchParams.set("view", view);
-        await page.goto(explicitLink.href, { waitUntil: "networkidle" });
+        await page.goto(explicitLink.href, { waitUntil: "domcontentloaded" });
         await activeTab.filter({ hasText: label }).waitFor();
       }
       const opener = page.locator(".personal-task-card", { hasText: "Current Todo" }).locator(":scope > button");
@@ -170,7 +173,7 @@ try {
           && getComputedStyle(document.documentElement).overflow !== "hidden"
           && getComputedStyle(document.body).overflow !== "hidden";
       });
-      await page.reload({ waitUntil: "networkidle" });
+      await page.reload({ waitUntil: "domcontentloaded" });
       await opener.waitFor();
       assert.equal(await drawer.count(), 0, "Reload cannot resurrect a dismissed Task");
       assert.deepEqual(scope(), initialScope);
@@ -187,26 +190,76 @@ try {
       await page.goForward();
       await page.waitForURL(value => !value.searchParams.has("todo"));
       await drawer.waitFor({ state: "hidden" });
-      await page.goto(deepLink, { waitUntil: "networkidle" });
+      await page.goto(deepLink, { waitUntil: "domcontentloaded" });
       await drawer.waitFor();
-      await page.reload({ waitUntil: "networkidle" });
+      await page.reload({ waitUntil: "domcontentloaded" });
       await drawer.waitFor();
       assert.equal(new URL(page.url()).searchParams.get("todo"), "todo-progress-current", "A deliberate deep link remains restorable");
       await drawer.getByRole("button", { name: /关闭详情/ }).click();
       await page.waitForURL(value => !value.searchParams.has("todo"));
-      await page.reload({ waitUntil: "networkidle" });
+      await page.reload({ waitUntil: "domcontentloaded" });
       await opener.waitFor();
       assert.equal(await drawer.count(), 0);
       const unavailable = new URL(deepLink);
       unavailable.searchParams.set("todo", "todo-missing-route");
-      await page.goto(unavailable.href, { waitUntil: "networkidle" });
+      await page.goto(unavailable.href, { waitUntil: "domcontentloaded" });
       await drawer.getByRole("button", { name: "重试读取完整要求" }).waitFor();
       await page.keyboard.press("Escape");
       await page.waitForURL(value => !value.searchParams.has("todo"));
-      await page.reload({ waitUntil: "networkidle" });
+      await page.reload({ waitUntil: "domcontentloaded" });
       await opener.waitFor();
       assert.equal(await drawer.count(), 0, "An unavailable deep link can be dismissed without a recovery loop");
       assert.deepEqual(scope(), initialScope);
+      if (width === 1512 || width === 390) {
+        const tasks = page.locator('[data-goal-panel="tasks"] .personal-task-board');
+        const taskSearch = tasks.getByRole("searchbox", {name: "搜索当前已列出的任务"});
+        await tasks.getByRole("button", {name: "列表", exact: true}).click();
+        await taskSearch.fill("Current");
+        await tasks.getByRole("combobox", {name: "按工作 Agent 筛选"}).selectOption("");
+        await page.waitForURL(value => value.searchParams.get("taskView") === "list" && value.searchParams.get("taskOwner") === "");
+        await page.locator('.personal-goal-tabs button').filter({hasText: "概览"}).click();
+        const now = page.getByRole("region", {name: "当前工作", exact: true});
+        await now.getByRole("button", {name: "看板", exact: true}).click();
+        const overviewBoard = page.locator('.goal-overview .personal-task-board');
+        assert.equal(await overviewBoard.getByRole("searchbox", {name: "搜索当前已列出的任务"}).inputValue(), "Current", "Overview and Tasks share the listed-task query");
+        assert.equal(await overviewBoard.getByRole("button", {name: "列表", exact: true}).getAttribute("aria-pressed"), "true");
+        await page.reload({waitUntil: "domcontentloaded"});
+        await overviewBoard.waitFor();
+        assert.equal(await overviewBoard.getByRole("searchbox", {name: "搜索当前已列出的任务"}).inputValue(), "Current", "Reload restores the scoped query");
+        assert.equal(await overviewBoard.getByRole("combobox", {name: "按工作 Agent 筛选"}).inputValue(), "", "Unassigned remains an explicit filter");
+        await page.goBack();
+        await now.getByRole("button", {name: "按负责人", exact: true}).waitFor();
+        assert.equal(await now.getByRole("button", {name: "按负责人", exact: true}).getAttribute("aria-pressed"), "true", "Back restores the overview lens");
+        await page.goForward();
+        await overviewBoard.waitFor();
+        await page.locator('.personal-goal-tabs button').filter({hasText: "任务"}).click();
+        await tasks.waitFor();
+        if (width === 1512) {
+          await tasks.locator('.personal-task-card', {hasText: "Current Todo"}).locator(":scope > button").click();
+          await drawer.waitFor();
+          await tasks.getByRole("group", {name: "任务状态筛选"}).getByRole("button", {name: "受阻与延后", exact: true}).click();
+          await tasks.locator(".personal-task-selection-note").waitFor();
+          assert.equal(new URL(page.url()).searchParams.get("todo"), "todo-progress-current", "Filtering cannot change the selected Task identity");
+          await tasks.getByRole("button", {name: "显示所选任务", exact: true}).click();
+          await drawer.getByRole("button", {name: /关闭详情/}).click();
+          await drawer.waitFor({state: "hidden"});
+        } else {
+          await tasks.getByRole("button", {name: "清除筛选", exact: true}).click();
+        }
+        await tasks.getByRole("button", {name: "看板", exact: true}).click();
+        const otherGoal = new URL(page.url());
+        otherGoal.searchParams.set("goalId", "product-release");
+        // A copied old filter address must not filter another Goal.
+        otherGoal.searchParams.set("taskQuery", "Current");
+        otherGoal.searchParams.set("taskView", "list");
+        await page.goto(otherGoal.href, {waitUntil: "domcontentloaded"});
+        const otherTasks = page.locator('[data-goal-panel="tasks"] .personal-task-board');
+        await otherTasks.waitFor();
+        assert.equal(await otherTasks.getByRole("searchbox", {name: "搜索当前已列出的任务"}).inputValue(), "");
+        assert.equal(await otherTasks.getByRole("button", {name: "看板", exact: true}).getAttribute("aria-pressed"), "true", "Another Goal does not inherit route presentation state");
+        await page.goto(goalLink.href + (goalLink.search ? "&" : "?") + "view=tasks", {waitUntil: "domcontentloaded"});
+        await opener.waitFor();
+      }
       if (width === 1512) {
         await opener.click();
         await drawer.waitFor();
@@ -237,7 +290,7 @@ try {
         await drawer.waitFor({ state: "hidden" });
         await page.waitForFunction(() => document.activeElement?.classList.contains("personal-task-board"));
         assert.equal(
-          await page.locator(".personal-task-board").evaluate(element => document.activeElement === element),
+          await page.locator('[data-goal-panel="tasks"]:not([hidden]) .personal-task-board').evaluate(element => document.activeElement === element),
           true,
           "A removed Task opener falls back to the Task list instead of another Task",
         );

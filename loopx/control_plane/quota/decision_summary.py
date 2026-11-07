@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from typing import Any, TypedDict, cast
+
 from dataclasses import dataclass
-from typing import Any, TypedDict
 
 from ...state_projection import actions_are_projection_aligned
 from ..goals.contract_health import project_contract_health_for_goal
@@ -18,7 +19,7 @@ from ..work_items.work_lane import work_lane_contract_is_due_monitor_attempt
 def quota_plan_items(plan: dict[str, Any]) -> list[dict[str, Any]]:
     """Flatten quota plan state groups into ordered goal items."""
 
-    groups = plan.get("groups") if isinstance(plan.get("groups"), dict) else {}
+    groups = cast(dict[str, Any], plan.get("groups")) if isinstance(plan.get("groups"), dict) else {}
     items: list[dict[str, Any]] = []
     for state_items in groups.values():
         if not isinstance(state_items, list):
@@ -47,7 +48,7 @@ class QuotaDecisionPacket(TypedDict):
 
 
 def compact_quota_decision(decision: dict[str, Any]) -> QuotaDecisionPacket:
-    quota = decision.get("quota") if isinstance(decision.get("quota"), dict) else {}
+    quota = cast(dict[str, Any], decision.get("quota")) if isinstance(decision.get("quota"), dict) else {}
     return {
         "should_run": bool(decision.get("should_run")),
         "normal_delivery_allowed": bool(decision.get("normal_delivery_allowed")),
@@ -70,7 +71,7 @@ def compact_quota_decision(decision: dict[str, Any]) -> QuotaDecisionPacket:
 
 def quota_decision_agent_id(decision: dict[str, Any]) -> str | None:
     agent_identity = (
-        decision.get("agent_identity")
+        cast(dict[str, Any], decision.get("agent_identity"))
         if isinstance(decision.get("agent_identity"), dict)
         else {}
     )
@@ -123,7 +124,7 @@ def goal_status_health_ok(
     if goal_missing_state_blocker(status_payload, goal_id=goal_id) is not None:
         return False
     contract = (
-        status_payload.get("contract")
+        cast(dict[str, Any], status_payload.get("contract"))
         if isinstance(status_payload.get("contract"), dict)
         else {}
     )

@@ -194,7 +194,7 @@ if os.environ.get("FAKE_CODEX_CHILD_MARKER"):
 if os.environ.get("FAKE_CODEX_SLEEP"):
     time.sleep(float(os.environ["FAKE_CODEX_SLEEP"]))
 output_path = pathlib.Path(args[args.index("--output-last-message") + 1])
-output_path.write_text(json.dumps({
+result = {
     "schema_version": "loopx_turn_result_v0",
     "turn_key": turn_key,
     "result_kind": "validated_progress",
@@ -208,7 +208,9 @@ output_path.write_text(json.dumps({
     "summary": "One public fixture advanced.",
     "work_evidence": ["artifact:fixture-change"],
     "validation_evidence": ["check:fixture-validation"]
-}), encoding="utf-8")
+}
+result.update(json.loads(os.environ.get("FAKE_CODEX_RESULT_FIELDS", "{}")))
+output_path.write_text(json.dumps(result), encoding="utf-8")
 """
     executable = write_python_host_fixture(
         executable,
@@ -256,13 +258,45 @@ def _capture_fake_codex_failure(
     return exc_info.value, runtime_root
 
 
-def test_codex_cli_result_schema_requires_only_bounded_contract_fields() -> None:
-    schema = codex_cli_result_schema()
+@pytest.mark.parametrize("kind", ["wait", "user_action_required", "iteration_failed"])
+@pytest.mark.parametrize("with_profile", [False, True])
+def test_codex_cli_stop_null_evidence_reaches_executor(tmp_path, monkeypatch, kind, with_profile):
+    from loopx.control_plane.turn_driver.executor import validate_loopx_turn_host_result
+
+    executable, log_path = _fake_codex(tmp_path)
+    monkeypatch.setenv("FAKE_CODEX_LOG", str(log_path))
+    monkeypatch.setenv("FAKE_CODEX_RESULT_FIELDS", json.dumps({
+        "result_kind": kind, "work_evidence": None, "validation_evidence": None,
+        "delivery_batch_scale": "", "delivery_outcome": "", "vision_unchanged_reason": "",
+        "path_delta_mode": "", "agent_vision_json": "", "progress_observation_json": "",
+    }))
+    request = _request()
+    if with_profile:
+        request["turn_envelope"]["contract_capsule"] = {
+            "execution_profile": {"work_kind": "engineering_change"}
+        }
+    result = run_codex_cli_host(request, runtime_root=tmp_path / "runtime",
+        project=tmp_path, codex_bin=str(executable), timeout_seconds=5)
+    assert "work_evidence" not in result and "validation_evidence" not in result
+    verdict = validate_loopx_turn_host_result({"transaction": {"turn_key": request["turn_key"]}}, result)
+    assert verdict["ok"], verdict["errors"]
+
+
+@pytest.mark.parametrize("with_profile", [False, True])
+def test_codex_cli_result_schema_requires_only_bounded_contract_fields(with_profile) -> None:
+    request = _request()
+    if with_profile:
+        request["turn_envelope"]["contract_capsule"] = {
+            "execution_profile": {"work_kind": "engineering_change"}
+        }
+    schema = codex_cli_result_schema(request)
 
     assert schema["additionalProperties"] is False
-    assert set(schema["required"]) == (
-        set(schema["properties"]) - {"work_evidence", "validation_evidence"}
-    )
+    assert set(schema["required"]) == set(schema["properties"])
+    assert not {"allOf", "if", "then"}.intersection(schema)
+    for field in ("work_evidence", "validation_evidence"):
+        assert schema["properties"][field]["type"] == ["array", "null"]
+        assert schema["properties"][field]["minItems"] == 1
     assert "raw_trajectory" not in schema["properties"]
     assert "stdout" not in schema["properties"]
     assert "child_execution_receipts" not in schema["properties"]

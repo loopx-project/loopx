@@ -209,8 +209,7 @@ def test_mcp_uses_kunluncode_profile_and_rejects_agent_impersonation(
         "todo_333333333333",
         "kunlun",
         "focused check passed",
-        task_lease_idempotency_key="lease-fixture",
-        task_lease_expected_version=7,
+        claim_operation_id="claim-fixture",
         no_follow_up=True,
     )
     completed = json.loads(output)
@@ -221,17 +220,18 @@ def test_mcp_uses_kunluncode_profile_and_rejects_agent_impersonation(
     terminal_closeout = settlement_commands[-1]
     assert "--no-follow-up" not in first_completion
     assert "--no-follow-up" in terminal_closeout
-    assert "--task-lease-idempotency-key" in first_completion
-    assert "--task-lease-idempotency-key" in terminal_closeout
+    assert "--claim-operation-id" in first_completion
+    assert "--claim-operation-id" in terminal_closeout
     assert completed["settlement"]["terminal_closeout"][
         "completion_continuation"
     ] == "no_followup"
-    for lease_command in (first_completion, terminal_closeout):
-        version_at = lease_command.index("--task-lease-expected-version")
-        assert lease_command[version_at : version_at + 2] == [
-            "--task-lease-expected-version",
-            "7",
+    for completion in (first_completion, terminal_closeout):
+        reference_at = completion.index("--claim-operation-id")
+        assert completion[reference_at : reference_at + 2] == [
+            "--claim-operation-id", "claim-fixture",
         ]
+        assert not any("task-lease" in part for part in completion)
+
 
 
 def test_fastmcp_complete_task_forwards_complete_task_lease_fence(
@@ -303,8 +303,7 @@ def test_fastmcp_complete_task_forwards_complete_task_lease_fence(
                 "todo_id": "todo_777777777777",
                 "agent_id": "claude",
                 "evidence": "focused check passed",
-                "task_lease_idempotency_key": "lease-fixture",
-                "task_lease_expected_version": 7,
+                "claim_operation_id": "claim-fixture",
             },
         )
     )
@@ -316,11 +315,9 @@ def test_fastmcp_complete_task_forwards_complete_task_lease_fence(
     assert complete_commands, commands
     for complete_command in complete_commands:
         assert complete_command[
-            complete_command.index("--task-lease-idempotency-key") :
-        ][:2] == ["--task-lease-idempotency-key", "lease-fixture"]
-        assert complete_command[
-            complete_command.index("--task-lease-expected-version") :
-        ][:2] == ["--task-lease-expected-version", "7"]
+            complete_command.index("--claim-operation-id") :
+        ][:2] == ["--claim-operation-id", "claim-fixture"]
+        assert not any("task-lease" in part for part in complete_command)
 
 
 def test_mcp_spends_only_after_typed_completed_state(
@@ -1281,8 +1278,7 @@ def test_native_controller_blocks_model_visible_mcp_mutations(
                 "todo_id": "todo-1",
                 "agent_id": "kunlun",
                 "evidence": "premature evidence",
-                "task_lease_idempotency_key": "lease-fixture",
-                "task_lease_expected_version": 7,
+                "claim_operation_id": "claim-fixture",
             },
         )
     )
@@ -1411,6 +1407,54 @@ def test_native_goal_pro_commits_only_after_verified_terminal_state(
     assert state["writeback"]["quota_spent"] is True
     journal = (tmp_path / ".loopx" / "kunluncode-runtime.json").read_text()
     assert "Implement and verify the native Goal Pro adapter" not in journal
+
+
+def test_native_goal_prepares_released_execution_before_model_launch(
+    tmp_path: Path,
+) -> None:
+    todo = _native_todo(claimed=True)
+
+    class PreparationControl(_FakeControlPlane):
+        def should_run(self) -> dict[str, object]:
+            self.calls.append("should_run")
+            ready = any(call.startswith("claim:") for call in self.calls)
+            return {
+                "ok": True,
+                "should_run": True,
+                "selected_todo": self.todo,
+                "normal_delivery_allowed": ready,
+                "execution_preparation": {
+                    "schema_version": "execution_preparation_v0",
+                    "state": "ready" if ready else "claim_required",
+                    "delivery_allowed": ready,
+                },
+            }
+
+    control = PreparationControl(todo)
+    clients: list[_FakeAppServer] = []
+
+    def factory(command: list[str], **kwargs) -> _FakeAppServer:
+        client = _FakeAppServer(command, **kwargs)
+        clients.append(client)
+        return client
+
+    result = run_native_goal(
+        tmp_path,
+        _native_context(tmp_path),
+        mode="goal-pro",
+        permission_mode="auto",
+        max_duration_secs=60,
+        controller_timeout_secs=120,
+        kunluncode_bin="/usr/bin/kunluncode",
+        control_plane=control,
+        client_factory=factory,
+    )
+
+    assert result["status"] == "committed"
+    assert control.calls[:3] == [
+        "should_run", "claim:todo-native-1", "should_run",
+    ]
+    assert clients and clients[0].calls[0] == "initialize"
 
 
 def test_source_native_goal_rejects_alias_only_runtime_state(

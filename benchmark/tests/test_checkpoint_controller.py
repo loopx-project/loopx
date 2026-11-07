@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import io
 import json
+import math
 import os
 import subprocess
 import socket
@@ -18,6 +20,7 @@ from unittest.mock import Mock
 import pytest
 
 from benchmark.edgebench import checkpoint_controller as transport
+from benchmark.edgebench.source import active_source_receipt
 
 
 @contextmanager
@@ -51,6 +54,7 @@ def wait(predicate):
 
 @pytest.fixture
 def controllers(tmp_path, monkeypatch):
+    active_source_receipt()  # A supplied frozen-source receipt must match the real imported provider.
     pytest.importorskip("sforge.harness.checkpoint", reason="Requires native checkpoint API source pin")
     from sforge.harness import judge_server as native
     from sforge.harness.config import SForgeConfig
@@ -127,6 +131,19 @@ def test_activation_accepts_only_bound_native_fields_and_valid_optional_relay():
             transport._activation_result(altered, body)
 
 
+def test_native_bank_rejects_an_unknown_schema_even_with_matching_bytes(tmp_path):
+    packet = {"schema_version": "sforge_judge_checkpoint_v3", "task_id": "fixture",
+              "source_run_id": "source", "opportunity": {}, "incumbent": None}
+    raw = json.dumps(packet).encode()
+    digest = hashlib.sha256(raw).hexdigest()
+    (tmp_path / "manifest.json").write_bytes(raw)
+    (tmp_path / "manifest.sha256").write_text(digest)
+    reference = {key: packet[key] for key in ("task_id", "source_run_id", "opportunity", "incumbent")}
+    reference["manifest_sha256"] = digest
+    with pytest.raises(ValueError, match="Native bank bytes differ"):
+        transport._bound_bank(tmp_path, reference)
+
+
 def test_native_controller_transport_preserves_original_point_and_fresh_authority(controllers, tmp_path, capsys):
     import requests
     source, destination, first, second, files, grades = controllers
@@ -173,6 +190,80 @@ def test_native_controller_transport_preserves_original_point_and_fresh_authorit
     with pytest.raises(ValueError, match="HTTP 409"):
         transport.restore(files[1], root=exported, expected_sha256=receipt["sha256"], run_id="branch")
     assert len(grades) == 3
+
+
+def test_native_controller_transport_retains_nonfinite_released_results(
+        controllers, tmp_path, monkeypatch):
+    from sforge.harness import judge_server as native
+
+    source, destination, first, second, files, grades = controllers
+    clock = SimpleNamespace(epoch=time.time())
+    # Native admission and checkpoint capture share this wall clock. HTTP and
+    # transport deadlines keep using the real monotonic clock.
+    monkeypatch.setattr(native.time, "time", lambda: clock.epoch)
+    for app in (source, destination):
+        app.state.judge.tasks["fixture"].judge.score_direction = "minimize"
+    original_grade = native.judge_submission
+
+    def grade(**kwargs):
+        report = original_grade(**kwargs).to_dict()
+        if kwargs["archive"] == b"inf":
+            report.update(valid=False, pass_rate=.5, passed=1, failed=1, total_tests=2,
+                          summary="Synthetic partial result",
+                          metrics={"lower_bound": -math.inf, "residual": math.nan},
+                          details=[{"name": "synthetic-timeout", "score": math.inf}])
+        return SimpleNamespace(to_dict=lambda: report)
+
+    monkeypatch.setattr(native, "judge_submission", grade)
+    token = register(source, first, max_agent_submissions=3, submission_cooldown=2)
+    assert submit(first, token, 7).status_code == 200
+    clock.epoch += 2.05
+    rejected = submit(first, token, math.inf)
+    assert rejected.status_code == 200
+    rejected_id = rejected.json()["submission_id"]
+    # A released partial result still consumed its native round. It neither
+    # replaces the finite incumbent nor prevents preserving the whole point.
+    before = json.dumps((source.state.judge.tokens, source.state.judge.submissions,
+                         source.state.judge.run_history), sort_keys=True)
+    exported = tmp_path / "nonfinite-point"
+    point = transport.capture(files[0], token=token, capture_id="e" * 32,
+                              destination=exported)
+    assert point["native_reference"]["incumbent"]["round"] == "agent-1"
+    assert (exported / "components/native_judge/incumbent.tar.gz").read_bytes() == b"7"
+
+    def reject_non_json_constant(value):
+        pytest.fail(f"Native checkpoint contains a non-JSON numeric constant: {value}")
+
+    manifest = exported / "components/native_judge/manifest.json"
+    json.loads(manifest.read_bytes(), parse_constant=reject_non_json_constant)
+    restored = transport.restore(files[1], root=exported, expected_sha256=point["sha256"],
+                                 run_id="nonfinite-branch")
+    fresh = restored["token"]
+    assert fresh != token and len(grades) == 2  # Restoring does not regrade.
+    history = destination.state.judge.get_run_history("nonfinite-branch", "fixture")
+    assert history["best_round"] == "agent-1" and history["best_score"] == 7
+    assert history["agent_submissions"] == 2 and history["auto_submissions"] == 0
+    released = next(entry for entry in history["entries"] if entry["round"] == "agent-2")
+    assert released["submission_id"] != rejected_id
+    report = destination.state.judge.submissions[released["submission_id"]]["report"]
+    assert report["score"] == math.inf and report["valid"] is False
+    assert report["failed"] == 1 and report["pass_rate"] == .5
+    assert report["metrics"]["lower_bound"] == -math.inf
+    assert math.isnan(report["metrics"]["residual"])
+    assert report["details"] == [{"name": "synthetic-timeout", "score": math.inf}]
+    opportunity = destination.state.judge.tokens[fresh]
+    assert opportunity["next_agent"] == 3 and opportunity["max_agent_submissions"] == 3
+    assert opportunity["submission_cooldown"] == 2
+    assert submit(second, fresh, 1).status_code == 429
+    clock.epoch += 2.05
+    assert submit(second, fresh, 1).status_code == 200
+    clock.epoch += 2.05
+    assert submit(second, fresh, 0).status_code == 429
+    history = destination.state.judge.get_run_history("nonfinite-branch", "fixture")
+    assert history["agent_submissions"] == 3 and history["best_score"] == 1
+    assert history["best_round"] == "agent-3" and len(grades) == 3
+    assert json.dumps((source.state.judge.tokens, source.state.judge.submissions,
+                       source.state.judge.run_history), sort_keys=True) == before
 
 
 def host_phase_command(tmp_path, monkeypatch):

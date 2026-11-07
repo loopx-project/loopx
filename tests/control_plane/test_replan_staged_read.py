@@ -11,12 +11,15 @@ from pathlib import Path
 
 import pytest
 
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
+
 from canonical_authority_fixture import isolate_sqlite_runtime
 from loopx.control_plane.effect_runtime import EffectRuntimeRejected, restart_effect_runtime
 from loopx.control_plane.quota.turn_envelope import (
     _turn_envelope_result, build_turn_envelope, quota_action_signature_document,
     turn_envelope_action_signature_document, prepare_context_delivery, restore_context_delivery,
 )
+from tests.control_plane.codex_checkpoint_fixture import reference_metadata_oracle
 from test_replan_host_context_projection import _quota_payload
 from test_replan_progress_native_cli import (
     AGENT, GOAL, TODO, TURN, call_progress_cli, make_progress_cli_fixture,
@@ -78,7 +81,7 @@ def test_staged_packet_budget_and_lossless_authority(stride):
         control = writer["stride_control"]
         assert control["previous_decision_ref"] == source["replan_action_packet"]["stride_control"]["previous_decision_ref"]
         assert "decision_followthrough" not in control and "decision_value_review" not in control
-        assert "minimal_example" not in control
+        assert control["minimal_example"] == source["replan_action_packet"]["stride_control"]["minimal_example"]
         assert control["basis_options"] == ["supported_progress", "unexplained_gap", "uncertain_evidence", "useful_new_route", "decision_failure"]
         assert {"basis", "action", "axes", "next_probe"} <= set(control["required_fields"])
     assert source == original
@@ -106,6 +109,7 @@ def test_pure_replan_does_not_advertise_unavailable_explore_attachment(tmp_path,
     try:
         entry = call("quota", "should-run", "--codex-app", "--goal-id", goal,
             "--agent-id", agent, "--turn-instance-id", turn, "--decision-output-dir", str(capture))
+        entry = read_cli_policy_payload(json.dumps(entry), returncode=0)
         source = json.loads((capture / "decision.json").read_bytes())
         original = explore_source(source)["content"]["graph"]
         graph = explore_source(entry)["content"]["graph"]
@@ -165,7 +169,7 @@ def assert_explore_entry_and_writer(source, entry, writer):
     assert "result_attachment_template" not in graph
     # These obligations apply BEFORE choosing or executing work, not at closeout.
     assert "Read measurement_feedback before repeating a measured route" in graph["result_writeback_guidance"]
-    assert "keep the active task lease through refresh-state" in graph["result_writeback_guidance"]
+    assert "keep its claimed execution through refresh-state" in graph["result_writeback_guidance"]
     assert "Keep raw logs local." in graph["result_writeback_guidance"]
     assert "Capture is optional, not a settlement obligation." in graph["result_writeback_guidance"]
     assert "never invent a shared version" in graph["result_writeback_guidance"]
@@ -193,6 +197,8 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     fixture = make_progress_cli_fixture(tmp_path, provider, "advanced")
     enable_explore(fixture)
+    with fixture["state"].open("a") as stream:
+        stream.write("\n## Original additional requirements\nPreserve this final independent stop.\n")
     if not replan:
         fixture["index"].write_text("")
     wake = tmp_path / "wakes" / TURN
@@ -227,19 +233,39 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
         assert len(commands) == 1 and "--turn-envelope" not in commands[0]
         assert "--decision-output-root" in commands[0]
         source_path, view_path = wake / "checkpoint-start-guard.json", wake / "checkpoint-start-view.json"
+        if context_delivery:
+            argv = shlex.split(body.split("```sh\n", 1)[1].split("\n```", 1)[0])
+            view_path = Path(argv[argv.index("--capture-file") + 1])
+            assert view_path.parent != wake and view_path.is_relative_to(wake)
         source, view = json.loads(source_path.read_bytes()), json.loads(view_path.read_bytes())
         assert str(view_path) in body and str(source_path) not in body
         assert body.endswith("original heartbeat instructions")
         if context_delivery:
+            assert "--defer-context-presentation" in commands[0]
+            assert "--context-delivery" in commands[0]
+            assert not list(native.iterdir()), "Host preflight must not alter native continuity"
+            assert not any(read.get("source") == "goal_state" for read in
+                view["interaction_contract"]["agent_channel"]["required_reads"])
+            delivered = [row["content"] for row in view["interaction_contract"]["agent_channel"]
+                ["work_context"]["sources"] if row.get("source") == "goal_state"]
+            if replan:
+                # This fixture has no bound work: the staged review owns the
+                # original Goal read, not ordinary work-context delivery.
+                core = source["autonomous_replan_obligation"]["replan_context"]["core_goal"]
+                assert shlex.split(core["read_action"]) == ["cat", "--", str(fixture["state"].resolve())]
+            else:
+                assert len(delivered) == 1 and delivered[0]["full_source"] is True
+                assert delivered[0]["text"] == fixture["state"].read_text()
             # The optional full/delta transport must present the staged CLI
             # view too. Its full recovery must not restore old inline hints.
             command = body.split("```sh\n", 1)[1].split("\n```", 1)[0]
             projected = run(shlex.split(command), cwd=fixture["project"], env=env,
                 capture_output=True, text=True, timeout=60)
             assert projected.returncode == 0, projected.stdout
-            presentation = json.loads(projected.stdout)
+            presentation = reference_metadata_oracle(json.loads(projected.stdout))
             assert presentation["ok"] and presentation["mode"] == "full"
-            assert presentation["recovery"]["path"] == str(view_path)
+            assert reference_metadata_oracle(presentation)["recovery"]["path"] == str(view_path)
+            assert read_cli_policy_payload(projected.stdout, returncode=projected.returncode) == view
         assert source["heartbeat_receipt"]["turn_instance_id"] == TURN
         assert source["heartbeat_receipt"] == view["heartbeat_receipt"]
         assert receipt["checkpoint"]["reason"] == "synthetic_no_native_capture"
@@ -272,6 +298,57 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
         assert {key: fixture[key].read_bytes() for key in before} == before
         assert capture.read_bytes() == source_path.read_bytes()
         assert len(commands) == 1  # Reads did not re-enter checkpoint preflight.
+    finally:
+        restart_effect_runtime(wait_for_exit=True)
+
+
+@pytest.mark.parametrize("mode", ["off", "on"])
+def test_review_routes_to_selection_before_the_bound_writer(tmp_path, monkeypatch, mode):
+    tmp_path = tmp_path.resolve()
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    fixture = make_progress_cli_fixture(tmp_path, "sqlite", "advanced")
+    captures, native = tmp_path / "captures", tmp_path / "native"
+    captures.mkdir(mode=0o700)
+    native.mkdir(mode=0o700)
+    pinned_cli = str(Path(sys.executable).with_name("loopx"))
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", "on")
+
+    def invoke(argv):
+        return subprocess.run(argv, cwd=fixture["project"], capture_output=True, text=True, timeout=60)
+
+    try:
+        entry = call_progress_cli(fixture, "--cli-bin", pinned_cli, "quota", "should-run",
+            "--codex-app", "--goal-id", GOAL, "--agent-id", AGENT, "--turn-instance-id", TURN,
+            "--context-delivery", mode, "--delta-delivery", "auto" if mode == "on" else "off",
+            "--decision-output-root", str(captures),
+            "--codex-context-dir", str(native), *(["--defer-context-presentation"] if mode == "on" else []))
+        review_argv = shlex.split(entry["replan_action_packet"]["review"])
+        review = json.loads(invoke(review_argv).stdout)
+        assert review["next"]["selection_required"] is True and "writeback" not in review["next"]
+        selection = entry
+        for key in review["next"]["selection_command_ref"].removeprefix("$.").split("."):
+            selection = selection[key]
+        selected = shlex.split(selection["route_prefix"]) + shlex.split(selection["command_args_template"])
+        selected[selected.index("{todo_id}")] = TODO
+        result = invoke(selected)
+        assert result.returncode == 0, result.stdout
+        view = json.loads(result.stdout)
+        if mode == "on":
+            assert view["schema_version"] == "context_capture_navigation_v1"
+        else:
+            assert view["selected_todo"]["todo_id"] == TODO
+            assert view["decision"] == "autonomous_replan_required"
+
+        # Follow the new observation. A recommendation on the initial capture
+        # can already name the same Todo without owning this settlement.
+        decisions = (json.loads(path.read_bytes()) for path in captures.glob("*/decision.json"))
+        bound = next(item for item in decisions if item["interaction_contract"]["cli_channel"].get("settlement_plan"))
+        bound_packet = _turn_envelope_result("replan_cli_view", payload=bound)["replan_action_packet"]
+        bound_review = json.loads(invoke(shlex.split(bound_packet["review"])).stdout)
+        assert bound_review["source_hash"] != review["source_hash"]
+        writer = json.loads(invoke(shlex.split(bound_review["next"]["writeback"])).stdout)
+        identity = writer["writeback"]["settlement_plan"]["identity"]
+        assert (identity["todo_id"], identity["turn_instance_id"]) == (TODO, TURN)
     finally:
         restart_effect_runtime(wait_for_exit=True)
 
@@ -317,6 +394,7 @@ def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, m
             "--goal-id", GOAL, "--agent-id", AGENT, "--turn-instance-id", TURN,
             "--todo-id", TODO, "--decision-output-dir", str(capture),
             *(["--turn-envelope"] if envelope else []))
+        guard = read_cli_policy_payload(json.dumps(guard), returncode=0)
         packet = guard["replan_action_packet"]
         if not envelope:
             assert "settlement_plan" not in guard["interaction_contract"]["cli_channel"]
@@ -594,6 +672,18 @@ def test_native_reader_keeps_its_installation_across_acceptance_and_writeback(tm
     from loopx.control_plane.turn_driver.decision_capture import write_decision_capture
     from loopx.control_plane.turn_driver.host_candidate import extract_turn_authority, render_prompt
 
+    release_root = Path(__file__).resolve().parents[2]
+    release_cli = release_root / "scripts" / "loopx"
+    stale_root = tmp_path / "stale-system-module"
+    stale_package = stale_root / "loopx"
+    stale_package.mkdir(parents=True)
+    (stale_package / "__init__.py").write_text("")
+    (stale_package / "entrypoint.py").write_text(
+        "raise SystemExit('stale system LoopX must not handle captured readers')\n"
+    )
+    monkeypatch.setenv("LOOPX_RELEASE_ROOT", str(release_root))
+    monkeypatch.setenv("PYTHONPATH", str(stale_root))
+
     source = _quota_payload()
     outcome = {"id": "original-outcome", "objective": "Deliver the original accepted artifact.",
         "requirements": [{"id": "original-stop", "description": "Stop before publication."}]}
@@ -606,7 +696,9 @@ def test_native_reader_keeps_its_installation_across_acceptance_and_writeback(tm
     args = {"captured_decision_path": str(capture), "turn_instance_id": "original-native-turn", "turn_key": "sha256:" + "0" * 64}
     legacy = bind_turn_decision_capture(source, envelope, **args)
     assert "read autonomous_replan_obligation.replan_context" in render_prompt(extract_turn_authority({"turn_envelope": legacy}))
-    bound = bind_turn_decision_capture(source, envelope, **args, reader_argv=current_loopx_cli_argv())
+    reader_argv = current_loopx_cli_argv()
+    assert reader_argv == [str(release_cli), "--cli-bin", str(release_cli)]
+    bound = bind_turn_decision_capture(source, envelope, **args, reader_argv=reader_argv)
     authority = extract_turn_authority({"turn_envelope": bound})
     trap = tmp_path / "bin"
     trap.mkdir()
@@ -655,7 +747,46 @@ def test_explore_uses_its_own_incremental_budget_and_real_result_log(tmp_path):
     cli_detail = call_progress_cli(reader_fixture, *command[3:])
     assert cli_detail["explore_basis"] == basis
     assert {row["status"] for row in basis["finding_refs"]} >= {"confirmed", "refuted"}
-    _, _, params = _views(enabled)
-    writer = _turn_envelope_result("replan_view", **params, stage="writeback")
+    writer_command = shlex.split(cli_review["next"]["writeback"])
+    writer = call_progress_cli(reader_fixture, *writer_command[3:])
     assert writer["stride_control"]["reference_context_id"] == review["context_id"]
+    control = writer["stride_control"]
+    example = control["minimal_example"]
+    assert set(control["required_fields"]) <= example.keys()
+    assert set(example["previous_review"]) == {
+        "reference_decision_ref", "adoption", "information_gain", "goal_gain", "evidence_refs", "lesson",
+    }
+    assert example["previous_review"]["reference_decision_ref"] == control["previous_decision_ref"]
+    assert {example["previous_review"][key] for key in ("adoption", "information_gain", "goal_gain")} == {"unknown"}
+    assert set(example["explore_review"]) >= {"revision", "disposition", "considered_refs", "reason"}
+    assert example["explore_review"]["revision"] == basis["revision"]
+    assert example["explore_review"]["considered_refs"] == []
     assert json_bytes(writer) <= 16 * 1024
+
+
+def test_replan_reader_rejects_replaced_entries_and_recovers_original(tmp_path):
+    source = _quota_payload()
+    original = tmp_path / "decision.json"
+    original.write_text(json.dumps(source), encoding="utf-8")
+    digest = build_turn_envelope(source)["action_signature"]["source_decision_hash"]
+    command = [str(Path(sys.executable).with_name("loopx")), "--format", "json", "quota", "replan-view",
+               "--decision-file", str(original), "--source-hash", digest, "--replan-stage", "review"]
+
+    def read():
+        result = subprocess.run(command, capture_output=True, text=True, timeout=15)
+        return result.returncode, json.loads(result.stdout)
+
+    code, review = read()
+    assert code == 0 and review["ok"]
+    saved = original.rename(tmp_path / "saved.json")
+    original.symlink_to(saved)
+    code, rejected = read()
+    assert code == 1 and rejected["ok"] is False
+    original.unlink()
+    if hasattr(os, "mkfifo"):
+        os.mkfifo(original)
+        code, rejected = read()
+        assert code == 1 and rejected["ok"] is False
+        original.unlink()
+    saved.rename(original)
+    assert read() == (0, review)

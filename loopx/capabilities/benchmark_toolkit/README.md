@@ -475,9 +475,14 @@ This contract authorizes only the runner-owned
 the authorization id and digest and carry the same non-empty subset of declared
 variable names. Shell `env`, `printenv`, and filtered enumeration remain credential
 probes: even an absolute executable path can be replaced by an exported shell
-function. The runner must still attest `provider_credential_shell_excluded=true`; an
-undeclared name, mismatched typed result, provider credential value, or missing
-isolation attestation remains disqualifying. The receipt publishes only the
+function. When no task-environment contract is declared, a probe that exposes no
+credential value is retained as a restricted-access suspicion for post-run review;
+the probe alone does not disqualify the run. Once an exact contract is declared,
+broad environment enumeration or any access outside the typed operation violates
+that contract and remains disqualifying. The runner must still attest
+`provider_credential_shell_excluded=true`; an undeclared name, mismatched typed
+result, observed provider credential value, or missing isolation attestation remains
+disqualifying. The receipt publishes only the
 authorization id and digest, purpose, counts and a digest of sorted variable names.
 Raw names and values remain in the private trajectory. The declaration must be
 derived from the immutable benchmark task contract; the toolkit validates its bounded
@@ -503,6 +508,37 @@ The private trajectory records this exact request/result shape:
 }
 ```
 
+Some isolated task containers reach their runner-owned task service through a
+container-host alias rather than an IP loopback address. That alias is external by
+default. A runner may classify only its exact task-service origin as loopback-scoped
+by adding a qualification-time authorization:
+
+```json
+{
+  "schema_version": "benchmark_integrity_policy_v0",
+  "policy_id": "offline-task-service",
+  "network_access": "loopback_only",
+  "task_service_access": {
+    "schema_version": "benchmark_task_service_access_v0",
+    "authorization_id": "fixture-task-service-v1",
+    "authorization_sha256": "<sha256-of-immutable-runner-authorization>",
+    "authority": "runner",
+    "purpose": "benchmark_task_service",
+    "origins": ["http://host.docker.internal:35103"]
+  }
+}
+```
+
+Origins must use HTTP or HTTPS, one of the exact container-host aliases, and an
+explicit port. The runner derives them from its trusted task-service launch record;
+agent text cannot grant access. Wrong ports, lookalike hosts, userinfo, malformed
+origins, undeclared aliases, and any mixed external URL remain external-network
+violations. Authorized requests contribute to the existing loopback evidence count.
+The separate task-service receipt records only authorization identifiers, counts and
+an origin-set digest; it never copies raw origins. Like task-environment access, this
+qualification-time runner permission is excluded from the frozen evaluation-policy
+digest.
+
 The default protocol remains blind: the verifier starts after the agent and official
 feedback is hidden. A benchmark that intentionally returns periodic evaluation during
 solving must preregister an `evaluation_protocol` in the integrity policy with
@@ -527,8 +563,8 @@ Qualification rejects a run when it detects any of the following:
 - post-run agent confirmation that restricted answer, out-of-scope task-source,
   hidden-test, verifier, other-trial, or controller-private material was both
   disclosed and causally used during solving or validation;
-- host escape, credential probing outside an exact task-environment contract,
-  credential exposure, or shell network access;
+- confirmed host escape, credential exposure, shell network access, or environment
+  access that violates a declared exact task-environment contract;
 - malformed or incomplete ATIF tool evidence;
 - missing runner authority or any required runtime isolation attestation.
 
@@ -804,11 +840,14 @@ A countable experiment uses the toolkit in this order:
 1. When domain guidance is a factor, qualify the four-arm contract and freeze its
    task-goal hashes before preregistration.
 2. Read the project experiment board before selecting or launching another case.
-3. Read or configure the concurrency envelope, then reconcile its reservations with
-   exact runner liveness.
+3. Read or configure the concurrency envelope and, when provider throughput is
+   shared, the token-capacity envelope; reconcile configured reservations with exact
+   runner liveness.
 4. Declare a `run_permission_policy_v0` and preflight the runner boundary.
 5. Atomically admit a case slot immediately before the independently authorized
-   runner launch.
+   runner launch. When a token envelope is configured, first record token usage,
+   reserve token capacity, and pass its fresh provider-capacity receipt to case-slot
+   admission; launch only after both admissions succeed.
 6. Upsert the planned or running row, then launch one frozen case/arm; do not expose
    evaluator sources or official feedback.
 7. Capture ATIF tool evidence and a runner-owned runtime attestation.
@@ -821,7 +860,8 @@ A countable experiment uses the toolkit in this order:
 11. Run the independent verifier only after the agent phase.
 12. Reduce the official result through the benchmark-owned scoring path.
 13. Upsert terminal score, countability, effort, treatment fidelity, and insight
-    status; release its reservation; then read the matched-comparison projection.
+    status; release its case reservation and, when configured, its token reservation;
+    then read the matched-comparison projection.
 14. Apply attempt-countability, treatment-fidelity, and matched-pair gates before any
     comparison claim.
 
@@ -901,6 +941,84 @@ example its profile, cache, scratch, and artifact filesystems—not merely a gen
 host default such as `/tmp`; if that binding cannot be proven, report `unresolved`.
 LoopX never records raw metrics, paths, provider logs, or the receipt in the
 envelope, and the receipt does not grant launch authority.
+
+### Token capacity
+
+Token capacity is optional. Campaigns without a configured token envelope retain
+case-slot admission without token observation, reservation, cooldown reporting, or
+release. For a provider quota expressed in tokens per minute, configure the
+goal-scoped token envelope as a second admission dimension; the following token
+steps apply to that configured campaign. The target is an integer fraction
+of the hard quota. Cold-start reserve absorbs short request bursts, and evaluator
+reserve prevents solver backfill from consuming capacity needed to close completed
+runs:
+
+```bash
+loopx benchmark token-capacity-configure \
+  --goal-id <goal-id> \
+  --quota-tokens-per-minute 10000000 \
+  --target-utilization-basis-points 9000 \
+  --cold-start-reserve-tokens-per-minute 500000 \
+  --evaluator-reserve-tokens-per-minute 1000000 \
+  --cooldown-seconds 90 \
+  --execute \
+  --format json
+```
+
+The runner converts provider usage into request-level
+`benchmark_token_usage_sample_v0` records. `uncached_input_tokens`,
+`cached_input_tokens`, and `output_tokens` are disjoint counters, so cached input is
+never counted twice. A measured zero-request sample is an explicit coverage
+heartbeat. A request whose usage cannot be obtained must be recorded as
+`metering_state=unmetered`; any such request in the exact trailing 60-second window
+makes new admission unresolved. Estimated but complete usage remains visible as
+`complete_estimated` and is counted at its supplied value.
+
+```bash
+loopx benchmark token-capacity-observe \
+  --goal-id <goal-id> \
+  --sample-json token-usage-sample.json \
+  --execute \
+  --format json
+
+loopx benchmark token-capacity-admit \
+  --goal-id <goal-id> \
+  --run-id <run-id> \
+  --workload-class <solver|evaluator> \
+  --tokens-per-minute <forecast-tpm> \
+  --execute \
+  --format json
+```
+
+Admission uses the greater of rolling observed tokens and current reservations. A
+solver is checked below the evaluator reserve; an evaluator may consume that
+reserve. The successful decision contains a fresh
+`benchmark_resource_headroom_receipt_v0` with a `provider_capacity=sufficient`
+check. Pass that receipt to `concurrency-admit`. If case-slot admission fails,
+release the token reservation before trying another run.
+
+Record an HTTP 429 or equivalent provider capacity rejection with
+`token-capacity-reject`. LoopX keeps the longer of the policy cooldown and a bounded
+provider `Retry-After`, and new token admissions remain closed until it expires.
+The usage window, cooldown, and exact run reservations are persisted, so a
+controller restart produces the same decision. Reservations are not process
+liveness: after a typed terminal or runner-invalid transition, release the same run
+from both envelopes. Reconcile orphaned reservations from authoritative runner
+liveness; LoopX never discovers or terminates jobs itself.
+
+```bash
+loopx benchmark token-capacity-reject \
+  --goal-id <goal-id> \
+  --retry-after-seconds 120 \
+  --execute \
+  --format json
+
+loopx benchmark token-capacity-release \
+  --goal-id <goal-id> \
+  --run-id <run-id> \
+  --execute \
+  --format json
+```
 
 Read back the gate with `concurrency-status`. To disable it, rerun
 `concurrency-configure` with the same capacity values and omit
@@ -1017,6 +1135,19 @@ loopx benchmark experiment-board-upsert \
   --execute \
   --format json
 ```
+
+Upsert now returns the complete normalized affected `row` and `write` receipt
+by default, for both preview and execution. Check `write.dry_run` and
+`write.write_performed` before treating a preview as a saved update. The receipt
+retains metrics, countability, protocol identity and total ledger `row_count`;
+it does not imply a matched comparison or replace whole-study inspection.
+Consumers of the previous board-shaped response can add `--include-board`.
+`--benchmark-id` and `--study-id` filter that optional board projection; they do
+not constrain the write or hide the affected row in the default receipt.
+For a later comparison, call `experiment-board-show` with the same Goal/project
+route and relevant benchmark/study filters. Reuse a current board already read
+when it answers the decision; avoid rebuilding and returning it after every
+single-row update. Validation and invalid-transition rejection still apply.
 
 The default ledger is locked, atomically updated, and keyed by benchmark, study,
 case, and run identity. A compact row carries arm role, exact and comparison

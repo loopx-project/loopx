@@ -112,6 +112,10 @@ def run_cli_result(
 ) -> tuple[dict[str, Any], float, int, str]:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(REPO_ROOT)
+    # This smoke measures status/quota decision latency and reads the inline
+    # `should_run` field; the model-facing capture transport replaces that body
+    # with a reader reference, so keep the same opt-out the canary harness uses.
+    env["LOOPX_CONTEXT_DELIVERY"] = "off"
     started = time.perf_counter()
     result = subprocess.run(
         [

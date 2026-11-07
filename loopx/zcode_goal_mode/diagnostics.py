@@ -66,7 +66,7 @@ def _run_probe(command: list[str], *, extra_env: dict[str, str] | None = None) -
             command, cwd=disposable.name, env=env, stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0,
             start_new_session=os.name == "posix",
-            creationflags=(subprocess.CREATE_NO_WINDOW | 4) if os.name == "nt" else 0,
+            creationflags=(getattr(subprocess, "CREATE_NO_WINDOW") | 4) if os.name == "nt" else 0,
         )
         cleanup = prepare_owned_process_cleanup(process)
     except OSError:

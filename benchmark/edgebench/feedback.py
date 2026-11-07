@@ -199,7 +199,7 @@ class BestOnlyFeedback:
         # Fetch only the sampler-admitted, selected native submission. Do not
         # read raw judge logs, verifier code or another run's result directory.
         response = self.session.get(f"{self.judge_url}/api/v1/result/{candidate['submission_id']}",
-                                    timeout=(3, 5))
+                                    params={"token": self.token}, timeout=(3, 5))
         response.raise_for_status()
         result = response.json()
         report = result.get("report")

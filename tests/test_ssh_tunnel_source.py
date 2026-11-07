@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from loopx.chat_ssh_source_api import SshSourceRequestMixin
+from loopx.chat.ssh_source_api import SshSourceRequestMixin
 from loopx.control_plane.goals.ssh_lifecycle_transport import (
     apply_ssh_goal_lifecycle,
 )
@@ -135,7 +135,7 @@ def test_ssh_source_request_mixin_delegates_validated_loopback_request() -> None
     receipt = {"ok": True, "status_url": "http://127.0.0.1:8877/status.json"}
 
     with mock.patch(
-        "loopx.chat_ssh_source_api.ensure_ssh_source", return_value=receipt
+        "loopx.chat.ssh_source_api.ensure_ssh_source", return_value=receipt
     ) as ensure:
         handler._ssh_source_ensure()
 
@@ -149,7 +149,7 @@ def test_ssh_source_request_mixin_delegates_validated_loopback_request() -> None
 def test_ssh_source_request_mixin_rejects_non_loopback_server() -> None:
     handler = _SshSourceHandler(host="0.0.0.0")
 
-    with mock.patch("loopx.chat_ssh_source_api.ensure_ssh_source") as ensure:
+    with mock.patch("loopx.chat.ssh_source_api.ensure_ssh_source") as ensure:
         handler._ssh_source_ensure()
 
     ensure.assert_not_called()
@@ -337,7 +337,7 @@ def test_ssh_goal_lifecycle_handler_returns_verified_remote_receipt() -> None:
         "projection_verified": True,
     }
     with mock.patch(
-        "loopx.chat_ssh_source_api.apply_ssh_goal_lifecycle",
+        "loopx.chat.ssh_source_api.apply_ssh_goal_lifecycle",
         return_value=receipt,
     ) as apply:
         handler._ssh_goal_lifecycle()

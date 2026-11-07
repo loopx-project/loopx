@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from datetime import datetime
@@ -44,6 +45,9 @@ def run_json_cli(
         command,
         cwd=cwd or REPO_ROOT,
         check=False,
+        # This helper consumes machine JSON. Keep model-facing transport in
+        # the parent; native-context fixtures declare it explicitly in argv.
+        env={**os.environ, "LOOPX_CONTEXT_DELIVERY": "off"},
         text=True, encoding="utf-8", errors="replace",
         capture_output=True,
     )
@@ -65,6 +69,11 @@ def run_json_cli_result(
     runtime_root: Path | None = None,
     cwd: Path | None = None,
 ) -> tuple[int, dict[str, Any]]:
+    """Return process status separately from the producer's unchanged JSON.
+
+    Callers can validate or replay the returned wire without test metadata
+    changing content commitments or overwriting a producer-owned field.
+    """
     command = [
         sys.executable,
         "-m",
@@ -89,7 +98,6 @@ def run_json_cli_result(
     payload = json.loads(result.stdout)
     if not isinstance(payload, dict):
         raise AssertionError(f"expected JSON object for {command!r}: {payload!r}")
-    payload["_returncode"] = result.returncode
     return result.returncode, payload
 
 

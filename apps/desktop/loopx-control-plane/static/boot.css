@@ -88,6 +88,9 @@ button:disabled { cursor: wait; opacity: .6; }
 main[data-state="error"] .mark { box-shadow: none; animation: none; }
 main[data-state="error"] .status-dots { display: none; }
 main[data-state="error"] .progress::after { width: 100%; transform: none; background: var(--warning); animation: none; }
+main[data-state="waiting"] .mark { box-shadow: none; animation: none; }
+main[data-state="waiting"] .status-dots { display: none; }
+main[data-state="waiting"] .progress::after { width: 100%; transform: none; background: var(--hairline); animation: none; }
 @keyframes boot-progress {
   0% { transform: translateX(-60px); }
   50% { transform: translateX(86px); }

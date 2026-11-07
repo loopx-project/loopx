@@ -10,6 +10,7 @@ import pytest
 from canonical_authority_fixture import isolate_sqlite_runtime, promoted_create_fixture
 from loopx.chat_action_store import ChatActionStore
 from loopx.chat_actions import ChatActionService
+from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
 from loopx.control_plane.todos.mutation_api import add_goal_todo
 
 
@@ -76,6 +77,92 @@ def test_cli_copy_pause_resume_defer_without_lease_bookkeeping(journey):
     assert refused["recovery"]["action"] == "resolve_lifecycle_edit"
     assert "--text" in refused["recovery"]["retry"]["remove_flags"]
     assert cli("todo", "list")["todo"] == readback
+
+
+@pytest.mark.parametrize("retained", ["absent", "released"])
+def test_deferred_wait_edit_recovers_by_reviewed_resume_then_deferral(journey, retained):
+    cli, _, _, runtime = journey
+    text = "Original requirements\n" + "完整验收 🙂 " * 80 + "FINAL_ACCEPTANCE"
+    cli("todo", "update", "--agent-id", "agent-a", "--text", text,
+        "--note", "Preserve this context", "--evidence", "evidence:original", "--priority", "P2")
+    if retained == "released":
+        cli("task-lease", "acquire", "--owner", "agent-a", "--idempotency-key", "original")
+    cli("todo", "update", "--agent-id", "agent-a", "--status", "deferred",
+        "--reason", "Wait for the original event", "--resume-when", "resume_at:2099-01-01T00:00:00Z")
+
+    def snapshot():
+        return read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a", include_leases=True)
+
+    before = snapshot()
+    original = before["todos"][0]
+    wait_edit = ("todo", "update", "--agent-id", "agent-a", "--status", "deferred",
+        "--reason", "Reviewed the next observation", "--resume-when", "resume_at:2099-02-01T00:00:00Z")
+    # A diagnostic is not permission to rewrite a suspended task or consume its
+    # released execution. Its proposed recovery must reach a lawful state.
+    rejected = cli(*wait_edit, ok=False)
+    assert snapshot() == before
+    recovery = rejected["recovery"]
+    assert recovery["execution_authority_granted"] is False
+    retry = recovery["retry"]
+    args = retry["cli_args"]
+    assert args[args.index("--status") + 1] == "open"
+    assert "--clear-resume-when" in args and "--resume-when" in retry["remove_flags"]
+    assert {"--reason", "--update-operation-id", "--update-expected-provider-revision"} <= set(retry["requires_flags"])
+    assert "acquire" not in recovery
+
+    wrong_owner = cli("todo", "update", "--agent-id", "agent-b", "--status", "open",
+        "--clear-resume-when", "--reason", "Cannot review another owner's wait", ok=False)
+    assert wrong_owner["error_code"] == "update_owner_mismatch"
+    assert "retry" not in wrong_owner["recovery"]
+    if retained == "released":
+        old = before["leases"][0]
+        refused = cli(*wait_edit, "--task-lease-idempotency-key", old["idempotency_key"],
+            "--task-lease-expected-version", str(old["version"]), ok=False)
+        assert refused["recovery"]["action"] == "inspect_current_proof"
+        assert "retry" not in refused["recovery"]
+    assert snapshot() == before
+
+    def retry_cli(*extra):
+        child = subprocess.run([sys.executable, "-m", "loopx.cli", "--format", "json", *args, *extra],
+            capture_output=True, text=True, timeout=60)
+        assert child.returncode == 0, child.stdout + child.stderr
+        return json.loads(child.stdout)
+
+    reviewed = ("--reason", "Owner reviewed the old wait before revising it",
+        "--update-operation-id", "resume-for-wait-edit",
+        "--update-expected-provider-revision", before["provider_revision"])
+    assert retry_cli(*reviewed, "--dry-run")["status"] == "planned"
+    assert snapshot() == before
+    resumed = retry_cli(*reviewed)
+    assert resumed["deferred_resume_transition"]["execution_authority_granted"] is False
+    opened = snapshot()
+    assert opened["todos"][0]["status"] == "open"
+    assert opened["todos"][0].get("resume_when") is None
+    assert opened["leases"] == before["leases"]
+    assert retry_cli(*reviewed)["status"] == "replayed"
+    assert snapshot() == opened
+
+    # Each new intent uses the current CAS; a historical recovery receipt cannot
+    # authorize the subsequent wait or revive the retired execution.
+    stale = cli(*wait_edit, "--update-operation-id", "stale-wait-edit",
+        "--update-expected-provider-revision", before["provider_revision"], ok=False)
+    assert stale["error_code"] == "provider_revision_mismatch"
+    assert snapshot() == opened
+    rearm = (*wait_edit, "--update-operation-id", "reviewed-wait-edit",
+        "--update-expected-provider-revision", opened["provider_revision"])
+    applied = cli(*rearm)
+    assert applied["deferred_transition"]["execution_authority_granted"] is False
+    after = snapshot()
+    task = after["todos"][0]
+    assert task["status"] == "deferred" and task["resume_when"] == "resume_at:2099-02-01T00:00:00Z"
+    changed = {"status", "reason", "resume_when", "updated_at", "last_actor_agent_id"}
+    assert {k: v for k, v in original.items() if k not in changed} == {
+        k: v for k, v in task.items() if k not in changed}
+    assert after["leases"] == before["leases"]
+    assert cli(*rearm)["status"] == "replayed"
+    assert snapshot() == after
+    assert retry_cli(*reviewed)["status"] == "replayed"
+    assert snapshot() == after, "historical resume cannot replace the newer reviewed wait"
 
 
 def test_chat_uses_same_atomic_owner_and_refuses_changed_review_basis(journey, tmp_path):

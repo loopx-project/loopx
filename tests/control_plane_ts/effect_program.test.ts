@@ -70,10 +70,14 @@ function identityTypes(identity: BoundSettlementIdentity): void {
     const todo: string = identity.todo_id;
     const replan: null = identity.replan_obligation_id;
     void [todo, replan];
-  } else {
+  } else if (identity.binding_kind === "autonomous_replan") {
     const todo: null = identity.todo_id;
     const replan: string = identity.replan_obligation_id;
     void [todo, replan];
+  } else {
+    const request: "request" = identity.binding_kind;
+    const todo: null = identity.todo_id;
+    void [request, todo];
   }
   // @ts-expect-error a validated identity cannot be rebound through mutation
   identity.todo_id = "other";
