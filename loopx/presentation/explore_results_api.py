@@ -93,8 +93,9 @@ class ExploreResultsRequestMixin:
                     self._send_error("Source identity changed; refresh the Goal.", status=409)
                     return
                 cursor = query.get("cursor", [""])[0]
-                page = (reader.history(goal_id, cursor) if view == "history" else
-                        reader.findings(goal_id, cursor, projector=_finding_rows))
+                original_goal_id = reader.source.goal_id
+                page = (reader.history(original_goal_id, cursor) if view == "history" else
+                        reader.findings(original_goal_id, cursor, projector=_finding_rows))
                 latest = linked_goal_source(self.server, goal_id)
                 if latest is None or latest[1].source.namespace != reader.source.namespace:
                     self._send_error("Source identity changed; refresh the Goal.", status=409)

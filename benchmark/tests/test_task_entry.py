@@ -800,10 +800,12 @@ def test_real_scheduler_stops_after_one_budget_exhausted_wake(planning_env, mode
                     "--text", "[P0] Complete synthetic task", "--execute"],
                    env=env, check=True, capture_output=True, text=True)
     def quota():
+        # The worker reads the direct control result, even when progressive
+        # context delivery is the default for agent-facing reads.
         result = subprocess.run([
             *cli, "quota", "should-run", "--goal-id", env["LOOPX_GOAL_ID"],
             "--agent-id", env["LOOPX_AGENT_ID"], "--runtime-profile", "generic_cli",
-            "--include-detail", "scheduler",
+            "--context-delivery", "off", "--include-detail", "scheduler",
         ], env=env, text=True, capture_output=True)
         assert result.returncode == 0, result.stdout + result.stderr
         # Follow the current capture's read-only recovery when the CLI returns

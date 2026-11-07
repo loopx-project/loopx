@@ -10,6 +10,7 @@ import {GoalResearchTimeline} from "./goal-research-timeline";
 import {requestJson} from "../../data/chat";
 import {sourceReadApiUrl} from "../../data/local-status-query";
 import {ContextHelp} from "./context-help";
+import type {WorkspaceGoal} from "./personal-workspace-model";
 import {groupUnlinkedHistoryQuestions, layoutExploreHistory, parseExploreHistoryPage, projectExploreHistory, type ExploreHistoryEvent} from "../../../../../../loopx/control_plane/presentation/explore_history.js";
 import "./goal-research-history.css";
 import {ExploreMeasurements, formatExploreMeasurementValue} from "./explore-measurements";
@@ -52,18 +53,22 @@ const viewFromUrl = (goal: string) => {
 
 /** An effect-free history consumer. Its source is Explore, not raw sessions or
  * a judge. All recorded updates survive; unsupported analysis stays unavailable. */
-export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, readSourceUrl}: {goalId: string; active: boolean; zh: boolean; refreshRevision?: number; readSourceUrl?: string}) {
+export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHistory = false, active, zh, refreshRevision = 0, readSourceUrl, sourceStrategy, onOpenSourceTasks}: {
+  goalId: string; originalGoalId?: string; preferHistory?: boolean; active: boolean; zh: boolean; refreshRevision?: number; readSourceUrl?: string;
+  sourceStrategy?: WorkspaceGoal["sourceStrategy"]; onOpenSourceTasks?: () => void;
+}) {
   const analysis = useResearchAnalysis(goalId, active, zh, readSourceUrl);
   const readCaseMode = () => {
     const query = new URLSearchParams(window.location.search);
-    return query.get("research_goal") !== goalId || query.get("research_reading") !== "history";
+    if (query.get("research_goal") === goalId && query.has("research_reading")) return query.get("research_reading") === "case";
+    return !preferHistory;
   };
   const [caseReading, setCaseReading] = useState(readCaseMode);
   useEffect(() => {
     const changed = () => setCaseReading(readCaseMode());
     changed(); window.addEventListener("popstate", changed);
     return () => window.removeEventListener("popstate", changed);
-  }, [goalId, readSourceUrl]);
+  }, [goalId, preferHistory, readSourceUrl]);
   const setCaseMode = (reading: boolean) => {
     const url = new URL(window.location.href);
     url.searchParams.set("research_goal", goalId);
@@ -79,16 +84,16 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
   useEffect(() => {
     if (!read.complete || !display || !displayHashSupported) return;
     let current = true;
-    const bytes = new TextEncoder().encode(trajectoryDisplaySnapshotText(read.events, goalId, displayNamespace));
+    const bytes = new TextEncoder().encode(trajectoryDisplaySnapshotText(read.events, originalGoalId, displayNamespace));
     void crypto.subtle.digest("SHA-256", bytes).then(hash => {
       if (current) setDisplayIdentity({events: read.events, namespace: displayNamespace,
         key: Array.from(new Uint8Array(hash), value => value.toString(16).padStart(2, "0")).join("")});
     }).catch(() => {if (current) setDisplayIdentity({events: read.events, namespace: displayNamespace, key: ""});});
     return () => {current = false;};
-  }, [read, goalId, displayNamespace, display?.snapshot_key, displayHashSupported]);
+  }, [read, originalGoalId, displayNamespace, display?.snapshot_key, displayHashSupported]);
   const displayKey = displayIdentity?.events === read.events && displayIdentity.namespace === displayNamespace ? displayIdentity.key : "";
   const displayCheckFailed = !displayHashSupported || (displayIdentity?.events === read.events && displayIdentity.namespace === displayNamespace && !displayIdentity.key);
-  const currentDisplay = analysis.pack?.applicability === "current" && analysis.pack.scope.goal_id === goalId
+  const currentDisplay = analysis.pack?.applicability === "current" && analysis.pack.scope.goal_id === originalGoalId
     && analysis.pack.result?.analysis_key === analysis.pack.analysis_key && analysis.pack.result.method_version === analysis.pack.method_version
     && JSON.stringify(analysis.pack.result.scope) === JSON.stringify(analysis.pack.scope)
     && display?.snapshot_key === displayKey && display.source_namespace === displayNamespace && display.language === (zh ? "zh" : "en") ? display : undefined;
@@ -198,7 +203,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
         let cursor = "";
         do {
           const query = new URLSearchParams({goal_id: goalId, view: "history", ...(cursor ? {cursor} : {})});
-          const page = parseExploreHistoryPage(await requestJson<unknown>(sourceReadApiUrl(readSourceUrl, `/api/chat/explore-results?${query}`), {signal: controller.signal}), goalId);
+          const page = parseExploreHistoryPage(await requestJson<unknown>(sourceReadApiUrl(readSourceUrl, `/api/chat/explore-results?${query}`), {signal: controller.signal}), originalGoalId);
           if (total !== -1 && total !== page.total) throw new Error("Explore history snapshot changed");
           total = page.total; events.push(...page.items);
           if (events.length > total || (page.next_cursor && (!page.items.length || cursors.has(page.next_cursor)))) throw new Error("Invalid Explore history pagination");
@@ -209,7 +214,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
         } while (cursor && current);
         if (current) {
           if (cursor || events.length !== total) throw new Error("Explore history coverage mismatch");
-          projectExploreHistory(events, goalId); // Verify replay identities before replacing a valid snapshot.
+          projectExploreHistory(events, originalGoalId); // Verify replay identities before replacing a valid snapshot.
           setRead({events, total, complete: true});
         }
       } catch (failure) {
@@ -220,14 +225,14 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
       } finally {if (current) setBusy(false);}
     })();
     return () => {current = false; controller.abort();};
-  }, [goalId, active, revision, refreshRevision, readSourceUrl]);
+  }, [goalId, originalGoalId, active, revision, refreshRevision, readSourceUrl]);
   const history = useMemo(() => {
     try {
-      const canonical = projectExploreHistory(read.events, goalId);
-      return {canonical, value: displayProjection.events === read.events ? canonical : projectExploreHistory(displayProjection.events, goalId), error: ""};
+      const canonical = projectExploreHistory(read.events, originalGoalId);
+      return {canonical, value: displayProjection.events === read.events ? canonical : projectExploreHistory(displayProjection.events, originalGoalId), error: ""};
     }
     catch (failure) {return {canonical: null, value: null, error: String(failure)};}
-  }, [read.events, displayProjection, goalId]);
+  }, [read.events, displayProjection, originalGoalId]);
   const value = history.value;
   const measurementFeedback = value?.measurementFeedback ?? [];
   const measurementSummary = (nodeId: string) => {
@@ -462,7 +467,8 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
     control?.querySelector<HTMLElement>("button:not(:disabled)")?.focus({preventScroll: true});
   };
   const readFailure = error || history.error;
-  const emptyHistory = !busy && !readFailure && read.total === 0;
+  const emptyHistory = !busy && !readFailure && read.complete && read.total === 0;
+  const emptySourceHistory = preferHistory && emptyHistory;
   const emptyWithAnalysis = emptyHistory && Boolean(analysis.pack?.result || analysis.pack?.native_outcomes);
   const emptyHistoryMessage = zh ? "这个 Goal 尚无研究历程" : "No research history for this Goal yet";
   const hasCases = (analysis.snapshot?.catalog.packs ?? []).some(p => p.case_study_summary);
@@ -489,27 +495,27 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
     </ContextHelp></div>
       </div>
       <div className={`research-history-controls${readingSelection ? " is-reading" : ""}`}>
-        <button type="button" className="research-history-search" aria-label={zh ? "搜索研究记录" : "Search research records"} disabled={!value?.events.length} onClick={() => {
+        {!emptySourceHistory ? <button type="button" className="research-history-search" aria-label={zh ? "搜索研究记录" : "Search research records"} disabled={!value?.events.length} onClick={() => {
           setRecordsOpen(true);
           window.requestAnimationFrame(() => {
             records.current?.querySelector<HTMLInputElement>("input")?.focus({preventScroll: true});
             records.current?.scrollIntoView({block: "start"});
           });
-        }}><Search size={15} aria-hidden/></button>
-        {!readingSelection ? <div className="research-lens" role="group" aria-label={zh ? "视图" : "View"}>{(["timeline", "graph"] as const).map(item => <button key={item} type="button" aria-pressed={lens === item} onClick={() => chooseLens(item)}>{item === "timeline" ? (zh ? "时间线" : "Timeline") : (zh ? "关系图" : "Graph")}</button>)}</div> : null}
+        }}><Search size={15} aria-hidden/></button> : null}
+        {!readingSelection && !emptySourceHistory ? <div className="research-lens" role="group" aria-label={zh ? "视图" : "View"}>{(["timeline", "graph"] as const).map(item => <button key={item} type="button" aria-pressed={lens === item} onClick={() => chooseLens(item)}>{item === "timeline" ? (zh ? "时间线" : "Timeline") : (zh ? "关系图" : "Graph")}</button>)}</div> : null}
         <div className="research-analysis-scoped-action">{!progressiveOverview ? <ResearchAnalysisButton analysis={analysis}/> : null}
           {readingSelection && analysis.pack ? <span className="research-analysis-scope">{zh ? "分析范围" : "Analysis scope"} · {analysis.pack.title}</span> : null}
         </div>
         <button type="button" aria-label={copy.refresh} disabled={busy} onClick={refresh}><RefreshCw size={15} aria-hidden/></button>
       </div></header>
-    <div className="research-history-meta">
+    {!emptySourceHistory ? <div className="research-history-meta">
       <div className="research-history-coverage" role="status">{emptyWithAnalysis ? <>{emptyHistoryMessage} · {read.events.length} / {read.total}<ContextHelp icon={FlaskConical} label={zh ? "研究历程来源" : "Research history source"}>
         <p>{zh ? "已保存的分析、原生测量与 Explore 历程分别读取。这个 Goal 没有已记录的 Explore 历程；已保存的结果仍可在下方阅读。" : "Saved analysis, native measurements and Explore history are read separately. This Goal has no recorded Explore history; its saved results remain readable below."}</p>
       </ContextHelp></> : <>{copy.time}{value?.startAt ? <> · <time>{timeLabel(value.startAt)}</time> — <time>{timeLabel(value.endAt)}</time></> : null} · {busy ? `${copy.reading} ${loaded}${read.total ? ` / ${read.total}` : ""}`
         : read.total === null ? (zh ? "来源尚未读到" : "Source has not been read")
           : `${read.events.length} / ${read.total} ${read.total === 1 ? copy.record : copy.records}${read.complete ? "" : ` · ${copy.partial}`}`}</>}</div>
       {!readingSelection ? displayControl : null}
-    </div>
+    </div> : null}
     {readFailure ? <div className="research-history-read-error" role="alert">
       <AlertCircle size={18} aria-hidden/>
       <div><strong>{read.events.length ? (zh ? "刷新失败，当前记录已保留" : "Refresh failed; current records are preserved") : copy.failure}</strong>
@@ -517,7 +523,18 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
       </div>
       <button type="button" disabled={busy} onClick={refresh}><RefreshCw size={14} aria-hidden/>{zh ? "重试" : "Retry"}</button>
     </div> : null}
-    {emptyHistory && !emptyWithAnalysis ? <div className="research-history-empty">
+    {emptySourceHistory ? <div className="research-history-empty research-history-source-empty">
+      <div>
+        <p role="status">{zh ? "这份来源没有可读的 Explore 记录。" : "This source has no readable Explore records."}</p>
+        {sourceStrategy ? <div className="research-source-strategy">
+          <strong>{zh ? "最近一条策略记录" : "Last recorded strategy"}</strong>
+          <time dateTime={sourceStrategy.recordedAt}>{timeLabel(sourceStrategy.recordedAt)}</time>
+          <p>{sourceStrategy.summary}</p>
+          {sourceStrategy.observation && sourceStrategy.observation !== sourceStrategy.summary ? <p>{sourceStrategy.observation}</p> : null}
+        </div> : null}
+      </div>
+      {onOpenSourceTasks ? <button type="button" onClick={onOpenSourceTasks}>{zh ? "查看原实验任务" : "View original tasks"}</button> : null}
+    </div> : emptyHistory && !emptyWithAnalysis ? <div className="research-history-empty">
       <div role="status"><strong>{emptyHistoryMessage}</strong><ContextHelp icon={FlaskConical} label={zh ? "研究历程来源" : "Research history source"}><p>{zh ? "开启研究模式后，后续研究问题、尝试与证据会在这里形成可回读的历程。" : "Enable research mode to build a readable history of questions, attempts and evidence from later work."}</p></ContextHelp></div>
       <button type="button" onClick={focusResearchMode}>{zh ? "查看研究模式" : "Review research mode"}</button>
     </div> : null}
@@ -629,7 +646,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
     {value?.unknownKindCount ? <p className="research-history-note">{zh ? "未识别类型保留于已读记录" : "Unrecognized types remain in loaded records"} · {value.unknownKindCount}</p> : null}
     </ContextHelp> : null}
     {value?.events.length ? <details ref={records} className="research-history-all-records" open={recordsOpen} onToggle={event => setRecordsOpen(event.currentTarget.open)}><summary>{zh ? "全部已读记录" : "All loaded records"} · {value.events.length}</summary>
-      {recordsOpen ? <ResearchRecordSearch key={JSON.stringify([goalId, readSourceUrl])} goalId={goalId} events={history.canonical?.events ?? []}
+      {recordsOpen ? <ResearchRecordSearch key={JSON.stringify([goalId, readSourceUrl])} goalId={originalGoalId} events={history.canonical?.events ?? []}
         displayEvents={currentDisplay && !originalDisplay ? value.events : undefined}
         displaySections={currentDisplay && !originalDisplay ? displayProjection.sections : undefined}
         renderBody={findingBody}

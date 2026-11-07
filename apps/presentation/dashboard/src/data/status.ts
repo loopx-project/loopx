@@ -553,7 +553,7 @@ export const runRecordSchema = z.object({
 });
 
 export const runGoalSchema = z.object({
-  source_access: z.object({namespace: z.string(), label: z.string(), read_only: z.literal(true)}).optional(),
+  source_access: z.object({namespace: z.string(), label: z.string(), read_only: z.literal(true), original_goal_id: z.string().optional()}).optional(),
   parent_goal_id: z.string().nullable().optional().catch(null),
   goal_objective: z.string().nullable().optional().catch(null),
   zcode_goal_eligible_agent_ids: z.array(z.string()).optional().default([]).catch([]),
@@ -626,6 +626,17 @@ export const runGoalSchema = z.object({
   raw_index_records: z.number().optional().default(0),
   unique_runs: z.number().optional().default(0),
   latest_runs: z.array(runRecordSchema).optional().default([]),
+  semantic_history: z.object({
+    agents: z.array(z.object({
+      latest_agent_vision_run: z.object({
+        generated_at: z.string(),
+        agent_vision: z.object({
+          vision_patch: z.object({vision_summary: z.string().nullish()}).nullish(),
+          path_delta: z.object({observed_reality: z.string().nullish()}).nullish().catch(null),
+        }),
+      }).nullish().catch(null),
+    })),
+  }).nullish().catch(null),
 });
 
 export const runHistorySchema = z.object({

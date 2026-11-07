@@ -1103,6 +1103,11 @@ function buildPersonalHomeModel(
       personalAgentSentence(payload, row, state, t),
     ].map((value) => projectionSentence(value, t))
       .find((value) => value !== "" && value !== "暂无") ?? t("projection.nextUpdatePending");
+    const sourceStrategies = goal.source_access ? goal.semantic_history?.agents.flatMap(({latest_agent_vision_run: run}) => {
+      const summary = run?.agent_vision.vision_patch?.vision_summary?.trim();
+      if (!run || !summary || !Number.isFinite(Date.parse(run.generated_at))) return [];
+      return [{recordedAt: run.generated_at, summary, observation: run.agent_vision.path_delta?.observed_reality?.trim()}];
+    }) : undefined;
     return [{
       activationState: goal.activation_state,
       objective: goal.goal_objective ?? null,
@@ -1140,6 +1145,7 @@ function buildPersonalHomeModel(
       goalId: goal.id,
       parentGoalId: goal.parent_goal_id,
       sourceAccess: goal.source_access ? {...goal.source_access, readOnly: true} : undefined,
+      sourceStrategy: sourceStrategies?.sort((left, right) => Date.parse(right.recordedAt) - Date.parse(left.recordedAt))[0],
       latestActivity: row.latestRun?.generated_at ?? "",
       needsYou,
       needsYouActionKind: needsYouTodo?.actionKind ?? null,

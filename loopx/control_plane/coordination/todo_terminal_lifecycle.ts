@@ -487,6 +487,15 @@ function terminalFailure(
   };
 }
 
+function completionEvidenceRejection(
+  input: CoordinationTodoTerminalLifecycleInput,
+  acceptedEvidence: unknown,
+): CoordinationTodoTerminalLifecycleResult | null {
+  if (input.evidence === null || input.evidence === (acceptedEvidence ?? null)) return null;
+  return terminalFailure("terminal_completion_receipt_mismatch",
+    "Archived closeout must retain the evidence accepted by ordinary completion.", {}, "decision_rejection");
+}
+
 function terminalRequestSha(input: CoordinationTodoTerminalLifecycleInput): string {
   const completionPolicyIdentity = input.completion_policy_request === null
     ? null
@@ -1194,6 +1203,59 @@ function semanticDuplicate(
   return undefined;
 }
 
+async function readSameTurnCompletionReceipt(
+  store: AuthorityStore,
+  input: ResolvedCoordinationTodoTerminalLifecycleInput,
+  normalized: CoordinationTodoTerminalLifecycleInput,
+  todo: JsonObject,
+): Promise<CoordinationTodoTerminalLifecycleResult | null> {
+  if (input.command !== "complete" || normalized.operation_identity.kind !== "completion_turn" ||
+      !input.requested_no_followup) return null;
+  const validationRequired = todo.completion_validation_required === true;
+  const validationSha256 = todo.completion_validation_sha256;
+  let fence;
+  try {
+    fence = evaluateTodoCompletionFence({schema_version: TODO_COMPLETION_FENCE_REQUEST_SCHEMA,
+      projection_source: "materialized", goal_id: input.goal_id, todo_id: input.todo_id, todo,
+      requested_no_followup: input.requested_no_followup,
+      requested_completion_turn_key: input.requested_completion_turn_key,
+      requested_completion_identity_source: input.requested_completion_identity_source});
+  } catch (error) {
+    return terminalFailure("invalid_todo_completion_transaction",
+      error instanceof Error ? error.message : "Invalid original completion identity");
+  }
+  if (fence.outcome === "continue" && fence.reason === "same_turn_terminal_upgrade") {
+    const originalInput = {...input,
+      ...(normalized.claim_operation_id === undefined ? {} : {claim_operation_id: normalized.claim_operation_id,
+        lease_idempotency_key: normalized.lease_idempotency_key, lease_expected_version: normalized.lease_expected_version}),
+      requested_no_followup: false,
+      operation_id: completionTurnOperationId(input, false)};
+    const original = await terminalReceipt(originalInput, terminalRequestSha(originalInput)).read(store);
+    if (original === null) return terminalFailure("terminal_completion_receipt_required",
+      "Same-Turn closeout requires the original accepted ordinary completion receipt.", {}, "decision_rejection");
+    if (original.status !== "replayed") return original;
+    const originalValidation = original.validation_receipt as JsonObject | null;
+    const receiptDigest = originalValidation?.validation_declaration_sha256;
+    // Revision-zero receipts may omit the digest. The exact recovered
+    // request already binds the canonical declaration, actor and lease;
+    // later declaration revisions still require the receipt's own digest.
+    const requiresDigest = Number.isSafeInteger(todo.completion_validation_revision) &&
+      Number(todo.completion_validation_revision) > 0;
+    if (original.completion_identity_key !== input.requested_completion_turn_key ||
+        (validationRequired && (originalValidation === null ||
+          typeof originalValidation !== "object" || originalValidation.passed !== true ||
+          (receiptDigest != null && receiptDigest !== validationSha256) ||
+          (requiresDigest && receiptDigest !== validationSha256))) ||
+        (input.validation_receipt !== null &&
+          canonicalAuthoritySha256(input.validation_receipt) !== canonicalAuthoritySha256(original.validation_receipt))) {
+      return terminalFailure("terminal_completion_receipt_mismatch",
+        "Original completion validation and identity must still match the completed Todo.", {}, "decision_rejection");
+    }
+    return original;
+  }
+  return null;
+}
+
 /**
  * Execute complete/supersede as one provider-neutral CAS transaction.
  *
@@ -1239,6 +1301,12 @@ export async function executeCoordinationTodoTerminalLifecycle(
     const receipt = terminalReceipt(input, requestSha);
     const replay = await receipt.read(store);
     if (replay !== null) {
+      // New archived closeout receipts preserve accepted evidence separately
+      // from the historical request fingerprint. Older receipts still replay.
+      if (Object.hasOwn(replay, "evidence")) {
+        const rejection = completionEvidenceRejection(input, replay.evidence);
+        if (rejection !== null) return rejection;
+      }
       // Older accepted lifecycle receipts lack the original quota binding.
       // Add it to this response from verified history; never rewrite the receipt.
       if (replay.status === "replayed" && isLifecycleCloseout(input) &&
@@ -1267,7 +1335,9 @@ export async function executeCoordinationTodoTerminalLifecycle(
     if (!await authoritySourcesCurrent()) return terminalFailure(AUTHORITY_SOURCE_CHANGED.code,
       AUTHORITY_SOURCE_CHANGED.reason, {}, "decision_rejection");
     const observation = await receipt.observe(store);
-    if (observation.kind === "receipt") return observation.result;
+    if (observation.kind === "receipt") return Object.hasOwn(observation.result, "evidence")
+      ? completionEvidenceRejection(input, observation.result.evidence) ?? observation.result
+      : observation.result;
     if (observation.authority.status !== "loaded") {
       return {
         schema_version: COORDINATION_TODO_TERMINAL_LIFECYCLE_RESULT_SCHEMA,
@@ -1360,13 +1430,19 @@ export async function executeCoordinationTodoTerminalLifecycle(
       "Todo requirements changed after Turn admission; reread the task and run a fresh Turn",
       {todo_id: input.todo_id}, "decision_rejection");
   }
+  let terminalUpgradeReceipt: CoordinationTodoTerminalLifecycleResult | null = null;
   if (todo.archive_state !== "active") {
-    return terminalFailure(
-      "todo_archived",
-      "Todo terminal lifecycle requires an active Todo",
-      {},
-      "decision_rejection",
-    );
+    // Ordinary completion may archive this Todo before its original Turn
+    // settles. Only its exact accepted parent permits this second phase;
+    // archive alone grants no new execution or completion authority.
+    terminalUpgradeReceipt = await readSameTurnCompletionReceipt(store, input, normalized, todo);
+    if (terminalUpgradeReceipt === null) {
+      return terminalFailure("todo_archived", "Todo terminal lifecycle requires an active Todo",
+        {}, "decision_rejection");
+    }
+    if (terminalUpgradeReceipt.status !== "replayed") return terminalUpgradeReceipt;
+    const rejection = completionEvidenceRejection(input, todo.evidence);
+    if (rejection !== null) return rejection;
   }
   const authorityTodo = todo;
   let edit: ReturnType<typeof prepareUpdatedTodo> | null = null;
@@ -1607,50 +1683,13 @@ export async function executeCoordinationTodoTerminalLifecycle(
     }
   }
   let completion: ReturnType<typeof reduceTodoCompletionTransaction> | null = null;
-  let terminalUpgradeReceipt: JsonObject | null = null;
   if (input.command === "complete") {
     const validationRequired = todo.completion_validation_required === true;
     const validationSha256 = todo.completion_validation_sha256;
-    if (normalized.operation_identity.kind === "completion_turn" && input.requested_no_followup) {
-      let fence;
-      try {
-        fence = evaluateTodoCompletionFence({schema_version: TODO_COMPLETION_FENCE_REQUEST_SCHEMA,
-          projection_source: "materialized", goal_id: input.goal_id, todo_id: input.todo_id, todo,
-          requested_no_followup: input.requested_no_followup,
-          requested_completion_turn_key: input.requested_completion_turn_key,
-          requested_completion_identity_source: input.requested_completion_identity_source});
-      } catch (error) {
-        return terminalFailure("invalid_todo_completion_transaction",
-          error instanceof Error ? error.message : "Invalid original completion identity");
-      }
-      if (fence.outcome === "continue" && fence.reason === "same_turn_terminal_upgrade") {
-        const originalInput = {...input,
-          ...(normalized.claim_operation_id === undefined ? {} : {claim_operation_id: normalized.claim_operation_id,
-            lease_idempotency_key: normalized.lease_idempotency_key, lease_expected_version: normalized.lease_expected_version}),
-          requested_no_followup: false,
-          operation_id: completionTurnOperationId(input, false)};
-        const original = await terminalReceipt(originalInput, terminalRequestSha(originalInput)).read(store);
-        if (original === null) return terminalFailure("terminal_completion_receipt_required",
-          "Same-Turn closeout requires the original accepted ordinary completion receipt.", {}, "decision_rejection");
-        if (original.status !== "replayed") return original;
-        const originalValidation = original.validation_receipt as JsonObject | null;
-        const receiptDigest = originalValidation?.validation_declaration_sha256;
-        // Revision-zero receipts may omit the digest. The exact recovered
-        // request already binds the canonical declaration, actor and lease;
-        // later declaration revisions still require the receipt's own digest.
-        const requiresDigest = Number.isSafeInteger(todo.completion_validation_revision) &&
-          Number(todo.completion_validation_revision) > 0;
-        if (original.completion_identity_key !== input.requested_completion_turn_key ||
-            (validationRequired && (originalValidation === null ||
-              typeof originalValidation !== "object" || originalValidation.passed !== true ||
-              (receiptDigest != null && receiptDigest !== validationSha256) ||
-              (requiresDigest && receiptDigest !== validationSha256))) ||
-            (input.validation_receipt !== null &&
-              canonicalAuthoritySha256(input.validation_receipt) !== canonicalAuthoritySha256(original.validation_receipt))) {
-          return terminalFailure("terminal_completion_receipt_mismatch",
-            "Original completion validation and identity must still match the completed Todo.", {}, "decision_rejection");
-        }
-        terminalUpgradeReceipt = original;
+    if (terminalUpgradeReceipt === null) {
+      terminalUpgradeReceipt = await readSameTurnCompletionReceipt(store, input, normalized, todo);
+      if (terminalUpgradeReceipt !== null && terminalUpgradeReceipt.status !== "replayed") {
+        return terminalUpgradeReceipt;
       }
     }
     if (validationRequired && !implicitMonitorNoChange &&
@@ -1985,6 +2024,10 @@ export async function executeCoordinationTodoTerminalLifecycle(
     todo_id: input.todo_id,
     command: input.command,
     changed,
+    // Freeze this archived phase's evidence for receipt-only recovery without
+    // adding a fresh authority read or changing legacy operation fingerprints.
+    ...(authorityTodo.archive_state !== "active" && terminalUpgradeReceipt !== null
+      ? {evidence: authorityTodo.evidence ?? null} : {}),
     ...(input.decision_outcome === null ? {} : {decision_outcome: input.decision_outcome}),
     ...(followthrough?.unblock_resume ? {unblock_resume: followthrough.unblock_resume} : {}),
     ...(followthrough?.decision_scope_resolution ? {decision_scope_resolution: followthrough.decision_scope_resolution} : {}),
