@@ -825,8 +825,9 @@ def test_actual_worker_handles_midwake_replan_and_duplicate_without_guard_replay
                    LOOPX_CODEX_HOME=str(tmp_path / "worker-home"), LOOPX_SHARED_SKILLS=str(skills),
                    MODEL_NAME="fixture", REASONING_EFFORT="high", OPENAI_BASE_URL=base_url,
                    OPENAI_API_KEY="synthetic-local-only", LOOPX_CODEX_TURN_TIMEOUT_SEC="60")
-        if context_delivery:
-            env["LOOPX_CONTEXT_DELIVERY"] = "on"
+        # The trial's negative arm must be explicit: heartbeat execution
+        # defaults to context-on, and the native fixture drops ambient flags.
+        env["LOOPX_CONTEXT_DELIVERY"] = "on" if context_delivery else "off"
         deadline = str(time.time() + 600)
         env["LOOPX_PHASE_DEADLINE_EPOCH"] = deadline
         if capture != "off":
