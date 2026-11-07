@@ -20,7 +20,7 @@ def test_todo_source_views_share_only_the_exact_request_source(monkeypatch):
     original = runtime.effect_runtime_request
 
     def track(method, params, **kwargs):
-        if method == "todo.context.page":
+        if method in {"todo.context.page", "todo.read"}:
             requests.append(params)
         return original(method, params, **kwargs)
 
@@ -153,7 +153,7 @@ def test_quota_caller_explicitly_composes_only_the_agent_source(monkeypatch):
     original = runtime.effect_runtime_request
 
     def track(method, params, **kwargs):
-        if method == "todo.context.page":
+        if method in {"todo.context.page", "todo.read"}:
             requests.append(params)
         return original(method, params, **kwargs)
 
@@ -165,12 +165,12 @@ def test_quota_caller_explicitly_composes_only_the_agent_source(monkeypatch):
                                   coordination={"registered_agents": ["agent-a", "agent-b"]})
     with runtime.effect_runtime_request_scope():
         result = build_quota_should_run(status, goal_id="goal-a", agent_id="agent-a", available_capabilities=["shell"])
-    bundles = [p["summary_display_views"] for p in requests if "summary_display_views" in p]
-    assert len(bundles) == 1
-    assert bundles[0]["source"]["record"]["first_open_items"][0]["todo_id"] == "todo_agent"
-    assert any("summary_display" in p and
-               p["summary_display"].get("source", {}).get("record", {}).get("first_open_items", [{}])[0].get("todo_id") == "todo_user"
-               for p in requests)
+    transactions = [p for p in requests if p.get("kind") == "quota_projection"]
+    assert len(transactions) == 1
+    sources = [r["summary_request"] for r in transactions[0]["requests"]]
+    assert [r["consume_display_views"] for r in sources] == [False, True]
+    assert sources[1]["source"]["record"]["first_open_items"][0]["todo_id"] == "todo_agent"
+    assert sources[0]["source"]["record"]["first_open_items"][0]["todo_id"] == "todo_user"
     assert result["agent_identity"]["agent_id"] == "agent-a"
 
 

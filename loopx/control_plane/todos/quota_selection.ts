@@ -1,6 +1,10 @@
 import {COORDINATION_STATE_CONTRACT} from "../coordination/coordination_state_contract.generated.ts";
-import {decodeTodoReadSource, readAgent, pythonFieldText, writeScopes, readScope, readScopes, taskClass} from "./read_codec.ts";
-import {projectTodoSummaryDisplay} from "./context_projection.ts";
+import {decodeTodoReadSource, readAgent, readExcludedAgents, readCapabilities, readResume,
+  pythonFieldText, pythonFieldIsInteger, pythonFieldInteger, writeScopes, readScope, readScopes, taskClass} from "./read_codec.ts";
+import {readTodoPriority, todoPriorityRank} from "./priority.ts";
+import {removedTodoContinuationPolicy} from "./legacy_continuation_policy_migration.ts";
+import {stripPythonWhitespace} from "../coordination/todo_agents.ts";
+import {projectTodoSummaryDisplay, projectTodoContextPage} from "./context_projection.ts";
 import {isBoundedBlockedRetry} from "../quota/settlement_phase.ts";
 import {parseTodoTimestampMicros} from "../runtime_timestamp.ts";
 import {countTodoWork, decodeMonitorSchedule, monitorIsDue, monitorHasScheduleGap,
@@ -9,7 +13,7 @@ import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { requireJsonObject, requireBoolean, requireInteger, requireStringArray,
   optionalNonEmptyString } from "../runtime_decode.ts";
-import { projectTodoResumePlanning } from "./resume_planning.ts";
+import { projectTodoResumePlanning, materializeResumePlanningRequest } from "./resume_planning.ts";
 import { gateAddressesAgent, actionAddressesAgent, claimAllowsAgent } from "./agent_scope.ts";
 import { missingRequiredCapabilities } from "../agents/capability_gate.ts";
 import {claimedAdvancementCountFromIndex} from "./frontier_revision.ts";
@@ -416,6 +420,9 @@ function quotaPlanningWire(planning: JsonObject): JsonObject {
  * visibility and the typed source closure rules. */
 export function projectTodoQuotaPlanning(value: unknown): JsonObject {
   let request = requireJsonObject(value, "quota planning");
+  if (request.schema_version === "todo_profile_rank_request_v0") {
+    return {rank: quotaProfileRank(requireJsonObject(request.facts, "profile rank facts"))};
+  }
   if (request.summary_request !== undefined) request = prepareQuotaSummary(request);
   if (!["todo_quota_planning_request_v0", "todo_quota_planning_request_v1", "todo_quota_planning_request_v2",
       "todo_quota_planning_request_v3", "todo_quota_planning_request_v4"].includes(String(request.schema_version))) {
@@ -491,8 +498,30 @@ export function projectTodoQuotaPlanning(value: unknown): JsonObject {
   const planning = {schema_version: "todo_quota_planning_v0", resume_planning: resume, ...selected, ...closure,
     ...(hasSourceContract ? {handoff_lanes: handoff, route_lanes: route} : {}),
     ...(now === null ? {} : frontier)};
-  return request.summary_request !== undefined ? composeQuotaSummary(request, planning) :
-    referenced ? quotaPlanningWire(planning) : planning;
+  if (request.summary_request !== undefined) {
+    const wire = composeQuotaSummary(request, planning);
+    const summary = requireJsonObject(request.summary_request, "summary request");
+    if (summary.consume_display_views === true) {
+      const display = {source: summary.source, handoff_gates: (request.handoff_items as JsonObject[]).map(row => row.display)};
+      wire.display_views = projectTodoContextPage({summary_display_views: display});
+    }
+    if (summary.consume_vision_wait_basis === true) {
+      if (summary.consume_display_views !== true) throw new EffectRuntimeRequestError("wait basis requires explicitly consumed terminal source rows");
+      const terminal = requireJsonObject(wire.display_views, "display views").terminal as JsonObject[];
+      const source = {items: terminal, deferred_items: terminal.filter(row => row.status === "deferred"),
+        resume_blocked_items: terminal.filter(row => row.resume_ready === false && row.status === "open"),
+        current_agent_blocker_items: terminal};
+      wire.vision_wait_basis = {
+        resume_planning: projectTodoResumePlanning(materializeResumePlanningRequest(source, {agent_id: selection.agent_id, item_limit: 5})),
+        current_agent_blocker_items: terminal.map(row => Object.fromEntries(["todo_id", "task_class", "status", "priority", "claimed_by", "excluded_agents", "reason"].filter(key => Object.hasOwn(row, key)).map(key => [key, row[key]]))),
+        lineage_source_items: terminal.map(row => Object.fromEntries(["todo_id", "successor_todo_ids", "resume_condition"].filter(key => Object.hasOwn(row, key)).map(key => [key, row[key]]))),
+      };
+    }
+    if (summary.consume_source_summary === true) wire.source_summary = projectTodoSummaryDisplay({source: summary.source,
+      handoff_gates: (request.handoff_items as JsonObject[]).map(row => row.display)});
+    return wire;
+  }
+  return referenced ? quotaPlanningWire(planning) : planning;
 }
 
 type Path = (string | number)[];
@@ -500,6 +529,67 @@ const summaryObject = (v: unknown): v is JsonObject => !!v && typeof v === "obje
 const truth = (v: unknown): boolean => Array.isArray(v) ? !!v.length : summaryObject(v) ? !!Object.keys(v).length : !!v;
 const get = (v: JsonObject, k: string, fallback: unknown = null): unknown => Object.hasOwn(v, k) ? v[k] : fallback;
 const summaryRows = (v: unknown): JsonObject[] => Array.isArray(v) ? v.filter(summaryObject) : [];
+
+/** One advisory ranking owner, used by native materialization and the legacy codec. */
+function quotaProfileRank(facts: JsonObject): number {
+  const avoid = requireBoolean(facts.avoid, "avoid"), prefer = requireBoolean(facts.prefer, "prefer");
+  const defaultClass = requireBoolean(facts.default_class, "default_class");
+  return avoid ? 2 : prefer || defaultClass ? 0 : 1;
+}
+
+function nativeProfileRank(item: JsonObject, profile: JsonObject | null): number {
+  if (profile === null) return 1;
+  const action = stripPythonWhitespace(pythonFieldText(item, "action_kind")).toLowerCase();
+  const valid = /^[a-z][a-z0-9_-]{0,63}$/.test(action);
+  // Native profiles have already passed the registered profile grammar: only
+  // literal action characters and '*' are allowed. Legacy fnmatch stays a codec.
+  const matches = (value: unknown) => valid && Array.isArray(value) && value.some(pattern => {
+    if (typeof pattern !== "string" || !/^[a-z0-9][a-z0-9_*-]{0,79}$/.test(pattern)) {
+      throw new EffectRuntimeRequestError("native quota profile requires normalized action patterns");
+    }
+    return new RegExp("^" + pattern.split("*").join(".*") + "$", "u").test(action);
+  });
+  const explicit = stripPythonWhitespace(pythonFieldText(item, "task_class")).toLowerCase();
+  return quotaProfileRank({avoid: matches(profile.avoid_action_kinds), prefer: matches(profile.preferred_action_kinds),
+    default_class: !!explicit && Array.isArray(profile.default_task_classes) && profile.default_task_classes.includes(explicit)});
+}
+
+/** Materialize facts from the complete source, preserving lane/ordinal lineage.
+ * This is the same quota owner, not another Todo eligibility or authority rule. */
+export function materializeQuotaRow(item: JsonObject, profile: JsonObject | null): JsonObject {
+  const text = (key: string) => stripPythonWhitespace(pythonFieldText(item, key));
+  const classification = taskClass({...item, text: ["title", "text"].filter(key => text(key)).map(key => pythonFieldText(item, key)).join(" ")});
+  const rawIndex = item.index;
+  const index = pythonFieldInteger(item, "index");
+  const priority = todoPriorityRank(readTodoPriority(Object.hasOwn(item, "priority") ? item :
+    {...item, text: truth(item.text) ? pythonFieldText(item, "text") : pythonFieldText(item, "title")}));
+  const schema = item.schema_version, legacySchema = COORDINATION_STATE_CONTRACT.todo_read_record.item_schema_version;
+  const nativeSchema = COORDINATION_STATE_CONTRACT.todo_domain_record.item_schema_version;
+  const legacy = schema === legacySchema || schema == null && typeof item.source_section === "string" && !!item.source_section.trim();
+  const unknown = schema != null && schema !== legacySchema && schema !== nativeSchema;
+  const address = (legacy || unknown) && pythonFieldIsInteger(item, "index") && Number(rawIndex) >= 0 ? Number(rawIndex) : null;
+  const status = text("status").toLowerCase();
+  // The retained action-kind substring heuristic only classifies legacy gates.
+  // Explicit task_class always wins; this never broadens a permission boundary.
+  const action = text("action_kind").toLowerCase();
+  const gate = text("task_class") ? classification === "user_gate" : classification === "user_gate" ||
+    ["approval", "approve", "boundary", "gate", "blocker", "credential", "private", "production", "leaderboard", "submission", "public_claim"].some(hint => action.includes(hint));
+  const instant = (key: string) => {const value = parseTodoTimestampMicros(text(key)); return value === null ? null : Number(value) / 1000000;};
+  return {presentation: [priority, address ?? 999999, address === null ? pythonFieldText(item, truth(item.completed_at) ? "completed_at" : "updated_at") : "",
+      address === null ? pythonFieldText(item, "todo_id") : ""],
+    claim: readAgent(item.claimed_by), bound: readAgent(item.bound_agent), blocks: readAgent(item.blocks_agent),
+    excluded: readExcludedAgents(item.excluded_agents),
+    global: item.global_gate === true || ["1", "true", "yes", "y", "global_gate", "global-gate"].includes(text("global_gate").toLowerCase()),
+    gate, removed: removedTodoContinuationPolicy(text("removed_continuation_policy")) !== null ||
+      removedTodoContinuationPolicy(text("continuation_policy")) !== null,
+    actionable: item.done !== true && (!status || status === "open") &&
+      (!readResume(item.resume_when) || item.resume_ready === true) &&
+      !(summaryObject(item.goal_acceptance_guard) && item.goal_acceptance_guard.allowed === false),
+    due_at: instant("next_due_at"), expires_at: instant("expires_at"),
+    watch_only: classification === "continuous_monitor" && (item.watch_only === true || text("watch_only").toLowerCase() === "true"),
+    task_class: classification, priority, index, profile_rank: nativeProfileRank(item, profile),
+    required: readCapabilities(item.required_capabilities), targets: readCapabilities(item.target_capabilities), raw_claimed: truth(item.claimed_by)};
+}
 
 /** Source selection is part of the existing quota read, using the display owner. */
 export function prepareQuotaSummary(request: JsonObject): JsonObject {
@@ -511,13 +601,17 @@ export function prepareQuotaSummary(request: JsonObject): JsonObject {
   if (summary.kind !== "user" && summary.kind !== "project_asset") {
     throw new EffectRuntimeRequestError("invalid quota summary kind");
   }
-  const pool = requireJsonObject(summary.source_rows, "source rows");
+  const materialize = summary.materialize_source === true;
+  const pool = materialize ? null : requireJsonObject(summary.source_rows, "source rows");
+  const profile = summaryObject(requireJsonObject(request.selection, "selection").profile)
+    ? requireJsonObject(request.selection, "selection").profile as JsonObject : null;
   const selectedFacts: JsonObject[] = [];
   let selected: JsonObject[] = projectTodoSummaryDisplay({source: summary.source,
     handoff_gates: (request.handoff_items as JsonObject[]).map(row => row.display)}, (key, index) => {
-      const lane = pool[key];
+      const lane = materialize ? source[key] : pool![key];
       if (!Array.isArray(lane)) throw new EffectRuntimeRequestError("quota summary source lane missing");
-      selectedFacts.push(requireJsonObject(lane[index], "quota source fact"));
+      const row = requireJsonObject(lane[index], "quota source fact");
+      selectedFacts.push(materialize ? materializeQuotaRow(row, profile) : row);
     }).map((payload, index) => {
       const fact = selectedFacts[index]!;
       const presentation = [...fact.presentation as [number, number, string, string]];
@@ -540,7 +634,11 @@ export function prepareQuotaSummary(request: JsonObject): JsonObject {
     return x[0] - y[0] || x[1] - y[1] || authorityUnicodeCompare(x[2], y[2]) || authorityUnicodeCompare(x[3], y[3]);
   });
   const selection = requireJsonObject(request.selection, "selection");
-  return {...request, summary_request: {...summary, legacy}, selection: {...selection, items: selected,
+  const encoded = (key: string) => summaryRows(source[key]).map(row => ({...materializeQuotaRow(row, profile), payload: row, display_source: {record: row}}));
+  return {...request, ...(summary.materialize_resume === true ? {resume: materializeResumePlanningRequest(source,
+      requireJsonObject(request.resume_options, "resume options"))} : {}),
+    summary_request: {...summary, legacy}, selection: {...selection, items: selected,
+    ...(materialize ? {active_items: encoded("active_next_action_items"), active_executable_items: encoded("active_next_action_executable_items")} : {}),
     source_open_count: legacy ? get(source, "open", get(source, "open_count", selected.length)) : get(source, "open_count", selected.length)}};
 }
 

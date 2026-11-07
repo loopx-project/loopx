@@ -98,9 +98,7 @@ from ..todos.todo_semantics import (
     todo_item_task_class as projection_todo_item_task_class,
 )
 from ..todos.quota_summary import (
-    select_quota_todo_display_views,
-    select_quota_todo_source_items,
-    select_quota_todo_summary,
+    select_quota_todo_contexts,
     select_task_orchestration_authority_items,
 )
 from ..todos.summary_item import compact_todo_summary_item, compact_todo_summary_items
@@ -292,7 +290,7 @@ def _prepare_quota_replan_context(
             source_status=status_payload, stride_strategy=goal_frontier_context["stride_strategy"],
             explore_reader=replan_explore_reader,
             goal_acceptance_contract=(agent_todo_summary or {}).get("goal_acceptance_contract"),
-            todo_items=replan_todo_items,
+            todo_items=agent_todo_terminal_source_items,
         )
     return goal_frontier_context, replan_obligation
 
@@ -697,29 +695,16 @@ def _prepare_quota_should_run_item(
         item=item, project_asset=project_asset, available=available_capabilities,
     )
     effective_available_capabilities = availability["effective"]
-    user_todo_summary = select_quota_todo_summary(
+    user_todo_summary, agent_todo_summary, agent_todo_display_views, user_todo_source_items = select_quota_todo_contexts(
         item.get("user_todos"),
         project_asset.get("user_todos") if project_asset else None,
-        agent_identity=agent_identity,
-        filter_user_gate_blocks_agent=True,
-        available_capabilities=effective_available_capabilities,
-    )
-    agent_todo_summary = select_quota_todo_summary(
         item.get("agent_todos"),
         project_asset.get("agent_todos") if project_asset else None,
         agent_identity=agent_identity,
         available_capabilities=effective_available_capabilities,
-    )
-    user_todo_source_items = select_quota_todo_source_items(
-        item.get("user_todos"),
-        project_asset.get("user_todos") if project_asset else None,
     )
     # Only this Agent source is consumed as summary, planning and retained
     # terminal rows below. User-source and general display calls stay single-view.
-    agent_todo_display_views = select_quota_todo_display_views(
-        item.get("agent_todos"),
-        project_asset.get("agent_todos") if project_asset else None,
-    )
     agent_todo_source_items = agent_todo_display_views["summary"]
     agent_todo_planning_source_items = agent_todo_display_views["planning"]
     task_orchestration_agent_items = select_task_orchestration_authority_items(

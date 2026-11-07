@@ -74,7 +74,9 @@ def observe_todo_acceptance(
         canonical, registry_path=registry_path, goal_id=goal_id)
     summary = fields.get("agent_todos")
     if isinstance(summary, dict) and "goal_acceptance_contract" in summary:
-        return {**fields, "agent_todos": {**summary, "goal_acceptance_contract": acceptance}}
+        from .summary_item import preserve_canonical_todo_source
+        return {**fields, "agent_todos": preserve_canonical_todo_source(summary,
+            {**summary, "goal_acceptance_contract": acceptance})}
     return fields
 
 
@@ -248,7 +250,11 @@ def project_todo_read(params: dict[str, Any]) -> dict[str, Any]:
     from ..effect_runtime import MAX_LOCAL_SNAPSHOT_BYTES
     from ..runtime.private_permissions import protect_private_path
 
-    request = {"schema_version": "todo_read_request_v0", **params}
+    native_read = None
+    if params.get("kind") == "select":
+        from .summary_item import canonical_todo_select_read
+        native_read = canonical_todo_select_read(params)
+    request = {"schema_version": "todo_read_request_v0", **(native_read or params)}
     encoded = json.dumps(request, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
     chunks: list[bytes] = []
     identity = None
@@ -313,6 +319,17 @@ def project_todo_read(params: dict[str, Any]) -> dict[str, Any]:
             frontier = summary.get("advancement_frontier_revision_index")
             if not isinstance(frontier, dict) or frontier.get("schema_version") != "todo_frontier_revision_index_v0":
                 raise ValueError("invalid typed Todo summary frontier index")
+    if params.get("kind") in {"canonical_fields", "query"} or native_read is not None:
+        from .summary_item import bind_canonical_todo_sources
+        bind_canonical_todo_sources(result, native_read or params)
+        if native_read is not None and result.get("projection"):
+            from .succession_warning import _EvaluatedTodo
+            projection = result["projection"]
+            for field, decisions in result["field_evaluations"].items():
+                summary = projection["summaries"][field]
+                summary["items"] = [_EvaluatedTodo(item, decision)
+                    for item, decision in zip(summary["items"], decisions, strict=True)]
+            projection["todos"] = [item for summary in projection["summaries"].values() for item in summary["items"]]
     return result
 
 

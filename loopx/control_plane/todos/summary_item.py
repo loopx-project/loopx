@@ -7,6 +7,148 @@ from typing import Any
 
 from .handoff_note import todo_read_source
 
+
+class _CanonicalTodoSummary(dict[str, Any]):
+    """Ephemeral source lineage; dict serialization exposes only product fields."""
+
+    def __init__(self, value: dict[str, Any], *, read: dict[str, Any],
+                 expected: dict[str, Any], field: str, digest: str,
+                 basis: bytes, request_identity: object, evaluations: Any = None) -> None:
+        super().__init__(value)
+        self.read, self.expected, self.field, self.digest = read, expected, field, digest
+        self.basis, self.request_identity = basis, request_identity
+        self.evaluations = evaluations
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> _CanonicalTodoSummary:
+        from copy import deepcopy
+        result = _CanonicalTodoSummary({}, read=deepcopy(self.read, memo),
+            expected=deepcopy(self.expected, memo), field=self.field, digest=self.digest,
+            basis=self.basis, request_identity=self.request_identity,
+            evaluations=deepcopy(self.evaluations, memo))
+        memo[id(self)] = result
+        result.update(deepcopy(dict(self), memo))
+        return result
+
+
+def preserve_canonical_todo_source(source: dict[str, Any], value: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(source, _CanonicalTodoSummary):
+        return value
+    return _CanonicalTodoSummary(value, read=source.read, expected=source.expected,
+        field=source.field, digest=source.digest, basis=source.basis,
+        request_identity=source.request_identity, evaluations=source.evaluations)
+
+
+def bind_canonical_todo_sources(result: dict[str, Any], read: dict[str, Any]) -> None:
+    from ..effect_runtime import todo_projection_request_identity
+
+    identity = todo_projection_request_identity()
+    metadata = result.get("source_projection")
+    fields = result.get("fields", (result.get("projection") or {}).get("summaries", result.get("payload")))
+    if identity is None or not isinstance(metadata, dict) or not isinstance(fields, dict):
+        return
+    for field, value in fields.items():
+        digest = metadata.get("field_digests", {}).get(field)
+        if not isinstance(value, dict) or not isinstance(digest, str):
+            continue
+        basis = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8", "backslashreplace")
+        observed = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8", "backslashreplace")
+        if sha256(observed).hexdigest() != digest:
+            # A modified response or a numeric JSON spelling mismatch cannot
+            # mint a native reference. Keep the complete supplied source codec.
+            continue
+        fields[field] = _CanonicalTodoSummary(value, read={key: value for key, value in metadata.get("replay_read", read).items() if key != "return_projection"},
+            expected=metadata["source"], field=field, digest=digest,
+            basis=basis, request_identity=identity,
+            evaluations=(result.get("field_evaluations") or {}).get(field))
+
+
+def canonical_todo_select_read(params: dict[str, Any]) -> dict[str, Any] | None:
+    """Compose the existing selector only when every consumed field is native."""
+    fields, references = params.get("fields") or {}, {}
+    read = expected = None
+    for role in params.get("roles") or []:
+        field = f"{role}_todos"
+        source = fields.get(field)
+        if not isinstance(source, _CanonicalTodoSummary):
+            return None
+        reference = canonical_todo_source_reference(source)
+        if reference is None or (params.get("field_evaluations") or {}).get(field) != source.evaluations:
+            return None
+        if read is not None and (read != reference["read"] or expected != reference["expected_source"]):
+            return None
+        read, expected = reference["read"], reference["expected_source"]
+        references[field] = {key: value for key, value in reference.items() if key not in {"read", "expected_source"}}
+    if read is None:
+        return None
+    selector = {key: value for key, value in params.items() if key not in {"kind", "fields", "field_evaluations"}}
+    return {**read, "return_projection": True,
+        "read_pipeline": [*(read.get("read_pipeline") or []),
+            {"expected_source": expected, "sources": references, "selector": selector}]}
+
+
+def canonical_todo_source_reference(value: dict[str, Any]) -> dict[str, Any] | None:
+    from ..effect_runtime import todo_projection_request_identity
+
+    if (not isinstance(value, _CanonicalTodoSummary)
+            or value.request_identity is not todo_projection_request_identity()):
+        return None
+    current = todo_read_source(value)
+    original = json.loads(value.basis)
+    if any(key != "goal_acceptance_contract" and current["record"].get(key) != child
+           for key, child in original.items()):
+        # Transformed Todo facts remain explicit supplied source, rather than
+        # retaining the original provider's source claim.
+        return None
+    changes: list[dict[str, Any]] = []
+
+    def diff(before: Any, after: Any, path: list[Any]) -> None:
+        if isinstance(before, dict) and isinstance(after, dict):
+            for key in before.keys() - after.keys():
+                changes.append({"path": [*path, key], "delete": True})
+            for key, child in after.items():
+                if key not in before:
+                    changes.append({"path": [*path, key], "value": child})
+                else:
+                    diff(before[key], child, [*path, key])
+        elif isinstance(before, list) and isinstance(after, list) and len(before) == len(after):
+            for index, (left, right) in enumerate(zip(before, after, strict=True)):
+                diff(left, right, [*path, index])
+        elif type(before) is not type(after) or before != after:
+            changes.append({"path": path, "value": after})
+
+    diff(original, current["record"], [])
+    return {"read": value.read, "expected_source": value.expected,
+        "field": value.field, "field_sha256": value.digest,
+        "changes": changes, "python_values": current.get("python_values", [])}
+
+
+class _QuotaProjectedSummary(dict[str, Any]):
+    """Prepared wait facts over an explicitly consumed immutable source view."""
+
+    def __init__(self, value: dict[str, Any], basis: dict[str, Any], rows: list[dict[str, Any]], agent: Any):
+        from ..effect_runtime import todo_projection_request_identity
+        super().__init__(value)
+        self.wait_basis, self.agent = basis, agent
+        self.request_identity = todo_projection_request_identity()
+        self.rows = json.dumps(rows, ensure_ascii=False, separators=(",", ":")).encode("utf-8", "backslashreplace")
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> _QuotaProjectedSummary:
+        from copy import deepcopy
+        result = _QuotaProjectedSummary({}, deepcopy(self.wait_basis, memo), [], self.agent)
+        memo[id(self)] = result
+        result.update(deepcopy(dict(self), memo))
+        result.rows, result.request_identity = self.rows, self.request_identity
+        return result
+
+
+def quota_vision_wait_basis(summary: dict[str, Any], rows: Any, agent: Any) -> dict[str, Any] | None:
+    from ..effect_runtime import todo_projection_request_identity
+    if (not isinstance(summary, _QuotaProjectedSummary) or summary.request_identity is None
+            or summary.request_identity is not todo_projection_request_identity() or summary.agent != agent):
+        return None
+    observed = json.dumps(rows, ensure_ascii=False, separators=(",", ":")).encode("utf-8", "backslashreplace")
+    return summary.wait_basis if observed == summary.rows else None
+
 TODO_SUMMARY_SOURCE_KEYS = (
     "active_next_action_items",
     "active_next_action_executable_items",
