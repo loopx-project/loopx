@@ -635,13 +635,12 @@ class LarkPrivateConversations:
         projected = conversation_reply_context({**context, "source_conversation_id": event["chat_id"]})
         prefix = str(projected["context_text"])
         message = f"{prefix}\n\nCurrent user message:\n{text}" if prefix else text
-        # The App checks a frozen thread excerpt against the original
-        # transport record. The compact private event can omit its thread
-        # ID; retain it from the verified provider context before admission.
-        thread_id = context.get("thread_id", "")
+        # A compact private event can omit its thread ID. Retain the verified
+        # identity for redelivery even when the provider has no thread excerpt.
+        thread_id = context.get("thread_id")
         if (event["chat_type"] == "p2p" and event.get("parent_id") and not event.get("thread_id")
-                and context.get("reply_context_verified") and context.get("thread_context")
-                and 0 < len(thread_id) <= 200):
+                and context.get("reply_context_verified") is True
+                and isinstance(thread_id, str) and 0 < len(thread_id) <= 200):
             record["event"] = {**event, "thread_id": thread_id}
         record.update(reply_context_message=message, reply_context_source_text=text)
         _atomic_write_json(path, record)
