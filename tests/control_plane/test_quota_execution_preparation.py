@@ -625,8 +625,9 @@ def test_preparation_does_not_replace_explicit_action_selection(monkeypatch):
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("lease_state", ["missing", "expired"])
+@pytest.mark.parametrize("startup", ["before-guard", "after-guard"])
 def test_codex_lifecycle_hook_uses_captured_authority_from_another_project(
-    tmp_path, monkeypatch, provider, lease_state,
+    tmp_path, monkeypatch, provider, lease_state, startup,
 ):
     from loopx.control_plane.turn_driver.codex_context import (
         codex_context_hook,
@@ -637,6 +638,16 @@ def test_codex_lifecycle_hook_uses_captured_authority_from_another_project(
     capture_root = tmp_path / "capture"
     context_root.mkdir(mode=0o700)
     monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    foreign_workspace = tmp_path / "project-b"
+    foreign_workspace.mkdir()
+    event = {
+        "session_id": "codex-hook-session",
+        "cwd": str(foreign_workspace.resolve()),
+        "hook_event_name": "SessionStart",
+        "source": "startup",
+    }
+    if startup == "before-guard":
+        assert codex_context_hook(str(context_root), event) == {}
     before = _run(
         tmp_path,
         monkeypatch,
@@ -647,17 +658,10 @@ def test_codex_lifecycle_hook_uses_captured_authority_from_another_project(
         "--decision-output-dir", str(capture_root), context_delivery="on",
     )
     turn = before["heartbeat_receipt"]["turn_instance_id"]
-    foreign_workspace = tmp_path / "project-b"
-    foreign_workspace.mkdir()
     monkeypatch.setenv("CODEX_THREAD_ID", "codex-hook-session")
     monkeypatch.chdir(foreign_workspace)
-    event = {
-        "session_id": "codex-hook-session",
-        "cwd": str(foreign_workspace.resolve()),
-        "hook_event_name": "SessionStart",
-        "source": "startup",
-    }
-    assert codex_context_hook(str(context_root), event) == {}
+    if startup == "after-guard":
+        assert codex_context_hook(str(context_root), event) == {}
     _present_saved_guard(tmp_path, context_root, capture_root, "codex_app_ssh_goal", turn)
 
     command = [
