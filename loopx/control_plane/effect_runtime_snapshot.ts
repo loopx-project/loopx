@@ -11,6 +11,7 @@ import {requireJsonObject, requireNonEmptyString} from "./runtime_decode.ts";
 import { BARE_SHA256_PATTERN } from "./content_digest.ts";
 
 export const MAX_LOCAL_SNAPSHOT_BYTES = 64 * 1024 * 1024;
+export const MAX_INLINE_RESPONSE_BYTES = 8 * 1024 * 1024;
 
 async function privateFile(path: string, flags: number): Promise<FileHandle> {
   if (!isAbsolute(path) || !basename(dirname(path)).startsWith("loopx-effect-")) {
