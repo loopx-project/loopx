@@ -121,6 +121,15 @@ def _capture_page(path: Path, raw: bytes, digest: str, *, offset: int, size: int
 
 
 
+def _validate_context_page_window(offset: int, size: int, output_limit: int | None) -> None:
+    from ..control_plane.effect_runtime import MAX_REQUEST_BYTES
+
+    maximum = max(8192, min(output_limit or 8192, MAX_REQUEST_BYTES))
+    if type(offset) is not int or offset < 0 or type(size) is not int or not 256 <= size <= maximum:
+        raise ValueError(f"Page offset must be nonnegative and --page-bytes must be between 256 and {maximum}; "
+            "larger pages require a sufficient --max-page-output-bytes within the capture limit.")
+
+
 def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, Any] | None = None,
                          next_page_bytes: int | None = None,
                          next_page_output_bytes: int | None = None,
@@ -170,14 +179,7 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
                 goal_id=getattr(args, "goal_id", None), agent_id=getattr(args, "agent_id", None))
         if not isinstance(digest, str) or BARE_SHA256_PATTERN.fullmatch(digest) is None or not value:
             raise ValueError("context-read requires the original capture file and its exact SHA-256")
-        from ..control_plane.effect_runtime import MAX_REQUEST_BYTES
-
-        # Default JSON reads share the native large-page profile. Explicit
-        # smaller budgets can recover a truncated range of this same capture.
-        maximum = max(8192, min(output_limit or 8192, MAX_REQUEST_BYTES))
-        if type(offset) is not int or offset < 0 or type(size) is not int or not 256 <= size <= maximum:
-            raise ValueError("context-read requires a nonnegative byte offset and page-bytes between 256 and 8192; "
-                "larger pages require a sufficient max-page-output-bytes within the capture limit")
+        _validate_context_page_window(offset, size, output_limit)
         path, raw, payload = _read_capture(value, digest)
         list_fields = getattr(args, "list_fields", False)
         list_depth = getattr(args, "list_depth", None)
@@ -319,15 +321,16 @@ def model_context_reference(view: dict[str, Any], *, reader_argv: list[str] | No
     The descriptor holds complete digests locally. Legacy explicit readers and
     full-page observation receipts retain their original transport shape.
     """
-    page_bytes, output_bytes = native_context_page_budget()
-    # Retain an explicitly smaller caller budget from the generated command.
-    words = shlex.split(view["command"])
-    for option in ("--page-bytes", "--max-page-output-bytes"):
-        if option in words:
-            if option == "--page-bytes":
-                page_bytes = int(words[words.index(option) + 1])
-            else:
-                output_bytes = int(words[words.index(option) + 1])
+    def command_budget(command: str) -> tuple[int, int]:
+        words = shlex.split(command)
+        page_bytes, output_bytes = native_context_page_budget()
+        if "--page-bytes" in words:
+            page_bytes = int(words[words.index("--page-bytes") + 1])
+        if "--max-page-output-bytes" in words:
+            output_bytes = int(words[words.index("--max-page-output-bytes") + 1])
+        return page_bytes, output_bytes
+
+    page_bytes, output_bytes = command_budget(view["command"])
 
     def reference(value: dict[str, Any], *, navigation: bool = False) -> dict[str, str]:
         path = Path(value["path"])
@@ -346,15 +349,16 @@ def model_context_reference(view: dict[str, Any], *, reader_argv: list[str] | No
         result["continuity_basis"] = view["continuity_basis"]
     if "first_read_command" in view:
         recovery = view["recovery"]
+        first_page_bytes, first_output_bytes = command_budget(view["first_read_command"])
         if view.get("first_read_reference"):
             # The producer already pinned this same initial selection. Keep
             # that existing cursor instead of asking the reader to replan it.
             result["first_read_command"] = context_capture_read_command(Path(recovery["path"]), recovery["sha256"],
-                page_bytes=page_bytes, max_page_output_bytes=output_bytes,
+                page_bytes=first_page_bytes, max_page_output_bytes=first_output_bytes,
                 reference_file=Path(view["first_read_reference"]), reader_argv=reader_argv)
         else:
             result["first_read_command"] = context_capture_read_command(Path(recovery["path"]), recovery["sha256"],
-                page_bytes=page_bytes, max_page_output_bytes=output_bytes, initial_read=True,
+                page_bytes=first_page_bytes, max_page_output_bytes=first_output_bytes, initial_read=True,
                 reference_file=Path(result["recovery"]["reference_file"]), reader_argv=reader_argv)
     result["instruction"] += (" Append --select '<pointer>' or --list to recovery.command for current fields. "
         "Reader references keep complete digests locally; the CLI checks them on every page. "
@@ -371,6 +375,7 @@ def _native_context_reference(projected: dict[str, Any], reference: dict[str, An
                               initial_read_pointers: list[str] | None,
                               initial_read_reference: Path | None,
                               page_bytes: int, output_bytes: int,
+                              first_read_budget: tuple[int, int],
                               page_attached: bool = False,
                               reader_argv: list[str] | None = None) -> dict[str, Any]:
     """Build the bounded native reference without publishing or registering it."""
@@ -419,8 +424,10 @@ def _native_context_reference(projected: dict[str, Any], reference: dict[str, An
             "Start with first_read_command for current facts and source navigation from this capture")
         result["instruction"] = (first_read + ", without reading an older baseline. "
             "Read each complete optional attachment from its captured step before using it. " + instruction)
+        first_page_bytes, first_output_bytes = first_read_budget
         result["first_read_command"] = context_capture_read_command(current_path, current["sha256"],
-            page_bytes=page_bytes, max_page_output_bytes=output_bytes, initial_read=True, reader_argv=reader_argv)
+            page_bytes=first_page_bytes, max_page_output_bytes=first_output_bytes,
+            initial_read=True, reader_argv=reader_argv)
         if not fits():
             result.pop("first_read_command")  # A complete optional selection or the existing generic recovery.
             result["overview"] = overview

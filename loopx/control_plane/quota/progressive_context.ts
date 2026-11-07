@@ -416,14 +416,16 @@ export function prepareProgressiveContextDelivery(request: JsonObject, legacyFie
   // Full native delivery can use that copy; delta still carries its own edits.
   if (request.source_edits === true && delivery.mode === "full") delete delivery.context;
   const observe = request.observe_first_read === true && !!jsonObject(required.context.selected_todo)?.todo_id;
-  const pointers = observe ? initialContextReadPointers(required.context, decisionFields) : [];
-  const observed = pointers.length ? observedFirstRead(codec, pointers) : undefined;
+  const groups = observe || request.include_initial_read_plan === true
+    ? initialContextReadGroups(required.context, decisionFields) : undefined;
+  const pointers = groups ? [...groups.opening, ...groups.remaining] : [];
+  const observed = observe && pointers.length ? observedFirstRead(codec, pointers) : undefined;
   const {operation: _operation, source_edits: _edits, source_number_tokens: _numbers, ...source} = request;
   return contextProjectionChanges(source, {context: required.context, delivery, projected: required.projected,
     ...(observed ? {observed_first_read: observed} : {}),
     read_sections: inlineReadSections(request, required.context),
-    ...(request.include_initial_read_plan === true
-      ? {initial_read_plan: nativeContextReadPlan(required.context, decisionFields)} : {})}, sourceValues);
+    ...(request.include_initial_read_plan === true && groups
+      ? {initial_read_plan: nativeContextReadPlan(required.context, pointers, groups)} : {})}, sourceValues);
 }
 
 /** Stateless presentation uses the same plan without inventing a native session,
@@ -437,18 +439,28 @@ export function prepareProgressiveContext(request: JsonObject, plan?: JsonObject
 
 /** Invocation-local navigation, not captured input or a read/retention receipt.
  * Decision vocabulary comes from the same owner as standalone initial reads. */
-function nativeContextReadPlan(context: JsonObject, decisionFields: readonly string[]): JsonObject {
-  const pointers = initialContextReadPointers(context, decisionFields), initial = pointers.length > 0;
-  return {initial, plan: capturedContextSelection(initial ? {context, initial_read: true}
-    : {context, select: [""], list_fields: true}, pointers)};
+function nativeContextReadPlan(context: JsonObject, pointers: string[],
+    groups: ReturnType<typeof initialContextReadGroups>): JsonObject {
+  if (!pointers.length) return {initial: false,
+    plan: capturedContextSelection({context, select: [""], list_fields: true})};
+  const select = (addresses: string[]) => capturedContextSelection({context, initial_read: true}, addresses);
+  return {initial: true, plan: select(pointers), ...(groups.opening.length && groups.remaining.length
+    ? {opening: select(groups.opening), remaining: select(groups.remaining)} : {})};
 }
 
 export function initialContextReadPointers(context: JsonObject, decisionFields: readonly string[]): string[] {
+  const {opening, remaining} = initialContextReadGroups(context, decisionFields);
+  return [...opening, ...remaining];
+}
+
+function initialContextReadGroups(context: JsonObject, decisionFields: readonly string[]): {
+  opening: string[]; remaining: string[];
+} {
   const object = (value: unknown): JsonObject | undefined =>
     value !== null && typeof value === "object" && !Array.isArray(value) ? value as JsonObject : undefined;
   const interaction = object(context.interaction_contract);
   // Unknown envelopes retain generic discovery instead of guessing their policy.
-  if (interaction?.schema_version !== "loopx_interaction_contract_v0") return [];
+  if (interaction?.schema_version !== "loopx_interaction_contract_v0") return {opening: [], remaining: []};
   const pointers: string[] = [];
   const include = (...path: (string | number)[]): void => {
     let value: unknown = context;
@@ -480,6 +492,10 @@ export function initialContextReadPointers(context: JsonObject, decisionFields: 
   include("interaction_contract", "agent_channel", "required_reads");
   const work = ["interaction_contract", "agent_channel", "work_context"];
   include(...work, "instruction");
+  // If the full starting selection needs paging, put the current decision and
+  // its read obligations in one independently readable opening. The rest is
+  // still required under the original ordering and authority.
+  const opening = pointers.splice(0);
   include(...work, "user_todos");
   const channel = object(interaction.agent_channel);
   const sources = object(channel?.work_context)?.sources;
@@ -550,23 +566,41 @@ export function initialContextReadPointers(context: JsonObject, decisionFields: 
     include(...source, "content", "harness", "guidance");
     include(...source, "content", "harness", "orchestration_gate");
   });
+  const cli = object(interaction.cli_channel);
+  const planPath = ["interaction_contract", "cli_channel", "settlement_plan"];
+  const plan = object(cli?.settlement_plan);
+  const steps = plan?.schema_version === "quota_settlement_plan_v1" && Array.isArray(plan.ordered_steps)
+    ? plan.ordered_steps : undefined;
+  const prepared = object(cli?.execution_preparation);
+  const identity = object(plan?.identity);
+  const settlementSteps = steps?.map(object).filter(step => step?.kind === "durable_writeback" || step?.kind === "quota_spend");
+  // A ready Turn already shows its ordered writeback and spend with their
+  // conditions. Hide only the exact duplicate fallback in this first read;
+  // recovery, legacy readers and the original capture keep both forms.
+  const repeatsSettlement = context.effective_action === EffectiveAction.NORMAL_RUN && context.normal_delivery_allowed === true
+    && channel?.delivery_allowed === true && cli?.selection_required !== true && prepared?.state === "ready"
+    && typeof identity?.effect_id === "string" && identity.effect_id.length > 0
+    && typeof identity.todo_id === "string" && prepared.todo_id === identity.todo_id
+    && object(context.selected_todo)?.todo_id === identity.todo_id
+    && isDeepStrictEqual(identity, object(object(context.heartbeat_receipt)?.settlement_identity))
+    && settlementSteps?.length === 2 && settlementSteps[0]?.kind === "durable_writeback" && settlementSteps[1]?.kind === "quota_spend"
+    && settlementSteps.every(step => typeof step?.command_template === "string" && step.command_template.length > 0)
+    && isDeepStrictEqual(cli?.next_cli_actions, settlementSteps.map(step => step?.command_template));
   if (!turnBindingRequired)
     for (const field of ["execution_preparation", "next_cli_actions", "spend_allowed_now", "spend_after_validation", "spend_policy",
       "quota_spend_source", "delivery_workspace_causality", "vision_continuation_audit"])
-      include("interaction_contract", "cli_channel", field);
+      if (field !== "next_cli_actions" || !repeatsSettlement) include("interaction_contract", "cli_channel", field);
   // Explicit selection clears next_cli_actions. Deliver the owner's discovery
   // and same-Turn binding recipe alongside its non-exhaustive suggestions.
-  if (object(interaction.cli_channel)?.selection_required === true) {
+  if (cli?.selection_required === true) {
     for (const field of ["selection_required", "selection_policy_ref", "selection_command"])
       include("interaction_contract", "cli_channel", field);
     include("action_portfolio", "selection_policy");
     include("action_portfolio", "suggested_actions");
   }
-  const planPath = ["interaction_contract", "cli_channel", "settlement_plan"];
-  const plan = object(object(interaction.cli_channel)?.settlement_plan);
-  if (plan?.schema_version === "quota_settlement_plan_v1" && Array.isArray(plan.ordered_steps)) {
+  if (plan && steps) {
     for (const field of Object.keys(plan)) if (field !== "ordered_steps") include(...planPath, field);
-    plan.ordered_steps.forEach((value, stepIndex) => {
+    steps.forEach((value, stepIndex) => {
       const step = object(value), stepPath = [...planPath, "ordered_steps", stepIndex];
       if (!step) { include(...stepPath); return; }
       for (const field of Object.keys(step)) {
@@ -611,5 +645,5 @@ export function initialContextReadPointers(context: JsonObject, decisionFields: 
     include("context_details", "instruction");
     include("context_details", "command_template");
   } else include("context_details", "unread_context_index");
-  return pointers;
+  return {opening, remaining: pointers};
 }

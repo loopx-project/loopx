@@ -583,9 +583,16 @@ def test_projected_claim_prepares_the_same_receipt_bound_turn(
 
         navigation = read(*args)
         command = shlex.split(navigation["first_read_command"])
-        page = read(*command[command.index("quota"):])
-        assert page["eof"]
-        values = {row["pointer"]: row["value"] for row in json.loads(page["content"])["selections"]}
+        selected = bytearray()
+        while True:
+            page = read(*command[command.index("quota"):])
+            assert page["offset"] == len(selected)
+            selected.extend(page["content"].encode())
+            if page["eof"]:
+                assert len(selected) == page["total_bytes"]
+                break
+            command = shlex.split(page["next_command"])
+        values = {row["pointer"]: row["value"] for row in json.loads(selected)["selections"]}
         boundary = packet["goal_boundary"]
         assert boundary["write_scope"] == scopes and boundary["requires_parent_approval"] == ["publish"]
         assert values["/heartbeat_receipt"] == packet["heartbeat_receipt"]

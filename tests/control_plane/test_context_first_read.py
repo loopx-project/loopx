@@ -473,8 +473,19 @@ def test_advertised_native_reader_keeps_the_complete_current_contract_across_pag
     expected_cli = selected_context_values(json.dumps({"selections": [
         {"pointer": cli_path, "value": source["interaction_contract"]["cli_channel"]}]}))
     vision_path = next(path for path in expected_cli if path.endswith("/vision_authoring"))
-    # Every CLI leaf outside the authoring reference must still be delivered.
+    actions_path = cli_path + "/next_cli_actions"
+    current_cli = source["interaction_contract"]["cli_channel"]
+    bound_steps = current_cli["settlement_plan"]["ordered_steps"]
+    actual_commands = [step["command_template"] for step in bound_steps
+                       if step["kind"] in ("durable_writeback", "quota_spend")]
+    assert len(actual_commands) == 2 and current_cli["next_cli_actions"] == actual_commands
+    # The ordered plan carries these exact templates and all their conditions.
+    # A ready first read should not present a second apparent route for them.
+    assert not any(path == actions_path or path.startswith(actions_path + "/") for path in values)
+    # Every distinct CLI leaf outside the authoring reference is still delivered.
     for path, item in expected_cli.items():
+        if path == actions_path or path.startswith(actions_path + "/"):
+            continue
         if path.startswith(vision_path + "/") or (isinstance(item, (dict, list)) and item):
             continue
         assert values[path] == item
@@ -484,10 +495,46 @@ def test_advertised_native_reader_keeps_the_complete_current_contract_across_pag
         "--max-page-output-bytes", "9000", cwd=project)
     assert code == 0 and detail["eof"]
     assert selected_context_values(detail["content"])[vision_path] == expected_cli[vision_path]
+    code, fallback = _run_cli(registry, runtime, "quota", "context-read", "--reference-file",
+        view["recovery"]["reference_file"], "--select", actions_path, cwd=project)
+    assert code == 0 and fallback["eof"]
+    assert selected_context_values(fallback["content"])[actions_path] == actual_commands
     assert values["/heartbeat_receipt"] == source["heartbeat_receipt"]
     assert values["/selected_todo"] == source["selected_todo"]
     assert _heartbeat_receipt_count(runtime, turn_id) == 1 and _spend_run_count(runtime) == 0
     assert Path(reference["path"]).read_bytes() == raw and state.read_bytes() == original_state
+
+
+@pytest.mark.parametrize("variant", ["different_argument", "different_order", "unready", "other_effect", "future_plan"])
+def test_initial_read_keeps_fallback_actions_when_the_bound_plan_is_not_equivalent(tmp_path, decision, variant):
+    interaction = decision["interaction_contract"]
+    cli = interaction["cli_channel"]
+    identity = {"schema_version": "quota_settlement_identity_v0", "effect_id": "original-effect",
+                "todo_id": decision["selected_todo"]["todo_id"], "turn_instance_id": "original"}
+    decision.update(effective_action="normal_run", normal_delivery_allowed=True,
+                    heartbeat_receipt={"settlement_identity": identity})
+    interaction["agent_channel"]["delivery_allowed"] = True
+    writeback = "loopx refresh-state --turn-instance-id original"
+    spend = "loopx quota spend-slot --turn-instance-id original --execute"
+    cli.update(execution_preparation={"state": "ready", "todo_id": identity["todo_id"]},
+               next_cli_actions=[writeback, spend],
+               settlement_plan={"schema_version": "quota_settlement_plan_v1", "identity": identity,
+                                "ordered_steps": [{"kind": "durable_writeback", "command_template": writeback},
+                                                  {"kind": "quota_spend", "command_template": spend}]})
+    if variant == "different_argument":
+        cli["next_cli_actions"][0] += " --suppress-external-sinks"
+    elif variant == "different_order":
+        cli["next_cli_actions"].reverse()
+    elif variant == "unready":
+        cli["execution_preparation"]["state"] = "claim_required"
+    elif variant == "other_effect":
+        decision["heartbeat_receipt"]["settlement_identity"] = {**identity, "effect_id": "another"}
+    else:
+        cli["settlement_plan"]["schema_version"] = "unknown_settlement_plan"
+
+    view = native_context_capture_view(decision, tmp_path)
+    _, values = read_selection(view["first_read_command"])
+    assert values["/interaction_contract/cli_channel/next_cli_actions"] == cli["next_cli_actions"]
 
 
 def test_initial_read_keeps_current_constraints_whole_and_history_reachable(tmp_path, decision):
