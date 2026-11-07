@@ -1413,6 +1413,31 @@ transaction。Provider 读取、revision、lease/actor fence 和状态写入保�
 保留一个 minor release；M1/#8011、完整 R0/V10/R1、D2/D5/D6/D3、context/model/
 split-install、adoption 和所有冻结失败继续保留。
 
+#### 后续 provider-first 事务边界
+
+下一实现应组合既有经过 provider 准入的 `canonicalTodoCollection` 和 projection
+owner。Native snapshot owner 把 Goal、store incarnation、provider revision、cursor
+及 query 绑定到完整 rows、leases、read-model 验证和 acceptance guards。Continuation
+只是同一次读取中的位置，不是可复用的 current-head handle；snapshot 变化后应重新
+完整读取。展示保留来源不会获取新的 authority。
+
+`quota_selection.py` 仍在 encoded selection rows 和 source-row facts 之外发送
+完整 summary source。请求还包含时钟、actor/profile、capabilities、closure evidence、
+route/handoff facts 和 resume 输入。合并传输之前，先把 canonical row materialization
+放入既有 typed owner。严格 integer、boolean 或文本区别仍可观测时，保留
+Python-value codec。Provider rows 不能替代独立 caller evidence 或 pending intent；
+all-done 计数本身无法重建 closure declaration。
+
+`goal_vision_wait` 还独立消费完整 lineage、scoped blockers、acceptance gaps 和
+resume facts。合并事务应保留每个 causal obligation，包括两个 obligation 共用
+witness 的情况。完整 note、write scopes、archive/settled identity 和来源 provenance
+仍属于 parity oracle。
+
+真实 PostgreSQL 集成用例把既有 native snapshot read 接到三种展示视图，检查
+provider/source 数据不变，在独立 commit 后观察新的 provider revision，并拒绝旧
+continuation。它验证的是组合前置条件；完整 guard transaction、PostgreSQL
+source/wheel host journey 和完整成本收益仍开放。
+
 ## 附录 B：决策日志
 
 | 日期 | 决策 | 负责人 / 批准 | 备选 | 变更的规范章节 |
