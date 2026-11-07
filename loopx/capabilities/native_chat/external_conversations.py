@@ -365,7 +365,7 @@ class ChatExternalConversations:
         Core or native no-effects readback; a crash resumes that reservation, never replays the
         failed Turn or fabricates successful execution.
         """
-        from .codex_adapter import CodexAppServerAdapter
+        from .codex_adapter import CodexAppServerAdapter, completed_result_review_readback
         from ...chat_manager import MANAGER_CONTEXT_VERSION
 
         path = self.root / f"{request_ref}.json"
@@ -428,41 +428,33 @@ class ChatExternalConversations:
                             model_id=native_session.get("agent_model_id") or ANTIGRAVITY_DEFAULT_MODEL)
             elif not plan.get("admitted_turn_id") and not preparation_retry:
                 result_review = bool(plan.get("read_only_review") and plan.get("unfinished_work"))
-                if result_review:
-                    with self.controller.lock:
-                        original_adapter = self.controller.adapters.get(row["session_id"])
-                    if original_adapter is not None and (not isinstance(original_adapter, CodexAppServerAdapter)
-                            or not original_adapter.answer_review_replaceable()):
-                        return row  # Do not reserve a review that would abandon owned work.
-                if plan.get("work_attempt"):
-                    # Only the original live adapter can observe its background
-                    # effects. Never turn a cold client's missing thread into
-                    # permission to continue writable work.
+                if result_review or plan.get("work_attempt"):
                     with self.controller.lock:
                         adapter = self.controller.adapters.get(row["session_id"])
-                    if isinstance(adapter, CodexAppServerAdapter):
+                    if not result_review and isinstance(adapter, CodexAppServerAdapter):
+                        # Only the original live owner can prove writable effects.
                         proof = adapter.completed_work_observation(
                             thread_ids=plan["native_thread_ids"], turn_id=turn["upstream_turn_id"],
                             known_turn_ids=self._settled_native_turn_ids(session["session_id"]))
                     if proof is None and (adapter is None or isinstance(adapter, CodexAppServerAdapter)
+                            and adapter.upstream_thread_id in plan["native_thread_ids"]
                             and adapter.answer_review_replaceable()):
-                        # A closed partial answer may be inspected even when its
-                        # effects cannot authorize writing. This cold reader
-                        # supplies result evidence only, never writable proof.
-                        proof = CodexAppServerAdapter.failed_request_observation(
-                            codex_bin=self.controller.codex_bin, codex_home=Path(session["codex_home"]),
-                            work_dir=context["project"], read_only_review=True, completed_result_review=True,
-                            known_turn_ids=self._settled_native_turn_ids(session["session_id"], include_interrupted=True),
-                            thread_ids=plan["native_thread_ids"], turn_id=turn["upstream_turn_id"])
+                        known = self._settled_native_turn_ids(session["session_id"], include_interrupted=True)
+                        if adapter is None:
+                            # Use a cold reader only when there is no live owner.
+                            proof = CodexAppServerAdapter.failed_request_observation(
+                                codex_bin=self.controller.codex_bin, codex_home=Path(session["codex_home"]),
+                                work_dir=context["project"], read_only_review=True, completed_result_review=True,
+                                known_turn_ids=known, thread_ids=plan["native_thread_ids"],
+                                turn_id=turn["upstream_turn_id"])
+                        else:
+                            proof = completed_result_review_readback(
+                                adapter.session, turn["upstream_turn_id"], known_turn_ids=known)
                 else:
                     proof = CodexAppServerAdapter.failed_request_observation(
                         codex_bin=self.controller.codex_bin, codex_home=Path(session["codex_home"]),
                         model_auth_home=model_auth_home,
                         read_only_review=bool(plan.get("read_only_review")) and not quota_answer,
-                        completed_result_review=result_review,
-                        work_dir=context["project"] if result_review else None,
-                        known_turn_ids=(self._settled_native_turn_ids(session["session_id"], include_interrupted=True)
-                                        if result_review else None),
                         thread_ids=plan["native_thread_ids"], turn_id=turn["upstream_turn_id"])
                     if (proof is not None and proof.get("codex_error_info") == "usageLimitExceeded"
                             and proof.get("only_original_user_item") is True and session.get("steward_context")):

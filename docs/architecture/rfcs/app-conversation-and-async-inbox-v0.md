@@ -2039,8 +2039,10 @@ command cannot acquire replay authority through this route.
 
 The original worker uses its existing Session, queue and project binding. Fresh
 source and grant checks, an idle queue, the backoff, and stop/steering/attachment
-guards still apply. A live adapter with owned background work is retained. The
-review uses the existing workspace-only read permission profile without network
+guards still apply. With a live adapter, the readback uses that same adapter
+only when it owns the exact thread and has no active or background work. The
+cold reader is used only when no adapter owns the Session. The review
+uses the existing workspace-only read permission profile without network
 access; it may inspect current local artifacts and receipts but cannot write,
 send, delegate or replace the original work declaration. References in the old
 question use its original-time Core context. The original partial Turn and

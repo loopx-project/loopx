@@ -2049,9 +2049,14 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
     source = fake.read_text()
     # Persisted history is readable from a cold client. Background terminals
     # belong to the process that loaded the thread, as in native app-server.
-    source = source.replace("turn_count = 0", "loaded = False\nturn_count = 0")
+    source = source.replace("turn_count = 0", "loaded = False\nreview_only = False\nturn_count = 0")
     source = source.replace('    elif method in {"thread/start", "thread/resume"}:',
-        '    elif method in {"thread/start", "thread/resume"}:\n        loaded = True')
+        '    elif method in {"thread/start", "thread/resume"}:\n        loaded = True\n'
+        '        review_only = request["params"].get("permissions") == "loopx_workspace_only_read"')
+    source = source.replace('        result = {"thread": {"id": "durable-thread"},',
+        '        result = {"thread": {"id": "durable-thread"},\n'
+        '                  "activePermissionProfile": {"id": request["params"].get("permissions")},\n'
+        '                  "runtimeWorkspaceRoots": request["params"].get("runtimeWorkspaceRoots"),')
     source = source.replace("turn_count = 0", f"turn_count = len(json.load(open({str(inventory)!r}))[\"turns\"]) if __import__(\"os\").path.exists({str(inventory)!r}) else 0")
     start = source.index("        response = 'Visible runtime response.")
     end = source.index('        print(json.dumps({"method": "item/agentMessage/delta"', start)
@@ -2061,14 +2066,18 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
         previous = json.loads(path.read_text()) if path.exists() else {{"turns": []}}
         response = {partial!r} if first or {fault == "still-incomplete"!r} else "Verified remaining work completed."
         artifact = Path({str(artifact)!r})
-        if "Newer follow-up" in json.dumps(request["params"]):
+        if review_only:
+            response = "Verified partial result. The remaining work is still pending."
+        elif "Newer follow-up" in json.dumps(request["params"]):
             response = "Newer input processed."
         else:
             artifact.write_text((artifact.read_text() if artifact.exists() else "") + ("first\\n" if first else "remaining\\n"))
         path.write_text(json.dumps({{"turns": [{{"id": active_turn, "status": "completed"}}, *previous["turns"]], "items": [
             {{"turnId": active_turn, "item": {{"id": "user", "type": "userMessage"}}}},
-            {{"turnId": active_turn, "item": {{"id": "effect", "type": "fileChange", "status": "completed"}}}},
-            {{"turnId": active_turn, "item": {{"id": "view", "type": "imageView", "path": str(artifact)}}}},
+            *([] if review_only else [
+                {{"turnId": active_turn, "item": {{"id": "effect", "type": "fileChange", "status": "completed"}}}},
+                {{"turnId": active_turn, "item": {{"id": "view", "type": "imageView", "path": str(artifact)}}}},
+            ]),
             {{"turnId": active_turn, "item": {{"id": "answer", "type": "agentMessage", "phase": "final_answer", "text": response}}}},
             *previous.get("items", [])]}}))
 ''' + source[end:]
@@ -2186,11 +2195,43 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
         if fault in {"queued-newer", "queued-items", "queued-input"}:
             monkeypatch.setattr(runtime, "resume_session_queue", resume)
         selected = worker()
+    artifact_before_recovery = artifact.read_bytes()
     selected.reconcile()
     continued = selected.core.read_request(ref)
-    if fault in {"changed-source", "revoked", "stop", "unknown-native", "background", "later-user", "cold-native", "dead-native", "foreign-native", "failed-effect", "equivalent-later", "later-failed-effect", "unsettled-command"}:
+    reviewed = fault in {"cold-native", "failed-effect", "equivalent-later", "later-failed-effect", "unsettled-command"}
+    if fault in {"changed-source", "revoked", "stop", "unknown-native", "background", "later-user", "dead-native", "foreign-native"}:
         assert continued["turn_id"] == original["turn_id"] and not continued.get("context_recovery")
-        assert artifact.read_text() == ("first\nremaining\n" if fault == "equivalent-later" else "first\n")
+        assert artifact.read_bytes() == artifact_before_recovery
+    elif reviewed:
+        assert continued["turn_id"] != original["turn_id"]
+        assert continued["session_id"] == original["session_id"]
+        recovery = continued["context_recovery"]
+        assert recovery["read_only_review"] is True and "work_attempt" not in recovery
+        assert recovery["native_observation"]["completed_result_review"] is True
+        assert recovery["native_observation"].get("all_effects_settled") is not True
+        review = runtime.wait_for_turn(session_id=continued["session_id"], turn_id=continued["turn_id"], timeout_sec=10)
+        assert review["status"] == "completed", review
+        assert not review["response"].get("unfinished_work")
+        assert artifact.read_bytes() == artifact_before_recovery
+        selected.reconcile_request(path)
+        deliveries = json.loads(path.read_text())["deliveries"]
+        assert deliveries["terminal"] == original_delivery
+        returned = deliveries[presentation_phase(continued, "terminal")]
+        assert returned["verified"] and "The remaining work is still pending." in returned["text"]
+        writes = list(provider.writes)
+        assert not worker().core.context_recovery_candidate(ref)
+        worker().reconcile()
+        assert provider.writes == writes
+
+        recovery_calls = [json.loads(line) for line in capture.read_text().splitlines()][len(before_recovery_calls):]
+        resume, = [row["params"] for row in recovery_calls if row.get("method") == "thread/resume"]
+        assert resume["threadId"] == session_before["upstream_thread_id"]
+        profile = "loopx_workspace_only_read"
+        assert resume["permissions"] == profile and resume["runtimeWorkspaceRoots"] == [str(workspace.resolve())]
+        permissions = resume["config"]["permissions"][profile]
+        assert permissions["filesystem"][":workspace_roots"] == {".": "read"}
+        assert permissions["network"]["enabled"] is False
+        assert sum(row.get("method") == "turn/start" for row in recovery_calls) == 1
     else:
         assert continued["turn_id"] != original["turn_id"]
         assert continued["session_id"] == original["session_id"]
@@ -2228,9 +2269,10 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
             assert "Verified remaining work completed." in bodies
     assert store._turn_path(original["session_id"], original["turn_id"]).read_bytes() == original_turn_bytes
     after_recovery_calls = [json.loads(line) for line in capture.read_text().splitlines()]
-    for method in ("initialize", "thread/start", "thread/resume"):
-        assert sum(row.get("method") == method for row in after_recovery_calls) == sum(
-            row.get("method") == method for row in before_recovery_calls)
+    expected_new = {"initialize": int(reviewed) + int(fault == "cold-native"),
+        "thread/start": 0, "thread/resume": int(reviewed)}
+    for method, count in expected_new.items():
+        assert sum(row.get("method") == method for row in after_recovery_calls[len(before_recovery_calls):]) == count
 
 
 def _app_projection_journey(fixture):
