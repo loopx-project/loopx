@@ -1423,31 +1423,46 @@ def test_saved_page_continues_and_replays_after_compaction_without_republication
         return _run_cli(registry, runtime, *args, cwd=tmp_path)
     initial_files = set(context.rglob("*"))
     for invalid in (["--initial-read", "--select", "/instructions"], ["--offset", "1", "--select", "/instructions"],
-                    ["--context-delivery", "off", "--initial-read"], ["--goal-id", "foreign", "--initial-read"]):
+                    ["--context-delivery", "off", "--initial-read"], ["--goal-id", "foreign", "--initial-read"],
+                    ["--delta-delivery", "off", "--initial-read", "--page-bytes", "3200"]):
         code, error = cli(*project, *invalid)
         assert code and not error["ok"] and "content" not in error
+    code, error = cli(*project, "--select", "/instructions", "--page-bytes", "255")
+    assert code and not error["ok"] and "--page-bytes must be between 256 and" in error["reason"]
     assert set(context.rglob("*")) == initial_files
-    code, first = cli(*project, "--select", "/instructions")
+    window = 3200
+    code, first = cli(*project, "--select", "/instructions", "--page-bytes", str(window))
     assert code == 0 and first["offset"] == 0 and not first["eof"]
     assert first["navigation"]["mode"] == "full"
     codex_context_hook(str(context), {**event, "hook_event_name": "PreCompact"})
     journal = (context / "session.json").read_bytes()
     files = set(context.rglob("*"))
-    def read_reference():
-        ref = first["reference_file"]
+    def read_selection(*, resume):
         result = bytearray()
-        args = ["quota", "context-read", "--reference-file", ref, "--max-page-output-bytes", "6400"]
+        if resume:
+            result.extend(first["content"].encode())
+            assert len(result) <= window
+            words = shlex.split(first["next_command"])
+            args = words[words.index("quota"):]
+        else:
+            args = ["quota", "context-read", "--reference-file", first["reference_file"],
+                    "--max-page-output-bytes", "6400"]
         while True:
             code, page = cli(*args)
             assert code == 0 and page["offset"] == len(result)
-            result.extend(page["content"].encode())
+            content = page["content"].encode()
+            if resume:
+                assert len(content) <= window
+            result.extend(content)
             if page["eof"]:
                 assert len(result) == page["total_bytes"]
                 return json.loads(result)["selections"][0]["value"]
             words = shlex.split(page["next_command"])
             args = words[words.index("quota"):]
     with ThreadPoolExecutor(2) as pool:
-        assert list(pool.map(lambda _: read_reference(), range(2))) == [value, value]
+        replay = pool.submit(read_selection, resume=False)
+        continuation = pool.submit(read_selection, resume=True)
+        assert replay.result() == continuation.result() == value
     assert (context / "session.json").read_bytes() == journal and set(context.rglob("*")) == files
     assert hashlib.sha256(original.read_bytes()).hexdigest() == digest
     assert not registry.exists() and not runtime.exists()
