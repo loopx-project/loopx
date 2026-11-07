@@ -78,13 +78,15 @@ if started == 0:
     assert env.get("FIXTURE_BOUND_WORK") and guard["heartbeat_receipt"]["closeout_required"] is True
     Path("checkpoint-closeout-guard.json").write_text(json.dumps(guard))
 else:
-    assert started == 1 and "resume" in sys.argv and sys.argv[-2] == "benchmark-original-session"
+    assert started == 1 and "resume" in sys.argv
+    assert sys.argv[sys.argv.index("resume") + 1:].count("benchmark-original-session") == 1
     guard = json.loads(Path(env["FIXTURE_HELD_QUOTA"]).read_text())
     assert env["LOOPX_TURN"] == guard["heartbeat_receipt"]["turn_instance_id"]
     assert env["LOOPX_TURN"] != env["FIXTURE_OUTER_TURN"]
     assert guard["heartbeat_receipt"]["event_id"] in body
 assert guard["heartbeat_receipt"]["turn_instance_id"] == env["FIXTURE_HELD_TURN"]
 Path("checkpoint-original-consumed.json").write_text(json.dumps(guard["heartbeat_receipt"]))
+original_replan = guard.get("replan_action_packet") or {}
 if guard["heartbeat_receipt"].get("settlement_identity") is None:
     todo_id = env["FIXTURE_SELECTION_TODO"]
     args = ["quota","should-run","--goal-id",env["LOOPX_GOAL_ID"],"--agent-id",env["LOOPX_AGENT_ID"],
@@ -99,12 +101,30 @@ if guard["heartbeat_receipt"].get("settlement_identity") is None:
 Path("checkpoint-business.json").write_text(json.dumps({"sum":sum(json.loads(Path("retained-input.json").read_text()))}))
 evidence = "checkpoint-business:" + hashlib.sha256(Path("checkpoint-business.json").read_bytes()).hexdigest()
 vision = Path("checkpoint-vision.json").resolve()
-vision.write_text(json.dumps({"schema_version":"goal_vision_replan_contract_v0","agent_id":env["LOOPX_AGENT_ID"],
+authored = {"schema_version":"goal_vision_replan_contract_v0","agent_id":env["LOOPX_AGENT_ID"],
     "state":"active", "vision_patch":{"acceptance_summary":"Validate the retained inputs and keep remaining validation work.",
         "advancement_policy":"as_needed"}, "path_delta":{"schema_version":"goal_path_delta_v0","outcome":"continue",
         "prior_assumption":"The retained inputs still require a concrete validation probe.",
         "observed_reality":"The retained inputs sum to five; this does not validate the other open tasks.",
-        "retained":["The remaining independent validation work"],"evidence_refs":[evidence]}}))
+        "retained":["The remaining independent validation work"],"evidence_refs":[evidence]}}
+stride = (guard.get("replan_action_packet") or {}).get("stride_control") or original_replan.get("stride_control")
+if stride:
+    authored["stride_decision"] = {**stride["minimal_example"],
+        "axes": {
+            "work_slice": {"plan": "Validate the retained inputs before selecting the next open task.",
+                "reason": "The exact retained inputs are available in this resumed Turn."},
+            "route_distance": {"plan": "Keep the deterministic sum check and then inspect remaining tasks.",
+                "reason": "The result verifies the retained inputs without requiring another method."},
+            "validation_scope": {"plan": "Read back the verified sum and leave unrelated inputs open.",
+                "reason": "The calculation covers only the current inputs."},
+        },
+        "next_probe": {"scope": "One remaining independent input check.",
+            "prediction": "The remaining task can be tested against its own inputs.",
+            "minimum_evidence": "The corresponding input list and independently calculated result.",
+            "adoption_criterion": "The readback agrees with the independent result.",
+            "cost_bound": "One input read and one deterministic computation."},
+    }
+vision.write_text(json.dumps(authored))
 actions = guard["interaction_contract"]["cli_channel"]["next_cli_actions"]
 refresh = next(command for command in actions if "refresh-state" in command)
 for old,new in [("<validated_progress>","retained_inputs_validated"),

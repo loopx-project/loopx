@@ -18,7 +18,7 @@ def _quota(registry: Path, runtime: Path, project: Path) -> dict:
         "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
         "quota", "should-run", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
         "--host-surface", "generic_cli", "--scheduler-owner", "outer_controller",
-        "--execution-mode", "isolated_headless",
+        "--execution-mode", "isolated_headless", "--context-delivery", "off",
     ])
     return payload
 
