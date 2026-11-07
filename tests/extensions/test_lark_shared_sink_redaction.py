@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import xml.etree.ElementTree as ET
 from inspect import signature
 from pathlib import Path
 
@@ -642,6 +643,93 @@ def test_shared_visual_sink_redacts_the_rendered_source(tmp_path: Path) -> None:
     assert "[credential-redacted]" in published_source[0]
     assert "[local-path-redacted]" in published_source[0]
     assert "[private-link-redacted]" in published_source[0]
+
+
+def test_shared_stage_svg_redacts_display_values_before_encoding(tmp_path: Path) -> None:
+    credential = "gh" "p_" + "A" * 36
+    private_link = "https://" + "example.feishu.cn/base/private"
+    published_sources: list[str] = []
+    published_marker = ""
+
+    def runner(args: list[str], cwd: Path | None, _timeout: float | None) -> dict[str, object]:
+        nonlocal published_marker
+        if "+update" in args:
+            source_arg = args[args.index("--source") + 1]
+            assert cwd is not None
+            source = (cwd / source_arg.removeprefix("@")).read_text(encoding="utf-8")
+            published_sources.append(source)
+            marker = re.search(r"LoopX delivery [0-9a-f]{20}", source)
+            assert marker is not None
+            published_marker = marker.group(0)
+            return {"returncode": 0, "stdout": json.dumps({"ok": True}), "stderr": ""}
+        assert "+query" in args
+        return {
+            "returncode": 0,
+            "stdout": json.dumps(
+                {
+                    "ok": True,
+                    "data": {"nodes": [{"text": {"text": published_marker}}]},
+                }
+            ),
+            "stderr": "",
+        }
+
+    projection = {
+        "goal_id": "goal_public_fixture",
+        "nodes": [
+            {
+                "node_id": "stage_node_one",
+                "title": "Confirm the failing stage",
+                "node_kind": "decision",
+                "status": "exploring",
+                "summary": (
+                    "Measured 12ms improvement from the shared board. "
+                    f"See {private_link}"
+                ),
+                "parent_id": "",
+                "tags": ["lane-fix_pr"],
+            },
+            {
+                "node_id": "stage_node_two",
+                "title": "Apply the fix",
+                "node_kind": "decision",
+                "status": "resolved",
+                "summary": f"Patch verified with {credential}.",
+                "parent_id": "stage_node_one",
+                "tags": ["lane-fix_pr"],
+            },
+        ],
+        "edges": [],
+        "findings": [],
+    }
+
+    result = sync_explore_visuals_to_lark(
+        LarkExploreConfig(base_token="PUBLIC_FIXTURE_BASE"),
+        projection=projection,
+        visual_sinks={
+            "canonical": {
+                "board_style": "semantic_lane_columns",
+                "stage_capacity": 14,
+                "stage_whiteboards": [
+                    {"stage_index": 1, "whiteboard_token": "wb_public_stage_fixture"}
+                ],
+            }
+        },
+        config_path=tmp_path / "lark-explore.json",
+        sink_visibility=SINK_VISIBILITY_SHARED,
+        execute=True,
+        runner=runner,
+    )
+
+    assert result["ok"] is True
+    assert len(published_sources) == 1
+    source = published_sources[0]
+    parsed = ET.fromstring(source)
+    assert parsed.tag.endswith("svg")
+    assert credential not in source
+    assert private_link not in source
+    assert "[credential-redacted]" in source
+    assert "[private-link-redacted]" in source
 
 
 def test_record_upsert_command_redacts_nested_credentials() -> None:

@@ -226,11 +226,13 @@ nested record keys and values while preserving only structurally valid
 record-link IDs. It recognizes Unix, drive-letter, UNC, and extended Windows
 paths, plus credential assignments that use compound environment-variable names,
 credential-bearing URL userinfo, and terminal control sequences around a token.
-Configured Explore whiteboards use the same visibility boundary on the final
-rendered source, and shared Explore stage documents sanitize lane labels before
-their `docs +update` content is built. Private-key blocks are removed in full
-rather than leaving their body behind. The automatic issue-fix Explore
-synchronization uses the same shared boundary.
+Configured Explore whiteboards apply the same visibility boundary to node and
+edge display text before SVG or Mermaid is encoded, and shared Explore stage
+documents sanitize lane labels before their `docs +update` content is built.
+Redaction never runs over raw markup, so encoded tags and diagram delimiters
+stay intact even when a value ends with a private link. Private-key blocks are
+removed in full rather than leaving their body behind. The automatic issue-fix
+Explore synchronization uses the same shared boundary.
 
 `sink_visibility` is a caller declaration; the adapter cannot verify the remote
 Base's effective access control. Redaction is shape-based, not a complete
