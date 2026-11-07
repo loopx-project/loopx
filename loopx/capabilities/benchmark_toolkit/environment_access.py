@@ -23,9 +23,7 @@ _SHELL_EXECUTABLES = frozenset({"bash", "dash", "fish", "ksh", "sh", "zsh"})
 _PYTHON_EXECUTABLE_PATTERN = re.compile(r"(?i)^(?:python(?:[0-9.]+)?|pypy[0-9.]*)$")
 _JAVASCRIPT_EXECUTABLES = frozenset({"node", "nodejs"})
 BENCHMARK_TASK_ENVIRONMENT_READ_TOOL = "benchmark_task_environment_read"
-BENCHMARK_TASK_ENVIRONMENT_READ_SCHEMA_VERSION = (
-    "benchmark_task_environment_read_v0"
-)
+BENCHMARK_TASK_ENVIRONMENT_READ_SCHEMA_VERSION = "benchmark_task_environment_read_v0"
 BENCHMARK_TASK_ENVIRONMENT_READ_RESULT_SCHEMA_VERSION = (
     "benchmark_task_environment_read_result_v0"
 )
@@ -543,27 +541,231 @@ def _xargs_command(arguments: tuple[str, ...]) -> tuple[str, ...]:
     return ()
 
 
+def _assignment_words(value: str) -> bool:
+    """Return whether a literal shell word list contains only assignments."""
+
+    if "$(" in value or "`" in value or "$" in value:
+        return False
+    try:
+        words = shlex.split(value)
+    except ValueError:
+        return False
+    return all(
+        re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", word, flags=re.DOTALL) is not None
+        for word in words
+    )
+
+
+def _proven_assignment_expansions(command: str) -> frozenset[str]:
+    """Find bounded loop variables proven to expand only to assignments.
+
+    Benchmark task scripts commonly iterate over a literal list of environment
+    configurations, then pass that list to ``env`` before a fixed task command.
+    Only literal ``for`` values and the exact ``${name#*:}`` suffix transform
+    are accepted. Dynamic loop values and other shell transforms stay unknown.
+    """
+
+    assignment_variables: set[str] = set()
+    assignment_suffix_variables: set[str] = set()
+    segments = _shell_segments(command)
+    for segment_index, segment in enumerate(segments):
+        if (
+            len(segment) < 3
+            or segment[0] != "for"
+            or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", segment[1]) is None
+            or segment[2] != "in"
+        ):
+            continue
+        variable = segment[1]
+        values = list(segment[3:])
+        found_do = False
+        for continued in segments[segment_index + 1 :]:
+            if continued and continued[0] == "do":
+                found_do = True
+                break
+            values.extend(continued)
+        if not found_do:
+            continue
+        if values and all(_assignment_words(value) for value in values):
+            assignment_variables.add(variable)
+        if values and all(
+            ":" in value and _assignment_words(value.split(":", 1)[1])
+            for value in values
+        ):
+            assignment_suffix_variables.add(variable)
+
+    changed = True
+    while changed:
+        changed = False
+        for segment in segments:
+            for token in segment:
+                suffix = re.fullmatch(
+                    r"([A-Za-z_][A-Za-z0-9_]*)=\$\{"
+                    r"([A-Za-z_][A-Za-z0-9_]*)#\*:\}",
+                    token,
+                )
+                if suffix and suffix.group(2) in assignment_suffix_variables:
+                    if suffix.group(1) not in assignment_variables:
+                        assignment_variables.add(suffix.group(1))
+                        changed = True
+
+    if any(
+        _shell_executable(segment)[0] in {".", "eval", "source"} for segment in segments
+    ):
+        return frozenset()
+    invalidated: set[str] = set()
+    for segment in segments:
+        executable, arguments = _shell_executable(segment)
+        if executable in {
+            "declare",
+            "export",
+            "local",
+            "read",
+            "readonly",
+            "typeset",
+            "unset",
+        }:
+            mutated_names = {
+                argument.split("=", 1)[0]
+                for argument in arguments
+                if not argument.startswith("-")
+            }
+            invalidated.update(assignment_variables.intersection(mutated_names))
+        if executable == "printf" and "-v" in arguments:
+            variable_index = arguments.index("-v") + 1
+            if variable_index < len(arguments):
+                invalidated.add(arguments[variable_index])
+        if executable in {"getopts", "mapfile", "readarray"}:
+            invalidated.update(assignment_variables.intersection(arguments))
+        for token in segment:
+            assignment = re.fullmatch(
+                r"([A-Za-z_][A-Za-z0-9_]*)=(.*)", token, flags=re.DOTALL
+            )
+            if assignment is None:
+                break
+            variable, value = assignment.groups()
+            if variable not in assignment_variables:
+                continue
+            suffix = re.fullmatch(r"\$\{([A-Za-z_][A-Za-z0-9_]*)#\*:\}", value)
+            if suffix and suffix.group(1) in assignment_suffix_variables:
+                continue
+            if not _assignment_words(value):
+                invalidated.add(variable)
+    assignment_variables.difference_update(invalidated)
+    return frozenset(assignment_variables)
+
+
+def _shell_value_has_credential_read(value: str) -> bool:
+    if "$(" in value or "`" in value or "${!" in value:
+        return True
+    variable_names = re.findall(
+        r"\$(?:([A-Za-z_][A-Za-z0-9_]*)|\{([A-Za-z_][A-Za-z0-9_]*))",
+        value,
+    )
+    return any(
+        _SENSITIVE_ENV_NAME_PATTERN.search(name) is not None
+        for pair in variable_names
+        for name in pair
+        if name
+    )
+
+
+def _env_command_has_credential_probe(
+    arguments: tuple[str, ...],
+    *,
+    depth: int,
+    assignment_expansions: frozenset[str],
+) -> bool:
+    """Separate environment listing from a bounded literal command wrapper."""
+
+    index = 0
+    while index < len(arguments):
+        option = arguments[index]
+        if option == "--":
+            index += 1
+            break
+        if option in {"-", "-i", "--ignore-environment"}:
+            index += 1
+            continue
+        if option in {"-u", "--unset", "-C", "--chdir"}:
+            if index + 1 >= len(arguments):
+                return True
+            index += 2
+            continue
+        if option.startswith(("--unset=", "--chdir=")) or (
+            option.startswith(("-u", "-C")) and len(option) > 2
+        ):
+            index += 1
+            continue
+        if option.startswith("-"):
+            return True
+        break
+
+    while index < len(arguments):
+        argument = arguments[index]
+        assignment = re.fullmatch(
+            r"[A-Za-z_][A-Za-z0-9_]*=(.*)", argument, flags=re.DOTALL
+        )
+        if assignment:
+            if _shell_value_has_credential_read(assignment.group(1)):
+                return True
+            index += 1
+            continue
+        expansion = re.fullmatch(
+            r"\$(?:([A-Za-z_][A-Za-z0-9_]*)|\{([A-Za-z_][A-Za-z0-9_]*)\})",
+            argument,
+        )
+        if expansion:
+            name = expansion.group(1) or expansion.group(2)
+            if name in assignment_expansions:
+                index += 1
+                continue
+        break
+
+    if index == len(arguments):
+        return True
+    executable = arguments[index]
+    if "$" in executable or "`" in executable or executable.startswith("-"):
+        return True
+    return _shell_segment_has_credential_probe(
+        arguments[index:],
+        depth=depth + 1,
+        assignment_expansions=assignment_expansions,
+    )
+
+
 def _shell_segment_has_credential_probe(
     tokens: tuple[str, ...],
     *,
     depth: int = 0,
+    assignment_expansions: frozenset[str] = frozenset(),
 ) -> bool:
     if depth >= 8:
         return True
     executable, arguments = _shell_executable(tokens)
     if not executable:
         return False
-    if executable in {"env", "printenv"}:
+    if executable == "env":
+        return _env_command_has_credential_probe(
+            arguments,
+            depth=depth,
+            assignment_expansions=assignment_expansions,
+        )
+    if executable == "printenv":
         return True
     if executable in {"command", "exec"}:
         wrapped = _shell_wrapper_command(executable, arguments)
         return bool(wrapped) and _shell_segment_has_credential_probe(
-            wrapped, depth=depth + 1
+            wrapped,
+            depth=depth + 1,
+            assignment_expansions=assignment_expansions,
         )
     if executable == "xargs":
         wrapped = _xargs_command(arguments)
         return bool(wrapped) and _shell_segment_has_credential_probe(
-            wrapped, depth=depth + 1
+            wrapped,
+            depth=depth + 1,
+            assignment_expansions=assignment_expansions,
         )
     if any(_PROC_ENVIRON_PATTERN.search(argument) for argument in arguments):
         return True
@@ -585,8 +787,11 @@ def _shell_segment_has_credential_probe(
 
 
 def _shell_command_has_credential_probe(command: str) -> bool:
+    assignment_expansions = _proven_assignment_expansions(command)
     return any(
-        _shell_segment_has_credential_probe(segment)
+        _shell_segment_has_credential_probe(
+            segment, assignment_expansions=assignment_expansions
+        )
         for segment in _shell_segments(command)
     )
 

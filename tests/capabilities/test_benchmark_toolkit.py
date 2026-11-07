@@ -4,7 +4,10 @@ import copy
 import hashlib
 import json
 import os
+import shlex
+import shutil
 import subprocess
+import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
@@ -2142,6 +2145,76 @@ def test_bare_sensitive_filename_does_not_match_unrelated_path_basename() -> Non
         ("cmd", "sh -c env", True),
         ("command", "bash -lc printenv", True),
         ("cmd", "/usr/bin/env", True),
+        ("cmd", "env MODE=fast pytest -q", False),
+        ("cmd", "env -i MODE=fast pytest -q", False),
+        ("cmd", "env -u API_KEY --chdir=/tmp MODE=fast pytest -q", False),
+        ("cmd", "command env MODE=fast pytest -q", False),
+        ("cmd", "env MODE=fast", True),
+        ("cmd", "env MODE=fast printenv API_KEY", True),
+        ("cmd", "env MODE=fast cat /proc/self/environ", True),
+        ("cmd", "env MODE=fast sh -c 'printenv API_KEY'", True),
+        ("cmd", "env MODE=$API_KEY pytest -q", True),
+        ("cmd", "env MODE=${!variable_name} pytest -q", True),
+        ("cmd", "env MODE='$(printenv API_KEY)' pytest -q", True),
+        ("cmd", "env $command pytest -q", True),
+        ("cmd", "env --split-string='pytest -q'", True),
+        (
+            "cmd",
+            (
+                "for settings in 'MODE=fast' 'MODE=slow TRIAL=2'; do "
+                "env $settings pytest -q; done"
+            ),
+            False,
+        ),
+        (
+            "cmd",
+            (
+                "for spec in 'base:' 'fast:MODE=fast TRIAL=2'; do "
+                "settings=${spec#*:}; env APPROACH=trial $settings pytest -q; "
+                "done"
+            ),
+            False,
+        ),
+        (
+            "cmd",
+            (
+                "for spec in 'base:' 'inspect:printenv API_KEY'; do "
+                "settings=${spec#*:}; env $settings pytest -q; done"
+            ),
+            True,
+        ),
+        (
+            "cmd",
+            (
+                "for settings in 'MODE=fast'; do true; done; "
+                "settings=$command; env $settings pytest -q"
+            ),
+            True,
+        ),
+        (
+            "cmd",
+            (
+                "for settings in 'MODE=fast'; do true; done; "
+                "eval 'settings=printenv'; env $settings pytest -q"
+            ),
+            True,
+        ),
+        (
+            "cmd",
+            (
+                "for settings in 'MODE=fast'; do true; done; "
+                "export settings=printenv; env $settings pytest -q"
+            ),
+            True,
+        ),
+        (
+            "cmd",
+            (
+                "for settings in 'MODE=fast'; do true; done; "
+                "printf -v settings printenv; env $settings pytest -q"
+            ),
+            True,
+        ),
         ("cmd", "/usr/bin/printenv API_KEY", True),
         ("cmd", "cat /proc/self/environ", True),
         (
@@ -2198,6 +2271,34 @@ def test_typed_command_distinguishes_environment_probe_from_source_text(
         if expected_probe
         else "integrity_qualified"
     )
+
+
+@pytest.mark.parametrize("options", [[], ["MODE=fast"], ["-u", "UNUSED"]])
+@pytest.mark.parametrize("reads_environment", [False, True])
+def test_env_wrapper_classification_matches_isolated_process(
+    options: list[str], reads_environment: bool,
+) -> None:
+    env_executable = shutil.which("env")
+    if env_executable is None:
+        pytest.skip("env utility unavailable")
+    source = (
+        'import os; print(os.environ["API_KEY"])'
+        if reads_environment
+        else 'print("ordinary-output")'
+    )
+    argv = [env_executable, *options, sys.executable, "-c", source]
+    result = subprocess.run(
+        argv, env={"API_KEY": "synthetic-probe-marker"}, capture_output=True,
+        text=True, check=True, timeout=10,
+    )
+    assert result.stdout.strip() == (
+        "synthetic-probe-marker" if reads_environment else "ordinary-output"
+    )
+    receipt = build_benchmark_integrity_qualification(
+        trajectory=_trajectory(command=shlex.join(argv)),
+        runtime_attestation=_attestation(),
+    )
+    assert receipt["evidence_counts"]["credential_probe"] == int(reads_environment)
 
 
 @pytest.mark.parametrize(
