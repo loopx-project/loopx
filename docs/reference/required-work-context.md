@@ -110,6 +110,17 @@ current source witnesses and unknown fields remain literal. Cold delivery and
 full-capture recovery retain the complete original text, including arbitrary
 sections, comments and final stops.
 
+The native initial selection may render a generated Objective once when the
+frontmatter entry and the entire generated Markdown blockquote agree exactly
+under the writer's format. The selected text is marked as a presentation.
+Literal `--select` and full recovery on the same immutable capture retain the
+original bytes. Differing or unrecognized formats keep both values. The native
+read observer does not count the presented leaf as reading its literal source.
+
+原生首读仅在生成的 frontmatter 目标与正文整段生成引用相符时展示一次目标。
+首读会标记这一呈现；同一捕获的显式选读与完整恢复保留原字节。两处不一致
+或格式无法确认时保留原文。首读观察不会把呈现文本记为已读原始字段。
+
 Enabled native quota delivery separates known acceptance requirements from their
 supporting material before full/delta presentation. The TypeScript acceptance
 projection keeps every scoped outcome objective, requirement description,
