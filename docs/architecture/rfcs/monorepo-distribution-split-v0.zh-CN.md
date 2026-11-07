@@ -1391,6 +1391,28 @@ lineage、pause/gates 与 pending intents。新增更多 leaf RPC 或有损裁�
 解决的性能 hold 保持独立。新实现仍需完整 source/wheel 正确性，以及不插桩、
 匹配条件的默认 SQLite 全路径比较；既有里程碑、采纳与完整成本缺口继续开放。
 
+### 2026-11-07 — 在受管请求内复用完整 Todo 展示来源
+
+既有 `todo.context.page` owner 可从同一完整输入来源组合 summary、planning 和
+保留 terminal 的展示视图。Python 传输仅在已经固定 runtime revision 的逻辑请求
+内复用结果，以完整 source JSON 和请求选项匹配，不以 Todo id 猜测相等。来源事实
+变化和后续请求重新验证；可变调用方获得独立解码值。大来源和不在请求 scope 内的
+调用保留原 single-view 传输；不完整响应在进入既有有界 request memo 前失败。
+
+对照 `main@32167518b3`，源码与隔离安装 wheel 的六组 101-Todo File/SQLite
+受管 CLI 生命周期通过，保留已验证产物、原完成时间、四种 settlement receipt、
+一次 debit、Effect 重启恢复及 evidence 替换拒绝。刻意丢弃 write-scope 响应字段的
+mutation 在独立公开 guard scope 检查失败。冻结展示 fixture 和聚焦来源隔离用例
+同时覆盖既有三种视图。一次带 profiler 的 SQLite guard 观察到 JSON 参数约
+1.900 MB → 1.556 MB，调用 89 → 87，已加载模块仍为 503。这些计数仅用于诊断，
+不验收完整 wire 成本、延迟或长程收益。
+
+这是可独立回滚的展示传输增量，尚非完整 provider-first Todo projection
+transaction。Provider 读取、revision、lease/actor fence 和状态写入保留原 owner。
+后续 canonical-source 事务、匹配的完整成本对照及受影响后端验收仍开放。I3 至少
+保留一个 minor release；M1/#8011、完整 R0/V10/R1、D2/D5/D6/D3、context/model/
+split-install、adoption 和所有冻结失败继续保留。
+
 ## 附录 B：决策日志
 
 | 日期 | 决策 | 负责人 / 批准 | 备选 | 变更的规范章节 |

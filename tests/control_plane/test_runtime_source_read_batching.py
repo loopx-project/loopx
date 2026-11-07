@@ -11,6 +11,87 @@ import pytest
 from loopx.control_plane import effect_runtime as runtime
 
 
+def test_todo_source_views_share_only_the_exact_request_source(monkeypatch):
+    from loopx.control_plane.todos.summary_item import (
+        todo_planning_source_items, todo_summary_source_items,
+    )
+
+    requests = []
+    original = runtime.effect_runtime_request
+
+    def track(method, params, **kwargs):
+        if method == "todo.context.page":
+            requests.append(params)
+        return original(method, params, **kwargs)
+
+    monkeypatch.setattr(runtime, "effect_runtime_request", track)
+    source = {"items": [{"todo_id": "todo_retained", "text": "Keep the full acceptance",
+                         "role": "agent", "status": "done", "done": True,
+                         "note": "Original recovery detail", "successor_todo_ids": ["todo_next"]}]}
+    with runtime.effect_runtime_request_scope():
+        assert todo_summary_source_items(source) == []
+        assert todo_planning_source_items(source) == []
+        terminal = todo_planning_source_items(source, include_terminal=True)
+        assert len(terminal) == 1
+        assert terminal[0]["note"] == "Original recovery detail"
+        assert terminal[0]["successor_todo_ids"] == ["todo_next"]
+        assert len(requests) == 1
+        terminal[0]["successor_todo_ids"].append("todo_unrelated")
+        assert todo_planning_source_items(source, include_terminal=True)[0]["successor_todo_ids"] == ["todo_next"]
+        # The same Todo id cannot alias changed full-source facts.
+        source["items"][0]["note"] = "Changed recovery detail"
+        assert todo_planning_source_items(source, include_terminal=True)[0]["note"] == "Changed recovery detail"
+        assert len(requests) == 2
+    # A later logical request starts with a new source read and result.
+    with runtime.effect_runtime_request_scope():
+        assert todo_planning_source_items(source, include_terminal=True)[0]["note"] == "Changed recovery detail"
+    assert len(requests) == 3
+
+
+def test_large_or_unscoped_todo_sources_keep_single_view_transport(monkeypatch):
+    from loopx.control_plane.todos.summary_item import todo_planning_source_items
+
+    requests = []
+    original = runtime.effect_runtime_request
+
+    def track(method, params, **kwargs):
+        if method == "todo.context.page":
+            requests.append(params)
+        return original(method, params, **kwargs)
+
+    monkeypatch.setattr(runtime, "effect_runtime_request", track)
+    source = {"items": [{"todo_id": "todo_retained", "text": "Keep acceptance", "status": "done",
+                         "note": "Recovery detail " * (runtime.MAX_REQUEST_BYTES // 32)}]}
+    with runtime.effect_runtime_request_scope():
+        assert todo_planning_source_items(source, include_terminal=True)[0]["note"] == source["items"][0]["note"]
+    assert set(requests[0]) == {"summary_display"}
+    source["items"][0]["note"] = "Small source outside the shared request"
+    assert todo_planning_source_items(source, include_terminal=True)[0]["note"] == source["items"][0]["note"]
+    assert set(requests[1]) == {"summary_display"}
+
+
+def test_incomplete_source_views_fail_before_entering_the_request_memo(monkeypatch):
+    from loopx.control_plane.todos.summary_item import todo_summary_source_items
+
+    calls = []
+    original = runtime.effect_runtime_request
+
+    def response(method, params, **kwargs):
+        if method != "todo.context.page":
+            return original(method, params, **kwargs)
+        calls.append(params)
+        return {"result": {"summary": [], "planning": [],
+                           "terminal": None if len(calls) == 1 else []}}
+
+    monkeypatch.setattr(runtime, "effect_runtime_request", response)
+    source = {"items": [{"todo_id": "todo_retained", "text": "Acceptance", "status": "done"}]}
+    with runtime.effect_runtime_request_scope():
+        with pytest.raises(RuntimeError, match="invalid TypeScript Todo source views"):
+            todo_summary_source_items(source)
+        assert todo_summary_source_items(source) == []
+    assert len(calls) == 2
+
+
 def serial_fingerprint(root: Path) -> str:
     """Independent reference: selected adapter, release identity and source bytes."""
     digest = hashlib.sha256()

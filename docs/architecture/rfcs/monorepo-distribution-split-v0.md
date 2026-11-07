@@ -1822,6 +1822,33 @@ performance holds remain separate. Full source/wheel correctness and a matched,
 unprofiled default-SQLite whole-path comparison are still required for a new
 implementation; all earlier milestone, adoption and complete-cost gaps remain.
 
+### 2026-11-07 — Reuse complete Todo display sources within a managed request
+
+The existing `todo.context.page` owner can compose summary, planning and retained
+terminal display views from one complete supplied source. The Python transport
+reuses those results only inside an already revision-pinned logical request,
+using exact source JSON and request options rather than Todo ids. Changed source
+facts and later requests revalidate; mutable callers receive independent decoded
+values. Large and unscoped sources keep the original single-view transport, and
+an incomplete response fails before entering the bounded request memo.
+
+Against `main@32167518b3`, the source and isolated wheel passed six synthetic
+101-Todo File/SQLite governed CLI lifecycles. They retained the verified artifact,
+original completion time, four settlement receipts, one debit, Effect restart
+recovery and rejected evidence replacement. A dropped write-scope response
+mutation fails at the independent public-guard scope check. Frozen display
+fixtures and focused source-isolation tests also cover the existing three views.
+One profiled SQLite guard reduced JSON parameter bytes from about 1.900 MB to
+1.556 MB and calls from 89 to 87; loaded modules remained 503. These counts are
+diagnostic and do not qualify complete wire cost, latency or long-horizon benefit.
+
+This is a reversible display-transport increment, not the complete provider-first
+Todo projection transaction. Provider reads, revisions, lease/actor fences and
+state writes retain their existing owners. The remaining canonical-source
+transaction, matched complete-cost qualification and affected backend acceptance
+stay open. I3 remains at least one minor release; M1/#8011, full R0/V10/R1,
+D2/D5/D6/D3, context/model/split-install, adoption and all frozen failures remain.
+
 ## Appendix B: Decision log
 
 | Date | Decision | Owner / approval | Alternatives | Normative sections changed |

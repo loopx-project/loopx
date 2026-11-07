@@ -24,6 +24,19 @@ const CONTEXT_FIELDS = [
 
 /** Select before redaction; never convert nested scopes or booleans to prose. */
 export function projectTodoContextPage(input: JsonObject): JsonObject {
+  if (input.summary_display_views !== undefined) {
+    if (Object.keys(input).length !== 1) throw new EffectRuntimeRequestError("summary display views cannot be combined with other views");
+    const source = requireJsonObject(input.summary_display_views, "summary display views");
+    if (Object.keys(source).some(key => key !== "source" && key !== "handoff_gates")) {
+      throw new EffectRuntimeRequestError("invalid summary display views fields");
+    }
+    requireJsonObject(source.source, "summary source");
+    return {
+      summary: projectTodoSummaryDisplay(source),
+      planning: projectTodoSummaryDisplay({source: source.source, include_terminal: false}),
+      terminal: projectTodoSummaryDisplay({source: source.source, include_terminal: true}),
+    };
+  }
   if (input.summary_display !== undefined) {
     if (Object.keys(input).length !== 1) throw new EffectRuntimeRequestError("summary display cannot be combined with other views");
     return {items: projectTodoSummaryDisplay(requireJsonObject(input.summary_display, "summary display"))};
