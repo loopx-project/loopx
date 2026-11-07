@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {readFileSync} from "node:fs";
 import {parseExploreHistoryPage, projectExploreHistory, layoutExploreHistory, groupUnlinkedHistoryQuestions} from "../../loopx/control_plane/presentation/explore_history.ts";
+import {researchRecordGroups} from "../../apps/presentation/dashboard/src/features/personal-workspace/research-record-search.ts";
 
 const goal = "history-fixture";
 const event = (extra: Record<string, unknown> = {}) => parseExploreHistoryPage({ok: true, goal_id: goal,
@@ -63,6 +64,21 @@ test("replays deduplicate only identical events and reject conflicting identitie
   assert.equal(event({confidence: 0}).confidence, 0, "a source's stated zero is retained");
   assert.equal(event().confidence, null, "unrecorded confidence is unknown, not zero");
   assert.throws(() => event({confidence: 2}), /evidence/);
+});
+
+test("record entries pair explicit single findings and keep runs, evidence versions and absent links distinguishable", () => {
+  const question = event({event_id: "q", status: "resolved", run_id: "run-a"});
+  const finding = event({event_id: "f1", event_kind: "finding", result_id: "f", node_id: "route", status: "refuted"});
+  const revised = {...finding, event_id: "f2", status: "confirmed", supersedes: "f1"};
+  const unrelated = {...finding, event_id: "orphan", result_id: "other-f", node_id: "absent"};
+  const sameTitle = {...question, event_id: "q2", result_id: "other-attempt"};
+  const project = (rows: ReturnType<typeof event>[]) => {
+    const view = projectExploreHistory(rows, goal);
+    return researchRecordGroups(view.events, view.nodes).map(group => group.events.map(row => row.event_id));
+  };
+  assert.deepEqual(project([finding, question, unrelated, sameTitle, revised, finding]), [["f1", "q", "f2"], ["orphan"], ["q2"]]);
+  assert.deepEqual(project([question, {...finding, run_id: "run-b"}]), [["q"], ["f1"]]);
+  assert.deepEqual(project([question, finding, {...revised, result_id: "separate-candidate"}]), [["q"], ["f1"], ["f2"]]);
 });
 
 test("sparse question capture is grouped without inventing routes or hiding versions and negative evidence", () => {
