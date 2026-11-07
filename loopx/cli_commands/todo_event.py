@@ -62,6 +62,21 @@ def _route_native_recovery(
         arguments = descriptor.get("cli_args")
         if descriptor.get("reference_source") == "claim_operation_id_from_claim":
             arguments = _original_todo_arguments(args)
+            required = descriptor.get("requires_flags")
+            if isinstance(required, list) and "--update-expected-provider-revision" in required:
+                # Core requires a post-claim targeted read. Project its pending
+                # references, not the old values or the claim's new revision.
+                for flag, placeholder in (
+                    ("--claim-operation-id", "<claim_operation_id_from_claim>"),
+                    ("--update-expected-provider-revision", "<provider_revision_from_reconciled_todo_read>"),
+                ):
+                    for index, argument in enumerate(arguments):
+                        if argument == flag and index + 1 < len(arguments):
+                            arguments[index + 1] = placeholder
+                            break
+                        if argument.startswith(flag + "="):
+                            arguments[index] = flag + "=" + placeholder
+                            break
         else:
             arguments = list(arguments) if isinstance(arguments, list) else command[1:]
         # The update adapter may already bind selectors. Inspect only the global

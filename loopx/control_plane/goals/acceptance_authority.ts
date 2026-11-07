@@ -1,5 +1,5 @@
 import {bindGoalOutcomesStateOwner, GoalOutcomeValidationError, goalOutcomeCheckBasis, refineGoalOutcome,
-  outcomeContextNavigation} from "./outcome_requirements.ts";
+  outcomeContextNavigation, outcomePlanningReadback} from "./outcome_requirements.ts";
 /** Acceptance effects use the existing canonical head, CAS and operation journal.
  * Only trusted local owner/host adapters may invoke these mutation exports. */
 import {isAbsolute} from "node:path";
@@ -303,7 +303,7 @@ export async function configureGoalAcceptance(store: AuthorityStore, value: Json
     // Historical receipts above remain replayable; new configurations must make
     // the blast radius explicit, including updates to legacy contracts.
     if (document.scope === undefined) return source(store, failure("goal_acceptance_scope_required",
-      "Select selected_work with todo_ids or explicitly choose all_advancement before configuring acceptance."));
+      "Select goal for Goal-only checks, selected_work with todo_ids, or all_advancement before configuring acceptance."));
     const todos = acceptanceTodos(head.head, String(request.goal_id));
     if (document.scope?.kind === "selected_work") for (const todoId of document.scope.todo_ids) {
       const todo = todos.get(todoId);
@@ -600,6 +600,7 @@ export async function inspectGoalAcceptance(
     ...(agentId === undefined || currentGoalObjective(head.head) === null ? {} : {objective_work_digest: goalObjectiveWorkDigest(head.head, agentId),
       goal_objective_guard: goalObjectiveWorkGuard(head.head, agentId)}),
     ...(context === null ? {} : {outcome_context: {...context, provider_revision: head.provider_revision}}),
+    ...(agentId === undefined ? {} : {planning_requirements: outcomePlanningReadback(contract, agentId)}),
     goal_acceptance_contract: contract});
 }
 

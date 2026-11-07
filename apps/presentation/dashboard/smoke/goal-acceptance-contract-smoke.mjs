@@ -31,6 +31,9 @@ for (const copy of Object.values(deliveryReviewCopy)) {
     scope: { kind: "selected_work", todo_ids: ["todo_confirmed"] } }), snapshot.goal_id);
   assert.ok(deliveryReviewMarkdown(selected, copy).includes(copy.contract.selectedWork));
   assert.ok(deliveryReviewMarkdown(parseDeliveryReview(withContract(contract), snapshot.goal_id), copy).includes(copy.contract.allWork));
+  const goalOnly = parseDeliveryReview(withContract({ ...contract,
+    scope: { kind: "goal" }, tasks: [], held_todo_ids: [] }), snapshot.goal_id);
+  assert.ok(deliveryReviewMarkdown(goalOnly, copy).includes(copy.contract.goalOnly));
   const empty = parseDeliveryReview(withContract({ ...contract, criteria: [], tasks: [] }), snapshot.goal_id);
   assert.ok(deliveryReviewMarkdown(empty, copy).includes(copy.contract.noTasks));
   assert.ok(deliveryReviewMarkdown(empty, copy).includes(copy.contract.noCriteria));

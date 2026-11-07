@@ -92,6 +92,36 @@ the same preview's `--fixture` option; their original Goal IDs stay intact.
 These display captures do not include their complete session trajectories or
 qualify installed App adoption, paid analysis or a scientific comparison.
 
+## Captured session archives
+
+The [fixed capture set](https://huggingface.co/datasets/huangrt01/loopx-edgebench-research-checkpoints-20261015/tree/a97e88f951deb6827d7051a59927860e9e4c4476/20261107-real-benchmark-trajectories) links the three real display
+fixtures above to all four retained solver-session files:
+
+| Display fixture | Captured session archive |
+| --- | --- |
+| Grid context on | [Grid ZIP](https://huggingface.co/datasets/huangrt01/loopx-edgebench-research-checkpoints-20261015/resolve/a97e88f951deb6827d7051a59927860e9e4c4476/20261107-real-benchmark-trajectories/grid_turing_robot.zip) |
+| Ad placement | [Ad ZIP](https://huggingface.co/datasets/huangrt01/loopx-edgebench-research-checkpoints-20261015/resolve/a97e88f951deb6827d7051a59927860e9e4c4476/20261107-real-benchmark-trajectories/ad_placement_optimization.zip) |
+| Schemathesis | [Schema ZIP](https://huggingface.co/datasets/huangrt01/loopx-edgebench-research-checkpoints-20261015/resolve/a97e88f951deb6827d7051a59927860e9e4c4476/20261107-real-benchmark-trajectories/schemathesis_config_modernization.zip) |
+
+Each fixture's `provenance.trajectory_archive` pins the archive and its SHA-256.
+The [manifest](https://huggingface.co/datasets/huangrt01/loopx-edgebench-research-checkpoints-20261015/blob/a97e88f951deb6827d7051a59927860e9e4c4476/20261107-real-benchmark-trajectories/manifest.json) binds native session IDs,
+original/published/compressed hashes, record counts and capture variants; the
+[redaction audit](https://huggingface.co/datasets/huangrt01/loopx-edgebench-research-checkpoints-20261015/blob/a97e88f951deb6827d7051a59927860e9e4c4476/20261107-real-benchmark-trajectories/redactions.json) identifies every
+removed opaque encrypted field. All plaintext values and unchanged JSONL lines
+were compared with the source, and all seven published files were read back by
+SHA-256. The 382 Explore records remain byte-identical.
+
+The Schema receiver's alternate runtime capture is a strict prefix missing
+56 tail records; the longer worker-session file is retained. Earlier Schema
+session history keeps its original identity. Complete captured files do not
+establish whole-run coverage or active duration. Invalid/cancelled statuses,
+unknown adoption/cost and unqualified scientific comparisons remain explicit.
+The earlier checkpoint release below remains available at its original version.
+
+中文：三例现有真实展示样例现在关联到同一固定 HF 版本的完整已捕获会话，保留
+原文、身份、取消/无效状态及未知覆盖。Schema 较短副本缺少的 56 条尾部记录已
+由较长原文件保留；清单和逐字段脱敏审计可查，不据此推断科学收益或完整运行覆盖。
+
 ## Earlier research checkpoints
 
 ### Saved analysis reference

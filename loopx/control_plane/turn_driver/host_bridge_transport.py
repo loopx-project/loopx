@@ -10,31 +10,37 @@ import sys as _sys
 import threading
 import time
 from typing import Any
-from typing import TYPE_CHECKING as _TYPE_CHECKING
 
-if _TYPE_CHECKING:
-    from ...extensions.process_runtime import (
-        force_terminate_process as force_terminate_process,
-        write_process_stdin_before_deadline as write_process_stdin_before_deadline,
-    )
-
-# Preview needs the bridge type; process helpers belong to execution or an
-# explicit caller import. Keep their existing identity and patch seams.
-_PROCESS_EXPORTS = ("force_terminate_process", "write_process_stdin_before_deadline")
+# Keep the historical exports and caller patch points, but select the OS
+# transport only when used. Decisions and deadlines remain with the caller.
+_PROCESS_RUNTIME_EXPORTS = (
+    "force_terminate_process", "write_process_stdin_before_deadline",
+)
 
 
 def __getattr__(name: str) -> Any:
-    if name not in _PROCESS_EXPORTS:
+    if name not in _PROCESS_RUNTIME_EXPORTS:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
     from ...extensions import process_runtime
 
-    value = getattr(process_runtime, name)
-    globals()[name] = value
-    return value
+    for export in _PROCESS_RUNTIME_EXPORTS:
+        globals().setdefault(export, getattr(process_runtime, export))
+    return globals()[name]
 
 
 def __dir__() -> list[str]:
-    return sorted(set(globals()) | set(_PROCESS_EXPORTS))
+    return sorted(set(globals()) | set(_PROCESS_RUNTIME_EXPORTS))
+
+
+def _export(name: str) -> Any:
+    return getattr(_sys.modules[__name__], name)
+
+
+# An already selected owner retains the former import-time binding, including
+# owner replacements installed before this module was imported.
+if "loopx.extensions.process_runtime" in _sys.modules:
+    for _name in _PROCESS_RUNTIME_EXPORTS:
+        globals()[_name] = getattr(_sys.modules["loopx.extensions.process_runtime"], _name)
 
 
 class GuardedHostBridge:
@@ -85,8 +91,8 @@ class GuardedHostBridge:
         if self.next(deadline=self.deadline) != {"kind": "ready"}:
             raise RuntimeError("managed Host bridge did not become ready")
         self.requested = True
-        write_stdin = getattr(_sys.modules[__name__], "write_process_stdin_before_deadline")
-        write_stdin(self.process, frame, deadline=self.deadline, cancel_and_reap=self.cancel)
+        _export("write_process_stdin_before_deadline")(self.process, frame, deadline=self.deadline,
+            cancel_and_reap=self.cancel)
 
     def cancel(self) -> None:
         if self.cancelled:
@@ -97,8 +103,7 @@ class GuardedHostBridge:
             if not self.requested:
                 # No request bytes have been sent, so this bridge cannot own a
                 # Host. This also handles suspension before JS handlers exist.
-                getattr(_sys.modules[__name__], "force_terminate_process")(
-                    self.process, process_tree_owned=True)
+                _export("force_terminate_process")(self.process, process_tree_owned=True)
                 self.not_launched = True
             elif self.process.poll() is None:
                 self.process.terminate()
@@ -123,8 +128,7 @@ class GuardedHostBridge:
             # Killing the bridge alone cannot certify an unobserved detached
             # Host. Retain the launching record and fail instead of claiming it.
             if self.process.poll() is None:
-                getattr(_sys.modules[__name__], "force_terminate_process")(
-                    self.process, process_tree_owned=True)
+                _export("force_terminate_process")(self.process, process_tree_owned=True)
             raise RuntimeError("managed Host bridge cleanup unconfirmed") from error
 
     def close_output(self) -> None:
@@ -140,4 +144,7 @@ class GuardedHostBridge:
             self.output.close()
 
 
-__all__ = [name for name in globals() if not name.startswith("_")] + list(_PROCESS_EXPORTS)
+# Star imports retain every former public name, including the lazy reexports.
+__all__ = sorted(
+    {name for name in globals() if not name.startswith("_")} | set(_PROCESS_RUNTIME_EXPORTS)
+)

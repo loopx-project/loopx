@@ -167,6 +167,28 @@ assert.deepEqual(distinct.map(row => row.marker), ["stream", "foreign", "another
   "Equal text, other Sessions/Turns and separate follow-up identities remain distinct");
 console.log("conversation-returns: history-before-admission preserves the live identity and distinct replies");
 
+// A fast queued Turn can finish before its start/stream is observed. Its
+// canonical answer replaces the waiting receipt, never a live stream.
+const queuedReply = {sourceSessionId: "current", sourceTurnId: "same-turn", role: "assistant",
+  text: "", queued: true, pending: false};
+const completedQueue = reconcileConversationHistory([queuedReply], [storedRoles[1]], createHistory);
+assert.equal(completedQueue.length, 1);
+assert.equal(completedQueue[0].text, storedRoles[1].text);
+assert.equal(completedQueue[0].queued, false);
+assert.equal(completedQueue[0].sourceMessageId, "agent-message");
+assert.equal(reconcileConversationHistory(completedQueue, [storedRoles[1]], createHistory), completedQueue);
+const unboundQueuedReply = {...queuedReply, sourceTurnId: undefined, sourceMessageId: "agent-message"};
+const unboundAnswer = reconcileConversationReturns([unboundQueuedReply], "current", [{...storedRoles[1], turn_id: undefined}], createHistory);
+assert.equal(unboundAnswer[0].text, "");
+assert.equal(unboundAnswer[0].queued, true, "Two absent Turn identities do not prove queue execution");
+for (const change of [{pending: true, text: "Live fragment"}, {queued: false, text: "Existing answer"},
+  {sourceSessionId: "foreign"}, {sourceTurnId: "another-turn"}]) {
+  const original = {...queuedReply, ...change};
+  const observed = reconcileConversationHistory([original], [storedRoles[1]], createHistory);
+  assert.equal(observed.find(row => row === original || row.sourceTurnId === original.sourceTurnId
+    && row.sourceSessionId === original.sourceSessionId)?.text, original.text);
+}
+
 // A revised brief keeps its return obligation despite a delivered old conclusion.
 const revised = [{sourceSessionId: "original", collaborations: [
   {request_id: "a", request_revision: 2, returns: [{phase: "conclusion", status: "delivered", request_revision: 1}]},

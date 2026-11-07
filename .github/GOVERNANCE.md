@@ -208,7 +208,7 @@ access, and takes effect only when the invited contributor accepts it.
 | [`@hhyykk`](https://github.com/hhyykk) | Write | Active external collaborator; the 2026-10-21 organization invitation is no longer pending, and active organization membership was not established |
 | [`@maxliux5`](https://github.com/maxliux5) | Write | Active; external collaborator |
 | [`@JackyCSer`](https://github.com/JackyCSer) | Write | Active; organization Member |
-| [`@cocolord`](https://github.com/cocolord) | Write | Active; organization Member |
+| [`@cocolord`](https://github.com/cocolord) | Maintain | Active organization Member; repository role updated 2026-11-07 |
 | [`@wujc12`](https://github.com/wujc12) | Write | Active; organization Member |
 | [`@songoow`](https://github.com/songoow) | Maintain | Active; organization Member |
 | [`@now-ing`](https://github.com/now-ing) | Write | Active; organization Member |
@@ -273,6 +273,19 @@ membership, repository Write or a maintenance commitment.
 Update this snapshot through a pull request when invitations are accepted,
 expire or are otherwise resolved. Maintainer appointments follow the separate
 process below.
+
+On 2026-11-07, the lead maintainer granted `@cocolord` repository Maintain
+to help carry the small-kernel refactors through review and merge. Recent
+work includes deferred loading at the Host and process boundaries in
+[#8185](https://github.com/loopx-project/loopx/pull/8185) and CLI registry
+inspection in [#8233](https://github.com/loopx-project/loopx/pull/8233).
+The existing [main ruleset](https://github.com/loopx-project/loopx/rules/18121976)
+allows Maintain holders to bypass branch rules when merging through a PR.
+The [repository merge policy](../AGENTS.md#merge-authority-and-validation)
+still requires explicit maintainer authorization, review of the proposed
+revision and validation for core refactors. Its limits on merging one's own
+PRs continue to apply. Code ownership and release authority follow their
+separate procedures.
 
 ## Subsystem Maintainers
 
