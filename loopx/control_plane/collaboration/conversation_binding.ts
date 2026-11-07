@@ -452,6 +452,75 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
   if (!Number.isSafeInteger(imageCount) || Number(imageCount) < 0 || Number(imageCount) > 4) {
     throw new EffectRuntimeRequestError("invalid external image attachment count");
   }
+  if (params.history_answer_review !== undefined) {
+    const observed = requireJsonObject(params.history_answer_review, "historical answer observation");
+    const binding = requireJsonObject(params.binding, "conversation binding");
+    const current = params.current_session == null ? null : requireJsonObject(params.current_session, "current Session");
+    const source = requireJsonObject(row.source, "original owner source");
+    const context = current?.steward_context as JsonObject | undefined;
+    const identityAvailable = binding.context_kind === "steward" && binding.grant === "portfolio_read"
+      && binding.enabled === true && (binding.audience ?? "owner") === "owner"
+      && row.binding_id === binding.binding_id && source.sender_ref === binding.operator_ref
+      && source.private_human_message === true && context?.binding_id === binding.binding_id
+      && context?.source_ref === source.source_ref && context?.provider_ref === binding.provider_ref
+      && context?.operator_ref === binding.operator_ref && current?.agent_id === "codex" && current.steward_context != null;
+    const reserved = row.context_recovery as JsonObject | undefined;
+    const previous = observed.previous_turn == null ? null : requireJsonObject(observed.previous_turn, "previous read-only answer");
+    const response = previous?.response as JsonObject | undefined;
+    const retained = row.context_recovery_history as JsonObject[] | undefined;
+    const originalReview = reserved?.context_correction === true ? (Array.isArray(retained) ? retained.at(-1) : undefined) : reserved;
+    const correctionVersion = Number(originalReview?.version) + 1;
+    // One compatibility correction for a delivered, explicitly partial review
+    // that predates original-context delivery. This never retries business or
+    // a failed/unknown native Turn. Keep the old terminal answer immutable.
+    const correction = row.status === "accepted" && row.capture_origin === "provider_history"
+      && (row.delivery_verified === true || reserved?.previous_delivery_verified === true)
+      && originalReview?.history_review === true && originalReview.read_only_review === true
+      && originalReview.answer_review === true && originalReview.context_version == null
+      && Number.isSafeInteger(originalReview.version) && Number(originalReview.version) > 0
+      && Number.isSafeInteger(correctionVersion)
+      && originalReview.failed_turn_id == null && originalReview.native_observation == null
+      && row.session_id === current?.session_id
+      && previous?.status === "completed" && previous.session_id === current?.session_id
+      && typeof previous.upstream_turn_id === "string" && previous.upstream_turn_id.length > 0
+      && previous.turn_id === row.turn_id && previous.message === row.message
+      && previous.client_turn_id === originalReview.client_turn_id
+      && originalReview.client_turn_id === `external-${request}-recovery-${originalReview.version}-review-1`
+      && response?.gate != null && Array.isArray(response.proposals) && response.proposals.length === 0
+      && !response.context_handoff && !response.protected_action && !response.goal_draft && !response.unfinished_work
+      && (reserved === originalReview || reserved?.context_version === 1
+        && reserved.context_correction === true && reserved.previous_answer_turn_id === previous.turn_id
+        && reserved.version === correctionVersion
+        && reserved.client_turn_id === `external-${request}-recovery-${correctionVersion}-review-1`);
+    if (observed.discovery_only === true) return {pending: correction && identityAvailable && row.command === null
+      && (reserved?.context_correction === true || current?.status === "ready" && current.active_turn_id == null)};
+    const created = Date.parse(String(observed.source_created_at));
+    const now = Date.parse(String(observed.observed_at));
+    if (row.command !== null || (row.status !== "prepared" && !correction) || Number(imageCount) !== 0
+        || !identityAvailable || !current || current.status !== "ready"
+        || current.active_turn_id != null || current.steward_context == null
+        || observed.source_verified !== true || observed.queue_empty !== true || observed.adapter_replaceable !== true
+        || observed.stop_observed !== false || !Number.isSafeInteger(observed.version) || Number(observed.version) < 1
+        || !Number.isFinite(created) || !Number.isFinite(now) || !Number.isFinite(Date.parse(String(current.created_at)))
+        || created < Date.parse(String(current.created_at)) || created > now - 5_000
+        || typeof row.message !== "string" || !row.message.trim() || row.message.trim().startsWith("/")) {
+      return {operation: "hold_history_answer", reason: observed.stop_observed === true ? "source_stopped"
+        : observed.adapter_replaceable !== true ? "owned_background_unavailable"
+        : observed.queue_empty !== true || current?.active_turn_id != null ? "session_busy"
+        : current?.agent_id !== "codex" ? "current_executor_unavailable"
+        : created < Date.parse(String(current?.created_at)) ? "source_predates_session"
+        : "source_scope_unavailable"};
+    }
+    // This creates a new, tools-restricted answer, never an execution of the
+    // historical request or a fabricated failed native Turn.
+    return {operation: "admit_history_answer", session_id: current.session_id,
+      context_correction: correction, context_version: 1, version: correction ? correctionVersion : observed.version,
+      ...(correction ? {previous_answer_turn_id: previous!.turn_id} : {}),
+      // Preserve the existing read-only suffix for older answer-capable
+      // readers. Advancing this request's reserved version is not a global
+      // manager-context upgrade and cannot turn the review into business.
+      client_turn_id: `external-${request}-recovery-${correction ? correctionVersion : observed.version}-review-1`};
+  }
   if (![null, "agents", "select_agent", "select_project", "status", "help", "new", "stop", "unsupported", "commission", "confirm_commission", "cancel_commission", "stop_commission", "resume_commission"].includes(command as null | string)) {
     throw new EffectRuntimeRequestError("unsupported external conversation command");
   }
