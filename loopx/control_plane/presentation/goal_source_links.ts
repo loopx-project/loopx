@@ -1,7 +1,6 @@
 /** Local organization of existing source Goals, never execution registration. */
-import type {JsonObject, JsonValue} from "../effect_program.ts";
 import {BARE_SHA256_PATTERN} from "../content_digest.ts";
-import {requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
+import {requireJsonObject, requireNonEmptyString, type JsonObject} from "../runtime_decode.ts";
 
 export function projectGoalSourceLinks(input: JsonObject): JsonObject {
   if (!Array.isArray(input.local_goal_ids) || !Array.isArray(input.links) || input.links.length > 32) {
@@ -59,7 +58,7 @@ export function projectGoalSourceStatus(input: JsonObject): JsonObject {
   }
   // These are status projection routing fields, not source document contents.
   // All children of this status were read from the same qualified namespace.
-  const route = (value: JsonValue, key = ""): JsonValue => {
+  const route = (value: unknown, key = ""): unknown => {
     if ((key === "goal_id" || key === "goal_filter") && value === originalId) return workspaceId;
     if (Array.isArray(value)) return value.map(item => key === "goal_ids" && item === originalId
       ? workspaceId : route(item));
@@ -69,7 +68,7 @@ export function projectGoalSourceStatus(input: JsonObject): JsonObject {
   };
   const projected = (workspaceId === originalId ? status : route(status)) as JsonObject;
   const projectedHistory = requireJsonObject(projected.run_history, "native history");
-  const goal = requireJsonObject((projectedHistory.goals as JsonValue[])[0], "native Goal");
+  const goal = requireJsonObject((projectedHistory.goals as unknown[])[0], "native Goal");
   goal.native_parent_goal_id = goal.parent_goal_id ?? null;
   goal.id = workspaceId;
   goal.parent_goal_id = row.parent_goal_id;
