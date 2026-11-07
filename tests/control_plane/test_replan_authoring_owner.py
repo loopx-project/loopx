@@ -69,8 +69,6 @@ def test_explicit_vision_detail_keeps_authoring_inline():
 
 
 def source_digest(source):
-    if source.get("schema_version") == "loopx_turn_envelope_v1":
-        return source["contract_binding"]["content_hash"]
     # The fixture's keys use Python's declared Unicode ordering; the existing
     # source binding uses JavaScript JSON number rendering (including 1.0).
     raw = subprocess.check_output(["node", "-e",
@@ -203,9 +201,7 @@ def test_real_capture_authoring_read_does_not_repeat_work_or_spend(tmp_path, mon
         "--decision-output-dir", str(capture), cwd=project)
     assert code == 0, result
     source = json.loads((capture / "decision.json").read_text())
-    steps = source["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"]
-    authoring = deepcopy(next(step["vision_authoring"] for step in steps
-        if step["kind"] == "durable_writeback" and "vision_authoring" in step))
+    authoring = deepcopy(source["replan_action_packet"]["writeback_contract"]["vision_authoring"])
     authoring.pop("minimal_example", None)
     shared = shared_packet(source)
     before = state.read_bytes()

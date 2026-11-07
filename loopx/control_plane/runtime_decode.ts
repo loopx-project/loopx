@@ -2,43 +2,6 @@ import { EffectRuntimeRequestError } from "./effect_runtime_errors.ts";
 
 export type JsonObject = Record<string, unknown>;
 
-export type SourceNumbers = WeakMap<object, Map<string, string>>;
-
-/** Native JSON IO retains the same sparse number spellings as Python IO.
- * Shared by journal publication and readback; this changes no source values. */
-export function parseJsonSource(encoded: string): {value: unknown; numbers: SourceNumbers} {
-  const numbers: SourceNumbers = new WeakMap();
-  const value: unknown = JSON.parse(encoded, function (key, item: unknown, context?: {source?: string}) {
-    if (typeof item === "number" && Number.isInteger(item) &&
-        context?.source !== undefined && context.source !== JSON.stringify(item)) {
-      const fields = numbers.get(this) ?? new Map<string, string>();
-      fields.set(key, context.source);
-      numbers.set(this, fields);
-    }
-    return item;
-  });
-  return {value, numbers};
-}
-
-/** Transport original spellings from the parsed object, never from rounded numbers. */
-export function parsedSourceNumberTokens(value: unknown, numbers?: SourceNumbers):
-    [(string | number)[], string][] {
-  const tokens: [(string | number)[], string][] = [];
-  if (numbers === undefined) return tokens;
-  const visit = (item: unknown, path: (string | number)[]): void => {
-    if (item === null || typeof item !== "object") return;
-    const child = (key: string | number, value: unknown): void => {
-      const token = numbers.get(item)?.get(String(key));
-      if (token !== undefined) tokens.push([[...path, key], token]);
-      else visit(value, [...path, key]);
-    };
-    if (Array.isArray(item)) item.forEach((value, index) => child(index, value));
-    else Object.entries(item).forEach(([key, value]) => child(key, value));
-  };
-  visit(value, []);
-  return tokens;
-}
-
 export function jsonObject(value: unknown): JsonObject | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as JsonObject)

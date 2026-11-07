@@ -1014,10 +1014,8 @@ def observe_subagent_host_result(
     reconciliation = reconcile_subagent_execution(topology, receipts)
     if reconciliation is not None:
         normalized["subagent_reconciliation"] = reconciliation
-        from ..quota.turn_envelope import read_turn_plan_work
-
         context = envelope_agent_context(
-            read_turn_plan_work(plan),
+            _mapping(plan.get("turn_envelope")),
             phase="after_delegate_result",
             observations={"reconciliation_counts": reconciliation["counts"]},
         )

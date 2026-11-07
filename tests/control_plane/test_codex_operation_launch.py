@@ -124,13 +124,13 @@ def test_operation_cli_stop_preempts_actual_native_boundary(
 
         monkeypatch.setattr(CodexChatAgentSession, "start", stop_before_start)
     else:
-        original_input = codex_operation_host.prepare_codex_cli_input
+        original_prompt = codex_operation_host._prompt
 
         def stop_before_turn(request):
             stop_goal()
-            return original_input(request)
+            return original_prompt(request)
 
-        monkeypatch.setattr(codex_operation_host, "prepare_codex_cli_input", stop_before_turn)
+        monkeypatch.setattr(codex_operation_host, "_prompt", stop_before_turn)
     code, payload = _cli([*arguments, "--execute"])
     assert len(stopped) == 1, payload
     assert (turns.read_bytes() if turns.exists() else None) == before_turns, payload
@@ -246,12 +246,9 @@ def test_native_turn_dispatch_failure_drains_before_stop_writer_is_released(
         1,
     ))
     arguments[arguments.index("--timeout-seconds") + 1] = "1"
-    original_input = codex_operation_host.prepare_codex_cli_input
-    def supplemented_input(request):
-        prompt, schema = original_input(request)
-        return prompt + "\n" + "x" * (8 * 1024 * 1024), schema
-
-    monkeypatch.setattr(codex_operation_host, "prepare_codex_cli_input", supplemented_input)
+    original_prompt = codex_operation_host._prompt
+    monkeypatch.setattr(codex_operation_host, "_prompt",
+                        lambda request: original_prompt(request) + "\n" + "x" * (8 * 1024 * 1024))
     sessions, drained_before_release = [], []
     entered = threading.Event()
     original_start = CodexChatAgentSession.start
@@ -317,13 +314,10 @@ def test_guarded_native_dispatch_preserves_large_unicode_input(tmp_path, monkeyp
     _, _, _, turns, arguments = _fixture(tmp_path, monkeypatch, "sqlite")
     observed = tmp_path / "accepted-native-input"
     monkeypatch.setenv("FAKE_OPERATION_PROMPT_FILE", str(observed))
-    original_input = codex_operation_host.prepare_codex_cli_input
+    original_prompt = codex_operation_host._prompt
     supplement = "完整输入☃" * (1024 * 1024)
-    def supplemented_input(request):
-        prompt, schema = original_input(request)
-        return prompt + "\n" + supplement, schema
-
-    monkeypatch.setattr(codex_operation_host, "prepare_codex_cli_input", supplemented_input)
+    monkeypatch.setattr(codex_operation_host, "_prompt",
+                        lambda request: original_prompt(request) + "\n" + supplement)
     code, payload = _cli([*arguments, "--execute"])
     assert code == 0 and payload["effects"]["host_invoked"], payload
     assert turns.read_text().splitlines() == ["owned-app-server-thread"]

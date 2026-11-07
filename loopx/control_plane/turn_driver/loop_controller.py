@@ -10,7 +10,8 @@ from collections.abc import Mapping
 from typing import Any
 
 from ..effect_program import SettlementIdentity
-from ..effect_runtime import effect_runtime_projection_result, source_number_tokens
+from ..effect_runtime import effect_runtime_projection_result
+from ..quota.turn_envelope import TurnControllerInput
 from .driver import _historical_route_text
 from .transaction import LoopXTurnResultKind
 from .turn_contract_generated import LoopDisposition as LoopDisposition
@@ -22,12 +23,12 @@ VALIDATED_TURN_RECEIPT_SCHEMA_VERSION = "loop_validated_turn_receipt_v0"
 
 def _controller_result(operation: str, **facts: Any) -> dict[str, Any]:
     decision = facts.get("decision")
+    if isinstance(decision, TurnControllerInput):
+        decision = decision.envelope()
     if isinstance(decision, Mapping):
         facts["decision"] = dict(decision)
-        if "contract_binding" not in decision:
-            # Recorded v0 decisions retain their original scalar codec. New
-            # complete sources use their exact number tokens below.
-            facts["historical_route_text"] = _historical_route_text(decision)
+        # Preserve scalar spelling here; the shared typed owner decides routes.
+        facts["historical_route_text"] = _historical_route_text(decision)
     # JSON numbers erase Python's int/float distinction and round large ints.
     # These are exact scalar codec facts, not precomputed admission decisions.
     source = facts.get({"receipt": "execution", "disposition": "receipt"}.get(operation, "journal"))
@@ -41,15 +42,6 @@ def _controller_result(operation: str, **facts: Any) -> dict[str, Any]:
             key: str(value) if type(value) is int else None for key, value in scalars.items()
         }
     request = {"operation": operation, **facts}
-    if isinstance(decision, Mapping) and "contract_binding" in decision:
-        tokens = source_number_tokens(decision)
-        if tokens:
-            request["decision_source_number_tokens"] = tokens
-    journal = facts.get("journal")
-    if isinstance(journal, Mapping):
-        tokens = source_number_tokens(journal)
-        if tokens:
-            request["source_number_tokens"] = tokens
     payload = effect_runtime_projection_result("turn.controller", request)
     if not isinstance(payload, dict):
         raise RuntimeError("TypeScript Turn controller returned an invalid response")
@@ -205,7 +197,7 @@ class BoundedTurnBudget:
 def decide_loop_disposition(
     *,
     turn_receipt: ValidatedTurnReceipt | None,
-    quota_decision: Mapping[str, Any],
+    quota_decision: Mapping[str, Any] | TurnControllerInput,
     predecessor_turn_key: str | None = None,
     bounded_turn_budget: BoundedTurnBudget | None = None,
 ) -> dict[str, Any]:

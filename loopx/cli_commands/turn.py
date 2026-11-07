@@ -12,7 +12,7 @@ from ..control_plane.goals.first_party_host_admission import (
 )
 from ..control_plane.operator_provider import operator_provider_environ
 from ..control_plane.quota.effective_action import EffectiveAction
-from ..control_plane.quota.turn_envelope import compose_turn_decision
+from ..control_plane.quota.turn_envelope import build_turn_envelope
 from ..control_plane.runtime.status_projection_cache import (
     resolve_status_projection_cache_runtime_root,
 )
@@ -164,8 +164,13 @@ def handle_turn_command(
                 runtime_root,
                 goal_id=args.goal_id,
                 turn_key=args.resume_turn_key,
-                agent_id=args.agent_id,
             )
+            raw_envelope = payload.get("turn_envelope")
+            envelope = raw_envelope if isinstance(raw_envelope, dict) else {}
+            if envelope.get("agent_id") != args.agent_id:
+                raise ValueError(
+                    "LoopX Turn resume journal belongs to another agent"
+                )
             goal_admission = FirstPartyHostGoalAdmission.for_plan(
                 registry_path=registry_path,
                 goal_id=args.goal_id,
@@ -245,8 +250,12 @@ def handle_turn_command(
             )
             operator_inbox_urgency_projector = decision_owner.operator_inbox_urgency_projector
             scheduler_context = decision_owner.scheduler_execution_context
-            decision = compose_turn_decision(decision_owner.resolve(), scheduler_execution_context=scheduler_context)
+            decision = decision_owner.resolve()
             resume_requested, session_binding = resolve_turn_resume_session_binding(args)
+            turn_envelope = build_turn_envelope(
+                decision,
+                scheduler_execution_context=scheduler_context,
+            )
             # Operation-equipped app-server sessions retain their Todo-bound
             # approval/handoff contract; this option controls exec conversation reuse.
             session_scope = (args.session_scope if args.host in {"codex-cli", "codex-app-server"}
@@ -254,24 +263,30 @@ def handle_turn_command(
             if args.host in {"codex-cli", "codex-app-server"} and delegated_context and delegated_context.get("request_subject") is not None:
                 session_scope = "agent"
             if native_session_binding_resolver is not None:
-                session_binding = native_session_binding_resolver(decision)
+                session_binding = native_session_binding_resolver(turn_envelope)
             if (
                 args.turn_command == "run-once"
                 and (args.host == "codex-cli" or dsh_operation_module)
                 and not resume_requested
                 and not args.resume_turn_key
                 and args.iteration_context != "fresh"
-                and decision.get("effective_action") != EffectiveAction.GOVERNED_CAPABILITY_INTENT.value
+                and turn_envelope.get("effective_action") != EffectiveAction.GOVERNED_CAPABILITY_INTENT.value
             ):
                 from ..control_plane.turn_driver.codex_cli import codex_cli_session_binding
 
-                session_binding = codex_cli_session_binding(
-                    runtime_root, work_contract=decision,
-                    goal_admission=strict_goal_admission,
-                    session_scope=session_scope, host=args.host,
+                session_binding = (
+                    codex_cli_session_binding(
+                        runtime_root,
+                        turn_envelope,
+                        goal_admission=strict_goal_admission,
+                        session_scope=session_scope,
+                        host=args.host,
+                    )
+                    if strict_goal_admission is not None
+                    else codex_cli_session_binding(runtime_root, turn_envelope, session_scope=session_scope, host=args.host)
                 )
             payload = build_loopx_turn_plan(
-                decision,
+                turn_envelope,
                 host=args.host,
                 execution_mode=args.execution_mode,
                 scheduler_owner=args.scheduler_owner,
@@ -318,11 +333,6 @@ def handle_turn_command(
                 capability_action["command"] = shlex.join(capability_action["command_argv"])
         if args.turn_command == "plan":
             if not args.include_transaction_detail:
-                # The current plan has one source, so inspection retains it.
-                # Execution still requires its explicit surface, even if a
-                # caller restores omitted session/transaction metadata.
-                payload = dict(payload)
-                payload["boundary"] = {**payload.get("boundary", {}), "inspection_only": True}
                 payload.pop("session", None)
                 payload.pop("transaction", None)
                 boundary = payload.get("boundary")

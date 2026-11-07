@@ -245,12 +245,12 @@ export function progressiveContextPlan(request: JsonObject): JsonObject {
 
 const pathStartsWith = (path: Path, start: Path) => start.every((key, i) => path[i] === key);
 
-function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSourceValues,
-    plan = progressiveContextPlan({payload: request.context, surface: request.surface})):
+function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSourceValues):
     {context: JsonObject; tokens: [Path, string][]; projected: boolean} {
   const context = requireJsonObject(request.context, "current projection");
   const details = requireJsonObject(request.native_projection, "supporting material reference");
   const identity = contextSourceIdentity(request, request.source_number_tokens);
+  const plan = progressiveContextPlan({payload: context, surface: request.surface});
   const deferred = plan.deferred as JsonObject[], references = (plan.references ?? []) as JsonObject[];
   const instructions = plan.instructions as JsonObject[];
   const at = (root: unknown, path: Path): unknown => path.reduce<unknown>((row, key) =>
@@ -335,14 +335,6 @@ function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSour
         + "Uncertain or missing necessary facts must be recovered before dependent action; Agent review is not independent acceptance."};
     }
   }
-  // A signed source and its presentation have different content hashes even
-  // when the only edit is a same-view Todo reference. Keep an address for the
-  // original and include its cost when deciding whether the projection wins.
-  const signedSource = request.surface === "complete_turn";
-  const sourceNavigation = typeof details.command_template === "string"
-    ? {command_template: details.command_template} : {path: details.path, sha256: details.sha256};
-  if (signedSource && required !== context && required.context_details === undefined)
-    required.context_details = sourceNavigation;
   const remaining = tokens.filter(([path]) => !removed.some(start => pathStartsWith(path, start)));
   // Unchanged source spellings cancel. Removed registered records contain only
   // safe integral numbers; sparse tokens retain their original float spelling.
@@ -350,21 +342,7 @@ function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSour
     path[0] === "context" ? size + token.length - JSON.stringify(at(request, path)).length : size, 0);
   const projected = required !== context && Buffer.byteLength(JSON.stringify(required))
     - Buffer.byteLength(JSON.stringify(context)) + adjustment(remaining) - adjustment(tokens) < 0;
-  // A saved capture may predate the caller's native transport. Keep its signed
-  // source immutable; bind only this display recipe after the optional shrink
-  // decision, so caller options neither bypass source validation nor defeat its
-  // no-growth guard. The next invocation still runs the ordinary CLI guard.
-  const selectionPath = ["interaction_contract", "cli_channel", "selection_command", "command_args_template"];
-  const transport = details.selection_command_args_template;
-  const bindTransport = typeof transport === "string" && typeof at(context, selectionPath) === "string"
-    && transport !== at(context, selectionPath);
-  if (!projected) { required = context; copies.clear(); }
-  if (bindTransport) {
-    parent(selectionPath)[selectionPath.at(-1)!] = transport;
-    if (signedSource && required.context_details === undefined)
-      required.context_details = sourceNavigation;
-  }
-  return {context: required, tokens: projected ? remaining : tokens, projected: projected || bindTransport};
+  return {context: projected ? required : context, tokens: projected ? remaining : tokens, projected};
 }
 
 function nativeContextContinuity(codec: JsonObject): JsonObject {
@@ -386,32 +364,30 @@ function nativeContextContinuity(codec: JsonObject): JsonObject {
 /** Plan and encode one native capture without sending its intermediate view
  * back through Python. Capture publication and native locking remain Host IO. */
 export function prepareProgressiveContextDelivery(request: JsonObject, legacyFields: readonly string[],
-    decisionFields: readonly string[], plan?: JsonObject): JsonObject {
+    decisionFields: readonly string[]): JsonObject {
   if (request.include_initial_read_plan !== undefined)
     requireBoolean(request.include_initial_read_plan, "include_initial_read_plan");
   const sourceValues: ProjectionSourceValues = new WeakMap();
-  const required = requiredNativeContext(request, sourceValues, plan);
+  const required = requiredNativeContext(request, sourceValues);
   const codec = nativeContextContinuity({...request, context: required.context,
     ...(request.source_number_tokens === undefined ? {} : {source_number_tokens: required.tokens})});
   const delivery = encodeContextDelivery(codec, legacyFields, sourceValues, fileNavigationPaths(required.context));
   const observe = request.observe_first_read === true && !!jsonObject(required.context.selected_todo)?.todo_id;
-  const navigation = request.include_initial_read_plan === true || observe
-    ? nativeContextReadPlan(required.context, decisionFields) : undefined;
-  const observed = observe && navigation?.initial
-    ? observedFirstRead(codec, initialContextReadPointers(required.context, decisionFields)) : undefined;
+  const pointers = observe ? initialContextReadPointers(required.context, decisionFields) : [];
+  const observed = pointers.length ? observedFirstRead(codec, pointers) : undefined;
   const {operation: _operation, source_edits: _edits, source_number_tokens: _numbers, ...source} = request;
   return contextProjectionChanges(source, {context: required.context, delivery, projected: required.projected,
     ...(observed ? {observed_first_read: observed} : {}),
     read_sections: inlineReadSections(request, required.context),
     ...(request.include_initial_read_plan === true
-      ? {initial_read_plan: navigation} : {})}, sourceValues);
+      ? {initial_read_plan: nativeContextReadPlan(required.context, decisionFields)} : {})}, sourceValues);
 }
 
 /** Stateless presentation uses the same plan without inventing a native session,
  * retained baseline or admission identity. Hosts may add delta independently. */
-export function prepareProgressiveContext(request: JsonObject, plan?: JsonObject): JsonObject {
+export function prepareProgressiveContext(request: JsonObject): JsonObject {
   const values: ProjectionSourceValues = new WeakMap();
-  const required = requiredNativeContext(request, values, plan);
+  const required = requiredNativeContext(request, values);
   const {operation: _operation, source_edits: _edits, source_number_tokens: _numbers, ...source} = request;
   return contextProjectionChanges(source, {context: required.context, projected: required.projected}, values);
 }
@@ -448,27 +424,6 @@ export function initialContextReadPointers(context: JsonObject, decisionFields: 
       replan.settlement_only !== true && typeof replan.review === "string" && replan.review) {
     include("replan_action_packet", "review");
     include("replan_action_packet", "guidance");
-  } else if (context.schema_version === "loopx_turn_envelope_v1" &&
-      context.effective_action === EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED && replan?.schema_version === "replan_action_packet_v0" &&
-      replan.decision === "replan_required" &&
-      replan.settlement_only !== true) {
-    // The complete contract already carries the review facts: use its own
-    // obligations and the indexed outcome paths below, without another writer.
-    for (const field of ["planning_guidance", "required_outcome", "allowed_terminal"])
-      include("replan_action_packet", field);
-    // An invalidated successor can reopen review under the same receipt. Show
-    // the current cause and basis before the agent chooses a writeback route.
-    const obligation = object(context.autonomous_replan_obligation);
-    const review = object(obligation?.replan_context);
-    if (obligation?.schema_version === "autonomous_replan_obligation_v0" &&
-        typeof replan.obligation_id === "string" && obligation.obligation_id === replan.obligation_id &&
-        review?.schema_version === "replan_context_v0" && review.obligation_id === replan.obligation_id) {
-      include("autonomous_replan_obligation", "obligation_id");
-      include("autonomous_replan_obligation", "stop_condition");
-      include("autonomous_replan_obligation", "replan_context", "context_id");
-      if (Array.isArray(obligation.triggers)) obligation.triggers.forEach((_trigger, index) =>
-        include("autonomous_replan_obligation", "triggers", index, "kind"));
-    }
   }
   include("agent_lane_next_action", "next_step");
   include("agent_lane_next_action", "next_action_basis");
@@ -548,48 +503,22 @@ export function initialContextReadPointers(context: JsonObject, decisionFields: 
     include(...source, "content", "harness", "guidance");
     include(...source, "content", "harness", "orchestration_gate");
   });
-  const cli = object(interaction.cli_channel);
-  const planPath = ["interaction_contract", "cli_channel", "settlement_plan"];
-  const plan = object(cli?.settlement_plan);
-  const steps = (plan?.schema_version === "quota_settlement_plan_v1" || plan?.schema_version === "quota_settlement_plan_v2") && Array.isArray(plan.ordered_steps)
-    ? plan.ordered_steps : undefined;
-  const prepared = object(cli?.execution_preparation);
-  const identity = object(plan?.identity);
-  const settlementSteps = steps?.map(object).filter(step => step?.kind === "durable_writeback" || step?.kind === "quota_spend");
-  const [writeback, spend] = settlementSteps ?? [];
-  const manualSettlement = plan?.schema_version === "quota_settlement_plan_v1";
-  // The complete contract's composed writeback owns the debit. Its runtime
-  // receipt step has no separate command for the agent to run.
-  const composedSettlement = plan?.schema_version === "quota_settlement_plan_v2" && writeback?.owner === "agent"
-    && spend?.owner === "runtime" && !Object.hasOwn(spend, "command_template");
-  const templates = manualSettlement ? [writeback?.command_template, spend?.command_template]
-    : composedSettlement ? [writeback?.command_template] : undefined;
-  // A ready Turn already shows its ordered writeback and spend with their
-  // conditions. Hide only the exact duplicate fallback in this first read;
-  // recovery, legacy readers and the original capture keep both forms.
-  const repeatsSettlement = context.effective_action === EffectiveAction.NORMAL_RUN && context.normal_delivery_allowed === true
-    && channel?.delivery_allowed === true && cli?.selection_required !== true && prepared?.state === "ready"
-    && typeof identity?.effect_id === "string" && identity.effect_id.length > 0
-    && typeof identity.todo_id === "string" && prepared.todo_id === identity.todo_id
-    && object(context.selected_todo)?.todo_id === identity.todo_id
-    && isDeepStrictEqual(identity, object(object(context.heartbeat_receipt)?.settlement_identity))
-    && settlementSteps?.length === 2 && writeback?.kind === "durable_writeback" && spend?.kind === "quota_spend"
-    && templates?.every(command => typeof command === "string" && command.length > 0) === true
-    && isDeepStrictEqual(cli?.next_cli_actions, templates);
   for (const field of ["execution_preparation", "next_cli_actions", "spend_allowed_now", "spend_after_validation", "spend_policy",
     "quota_spend_source", "delivery_workspace_causality", "vision_continuation_audit"])
-    if (field !== "next_cli_actions" || !repeatsSettlement) include("interaction_contract", "cli_channel", field);
+    include("interaction_contract", "cli_channel", field);
   // Explicit selection clears next_cli_actions. Deliver the owner's discovery
   // and same-Turn binding recipe alongside its non-exhaustive suggestions.
-  if (cli?.selection_required === true) {
+  if (object(interaction.cli_channel)?.selection_required === true) {
     for (const field of ["selection_required", "selection_policy_ref", "selection_command"])
       include("interaction_contract", "cli_channel", field);
     include("action_portfolio", "selection_policy");
     include("action_portfolio", "suggested_actions");
   }
-  if (plan && steps) {
+  const planPath = ["interaction_contract", "cli_channel", "settlement_plan"];
+  const plan = object(object(interaction.cli_channel)?.settlement_plan);
+  if (plan?.schema_version === "quota_settlement_plan_v1" && Array.isArray(plan.ordered_steps)) {
     for (const field of Object.keys(plan)) if (field !== "ordered_steps") include(...planPath, field);
-    steps.forEach((value, stepIndex) => {
+    plan.ordered_steps.forEach((value, stepIndex) => {
       const step = object(value), stepPath = [...planPath, "ordered_steps", stepIndex];
       if (!step) { include(...stepPath); return; }
       for (const field of Object.keys(step)) {
@@ -632,8 +561,6 @@ export function initialContextReadPointers(context: JsonObject, decisionFields: 
       include("context_details", "unread_context_index", field);
     include("context_details", "instruction");
     include("context_details", "command_template");
-  } else if (details && known(details, ["command_template", "path", "sha256"])) {
-    include("context_details");
   } else include("context_details", "unread_context_index");
   return pointers;
 }

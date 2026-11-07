@@ -194,13 +194,6 @@ class PostWritebackHookRegistration:
 
 def turn_context_source(payload: Mapping[str, Any]) -> Mapping[str, Any]:
     """Use the host envelope or the native quota identity, without new authority."""
-    if "work_contract" in payload:
-        from .quota.turn_envelope import turn_plan_host_source
-        from .quota.turn_envelope import complete_turn_host_source
-
-        source = complete_turn_host_source(turn_plan_host_source(payload), operation="plan_work")
-        assert source is not None
-        return source
     envelope = payload.get("turn_envelope")
     if isinstance(envelope, Mapping):
         return envelope

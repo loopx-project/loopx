@@ -12,7 +12,6 @@ import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 import {boundConversationExecutorMatches, goalAgentConversationIdentity, resolveConversationScope} from "./conversation_scope.ts";
 import {readTurnSelectionRejection} from "../turn_driver/selection_rejection.ts";
 import {EffectiveAction} from "../quota/effective_action.generated.ts";
-import {turnPlanWorkSource} from "../quota/turn_envelope.ts";
 
 /** A stopped observation may get one new Chat carrier, never a new native
  * observation identity. The host independently reads the old worker lock,
@@ -180,7 +179,7 @@ function admitReportSelectionRecovery(params: JsonObject, request: JsonObject, s
   const recorded = requireJsonObject(inspection.recorded_effects, "probe effects");
   const plan = requireJsonObject(journal.plan, "probe plan");
   const route = requireJsonObject(plan.route, "probe route");
-  const envelope = turnPlanWorkSource(plan, probe.source_number_tokens).work;
+  const envelope = requireJsonObject(plan.turn_envelope, "probe envelope");
   const action = requireJsonObject(envelope.action, "probe action");
   const selected = requireJsonObject(action.selected_todo, "probe selected task");
   const identity = requireJsonObject(requireJsonObject(requireJsonObject(plan.transaction, "probe transaction")

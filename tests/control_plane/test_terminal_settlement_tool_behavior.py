@@ -64,20 +64,11 @@ def _writeback_action(request: Mapping[str, Any]) -> ScriptedExecToolAction:
 
 
 def _spend_action(request: Mapping[str, Any]) -> ScriptedExecToolAction:
-    # An ordinary Todo completion supplies the remaining manual settlement plan.
-    for message in reversed(request["messages"]):
-        if message["role"] != "tool":
-            continue
-        try:
-            payload = json.loads(message["content"])
-        except json.JSONDecodeError:
-            continue
-        plan = payload.get("settlement_plan") if isinstance(payload, dict) else None
-        if plan:
-            step = next(row for row in plan["ordered_steps"] if row["kind"] == "quota_spend")
-            return ScriptedExecToolAction(step["command_template"])
-    # Negative probe for a spend attempted before the host allows it.
-    return ScriptedExecToolAction("loopx quota spend-slot")
+    packet = _latest_quota_packet(request)
+    command = packet["interaction_contract"]["cli_channel"]["next_cli_actions"][1]
+    return ScriptedExecToolAction(
+        command=command.replace('"${LOOPX_TURN:?}"', "turn-test-001")
+    )
 
 
 def _completion_action(
@@ -161,7 +152,7 @@ def test_real_tool_loop_settles_final_todo_after_spend(
             )),
             *([partial(_completion_action, kind="validation")] if ordinary_completion else []),
             _writeback_action,
-            *([_spend_action] if ordinary_completion else []),
+            _spend_action,
             _completion_action,
         ]
     )
@@ -180,7 +171,8 @@ def test_real_tool_loop_settles_final_todo_after_spend(
         "quota_should_run",
         "delivery_validation",
         *(["todo_completion"] if ordinary_completion else []),
-        *(["durable_writeback", "quota_spend"] if ordinary_completion else ["settle_turn"]),
+        "durable_writeback",
+        "quota_spend",
         "terminal_closeout",
     ]
     assert receipt["settlement_receipt_steps"] == [
@@ -780,20 +772,14 @@ def test_batch_read_failure_cannot_admit_terminal_writeback(
     assert len(transport.requests) == 2
 
 
-@pytest.mark.parametrize("read_decision", [True, False])
 def test_real_rejection_loop_settles_projected_todos_then_stops(
-    tmp_path: Path, read_decision: bool,
+    tmp_path: Path,
 ) -> None:
-    def read_terminal_decision(request):
-        navigation = json.loads(request["messages"][-1]["content"])
-        return ScriptedExecToolAction(navigation["first_read_command"])
-
     transport = ScriptedDoubaoExecTransport(
         [
             _reentry_todo_action(0),
             _reentry_todo_action(1),
             _reentry_quota_action,
-            *([read_terminal_decision] if read_decision else []),
             ScriptedAssistantAction(content="Terminal lifecycle is settled."),
         ]
     )
@@ -806,15 +792,10 @@ def test_real_rejection_loop_settles_projected_todos_then_stops(
         fixture_root=tmp_path / "actor",
     )
 
-    if not read_decision:
-        assert receipt["qualification_passed"] is False
-        assert receipt["terminal_quota_observed"] is False
-        assert receipt["failure_code"] == "model_returned_before_terminal_quota"
-        return
     assert receipt["qualification_passed"] is True, json.dumps(receipt, sort_keys=True)
     assert receipt["failure_code"] is None
-    assert receipt["provider_call_count"] == 5
-    assert receipt["tool_call_count"] == 4
+    assert receipt["provider_call_count"] == 4
+    assert receipt["tool_call_count"] == 3
     assert receipt["projected_todo_count"] == 2
     assert receipt["settled_todo_count"] == 2
     assert receipt["completion_identity_preserved"] is True
@@ -824,7 +805,6 @@ def test_real_rejection_loop_settles_projected_todos_then_stops(
         "todo_lifecycle_settlement",
         "todo_lifecycle_settlement",
         "terminal_quota_reentry",
-        "context_read",
     ]
     transition = _latest_reentry_transition(transport.requests[0])
     assert len(transition["triggers"]) == 2

@@ -15,7 +15,6 @@ import pytest
 from benchmark.runtime.codex import Execution
 from benchmark.runtime.worker import heartbeat_body
 from loopx.heartbeat_prompt import build_heartbeat_prompt
-from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
 from tests.control_plane.cli_output_fixture import stable_budget_fixture_root
 from tests.control_plane.test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, TODO_ID, TURN_ID, ALTERNATIVE_TODO_ID, REPO_ROOT,
@@ -36,45 +35,6 @@ def assert_explicit_off_keeps_legacy_prompt(original, disabled):
     assert disabled["interface_budget"]["char_count"] == original["interface_budget"]["char_count"] + extra
     assert disabled["interface_budget"]["budget_char_count"] == original["interface_budget"]["budget_char_count"] + extra
     assert disabled["interface_budget"]["max_chars"] == original["interface_budget"]["max_chars"]
-
-
-def assert_original_read_and_recovery_duties(body):
-    text = ' '.join(body.split())
-    for obligation in (
-        'Read work_context and required_reads before acting',
-        'applicable goals, criteria, constraints and stops',
-        'original capture sections needed for selection, replan',
-        'missing/truncated content or commands and referenced details',
-        'complete original source and identity, not fresh admission',
-        'explicit full-read obligations and supplied capture/handoff flags',
-        'selection and same-Turn repair',
-        'RRULE/projected-fallback_hint/ack/fail',
-    ):
-        assert obligation in text, obligation
-    assert any(pointer in text for pointer in (
-        'Settle current settlement_plan.ordered_steps in order, else next_cli_actions',
-        'Settle current interaction_contract.cli_channel.settlement_plan.ordered_steps in order, else next_cli_actions',
-    ))
-
-
-def read_original_capture(path, *, registry, runtime):
-    # Complete inline output has no hidden second envelope. The caller already
-    # owns this publication path; exercise its existing digest-checked reader.
-    original = path.read_bytes()
-    digest = hashlib.sha256(original).hexdigest()
-    rc, page = _run_cli(registry, runtime, 'quota', 'context-read',
-        '--capture-file', str(path), '--capture-sha256', digest,
-        '--page-bytes', '64000', '--max-page-output-bytes', '64000')
-    data = b''
-    while True:
-        assert rc == 0 and page['ok'], page
-        assert page['sha256'] == digest and page['offset'] == len(data)
-        data += page['content'].encode()
-        if page['eof']:
-            break
-        rc, page = _run_generated_cli(page['next_command'], registry_path=registry)
-    assert data == original and hashlib.sha256(data).hexdigest() == digest
-    return data
 
 
 def test_shared_native_root_keeps_dynamic_turn_binding_and_bootstrap_options(tmp_path):
@@ -122,7 +82,12 @@ def test_capture_preserves_full_dispatcher_and_envelope_needs_explicit_opt_in(tm
     payload = build_heartbeat_prompt(**args, decision_output_root=tmp_path, turn_envelope=True)
     assert payload['interface_budget']['within_budget'], payload['interface_budget']
     assert '--turn-envelope --decision-output-root' in payload['quota_guard_command']
-    assert_original_read_and_recovery_duties(payload['task_body'])
+    assert 'writeback.settlement_plan.ordered_steps' in payload['task_body']
+    assert 'When present, read inline `agent_context` before planning.' in payload['task_body']
+    assert 'an `agent_context.detail_ref`' in payload['task_body']
+    assert 'using inline ACK argv' in payload['task_body']
+    assert 'needed missing/truncated/referenced command' in payload['task_body']
+    assert 'failure argv only after host update failure' in payload['task_body']
     assert '--decision-output-root' in payload['thin_prompt_command']
     assert '--turn-envelope' in payload['thin_prompt_command']
     # The captured allowance must neither leak into ordinary thin nor disable
@@ -163,13 +128,15 @@ def test_captured_scheduler_ack_is_inline_and_failure_detail_stays_on_original_s
     assert code == 0, envelope
     original = (capture / 'decision.json').read_bytes()
     source = json.loads(original)['scheduler_hint']['app_automation']
-    assert_complete_turn_decision(envelope)
-    projected = envelope['scheduler_hint']['app_automation']
-    assert projected['ack_hint']['cli_args'] == source['ack_hint']['cli_args']
-    assert projected['failure_hint']['cli_args'] == source['failure_hint']['cli_args']
-    assert projected == source
+    projected = envelope['scheduler']['app_automation']
+    assert projected['ack_cli_args'] == source['ack_hint']['cli_args']
+    assert 'ack_cli_args_detail_ref' not in projected
+    assert projected['failure_cli_args_detail_ref']['detail_ref'] == (
+        'full_decision.scheduler_hint.app_automation.failure_hint.cli_args'
+    )
     before = _heartbeat_receipt_count(runtime, TURN_ID)
-    read = read_original_capture(capture / 'decision.json', registry=registry, runtime=runtime)
+    read = subprocess.run(shlex.split(envelope['detail_ref']['full_decision']),
+        capture_output=True, check=True).stdout
     assert read == original
     assert _heartbeat_receipt_count(runtime, TURN_ID) == before
 
@@ -212,7 +179,10 @@ def test_bound_captured_prompt_fits_budget_without_reward_memory(
         assert payload['interface_budget']['max_chars'] == 5_500
         assert payload['interface_budget']['within_budget'], payload['interface_budget']
         assert len(result.stdout) <= 5_400  # Shipped Agent JSON, not generator metadata.
-        assert_original_read_and_recovery_duties(body)
+        assert 'using inline ACK argv' in body
+        assert 'needed missing/truncated/referenced command' in body
+        assert 'failure argv only after host update failure' in body
+        assert 'same-invocation observation, not fresh admission' in body
         assert 'goal_acceptance' in body  # Retain the complete outcome guidance too.
 
 
@@ -335,10 +305,13 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(
         assert len(captures) == 1
         full = json.loads(captures[0].read_text())
         if enabled:
-            assert_complete_turn_decision(first)
+            assert first['action_signature']['matches']
+            detail = shlex.split(first['detail_ref']['full_decision'])
+            assert detail[:2] == ['cat', '--']  # Depends on the saved-detail reader contract.
             receipts = _heartbeat_receipt_count(runtime, TURN_ID)
-            readback = read_original_capture(captures[0], registry=registry, runtime=runtime)
-            assert json.loads(readback) == full
+            readback = subprocess.run(detail, env=env, cwd=project, capture_output=True,
+                                      text=True, check=True)
+            assert json.loads(readback.stdout) == full
             assert _heartbeat_receipt_count(runtime, TURN_ID) == receipts
         else:
             assert first['interaction_contract'] == full['interaction_contract']
@@ -360,8 +333,8 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(
         assert json.loads(captures[0].read_text()) == full
         selected_full = json.loads(next(p for p in paths if p != captures[0]).read_text())
         if enabled:
-            assert_complete_turn_decision(selected)
-            assert selected['interaction_contract']['cli_channel']['settlement_plan'] == selected_full['interaction_contract']['cli_channel']['settlement_plan']
+            assert selected['action_signature']['matches']
+            assert selected['writeback']['settlement_plan'] == selected_full['interaction_contract']['cli_channel']['settlement_plan']
         else:
             assert selected['interaction_contract'] == selected_full['interaction_contract']
             assert 'action_signature' not in selected
@@ -381,7 +354,7 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(
         '--todo-id', ALTERNATIVE_TODO_ID, '--turn-instance-id', TURN_ID,
         '--classification', 'validated_progress', '--delivery-batch-scale', 'implementation',
         '--delivery-outcome', 'outcome_progress', '--delivery-boundary', 'in_flight_continuation',
-        '--no-global-sync', '--suppress-external-sinks', cwd=project)
+        '--no-global-sync', '--suppress-external-sinks')
     assert rc == 0, refresh
     spend = refresh['settlement_owed']['command']
     for _ in range(2):
@@ -491,33 +464,6 @@ def test_ssh_goal_capture_keeps_native_begin_turn_and_off_boundary(tmp_path, tur
     if turn_envelope:
         assert "--turn-envelope" in guard
         assert "detail_ref.full_decision" in enabled["task_body"]
-
-
-@pytest.mark.parametrize("delivery", ["default", "off", "on", "envelope"])
-def test_visible_goal_reads_required_material_without_unconditional_capture_traversal(tmp_path, delivery):
-    args = dict(goal_id=GOAL_ID, agent_id=AGENT_ID,
-                runtime_profile="codex_app_ssh_goal", thin=True)
-    if delivery == "off":
-        args["context_delivery"] = "off"
-    elif delivery in {"on", "envelope"}:
-        args.update(context_delivery="on", decision_output_root=tmp_path,
-                    codex_context_root=str(tmp_path), turn_envelope=delivery == "envelope")
-    prompt = build_heartbeat_prompt(**args)
-    body = prompt["task_body"]
-    assert "work_context" in body and "required_reads" in body and "before work" in body
-    assert "Complete visible Goal only on" in body
-    assert "no work/spend/completion claim" in body
-    assert "exact identities/effect ids" in body.lower()
-    for enlarged_prerequisite in (
-        "Read the complete captured contract before selection",
-        "Read complete same-invocation detail_ref.full_decision before",
-    ):
-        assert enlarged_prerequisite not in body
-    if delivery == "envelope":
-        assert "detail_ref.full_decision" in body
-    if delivery == "off":
-        assert "--context-delivery off" in prompt["quota_guard_command"]
-        assert "--decision-output-root" not in prompt["quota_guard_command"]
 
 
 @pytest.mark.parametrize("turn_envelope", [False, True])

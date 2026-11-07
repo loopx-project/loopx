@@ -8,28 +8,13 @@ behavior do not supersede the latest audit in the main document.
 
 ### C1 source audit: shared owners and the remaining split
 
-The current complete-source validator also delegates executable required-read
-checks to the existing interaction owner. Explicit command/order coordinates
-cannot disappear or introduce an unsupported execution order; prose-only and
-valid pending obligations remain intact. The same rule reaches quota, managed
-preview and actual Turn/Host planning without caller-specific decisions. An
-explicit direct complete carrier reaches its typed reader even when its version
-is unsupported. The [paired checkpoint](../ledger/controller-executor-unified-contract-v0/2026-10-30-c1-source-convergence.md#executable-required-reads-and-native-runner-attribution)
-records counterexamples, compatibility, maintenance scope and the native-runner
-budget attribution. It does not waive the remaining budget gate, retire recorded
-readers or establish installed/model/outcome benefit.
-
 Bound native execution preparation retains the ordinary managed claim reference
 and captures its same-Turn ready decision before CLI compaction. The Host hands
 that source to the existing saved-capture presentation/reader owner, rather than
 discarding it and making the model evaluate another guard to obtain its current
-contract. Goal, Agent, Todo and Turn must match before publication. A qualified
-native recheck retains its enabled profile and uses the existing deferred
-presentation route; forcing it off would replace the complete composer's
-combined settlement with the older split plan. The saved-capture owner then
-presents the verified source once. Required material remains complete: consume
-the complete inline Goal or execute its declared read when it is not inline;
-a ready receipt or saved file does not fulfill that consumption. Optional presentation failure
+contract. Goal, Agent, Todo and Turn must match before publication. Required
+material reads, including an explicit complete Goal read, remain required; a
+ready receipt or saved file does not fulfill them. Optional presentation failure
 retains the original digest-bound recovery. Explicit off is inert, and an
 unbound request keeps its original readiness route without inventing a Turn.
 This is a bounded Host handoff repair, not C1 cutover, installed adoption or
@@ -92,17 +77,6 @@ This retires one duplicate rule, not the historical envelope format. Complete
 writer/consumer cutover and original-quota outcome/full-cost qualification remain
 open. The added bridge calls must be counted; code convergence alone is no
 evidence of lower cost.
-
-The current-main integration also checks the provenance of its qualification
-fixtures. `read_fixture_todos` previously seeded canonical authority from an
-attention summary, erasing an authored tail after 500 characters before capture.
-It now uses the existing full source parser and Todo normalizer. A real
-File/SQLite CLI case carries that tail through complete capture, a subprocess
-Host's artifact, independent validation, settlement and replay. Both original
-truncation failures remain evidence; this repairs the test input, not a runtime
-policy. Current size and compatibility failures remain open. Deterministic
-artifact agreement and measured CLI/RPC bytes do not qualify model comprehension,
-native accepted outcomes, total cost or the full C1 cutover.
 
 | Current source / obligation | Present envelope treatment | Required C1 disposition |
 | --- | --- | --- |
@@ -532,27 +506,11 @@ reject an unsupported inner version before Codex prompt execution or DSH runner
 loading, without spend. The complete-contract/context/DSH/stdio selection passes
 352 cases; TypeScript checking and focused lint pass. This qualifies these
 interaction semantics, not every required field or packaged-host adoption.
-Heartbeat templates now own the ordered settlement instruction; exact-Turn
-binding adds only its canonical source locator, instead of repeating the
-execution and no-static-reconstruction clauses. Thin prompts combine complete
-capture and required-context reads before action, while sharing the unchanged
-progress/outcome clauses. On the unchanged full-route fixture (320-character
-scope, explicit CLI and five capabilities), the unbound prompt falls from 4,981
-to 4,895 budget characters under the original 4,900 ceiling. The exact-Turn
-variant falls from 5,198 to 4,987 and still fails that ceiling. The padded-route
-negative remains rejected; no route, capability, fixture population or limit
-was shortened. The prompt/platform selection passes 115 checks with one skip.
-These are presentation and clause-retention results, not model adoption or cost
-benefit. Four other original CLI-budget failures remain open. Integration with
-opaque reader references also exposed two obsolete digest-field assertions;
-their File/SQLite consumers now read the pinned machine descriptor, preserve
-the original receipt and reject byte-changed captures without admission or spend.
 Remaining cache consistency investigation, other old reader expectations, staged instruction parity and
 actual optional/external consumers, version admission and packaged host
 continuity remain unfinished. Operation-SDK checks without an explicit native
 runtime are untested, not qualified. The default writer change remains
-unshipped. The candidate is a normal review proposal; whole-C1 adoption and
-original-quota net-cost qualification remain open. No model or whole-cost benefit is
+unshipped; the PR is Draft for unfinished author work, not merely pending review. No model or cost benefit is
 established. Historical effect decoding is temporary; it must not become a
 second permanent executable view.
 
@@ -572,17 +530,6 @@ design, not a claim that these paths have changed.
 | `turn_driver/decision_capture.py` and `cli_commands/quota_capture.py` | Reuse immutable capture, validated readers and full/delta delivery. Fresh delivery and saved-capture recovery must reconstruct the same contract; do not reuse a continuity baseline for a different projection merely because its Turn identity matches. |
 | `benchmark/runtime/worker.py`, `benchmark/runtime/sessions.py` and `scripts/external_scheduler_worker.py` | Migrate the product entry they actually invoke. Keep evaluation setup and outer wake ownership; do not add benchmark-only conversion or count a managed-host test as attached-host acceptance. |
 
-The proposal's [private-plan checkpoint](../ledger/controller-executor-unified-contract-v0/2026-10-30-c1-source-convergence.md#current-private-plan-boundary)
-migrates the complete-source Turn writer and its capture, Host, CLI resume,
-native conversation, capability, child-result and journal consumers together.
-The [quota and managed-controller cutover](../ledger/controller-executor-unified-contract-v0/2026-10-30-c1-source-convergence.md#current-quota-and-managed-controller-cutover)
-also removes normal presentation's v0 builder branch and the managed preview's
-transient v0 producer. Both current routes consume the existing complete-source
-owner; original-version readers remain explicit. A one-owner missing-material
-drill reaches both real CLI entries. This is an unmerged source proposal;
-installed adoption, remaining supported readers and original-quota accepted
-outcomes with complete costs still keep C1 open.
-
 Before replacing any seam, its implementation PR records source path, field or
 instruction clause, current readers, target owner, representation, recovery and
 retirement condition. Relocation must include reference resolution; an omitted
@@ -601,22 +548,6 @@ retain its historical decoder until that work and the supported recovery window
 are reconciled. Rollback likewise separates outstanding work from new admission.
 A version transition does not rewrite saved prompts, journals or source hashes
 as if they had always used the new contract.
-
-Code convergence is part of each migration slice, not only the final C9 cleanup.
-Both entrypoints must call the same semantic implementation for composition,
-reference validation, context reconstruction and settlement. Keep genuinely
-host-specific launch/observation mechanics in thin adapters; do not force their
-different lifecycles into a new general-purpose runner. The existing typed owners
-remain responsible for their respective decisions.
-
-For each slice, record the before/after callsites, shared owner, removed duplicate
-algorithm and remaining compatibility caller with its removal condition. Qualify
-both routes with the same independently authored semantic cases and their real
-transport/recovery tests. A wrapper that only delegates can be transitional;
-copying a rule into a newly named common module while leaving two implementations
-is not convergence. The next change to a shared rule should be made and tested in
-one owner and reach both routes. Do not make declining line counts an acceptance
-metric or remove unique host coverage to meet one.
 
 The first C1 PR must include the two production composition callsites above and
 at least one complete producer-to-final-input journey, with an explicit list of
@@ -659,55 +590,6 @@ pending receipts. Before field/decoder removal, demonstrate export, old-version
 readback and downgrade behavior; retain the old reader until the supported
 retention/upgrade boundary is satisfied. No destructive migration is authorized
 by this document alone.
-
-#### Recorded acceptance-index compatibility
-
-The staged Turn extraction keeps recorded unversioned/v0 replan reads on their
-original count-only acceptance index and 12 KiB index allowance. Complete v1
-reads retain current owner/work facts and grouped exact requirement states,
-with full original outcomes available through their digest-bound detail readers.
-Grouping is presentation, not independent acceptance evidence. The earlier
-rich-index measurement and its 20 KiB candidate allowance remain evidence for
-the complete-source path; they do not increase the historical reader's budget.
-
-#### Turn consumer preparation and instruction parity
-
-The separate Turn proposal keeps the ordinary quota producer on its recorded
-contract; the parent retains the broader quota/heartbeat cutover. Tests of an
-unmigrated producer must preserve that boundary. Current Turn planning consumes
-its complete source directly and publishes its own immutable capture; pairing a
-newly composed source with an older executor envelope is rejected.
-
-Native selected-task execution prepares its ordinary managed lease before the
-kernel delivery guard and reuses that proof during post-model validation. A
-claim label alone is insufficient, and another execution's lease remains
-unavailable. Source checks precede the independent task argv; rejection and
-original-result recovery retain the original session and once-only effects.
-
-Modern Codex and structured Host instructions share the existing audit read
-rule: read a declared audit before judging Goal acceptance or proposing
-closeout, including when the Goal stays open. Notification policy does not grant
-or cancel execution authority; supplied delivery, attempt, quiet-noop, execution
-and orchestration constraints still apply. Core retains state, quota and
-scheduler effects. A complete contract can declare a pending original material
-read: publication does not fulfill it, and tests must execute its reader and
-preserve the original body and stops.
-
-The disposable research-team launcher and initializer locate the actually loaded
-Core together, including an isolated wheel, while retaining exclusive runtime
-creation. Source and packaged consumer checks are distinct from installed App
-adoption, live optional-provider/model behavior and original-quota complete-cost
-benefit. These repairs do not close C1 or authorize rollout or merge.
-
-#### One settlement recipe in the ready first read
-
-The progressive reader omits `next_cli_actions` only when it repeats the
-recognized ordered settlement plan for the ready Todo and original effect.
-The ordinary quota plan supplies separate writeback and spend templates; the
-complete C1 plan supplies one combined writeback and a runtime-owned spend
-receipt. Both retain the original commands, ordering and preconditions in
-the captured plan. A distinct fallback or unknown plan remains visible;
-the exact original field is still readable, and direct output is unchanged.
 
 ### C1 baseline boundary and reuse inventory
 

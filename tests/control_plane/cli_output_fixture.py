@@ -42,21 +42,7 @@ def read_cli_context_for_oracle(text: str) -> tuple[str, dict[str, int]]:
     payload = json.loads(text)
     if not isinstance(payload, dict) or payload.get("schema_version") != "context_capture_navigation_v1":
         return text, {}
-    body, calls, reader_bytes = read_pinned_cli_body(payload["recovery"]["command"])
-    navigation_bytes = len(text.encode("utf-8"))
-    return body, {
-        "navigation_chars": len(text),
-        "navigation_lines": len(text.splitlines()),
-        "navigation_utf8_bytes": navigation_bytes,
-        "reader_calls": calls,
-        "reader_stdout_utf8_bytes": reader_bytes,
-        "body_utf8_bytes": len(body.encode("utf-8")),
-        "total_stdout_utf8_bytes": navigation_bytes + reader_bytes,
-    }
-
-
-def read_pinned_cli_body(command: str) -> tuple[str, int, int]:
-    """Read one digest-bound fixture body and account for every reader response."""
+    command = payload["recovery"]["command"]
     observed = bytearray()
     reader_bytes = calls = 0
     identity = total = digest = None
@@ -74,7 +60,7 @@ def read_pinned_cli_body(command: str) -> tuple[str, int, int]:
                 del scope[index:index + 2]
         if identity is None:
             identity = scope
-        assert scope == identity, ("context continuation changed its source or reader route", scope, identity)
+        assert scope == identity, "context continuation changed its source or reader route"
         result = subprocess.run(words, capture_output=True, text=True, encoding="utf-8",
             errors="strict", check=False, timeout=30)
         assert result.returncode == 0, result.stdout + result.stderr
@@ -92,7 +78,15 @@ def read_pinned_cli_body(command: str) -> tuple[str, int, int]:
             assert len(observed) == total, "context reader ended before the complete body"
             body = observed.decode("utf-8")
             assert isinstance(json.loads(body), dict)
-            return body, calls, reader_bytes
+            return body, {
+                "navigation_chars": len(text),
+                "navigation_lines": len(text.splitlines()),
+                "navigation_utf8_bytes": len(text.encode("utf-8")),
+                "reader_calls": calls,
+                "reader_stdout_utf8_bytes": reader_bytes,
+                "body_utf8_bytes": len(observed),
+                "total_stdout_utf8_bytes": len(text.encode("utf-8")) + reader_bytes,
+            }
         assert page["next_offset"] == len(observed) < total
         command = page["next_command"]
 

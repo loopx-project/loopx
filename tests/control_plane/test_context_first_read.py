@@ -155,10 +155,6 @@ def test_initial_read_keeps_supporting_index_obligations_and_recovers_its_full_l
     assert json.loads(raw) == decision
 
 
-
-
-
-
 @pytest.mark.parametrize("damage", [None, "foreign_plan", "changed_file"])
 def test_native_preparation_reuses_only_its_current_digest_bound_navigation(
     tmp_path, monkeypatch, decision, damage,
@@ -241,7 +237,6 @@ def test_prepared_initial_read_keeps_exact_body_without_retransmitting_unused_pr
     assert len(observed) == 1
     if opaque:
         assert b"Historical evidence remains available." not in observed[0]
-        assert b"unread_branch_" not in observed[0], "Explicit replay needs only the selected address structure"
         assert len(observed[0]) < len(raw) // 2
     else:
         assert b"Historical evidence remains available." in observed[0]
@@ -427,12 +422,9 @@ def test_advertised_native_reader_keeps_the_complete_current_contract_across_pag
     state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     original_state = state.read_bytes()
     turn_id = "native-first-read"
-    capture_root = tmp_path / "captures"
-    capture_root.mkdir(mode=0o700)
     code, view = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
         "--context-delivery", "on", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
-        "--todo-id", TODO_ID, "--turn-instance-id", turn_id,
-        "--decision-output-root", str(capture_root), cwd=project)
+        "--todo-id", TODO_ID, "--turn-instance-id", turn_id, cwd=project)
     assert code == 0 and view["mode"] == "full", view
     _, reference = read_context_read_reference(view["recovery"]["reference_file"])
     raw = Path(reference["path"]).read_bytes()
@@ -456,23 +448,8 @@ def test_advertised_native_reader_keeps_the_complete_current_contract_across_pag
     expected_cli = selected_context_values(json.dumps({"selections": [
         {"pointer": cli_path, "value": source["interaction_contract"]["cli_channel"]}]}))
     vision_path = next(path for path in expected_cli if path.endswith("/vision_authoring"))
-    actions_path = cli_path + "/next_cli_actions"
-    current_cli = source["interaction_contract"]["cli_channel"]
-    plan = current_cli["settlement_plan"]
-    assert plan["schema_version"] == "quota_settlement_plan_v2"
-    writeback = next(step for step in plan["ordered_steps"] if step["kind"] == "durable_writeback")
-    spend = next(step for step in plan["ordered_steps"] if step["kind"] == "quota_spend")
-    assert writeback["owner"] == "agent" and writeback["command_template"].endswith(" --settle-turn --settlement-receipt")
-    assert spend["owner"] == "runtime" and "command_template" not in spend
-    actual_commands = [writeback["command_template"]]
-    assert current_cli["next_cli_actions"] == actual_commands
-    # The ordered plan carries the exact combined template and its conditions.
-    # A ready first read should not present a second apparent route for it.
-    assert not any(path == actions_path or path.startswith(actions_path + "/") for path in values)
-    # Every distinct CLI leaf outside the authoring reference is still delivered.
+    # Every CLI leaf outside the authoring reference must still be delivered.
     for path, item in expected_cli.items():
-        if path == actions_path or path.startswith(actions_path + "/"):
-            continue
         if path.startswith(vision_path + "/") or (isinstance(item, (dict, list)) and item):
             continue
         assert values[path] == item
@@ -482,58 +459,10 @@ def test_advertised_native_reader_keeps_the_complete_current_contract_across_pag
         "--max-page-output-bytes", "9000", cwd=project)
     assert code == 0 and detail["eof"]
     assert selected_context_values(detail["content"])[vision_path] == expected_cli[vision_path]
-    code, fallback = _run_cli(registry, runtime, "quota", "context-read", "--reference-file",
-        view["recovery"]["reference_file"], "--select", actions_path, cwd=project)
-    assert code == 0 and fallback["eof"]
-    assert selected_context_values(fallback["content"])[actions_path] == actual_commands
     assert values["/heartbeat_receipt"] == source["heartbeat_receipt"]
     assert values["/selected_todo"] == source["selected_todo"]
     assert _heartbeat_receipt_count(runtime, turn_id) == 1 and _spend_run_count(runtime) == 0
     assert Path(reference["path"]).read_bytes() == raw and state.read_bytes() == original_state
-
-
-@pytest.mark.parametrize("variant", [
-    "different_argument", "different_order", "unready", "other_effect", "future_plan",
-    "composed_extra_fallback", "composed_unexpected_runtime_command",
-])
-def test_initial_read_keeps_fallback_actions_when_the_bound_plan_is_not_equivalent(tmp_path, decision, variant):
-    interaction = decision["interaction_contract"]
-    cli = interaction["cli_channel"]
-    identity = {"schema_version": "quota_settlement_identity_v0", "effect_id": "original-effect",
-                "todo_id": decision["selected_todo"]["todo_id"], "turn_instance_id": "original"}
-    decision.update(effective_action="normal_run", normal_delivery_allowed=True,
-                    heartbeat_receipt={"settlement_identity": identity})
-    interaction["agent_channel"]["delivery_allowed"] = True
-    writeback = "loopx refresh-state --turn-instance-id original"
-    spend = "loopx quota spend-slot --turn-instance-id original --execute"
-    cli.update(execution_preparation={"state": "ready", "todo_id": identity["todo_id"]},
-               next_cli_actions=[writeback, spend],
-               settlement_plan={"schema_version": "quota_settlement_plan_v1", "identity": identity,
-                                "ordered_steps": [{"kind": "durable_writeback", "command_template": writeback},
-                                                  {"kind": "quota_spend", "command_template": spend}]})
-    if variant == "different_argument":
-        cli["next_cli_actions"][0] += " --suppress-external-sinks"
-    elif variant == "different_order":
-        cli["next_cli_actions"].reverse()
-    elif variant == "unready":
-        cli["execution_preparation"]["state"] = "claim_required"
-    elif variant == "other_effect":
-        decision["heartbeat_receipt"]["settlement_identity"] = {**identity, "effect_id": "another"}
-    elif variant == "future_plan":
-        cli["settlement_plan"]["schema_version"] = "unknown_settlement_plan"
-    else:
-        plan = cli["settlement_plan"]
-        plan["schema_version"] = "quota_settlement_plan_v2"
-        plan["ordered_steps"][0]["owner"] = "agent"
-        plan["ordered_steps"][1]["owner"] = "runtime"
-        if variant == "composed_extra_fallback":
-            plan["ordered_steps"][1].pop("command_template")
-        else:
-            cli["next_cli_actions"] = [writeback]
-
-    view = native_context_capture_view(decision, tmp_path)
-    _, values = read_selection(view["first_read_command"])
-    assert values["/interaction_contract/cli_channel/next_cli_actions"] == cli["next_cli_actions"]
 
 
 def test_initial_read_keeps_current_constraints_whole_and_history_reachable(tmp_path, decision):
@@ -832,16 +761,6 @@ def test_initial_read_is_rejected_before_quota_or_machine_access(tmp_path):
     code = handle_native_context_command(Namespace(initial_read=True, quota_command="should-run", format="json"),
         print_payload=lambda value, *_args: output.append(value), registry_path=tmp_path / "unopened-registry.json")
     assert code == 1 and not output[0]["ok"] and "only supported by context-read" in output[0]["reason"]
-    assert not (tmp_path / "unopened-registry.json").exists()
-
-
-def test_selection_digest_without_a_selected_view_is_rejected_before_authority_access(tmp_path):
-    output = []
-    code = handle_native_context_command(Namespace(quota_command="context-read", format="json",
-        selection_sha256="0" * 64), print_payload=lambda value, *_args: output.append(value),
-        registry_path=tmp_path / "unopened-registry.json")
-    assert code == 1 and not output[0]["ok"]
-    assert "requires context-read with --select or --initial-read" in output[0]["reason"]
     assert not (tmp_path / "unopened-registry.json").exists()
 
 

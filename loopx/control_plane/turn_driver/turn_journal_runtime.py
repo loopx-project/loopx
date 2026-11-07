@@ -124,9 +124,6 @@ def interpret_turn_journal_projection(
             else None
         ),
     }
-    tokens = source_number_tokens(journal)
-    if tokens:
-        request["source_number_tokens"] = tokens
     payload = effect_runtime_result("turn_journal.inspect", request)
     if not isinstance(payload, dict) or set(payload) != _PROJECTION_KEYS:
         raise RuntimeError(
@@ -175,7 +172,6 @@ def write_turn_journal(
 
     request: dict[str, Any] = {
         "path": path,
-        # TS owns validation, transitions and publication over the native object.
         "journal": dict(journal),
         "expected_effect_id": expected_effect_id,
     }

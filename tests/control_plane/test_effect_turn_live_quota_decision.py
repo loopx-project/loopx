@@ -1498,31 +1498,26 @@ def test_retained_selection_reentry_refreshes_provider_todos_before_replan(
         }
         for index in range(20)
     ]
-    from canonical_authority_fixture import initialize_canonical_authority
-    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
-    from loopx.control_plane.todos.todo_summary import structured_todo_item
-    from loopx.control_plane.todos import list_readback
+    from loopx.control_plane.testing.quota_fixtures import quota_todo_summary
 
-    runtime = tmp_path / "runtime"
-    state = tmp_path / "goal.md"
-    state.write_text("# Goal\nPreserve the selected work and original replan threshold.\n")
-    registry = tmp_path / "registry.json"
-    registry.write_text(json.dumps({"schema_version": 1, "common_runtime_root": str(runtime),
-        "goals": [{"id": GOAL_ID, "status": "active", "repo": str(tmp_path), "state_file": "goal.md"}]}))
-    canonical_items = [structured_todo_item(item, role="agent", source_section="Agent Todo", text_limit=None)
-                       for item in fresh_items]
-    initialize_canonical_authority(runtime, GOAL_ID,
-        build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=canonical_items, handoff_mode="hard_lease"),
-        state_path=state)
-    read_todos = list_readback.list_goal_todos
+    fresh_agent_todos = quota_todo_summary(
+        fresh_items,
+        role="agent",
+        claim_scope_agent_id=agent_id,
+    )
+    fresh_user_todos = quota_todo_summary([], role="user")
     reads: list[str] = []
 
-    def fresh_todos(**kwargs: object) -> dict[str, object]:
-        if kwargs.get("role") != "user":
-            reads.append("provider")
-        # Use the real canonical snapshot for both roles, including its lease
-        # and source metadata. A mocked summary cannot establish admission.
-        return read_todos(**kwargs)
+    def fresh_todos(**_kwargs: object) -> dict[str, object]:
+        reads.append("provider")
+        return {
+            "ok": True,
+            "todos": fresh_items,
+            "agent_todos": fresh_agent_todos,
+            "user_todos": fresh_user_todos,
+        }
+
+    from loopx.control_plane.todos import list_readback
 
     monkeypatch.setattr(list_readback, "list_goal_todos", fresh_todos)
 
@@ -1533,8 +1528,8 @@ def test_retained_selection_reentry_refreshes_provider_todos_before_replan(
         available_capabilities=["shell"],
         include_scheduler_detail=False,
         codex_app_current_rrule=None,
-        registry_path=registry,
-        runtime_root=runtime,
+        registry_path=tmp_path / "registry.json",
+        runtime_root=tmp_path / "runtime",
         retained_action_selection_todo_id=selected_todo_id,
         turn_instance_id="turn-provider-frontier-reentry",
     )

@@ -242,7 +242,6 @@ function turnJournalInspectionRequest(
     turn_key: requiredString(request.turn_key, "turn_journal.inspect turn_key"),
     retry_failed: request.retry_failed === true,
     session_recovery_check: sessionRecoveryCheck,
-    source_number_tokens: request.source_number_tokens,
   };
 }
 

@@ -442,19 +442,11 @@ class ManagedSessionTurn:
             raise ManagedTaskValidationUnavailable("the selected task needs its existing independent argv validation declaration")
         return rows[0]
 
-    def prepare_validation(self, request: dict[str, Any], native_request: dict[str, Any], *,
-                           _checked_work_identity: dict[str, str] | None = None) -> None:
-        from ...control_plane.turn_driver.driver import selected_turn_todo, turn_host_lineage
+    def prepare_validation(self, request: dict[str, Any], native_request: dict[str, Any]) -> None:
+        from ...control_plane.turn_driver.driver import selected_turn_todo
         from ...control_plane.turn_driver.command_validation import build_loopx_turn_command_validator
         from ...control_plane.todos.completion_validation_store import read_completion_validation_declaration
-        # Dispatch can reuse its just-checked identity within this invocation;
-        # direct callers still check the complete source through the same owner.
-        if "work_contract" in native_request:
-            selected = _checked_work_identity
-            if selected is None:
-                selected = turn_host_lineage(native_request)
-        else:
-            selected = selected_turn_todo(native_request.get("turn_envelope") or {})
+        selected = selected_turn_todo(native_request.get("turn_envelope") or {})
         if not selected.get("todo_id"):
             raise ManagedTaskValidationUnavailable("select an existing native task with independent validation")
         self.validation_basis = self._validation_source(request, selected["todo_id"])
@@ -475,16 +467,11 @@ class ManagedSessionTurn:
         The captured canonical digest and fresh source must agree before and
         after the existing command validator reads the task's real artifact.
         """
-        from ...control_plane.turn_driver.driver import (
-            COMPLETE_TURN_PLAN_SCHEMA_VERSION, selected_turn_todo, turn_host_lineage,
-        )
+        from ...control_plane.turn_driver.driver import selected_turn_todo
 
         def validate(plan, result):
             actor = request["actor"]
-            # Model work is a reentry boundary. Recheck the complete source;
-            # only an absent contract retains historical envelope decoding.
-            selected = (turn_host_lineage(plan) if "work_contract" in plan or plan.get("schema_version") == COMPLETE_TURN_PLAN_SCHEMA_VERSION
-                        else selected_turn_todo(plan.get("turn_envelope") or {}))
+            selected = selected_turn_todo(plan.get("turn_envelope") or {})
             basis = self.validation_basis
             if not basis or not self.task_validator or basis["todo_id"] != selected["todo_id"]:
                 raise ValueError("the original task validation source was not captured before model work")

@@ -16,8 +16,7 @@ import { parseExactGoalRef } from "../goals/goal_instance_identity.ts";
 import { preparedAttemptViolation } from "./turn_journal_attempt_contract.ts";
 import { recordedTurnEffects, type RecordedTurnEffects } from "./turn_journal_effect_readback.ts";
 import { selectedWorkTodoId } from "../work_items/interaction_contract.ts";
-import { turnPlanWorkSource, turnEnvelopeScopedSettlementIdentity } from "../quota/turn_envelope.ts";
-import { sourceNumberTokens } from "../runtime_decode.ts";
+import { turnEnvelopeScopedSettlementIdentity } from "../quota/turn_envelope.ts";
 
 export const TURN_JOURNAL_INSPECTION_SCHEMA_VERSION =
   "loopx_turn_journal_inspection_v1";
@@ -48,7 +47,6 @@ export interface TurnJournalInspectionRequest {
   turn_key: string;
   retry_failed?: boolean;
   session_recovery_check?: TurnRecoveryCheck | null;
-  source_number_tokens?: unknown;
 }
 
 export interface TurnRecoveryCheck {
@@ -226,7 +224,6 @@ function typedSettlementIdentityState(
   transaction: JsonObject,
   settlement: JsonObject,
   identity: JsonObject,
-  scopedIdentity?: JsonObject | null,
 ): [valid: boolean, turnInstanceMatches: boolean, bindingMatches: boolean] {
   if (
     settlement.schema_version !== SETTLEMENT_PLAN_SCHEMA_VERSION ||
@@ -252,8 +249,7 @@ function typedSettlementIdentityState(
     && parsed.value.todo_id === selectedTodoId && parsed.value.binding_id === selectedTodoId;
   if (selectedTodoId === null && ["autonomous_replan", "request"].includes(parsed.value.binding_kind)) {
     try {
-      bindingMatches = (scopedIdentity === undefined
-        ? turnEnvelopeScopedSettlementIdentity(envelope, expectedTurnInstance) : scopedIdentity)?.effect_id
+      bindingMatches = turnEnvelopeScopedSettlementIdentity(envelope, expectedTurnInstance)?.effect_id
         === parsed.value.effect_id;
     } catch {
       bindingMatches = false; // Corrupt evidence remains a refusal, never a surrogate task.
@@ -568,23 +564,7 @@ export function interpretTurnJournalEffect(
   }
   const journal = asObject(request.journal);
   const plan = asObject(journal.plan);
-  let envelope = asObject(plan.turn_envelope);
-  let workContractValid = true;
-  let scopedIdentity: JsonObject | null | undefined;
-  try {
-      const tokens = sourceNumberTokens(journal, request.source_number_tokens)
-        .filter(({path}) => path[0] === "plan" && path[1] === "work_contract")
-        .map(({path, token}) => [path.slice(2), token]);
-      // Current journals consume the same checked source as Host dispatch.
-      // Keep transport/signature metadata, but derive execution fields from
-      // its owner. Only historical absence retains adapter-only decoding.
-      const checked = turnPlanWorkSource(plan, tokens);
-      envelope = checked.work;
-      scopedIdentity = checked.scopedIdentity;
-  } catch (error) {
-    if (!(error instanceof EffectRuntimeRequestError)) throw error;
-    workContractValid = false;
-  }
+  const envelope = asObject(plan.turn_envelope);
   const transaction = asObject(plan.transaction);
   const settlement = asObject(transaction.settlement_plan);
   const identity = asObject(settlement.identity);
@@ -614,10 +594,9 @@ export function interpretTurnJournalEffect(
     settlementIdentityValid,
     settlementTurnInstanceMatches,
     settlementBindingMatches,
-  ] = typedSettlementIdentityState(envelope, transaction, settlement, identity, scopedIdentity);
+  ] = typedSettlementIdentityState(envelope, transaction, settlement, identity);
 
   const violations: string[] = [];
-  if (!workContractValid) violations.push("work_contract_invalid");
   if (!goalComplete) violations.push("goal_identity_missing");
   else if (!goalMatches) violations.push("goal_mismatch");
   if (goalBinding.kind === "invalid") {
@@ -670,7 +649,6 @@ export function interpretTurnJournalEffect(
   }
 
   const lineageConsistent =
-    workContractValid &&
     goalMatches &&
     goalBinding.kind !== "invalid" &&
     (

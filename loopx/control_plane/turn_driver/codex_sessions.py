@@ -9,7 +9,7 @@ import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from ...boundary_authority import normalize_checkpointed_boundary_authority_entries
 from ...file_lock import exclusive_file_lock
@@ -21,14 +21,12 @@ from ..projects.registry_codec import (
     require_runtime_compatible_project_registry,
 )
 from ..goals.first_party_host_admission import FirstPartyHostGoalAdmission
-from .driver import session_identity_fields, turn_host_lineage
+from .driver import selected_turn_todo, session_identity_fields
 
 CODEX_CLI_SESSION_SCHEMA_VERSION = "loopx_codex_cli_session_v1"
 MANAGED_CLI_SESSION_SCHEMA_VERSION = "loopx_managed_cli_session_v1"
 SESSION_ID_MAX_CHARS = 256
 _UNCHECKED_SESSION_DOCUMENT = object()
-_ABSENT_WORK_CONTRACT = object()
-_ABSENT_EXECUTOR_ADAPTER = object()
 
 
 def _host_session_schema(host: str) -> str:
@@ -39,22 +37,18 @@ def _host_session_schema(host: str) -> str:
     raise ValueError("unsupported managed session host")
 
 
-def _lineage(
-    request: Mapping[str, Any], *, session_scope: str | None = None,
-    checked_lineage: Mapping[str, str] | None = None,
-) -> dict[str, str]:
-    # Operation preflight may already hold this exact invocation's normalized
-    # source identity. Scope/path checks stay here; standalone and historical
-    # readers retain their own source check. Never retain it across attempts.
-    lineage = turn_host_lineage(request) if checked_lineage is None else dict(checked_lineage)
+def _lineage(request: Mapping[str, Any], *, session_scope: str | None = None) -> dict[str, str]:
+    envelope = request.get("turn_envelope") or {}
+    todo = selected_turn_todo(envelope)
+    lineage = {
+        "goal_id": str(envelope.get("goal_id") or "").strip(),
+        "agent_id": str(envelope.get("agent_id") or "").strip(),
+        "todo_id": str(todo.get("todo_id") or "").strip(),
+    }
     if session_scope is None:
         session = request.get("session") or {}
         policy = session.get("context_policy") or {}
         session_scope = str(policy.get("binding_scope") or "todo")
-    return _checked_session_lineage(lineage, session_scope)
-
-
-def _checked_session_lineage(lineage: dict[str, str], session_scope: str) -> dict[str, str]:
     if not all(lineage[field] for field in session_identity_fields(session_scope)):
         raise ValueError("Codex CLI host request has incomplete turn lineage")
     lineage["goal_id"] = validate_goal_id_path_segment(lineage["goal_id"])
@@ -174,32 +168,13 @@ def _read_codex_cli_session_document(
 
 def codex_cli_session_binding(
     runtime_root: Path,
-    turn_envelope: Mapping[str, Any] | object = _ABSENT_EXECUTOR_ADAPTER,
+    turn_envelope: Mapping[str, Any],
     *,
-    work_contract: object = _ABSENT_WORK_CONTRACT,
     goal_admission: FirstPartyHostGoalAdmission | None = None,
     session_scope: str = "todo",
     host: str = "codex-cli",
 ) -> dict[str, str] | None:
-    """Read the original native session from one complete source.
-
-    Explicit historical adapters keep their existing decoder and, when a
-    complete source accompanies one, its consistency checks. Neither path
-    authorizes a Host launch or changes the session's owner or namespace.
-    """
-    if turn_envelope is _ABSENT_EXECUTOR_ADAPTER:
-        if work_contract is _ABSENT_WORK_CONTRACT:
-            raise ValueError("session binding requires the complete source or historical executor input")
-        from ..quota.turn_envelope import _turn_envelope_result
-
-        lineage = _checked_session_lineage(_turn_envelope_result(
-            "complete_host_lineage", payload=work_contract,
-        ), session_scope)
-    else:
-        request: dict[str, Any] = {"turn_envelope": dict(cast(Mapping[str, Any], turn_envelope))}
-        if work_contract is not _ABSENT_WORK_CONTRACT:
-            request["work_contract"] = work_contract
-        lineage = _lineage(request, session_scope=session_scope)
+    lineage = _lineage({"turn_envelope": dict(turn_envelope)}, session_scope=session_scope)
     session = select_codex_cli_session(
         runtime_root,
         lineage=lineage,

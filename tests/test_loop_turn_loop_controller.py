@@ -322,17 +322,17 @@ def test_no_receipt_with_delivery_decision_runs_now() -> None:
     _assert_markers(payload, "run_now")
 
 
-@pytest.mark.parametrize("complete", [False, True], ids=["historical", "current"])
+@pytest.mark.parametrize("qualified", [False, True], ids=["mapping", "producer"])
 @pytest.mark.parametrize("unit,repeats", [("G", 128), ("G", 2_420_000), ("界😀", 180_000)],
                          ids=["small", "large", "escaped-unicode"])
 def test_controller_preserves_complete_goal_over_the_real_transport(
-    complete, unit, repeats,
+    qualified, unit, repeats,
 ) -> None:
     import json
     import tempfile
     from pathlib import Path
 
-    from loopx.control_plane.quota.turn_envelope import build_turn_envelope, compose_turn_decision
+    from loopx.control_plane.quota.turn_envelope import build_turn_controller_input
     from loopx.control_plane.turn_driver import build_loopx_turn_plan
     from tests.test_turn_envelope import _full_decision
 
@@ -343,23 +343,21 @@ def test_controller_preserves_complete_goal_over_the_real_transport(
         "complete": True,
         "sources": [{"source": "goal_state", "content": {"text": original_text}}],
     }
-    envelope = compose_turn_decision(source) if complete else build_turn_envelope(source)
+    current = build_turn_controller_input(source)
+    envelope = current.envelope()
     before = set(snapshot_root.glob("loopx-effect-*"))
-    context = (envelope["interaction_contract"]["agent_channel"]["work_context"]
-        if complete else envelope["work_context"])
-    assert context["sources"][0]["content"]["text"] == original_text
-    if not complete:
-        assert envelope["action_signature"]["matches"] is True
+    assert envelope["work_context"]["sources"][0]["content"]["text"] == original_text
+    assert envelope["action_signature"]["matches"] is True
     assert (len(json.dumps(envelope).encode()) > 2 * 1024 * 1024) == (repeats > 128)
     if unit != "G":
-        assert len(json.dumps(envelope, ensure_ascii=False).encode()) < 2 * 1024 * 1024
+        assert len(current.envelope_json.encode()) < 2 * 1024 * 1024
     plan = build_loopx_turn_plan(envelope, host="codex-cli", execution_mode="interactive-visible")
     assert plan["route"]["kind"] == "ready_for_host"
     result = _decide_loop_disposition(
-        turn_receipt=None, quota_decision=envelope,
+        turn_receipt=None, quota_decision=current if qualified else envelope,
     )
     _assert_markers(result, "run_now")
-    assert context["sources"][0]["content"]["text"] == original_text
+    assert current.envelope() == envelope
     assert set(snapshot_root.glob("loopx-effect-*")) == before
 
 
@@ -373,7 +371,7 @@ def test_large_controller_decision_keeps_signature_rejection() -> None:
 @pytest.mark.parametrize("qualified", [False, True], ids=["mapping", "producer"])
 def test_controller_snapshot_limit_rejects_before_sending(monkeypatch, qualified) -> None:
     from loopx.control_plane import effect_runtime
-    from loopx.control_plane.quota.turn_envelope import compose_turn_decision
+    from loopx.control_plane.quota.turn_envelope import build_turn_controller_input
     from tests.test_turn_envelope import _full_decision
 
     effect_runtime.effect_runtime_result("runtime.ping", {})
@@ -389,7 +387,7 @@ def test_controller_snapshot_limit_rejects_before_sending(monkeypatch, qualified
                 source["interaction_contract"]["agent_channel"]["work_context"] = {
                     "complete": True, "sources": [{"source": "goal_state", "content": {"text": text}}],
                 }
-                decision = compose_turn_decision(source)
+                decision = build_turn_controller_input(source)
             else:
                 decision = _envelope(should_run=True)
                 decision["work_context"] = {"text": text}

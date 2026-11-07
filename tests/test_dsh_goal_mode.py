@@ -1581,28 +1581,3 @@ def test_dsh_sdk_overrides_follow_each_verified_turn(
         assert env["LOOPX_TURN_WORKSPACE"] == str(tmp_path.resolve())
         assert env["DSH_PERMISSION_MODE"] == "read-only"
     assert pinned["LOOPX_TURN_TODO_ID"] == "stale-todo"
-
-
-@pytest.mark.parametrize("goal,agent,todo", [
-    (" goal ", " agent ", " todo "), (17, True, 23), (False, 0, ""),
-])
-def test_dsh_historical_runner_retains_raw_lineage_and_tool_coercion(
-    tmp_path, monkeypatch, goal, agent, todo,
-):
-    calls = []
-
-    def runner(**kwargs):
-        calls.append(kwargs)
-        return '{"result_kind":"wait"}'
-
-    monkeypatch.setattr(turn_host_adapter, "run_dsh_turn", runner)
-    request = _signed_request(goal_id=goal, agent_id=agent, todo_id=todo)
-    turn_host_adapter.run_dsh_host(request, config=turn_host_adapter.DshHostConfig(workspace=tmp_path))
-    [call] = calls
-    raw = [value if value else None for value in (goal, agent, todo)]
-    expected = ("dsh-lineage-v1-" + sha256(json.dumps(raw, ensure_ascii=False,
-                sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-                if any(raw) else "dsh-" + TURN_KEY.removeprefix("sha256:")[:24])
-    assert call["session_id"] == expected
-    assert [call["env"][key] for key in ("LOOPX_TURN_GOAL_ID", "LOOPX_TURN_AGENT_ID", "LOOPX_TURN_TODO_ID")] == [
-        str(value or "") for value in (goal, agent, todo)]
