@@ -374,11 +374,7 @@ def _emit_quota_result(
         # Preserve the original validation error when activation itself failed.
         context_delivery_enabled = False
         activation = {"progressive_enabled": False}
-    # A prepared reference names one immutable capture. A later selection in
-    # the same Turn must create a fresh sibling instead of reusing that path.
-    selection_root = (capture_directory.parent if capture_directory is not None
-                      and getattr(args, "prepared_capture_reference", False) else None)
-    bind_capture_selection_transport(payload, args, capture_root=selection_root)
+    bind_capture_selection_transport(payload, args, capture_directory=capture_directory)
     delivery_request = None
     decision_identity = ("", "")
     if capture_directory is not None and payload.get("replan_action_packet"):
