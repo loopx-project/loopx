@@ -115,9 +115,11 @@ def _create_resume_state(target: Path, predecessor: Path, *, recovered: dict | N
 
 
 def _verify_failed_phase_replay(phase: Path, state: dict, recovery: dict, *,
-                                states: list[Path], digest: str) -> None:
-    from .interruption_recovery import _physical_read
+                                states: list[Path], digest: str, env: dict[str, str],
+                                wake_log_dir: str) -> None:
+    from .interruption_recovery import _physical_read, verify_failed_host_replay_witness
     from loopx.control_plane.turn_driver.host_failure import normalize_host_failure_record
+    from scripts.external_scheduler_worker import _host_attempt
 
     original_ref = state.get("resume_from")
     original = Path(original_ref) if isinstance(original_ref, str) else None
@@ -131,6 +133,10 @@ def _verify_failed_phase_replay(phase: Path, state: dict, recovery: dict, *,
     native = recovery.get("native")
     if not isinstance(prior, dict) or not isinstance(native, dict):
         raise ValueError("Explicit failed continuation requires the original Host and native session")
+    scope = prior.get("scope")
+    if not isinstance(scope, str) or not re.fullmatch(r"[0-9a-f]{64}", scope):
+        raise ValueError("Explicit failed continuation replay requires the original Host attempt scope")
+    _host_attempt(saved, scope)
     failure = normalize_host_failure_record(prior.get("host_failure"))
     session = prior.get("session_id")
     if (prior.get("status") != "failed" or saved.get("last_wake_status") != "wake_failed"
@@ -142,6 +148,7 @@ def _verify_failed_phase_replay(phase: Path, state: dict, recovery: dict, *,
             or type(state.get("recovered_attempt_count")) is not int
             or state["recovered_attempt_count"] != failure["attempt"]):
         raise ValueError("Explicit failed continuation replay differs from the original returned failure")
+    verify_failed_host_replay_witness(original, prior, recovery, env=env, wake_log_dir=wake_log_dir)
 
 
 def resume_state_file(state_file: str, *, phase_deadline: float, agent_id: str,
@@ -211,7 +218,8 @@ def resume_state_file(state_file: str, *, phase_deadline: float, agent_id: str,
             if (same_phase and isinstance(failed_phase, dict)
                     and failed_phase.get("source_state_sha256") == retry_failed_state_sha256):
                 _verify_failed_phase_replay(predecessor, state, failed_phase,
-                                            states=states, digest=retry_failed_state_sha256)
+                                            states=states, digest=retry_failed_state_sha256,
+                                            env=env, wake_log_dir=wake_log_dir)
                 return str(predecessor)  # Replay never erases a later failure in this phase.
             if not explicit_failed_phase:
                 raise ValueError('Explicit failed continuation source changed; inspect the retained phase')

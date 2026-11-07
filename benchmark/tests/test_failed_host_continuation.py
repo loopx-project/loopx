@@ -80,20 +80,33 @@ def test_explicit_scheduler_does_not_launch_when_phase_selection_is_locked(tmp_p
     assert not invoked and held.read_bytes() == b"{}"
 
 
-def test_explicit_scheduler_requires_original_binding_for_same_phase_replay(tmp_path):
+@pytest.mark.parametrize("original_returned", [False, True])
+def test_explicit_scheduler_requires_complete_same_phase_evidence(tmp_path, original_returned):
     state = tmp_path / "scheduler.json"
-    state.write_bytes(b"{}")
-    digest = hashlib.sha256(b"{}").hexdigest()
+    session = "original-native"
+    failure = build_host_failure_record("quota_exhausted", attempt=1)
+    source = {
+        "last_wake_status": "wake_failed", "last_wake_rc": 1,
+        "host_attempt": {"scope": "a" * 64, "status": "failed", "attempt": 1,
+                         "session_id": session, "host_failure": failure, "not_before": time.time()},
+    } if original_returned else {}
+    original = json.dumps(source).encode()
+    state.write_bytes(original)
+    digest = hashlib.sha256(original).hexdigest()
     deadline = time.time() + 60
     suffix = hashlib.sha256(deadline.hex().encode()).hexdigest()[:20]
     phase = tmp_path / f"scheduler.phase-{suffix}.json"
-    phase.write_text(json.dumps({"resume_from": str(state), "failed_host_recovery": {
-        "phase_deadline_epoch": deadline, "source_state_sha256": digest,
-    }}))
+    phase.write_text(json.dumps({
+        "resume_from": str(state), "recovered_session_id": session, "recovered_attempt_count": 1,
+        "failed_host_recovery": {
+            "phase_deadline_epoch": deadline, "source_state_sha256": digest, "host_failure": failure,
+            "retry_failed": True, "native": {"session_id": session, "status": "failed"},
+        },
+    }))
     before = phase.read_bytes()
     result, invoked = _run_scheduler_probe(tmp_path, state, deadline=deadline, digest=digest)
     assert result.returncode != 0 and "Explicit failed continuation" in result.stderr
-    assert not invoked and phase.read_bytes() == before and state.read_bytes() == b"{}"
+    assert not invoked and phase.read_bytes() == before and state.read_bytes() == original
 
 
 @pytest.mark.parametrize('kind,attempt,explicit,allowed', [
@@ -260,10 +273,32 @@ sys.exit(1)
     assert phase_initial['failed_host_recovery']['phase_deadline_epoch'] == deadline
     assert resume() == str(phase)
     if fault is None:
+        from benchmark.runtime import codex_readiness
+
+        def unexpected_observer(*args, **kwargs):
+            pytest.fail("Exact replay must reuse the original native and allowance observations")
+
+        with monkeypatch.context() as replay:
+            replay.setattr(native, "native_failed_turn", unexpected_observer)
+            replay.setattr(codex_readiness, "require_native_receiver_allowance", unexpected_observer)
+            assert resume() == str(phase)
         original.write_bytes(original_bytes + b"\n")
         with pytest.raises(ValueError, match="replay source changed"):
             resume()
         original.write_bytes(original_bytes)
+        receipt_path = receipts[0]
+        returned_bytes = receipt_path.read_bytes()
+        receipt_path.write_bytes(returned_bytes + b"\n")
+        with pytest.raises(ValueError, match="wake receipt changed"):
+            resume()
+        receipt_path.write_bytes(returned_bytes)
+        for field in ("allowance", "native", "receipt_sha256", "session_profile_digest"):
+            incomplete = copy.deepcopy(phase_initial)
+            del incomplete["failed_host_recovery"][field]
+            phase.write_text(json.dumps(incomplete))
+            with pytest.raises(ValueError, match="Explicit failed continuation"):
+                resume()
+        phase.write_text(json.dumps(phase_initial))
         assert json.loads(phase.read_bytes()) == phase_initial
     if fault == 'stop_after_prepare':
         from loopx.control_plane.goals.activation_service import set_goal_activation_state
