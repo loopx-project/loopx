@@ -1245,6 +1245,19 @@ once. Duplicate response receipts remain deduplicated by the existing request
 reconciler. Late/unmatched calls and unclassified commands stay explicit.
 Python only transports the original line positions, literal argv and return
 metadata; neither command arguments nor returned text enter this projection.
+Code Mode can wrap several operations in one custom tool call. A command
+completion carrying only its own identity and the Turn does not link the
+command to an issuing call or response. These completions do not classify the
+whole call or assign its returned text to LoopX.
+
+When no requests are recognized and any calls are unclassified or unmatched,
+the command-request input shares are unknown (`null`). The saved `tokens`
+object still sums the recognized subset, so an empty sum is zero. Research and
+the comparison reader withhold command token values and deltas in that case,
+including for older packs that saved zero shares. They retain the counts and
+do not rewrite those packs. When some requests are recognized, their sums and
+shares describe only that subset. Without unresolved calls, a measured empty
+subset can show zero.
 
 Keep three overlapping observations separate:
 
@@ -1302,6 +1315,9 @@ disable it; no ledger migration, source rewrite or runtime activation is needed.
 返回保留，不将其认作纯控制、全部开销或可省成本。输入已含缓存、输出已含推理，
 压缩镜像不重复计数；模型耗时与实扣未知。对照沿同一 TS owner 校验原 Goal、案例、
 修订、窗口、方法及独立 Session，并保留原 run/pack/来源和时间，不据此核准科学配对。
+Code Mode 的命令完成记录若缺少外层调用或响应 ID，不能据此归属请求或混合返回文本。
+识别数为零且仍有未分类或未匹配调用时，占比为 `null`；保存的 `tokens` 仅是已识别
+子集之和。研究页与对照会隐藏此时的命令用量和差值，旧包同样按此读取但不改写。
 不平均百分比；归因缺失/部分、方法变化、来源失效或零分母保持未知。比例下降但绝对
 输入增加会明确提示。浏览零模型调用，不重采集、不重写旧包或账本；旧包缺字段不补零。
 既有 GET reader 在注册 Goal/来源命名空间中校验两个显式 pack，调用同一 builtin；

@@ -384,6 +384,7 @@ def _native_context_reference(projected: dict[str, Any], reference: dict[str, An
                               initial_read_pointers: list[str] | None,
                               initial_read_reference: Path | None,
                               page_bytes: int, output_bytes: int,
+                              page_attached: bool = False,
                               reader_argv: list[str] | None = None) -> dict[str, Any]:
     """Build the bounded native reference without publishing or registering it."""
     target = projected.get("target") if projected.get("schema_version") == "context_delivery_v1" else None
@@ -425,8 +426,11 @@ def _native_context_reference(projected: dict[str, Any], reference: dict[str, An
         if any(pointer.endswith("/vision_authoring/rule") for pointer in initial_read_pointers):
             instruction = ("Before composing a Vision, select the complete vision_authoring object "
                 "at the displayed step in this capture. " + instruction)
-        result["instruction"] = ("Start with first_read_command for current facts and source navigation from this capture, "
-            "without reading an older baseline. "
+        first_read = ("Read the top-level content and follow next_command if eof is false. "
+            "Use first_read_command only to recover missing initial context from this capture"
+            if page_attached else
+            "Start with first_read_command for current facts and source navigation from this capture")
+        result["instruction"] = (first_read + ", without reading an older baseline. "
             "Read each complete optional attachment from its captured step before using it. " + instruction)
         result["first_read_command"] = context_capture_read_command(current_path, current["sha256"],
             page_bytes=page_bytes, max_page_output_bytes=output_bytes, initial_read=True, reader_argv=reader_argv)
@@ -501,6 +505,7 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
                                 captured_recovery: dict[str, Any] | None = None,
                                 metadata: dict[str, Any] | None = None,
                                 max_page_output_bytes: int | None = None,
+                                page_attached: bool = False,
                                 reader_argv: list[str] | None = None,
                                 initial_read_plan: dict[str, Any] | None = None) -> dict[str, Any]:
     """Publish the cheaper readable native transport for an already-decided view.
@@ -582,7 +587,8 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
             current_document=current_document, total_bytes=len(body), metadata=metadata,
             field_index=field_index, initial_read_pointers=initial_read_pointers,
             progressive_enabled=progressive_enabled, initial_read_reference=initial_read_reference,
-            page_bytes=page_bytes, output_bytes=output_bytes, reader_argv=reader_argv)
+            page_bytes=page_bytes, output_bytes=output_bytes, page_attached=page_attached,
+            reader_argv=reader_argv)
 
     if typed and mode == "delta":
         result = None
@@ -679,7 +685,10 @@ def _saved_context_read_page(args: argparse.Namespace, navigation: dict[str, Any
         "capture_sha256": None if reference else recovery["sha256"],
         "codex_context_dir": None, "codex_context_root": None, "initial_read": bool(args.initial_read and not pinned)})
     page = read_context_capture(read_args, presentation={"navigation": navigation}, reader_argv=reader_argv)
-    if not page["ok"] and "recovery_command" not in page:
+    if page["ok"]:
+        # Keep the already-budgeted page and cursor ahead of recovery metadata.
+        page["navigation"] = page.pop("navigation")
+    elif "recovery_command" not in page:
         page["recovery_command"] = recovery["command"]
     return page
 
@@ -803,7 +812,8 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
             progressive_enabled=activation["progressive_enabled"], initial_read_plan=prepared.initial_read_plan,
             metadata={"recovery": full_reference, "capture_sha256": args.capture_sha256,
                 "context_delivery": activation},
-            max_page_output_bytes=getattr(args, "max_page_output_bytes", None), reader_argv=reader_argv)
+            max_page_output_bytes=getattr(args, "max_page_output_bytes", None), page_attached=saved_page,
+            reader_argv=reader_argv)
         reference = {key: native_view[key] for key in ("path", "sha256", "command")}
         mode, target = native_view["mode"], native_view.get("target")
         initial_reference = native_view.get("first_read_reference")

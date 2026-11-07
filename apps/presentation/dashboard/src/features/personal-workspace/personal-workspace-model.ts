@@ -166,6 +166,7 @@ export type WorkspaceGoalSubagentConfiguration = {
 
 export type WorkspaceGoal = {
   sourceAccess?: {namespace: string; label: string; readOnly: true; original_goal_id?: string};
+  sourceStrategy?: {recordedAt: string; summary: string; observation?: string};
   /** Registry organization in this status source; not Agent ownership or execution dependency. */
   parentGoalId?: string | null;
   /** Bounded, safe text from this Goal's declared source document. */

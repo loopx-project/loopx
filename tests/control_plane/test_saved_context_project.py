@@ -1100,6 +1100,98 @@ def test_retry_lost_navigation_uses_original_predecessor(tmp_path, monkeypatch):
     assert not registry.exists() and not runtime.exists()
 
 
+@pytest.mark.parametrize("repeat", [1, 1200], ids=["eof", "multipage"])
+def test_saved_initial_page_is_primary_and_its_recovery_replays_the_same_selection(tmp_path, monkeypatch, repeat):
+    from loopx.control_plane.turn_driver.codex_context import codex_context_hook
+
+    runtime, registry, context = tmp_path / "runtime", tmp_path / "registry.json", tmp_path / "native"
+    context.mkdir(mode=0o700)
+    monkeypatch.setenv("CODEX_THREAD_ID", "session")
+    codex_context_hook(str(context), {"hook_event_name": "SessionStart", "source": "startup",
+        "session_id": "session", "cwd": str(tmp_path)})
+    receipt = {"turn_instance_id": "t"}
+    text = "Keep the original requirement. 保留原要求🙂\n" * repeat
+    original = tmp_path / "original.json"
+    original.write_text(json.dumps({"ok": True, "goal_id": "g", "agent_identity": {"agent_id": "a"},
+        "heartbeat_receipt": receipt, "effective_action": "normal_run",
+        "interaction_contract": {"schema_version": "loopx_interaction_contract_v0", "agent_channel": {
+            "work_context": {"sources": [{"source": "goal_state", "ordering": "before_work",
+                "content": {"text": text, "state_file": "goal.md"}}]}}}}, ensure_ascii=False))
+    raw = original.read_bytes()
+    digest = hashlib.sha256(raw).hexdigest()
+    project = ["quota", "context-project", "--capture-file", str(original), "--capture-sha256", digest,
+        "--goal-id", "g", "--agent-id", "a", "--turn-instance-id", "t", "--codex-app",
+        "--context-delivery", "on", "--codex-context-dir", str(context)]
+    if repeat > 1:
+        project += ["--max-page-output-bytes", "6400"]
+
+    def cli(*args):
+        return _run_cli(registry, runtime, *args, cwd=tmp_path)
+
+    def follow(command):
+        words = shlex.split(command)
+        code, page = cli(*words[words.index("quota"):])
+        assert code == 0 and page["ok"], page
+        return page
+
+    code, reference = cli(*project)
+    assert code == 0 and "content" not in reference
+    assert reference["instruction"].startswith("Start with first_read_command")
+    code, first = cli(*project, "--initial-read")
+    assert code == 0 and first["offset"] == 0 and first["eof"] == (repeat == 1)
+    assert list(first).index("content") < list(first).index("navigation")
+    navigation = first["navigation"]
+    assert "top-level content" in navigation["instruction"]
+    assert "first_read_command only to recover" in navigation["instruction"]
+    assert "without reading an older baseline" in navigation["instruction"]
+    assert "Start with first_read_command" not in navigation["instruction"]
+    assert ("next_command" in first) == (repeat > 1)
+    if "next_command" in first:
+        assert list(first).index("next_command") < list(first).index("navigation")
+    limit = 6400 if repeat > 1 else 64000
+    assert len(json.dumps(first, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= limit
+
+    def finish(page):
+        body = bytearray()
+        while True:
+            assert page["offset"] == len(body)
+            body.extend(page["content"].encode())
+            if page["eof"]:
+                assert len(body) == page["total_bytes"]
+                return bytes(body)
+            assert page["next_offset"] == len(body)
+            page = follow(page["next_command"])
+
+    # A client that forwards only navigation discards the bounded first page.
+    # It can recover this same selection using the separate offset-zero recipe.
+    assert "content" not in navigation and "next_command" not in navigation
+    files = set(context.rglob("*"))
+    journal = (context / "session.json").read_bytes()
+    body = finish(first)
+    assert finish(follow(navigation["first_read_command"])) == body
+    selected = {item["pointer"]: item["value"] for item in json.loads(body)["selections"]}
+    assert selected["/heartbeat_receipt"] == receipt
+    assert selected["/effective_action"] == "normal_run"
+    assert selected["/interaction_contract/agent_channel/work_context/sources/0/content/text"] == text
+    assert original.read_bytes() == raw and (context / "session.json").read_bytes() == journal
+    assert set(context.rglob("*")) == files
+    if repeat == 1:
+        code, detail = cli(*project, "--select", "/heartbeat_receipt")
+        assert code == 0 and detail["eof"] and "next_command" not in detail
+        assert "first_read_command only to recover" in detail["navigation"]["instruction"]
+        assert json.loads(detail["content"])["selections"] == [{"pointer": "/heartbeat_receipt", "value": receipt}]
+        code, rejected = cli(*project, "--select", "/missing")
+        assert code and not rejected["ok"] and "recovery_command" in rejected
+        assert not ({"content", "next_command", "navigation"} & rejected.keys())
+        code, too_small = cli(*project, "--initial-read", "--max-page-output-bytes", "256")
+        assert code and not too_small["ok"] and not ({"content", "next_command", "navigation"} & too_small.keys())
+        assert too_small["heartbeat_receipt"] == receipt and too_small["capture_sha256"] == digest
+        recovered = Path(too_small["recovery"]["path"]).read_bytes()
+        assert hashlib.sha256(recovered).hexdigest() == too_small["recovery"]["sha256"]
+        assert json.loads(recovered) == json.loads(raw)
+    assert not registry.exists() and not runtime.exists()
+
+
 def test_saved_page_continues_and_replays_after_compaction_without_republication(tmp_path, monkeypatch):
     from concurrent.futures import ThreadPoolExecutor
     from loopx.control_plane.turn_driver.codex_context import codex_context_hook
