@@ -325,17 +325,22 @@ def project_todo_read(params: dict[str, Any]) -> dict[str, Any]:
             if not isinstance(frontier, dict) or frontier.get("schema_version") != "todo_frontier_revision_index_v0":
                 raise ValueError("invalid typed Todo summary frontier index")
     if params.get("kind") in {"canonical_fields", "query"} or native_read is not None:
-        from .summary_item import bind_canonical_todo_sources
-        bind_canonical_todo_sources(result, native_read or params)
-        if native_read is not None and result.get("projection"):
-            from .succession_warning import _EvaluatedTodo
-            projection = result["projection"]
-            for field, decisions in result["field_evaluations"].items():
-                summary = projection["summaries"][field]
-                summary["items"] = [_EvaluatedTodo(item, decision)
-                    for item, decision in zip(summary["items"], decisions, strict=True)]
-            projection["todos"] = [item for summary in projection["summaries"].values() for item in summary["items"]]
+        _bind_todo_read_sources(result, native_read or params, native_selection=native_read is not None)
     return result
+
+
+def _bind_todo_read_sources(result: dict[str, Any], read: dict[str, Any], *, native_selection: bool) -> None:
+    from .summary_item import bind_canonical_todo_sources
+
+    bind_canonical_todo_sources(result, read)
+    if native_selection and result.get("projection"):
+        from .succession_warning import _EvaluatedTodo
+        projection = result["projection"]
+        for field, decisions in result["field_evaluations"].items():
+            summary = projection["summaries"][field]
+            summary["items"] = [_EvaluatedTodo(item, decision)
+                for item, decision in zip(summary["items"], decisions, strict=True)]
+        projection["todos"] = [item for summary in projection["summaries"].values() for item in summary["items"]]
 
 
 def restore_todo_field_evaluations(result: dict[str, Any]) -> dict[str, Any]:

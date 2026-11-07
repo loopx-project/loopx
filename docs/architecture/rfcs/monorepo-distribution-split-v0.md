@@ -2013,9 +2013,13 @@ this transaction's original acceptance: independent review and attribution of
 the remaining lifecycle costs before proposing further optimization. These
 negative results do not justify another leaf-RPC migration or a new provider.
 
-The proposal was rebased onto `main@e58ba30bc`; the affected production and test
-files remain byte-identical to the measured revision. TypeScript typecheck and
-Ruff pass. Mypy retains main's existing missing return annotation in
+The proposal was rebased onto `main@e58ba30bc`. A final scope-fit check found that
+the read transport's provenance binding exceeded the decision-function budget.
+That complete binding and selected-row evaluation restoration were extracted
+into a local helper; 24 focused parity cases and the maintainability ratchet
+pass. The cost table remains the observation at `66ff8bf48`, before this helper
+extraction, and is not an exact-final-head cost qualification. TypeScript
+typecheck and Ruff pass. Mypy retains main's existing missing return annotation in
 `decision_capture.py`; the standard premerge also retains main's peer-boundary
 scanner failure on unchanged benchmark documentation. Neither is a passing
 skip. Required exact-head review, validation/readiness and maintainer merge
