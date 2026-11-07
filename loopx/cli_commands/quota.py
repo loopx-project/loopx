@@ -455,7 +455,8 @@ def _emit_quota_result(
             and activation["progressive_enabled"] and not native_context and delivery_request is None):
         payload = progressive_context_or_current(payload, args,
             runtime_root=context.runtime_root if context is not None else Path(args._progressive_context_runtime),
-            directory=capture_directory, reader_argv=reader_argv)
+            directory=capture_directory, reader_argv=reader_argv,
+            captured_decision_path=str(capture_directory / "decision.json") if capture_directory is not None else None)
     if (not deferred_context and args.format == "json" and succeeded and capture_directory
             and native_context):
         try:
