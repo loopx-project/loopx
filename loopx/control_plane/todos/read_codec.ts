@@ -155,6 +155,11 @@ export function pythonFieldIsInteger(row: JsonObject, key: string): boolean {
     !pythonValues.get(row)?.has(key);
 }
 
+/** Tuple/set JSON arrays retain their original Python container distinction. */
+export function pythonFieldIsList(row: JsonObject, key: string): boolean {
+  return Array.isArray(row[key]) && !pythonValues.get(row)?.has(key);
+}
+
 /** Python int() spelling is scalar IO; selection and ordering stay with owners. */
 export function pythonFieldInteger(row: JsonObject, key: string, fallback = 999999): number {
   const value = row[key], scalar = pythonValues.get(row)?.get(key);

@@ -201,14 +201,14 @@ const SUMMARY_FIELDS = [
   "route_key", "completed_at", "updated_at", "completion_turn_key", "superseded_by", "handoff_note",
 ];
 
-const SUMMARY_SOURCES = [
+export const SUMMARY_SOURCES = [
   "active_next_action_items", "active_next_action_executable_items", "first_open_items", "backlog_items", "unclaimed_priority_open_items",
   "claimed_open_items", "claimed_advancement_open_items", "claimed_monitor_open_items", "monitor_open_items", "current_agent_claimed_open_items",
   "current_agent_claimed_advancement_items", "current_agent_claimed_monitor_items", "blocker_items", "resume_blocked_items", "monitor_blocked_resume_candidates",
   "current_agent_monitor_blocked_resume_candidates", "unclaimed_monitor_blocked_resume_candidates", "items",
 ];
 
-const PLANNING_SOURCES = ["items", "deferred_items", "blocker_items", "monitor_open_items"];
+export const PLANNING_SOURCES = ["items", "deferred_items", "blocker_items", "monitor_open_items"];
 
 function compactSummaryRecord(item: JsonObject, body: unknown): JsonObject {
   const row: JsonObject = {index: item.index ?? null, text: body};

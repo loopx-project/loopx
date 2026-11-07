@@ -1,6 +1,6 @@
 import {COORDINATION_STATE_CONTRACT} from "../coordination/coordination_state_contract.generated.ts";
 import {decodeTodoReadSource, readAgent, readExcludedAgents, readCapabilities, readResume,
-  pythonFieldText, pythonFieldIsInteger, pythonFieldInteger, writeScopes, readScope, readScopes, taskClass} from "./read_codec.ts";
+  pythonFieldText, pythonFieldIsInteger, pythonFieldIsList, pythonFieldInteger, writeScopes, readScope, readScopes, taskClass} from "./read_codec.ts";
 import {readTodoPriority, todoPriorityRank} from "./priority.ts";
 import {removedTodoContinuationPolicy} from "./legacy_continuation_policy_migration.ts";
 import {stripPythonWhitespace} from "../coordination/todo_agents.ts";
@@ -616,7 +616,7 @@ export function prepareQuotaSummary(request: JsonObject): JsonObject {
   let selected: JsonObject[] = projectTodoSummaryDisplay({source: summary.source,
     handoff_gates: (request.handoff_items as JsonObject[]).map(row => row.display)}, (key, index) => {
       const lane = materialize ? source[key] : pool![key];
-      if (!Array.isArray(lane)) throw new EffectRuntimeRequestError("quota summary source lane missing");
+      if (!Array.isArray(lane) || materialize && !pythonFieldIsList(source, key)) throw new EffectRuntimeRequestError("quota summary source lane missing");
       const row = requireJsonObject(lane[index], "quota source fact");
       selectedFacts.push(materialize ? materializeQuotaRow(row, profile) : row);
     }).map((payload, index) => {
@@ -641,7 +641,8 @@ export function prepareQuotaSummary(request: JsonObject): JsonObject {
     return x[0] - y[0] || x[1] - y[1] || authorityUnicodeCompare(x[2], y[2]) || authorityUnicodeCompare(x[3], y[3]);
   });
   const selection = requireJsonObject(request.selection, "selection");
-  const encoded = (key: string) => summaryRows(source[key]).map(row => ({...materializeQuotaRow(row, profile), payload: row, display_source: {record: row}}));
+  const encoded = (key: string) => (pythonFieldIsList(source, key) ? summaryRows(source[key]) : [])
+    .map(row => ({...materializeQuotaRow(row, profile), payload: row, display_source: {record: row}}));
   return {...request, ...(summary.materialize_resume === true ? {resume: materializeResumePlanningRequest(source,
       requireJsonObject(request.resume_options, "resume options"))} : {}),
     summary_request: {...summary, legacy}, selection: {...selection, items: selected,

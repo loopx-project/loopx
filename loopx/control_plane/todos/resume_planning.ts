@@ -12,7 +12,7 @@ import {
 } from "./resume_condition.ts";
 
 import { automaticResumeFields, selectPendingResume } from "./automatic_resume.ts";
-import {id, object, pythonFieldText, pythonFieldInteger, copyTodoPythonValues, readAgent, readExcludedAgents, readResume,
+import {id, object, pythonFieldText, pythonFieldInteger, pythonFieldIsList, copyTodoPythonValues, readAgent, readExcludedAgents, readResume,
   readScopes, readScope, writeScopes, taskClass} from "./read_codec.ts";
 import {readTodoPriority, todoPriorityRank} from "./priority.ts";
 import {stripPythonWhitespace} from "../coordination/todo_agents.ts";
@@ -25,7 +25,7 @@ const DEFERRED_POLICY = "quota may wake the current peer only for ready deferred
   "diagnostic visibility and executor-excluded todos remain visible but non-selectable";
 const MONITOR_POLICY = "open advancement todos gated by todo_done:<continuous_monitor> must " +
   "project as successor replan/state repair instead of quiet monitor wait";
-const SOURCE_KEYS = ["items", "backlog_items", "first_open_items", "deferred_items",
+export const SOURCE_KEYS = ["items", "backlog_items", "first_open_items", "deferred_items",
   "deferred_resume_candidates", "resume_blocked_items", "monitor_open_items",
   "current_agent_claimed_monitor_items", "claimed_monitor_open_items"] as const;
 type SourceKey = typeof SOURCE_KEYS[number];
@@ -58,7 +58,7 @@ export function materializeResumePlanningRequest(source: JsonObject, options: Js
       target_class: taskClass({task_class: condition.target_task_class})};
   };
   return {schema_version: RESUME_PLANNING_REQUEST,
-    sources: Object.fromEntries(SOURCE_KEYS.map(key => [key, Array.isArray(source[key]) ? (source[key] as unknown[]).map(encode) : []])),
+    sources: Object.fromEntries(SOURCE_KEYS.map(key => [key, pythonFieldIsList(source, key) ? (source[key] as unknown[]).map(encode) : []])),
     agent_id: options.agent_id ?? null, item_limit: options.item_limit ?? 5,
     has_deferred_count: Object.hasOwn(source, "deferred_count"), has_visible_deferred_count: truth(source.deferred_count),
     deferred_count: source.deferred_count ?? null, deferred_work_counts: source.deferred_work_counts ?? null,
