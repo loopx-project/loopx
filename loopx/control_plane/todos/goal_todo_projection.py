@@ -283,7 +283,8 @@ def project_todo_read(params: dict[str, Any]) -> dict[str, Any]:
                     break
                 if not isinstance(piece, dict) or piece.get("offset") != consumed:
                     raise ValueError("invalid Todo read result page")
-                current = (piece.get("sha256"), piece.get("byte_count"))
+                current = (piece.get("sha256"), piece.get("byte_count"),
+                           piece.get("content_encoding"), piece.get("decoded_byte_count"))
                 if identity is None:
                     identity = current
                 if identity != current or type(current[1]) is not int or current[1] <= consumed:
@@ -300,7 +301,7 @@ def project_todo_read(params: dict[str, Any]) -> dict[str, Any]:
                     complete = b"".join(chunks)
                     if consumed != current[1] or hashlib.sha256(complete).hexdigest() != current[0]:
                         raise ValueError("Todo read result digest mismatch")
-                    result = json.loads(complete)
+                    result = _decode_todo_result_bytes(complete, current[2], current[3])
                     break
                 if not isinstance(after, dict) or after.get("offset") != consumed or after.get("sha256") != current[0]:
                     raise ValueError("invalid Todo read result continuation")
@@ -326,6 +327,31 @@ def project_todo_read(params: dict[str, Any]) -> dict[str, Any]:
                 raise ValueError("invalid typed Todo summary frontier index")
     if params.get("kind") in {"canonical_fields", "query"} or native_read is not None:
         _bind_todo_read_sources(result, native_read or params, native_selection=native_read is not None)
+    return result
+
+
+def _decode_todo_result_bytes(data: bytes, encoding: Any, size: Any) -> dict[str, Any]:
+    import json
+    from ..effect_runtime import MAX_LOCAL_SNAPSHOT_BYTES
+
+    if encoding is None:
+        if size is not None:
+            raise ValueError("invalid Todo read result encoding")
+    elif encoding == "gzip" and type(size) is int and 0 < size <= MAX_LOCAL_SNAPSHOT_BYTES:
+        import zlib
+        try:
+            decoder = zlib.decompressobj(16 + zlib.MAX_WBITS)
+            decoded = decoder.decompress(data, size + 1)
+        except zlib.error as error:
+            raise ValueError("invalid compressed Todo read result") from error
+        if len(decoded) != size or not decoder.eof or decoder.unused_data or decoder.unconsumed_tail:
+            raise ValueError("invalid compressed Todo read result")
+        data = decoded
+    else:
+        raise ValueError("invalid Todo read result encoding")
+    result = json.loads(data)
+    if not isinstance(result, dict):
+        raise ValueError("invalid typed Todo read result")
     return result
 
 

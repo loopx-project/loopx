@@ -142,3 +142,46 @@ def test_quota_source_outage_preserves_the_canonical_read_diagnostics(tmp_path, 
             assert bundled.value.payload == original.value.payload
         finally:
             retained.rename(directory)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_large_native_quota_reply_preserves_complete_views_without_snapshot_write(tmp_path, monkeypatch, provider):
+    from loopx.control_plane import effect_runtime as runtime_owner
+    from loopx.control_plane.todos.summary_item import todo_planning_source_items, todo_summary_source_items
+
+    project, runtime, _ = fixture._write_fixture(tmp_path, claimed=False)
+    state = project / f".codex/goals/{fixture.GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    with state.open("a") as file:
+        for index in range(7999):
+            file.write(f"\n- [ ] [P1] Build synthetic work {index}\n"
+                f"  <!-- loopx:todo todo_id=todo_native_{index:05d} status=open task_class=advancement_task -->\n")
+    fixture._initialize_fixture_authority(project, runtime, provider=provider)
+    snapshots, requests = [], []
+    read = runtime_owner._read_local_snapshot_response
+    dispatch = runtime_owner.effect_runtime_request
+    def observed(envelope, sink, **kwargs):
+        snapshots.append(kwargs["method"])
+        return read(envelope, sink, **kwargs)
+    def requested(method, params, **kwargs):
+        if method == "todo.read" and params.get("kind") == "quota_projection":
+            requests.append(params)
+        return dispatch(method, params, **kwargs)
+    monkeypatch.setattr(runtime_owner, "_read_local_snapshot_response", observed)
+    monkeypatch.setattr(runtime_owner, "effect_runtime_request", requested)
+    with effect_runtime_request_scope():
+        before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=fixture.GOAL_ID, include_summary=True)
+        fields = before["_todo_fields"]
+        source = fields["agent_todos"]
+        expected = {"summary": todo_summary_source_items(source), "planning": todo_planning_source_items(source),
+                    "terminal": todo_planning_source_items(source, include_terminal=True)}
+        snapshots.clear()
+        _, agent, views, _ = select_quota_todo_contexts(fields["user_todos"], None, source, None,
+            agent_identity={"agent_id": fixture.AGENT_ID}, available_capabilities=["shell", "filesystem_write", "network"])
+        assert agent is not None and all(len(rows) == 8000 for rows in views.values())
+        assert views == expected
+        assert len(requests) == 1
+        assert all("source_reference" in item["summary_request"] for item in requests[0]["requests"])
+        assert "todo.read" not in snapshots
+    after = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=fixture.GOAL_ID)
+    assert after["provider_revision"] == before["provider_revision"]
+    assert after["todos"] == before["todos"]
