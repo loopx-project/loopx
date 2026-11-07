@@ -54,6 +54,37 @@ export function selectQueuedChatTurns(input: JsonObject): JsonObject {
   return {turn_ids: ids};
 }
 
+/** Select delivery for a provider-verified native mention in an exact Session.
+ * A recorded ingress owns retries, even after the observed Turn has changed.
+ */
+export function planNativeMentionIngress(input: JsonObject): JsonObject {
+  if (input.mentioned !== true) return {action: "configured"};
+  if (input.binding_matches !== true) return {action: "reject", error_code: "live_steering_session_not_attached"};
+  if (input.text_only !== true) return {action: "reject", error_code: "queue_steering_attachments_unavailable"};
+
+  if (input.receipt != null) {
+    const receipt = requireJsonObject(input.receipt, "mention ingress receipt");
+    if (input.receipt_message_matches !== true) return {action: "unresolved"};
+    if (receipt.mode === "session_queue") return {action: "enqueue"};
+    if (receipt.mode !== "live_steering") return {action: "unresolved"};
+    if (receipt.status === "delivered" && typeof receipt.active_turn_id === "string" &&
+        receipt.active_turn_id && (receipt.expected_turn_id == null || receipt.expected_turn_id === receipt.active_turn_id)) {
+      return {action: "delivered", target_turn_id: receipt.active_turn_id};
+    }
+    if (receipt.status === "failed" && NOT_DELIVERED.has(String(receipt.error_code))) {
+      return {action: "reject", error_code: receipt.error_code};
+    }
+    return {action: "unresolved"};
+  }
+
+  if (input.queued_turn_exists === true) return {action: "enqueue"};
+  // A recovered source event without a Chat receipt cannot bind to a newer
+  // active Turn. Keep the original message available for explicit recovery.
+  if (input.may_deliver_new !== true) return {action: "unresolved"};
+  if (input.target_turn_id === null) return {action: "enqueue"};
+  return {action: "steer", target_turn_id: requireNonEmptyString(input.target_turn_id, "target_turn_id")};
+}
+
 export function planQueuedChatSteering(input: JsonObject): QueueSteeringPlan {
   const session = requireJsonObject(input.session, "session");
   const turn = requireJsonObject(input.turn, "queued turn");

@@ -9,12 +9,13 @@ import os
 import re
 import subprocess
 import threading
+from collections import deque
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from ...chat_manager import MANAGER_AGENT_OBJECTIVE
+from ...chat_manager import MANAGER_AGENT_OBJECTIVE, manager_channel
 from ...control_plane.collaboration import conversation_reply_context
 from ...file_lock import exclusive_file_lock
 from .manager_routing import (
@@ -27,6 +28,7 @@ from .manager_routing import (
     ManagerAuthorityMode,
 )
 from ..external_connector_runtime import (
+    ExternalEffectKind,
     ExternalResponsePolicy,
     build_external_event_response_receipt,
     decide_external_event_ack,
@@ -44,7 +46,7 @@ from .goal_channel_contracts import (
     normalize_lark_topic_event_rejection_reason,
 )
 from .goal_channel_targets import goal_channel_target_for_name
-from .goal_channel_transport import record_event_timing
+from .goal_channel_transport import lark_provider_mention_identities, record_event_timing
 from .goal_topic_connections import decide_lark_topic_event
 from .goal_topic_dispatch import ProfileEventDispatch
 from .inbox_reply import CommandRunner, reply_lark_event_inbox
@@ -399,15 +401,20 @@ def _profile_event_lane(
     snapshot: Mapping[str, Any],
     event: Mapping[str, Any],
     runtime_root: str | Path,
-) -> tuple[str, ...]:
-    """Only serialize transport work; actual ingress re-reads its authority."""
+    capture_mention: Callable[[Mapping[str, object]], dict[str, object]] | None = None,
+    include_capture: bool = False,
+) -> Any:
+    """Capture a live target before joining the ordinary reply lane."""
+
+    def result(lane: tuple[str, ...], capture: dict[str, object] | None = None) -> Any:
+        return (lane, capture) if include_capture else lane
 
     private_config = dict(snapshot.get("private_profiles") or {}).get(profile)
     if isinstance(private_config, Mapping) and _native_profile_event(snapshot, profile, event):
         from .conversation_identity import lark_private_source
 
         try:
-            source = lark_private_source(
+            private_source = lark_private_source(
                 provider_ref=private_config["provider_ref"], event=event
             )
         except (KeyError, TypeError, ValueError):
@@ -417,7 +424,7 @@ def _profile_event_lane(
             # Use the same App/chat/topic (or private sender) source shape for
             # scheduling, never a grant or a persisted Session selection. Core
             # still verifies the provider and acquires its fresh source fence.
-            return ("private." + source["source_ref"],)
+            return result(("private." + private_source["source_ref"],))
 
     scoped, _status = _profile_event_route(
         profile=profile, snapshot=snapshot, event=event
@@ -440,10 +447,16 @@ def _profile_event_lane(
                     route.get("app_ref"), route.get("target_ref"),
                     route.get("topic_root_message_id"),
                 )
+            capture = (
+                capture_mention(route) if capture_mention is not None
+                and _route_native_mention(routed_event, route, targets) else None
+            )
+            if capture and capture.get("target_turn_id"):
+                return result(("steer." + source, "steer.session." + str(route["session_id"])), capture)
             if route.get("session_id"):
-                return (source, "session." + str(route["session_id"]))
-            return (source,)
-    return ("unmatched." + _opaque_digest(profile, event.get("chat_id")),)
+                return result((source, "session." + str(route["session_id"])), capture)
+            return result((source,), capture)
+    return result(("unmatched." + _opaque_digest(profile, event.get("chat_id")),))
 
 
 def poll_lark_goal_topic_profile_once(
@@ -457,6 +470,7 @@ def poll_lark_goal_topic_profile_once(
     reply_runner: CommandRunner = _default_simple_runner,
     proposal_deliverer: ProposalDeliverer | None = None,
     private_admitter: Callable[[str, dict[str, object]], Mapping[str, object]] | None = None,
+    mention_capture: Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
     """Consume one bounded event batch for an App and reuse Inbox reply/ACK."""
 
@@ -527,6 +541,7 @@ def poll_lark_goal_topic_profile_once(
                 reply_runner=reply_runner,
                 provider_runner=provider_runner,
                 proposal_deliverer=proposal_deliverer,
+                mention_capture=mention_capture,
             )
         except Exception:
             event_statuses.append("processing_failed")
@@ -558,6 +573,7 @@ def stream_lark_goal_topic_profile(
     health_sink: HealthSink | None = None,
     proposal_deliverer: ProposalDeliverer | None = None,
     private_admitter: Callable[[str, dict[str, object]], Mapping[str, object]] | None = None,
+    capture_mention: Callable[[Mapping[str, object]], dict[str, object]] | None = None,
     review_callback_handler: ReviewCallbackHandler | None = None,
 ) -> dict[str, Any]:
     """Keep one bounded long-lived CLI consumer attached between messages."""
@@ -669,7 +685,8 @@ def stream_lark_goal_topic_profile(
     def handle_event(line: str) -> None:
         nonlocal event_count, replied_count, provider_ready
 
-        event = _event_payloads(line)[0]
+        envelope = json.loads(line)
+        event = envelope["event"]
         message_id = str(event.get("message_id") or "")
         record_event_timing(profile, message_id, "dispatch_started")
         current_snapshot = snapshot_provider()
@@ -679,15 +696,16 @@ def stream_lark_goal_topic_profile(
             snapshot=current_snapshot,
             runtime_root=runtime_root,
             answer=answer,
-            consume_runner=lambda _args, payload=line: {
+            consume_runner=lambda _args: {
                 "returncode": 0,
-                "stdout": payload,
+                "stdout": json.dumps(event, ensure_ascii=False),
                 "stderr": "",
             },
             provider_runner=provider_runner,
             reply_runner=reply_runner,
             proposal_deliverer=proposal_deliverer,
             private_admitter=private_admitter,
+            mention_capture=envelope["mention_capture"],
         )
         record_event_timing(profile, message_id, "dispatch_returned")
         with result_lock:
@@ -733,7 +751,67 @@ def stream_lark_goal_topic_profile(
                     flush=True,
                 )
 
-    dispatch = ProfileEventDispatch(handle_event, stop)
+    reserve_priority = capture_mention is not None and _profile_supports_mention_steering(
+        snapshot, profile, capture_mention
+    )
+    dispatch = ProfileEventDispatch(handle_event, stop, reserve_priority=reserve_priority)
+    ordinary_backlog: deque[tuple[tuple[str, ...], str]] = deque()
+    backlog_condition = threading.Condition()
+    backlog_closed = False
+    backlog_worker: threading.Thread | None = None
+
+    def drain_ordinary_backlog() -> None:
+        while True:
+            with backlog_condition:
+                while not ordinary_backlog and not backlog_closed:
+                    if stop.is_set() or dispatch.failed:
+                        return
+                    backlog_condition.wait(0.05)
+                if backlog_closed or stop.is_set() or dispatch.failed:
+                    ordinary_backlog.clear()
+                    backlog_condition.notify_all()
+                    return
+                lane, envelope = ordinary_backlog[0]
+            try:
+                submitted = dispatch.submit(lane, envelope, priority=False)
+            except Exception:
+                with backlog_condition:
+                    ordinary_backlog.clear()
+                    backlog_condition.notify_all()
+                return
+            with backlog_condition:
+                if ordinary_backlog:
+                    ordinary_backlog.popleft()
+                if not submitted:
+                    ordinary_backlog.clear()
+                backlog_condition.notify_all()
+                if not submitted:
+                    return
+
+    def submit_event(lane: tuple[str, ...], envelope: str, *, priority: bool) -> bool:
+        nonlocal backlog_worker
+        if priority or not reserve_priority:
+            return dispatch.submit(lane, envelope, priority=priority)
+        with backlog_condition:
+            if not ordinary_backlog and not dispatch.ordinary_full:
+                return dispatch.submit(lane, envelope, priority=False)
+            while len(ordinary_backlog) >= 64 and not backlog_closed:
+                if stop.is_set() or dispatch.failed:
+                    return False
+                backlog_condition.wait(0.05)
+            if backlog_closed or stop.is_set() or dispatch.failed:
+                return False
+            ordinary_backlog.append((lane, envelope))
+            if backlog_worker is None:
+                backlog_worker = threading.Thread(
+                    target=drain_ordinary_backlog,
+                    name=f"loopx-lark-ordinary-{profile}",
+                    daemon=True,
+                )
+                backlog_worker.start()
+            backlog_condition.notify_all()
+            return True
+
     watcher.start()
     stream_failed = True
     try:
@@ -766,20 +844,35 @@ def stream_lark_goal_topic_profile(
             for event in _event_payloads(line):
                 message_id = str(event.get("message_id") or "")
                 record_event_timing(profile, message_id, "received")
-                lane = _profile_event_lane(
+                lane, mention_capture = _profile_event_lane(
                     profile=profile,
                     snapshot=snapshot_provider(),
                     event=event,
                     runtime_root=runtime_root,
+                    capture_mention=capture_mention,
+                    include_capture=True,
                 )
                 record_event_timing(profile, message_id, "lane_ready")
-                if not dispatch.submit(lane, json.dumps(event, ensure_ascii=False)):
+                envelope = json.dumps({"event": event, "mention_capture": mention_capture}, ensure_ascii=False)
+                if not submit_event(lane, envelope, priority=bool((mention_capture or {}).get("target_turn_id"))):
                     break
+        while True:
+            with backlog_condition:
+                if not ordinary_backlog or stop.is_set() or dispatch.failed:
+                    break
+                backlog_condition.wait(0.05)
         stream_failed = False
     finally:
+        with backlog_condition:
+            backlog_closed = True
+            if stream_failed or stop.is_set() or dispatch.failed:
+                ordinary_backlog.clear()
+            backlog_condition.notify_all()
         try:
             dispatch.close(cancel_pending=stream_failed)
         finally:
+            if backlog_worker is not None:
+                backlog_worker.join(timeout=1)
             watcher_done.set()
             if process.poll() is None:
                 process.terminate()
@@ -835,6 +928,145 @@ def stream_lark_goal_topic_profile(
     }
 
 
+def _profile_supports_mention_steering(
+    snapshot: Mapping[str, Any],
+    profile: str,
+    capture_mention: Callable[[Mapping[str, object]], dict[str, object]] | None = None,
+) -> bool:
+    """Reserve a priority worker only when a bound Session can steer on @mention."""
+
+    profile_config = _active_profile_configs(snapshot).get(profile)
+    if profile_config is None:
+        return False
+    bot_app_id = str(profile_config.get("bot_app_id") or "")
+    target_payload = snapshot.get("target_payload")
+    target_payload = target_payload if isinstance(target_payload, Mapping) else {}
+    binding_payloads = snapshot.get("binding_payloads")
+    binding_payloads = binding_payloads if isinstance(binding_payloads, Mapping) else {}
+    for goal_id, payload in binding_payloads.items():
+        if not isinstance(payload, Mapping):
+            continue
+        for binding in bindings_for_goal(payload, str(goal_id)):
+            if binding.get("enabled") is not True:
+                continue
+            session_id = str(binding.get("session_id") or "").strip()
+            routing = binding.get("routing")
+            routing = routing if isinstance(routing, Mapping) else {}
+            ingress_mode = str(routing.get("ingress_mode") or "")
+            if not session_id or ingress_mode not in {"live_steering", "session_queue"}:
+                continue
+            target = goal_channel_target_for_name(
+                target_payload, str(binding.get("target_ref") or "")
+            )
+            if target is None or target.get("enabled") is not True:
+                continue
+            identity = target.get("identity")
+            identity = identity if isinstance(identity, Mapping) else {}
+            sender_profile = str(identity.get("sender_profile") or "").strip()
+            same_app = bool(bot_app_id) and str(identity.get("bot_app_id") or "") == bot_app_id
+            if sender_profile != profile and not same_app:
+                continue
+            if not (identity.get("bot_app_id") or identity.get("bot_open_id")):
+                continue
+            if capture_mention is not None:
+                channel = target.get("channel")
+                channel = channel if isinstance(channel, Mapping) else {}
+                chat_id = str(channel.get("chat_id") or "")
+                kind = str(routing.get("conversation_kind") or "goal")
+                route = {
+                    "goal_id": str(goal_id),
+                    "connection_id": str(binding.get("connection_id") or ""),
+                    "agent_id": str(binding.get("agent_id") or "codex"),
+                    "session_id": session_id,
+                    "conversation_kind": kind,
+                    "manager_channel_id": (
+                        manager_channel(
+                            provider="lark",
+                            audience=f"{sender_profile or 'default'}\0{chat_id}",
+                        )
+                        if kind == "manager"
+                        else ""
+                    ),
+                    "ingress_mode": ingress_mode,
+                }
+                if capture_mention(route).get("binding_matches") is not True:
+                    continue
+            return True
+    return False
+
+
+def _bound_topic_session(
+    route: Mapping[str, object], runtime_controller: Any
+) -> Mapping[str, Any] | None:
+    session_id = str(route.get("session_id") or "")
+    store = getattr(runtime_controller, "store", None)
+    if not session_id or store is None:
+        return None
+    session = store.load_session(session_id)
+    manager = route.get("conversation_kind") == "manager"
+    agent_id = manager_turn_executor(runtime_controller) if manager else str(route.get("agent_id") or "codex")
+    goal_id = str(route.get("goal_id") or "")
+    channel_id = str(route.get("manager_channel_id") or "") if manager else f"goal.{goal_id}"
+    if (
+        not isinstance(session, Mapping) or session.get("status") == "closed"
+        or (not manager and session.get("goal_id") != goal_id)
+        or session.get("agent_id") != agent_id or session.get("channel_id") != channel_id
+    ):
+        return None
+    return session
+
+
+def capture_topic_mention(
+    route: Mapping[str, object], runtime_controller: Any
+) -> dict[str, object]:
+    """Read the bound Session/Turn without opening or resuming an executor."""
+    session = _bound_topic_session(route, runtime_controller)
+    return {
+        "connection_id": route.get("connection_id"),
+        "session_id": route.get("session_id"),
+        "binding_matches": session is not None,
+        "target_turn_id": (session or {}).get("active_turn_id") or None,
+    }
+
+
+def _native_topic_mention(event: Mapping[str, object], identity: Mapping[str, object]) -> bool:
+    if event.get("sender_type") != "user" or not event.get("sender_id") or event.get("historical_context_only"):
+        return False
+    expected = {str(identity.get(key) or "") for key in ("bot_app_id", "bot_open_id")} - {""}
+    mentions = event.get("mentions")
+    return bool(expected and isinstance(mentions, list) and any(
+        isinstance(item, Mapping) and lark_provider_mention_identities(item).intersection(expected)
+        for item in mentions
+    ))
+
+
+def _route_native_mention(event: Mapping[str, object], route: Mapping[str, object],
+                          target_payload: Mapping[str, object]) -> bool:
+    if route.get("ingress_mode") not in {"live_steering", "session_queue", "async_inbox"}:
+        return False
+    if (route.get("conversation_kind") == "manager"
+            and route.get("authority_mode") != ManagerAuthorityMode.TURN_AUTHORIZED.value):
+        return False
+    target = goal_channel_target_for_name(target_payload, str(route.get("target_ref") or "")) or {}
+    identity = target.get("identity")
+    return isinstance(identity, Mapping) and _native_topic_mention(event, identity)
+
+
+def _mention_reply(route: Mapping[str, object], decision: Mapping[str, object]) -> dict[str, object]:
+    receipt = _session_turn_effect(route)
+    if decision["action"] == "delivered":
+        return {"response_text": "已送达当前回合。", "effect_receipt": receipt}
+    receipt["effect_kind"] = ExternalEffectKind.NO_FOLLOW_UP.value
+    if decision["action"] == "unresolved":
+        return {"response_text": "送达状态待核实。原消息保留在 Lark。", "effect_receipt": receipt}
+    text = {
+        "queue_steering_attachments_unavailable": "本轮调整仅支持文字。原消息和附件保留在 Lark。",
+        "live_steering_turn_mismatch": "接收时的回合已结束或切换。原消息保留在 Lark。",
+        "live_steering_turn_not_started": "接收时的回合尚未就绪。原消息保留在 Lark。",
+    }.get(str(decision.get("error_code")), "当前会话无法调整本轮。原消息保留在 Lark。")
+    return {"response_text": text, "effect_receipt": receipt}
+
+
 def answer_lark_goal_topic(
     *,
     route: Mapping[str, Any],
@@ -878,17 +1110,52 @@ def answer_lark_goal_topic(
         route.get("message_id"),
         route.get("topic_root_message_id"),
     )
+    native_mention = route.get("native_mention") is True
+    if native_mention:
+        from ...capabilities.native_chat.queued_admission import deliver_native_mention
+
+        capture = route.get("mention_capture")
+        capture = capture if isinstance(capture, Mapping) else capture_topic_mention(route, runtime_controller)
+        current = _bound_topic_session(route, runtime_controller)
+        binding_matches = (
+            current is not None and capture.get("binding_matches") is True
+            and capture.get("session_id") == session_id
+            and capture.get("connection_id") == route.get("connection_id")
+            and ingress_mode in {"live_steering", "session_queue"}
+        )
+        if manager and binding_matches and current is not None and capture.get("target_turn_id"):
+            from ...chat_manager_context import manager_authorization_scope_is_current
+
+            binding_matches = manager_authorization_scope_is_current(
+                runtime_controller.registry_path, runtime_controller.manager_scope_resolver, current,
+                current.get("manager_authorization_scope_id"),
+                runtime_root=runtime_controller.coordination_runtime_root,
+            )
+        body = text
+        try:
+            payload = json.loads(text)
+        except (TypeError, ValueError):
+            payload = None
+        if isinstance(payload, Mapping) and isinstance(payload.get("text"), str):
+            body = payload["text"]
+        target_turn_id = capture.get("target_turn_id")
+        decision = deliver_native_mention(
+            runtime_controller, session_id=session_id, ingress_id=client_turn_id,
+            target_turn_id=str(target_turn_id) if isinstance(target_turn_id, str) and target_turn_id else None,
+            binding_matches=binding_matches,
+            text_only=route.get("native_mention_text_only") is True,
+            may_deliver_new=route.get("native_mention_fresh") is True,
+            steering_text=(reply_context + "\n\n" if reply_context else "") + body,
+            queued_text=message, origin="lark",
+        )
+        if decision["action"] != "enqueue":
+            return _mention_reply(route, decision)
+        ingress_mode = "session_queue"
+
     if ingress_mode in {"live_steering", "session_queue"}:
-        session = runtime_controller.store.load_session(session_id)
-        if (
-            session is None
-            or (not manager and session.get("goal_id") != goal_id)
-            or session.get("agent_id") != agent_id
-            or session.get("channel_id") != expected_channel
-            or session.get("status") == "closed"
-        ):
+        if _bound_topic_session(route, runtime_controller) is None:
             if manager and manager_session_requires_executor_rebind(
-                session,
+                runtime_controller.store.load_session(session_id),
                 expected_channel=expected_channel,
                 agent_id=agent_id,
             ):
@@ -896,9 +1163,7 @@ def answer_lark_goal_topic(
                     "manager_channel_executor_rebind_required",
                     _session_turn_effect(route),
                 )
-            raise RuntimeError(
-                "bound Agent session is unavailable or no longer matches"
-            )
+            raise RuntimeError("bound Agent session is unavailable or no longer matches")
         if ingress_mode == "live_steering":
             turn, _created = runtime_controller.steer_active_turn(
                 session_id=session_id,
@@ -934,6 +1199,10 @@ def answer_lark_goal_topic(
                 objective=str(objective or goal_id),
                 origin="lark",
             )
+            if native_mention:
+                runtime_controller.store.update_ingress_receipt(
+                    session_id, client_turn_id, status="delivered",
+                )
     else:
         # Compatibility path for bindings created before the three ingress modes.
         channel_id = "lark." + _opaque_digest(
@@ -1055,8 +1324,9 @@ def process_lark_goal_topic_event(
     reply_runner: CommandRunner,
     provider_runner: Any | None = None,
     proposal_deliverer: ProposalDeliverer | None = None,
+    mention_capture: Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
-    """Single-flight an addressed manager message through answer, reply and ACK.
+    """Single-flight a manager or live mention through ingress, reply and ACK.
 
     The inbox and delivery receipt make sequential retries safe, but two
     listeners can otherwise both observe an absent receipt and generate two
@@ -1071,10 +1341,20 @@ def process_lark_goal_topic_event(
         runtime_root=runtime_root,
     )
     route = decision.get("route")
-    if (
-        isinstance(route, Mapping)
-        and route.get("conversation_kind") == "manager"
-        and route.get("authority_mode") == ManagerAuthorityMode.TURN_AUTHORIZED.value
+    native_mention = isinstance(route, Mapping) and _route_native_mention(event, route, target_payload)
+    if mention_capture is not None and not native_mention:
+        return {"ok": True, "status": "ignored", "reason": "mention_binding_changed"}
+    if native_mention:
+        route = {
+            **route,
+            "native_mention": True,
+            "native_mention_text_only": event.get("message_type") == "text" and not event.get("attachment_count"),
+            "mention_capture": mention_capture,
+        }
+        decision = {**decision, "route": route}
+    if isinstance(route, Mapping) and (
+        native_mention or (route.get("conversation_kind") == "manager"
+                           and route.get("authority_mode") == ManagerAuthorityMode.TURN_AUTHORIZED.value)
     ):
         message_id = str(route.get("message_id") or "")
         if not MESSAGE_ID_PATTERN.fullmatch(message_id):
@@ -1252,6 +1532,7 @@ def _process_lark_goal_topic_event(
             "goal_id": route["goal_id"],
             "agent_id": route.get("agent_id"),
             "inbox_config_ref": config_ref,
+            **({"reason": "async_inbox_requires_bound_session"} if route.get("native_mention") else {}),
         }
     # Receipt ACK is visible while the synchronous manager is reasoning. The
     # private reaction ledger makes retries idempotent. Manager received ACKs
@@ -1295,6 +1576,11 @@ def _process_lark_goal_topic_event(
     captured_event = next(
         item for item in projection["items"] if item.get("message_id") == message_id
     )
+    if route.get("native_mention") and (
+        not captured_event.get("target_mention_count") or captured_event.get("historical_context_only")
+        or captured_event.get("sender_id") != canonical["sender_id"]
+    ):
+        return {"ok": False, "status": "native_mention_proof_changed", "goal_id": route["goal_id"]}
     route = {
         **route,
         "source_sender_id": str(canonical.get("sender_id") or ""),
@@ -1305,6 +1591,7 @@ def _process_lark_goal_topic_event(
         "root_id": captured_event.get("root_id", ""),
         "thread_id": captured_event.get("thread_id", ""),
         "thread_context": captured_event.get("thread_context"),
+        **({"native_mention_fresh": int(ingest.get("accepted_count") or 0) > 0} if route.get("native_mention") else {}),
         **({"context_materials": context_materials} if context_materials else {}),
     }
     delivery_path: Path | None = None
