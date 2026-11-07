@@ -184,6 +184,11 @@ def queued_chat_turn_ids(
     })["turn_ids"]
 
 
+def plan_native_mention_ingress(**facts: object) -> dict[str, Any]:
+    """Ask the shared queue/steering owner to select one exact ingress."""
+    return effect_runtime_result("chat.queue.mention", facts)
+
+
 def plan_queued_chat_steering(
     session: dict[str, Any], turn: dict[str, Any], active: dict[str, Any] | None,
     receipt: dict[str, Any] | None, *, ingress_id: str, operation_id: str, target: str, phase: str,

@@ -1325,6 +1325,7 @@ class ChatRuntimeController:
     def steer_active_turn(
         self, *, session_id: str, client_ingress_id: str, message: str,
         expected_turn_id: str | None = None, _queued_turn_id: str | None = None,
+        origin: str | None = None,
     ) -> tuple[dict[str, Any], bool]:
         """Steer the exact active Codex Turn with durable ingress deduplication."""
         session = self._require_steering_session(session_id)
@@ -1416,21 +1417,10 @@ class ChatRuntimeController:
                 error_code="live_steering_rejected",
             )
             raise
-        if _queued_turn_id is None:
-            self.store.append_message(session_id, role="user", text=message, turn_id=active_turn_id)
-        self.store.append_event(
-            session_id,
-            active_turn_id,
-            kind="turn.steered",
-            payload={"client_ingress_id": client_ingress_id,
-                **({"queued_turn_id": _queued_turn_id} if _queued_turn_id is not None else {})},
-        )
-        self.store.update_ingress_receipt(
-            session_id,
-            client_ingress_id,
-            status="delivered",
-            active_turn_id=active_turn_id,
-            error_code=None,
+        from .capabilities.native_chat.queued_admission import record_steering_delivery
+        record_steering_delivery(
+            self.store, session_id=session_id, turn_id=active_turn_id, ingress_id=client_ingress_id,
+            message=message, queued_turn_id=_queued_turn_id, origin=origin,
         )
         turn = self.store.load_turn(session_id, active_turn_id)
         if turn is None:

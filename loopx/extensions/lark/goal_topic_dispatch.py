@@ -21,6 +21,7 @@ class ProfileEventDispatch:
         *,
         workers: int = 4,
         capacity: int = 64,
+        reserve_priority: bool = False,
     ) -> None:
         if workers < 1 or capacity < workers:
             raise ValueError("dispatch capacity must cover its positive worker limit")
@@ -28,8 +29,9 @@ class ProfileEventDispatch:
         self._stop = stop
         self._workers = workers
         self._capacity = capacity
+        self._reserve_priority = reserve_priority and workers > 1
         self._condition = threading.Condition()
-        self._waiting: dict[str, deque[tuple[tuple[str, ...], str]]] = {}
+        self._waiting: dict[str, deque[tuple[tuple[str, ...], str, bool]]] = {}
         self._ready: deque[str] = deque()
         self._active: dict[str, tuple[str, ...]] = {}
         self._pending = 0
@@ -47,7 +49,7 @@ class ProfileEventDispatch:
         with self._condition:
             return self._failure is not None
 
-    def submit(self, lane: tuple[str, ...], line: str) -> bool:
+    def submit(self, lane: tuple[str, ...], line: str, *, priority: bool = False) -> bool:
         with self._condition:
             while self._pending >= self._capacity and not self._closing:
                 if self._stop.is_set():
@@ -59,7 +61,7 @@ class ProfileEventDispatch:
                 return False
             source = lane[0]
             queue = self._waiting.setdefault(source, deque())
-            queue.append((lane, line))
+            queue.append((lane, line, priority))
             self._pending += 1
             if source not in self._active and source not in self._ready:
                 self._ready.append(source)
@@ -75,7 +77,12 @@ class ProfileEventDispatch:
             if self._cancelled or len(self._active) >= self._workers:
                 break
             source = self._ready.popleft()
-            lane, line = self._waiting[source][0]
+            lane, line, priority = self._waiting[source][0]
+            # Keep one of the existing workers available for a verified live
+            # mention while ordinary answer handlers wait on Chat completion.
+            if self._reserve_priority and not priority and len(self._active) >= self._workers - 1:
+                self._ready.append(source)
+                continue
             occupied = {key for active in self._active.values() for key in active}
             if occupied.intersection(lane):
                 self._ready.append(source)
