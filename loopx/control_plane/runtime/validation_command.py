@@ -9,6 +9,8 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
+from ...extensions.process_runtime import terminate_process_tree
+
 # Frozen wire id shared with capabilities/issue_fix. Kept verbatim for wire
 # compatibility with existing caller-repo-branch receipts.
 CALLER_VALIDATION_RECEIPT_SCHEMA_VERSION = "issue_fix_validation_command_v0"
@@ -61,9 +63,6 @@ def run_caller_validation(
     )
     if not argv:
         raise ValueError("validation command must not be empty")
-
-    from ...extensions.process_runtime import terminate_process_tree
-
     with subprocess.Popen(
         argv,
         cwd=workspace,
