@@ -2066,6 +2066,16 @@ requires the original source, queue and native effect checks.
 The retained business obligation stays pending independently of the review's
 prose or failure; a review never starts a writable retry or another review.
 
+A completed review does not consume the original one-shot `work-1` reservation.
+If the original writable owner later becomes available through ordinary work,
+the existing reply worker can reconsider the retained original declaration.
+It must obtain fresh settled native-effect proof and recheck the exact original
+source, grant, completed review and binding snapshot. A later equivalent source
+submission still holds the old work. Review output and cold-reader inventory
+cannot substitute for that proof. Admission and dispatch use the existing
+continuation checks, and a crash adopts the same reserved Turn. A failed or
+still-incomplete continuation remains pending and gets no additional attempt.
+
 ### File-backed idle recovery observations
 
 Repeated recovery checks must not reparse every historical Turn and source body
