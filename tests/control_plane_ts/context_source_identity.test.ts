@@ -21,7 +21,7 @@ test("native projection omits only same-path source copies while identity keeps 
     ["count", ["count"]], ["target", ["moved"]],
   ])]]);
   const tokens = [[["count"], "1152921504606846977"], [["moved"], "1.0"]];
-  assert.deepEqual(contextProjectionChanges(source, projected, origins, true).changes,
+  assert.deepEqual(contextProjectionChanges(source, projected, origins, undefined, true).changes,
     [{path: ["target"], from: ["moved"]}]);
   assert.deepEqual(contextProjectionChanges(source, projected, origins).changes,
     [{path: ["count"], from: ["count"]}, {path: ["target"], from: ["moved"]}]);
