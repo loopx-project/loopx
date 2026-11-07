@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import os
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -12,6 +14,7 @@ from loopx.canary.planner import DEFAULT_CATALOG_PATH
 from loopx.canary.premerge import build_premerge_validation_gate
 from loopx.canary.runner import build_canary_smoke_suite_run, normalize_canary_command
 from loopx.cli import main
+from tests.source_cli import run_source_cli
 
 
 def _git(repo: Path, *args: str) -> None:
@@ -129,6 +132,105 @@ def test_concurrent_checkout_roots_do_not_share_process_state(tmp_path):
     for repo, result in zip(repos, results):
         assert result["ok"]
         assert str(repo) in result["selected_checks"][0]["stdout_tail"]
+
+
+_CLI_BUDGET_SCRIPT = "examples/control_plane/cli-output-budget-regression-smoke.py"
+_CLI_BUDGET_ENV = ("LOOPX_CLI_OUTPUT_BASE_REF", "LOOPX_CLI_OUTPUT_MAIN_REF")
+_NEIGHBOR_SCRIPT = "examples/semantic-vocabulary-drift-smoke.py"
+_AMBIENT_REFS = ("ambient-base", "ambient-main")
+
+
+def _cli_budget_checkout(path: Path) -> Path:
+    repo = _checkout(path)
+    probe = (
+        "import json, os\n"
+        f"print(json.dumps([os.environ.get(name) for name in {_CLI_BUDGET_ENV!r}]))\n"
+    )
+    for script in (
+        _NEIGHBOR_SCRIPT,
+        "examples/control_plane/control-plane-maintainability-ratchet-smoke.py",
+        _CLI_BUDGET_SCRIPT,
+    ):
+        child = repo / script
+        child.parent.mkdir(parents=True, exist_ok=True)
+        fail = (
+            'if os.environ.get("CANARY_FIXTURE_FAIL") == "1":\n'
+            "    raise SystemExit(7)\n"
+            if script == _CLI_BUDGET_SCRIPT else ""
+        )
+        child.write_text(probe + fail, encoding="utf-8")
+    metrics = Path("loopx/canary/module_metric_baseline.json")
+    (repo / metrics).parent.mkdir(parents=True)
+    (repo / metrics).write_bytes((DEFAULT_CATALOG_PATH.parents[2] / metrics).read_bytes())
+    _git(repo, "add", "examples", "loopx")
+    _git(repo, "commit", "-m", "install synthetic validation probes")
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _git(repo, "commit", "--allow-empty", "-m", "integration target")
+    _git(repo, "branch", "integration/base")
+    changed = repo / "loopx/control_plane/testing/cli_output_budget.py"
+    changed.parent.mkdir(parents=True)
+    changed.write_text("# Exercise CLI output budget selection.\n", encoding="utf-8")
+    _git(repo, "add", "loopx")
+    _git(repo, "commit", "-m", "select CLI output budget check")
+    return repo
+
+
+def _check_for_script(run: dict, script: str) -> dict:
+    return next(item for item in run["selected_checks"] if item["normalized"]["script"] == script)
+
+
+@pytest.mark.parametrize(
+    ("base_args", "expected_base", "child_exit"),
+    [
+        (["--git-diff-base", "integration/base"], "integration/base", 0),
+        ([], "origin/main", 0),
+        (["--git-diff-base", "integration/base"], "integration/base", 7),
+    ],
+)
+def test_premerge_scopes_cli_budget_base_to_its_child(tmp_path, base_args, expected_base, child_exit):
+    repo = _cli_budget_checkout(tmp_path / "repo")
+    env = {**os.environ, **dict(zip(_CLI_BUDGET_ENV, _AMBIENT_REFS)), "CANARY_FIXTURE_FAIL": str(int(child_exit != 0))}
+    response = run_source_cli(
+        ["--format", "json", "canary", "premerge", "--from-git-diff", "--tier", "quick",
+         "--no-progress", *base_args],
+        cwd=repo, env=env, check=False, timeout=60,
+    )
+    assert response.stdout, response.stderr
+    payload = json.loads(response.stdout)
+    assert payload["base_ref"] == expected_base
+    budget = _check_for_script(payload["catalog_run"], _CLI_BUDGET_SCRIPT)
+    neighbor = _check_for_script(payload["catalog_run"], _NEIGHBOR_SCRIPT)
+    assert json.loads(budget["stdout_tail"]) == [expected_base, expected_base]
+    assert json.loads(neighbor["stdout_tail"]) == list(_AMBIENT_REFS)
+    assert budget["returncode"] == child_exit
+    assert budget["ok"] is (child_exit == 0)
+    assert payload["validation_summary"]["failure_count"] == int(child_exit != 0)
+    if child_exit:
+        assert response.returncode != 0 and payload["gate"]["merge_gate_passed"] is False
+
+
+def test_cli_budget_children_keep_independent_bases_and_standalone_defaults(tmp_path, monkeypatch):
+    repo = _cli_budget_checkout(tmp_path / "repo")
+    for name, value in zip(_CLI_BUDGET_ENV, _AMBIENT_REFS):
+        monkeypatch.setenv(name, value)
+    monkeypatch.delenv("CANARY_FIXTURE_FAIL", raising=False)
+
+    def run(base: str | None) -> dict:
+        return build_canary_smoke_suite_run(
+            repo_root=repo, scripts=[_CLI_BUDGET_SCRIPT, _NEIGHBOR_SCRIPT],
+            parallel_jobs=2, cli_output_base_ref=base,
+        )
+
+    bases = ("integration/base", "origin/main", None)
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        results = list(executor.map(run, bases))
+    for base, result in zip(bases, results):
+        assert result["ok"] and result["effective_parallel_jobs"] == 2
+        budget = _check_for_script(result, _CLI_BUDGET_SCRIPT)
+        assert json.loads(budget["stdout_tail"]) == ([base, base] if base else list(_AMBIENT_REFS))
+        neighbor = _check_for_script(result, _NEIGHBOR_SCRIPT)
+        assert json.loads(neighbor["stdout_tail"]) == list(_AMBIENT_REFS)
+    assert tuple(os.environ[name] for name in _CLI_BUDGET_ENV) == _AMBIENT_REFS
 
 
 @pytest.mark.parametrize("command", [
