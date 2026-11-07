@@ -805,7 +805,8 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
         activation = native_context_activation(args)
         saved_page = bool(getattr(args, "initial_read", False) or getattr(args, "select", None))
         if saved_page and (args.format != "json" or not _context_page_output_enabled(args, activation) or args.offset != 0
-                or args.reference_file or args.selection_sha256 or args.page_bytes is not None
+                or args.reference_file or args.selection_sha256
+                or (args.page_bytes is not None and not activation["enabled"])
                 or (args.initial_read and args.select)):
             raise ValueError("Use JSON context-project at offset zero with native delivery or progressive --initial-read. "
                 "Choose either --initial-read or --select. Use context-read for replay or continuation.")
