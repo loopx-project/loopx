@@ -311,6 +311,11 @@ def project_todo_read(params: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("invalid typed Todo read result")
     if result.get("rejection"):
         raise EffectRuntimeRejected(result["rejection"]["message"])
+    if result.get("canonical") is not None and (native_read is not None or params.get("kind") == "quota_projection"):
+        from ..coordination.local_authority import validate_canonical_todo_read
+        read = native_read or next(request["summary_request"]["source_reference"]["read"]
+            for request in params["requests"] if "source_reference" in request["summary_request"])
+        validate_canonical_todo_read(result["canonical"], goal_id=read["source"]["goal_id"])
     if params.get("kind") == "group":
         summary = result.get("summary")
         if not isinstance(summary, dict) or summary.get("schema_version") != "todo_summary_v0":

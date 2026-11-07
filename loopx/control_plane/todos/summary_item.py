@@ -13,18 +13,20 @@ class _CanonicalTodoSummary(dict[str, Any]):
 
     def __init__(self, value: dict[str, Any], *, read: dict[str, Any],
                  expected: dict[str, Any], field: str, digest: str,
-                 basis: bytes, request_identity: object, evaluations: Any = None) -> None:
+                 basis: bytes, request_identity: object, evaluations: Any = None,
+                 source_row_fields: tuple[str, ...] = ()) -> None:
         super().__init__(value)
         self.read, self.expected, self.field, self.digest = read, expected, field, digest
         self.basis, self.request_identity = basis, request_identity
         self.evaluations = evaluations
+        self.source_row_fields = source_row_fields
 
     def __deepcopy__(self, memo: dict[int, Any]) -> _CanonicalTodoSummary:
         from copy import deepcopy
         result = _CanonicalTodoSummary({}, read=deepcopy(self.read, memo),
             expected=deepcopy(self.expected, memo), field=self.field, digest=self.digest,
             basis=self.basis, request_identity=self.request_identity,
-            evaluations=deepcopy(self.evaluations, memo))
+            evaluations=deepcopy(self.evaluations, memo), source_row_fields=self.source_row_fields)
         memo[id(self)] = result
         result.update(deepcopy(dict(self), memo))
         return result
@@ -35,7 +37,8 @@ def preserve_canonical_todo_source(source: dict[str, Any], value: dict[str, Any]
         return value
     return _CanonicalTodoSummary(value, read=source.read, expected=source.expected,
         field=source.field, digest=source.digest, basis=source.basis,
-        request_identity=source.request_identity, evaluations=source.evaluations)
+        request_identity=source.request_identity, evaluations=source.evaluations,
+        source_row_fields=source.source_row_fields)
 
 
 def bind_canonical_todo_sources(result: dict[str, Any], read: dict[str, Any]) -> None:
@@ -59,7 +62,8 @@ def bind_canonical_todo_sources(result: dict[str, Any], read: dict[str, Any]) ->
         fields[field] = _CanonicalTodoSummary(value, read={key: value for key, value in metadata.get("replay_read", read).items() if key != "return_projection"},
             expected=metadata["source"], field=field, digest=digest,
             basis=basis, request_identity=identity,
-            evaluations=(result.get("field_evaluations") or {}).get(field))
+            evaluations=(result.get("field_evaluations") or {}).get(field),
+            source_row_fields=tuple(metadata.get("source_row_fields", [])))
 
 
 def canonical_todo_select_read(params: dict[str, Any]) -> dict[str, Any] | None:
@@ -94,11 +98,6 @@ def canonical_todo_source_reference(value: dict[str, Any]) -> dict[str, Any] | N
         return None
     current = todo_read_source(value)
     original = json.loads(value.basis)
-    if any(key != "goal_acceptance_contract" and current["record"].get(key) != child
-           for key, child in original.items()):
-        # Transformed Todo facts remain explicit supplied source, rather than
-        # retaining the original provider's source claim.
-        return None
     changes: list[dict[str, Any]] = []
 
     def diff(before: Any, after: Any, path: list[Any]) -> None:
@@ -117,6 +116,13 @@ def canonical_todo_source_reference(value: dict[str, Any]) -> dict[str, Any] | N
             changes.append({"path": path, "value": after})
 
     diff(original, current["record"], [])
+    if (any(change["path"][0] in value.source_row_fields or
+            change["path"][0] in original and change["path"][0] != "goal_acceptance_contract"
+            for change in changes) or any(fact[0] and fact[0][0] in original
+            and fact[0][0] != "goal_acceptance_contract" for fact in current.get("python_values", []))):
+        # Transformed Todo facts remain complete supplied source, rather than
+        # retaining provider provenance. The native owner declares row lanes.
+        return None
     return {"read": value.read, "expected_source": value.expected,
         "field": value.field, "field_sha256": value.digest,
         "changes": changes, "python_values": current.get("python_values", [])}
