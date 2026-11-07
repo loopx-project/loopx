@@ -82,13 +82,18 @@ def test_live_process_group_cannot_be_settled():
 
 
 @pytest.mark.skipif(os.name != "posix", reason="Owned process-group cleanup requires POSIX")
-@pytest.mark.parametrize("fault", [None, "profile", "stop", "wrong_session", "duplicate_wake"])
-def test_real_sqlite_scheduler_retains_interrupted_session_then_admits_next_turn(tmp_path, monkeypatch, fault):
+@pytest.mark.parametrize("fault", [None, "profile", "stop", "wrong_session", "duplicate_wake", "late_native"])
+@pytest.mark.parametrize('legacy_returned', [False, True])
+def test_real_sqlite_scheduler_retains_interrupted_session_then_admits_next_turn(tmp_path, monkeypatch, fault, legacy_returned):
     from benchmark.runtime import worker
     from benchmark.tests.test_worker_phase_budget import _phase_worker
     from tests import test_external_scheduler_worker as scheduler_fixture
 
     env, project, _runtime, _source, goal_state, _clock = _phase_worker(tmp_path, monkeypatch)
+    # The installed worker keeps its native home outside the submitted workspace.
+    # Match that layout: the home also contains a shared-skills symlink which is
+    # intentionally not a stopped-source participant.
+    env['LOOPX_CODEX_HOME'] = str(tmp_path / 'native-home')
     monkeypatch.setattr(worker, "time", time)
     binary = Path(env["CODEX_BIN"])
     binary.write_text(f"#!{sys.executable}\n" + '''
@@ -149,6 +154,44 @@ else:
     assert first["host_invoked"] and first["budget_exhausted"]
     assert first["host_attempt_id"] == old["host_attempt"]["attempt_id"]
     assert first["native_process"]["after_cleanup"]["return_code"] is not None
+    if fault == 'late_native':
+        history = project / 'native-history.json'
+        value = json.loads(history.read_bytes())
+        value['completedAt'] = int(time.time()) + 60
+        history.write_text(json.dumps(value))
+    if legacy_returned:
+        from datetime import datetime, timezone
+        from benchmark.edgebench.stopped_recovery import prepare_stopped_recovery
+        from benchmark.tests.test_stopped_recovery import _fake_container
+
+        # Model the previous writer's actual persisted shape. These synthetic
+        # source bytes, including the returned stop, must remain unchanged.
+        old['host_attempt'].pop('attempt_id')
+        old['host_attempt']['session_id'] = None
+        original.write_text(json.dumps(old))
+        old_bytes = original.read_bytes()
+        for key in ('host_attempt_id', 'native_process', 'goal_id', 'agent_id'):
+            first.pop(key, None)
+        receipts[0].write_text(json.dumps(first))
+        returned_at = time.time()
+        os.utime(receipts[0], (returned_at, returned_at))
+        os.utime(original, (returned_at + .1, returned_at + .1))
+        home = Path(env['LOOPX_CODEX_HOME'])
+        for name in ('state_5.sqlite', 'thread_history_1.sqlite'):
+            (home / name).write_text('synthetic native observer state')
+        (home / 'sessions').mkdir(exist_ok=True)
+        (home / 'sessions/original.jsonl').write_text('{}\n')
+        phase_clock = tmp_path / 'original-phase-deadline'
+        phase_clock.write_text(os.environ['LOOPX_PHASE_DEADLINE_EPOCH'])
+        declaration = dict(goal_id=env['LOOPX_GOAL_ID'], agent_id=env['LOOPX_AGENT_ID'],
+            workspace=str(project), runtime_root=env['LOOPX_RUNTIME_ROOT'], native_home=str(home),
+            registry=env['LOOPX_REGISTRY'], scheduler_state=str(original),
+            wake_log_dir=env['LOOPX_WAKE_LOG_DIR'], phase_clock=str(phase_clock), wake_turn_id=first['turn_id'])
+        box, client = _fake_container(monkeypatch)
+        box.attrs['State']['FinishedAt'] = datetime.now(timezone.utc).isoformat()
+        proof = tmp_path / 'legacy-source-proof.json'
+        prepare_stopped_recovery(client, container_id=box.id, declaration=declaration, output=proof)
+        monkeypatch.setenv('LOOPX_INTERRUPTED_SOURCE', str(proof))
     deadline = time.time() + 60
     monkeypatch.setenv("LOOPX_PHASE_DEADLINE_EPOCH", str(deadline))
     if fault == "profile":
@@ -171,6 +214,7 @@ else:
         brief.write_text(json.dumps({'ok': True, 'handoff_text': 'Retained submission old-7 is now restored-7; read the inherited history. Goal and opportunities are unchanged.'}))
         monkeypatch.setenv('LOOPX_RECOVERY_HANDOFF', str(brief))
         monkeypatch.setenv('LOOPX_RECOVERY_HANDOFF_SHA256', hashlib.sha256(brief.read_bytes()).hexdigest())
+    original_receipt = receipts[0].read_bytes()
     new = resume_state_file(str(original), phase_deadline=deadline, agent_id=args.agent_id,
         wake_log_dir=env["LOOPX_WAKE_LOG_DIR"], env=dict(os.environ))
     if fault:
@@ -192,6 +236,7 @@ else:
     argv = [json.loads(line) for line in (project / "native-argv").read_text().splitlines()]
     assert len(argv) == 2 and "resume" in argv[1] and "original-native" in argv[1]
     assert original.read_bytes() == old_bytes and goal_state.read_bytes() == initial_goal
+    assert receipts[0].read_bytes() == original_receipt
     assert json.loads(Path(new).read_bytes())["recovery_handoff_delivered"] is True
     assert scheduler_fixture.worker.run_worker(args) == 0
     inputs = [json.loads(line) for line in (project / 'native-inputs').read_text().splitlines()]
