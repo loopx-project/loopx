@@ -2,6 +2,33 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {contextSourceIdentity, contextProjectionChanges, contextProjectionIdentity, referenceQuotaSummaryLanes} from "../../loopx/control_plane/quota/diagnostic_projection.ts";
 
+test("smaller scalar record replacements avoid repeated removal paths and keep sparse edits", () => {
+  const source = {summary: {claim_scope: {rows: [{todo_id: "t", text: "Full constraint.", note: "Evidence.",
+    status: "open", claimed_by: "peer", priority: "P0", action_kind: "inspect"}]}}};
+  const reference = {todo_id: "t", context_ref: "/summary/literal/0"};
+  const projected = {summary: {claim_scope: {rows: [reference]}}};
+  assert.deepEqual(contextProjectionChanges(source, projected).changes,
+    [{path: ["summary", "claim_scope", "rows", 0], value: reference}]);
+  const body = "Keep this complete body. ".repeat(100);
+  assert.deepEqual(contextProjectionChanges({record: {body, status: "open"}},
+    {record: {body, status: "done"}}).changes, [{path: ["record", "status"], value: "done"}]);
+});
+
+test("native projection omits only same-path source copies while identity keeps numeric lineage", () => {
+  const source = {count: 2 ** 60, moved: 1, old: "unchanged"};
+  const projected = {...source, target: source.moved};
+  const origins = new WeakMap([[projected, new Map([
+    ["count", ["count"]], ["target", ["moved"]],
+  ])]]);
+  const tokens = [[["count"], "1152921504606846977"], [["moved"], "1.0"]];
+  assert.deepEqual(contextProjectionChanges(source, projected, origins, true).changes,
+    [{path: ["target"], from: ["moved"]}]);
+  assert.deepEqual(contextProjectionChanges(source, projected, origins).changes,
+    [{path: ["count"], from: ["count"]}, {path: ["target"], from: ["moved"]}]);
+  assert.notEqual(contextProjectionIdentity(source, projected, tokens, origins),
+    contextProjectionIdentity(source, projected, [], origins));
+});
+
 test("source identity keeps number spellings separate from strings and retains later exact owners", () => {
   const source = {first: {observations: [1, 2 ** 60]},
     second: {observations: [1, 2 ** 60]}, third: {observations: [1, 2 ** 60]},
