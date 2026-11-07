@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from copy import deepcopy
 from typing import Any
 
 from ..effect_runtime import effect_runtime_projection_result, source_number_tokens
@@ -321,7 +322,13 @@ def prepare_context_delivery(
         if consumed_pointers and observe_first_read:
             source["observe_first_read"] = True
     result = _turn_envelope_result("context_delivery", **source, source_edits=True)
-    return _apply_context_projection_changes(source, result)
+    transaction = _apply_context_projection_changes(source, result)
+    if native_projection is not None:
+        delivery = transaction["delivery"]
+        if delivery["mode"] == "full" and "context" not in delivery:
+            # Preserve the separately owned delivery body for callers.
+            delivery["context"] = deepcopy(transaction["context"])
+    return transaction
 
 
 def prepare_progressive_context(context: Mapping[str, Any], *, source_reference: Mapping[str, Any],

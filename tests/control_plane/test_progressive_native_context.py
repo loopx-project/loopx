@@ -381,19 +381,26 @@ def test_native_required_view_and_encoding_use_one_runtime_request(tmp_path, mon
     setup(tmp_path, monkeypatch)
     invoke = turn_envelope.effect_runtime_projection_result
     requests = []
+    responses = []
 
     def observe(method, params, **kwargs):
         requests.append((method, params["operation"]))
-        return invoke(method, params, **kwargs)
+        response = invoke(method, params, **kwargs)
+        responses.append(response)
+        return response
 
     monkeypatch.setattr(turn_envelope, "effect_runtime_projection_result", observe)
     original = payload()
     before = json.dumps(original, sort_keys=True)
     for capture in ("cold", "warm"):
         requests.clear()
+        responses.clear()
         _, wire = project(tmp_path, capture, payload=original)
         assert requests == [("quota.turn_envelope.evaluate", "context_delivery")]
         required = json.loads(Path(wire["recovery"]["path"]).read_bytes())
+        if capture == "cold":
+            assert wire["mode"] == "full" and wire["context"] == required
+            assert not any(edit["path"][:2] == ["delivery", "context"] for edit in responses[0]["changes"])
         assert outcome(required)["requirements"][0]["description"] == "Preserve this final requirement."
         assert json.loads(Path(required["context_details"]["path"]).read_bytes()) == original
     assert wire["mode"] == "delta"
