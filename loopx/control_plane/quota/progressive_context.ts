@@ -6,8 +6,7 @@ import {visionAuthoringContract} from "../goals/vision_checkpoint.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {jsonObject, requireBoolean, requireJsonObject} from "../runtime_decode.ts";
 import {GOAL_OUTCOMES_SCHEMA, OUTCOME_CONTEXT_NAVIGATION_SCHEMA} from "../goals/outcome_requirements.ts";
-import {EXECUTION_PREPARATION_SCHEMA_VERSION} from "../work_items/execution_preparation.ts";
-import {FULL_OUTCOME_READ_GUIDANCE, INTERACTION_CONTRACT_SCHEMA_VERSION, PROGRESSIVE_OUTCOME_READ_GUIDANCE}
+import {FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE, progressivePreparationScope}
   from "../work_items/interaction_contract.ts";
 import {quotaSummaryReferences, contextSourceIdentity, contextProjectionChanges,
   type ProjectionSourceValues} from "./diagnostic_projection.ts";
@@ -237,27 +236,10 @@ export function progressiveContextPlan(request: JsonObject): JsonObject {
           row.reason.replace(FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE)});
     });
   }
-  const interaction = jsonObject(payload.interaction_contract);
-  const cli = jsonObject(interaction?.cli_channel);
-  const preparation = jsonObject(cli?.execution_preparation);
-  const boundary = jsonObject(payload.goal_boundary);
-  const scopes = boundary?.write_scope;
-  // Selection and an ordinary claim only prepare work. Keep the full list
-  // addressable before a scope decision, and inline as soon as delivery is ready.
-  if (interaction?.schema_version === INTERACTION_CONTRACT_SCHEMA_VERSION &&
-      payload.should_run === true && payload.effective_action === EffectiveAction.NORMAL_RUN &&
-      jsonObject(interaction.agent_channel)?.delivery_allowed === false &&
-      cli?.spend_allowed_now === false && cli.spend_after_validation === false &&
-      (cli.selection_required === true && !Object.hasOwn(cli, "execution_preparation") &&
-         jsonObject(cli.selection_command)?.schema_version === "action_selection_cli_command_v1" ||
-       preparation?.schema_version === EXECUTION_PREPARATION_SCHEMA_VERSION && preparation.state === "claim_required" &&
-         cli.selection_required !== true && payload.normal_delivery_allowed === false &&
-         preparation.delivery_allowed === false && jsonObject(preparation.claim)?.host_execution_allowed === true) &&
-      boundary && !Object.hasOwn(boundary, "write_scope_pointer") &&
-      Array.isArray(scopes) && scopes.length > 0 && scopes.every(scope => typeof scope === "string")) {
-    const path = ["goal_boundary", "write_scope"];
-    deferred.push({path});
-    instructions.push({path: ["goal_boundary", "write_scope_pointer"], value: pointer(path)});
+  const scope = progressivePreparationScope(payload);
+  if (scope) {
+    deferred.push({path: scope.path, read_instruction: scope.instruction});
+    instructions.push({path: scope.marker_path, value: pointer(scope.path)});
   }
   if (!deferred.length && !references.length) return unchanged;
   if (references.length) instructions.push({path: ["context_reference_instruction"], value:
@@ -352,9 +334,7 @@ function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSour
           return jsonObject(source)?.content !== undefined && !hasRead(path) ? [pointer(path)] : [];
         }) : [],
       },
-      instruction: (deferred.some(edit => pointer(edit.path as Path) === "/goal_boundary/write_scope")
-        ? "If choosing work depends on write scope, select the pointer in goal_boundary.write_scope_pointer from the source below. "
-          + "Use the complete current scope from the ready decision before delivery. " : "")
+      instruction: deferred.map(edit => typeof edit.read_instruction === "string" ? edit.read_instruction : "").join("")
         + "This view retains complete requirements and current review/check states. "
         + "Source history, review reasoning and evidence references are supporting material. "
         + "Read them from this same immutable capture when a decision, verification or review depends on them. "
