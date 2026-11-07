@@ -32,7 +32,22 @@ BENCHMARK_CONCURRENCY_COMMANDS = {
     "concurrency-admit",
     "concurrency-release",
     "concurrency-tune",
+    "terminal-reconcile",
 }
+
+
+def _render_terminal_markdown(payload: dict[str, object]) -> str:
+    row = payload.get("row", {})
+    return "\n".join([
+        "# Benchmark Terminal Reconciliation", "",
+        f"- Run: `{row.get('run_id')}`",
+        f"- Status: `{row.get('status')}`",
+        f"- Preview: `{payload.get('dry_run')}`",
+        f"- Board readback verified: `{payload.get('board_readback_verified')}`",
+        f"- Slot readback verified: `{payload.get('slot_readback_verified')}`",
+        f"- Released: `{payload.get('released')}`",
+        f"- Already released: `{payload.get('already_released')}`", "",
+    ])
 
 
 def _add_location_arguments(parser: argparse.ArgumentParser) -> None:
@@ -122,6 +137,18 @@ def register_benchmark_concurrency_commands(
     _add_location_arguments(release_parser)
     release_parser.add_argument("--run-id", required=True)
     _add_execute_argument(release_parser)
+
+    terminal_parser = benchmark_subparsers.add_parser(
+        "terminal-reconcile",
+        help="Write a bound provider terminal result, then release its original admission.",
+    )
+    add_subcommand_format(terminal_parser)
+    _add_location_arguments(terminal_parser)
+    terminal_parser.add_argument(
+        "--request-json", required=True,
+        help="Host-owned terminal proof with admission_receipt, identity and terminal; never solver input.",
+    )
+    _add_execute_argument(terminal_parser)
 
     tune_parser = benchmark_subparsers.add_parser(
         "concurrency-tune",
@@ -237,13 +264,27 @@ def handle_benchmark_concurrency_command(
                 execute=args.execute,
                 agent_id=args.agent_id,
             )
+        elif args.benchmark_command == "terminal-reconcile":
+            from ..capabilities.benchmark_toolkit.terminal_followthrough import reconcile_benchmark_terminal
+
+            request = _read_json_argument(args.request_json)
+            if not isinstance(request, dict) or set(request) != {"admission_receipt", "identity", "terminal"}:
+                raise ValueError("invalid benchmark terminal request")
+            payload = reconcile_benchmark_terminal(
+                project=project, goal_id=args.goal_id, **request,
+                execute=args.execute, agent_id=args.agent_id,
+            )
         else:
             payload = _tune_payload(args, path=path)
         payload["goal_id"] = args.goal_id
         payload["path_recorded"] = False
     except (OSError, TypeError, ValueError):
         args.benchmark_concurrency_parser.error(
-            "invalid benchmark concurrency envelope input"
+            "terminal reconciliation did not complete; check input and runtime, then retry the original proof"
+            if args.benchmark_command == "terminal-reconcile"
+            else "invalid benchmark concurrency envelope input"
         )
-    print_payload(payload, output_format(args), render_benchmark_concurrency_markdown)
+    renderer = (_render_terminal_markdown if args.benchmark_command == "terminal-reconcile"
+                else render_benchmark_concurrency_markdown)
+    print_payload(payload, output_format(args), renderer)
     return 0 if payload.get("ok") is not False else 2

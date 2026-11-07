@@ -108,7 +108,8 @@ def prepare_stopped_recovery(client, *, container_id: str, declaration: dict,
         state = json.loads(state_raw)
         prior = state.get('host_attempt', {})
         failed = prior.get('status') == 'failed'
-        if (prior.get('status') not in {'started', 'failed'}
+        returned_budget_stop = prior.get('status') == 'stopped'
+        if (prior.get('status') not in {'started', 'failed', 'stopped'}
                 or json.loads(copied['host_pending'].read_bytes()) != {'pending': True}):
             raise ValueError('Stopped legacy recovery requires the original unresolved Host attempt')
         wake = copied['wake_log_dir'] / declaration['wake_turn_id'] / 'receipt.json'
@@ -116,6 +117,26 @@ def prepare_stopped_recovery(client, *, container_id: str, declaration: dict,
         receipt = json.loads(raw)
         candidates = [p for p in copied['wake_log_dir'].glob('*/receipt.json')
                       if p.stat().st_mtime > copied['scheduler_state'].stat().st_mtime]
+        if returned_budget_stop:
+            from benchmark.runtime.scheduler import BUDGET_EXHAUSTED_EXIT_CODE
+
+            session = receipt.get('session', {})
+            if (prior.get('attempt_id') is not None or 'host_failure' in prior
+                    or type(prior.get('stop_exit_code')) is not int
+                    or prior['stop_exit_code'] != BUDGET_EXHAUSTED_EXIT_CODE
+                    or type(state.get('last_wake_rc')) is not int
+                    or state['last_wake_rc'] != BUDGET_EXHAUSTED_EXIT_CODE
+                    or state.get('last_wake_status') != 'wake_requested_stop'
+                    or state.get('last_wake_failure_kind') is not None
+                    or receipt.get('timed_out') is not True
+                    or type(receipt.get('return_code', BUDGET_EXHAUSTED_EXIT_CODE)) is not int
+                    or receipt.get('return_code', BUDGET_EXHAUSTED_EXIT_CODE) != BUDGET_EXHAUSTED_EXIT_CODE
+                    or session.get('binding_scope') != 'agent'
+                    or not isinstance(session.get('session_id'), str) or not session['session_id'].strip()
+                    or prior.get('session_id') not in (None, session['session_id'])
+                    or any(key in receipt and receipt[key] != declaration[key]
+                           for key in ('goal_id', 'agent_id'))):
+                raise ValueError('Stopped source lacks its exact returned budget stop')
         if failed:
             from loopx.control_plane.turn_driver.host_failure import build_host_failure_record, normalize_host_failure_record
 
@@ -131,12 +152,14 @@ def prepare_stopped_recovery(client, *, container_id: str, declaration: dict,
                     or type(receipt.get('return_code')) is not int or receipt['return_code'] != 1
                     or receipt.get('budget_exhausted')):
                 raise ValueError('Stopped source lacks its exact returned quota failure')
-            # A returned failure is committed after its receipt. Do not borrow
-            # an earlier or later wake, or treat an uncertain started attempt as returned.
+        if failed or returned_budget_stop:
+            # Returned failures and budget stops are committed after their
+            # receipt. A still-started legacy attempt has the opposite order.
+            # Neither path may borrow an earlier wake or skip a later one.
             all_receipts = list(copied['wake_log_dir'].glob('*/receipt.json'))
             newest = max((p.stat().st_mtime for p in all_receipts), default=0)
             if candidates or [p for p in all_receipts if p.stat().st_mtime == newest] != [wake]:
-                raise ValueError('Stopped failure is not the last returned wake')
+                raise ValueError('Stopped source is not the last returned wake')
             candidates = [wake]
         if candidates != [wake]:
             raise ValueError('Stopped source has no unique returned wake after its Host attempt')
@@ -147,12 +170,18 @@ def prepare_stopped_recovery(client, *, container_id: str, declaration: dict,
             raise ValueError('Stopped source lacks an exact interrupted budget receipt')
         start = int(declaration['wake_turn_id'].split('-')[1]) / 1_000_000_000
         phase = float(copied['phase_clock'].read_text())
-        if not math.isfinite(phase) or not start <= min(phase, finished) or (not failed and phase > finished):
+        # A returned stop proves the process was reaped before its receipt.
+        # Legacy workers could reserve cleanup time before the hard deadline;
+        # do not enlarge that native Turn's window to a later container stop.
+        process_stopped = math.floor(wake.stat().st_mtime) if returned_budget_stop else finished
+        if (not math.isfinite(phase) or not start <= min(phase, process_stopped)
+                or process_stopped > finished
+                or (not failed and not returned_budget_stop and phase > finished)):
             raise ValueError('Stopped source phase did not expire during the original wake')
         result = {'container_id': box.id, 'source_state': before, 'declaration': declaration,
                   'components': components, 'scheduler_state_sha256': hashlib.sha256(state_raw).hexdigest(),
                   'receipt_sha256': hashlib.sha256(raw).hexdigest(),
-                  'process_started_at': start, 'process_stopped_at': finished,
+                  'process_started_at': start, 'process_stopped_at': process_stopped,
                   'source_phase_deadline_epoch': phase, 'session': receipt.get('session'),
                   'execution_authority_granted': False}
         box.reload()
