@@ -3,11 +3,8 @@
 This research adapter calls SForge's native `run_agent`. Task images, prompts,
 submission cooldowns, judge isolation and scoring remain owned by the pinned
 EdgeBench checkout. Best-only adds host capture/admission scheduling; native and
-blind retain native automatic evaluation. The CLI defaults to a reviewed commit
-from the shared
-[EdgeBench integration branch](https://github.com/huangruiteng/EdgeBench/tree/codex/edgebench-integration),
-maintained jointly by `huangruiteng` and `loopx-agent`. The canonical repository
-and revision/compatibility-patch pair live in [`source-default.json`](source-default.json).
+blind retain native automatic evaluation. The canonical repository and pinned
+revision/compatibility-patch pair live in [`source-default.json`](source-default.json).
 Run the controller on Linux with Docker and native SForge
 iptables permissions; a macOS Docker socket alone does not provide that boundary.
 
@@ -24,7 +21,7 @@ never repin an active or historical cohort.
 
 For a **new cohort with no explicit source options**, `source-default.json`
 selects the reviewed provider commit
-[`118f9257d39c71d0805bb5b9cd4eb85d13a1e6d2`](https://github.com/huangruiteng/EdgeBench/commit/118f9257d39c71d0805bb5b9cd4eb85d13a1e6d2)
+[`476b34d17e759a7dbcf9ec36a12ff42b757b462a`](https://github.com/huangruiteng/EdgeBench/commit/476b34d17e759a7dbcf9ec36a12ff42b757b462a)
 and the versioned
 [`nonfinite-checkpoint-v2` compatibility patch](compatibility/nonfinite-checkpoint-v2.patch).
 This LoopX-owned patch fixes the native checkpoint representation of nonfinite
@@ -113,6 +110,28 @@ Maintainers update the shared branch through reviewed integration work and keep
 its PR manifest current. Changing the default repository/branch requires updating
 the single source file and this protocol; adding a second contributor-specific
 default would split the source of truth again.
+
+## Reserve a native evaluator per arm
+
+For matched native or blind archive-submission trials, give the judge the exact
+`--run-id` of each worker at startup. Use the same log directory for the judge and
+workers. This example reserves four evaluator lanes.
+
+```sh
+SFORGE_TASKS_DIR=/data/tasks python -m benchmark.edgebench.serve \
+  --log-dir /data/private-runs --port 8080 \
+  --judge-isolated-run official-01 --judge-isolated-run native-goal-01 \
+  --judge-isolated-run context-on-01 --judge-isolated-run context-off-01 \
+  --judge-max-concurrent 4 --judge-max-pending 4
+```
+
+Each listed run gets one FIFO evaluator and an equal share of
+`--judge-max-pending`, rounded down. A full lane rejects another submission
+before spending a round or starting its cooldown. The judge rejects
+registrations for unlisted run IDs. Set `--judge-max-concurrent` to at least the
+number of reserved runs and provision enough CPU, memory and host evaluation
+slots for all of them. Shared hardware can still affect grading latency.
+Omitting the run list selects the shared evaluator pool.
 
 ## Worker profiles
 
@@ -407,11 +426,10 @@ does not limit game API calls.
 
 The pinned native judge's cooldown is in-memory session state. Server restart or
 fresh registration does not prove cooldown continuity or safe retry after an
-ambiguous response. Its capacity bound is aggregate, not a reserved evaluation
-lane per run. Qualify restart/reconciliation, per-run contention and infrastructure
-failure accounting before admitting a campaign; a one-hour cooldown alone does
-not establish fairness. This adapter change does not repair those provider gaps
-or change scoring, accepted-submission accounting, or final selection.
+ambiguous response. For matched trials, [reserve a native evaluator per arm](#reserve-a-native-evaluator-per-arm)
+and record the scheduling configuration in the study manifest. Qualify restart
+and reconciliation, shared-host contention and infrastructure failure accounting
+before admitting a campaign.
 
 The shared native task policy also describes accepted-result recovery. Check the
 pinned provider's generated `sforge-submit --help`: clients that support
