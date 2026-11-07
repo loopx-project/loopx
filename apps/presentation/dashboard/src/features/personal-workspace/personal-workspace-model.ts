@@ -165,7 +165,8 @@ export type WorkspaceGoalSubagentConfiguration = {
 };
 
 export type WorkspaceGoal = {
-  sourceAccess?: {namespace: string; label: string; readOnly: true};
+  sourceAccess?: {namespace: string; label: string; readOnly: true; original_goal_id?: string};
+  sourceStrategy?: {recordedAt: string; summary: string; observation?: string};
   /** Registry organization in this status source; not Agent ownership or execution dependency. */
   parentGoalId?: string | null;
   /** Bounded, safe text from this Goal's declared source document. */
@@ -581,7 +582,7 @@ export type PersonalWorkspaceCallbacks = {
   onInterruptConversationTurn?: (contextId: string, turnId: string) => Promise<void>;
   onSteerConversationTurn?: (contextId: string, turnId: string, message: string, ingressId: string) => Promise<void>;
   onQueueConversationTurn?: (contextId: string, sessionId: string, message: string, ingressId: string, attachments?: WorkspaceImageAttachment[]) => Promise<void>;
-  onObserveConversationTurn?: (contextId: string, sessionId: string, turnId: string) => Promise<void>;
+  onObserveConversationQueue?: (contextId: string, sessionId: string) => Promise<void>;
   onOpenGoal?: (goalId: string) => void | Promise<void>;
   onOpenGoalView?: (tab: WorkspaceGoalTab) => void;
   onOpenRunSession?: (run: WorkspaceRun) => void | Promise<void>;

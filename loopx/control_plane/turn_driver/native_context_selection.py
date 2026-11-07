@@ -23,9 +23,11 @@ def verified_context_selection(state: dict[str, Any], page: dict[str, Any]) -> d
                   if isinstance(entry := state.get(key), dict)]
     reference_file = page.get("reference_file")
     selected = None
+    observation = None
     if isinstance(reference_file, str):
         _, metadata = read_context_read_reference(reference_file)
         selected = metadata.get("selection")
+        observation = metadata.get("observed_read")
         if not isinstance(selected, dict) or selected.get("list_fields") is not False:
             return None
         path, source_digest = metadata["path"], metadata["sha256"]
@@ -57,15 +59,18 @@ def verified_context_selection(state: dict[str, Any], page: dict[str, Any]) -> d
         return None
     _, raw, source = read_context_capture_file(str(physical), source_digest, private=True)
     actual_digest = source_digest
+    presentation_pointers: set[str] = set()
     if selected is not None or "selected_pointers" in page:
         selection, selected_raw, actual_digest = context_selection_view(source, select=pointers,
             initial_read=initial_read, list_fields=False,
             list_depth=selected.get("list_depth") if selected else None,
-            expected_sha256=view_digest, preserve_selection_order=selected is not None and not initial_read)
+            expected_sha256=view_digest, preserve_selection_order=selected is not None and not initial_read,
+            present_goal_narrative=bool(selected and selected.get("present_goal_narrative") is True))
         if selected_raw is None:
             return None
         raw = selected_raw
         pointers = [item["pointer"] for item in selection["selections"]]
+        presentation_pointers = set(selection.get("presentation_pointers", []))
     if actual_digest != view_digest or len(raw) != total or raw[offset:offset + len(actual)] != actual:
         return None
     end = offset + len(actual)
@@ -73,6 +78,17 @@ def verified_context_selection(state: dict[str, Any], page: dict[str, Any]) -> d
             or (page.get("eof") is False and (end >= total or page.get("next_offset") != end))
             or type(page.get("eof")) is not bool):
         return None
-    sections = _turn_envelope_result("context_read_sections", context=source, select=pointers)["sections"]
+    inherited = {}
+    if isinstance(observation, dict):
+        from .native_first_read import observation_current
+
+        # The hook already matched its event session/workspace to this journal.
+        # Native hook processes need not inherit the shell's CODEX_THREAD_ID.
+        if observation_current(observation, physical, source_digest, hook_session=state.get("session_id")):
+            inherited = observation["fields"]
+    # A display edit is not an observation of its literal source text.
+    literal_pointers = [pointer for pointer in pointers if pointer not in presentation_pointers]
+    sections = _turn_envelope_result("context_read_sections", context=source, select=literal_pointers,
+        consumed_pointers=inherited)["sections"] if literal_pointers else {}
     return {**page, "schema_version": "context_capture_page_v1", "sha256": view_digest,
         "selected_pointers": pointers, "source_sha256": current["sha256"], "read_sections": sections}

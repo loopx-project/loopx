@@ -141,6 +141,15 @@ for (const bytes of [Buffer.from("\ufeff{}"), Buffer.from([0xff]), Buffer.alloc(
   });
 }
 
+test("a valid record at the byte limit retains its complete content", async t => {
+  const f = fixture(t), request = f.publish(1);
+  const path = join(f.folder, request.request_id + ".json");
+  const original = readFileSync(path);
+  writeFileSync(path, Buffer.concat([original, Buffer.alloc(128_000 - original.length, 32)]));
+  const result = (await f.call("pending", {request_id: request.request_id})).result as JsonObject;
+  assert.equal((result.items as JsonObject[])[0].message, request.message);
+});
+
 test("malformed receipts retain the request and recovery advice", async t => {
   const f = fixture(t), request = f.publish(1);
   mkdirSync(join(f.base, "decisions"));

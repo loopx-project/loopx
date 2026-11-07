@@ -1,3 +1,4 @@
+import {normalizeWorkYardstickCapture} from "../../../../../loopx/control_plane/work_items/yardstick_decision.js";
 import {sourceReadApiUrl} from "./local-status-query";
 import type {OracleEvidence} from "./goal-acceptance-observation";
 import { HANDOFF_MODES, EXECUTION_HANDOFF_MODES, type ExecutionHandoffMode } from "../../../../../loopx/control_plane/coordination/handoff_mode_vocabulary.js";
@@ -3008,6 +3009,7 @@ const exploreResultPageSchema = z.object({
     evidence_refs: z.array(z.string()), last_updated_at: z.string(),
     measurements: z.unknown().transform(value => normalizeExploreMeasurements(value)).optional(),
     measurement_error: z.string().optional(),
+    work_yardstick: z.unknown().transform(capture => normalizeWorkYardstickCapture({capture})).optional(),
     linked_todos_available: z.boolean().optional(),
     linked_todos: z.array(z.object({
       todo_id: z.string(), text: z.string(), status: z.string(), claimed_by: z.string(),
@@ -3015,9 +3017,39 @@ const exploreResultPageSchema = z.object({
   })),
 });
 export type ExploreResultPage = z.infer<typeof exploreResultPageSchema>;
-export async function fetchExploreResults(goalId: string, cursor?: string, readSourceUrl?: string) {
+export async function fetchExploreResults(goalId: string, cursor?: string, readSourceUrl?: string, originalGoalId = goalId) {
   const query = new URLSearchParams({goal_id: goalId, view: "findings", ...(cursor ? {cursor} : {})});
   const page = exploreResultPageSchema.parse(await requestJson<unknown>(sourceReadApiUrl(readSourceUrl, `/api/chat/explore-results?${query}`)));
-  if (page.goal_id !== goalId) throw new Error("Explore result Goal mismatch");
+  if (page.goal_id !== originalGoalId) throw new Error("Explore result Goal mismatch");
+  for (const item of page.items) if (item.work_yardstick) normalizeWorkYardstickCapture({
+    capture: item.work_yardstick, goal_id: originalGoalId, agent_id: item.agent_id, evidence_refs: item.evidence_refs,
+  });
   return page;
+}
+
+const researchHistoryTimingSchema = z.object({
+  ok: z.literal(true),
+  goal_id: z.string(),
+  source_namespace: z.string().nullable(),
+  first_recorded_at: z.iso.datetime().nullable(),
+  last_recorded_at: z.iso.datetime().nullable(),
+  untimed_record_count: z.number().int().nonnegative(),
+  strategy_recorded_at: z.iso.datetime().nullable(),
+}).refine(value => value.first_recorded_at === null
+  ? value.last_recorded_at === null
+  : value.last_recorded_at !== null && Date.parse(value.first_recorded_at) <= Date.parse(value.last_recorded_at));
+export type ResearchHistoryTiming = z.infer<typeof researchHistoryTimingSchema>;
+
+export async function fetchResearchHistoryTiming(
+  goalId: string, originalGoalId: string, namespace: string | null, directoryUrl: string | undefined, signal: AbortSignal,
+): Promise<ResearchHistoryTiming> {
+  const statusUrl = namespace ? `/status.json?source_namespace=${namespace}` : directoryUrl;
+  const query = new URLSearchParams({goal_id: goalId, view: "history-timing"});
+  const timing = researchHistoryTimingSchema.parse(await requestJson<unknown>(
+    sourceReadApiUrl(statusUrl, `/api/chat/explore-results?${query}`), {signal},
+  ));
+  if (timing.goal_id !== originalGoalId || timing.source_namespace !== namespace) {
+    throw new Error("Research timing source mismatch");
+  }
+  return timing;
 }

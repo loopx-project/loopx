@@ -1,11 +1,11 @@
-# 第 11 讲：扩展层、Explore 与 Multi-Agent 产品
+# 第 11 讲：扩展层、Explore 与 Agent 协作
 
 > **本讲结论：** Extension 交付可选 provider、domain facts、capability 或 presentation；
 > 它复用同一份 goal、todo、quota、scheduler、evidence 与 handoff contract，不创建第二个
 > kernel。
 
 建议时长：150 分钟。扩展地图与 governed external execution 50 分钟、Explore 30 分钟、
-Single-Agent Auto ML 25 分钟、Multi-agent/Auto Research 30 分钟、实验 15 分钟。
+Single-Agent Auto ML 25 分钟、Agent 协作 30 分钟、实验 15 分钟。
 
 一小时专题[长程任务如何收敛](topic-long-horizon-convergence.md)从“如何退出局部循环”解释
 Graph、Harness 与 Kernel 的关系；本讲继续展开它们的扩展边界和产品组合方式。
@@ -17,31 +17,31 @@ Graph、Harness 与 Kernel 的关系；本讲继续展开它们的扩展边界�
 1. 使用 `configure-goal` 预览和开启 default-off feature。
 2. 准确区分 Explore Graph 和 Explore Harness。
 3. 解释 Harness 为什么只是 analysis-only planner，而不是执行授权。
-4. 解释 user、preset、kernel 三层 multi-agent minimality。
+4. 解释领域配置与通用协作控制面的边界。
 5. 判断 supervisor、multi-subagent、reward memory、connector 各自扩展哪个边界。
 6. 区分 Provider 的运行责任与 Extension 的交付生命周期。
 7. 用 Single-Agent Auto ML 解释 Explore Graph、Harness、Domain Pack 与 Kernel 怎样组合。
 8. 用 governed external execution 解释外部 effect 怎样安全 start、reconcile、writeback 和 spend。
 
 本讲采用分层阅读：所有开发者先读 Extension Contract、分层原则和 Feature Catalog；
-做探索产品再读 Graph/Harness 与 Single-Agent Auto ML；做 multi-agent 产品再读 Generic
-Kernel 与 Auto Research；只有接入对应 surface 时，才需要继续读 Supervisor、Reward
+做探索产品再读 Graph/Harness 与 Single-Agent Auto ML；做 Agent 协作再读
+Multi-Subagent；只有接入对应 surface 时，才需要继续读 Supervisor、Reward
 Memory 或 Lark Event Inbox。
 
-## 从 Auto Research 反推 Extension Contract
+## 从研究协作反推 Extension Contract
 
-第 2 讲把 Auto Research 当作产品 Showcase；本讲把它拆成一个可复用 extension：
+第 2 讲用研究团队说明协作边界；本讲按可复用 extension 拆分责任：
 
-| Surface | Auto Research 提供 | 继续由通用层拥有 |
+| Surface | 研究场景提供 | 继续由通用层拥有 |
 | --- | --- | --- |
 | User entry | open question、少量 preset 选项 | goal identity、preview/execute boundary |
 | Provider | evaluator、artifact source 与可选 sink 的 observation/readback | transition 与 goal lifecycle |
 | Capability Pack | role defaults、evidence adapter、decision candidates | todo/gate/quota/handoff/terminal semantics |
 | Domain State | hypothesis、experiment、dev/holdout evidence | claim、permission、scheduler、spend |
-| Host integration | visible worker panes、isolated executor turn | session lifecycle、workspace guard、effect receipt |
+| Host integration | local/cloud workers、isolated executor turn | session lifecycle、workspace guard、effect receipt |
 | Projection | evidence graph、research frontier、showcase | canonical state 与 transition authority |
 
-如果一个新 extension 能按这五行回答，通常不需要复制 runner。若它必须自己维护 agent
+如果一个新 extension 能按这些边界回答，通常不需要复制 runner。若它必须自己维护 agent
 身份、runnable queue、retry、gate、completion 和 cadence，它已经不是薄 capability，而是
 第二个 control plane。
 
@@ -708,83 +708,6 @@ loopx ml-experiment preview --format json \
 analysis-only，确认 planner boundary 中 `writes_state`、`claims_todos`、`acquires_leases`、
 `starts_agents` 和 `changes_quota` 均为 false。这个实验验证组合边界，不需要真实训练任务。
 
-## Generic Multi-Agent Kernel
-
-LoopX 的 multi-agent 产品采用三层 minimality：
-
-| 层 | Owns | Must not own |
-| --- | --- | --- |
-| User | objective 和少量产品选项 | pane、tick、quota/frontier 细节 |
-| Preset | domain roles、handoff hints、metric/evidence adapter、defaults | runner lifecycle、通用 replan、TUI、claim/quota protocol |
-| Kernel | runner、真实 Codex TUI panes、workspace-safe launch、pane-local tick、todo/evidence/status、vision/replan | domain-specific research/support/sales 语义 |
-
-一个新产品不应 copy Auto Research runner。它只写自己的薄 preset，然后复用 `demo/multi_agent/`。
-
-Kernel 的关键 invariant：
-
-```text
-leader_agent_required = false
-broadcaster_selects_todo = false
-each_pane_reads_own_quota_frontier = true
-todos_and_evidence_are_handoff_authority = true
-```
-
-## Auto Research 是 Preset，不是第二内核
-
-用户入口只有一个开放问题：
-
-```bash
-loopx auto-research "<open question>"
-```
-
-它先输出固定 contract，不启动 pane：
-
-- research brief；
-- P0/P1/P2 action plan；
-- evidence refs；
-- next executable step；
-- exact gate。
-
-预览一键启动：
-
-```bash
-loopx --format json auto-research start \
-  "How should we evaluate autonomous research agents?"
-```
-
-执行 visible lanes：
-
-```bash
-loopx auto-research start \
-  "How should we evaluate autonomous research agents?" \
-  --execute
-```
-
-默认角色：
-
-| Role | Owns |
-| --- | --- |
-| research-curator | contract、boundary、metric、stop/gate |
-| hypothesis-proposer | todo-backed hypotheses、successor、retirement rationale |
-| research-executor | isolated attempts、scored/unscored evidence |
-| evaluator-promoter | holdout/verification、claim classification、promotion gate |
-
-Launcher 打开真实 Codex TUI panes，但不选择 todo、不执行 worker turn、不写研究结果。当前默认由每个可见 pane 运行自己的第一次 quota/frontier tick；需要显式 post-launch 广播时才使用 `--wake-visible-after-launch`。无论哪种唤醒方式，broadcaster 都不能替 pane 决定 todo。
-
-### KNN Demo
-
-```bash
-loopx --format json auto-research start \
-  "How can the KNN solver improve exact-neighbor speedup?" \
-  --preset knn-demo \
-  --language zh \
-  --execute
-```
-
-Preset 可以定义 benchmark workspace、editable/protected files、metric 和 role hints，但不能添加产品专属 coordinator。
-
-可见 pane 启动只证明 runner positive path，不证明 lane 已产生研究成果。研究 evidence 必须由实际 role 工作后写入。
-
 ## Multi-Subagent
 
 `multi_subagent` 允许某个 executor 在 bounded todo 内调用 child agents，适合并行只读调查或隔离子问题。
@@ -915,7 +838,7 @@ loopx --format json explore worker-branch-plan \
 
 验证 disabled packet 是否说明 `required_contract`，且没有 claim/lease/launch side effect。
 
-## 核心代码领读：Explore、Auto ML 与 Auto Research 怎样复用 kernel
+## 核心代码领读：Explore 与 Auto ML 怎样复用 kernel
 
 扩展层最重要的判断不是“功能多不多”，而是它有没有重新发明 todo、quota、lease、scheduler 或 evidence。下面沿真实配置与执行边界读。
 
@@ -1072,47 +995,7 @@ production_actions_enabled = false
 静默获得训练或生产 effect。项目 provider 要增加 delivery authority，仍须经过 registry
 goal boundary、quota、preflight、effect receipt 与 writeback。
 
-### 6. Auto Research 是薄 preset，不是第二个 kernel
-
-`demo/auto_research/preset.py` 公开地限定了 line-count claim：
-
-```python
-def build_auto_research_minimal_a2a_recipe(...):
-    user_line = (
-        "loopx auto-research start "
-        f"{quoted_open_question}{language_flag} --execute"
-    )
-    return build_minimal_decentralized_a2a_recipe(
-        product_id="auto-research",
-        user_recipe_lines=[user_line],
-        preset_recipe_lines=default_auto_research_agent_specs(),
-        claim_boundary=(
-            "line count covers user intent and auto-research preset defaults only; "
-            "the reusable kernel owns visible process launch, fixed wake prompt, "
-            "pane-local quota/frontier tick, todo/evidence/status protocol, "
-            "and public artifact routing"
-        ),
-    )
-```
-
-每个 role 只声明 domain-specific profile：
-
-```python
-return {
-    "agent_id": lane["agent_id"],
-    "lane_id": lane["lane_id"],
-    "role_id": role_id,
-    "scope": lane["scope"],
-    "role_profile": role_profile,
-    "skill": {"name": "loopx-auto-research-worker", ...},
-    "handoff_hints": role_profile.get("handoff") or [],
-    "reasoning_effort": reasoning_effort,
-}
-```
-
-Preset 拥有 research roles、handoff hints、metric hints 和 domain defaults；共享 multi-agent kernel 拥有 process launch、fixed wake prompt、pane-local quota tick、todo/evidence/status 与 artifact routing。
-
-### 7. 两个 Explore 功能怎样开启
+### 6. 两个 Explore 功能怎样开启
 
 Explore Graph 与 Explore Harness 可独立开启。推荐先 preview：
 
@@ -1134,7 +1017,7 @@ explore_harness.enabled=true
 
 否则它仍会停在 `analysis_only`。开启 Graph 不会自动开启 Harness，开启 Harness 也不会自动授权 external sink 或 worker launch。
 
-### 8. 一条 extension 的最小审查路径
+### 7. 一条 extension 的最小审查路径
 
 ```text
 configure preview
@@ -1158,11 +1041,10 @@ terminal effect receipt、durable writeback 和 quota settlement。
 - `build_explore_worker_branch_plan:871`：gate 如何限制 width 与 commands；
 - `append_explore_result_events:517`：幂等与冲突；
 - `build_ml_experiment_advisory_packet:655`：default-off advisory 与 effect authority 的边界；
-- `build_auto_research_preset_role:99`：preset domain 与 kernel mechanics 的边界。
 
 读完应能回答：Graph 和 Harness 为什么独立、analysis-only 如何帮助单 Agent 管理昂贵
-实验、ML pack 为什么不带 launch authority、Auto Research 的“四行配置”没有计算哪些
-kernel 代码、supervisor 为什么不能借扩展层获得 durable leader authority。
+实验、ML pack 为什么不带 launch authority、supervisor 为什么不能借扩展层获得 durable
+leader authority。
 
 ## 代码阅读路线
 
@@ -1171,15 +1053,11 @@ kernel 代码、supervisor 为什么不能借扩展层获得 durable leader auth
 3. `loopx/capabilities/explore/`
 4. `docs/product/domain-capability-packs.md`
 5. `loopx/domain_packs/ml_experiment.py`
-6. `docs/reference/protocols/multi-agent-three-layer-minimality-v0.md`
-7. `demo/multi_agent/`
-8. `demo/auto_research/README.md`
-9. `demo/auto_research/preset.py`
-10. `docs/reference/protocols/peer-supervisor-v0.md`
-11. `loopx/extensions/governed_capability_execution.py`
-12. `loopx/control_plane/governed_capability.ts`
-13. `loopx/control_plane/turn_driver/settlement.py`
-14. `docs/reference/extensions.md`
+6. `docs/reference/protocols/peer-supervisor-v0.md`
+7. `loopx/extensions/governed_capability_execution.py`
+8. `loopx/control_plane/governed_capability.ts`
+9. `loopx/control_plane/turn_driver/settlement.py`
+10. `docs/reference/extensions.md`
 
 ## 代表性 Smoke
 
@@ -1187,7 +1065,6 @@ kernel 代码、supervisor 为什么不能借扩展层获得 durable leader auth
 - `examples/explore-configure-goal-smoke.py`
 - `examples/explore-worker-plan-gate-smoke.py`
 - `examples/ml-experiment-domain-pack-smoke.py`
-- `examples/auto-research-layered-e2e-acceptance-smoke.py`
 - `examples/control_plane/peer-supervisor-smoke.py`
 - `examples/showcase-catalog-smoke.py`
 - `tests/extensions/test_governed_capability_execution.py`

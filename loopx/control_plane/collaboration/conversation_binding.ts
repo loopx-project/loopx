@@ -452,6 +452,75 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
   if (!Number.isSafeInteger(imageCount) || Number(imageCount) < 0 || Number(imageCount) > 4) {
     throw new EffectRuntimeRequestError("invalid external image attachment count");
   }
+  if (params.history_answer_review !== undefined) {
+    const observed = requireJsonObject(params.history_answer_review, "historical answer observation");
+    const binding = requireJsonObject(params.binding, "conversation binding");
+    const current = params.current_session == null ? null : requireJsonObject(params.current_session, "current Session");
+    const source = requireJsonObject(row.source, "original owner source");
+    const context = current?.steward_context as JsonObject | undefined;
+    const identityAvailable = binding.context_kind === "steward" && binding.grant === "portfolio_read"
+      && binding.enabled === true && (binding.audience ?? "owner") === "owner"
+      && row.binding_id === binding.binding_id && source.sender_ref === binding.operator_ref
+      && source.private_human_message === true && context?.binding_id === binding.binding_id
+      && context?.source_ref === source.source_ref && context?.provider_ref === binding.provider_ref
+      && context?.operator_ref === binding.operator_ref && current?.agent_id === "codex" && current.steward_context != null;
+    const reserved = row.context_recovery as JsonObject | undefined;
+    const previous = observed.previous_turn == null ? null : requireJsonObject(observed.previous_turn, "previous read-only answer");
+    const response = previous?.response as JsonObject | undefined;
+    const retained = row.context_recovery_history as JsonObject[] | undefined;
+    const originalReview = reserved?.context_correction === true ? (Array.isArray(retained) ? retained.at(-1) : undefined) : reserved;
+    const correctionVersion = Number(originalReview?.version) + 1;
+    // One compatibility correction for a delivered, explicitly partial review
+    // that predates original-context delivery. This never retries business or
+    // a failed/unknown native Turn. Keep the old terminal answer immutable.
+    const correction = row.status === "accepted" && row.capture_origin === "provider_history"
+      && (row.delivery_verified === true || reserved?.previous_delivery_verified === true)
+      && originalReview?.history_review === true && originalReview.read_only_review === true
+      && originalReview.answer_review === true && originalReview.context_version == null
+      && Number.isSafeInteger(originalReview.version) && Number(originalReview.version) > 0
+      && Number.isSafeInteger(correctionVersion)
+      && originalReview.failed_turn_id == null && originalReview.native_observation == null
+      && row.session_id === current?.session_id
+      && previous?.status === "completed" && previous.session_id === current?.session_id
+      && typeof previous.upstream_turn_id === "string" && previous.upstream_turn_id.length > 0
+      && previous.turn_id === row.turn_id && previous.message === row.message
+      && previous.client_turn_id === originalReview.client_turn_id
+      && originalReview.client_turn_id === `external-${request}-recovery-${originalReview.version}-review-1`
+      && response?.gate != null && Array.isArray(response.proposals) && response.proposals.length === 0
+      && !response.context_handoff && !response.protected_action && !response.goal_draft && !response.unfinished_work
+      && (reserved === originalReview || reserved?.context_version === 1
+        && reserved.context_correction === true && reserved.previous_answer_turn_id === previous.turn_id
+        && reserved.version === correctionVersion
+        && reserved.client_turn_id === `external-${request}-recovery-${correctionVersion}-review-1`);
+    if (observed.discovery_only === true) return {pending: correction && identityAvailable && row.command === null
+      && (reserved?.context_correction === true || current?.status === "ready" && current.active_turn_id == null)};
+    const created = Date.parse(String(observed.source_created_at));
+    const now = Date.parse(String(observed.observed_at));
+    if (row.command !== null || (row.status !== "prepared" && !correction) || Number(imageCount) !== 0
+        || !identityAvailable || !current || current.status !== "ready"
+        || current.active_turn_id != null || current.steward_context == null
+        || observed.source_verified !== true || observed.queue_empty !== true || observed.adapter_replaceable !== true
+        || observed.stop_observed !== false || !Number.isSafeInteger(observed.version) || Number(observed.version) < 1
+        || !Number.isFinite(created) || !Number.isFinite(now) || !Number.isFinite(Date.parse(String(current.created_at)))
+        || created < Date.parse(String(current.created_at)) || created > now - 5_000
+        || typeof row.message !== "string" || !row.message.trim() || row.message.trim().startsWith("/")) {
+      return {operation: "hold_history_answer", reason: observed.stop_observed === true ? "source_stopped"
+        : observed.adapter_replaceable !== true ? "owned_background_unavailable"
+        : observed.queue_empty !== true || current?.active_turn_id != null ? "session_busy"
+        : current?.agent_id !== "codex" ? "current_executor_unavailable"
+        : created < Date.parse(String(current?.created_at)) ? "source_predates_session"
+        : "source_scope_unavailable"};
+    }
+    // This creates a new, tools-restricted answer, never an execution of the
+    // historical request or a fabricated failed native Turn.
+    return {operation: "admit_history_answer", session_id: current.session_id,
+      context_correction: correction, context_version: 1, version: correction ? correctionVersion : observed.version,
+      ...(correction ? {previous_answer_turn_id: previous!.turn_id} : {}),
+      // Preserve the existing read-only suffix for older answer-capable
+      // readers. Advancing this request's reserved version is not a global
+      // manager-context upgrade and cannot turn the review into business.
+      client_turn_id: `external-${request}-recovery-${correction ? correctionVersion : observed.version}-review-1`};
+  }
   if (![null, "agents", "select_agent", "select_project", "status", "help", "new", "stop", "unsupported", "commission", "confirm_commission", "cancel_commission", "stop_commission", "resume_commission"].includes(command as null | string)) {
     throw new EffectRuntimeRequestError("unsupported external conversation command");
   }
@@ -493,6 +562,17 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
     const answerReviewOwed = reservation?.answer_review === true
       && turn?.client_turn_id === reservation.client_turn_id
       && (turn?.status !== "completed" || response?.gate != null);
+    // A restricted result review can supply an answer without settling the
+    // original business. Retain the exact declaration independently of whatever
+    // the reviewer says; neither a delivered review nor its failure is replay authority.
+    const originalResult = reservation?.original_turn as JsonObject | undefined;
+    const originalResponse = originalResult?.response as JsonObject | undefined;
+    const retainedWork = reservation?.read_only_review === true && reservation.answer_review !== true
+      && turn?.client_turn_id === reservation.client_turn_id && originalResult?.status === "completed"
+      && originalResult.session_id === row.session_id && originalResult.turn_id === reservation.failed_turn_id
+      && originalResult.turn_id !== row.turn_id && originalResponse != null
+      && unfinishedProjectWork(originalResponse) !== null
+      && isDeepStrictEqual(originalResponse.unfinished_work, reservation.unfinished_work);
     const recovered = row.native_result_recovery == null ? null
       : requireJsonObject(row.native_result_recovery, "recovered native result");
     const native = recovered?.native_observation as JsonObject | undefined;
@@ -508,7 +588,7 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
       && extendsOriginalText(response, result);
     return {pending: !returned && row.command === null && row.status === "accepted"
       && turn?.session_id === row.session_id && turn?.turn_id === row.turn_id
-      && (expandedResult || metadataOwed || answerReviewOwed || unfinished || turn?.status === "failed"
+      && (expandedResult || metadataOwed || answerReviewOwed || retainedWork || unfinished || turn?.status === "failed"
         && ["usage_limit_exceeded", "response_timeout", "upstream_transport_failure", "context_window_exceeded",
           "antigravity_rpc_error", "antigravity_transport_error", "antigravity_step_error",
           "manager_authorization_unavailable", "runtime_error", "server_restarted"].includes(String(turn.error_code)))
@@ -743,14 +823,14 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
   if ((previous?.read_only_review === true && previous.failed_turn_id !== row.turn_id)
       || (Array.isArray(row.context_recovery_history) && row.context_recovery_history.some(value =>
         requireJsonObject(value, "prior recovery").read_only_review === true))) return no;
+  if (failed.error_code === "server_restarted") {
+    return planResultReview(recovery, row, current, failed, previous, version);
+  }
   const exhaustedAnswer = steward && current.agent_id === "codex"
     ? planExhaustedStewardAnswer(recovery, row, current, failed, previous, version) : null;
   if (exhaustedAnswer !== null) return exhaustedAnswer;
   if (failed.status === "completed" && !steward) {
     return planUnfinishedWork(recovery, row, current, failed, previous, version);
-  }
-  if (!steward && failed.error_code === "server_restarted") {
-    return planResultReview(recovery, row, current, failed, previous, version);
   }
   if (failed.session_id !== current.session_id || failed.turn_id !== row.turn_id
       || failed.status !== "failed" || failed.delta_count !== 0 || failed.response !== null
@@ -1033,7 +1113,7 @@ function nativeRecoveryCapacity(recovery: JsonObject, row: JsonObject, current: 
 
 /** A completed model Turn can explicitly report unfinished business. The
  * proposal alone grants nothing: only the original worker may reserve one
- * continuation after stable latest-native/source/grant/stop checks.
+ * continuation after stable correlated-native/source/grant/stop checks.
  */
 function unfinishedProjectWork(result: JsonObject): JsonObject | null {
   const raw = result.unfinished_work;
@@ -1062,6 +1142,14 @@ function planUnfinishedWork(recovery: JsonObject, row: JsonObject, current: Json
       || recovery.steering_observed !== false || recovery.stop_observed !== false
       || recovery.attachments_present !== false
       || typeof completed.upstream_turn_id !== "string" || !completed.upstream_turn_id) return no;
+  const observedResult = recovery.native_observation as JsonObject | null | undefined;
+  // An admitted continuation may already have appended the original input.
+  // Recover its existing receipt before considering a fresh result review.
+  const existingWorkTurn = previous?.work_attempt === 1 && recovery.admitted_turn != null;
+  if (previous?.read_only_review === true || (!existingWorkTurn
+      && (recovery.later_equivalent_input_present === true || observedResult?.completed_result_review === true))) {
+    return planCompletedResultReview(recovery, row, current, completed, previous, version, work);
+  }
   const client = `external-${ref(row.request_ref, "original request")}-recovery-${version}-work-1`;
   if (previous?.work_attempt != null && (previous.work_attempt !== 1
       || previous.failed_turn_id !== completed.turn_id || previous.version !== version
@@ -1078,7 +1166,8 @@ function planUnfinishedWork(recovery: JsonObject, row: JsonObject, current: Json
       admitted_turn_id: sessionIdentity(admitted.turn_id, "admitted unfinished work"), native_thread_ids: [],
       not_before: previous.not_before};
   }
-  if (current.active_turn_id != null || current.status !== "ready") return no;
+  if (current.active_turn_id != null || current.status !== "ready"
+      || recovery.queued_input_present !== false || recovery.later_equivalent_input_present !== false) return no;
   const now = Date.parse(String(recovery.observed_at)), ended = Date.parse(String(completed.completed_at));
   if (!Number.isFinite(now) || !Number.isFinite(ended) || now < ended + 60_000) return no;
   const native = sessionIdentity(current.upstream_thread_id, "original native thread");
@@ -1088,7 +1177,45 @@ function planUnfinishedWork(recovery: JsonObject, row: JsonObject, current: Json
   return {...planned, recovery_eligible: recovery.source_verified === true
     && observed.thread_id === native && observed.turn_id === completed.upstream_turn_id
     && observed.completed_work === true && observed.all_effects_settled === true
+    && typeof observed.native_inventory_sha256 === "string" && BARE_SHA256_PATTERN.test(observed.native_inventory_sha256)
     && matchesWork(observed.unfinished_work)};
+}
+
+/** A result-only fallback never consumes or restores the writable retry budget. */
+function planCompletedResultReview(recovery: JsonObject, row: JsonObject, current: JsonObject,
+  completed: JsonObject, previous: JsonObject | null, version: number, work: JsonObject): JsonObject {
+  const no = {operation: "admit_turn", recovery_candidate: false, recovery_eligible: false};
+  const client = `external-${ref(row.request_ref, "original request")}-recovery-${version}-review-1`;
+  if (current.steward_context != null || completed.client_turn_id !== `external-${row.request_ref}`
+      || completed.message !== row.message || completed.origin !== row.origin
+      || previous !== null && (previous.read_only_review !== true || previous.failed_turn_id !== completed.turn_id
+        || previous.client_turn_id !== client || previous.version !== version || previous.work_attempt != null
+        || previous.answer_review === true || !isDeepStrictEqual(previous.original_turn, completed)
+        || !isDeepStrictEqual(previous.unfinished_work, work))) return no;
+  const candidate = {...no, recovery_candidate: true, read_only_review: true, unfinished_work: work,
+    failed_turn_id: completed.turn_id, session_id: current.session_id, client_turn_id: client};
+  if (previous !== null && recovery.admitted_turn != null) {
+    const admitted = requireJsonObject(recovery.admitted_turn, "admitted result review");
+    if (admitted.client_turn_id !== client || admitted.session_id !== current.session_id
+        || admitted.turn_id === completed.turn_id || admitted.message !== row.message || admitted.origin !== row.origin
+        || !Array.isArray(admitted.attachments ?? []) || (admitted.attachments as unknown[] | undefined)?.length) return no;
+    return {...candidate, recovery_eligible: recovery.source_verified === true,
+      admitted_turn_id: sessionIdentity(admitted.turn_id, "admitted result review"), native_thread_ids: []};
+  }
+  const now = Date.parse(String(recovery.observed_at)), ended = Date.parse(String(completed.completed_at));
+  if (current.status !== "ready" || current.active_turn_id != null || recovery.queued_input_present !== false
+      || !Number.isFinite(now) || !Number.isFinite(ended) || now < ended + 60_000) return no;
+  const native = sessionIdentity(current.upstream_thread_id, "original native thread");
+  const planned = {...candidate, native_thread_ids: [native]};
+  if (recovery.native_observation == null) return planned;
+  const proof = requireJsonObject(recovery.native_observation, "completed result review inventory");
+  return {...planned, recovery_eligible: recovery.source_verified === true
+    && proof.thread_id === native && proof.turn_id === completed.upstream_turn_id
+    && proof.read_only_review === true && proof.completed_result_review === true
+    && proof.completed_work !== true && proof.all_effects_settled !== true
+    && typeof proof.visible_response === "string" && proof.visible_response.trim().length > 0
+    && typeof proof.native_inventory_sha256 === "string" && BARE_SHA256_PATTERN.test(proof.native_inventory_sha256)
+    && isDeepStrictEqual(proof.unfinished_work, work)};
 }
 
 function interruptedVisibleResult(value: unknown): boolean {
@@ -1221,16 +1348,20 @@ function planInterruptedStewardAnswer(recovery: JsonObject, row: JsonObject, cur
   return {...capacity, recovery_eligible: capacity.recovery_eligible === true && capacity.answer_executor === "codex"};
 }
 
-/** Original project result reviews retain their workspace-only read policy. */
+/** Reuse the original queue for a restricted result review, never business replay. */
 function planResultReview(recovery: JsonObject, row: JsonObject, current: JsonObject,
   failed: JsonObject, previous: JsonObject | null, version: number): JsonObject {
   const no = {operation: "admit_turn", recovery_candidate: false, recovery_eligible: false};
+  const steward = current.steward_context != null;
+  const review = steward ? {answer_review: true, answer_executor: "codex"} : {};
   if (failed.session_id !== current.session_id || failed.turn_id !== row.turn_id
       || failed.status !== "failed" || failed.response !== null
       || !Number.isSafeInteger(failed.delta_count) || Number(failed.delta_count) <= 0
       || recovery.steering_observed !== false || recovery.stop_observed !== false
       || recovery.attachments_present !== false
-      || typeof failed.upstream_turn_id !== "string" || !failed.upstream_turn_id) return no;
+      || typeof failed.upstream_turn_id !== "string" || !failed.upstream_turn_id
+      || steward && (failed.client_turn_id !== `external-${row.request_ref}`
+        || failed.message !== row.message || failed.origin !== row.origin)) return no;
   const client = `external-${ref(row.request_ref, "original request")}-recovery-${version}-review-1`;
   if (previous?.read_only_review === true && (previous.failed_turn_id !== failed.turn_id
       || previous.version !== version || previous.client_turn_id !== client)) return no;
@@ -1240,7 +1371,7 @@ function planResultReview(recovery: JsonObject, row: JsonObject, current: JsonOb
         || admitted.turn_id === failed.turn_id || admitted.message !== row.message
         || admitted.origin !== row.origin || (admitted.attachments != null
           && (!Array.isArray(admitted.attachments) || admitted.attachments.length))) return no;
-    return {...no, recovery_candidate: true, recovery_eligible: recovery.source_verified === true,
+    return {...no, ...review, recovery_candidate: true, recovery_eligible: recovery.source_verified === true,
       read_only_review: true, client_turn_id: client, session_id: current.session_id,
       admitted_turn_id: sessionIdentity(admitted.turn_id, "admitted result review"), native_thread_ids: []};
   }
@@ -1248,15 +1379,20 @@ function planResultReview(recovery: JsonObject, row: JsonObject, current: JsonOb
   const now = Date.parse(String(recovery.observed_at)), completed = Date.parse(String(failed.completed_at));
   if (!Number.isFinite(now) || !Number.isFinite(completed) || now < completed + 60_000) return no;
   const native = sessionIdentity(current.upstream_thread_id, "original native thread");
-  const candidate = {...no, recovery_candidate: true, read_only_review: true,
+  const candidate = {...no, ...review, recovery_candidate: true, read_only_review: true,
     client_turn_id: client, session_id: current.session_id, failed_turn_id: failed.turn_id,
     native_thread_ids: [native]};
   if (recovery.native_observation == null) return candidate;
   const observed = requireJsonObject(recovery.native_observation, "interrupted result inventory");
-  return {...candidate, recovery_eligible: recovery.source_verified === true
+  const eligible = recovery.source_verified === true
     && observed.thread_id === native && observed.turn_id === failed.upstream_turn_id
     && observed.read_only_review === true && observed.no_final_answer === true
-    && observed.effects_observed === true};
+    && observed.effects_observed === true && (!steward
+      || typeof observed.native_inventory_sha256 === "string"
+        && BARE_SHA256_PATTERN.test(observed.native_inventory_sha256));
+  if (!eligible || !steward) return {...candidate, recovery_eligible: eligible};
+  const capacity = nativeRecoveryCapacity(recovery, row, current, candidate);
+  return {...capacity, recovery_eligible: capacity.recovery_eligible === true && capacity.answer_executor === "codex"};
 }
 
 /** A local manager-context failure precedes native dispatch. Only the Core's

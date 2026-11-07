@@ -448,8 +448,19 @@ def test_advertised_native_reader_keeps_the_complete_current_contract_across_pag
     expected_cli = selected_context_values(json.dumps({"selections": [
         {"pointer": cli_path, "value": source["interaction_contract"]["cli_channel"]}]}))
     vision_path = next(path for path in expected_cli if path.endswith("/vision_authoring"))
-    # Every CLI leaf outside the authoring reference must still be delivered.
+    actions_path = cli_path + "/next_cli_actions"
+    current_cli = source["interaction_contract"]["cli_channel"]
+    bound_steps = current_cli["settlement_plan"]["ordered_steps"]
+    actual_commands = [step["command_template"] for step in bound_steps
+                       if step["kind"] in ("durable_writeback", "quota_spend")]
+    assert len(actual_commands) == 2 and current_cli["next_cli_actions"] == actual_commands
+    # The ordered plan carries these exact templates and all their conditions.
+    # A ready first read should not present a second apparent route for them.
+    assert not any(path == actions_path or path.startswith(actions_path + "/") for path in values)
+    # Every distinct CLI leaf outside the authoring reference is still delivered.
     for path, item in expected_cli.items():
+        if path == actions_path or path.startswith(actions_path + "/"):
+            continue
         if path.startswith(vision_path + "/") or (isinstance(item, (dict, list)) and item):
             continue
         assert values[path] == item
@@ -459,10 +470,46 @@ def test_advertised_native_reader_keeps_the_complete_current_contract_across_pag
         "--max-page-output-bytes", "9000", cwd=project)
     assert code == 0 and detail["eof"]
     assert selected_context_values(detail["content"])[vision_path] == expected_cli[vision_path]
+    code, fallback = _run_cli(registry, runtime, "quota", "context-read", "--reference-file",
+        view["recovery"]["reference_file"], "--select", actions_path, cwd=project)
+    assert code == 0 and fallback["eof"]
+    assert selected_context_values(fallback["content"])[actions_path] == actual_commands
     assert values["/heartbeat_receipt"] == source["heartbeat_receipt"]
     assert values["/selected_todo"] == source["selected_todo"]
     assert _heartbeat_receipt_count(runtime, turn_id) == 1 and _spend_run_count(runtime) == 0
     assert Path(reference["path"]).read_bytes() == raw and state.read_bytes() == original_state
+
+
+@pytest.mark.parametrize("variant", ["different_argument", "different_order", "unready", "other_effect", "future_plan"])
+def test_initial_read_keeps_fallback_actions_when_the_bound_plan_is_not_equivalent(tmp_path, decision, variant):
+    interaction = decision["interaction_contract"]
+    cli = interaction["cli_channel"]
+    identity = {"schema_version": "quota_settlement_identity_v0", "effect_id": "original-effect",
+                "todo_id": decision["selected_todo"]["todo_id"], "turn_instance_id": "original"}
+    decision.update(effective_action="normal_run", normal_delivery_allowed=True,
+                    heartbeat_receipt={"settlement_identity": identity})
+    interaction["agent_channel"]["delivery_allowed"] = True
+    writeback = "loopx refresh-state --turn-instance-id original"
+    spend = "loopx quota spend-slot --turn-instance-id original --execute"
+    cli.update(execution_preparation={"state": "ready", "todo_id": identity["todo_id"]},
+               next_cli_actions=[writeback, spend],
+               settlement_plan={"schema_version": "quota_settlement_plan_v1", "identity": identity,
+                                "ordered_steps": [{"kind": "durable_writeback", "command_template": writeback},
+                                                  {"kind": "quota_spend", "command_template": spend}]})
+    if variant == "different_argument":
+        cli["next_cli_actions"][0] += " --suppress-external-sinks"
+    elif variant == "different_order":
+        cli["next_cli_actions"].reverse()
+    elif variant == "unready":
+        cli["execution_preparation"]["state"] = "claim_required"
+    elif variant == "other_effect":
+        decision["heartbeat_receipt"]["settlement_identity"] = {**identity, "effect_id": "another"}
+    else:
+        cli["settlement_plan"]["schema_version"] = "unknown_settlement_plan"
+
+    view = native_context_capture_view(decision, tmp_path)
+    _, values = read_selection(view["first_read_command"])
+    assert values["/interaction_contract/cli_channel/next_cli_actions"] == cli["next_cli_actions"]
 
 
 def test_initial_read_keeps_current_constraints_whole_and_history_reachable(tmp_path, decision):
@@ -813,6 +860,107 @@ def test_warm_delta_initial_read_uses_current_action_without_the_old_base(tmp_pa
     failure = json.loads(failed.stdout)
     assert failed.returncode != 0 and not failure["ok"] and "content" not in failure
     assert not registry.exists() and not runtime.exists()
+
+
+@pytest.mark.parametrize("invalidate,retained", [("none", 7), ("compact", 7), ("partial", 7), ("off", 7), ("none", 1)])
+def test_native_first_read_reuses_requirement_bodies_after_canonical_correction(
+        tmp_path, monkeypatch, navigated_decision, invalidate, retained):
+    from test_codex_context_lifecycle import setup, deliver
+
+    event = setup(tmp_path, monkeypatch)
+    source = navigated_decision["interaction_contract"]["agent_channel"]["work_context"]["sources"][0]
+    content = source["content"]
+    outcome = content["goal_acceptance_contract"]["outcome_requirements"]["outcomes"][0]
+    outcome.update(objective="Preserve cumulative acceptance.", sources=[], requirements=[
+        {"id": f"criterion-{i}", "description": (f"Criterion {i}: preserve original requirements, cancellation, source and independent validation. " * 12),
+         "status": "unverified", "planning_satisfied": False} for i in range(8)])
+    prefix = "/interaction_contract/agent_channel/work_context/sources/0/content/goal_acceptance_contract/outcome_requirements/outcomes/0"
+
+    def navigation(name, enabled=True):
+        directory = tmp_path / name
+        directory.mkdir(mode=0o700)
+        prepared = codex_context.prepare_codex_context(navigated_decision, directory=str(tmp_path),
+            capture_directory=directory, goal_id="fixture", agent_id="agent", surface="quota_packet",
+            capture_id=name, progressive_enabled=enabled)
+        return model_context_reference(native_context_capture_view(prepared.delivery, directory,
+            context_directory=str(tmp_path), progressive_enabled=enabled,
+            initial_read_plan=prepared.initial_read_plan, max_page_output_bytes=6000))
+
+    def pages(command):
+        result = []
+        while command:
+            words = shlex.split(command)
+            page = json.loads(subprocess.check_output([sys.executable, "-m", "loopx.entrypoint", "--format", "json",
+                *words[words.index("quota"):]]))
+            assert page["ok"]
+            result.append(page)
+            command = page.get("next_command")
+        return result
+
+    first = pages(navigation("before")["first_read_command"])
+    assert len(first) > 1
+    deliver(tmp_path, event, first[1:] if invalidate == "partial" else first)
+    if invalidate == "compact":
+        codex_context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": "PostCompact"})
+    # A real canonical correction also changes metadata and may switch from a
+    # complete source to a smaller supporting-material projection. Neither is a
+    # change to the seven retained descriptions. Reviews and new controls are.
+    outcome["revision"] += 1
+    outcome["sources"] = [{"ref": "fixture:correction", "summary": "Supporting correction evidence. " * 600}]
+    outcome["requirements"][0]["description"] = "Revised cancellation: never publish the result."
+    outcome["requirements"][1]["status"] = "accepted"
+    outcome["requirements"][2]["new_control"] = "Read the current authorization before acting."
+    outcome["requirements"].append({"id": "new", "description": "A newly required independent check."})
+    if retained == 1:
+        for item in outcome["requirements"][2:8]:
+            item["description"] = "Revised requirement: " + item["description"]
+    current = navigation("after", invalidate != "off")
+    read = pages(current["first_read_command"] if invalidate != "off" else current["recovery"]["command"])
+    if invalidate == "off":
+        assert "first_read_command" not in current
+        assert json.loads("".join(page["content"] for page in read)) == navigated_decision
+        assert all("previously_delivered_fields" not in page for page in read)
+        return
+    body = "".join(page["content"] for page in read)
+    facts = selected_context_values(body)
+    assert facts[prefix + "/revision"] == 2
+    assert facts[prefix + "/requirements/0/description"] == outcome["requirements"][0]["description"]
+    assert facts[prefix + "/requirements/1/status"] == "accepted"
+    assert facts[prefix + "/requirements/2/new_control"] == outcome["requirements"][2]["new_control"]
+    assert facts[prefix + "/requirements/8"] == outcome["requirements"][8]
+    assert facts["/goal_boundary"] == navigated_decision["goal_boundary"]
+    if invalidate != "none" or retained == 1:
+        assert "previously_delivered_fields" not in read[0]
+        assert facts[prefix + "/requirements/1/description"] == outcome["requirements"][1]["description"]
+        return
+    expected = {prefix + f"/requirements/{i}/description" for i in (1, 2)} | {
+        prefix + f"/requirements/{i}" for i in range(3, 8)}
+    assert set(read[0]["previously_delivered_fields"]) >= expected
+    assert prefix + "/requirements/1/description" not in facts
+    cold = pages(current["recovery"]["command"] + " --initial-read")
+    assert len(body.encode()) < sum(len(page["content"].encode()) for page in cold)
+    recovered = pages(current["recovery"]["command"] + " --select " + prefix + "/requirements/1/description")
+    assert selected_context_values("".join(page["content"] for page in recovered))[
+        prefix + "/requirements/1/description"] == outcome["requirements"][1]["description"]
+    before = codex_context._state(tmp_path)["consumed_pointers"][prefix]
+    metadata = json.loads(Path(read[0]["reference_file"]).read_text())
+    metadata["observed_read"]["fields"][next(iter(metadata["observed_read"]["fields"]))] = "f" * 64
+    forged = tmp_path / "forged-reference.json"
+    forged.write_text(json.dumps(metadata))
+    forged.chmod(0o600)
+    deliver(tmp_path, event, [{**page, "reference_file": str(forged)} for page in read])
+    assert codex_context._state(tmp_path)["consumed_pointers"][prefix] == before
+    # Only complete current pages plus authenticated, exact inherited fields
+    # can qualify the revised parent. No full-input baseline is manufactured.
+    with monkeypatch.context() as hook_env:
+        hook_env.delenv("CODEX_THREAD_ID")
+        deliver(tmp_path, event, read[:-1])
+        assert codex_context._state(tmp_path)["consumed_pointers"][prefix] == before
+        deliver(tmp_path, event, read[-1:])
+    assert codex_context._state(tmp_path)["consumed_pointers"][prefix] != before
+    next_read = pages(navigation("continued")["first_read_command"])
+    assert prefix in next_read[0]["previously_delivered_fields"]
+    assert selected_context_values("".join(page["content"] for page in next_read))[prefix + "/revision"] == 2
 
 
 @pytest.mark.parametrize("invalidate", ["compact", "resume", "partial", "task_switch", "off"])

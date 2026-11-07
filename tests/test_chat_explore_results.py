@@ -32,12 +32,16 @@ def test_ninth_link_readback_pagination_scope_failure_and_recovery(tmp_path, mon
     log = explore_result_log_path(runtime, "evidence-goal")
     append_explore_result_event(log, build_explore_node_event(
         goal_id="evidence-goal", node_id="question", title="Bounded input hypothesis",
-        node_kind="question", summary="Inputs with a finite prefix",
+        node_kind="question", summary="Inputs with a finite prefix", recorded_at="2026-01-02T08:00:00+08:00",
     ))
     for index in range(41):
         append_explore_result_event(log, build_explore_finding_event(
             goal_id="evidence-goal", node_id="question", finding_id=f"finding_{index}",
             title=f"Observation {index}", status="refuted",
+            recorded_at=(
+                "2026-02-01T12:00:00" if index == 0
+                else "2026-01-03T00:45:00Z" if index == 40 else "2026-01-02T00:30:00Z"
+            ),
             summary="Counterexample at input revision A " + "c" * 1700 + "; do not transfer beyond the tested scope.",
             evidence_refs=["artifact:counterexample"], agent_id="worker",
         ))
@@ -103,6 +107,22 @@ def test_ninth_link_readback_pagination_scope_failure_and_recovery(tmp_path, mon
         assert page["total"] == 41 and len(page["items"]) == 40
         history = read(base + "evidence-goal&view=history")
         assert history["total"] == 42 and len(history["items"]) == 40
+        timing_url = base + "evidence-goal&view=history-timing"
+        assert read(timing_url) == {
+            "ok": True, "goal_id": "evidence-goal", "source_namespace": None,
+            "first_recorded_at": "2026-01-02T00:00:00Z",
+            "last_recorded_at": "2026-01-03T00:45:00Z",
+            "untimed_record_count": 1, "strategy_recorded_at": None,
+        }
+        empty = read(base + "other-goal&view=history-timing")
+        assert empty["first_recorded_at"] is None and empty["last_recorded_at"] is None
+        assert empty["untimed_record_count"] == 0
+        with pytest.raises(HTTPError) as no_pages:
+            read(timing_url + "&cursor=stale")
+        assert no_pages.value.code == 400
+        with pytest.raises(HTTPError) as denied_timing:
+            read(Request(timing_url, headers={"Origin": "https://unrelated.example"}))
+        assert denied_timing.value.code == 403
         item = page["items"][0]
         assert item["scope"] == "Inputs with a finite prefix"
         assert item["status"] == "refuted"
@@ -129,8 +149,12 @@ def test_ninth_link_readback_pagination_scope_failure_and_recovery(tmp_path, mon
             read(base + "evidence-goal")
         assert corrupt.value.code == 409
         assert str(tmp_path).encode() not in corrupt.value.read()
+        with pytest.raises(HTTPError) as corrupt_timing:
+            read(timing_url)
+        assert corrupt_timing.value.code == 409
         log.write_bytes(before)
         assert read(base + "evidence-goal")["total"] == 41
+        assert read(timing_url)["last_recorded_at"] == "2026-01-03T00:45:00Z"
         state.unlink()
         assert len(read(base + "evidence-goal")["items"][0]["linked_todos"]) == 2
     finally:

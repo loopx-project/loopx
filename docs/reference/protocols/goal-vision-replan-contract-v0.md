@@ -640,6 +640,11 @@ exact `replan-decision-*` id and separately records:
 - `goal_gain`: improved, flat, regressed or unknown;
 - delivered evidence references and the bounded lesson for the next experiment.
 
+The authoring contract exposes `review_reference_limit` (3). It applies separately
+to `previous_review.evidence_refs` and `explore_review.considered_refs`.
+
+编写契约的 `review_reference_limit`（3）分别限制上述两个引用列表。
+
 A claim needs evidence references; unavailable evidence remains unknown. These
 are explicit Agent assessments, not host certification of scientific truth.
 The next review retains the assessment with the original decision and subsequent

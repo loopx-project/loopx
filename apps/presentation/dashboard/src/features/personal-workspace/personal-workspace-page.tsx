@@ -915,7 +915,11 @@ export function PersonalWorkspacePage({
   const { locale, t } = useWorkspaceI18n();
   const [localGoalId, setLocalGoalId] = useState<string | null>(controlledGoalId ?? null);
   const sourceGoal = model.goals.find(goal => goal.goalId === (controlledGoalId === undefined ? localGoalId : controlledGoalId));
-  const researchReadSourceUrl = sourceGoal?.sourceAccess ? `/status.json?source_namespace=${sourceGoal.sourceAccess.namespace}` : statusSourceControl?.activeSource.kind === "runtime" && statusSourceControl.connectionState !== "loading" && statusSourceControl.connectionState !== "error" ? statusSourceControl.activeSource.statusUrl : undefined;
+  const directoryReadSourceUrl = statusSourceControl?.activeSource.kind === "runtime"
+    && statusSourceControl.connectionState !== "loading" && statusSourceControl.connectionState !== "error"
+    ? statusSourceControl.activeSource.statusUrl : undefined;
+  const researchReadSourceUrl = sourceGoal?.sourceAccess
+    ? `/status.json?source_namespace=${sourceGoal.sourceAccess.namespace}` : directoryReadSourceUrl;
   const readOnly = sourceReadOnly || sourceGoal?.sourceAccess?.readOnly === true;
   const hostReadOnly = statusSourceControl?.activeSource.readOnly ?? sourceReadOnly;
   const [localAgentId, setLocalAgentId] = useState(controlledAgentId ?? agents.find((agent) => agent.available)?.agentId ?? "codex");
@@ -1310,18 +1314,25 @@ export function PersonalWorkspacePage({
     refreshKey: `${managerMessages.length}:${Boolean(managerMessages.at(-1)?.pending)}:${steering}`,
   });
   const queuedTurnKeys = new Set(conversationQueue.turns.map(turn => JSON.stringify([conversationSessionId, turn.turn_id])));
-  const observedQueueTurn = useRef("");
+  const observedQueue = useRef<{scope: string; snapshot: string} | null>(null);
   useEffect(() => {
     const turnId = conversationQueue.activeTurnId;
-    if (!conversationSessionId || !turnId || turnId === runningMessage?.sourceTurnId || !callbacks.onObserveConversationTurn) return;
-    const key = JSON.stringify([statusSourceControl?.activeSource.statusUrl, conversationKey, conversationSessionId, turnId]);
-    if (observedQueueTurn.current === key) return;
-    observedQueueTurn.current = key;
-    void callbacks.onObserveConversationTurn(conversationKey, conversationSessionId, turnId).catch(() => {
-      if (observedQueueTurn.current === key) observedQueueTurn.current = "";
+    if (!conversationSessionId || !conversationQueue.readReady || !callbacks.onObserveConversationQueue) return;
+    const scope = JSON.stringify([statusSourceControl?.activeSource.statusUrl, conversationKey, conversationSessionId]);
+    const snapshot = JSON.stringify([turnId, conversationQueue.turns.map(turn => turn.turn_id)]);
+    const previous = observedQueue.current;
+    if (previous?.scope === scope && previous.snapshot === snapshot) return;
+    observedQueue.current = {scope, snapshot};
+    if (previous?.scope !== scope && (!turnId || turnId === runningMessage?.sourceTurnId)) return;
+    // A queued Turn can start and finish between polls after reconnect. Its
+    // disappearance still requires original history, even with no live Turn.
+    void callbacks.onObserveConversationQueue(conversationKey, conversationSessionId).catch(() => {
+      if (observedQueue.current?.scope === scope && observedQueue.current.snapshot === snapshot) {
+        observedQueue.current = {scope, snapshot: ""};
+      }
     });
-  }, [conversationQueue.activeTurnId, conversationQueue.turns, conversationSessionId, runningMessage?.sourceTurnId,
-    callbacks.onObserveConversationTurn, conversationKey, statusSourceControl?.activeSource.statusUrl]);
+  }, [conversationQueue.activeTurnId, conversationQueue.turns, conversationQueue.readReady, conversationSessionId, runningMessage?.sourceTurnId,
+    callbacks.onObserveConversationQueue, conversationKey, statusSourceControl?.activeSource.statusUrl]);
   const legacyDrafts = conversationSessionId ? legacySteeringRequests(conversationSessionId, composerDraftKey) : [];
   function restoreLegacyDraft(key: string) {
     if (composer.trim() || !conversationSessionId) return;
@@ -2750,7 +2761,7 @@ export function PersonalWorkspacePage({
             </div>
              : null;
   const taskBoard = (active: boolean) => selectedGoal ? (<GoalTasksView digest={workspaceDigest}
-                    historyEnabled={!readOnly} historyActive={active}
+                    historyEnabled={!readOnly || Boolean(selectedGoal.sourceAccess)} historyActive={active}
                     historyRefreshRevision={historyRefreshRevision}
                     goal={selectedGoal}
                     items={items}
@@ -2965,7 +2976,7 @@ export function PersonalWorkspacePage({
                     historyRefreshRevision={historyRefreshRevision} proposals={proposals} onPreview={createPreview} />,
                   tasks: taskBoard(!settingsOpen && selectedGoalTab === "tasks"),
                   research: !readOnly || researchReadSourceUrl
-                    ? <GoalResearchWorkbench goalId={selectedGoal.goalId} active={!settingsOpen && selectedGoalTab === "research"} zh={locale === "zh-CN"} refreshRevision={historyRefreshRevision} readSourceUrl={researchReadSourceUrl} />
+                    ? <GoalResearchWorkbench goalId={selectedGoal.goalId} goals={workspaceGoals} onSelectGoal={id => selectGoal(id, "research")} onOpenTasks={() => setSelectedGoalTab("tasks")} active={!settingsOpen && selectedGoalTab === "research"} zh={locale === "zh-CN"} refreshRevision={historyRefreshRevision} readSourceUrl={researchReadSourceUrl} directoryReadSourceUrl={directoryReadSourceUrl} />
                     : <ContextHelp label={locale === "zh-CN" ? "来源无研究读取入口" : "Research source unavailable"} icon={CircleHelp}><p role="status">{locale === "zh-CN" ? "此来源尚未提供研究记录的读取入口。" : "This source does not provide a research history endpoint."}</p></ContextHelp>,
                   files: goalResults(selectedGoalTab === "files" && !settingsOpen),
                   chat: agentWorkActive ? <GoalAgentWorkPage key={`${selectionScope}:${selectedWorkAgentId}`} goal={selectedGoal} agentId={selectedWorkAgentId!} readOnly={readOnly}

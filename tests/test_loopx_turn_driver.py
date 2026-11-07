@@ -1821,35 +1821,42 @@ def test_turn_cli_resolves_its_decision_through_the_shared_owner(
     )
 
 
+@pytest.mark.parametrize("provider", ("file", "sqlite"))
 def test_turn_cli_projects_explicit_fresh_iteration_context(
-    tmp_path: Path,
+    tmp_path: Path, provider: str,
 ) -> None:
-    project, runtime, registry = _write_live_fixture(tmp_path)
-    output = io.StringIO()
+    _, runtime, registry = _write_live_fixture(tmp_path, provider=provider)
+    # Use the CLI entrypoint in a fresh process. In-process
+    # callers and test collection may already have selected these providers.
+    process = subprocess.run(
+        [
+            sys.executable, "-c", "\n".join((
+                "import sys",
+                "from loopx.entrypoint import main",
+                "status = main(sys.argv[1:])",
+                "unselected = {'loopx.capabilities.semantic_preference.contract',",
+                "              'loopx.capabilities.semantic_preference.reward_memory'}",
+                "assert not unselected & sys.modules.keys(), unselected & sys.modules.keys()",
+                "raise SystemExit(status)",
+            )),
+            "--registry", str(registry),
+            "--runtime-root", str(runtime),
+            "--format", "json",
+            "turn", "plan",
+            "--goal-id", "loopx-turn-fixture",
+            "--agent-id", "codex-fixture",
+            "--iteration-context", "fresh",
+            "--include-transaction-detail",
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        env={**os.environ, "LOOPX_USAGE_PING": "0"},
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
 
-    with contextlib.redirect_stdout(output):
-        exit_code = cli_main(
-            [
-                "--registry",
-                str(registry),
-                "--runtime-root",
-                str(runtime),
-                "--format",
-                "json",
-                "turn",
-                "plan",
-                "--goal-id",
-                "loopx-turn-fixture",
-                "--agent-id",
-                "codex-fixture",
-                "--iteration-context",
-                "fresh",
-                "--include-transaction-detail",
-            ]
-        )
-
-    payload = json.loads(output.getvalue())
-    assert exit_code == 0, payload
+    assert process.returncode == 0, process.stdout + process.stderr
+    payload = json.loads(process.stdout)
     assert payload["session"]["action"] == "start_new"
     assert payload["session"]["context_policy"] == {
         "schema_version": "loopx_iteration_context_policy_v0",
@@ -2432,7 +2439,16 @@ def test_managed_start_interruption_preserves_reservation_and_attempt(
 
 def test_turn_run_once_cli_dsh_fresh_sessions_and_iteration_failure(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    original_builder = turn_run_once_command.build_dsh_host_runner
+    builder_calls: list[Path] = []
+
+    def patched_builder(*args: Any, **kwargs: Any) -> Any:
+        builder_calls.append(kwargs["workspace"])
+        return original_builder(*args, **kwargs)
+
+    monkeypatch.setattr(turn_run_once_command, "build_dsh_host_runner", patched_builder)
     project, runtime, registry = _write_live_fixture(tmp_path)
     host_project = tmp_path / "isolated-dsh-workspace"
     host_project.mkdir()
@@ -2507,6 +2523,7 @@ def run_dsh_turn(**kwargs):
     run("fresh-fixture-2", "fresh")
     run("resume-fixture-1", "resume")
     run("resume-fixture-2", "resume")
+    assert builder_calls == [host_project] * 4
 
     session_ids = (host_project / "dsh-session-ids.txt").read_text(
         encoding="utf-8"

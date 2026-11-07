@@ -386,8 +386,9 @@ def _emit_quota_result(
         _export("attach_host_poll_receipt")(
             context.status_payload, args, payload, registry_path=registry_path,
         )
+    native_context = context_delivery_enabled and bool(getattr(args, "codex_context_dir", None) or getattr(args, "codex_context_root", None))
     try:
-        captured_digest = capture_decision(capture_directory, payload)
+        captured_digest = capture_decision(capture_directory, payload, args=args, native_context=native_context)
         if getattr(args, "prepared_capture_reference", False) and payload.get("ok") is True:
             assert captured_digest is not None  # Preflight requires an explicit capture directory.
             from ..control_plane.turn_driver.codex_execution_preparation import prepared_capture_reference
@@ -432,7 +433,6 @@ def _emit_quota_result(
     # Handoff releases the immutable original before any presentation. Native
     # actual-input observation owns its projection when explicitly selected;
     # never wrap one context-delivery wire in a second projection.
-    native_context = context_delivery_enabled and bool(getattr(args, "codex_context_dir", None) or getattr(args, "codex_context_root", None))
     deferred_context = getattr(args, "defer_context_presentation", False)
     if (not deferred_context and args.format == "json" and succeeded and delivery_request is not None and not native_context
             and context_delivery_enabled):
@@ -506,9 +506,10 @@ def _record_non_guard_quota_event(
     )
     if args.quota_command == "spend-slot" and spend_turn_instance_id:
         assert context is not None  # A settlement requires a prepared authority context.
-        _export("attach_spend_settlement_result")(
+        readback = _export("attach_spend_settlement_result")(
             payload,
             runtime_root=context.runtime_root,
+            registry_path=registry_path,
             goal_id=args.goal_id,
             agent_id=args.agent_id,
             todo_id=rollout_todo_id,
@@ -521,12 +522,7 @@ def _record_non_guard_quota_event(
             execute=bool(args.execute),
             runtime_root=context.runtime_root,
             registry_path=registry_path,
-            goal_id=args.goal_id,
-            agent_id=args.agent_id,
-            todo_id=rollout_todo_id,
-            turn_instance_id=spend_turn_instance_id,
-            replan_obligation_id=rollout_replan_obligation_id,
-            goal_ref=goal_ref,
+            readback=readback,
         )
 
 

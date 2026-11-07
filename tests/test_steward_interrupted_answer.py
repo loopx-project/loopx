@@ -5,6 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 import time
+from types import SimpleNamespace
 
 import pytest
 from test_antigravity_steward_adapter import language_server  # noqa: F401
@@ -13,6 +14,225 @@ from test_native_steward_private import steward  # noqa: F401
 from loopx.capabilities.native_chat import antigravity_adapter as native
 from loopx.capabilities.native_chat import external_conversations
 from loopx.extensions.lark.conversation_identity import identity_ref
+
+
+@pytest.mark.parametrize("fault", [None, "stop", "source-changed", "unknown-native", "no-capacity", "native-changed",
+    "review-action", "post-enqueue-crash", "image-view", "checkpoint-live", "checkpoint-cold",
+    "checkpoint-injection-unknown", "checkpoint-empty", "checkpoint-settings-change"])
+def test_restarted_codex_steward_gets_one_original_read_only_answer(steward, monkeypatch, fault):
+    from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter
+    from loopx.chat_agent import CodexChatAgentError
+    from loopx.extensions.lark.private_conversations import LarkPrivateConversations
+
+    store, runtime, provider, transport, binding, capture, workspace = steward
+    fake = Path(runtime.codex_bin)
+    checkpoint = bool(fault and fault.startswith("checkpoint-"))
+    original_thread = "working-thread" if checkpoint else "durable-thread"
+    code = fake.read_text().replace('result = {"thread": {"id": "durable-thread"}}', '''result = {"thread": {"id": "durable-thread"}, "model": "gpt-6.1-sol"}
+        permissions = request.get("params", {}).get("permissions")
+        if permissions:
+            result.update(activePermissionProfile={"id": permissions}, runtimeWorkspaceRoots=[request["params"]["cwd"]])''')
+    if checkpoint:
+        code = code.replace('"durable-thread"', 'thread_id')
+        code = code.replace('active_turn = None', 'active_turn = None\nthread_id = "working-thread"', 1)
+        begin = code.index('    elif method in {"thread/start", "thread/resume"}:')
+        end = code.index('    elif method == "thread/goal/get":', begin)
+        code = code[:begin] + '''    elif method in {"thread/start", "thread/resume", "thread/fork"}:
+        params = request["params"]
+        permissions = params.get("permissions")
+        thread_id = ("continued-thread" if method == "thread/fork" else params.get("threadId")
+            if method == "thread/resume" else "review-thread" if permissions else "working-thread")
+        result = {"thread": {"id": thread_id}, "model": "gpt-6.1-sol", "modelProvider": "openai",
+                  "cwd": params["cwd"], "approvalPolicy": "never"}
+        if method == "thread/fork":
+            result["thread"]["forkedFromId"] = params["threadId"]
+            result["sandbox"] = {"type": {"danger-full-access": "dangerFullAccess",
+                "workspace-write": "workspaceWrite", "read-only": "readOnly"}[params["sandbox"]]}
+        if permissions:
+            result.update(activePermissionProfile={"id": permissions}, runtimeWorkspaceRoots=[params["cwd"]])
+''' + code[end:]
+        if fault == "checkpoint-injection-unknown":
+            code = code.replace('    elif method == "turn/start":', '''    elif method == "thread/inject_items" and thread_id == "continued-thread":
+        sys.exit(2)
+    elif method == "turn/start":''')
+    if fault in {"review-action", "checkpoint-empty"}:
+        start = code.index("        response = 'Visible runtime response.")
+        end = code.index('        print(json.dumps({"method": "item/agentMessage/delta"', start)
+        reply = '<loopx-review-json>' + json.dumps({"message": "Forbidden repeat",
+            "unfinished_work": {"remaining": "Repeat business", "dependency": "owner", "effects_settled": True}}) + '</loopx-review-json>'
+        code = code[:start] + f"        response = {reply!r}\n" + code[end:]
+    fake.write_text(code)
+    artifact = workspace / "original-output.txt"
+    start_turn = CodexAppServerAdapter.start_turn
+
+    def restart_after_output(adapter, message, sink, **kwargs):
+        if adapter.session.answer_review:
+            return start_turn(adapter, message, sink, **kwargs)
+        def observed(kind, payload):
+            sink(kind, payload)
+            if kind == "answer.delta":
+                artifact.write_text("Original effect, do not repeat")
+                raise CodexChatAgentError("Synthetic service loss after output", error_code="server_restarted", gate=None)
+        return start_turn(adapter, message, observed, **kwargs)
+
+    monkeypatch.setattr(CodexAppServerAdapter, "start_turn", restart_after_output)
+    event = provider.event("steward-app", "restart-original-question", "Explain the existing change")
+    transport.admit("steward-app", event)
+    ref = identity_ref(binding["provider_ref"], event["message_id"])
+    original = transport.core.read_request(ref)
+    failed = runtime.wait_for_turn(session_id=original["session_id"], turn_id=original["turn_id"], timeout_sec=15)
+    assert failed["status"] == "failed" and failed["error_code"] == "server_restarted" and failed["delta_count"] > 0
+    path = transport.root / f"{ref}.json"
+    transport.reconcile_request(path)
+    failure_bytes = store._turn_path(original["session_id"], original["turn_id"]).read_bytes()
+    notice = deepcopy(json.loads(path.read_text())["deliveries"])
+    history_marker = "Unrelated retained conversation. " * 5000
+    if fault is None:
+        store.append_message(original["session_id"], role="agent", text=history_marker,
+                             turn_id="unrelated-historical-turn")
+    start_adapter = runtime._start_adapter
+    def start_scoped_review(**kwargs):
+        if kwargs.get("answer_review_context") is not None:
+            assert kwargs["history"] is None, "a restricted answer must not import the whole conversation"
+        if fault == "checkpoint-settings-change" and kwargs.get("working_continuation") is not None:
+            store.update_session(original["session_id"], requested_agent_model_id="gpt-6-luna")
+        return start_adapter(**kwargs)
+    monkeypatch.setattr(runtime, "_start_adapter", start_scoped_review)
+    class Ahead(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return super().now(tz) + timedelta(seconds=600)
+    monkeypatch.setattr(external_conversations, "datetime", Ahead)
+    import loopx.chat_manager as manager_module
+    import loopx.chat_runtime as runtime_module
+    from test_chat_manager_model_adoption import configure
+    configure(runtime.coordination_runtime_root, model=None, effort=None, endpoint="antigravity", policy="flexible")
+    allocation = manager_module.manager_executor_allocation(runtime,
+        endpoint_capabilities=[{"agent_id": "codex", "available": True}, {"agent_id": "antigravity", "available": False}])
+    def route(*_args, **_kwargs):
+        return None if fault == "no-capacity" else {"allocation": allocation, "blocked_primary": None,
+            "observed_at": time.time()}
+    monkeypatch.setattr(manager_module, "manager_session_quota_route", lambda *_args, **_kwargs:
+        None if fault == "no-capacity" else {"allocation": allocation, "blocked_primary": None,
+            "observed_at": Ahead.now().timestamp()})
+    monkeypatch.setattr(runtime_module, "manager_session_quota_route", route)
+    probes = []
+    def observe(**kwargs):
+        assert kwargs.get("read_only_review") is True
+        probes.append(kwargs)
+        if fault == "unknown-native":
+            return None
+        if fault == "image-view":
+            from loopx.capabilities.native_chat.codex_adapter import interrupted_result_readback
+            def items(method, params, _deadline):
+                if method == "thread/turns/list":
+                    return iter([{"id": failed["upstream_turn_id"], "status": "interrupted"}])
+                assert method == "thread/items/list" and params == {"turnId": failed["upstream_turn_id"]}
+                return iter([{"turnId": failed["upstream_turn_id"], "item": item} for item in [
+                    {"id": "original-user", "type": "userMessage"},
+                    {"id": "original-command", "type": "commandExecution", "status": "completed"},
+                    {"id": "original-image", "type": "imageView", "path": str(artifact)}]])
+            return interrupted_result_readback(SimpleNamespace(thread_id="durable-thread",
+                response_timeout_sec=1, _control_items=items), failed["upstream_turn_id"])
+        changed = fault == "native-changed" and bool((transport.core.read_request(ref).get("context_recovery") or {}).get("answer_review"))
+        return {"thread_id": original_thread, "turn_id": failed["upstream_turn_id"],
+            "read_only_review": True, "no_final_answer": True, "effects_observed": True,
+            "native_inventory_sha256": ("2" if changed else "1") * 64}
+    monkeypatch.setattr(CodexAppServerAdapter, "failed_request_observation", staticmethod(observe))
+    if fault == "stop":
+        store.append_event(original["session_id"], original["turn_id"], kind="turn.interrupt_requested", payload={})
+    elif fault == "source-changed":
+        provider.messages[event["message_id"]]["content"] = "Revised original source"
+    restarted = LarkPrivateConversations(controller=runtime, runtime_root=store.root.parent,
+        runner=provider, cli_bin="lark-cli")
+    if fault == "post-enqueue-crash":
+        enqueue = runtime.enqueue_turn
+        def crash(**kwargs):
+            enqueue(**kwargs)
+            raise OSError("synthetic unknown admission response")
+        monkeypatch.setattr(runtime, "enqueue_turn", crash)
+        with pytest.raises(OSError, match="unknown admission response"):
+            restarted.reconcile_request(path)
+        monkeypatch.setattr(runtime, "enqueue_turn", enqueue)
+    restarted.reconcile_request(path)
+    current = restarted.core.read_request(ref)
+    if fault in {"stop", "source-changed", "unknown-native", "no-capacity"}:
+        assert current["turn_id"] == original["turn_id"] and not current.get("context_recovery")
+    else:
+        recovery = current["context_recovery"]
+        assert recovery["answer_review"] is True and recovery["read_only_review"] is True
+        assert not any(recovery.get(key) for key in ["work_attempt", "quota_attempt", "routing_attempt"])
+        done = runtime.wait_for_turn(session_id=current["session_id"], turn_id=current["turn_id"], timeout_sec=15)
+        assert done["status"] == ("failed" if fault in {"native-changed", "review-action", "checkpoint-empty"} else "completed"), done
+        restarted.reconcile_request(path)
+        delivered = json.loads(path.read_text())
+        terminal = delivered["deliveries"]["terminal.recovery.22.review.1"]
+        assert terminal["verified"]
+        actual = provider.messages[terminal["attempt"]["message_ref"]]
+        assert actual["chat_id"] == event["chat_id"] and actual["sender"]["id"] == provider.profile_apps["steward-app"]
+        assert json.loads(actual["body"]["content"])["zh_cn"]["content"][0][0]["text"] == terminal["text"]
+        assert delivered["deliveries"]["terminal"] == notice["terminal"]
+        calls = [json.loads(line) for line in capture.read_text().splitlines()]
+        review_threads = [c for c in calls if c["method"] == "thread/start" and c["params"].get("permissions")]
+        assert len(review_threads) == 1
+        opened = review_threads[0]["params"]
+        assert opened["config"]["features"]["apply_patch_freeform"] is False
+        assert opened["config"]["features"]["apps"] is False
+        assert opened["config"]["permissions"][opened["permissions"]]["network"]["enabled"] is False
+        assert [t["name"] for t in opened["dynamicTools"]] == ["loopx_manager_read"]
+        assert not any(c["method"] == "thread/resume" for c in calls), "unknown old business must not be resumed"
+        assert not any(c["method"] in {"thread/inject_items", "thread/compact/start"} for c in calls)
+        if fault is None:
+            assert any(item["text"] == history_marker for item in store.messages(original["session_id"]))
+            review_inputs = [c["params"] for c in calls if c["method"] == "turn/start"]
+            assert original["message"] in json.dumps(review_inputs, ensure_ascii=False)
+        writes = list(provider.writes)
+        restarted.reconcile_request(path)
+        assert provider.writes == writes
+        if checkpoint:
+            sid = original["session_id"]
+            review_session = store.load_session(sid)
+            parked = review_session["parked_native_working"]
+            assert parked["thread_id"] == "working-thread" and parked["review_turn_ids"] == [done["turn_id"]]
+            assert review_session["upstream_thread_id"] == "review-thread"
+            if fault == "checkpoint-cold":
+                runtime.adapters.pop(sid).close_session()
+                assert store.load_session(sid)["parked_native_working"] == parked
+            monkeypatch.setattr(CodexAppServerAdapter, "start_turn", start_turn)
+            later = provider.event("steward-app", "after-working-checkpoint", "Next independent question")
+            restarted.admit("steward-app", later)
+            next_row = restarted.core.read_request(identity_ref(binding["provider_ref"], later["message_id"]))
+            next_turn = runtime.wait_for_turn(session_id=sid, turn_id=next_row["turn_id"], timeout_sec=15)
+            packets = [json.loads(line) for line in capture.read_text().splitlines()][len(calls):]
+            methods = [packet["method"] for packet in packets]
+            assert "thread/start" not in methods and "thread/compact/start" not in methods
+            if fault == "checkpoint-settings-change":
+                assert next_turn["status"] == "failed"
+                assert not {"thread/fork", "thread/resume", "thread/inject_items", "turn/start"}.intersection(methods)
+                assert store.load_session(sid)["parked_native_working"] == parked
+                assert store.load_session(sid)["upstream_thread_id"] == "review-thread"
+            elif fault == "checkpoint-empty":
+                assert next_turn["status"] == "completed"
+                assert [p["params"]["threadId"] for p in packets if p["method"] == "thread/resume"] == ["working-thread"]
+                assert "thread/inject_items" not in methods
+            else:
+                assert [p["params"]["threadId"] for p in packets if p["method"] == "thread/fork"] == ["working-thread"]
+                injected = [p["params"] for p in packets if p["method"] == "thread/inject_items"]
+                assert len(injected) == 1 and injected[0]["threadId"] == "continued-thread"
+                suffix = [(item["role"], item["content"][0]["text"]) for item in injected[0]["items"]]
+                assert suffix == [("assistant", done["response"]["message"])]
+                assert "Next independent question" not in str(suffix)
+                if fault == "checkpoint-injection-unknown":
+                    assert next_turn["status"] == "failed" and "turn/start" not in methods
+                    assert store.load_session(sid)["parked_native_working"] == parked
+                    assert store.load_session(sid)["upstream_thread_id"] == "review-thread"
+                else:
+                    assert next_turn["status"] == "completed"
+                    assert store.load_session(sid)["upstream_thread_id"] == "continued-thread"
+            if fault not in {"checkpoint-injection-unknown", "checkpoint-settings-change"}:
+                assert store.load_session(sid).get("parked_native_working") is None
+    assert store._turn_path(original["session_id"], original["turn_id"]).read_bytes() == failure_bytes
+    assert artifact.read_text() == "Original effect, do not repeat"
 
 
 @pytest.mark.parametrize("fault", [None, "stop", "source-changed", "revoked", "unknown-native", "native-changed", "no-capacity", "review-gate", "review-action", "post-enqueue-crash"])

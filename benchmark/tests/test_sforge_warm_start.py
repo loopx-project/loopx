@@ -14,14 +14,15 @@ from benchmark.runtime import sforge_warm_start as warm
 from loopx.control_plane.effect_runtime import EffectRuntimeConflict, effect_runtime_result
 
 
+@pytest.mark.parametrize("option", ["--restore-phase-extension-seconds", "--restore-phase-remaining-cap-seconds"])
 @pytest.mark.parametrize("extension", ["-1", "64800", str(2 ** 53)])
-def test_extension_without_a_warm_entry_refuses_before_attempt_or_registration(tmp_path, extension):
+def test_extension_without_a_warm_entry_refuses_before_attempt_or_registration(tmp_path, extension, option):
     pytest.importorskip("harbor")
     from benchmark.edgebench import run as entry
     argv = ["--task", "fixture", "--tasks-dir", str(tmp_path), "--log-dir", str(tmp_path),
         "--run-id", "unadmitted", "--worker", "heartbeat-explore", "--model", "fixture",
         "--effort", "high", "--judge-url", "http://localhost:1",
-        "--restore-phase-extension-seconds", extension]
+        option, extension]
     with pytest.raises(SystemExit) as rejected:
         entry.main(argv)
     assert rejected.value.code == 2 and not list(tmp_path.iterdir())
@@ -75,10 +76,11 @@ def point(tmp_path, request, monkeypatch):
     (workspace / "candidate").write_text("retained candidate")
     (workspace / "candidate").chmod(0o600)
     config = tmp_path / "config.toml"
-    if getattr(request, "param", None) in {"gateway", "gateway-on"}:
+    if getattr(request, "param", None) in {"gateway", "gateway-on", "gateway-children"}:
         from benchmark.runtime.codex import Execution, codex_settings
         config.write_text(codex_settings(execution=Execution(context="resume",
-            context_delivery="on" if request.param == "gateway-on" else "off"),
+            context_delivery="on" if request.param == "gateway-on" else "off",
+            native_child_limit=3 if request.param == "gateway-children" else None),
             workspace=workspace, model="original", effort="high",
             base_url="http://gateway:4001/v1", wire_api="responses"))
     else:
@@ -113,14 +115,15 @@ def point(tmp_path, request, monkeypatch):
     unit = tmp_path / "point"
     sealed = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "capture", "components": components,
         "point_metadata": metadata, "expected_source_sha256": observed["source_sha256"], "destination": str(unit)})
-    start = warm.WarmStart(unit, sealed["sha256"], config, "source-goal", "source-agent", "source-todo", int(time.time()) + 600)
+    start = warm.WarmStart(unit, sealed["sha256"], config, "source-goal", "source-agent", "source-todo",
+        int(time.time()) + 600, native_child_limit=3 if getattr(request, "param", None) == "gateway-children" else None)
     return start, workspace
 
 
 @pytest.mark.parametrize("change", [
     {"goal_id": "foreign-goal"}, {"agent_id": "foreign-agent"}, {"source_todo_id": "missing"},
     {"deadline_epoch": 1}, {"deadline_epoch": True}, {"normal_cadence": 0}, {"normal_cadence": True},
-    {"fresh_replan": "false"},
+    {"fresh_replan": "false"}, {"research_sidecar": "false"},
 ])
 def test_invalid_participant_rejects_before_workspace_or_authority_changes(point, change):
     start, workspace = point
@@ -230,10 +233,12 @@ def test_staging_preserves_sealed_modes(point, monkeypatch, tmp_path, model_tran
         assert "destination_config" not in declaration
 
 
-@pytest.mark.parametrize("point,context_delivery", [("gateway", "off"), ("gateway-on", "on")], indirect=["point"])
+@pytest.mark.parametrize("point,context_delivery,native_child_limit", [
+    ("gateway", "off", None), ("gateway-on", "on", None), ("gateway-children", "off", 3),
+], indirect=["point"])
 @pytest.mark.parametrize("model_transition", [False, True])
 def test_fresh_gateway_stages_exact_first_worker_settings(point, monkeypatch, tmp_path,
-                                                        model_transition, context_delivery):
+                                                        model_transition, context_delivery, native_child_limit):
     from benchmark.runtime.codex import Execution, prepare_codex_home
 
     start, workspace = point
@@ -271,7 +276,8 @@ def test_fresh_gateway_stages_exact_first_worker_settings(point, monkeypatch, tm
     home.mkdir()
     skills.mkdir()
     (home / "config.toml").write_bytes(effective)
-    args = dict(home=home, execution=Execution(context="resume", context_delivery=context_delivery), workspace=workspace,
+    args = dict(home=home, execution=Execution(context="resume", context_delivery=context_delivery,
+        native_child_limit=native_child_limit), workspace=workspace,
         model=model, effort=effort, base_url="http://gateway:4002/v1",
         api_key="synthetic", wire_api="responses", skills=skills)
     old_receiver = tmp_path / "unrebound-home"
@@ -281,8 +287,92 @@ def test_fresh_gateway_stages_exact_first_worker_settings(point, monkeypatch, tm
         prepare_codex_home(**{**args, "home": old_receiver})
     assert (old_receiver / "config.toml").read_bytes() == requested
     prepare_codex_home(**args)
+    if native_child_limit is not None:
+        for changed in [None, 2]:
+            with pytest.raises(ValueError, match="settings changed within a trial"):
+                prepare_codex_home(**{**args, "execution": replace(args["execution"], native_child_limit=changed)})
+        assert (home / "config.toml").read_bytes() == effective
     with pytest.raises(ValueError, match="settings changed within a trial"):
         prepare_codex_home(**{**args, "base_url": "http://gateway:4003/v1"})
+
+
+@pytest.mark.parametrize("point", ["gateway-children"], indirect=True)
+def test_warm_render_cannot_change_native_child_authorization(point):
+    start, workspace = point
+    effective = start.config.read_bytes().replace(b':4001/', b':4002/').replace(
+        b'max_concurrent_threads_per_session = 3', b'max_concurrent_threads_per_session = 2')
+    class NoEffects:
+        def __getattr__(self, name):
+            pytest.fail("capacity mismatch must reject before restoring workspace or authority")
+    with pytest.raises(ValueError):
+        asyncio.run(start.stage(NoEffects(), str(workspace), effective_config=effective,
+            provider_base_url="http://gateway:4002/v1"))
+
+
+@pytest.mark.parametrize("point,requested,allowed", [
+    ("gateway-children", None, False), ("gateway-children", 2, False),
+    ("gateway", 3, False), ("gateway-children", 3, True), ("gateway", None, True),
+], indirect=["point"])
+def test_warm_cli_checks_sealed_native_child_limit_before_activation(point, tmp_path, monkeypatch, requested, allowed):
+    pytest.importorskip("harbor")
+    pytest.importorskip("sforge")
+    from sforge.harness.config import SForgeConfig
+    from benchmark.edgebench import checkpoint_controller, checkpoint_supervisor, run as entry
+
+    start, workspace = point
+    source = json.loads((start.root / "checkpoint.json").read_bytes())
+    metadata = source["point_metadata"]
+    metadata["worker_file_snapshot"].update(native_capsule_component_id="native", native_capsule_sha256="a" * 64)
+    components = source["components"]
+    observed = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "probe", "components": components})
+    sealed_root = tmp_path / "warm-cli-point"
+    sealed = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "capture", "components": components,
+        "point_metadata": metadata, "expected_source_sha256": observed["source_sha256"], "destination": str(sealed_root)})
+    request = tmp_path / "request.json"
+    request.write_text(json.dumps({"destination": "/logs/agent/checkpoints", "point_metadata": {},
+        "components": [{"id": "code", "source_path": str(workspace)}],
+        "native_session": True, "loopx_state": True, "evaluation_opportunity": True, "controller_handoff": True}))
+    for name, value in {"LOOPX_SRC_DIR": str(tmp_path), "LOOPX_EXPECTED_COMMIT": "fixture",
+                        "CODEX_AUTH_JSON_PATH": str(tmp_path / "unused-auth.json")}.items():
+        monkeypatch.setenv(name, value)
+    for name in ("OPENAI_BASE_URL", "OPENAI_API_KEY", "LOOPX_RUNNER_SRC_DIR"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(entry, "source_pins", lambda *args: ("fixture", "fixture"))
+    monkeypatch.setattr(entry, "archive_source", lambda *args: None)
+    monkeypatch.setattr(entry, "load_config", SForgeConfig)
+    monkeypatch.setattr(entry, "load_benchmark", lambda *args: None)
+    monkeypatch.setattr(entry, "make_task_spec", lambda *args: SimpleNamespace(
+        task_id="fixture", cwd=str(workspace), work_image_key="work", judge_image_key="judge",
+        internet=False, game_mode=False, submit_paths=["candidate"],
+        work=SimpleNamespace(agent_query="Synthetic task"),
+        judge=SimpleNamespace(selection="score_first", score_direction="maximize")))
+    monkeypatch.setattr(checkpoint_supervisor, "CheckpointSupervisor", lambda *args, **kwargs: object())
+    monkeypatch.setattr(entry, "RecordingDockerBackend", lambda **kwargs: SimpleNamespace(image_exists=lambda _: True))
+
+    class ReachedNativeActivation(Exception):
+        pass
+
+    def restore(*args, **kwargs):
+        assert kwargs["run_id"] == "receiver"
+        raise ReachedNativeActivation
+
+    monkeypatch.setattr(checkpoint_controller, "restore", restore)
+    argv = ["--task", "fixture", "--tasks-dir", str(tmp_path), "--log-dir", str(tmp_path),
+        "--run-id", "receiver", "--worker", "heartbeat-explore", "--model", "fixture", "--effort", "high",
+        "--task-entry", "loopx-planned", "--judge-url", "http://localhost:1", "--checkpoint-request", str(request),
+        "--checkpoint-controller-file", str(tmp_path / "controller.json"), "--restore-checkpoint", str(sealed_root),
+        "--restore-sha256", sealed["sha256"], "--restore-config", str(start.config), "--restore-goal", start.goal_id,
+        "--restore-agent", start.agent_id, "--restore-source-todo", start.source_todo_id]
+    if requested is not None:
+        argv.extend(("--native-child-limit", str(requested)))
+    if allowed:
+        with pytest.raises(ReachedNativeActivation):
+            entry.main(argv)
+    else:
+        with pytest.raises(ValueError, match="native child limit differs from the sealed checkpoint"):
+            entry.main(argv)
+    assert not (tmp_path / "runs" / "receiver").exists()
+    assert not (tmp_path / ".warm-attempts" / "receiver" / "restored-phase-deadline").exists()
 
 
 @pytest.mark.parametrize("point", ["gateway"], indirect=True)
@@ -385,6 +475,8 @@ def test_warm_launcher_reserves_host_attempt_without_preempting_native_run(tmp_p
 def research_point(point, tmp_path, monkeypatch, request):
     start, workspace = point
     research = tmp_path / "retained-experiments"
+    managed = getattr(request, "param", None) == "managed"
+    component_id = "benchmark_research" if managed else "experiments"
     if getattr(request, "param", "directory") == "file":
         research.write_text("retained observations")
         research.chmod(0o600)
@@ -395,7 +487,7 @@ def research_point(point, tmp_path, monkeypatch, request):
         (research / "observations.json").write_text('[2, 3, 5]')
         (research / "candidate.py").chmod(0o600)
     manifest = json.loads((start.root / "checkpoint.json").read_bytes())
-    components = manifest["components"] + [{"id": "experiments", "source_path": str(research)}]
+    components = manifest["components"] + [{"id": component_id, "source_path": str(research)}]
     metadata = manifest["point_metadata"]
     metadata["worker_file_snapshot"]["components"].append(components[-1])
     probe = effect_runtime_result("runtime.checkpoint_artifacts", {"action": "probe", "components": components})
@@ -408,7 +500,11 @@ def research_point(point, tmp_path, monkeypatch, request):
     else:
         research.unlink()
     monkeypatch.setattr(warm, "_RESEARCH_ROOTS", (tmp_path,))
-    return replace(start, root=unit, sha256=result["sha256"], research_component_ids=("experiments",)), workspace, research
+    if managed:
+        from benchmark.runtime import research_artifacts
+        monkeypatch.setattr(research_artifacts, "RESEARCH_DIRECTORY", str(research))
+    return replace(start, root=unit, sha256=result["sha256"], research_sidecar=managed,
+        research_component_ids=() if managed else ("experiments",)), workspace, research
 
 
 def test_explicit_research_files_reproduce_the_retained_experiment(research_point):
@@ -432,6 +528,47 @@ def test_unselected_research_files_remain_inert(research_point):
     start, workspace, research = research_point
     warm.restore_workspace({"root": str(start.root), "sha256": start.sha256, "deadline_epoch": start.deadline_epoch}, workspace)
     assert not research.exists()
+
+
+@pytest.mark.parametrize("research_point", ["managed"], indirect=True)
+def test_managed_research_roundtrips_through_existing_capture_and_receiver(research_point, monkeypatch, tmp_path):
+    start, workspace, research = research_point
+    original_manifest = (start.root / "checkpoint.json").read_bytes()
+    control = tmp_path / "control"
+    control.mkdir()
+    monkeypatch.setattr(warm, "_CONTROL", str(control))
+    class Environment:
+        async def upload_dir(self, source, target):
+            shutil.copytree(source, target)
+        async def upload_file(self, source, target):
+            shutil.copyfile(source, target)
+        async def exec(self, command, **kwargs):
+            return SimpleNamespace(return_code=0)
+    assert start.research_component_ids == ()  # No extra manual recovery flag.
+    assert asyncio.run(start.stage(Environment(), str(workspace)))[0] == str(research)
+    declaration = json.loads((control / "warm-start.json").read_bytes())
+    assert declaration["research_component_ids"] == ["benchmark_research"]
+    warm.restore_workspace(declaration, workspace)
+    scope = {}
+    exec((research / "candidate.py").read_text(), scope)
+    assert [scope["predict"](x) for x in json.loads((research / "observations.json").read_text())] == [14, 21, 35]
+    assert (research / "candidate.py").stat().st_mode & 0o777 == 0o600
+    assert (workspace / "candidate").read_text() == "retained candidate"
+    assert (start.root / "checkpoint.json").read_bytes() == original_manifest
+    with pytest.raises(ValueError, match="already exists"):
+        warm.restore_workspace(declaration, workspace)
+
+
+def test_legacy_checkpoint_keeps_original_workspace_and_does_not_invent_research(point):
+    start, workspace = point
+    original_manifest = (start.root / "checkpoint.json").read_bytes()
+    start = replace(start, research_sidecar=True)
+    metadata = start.verify(str(workspace))
+    assert start._selected_research(metadata) == ()
+    warm.restore_workspace({"root": str(start.root), "sha256": start.sha256,
+                            "deadline_epoch": start.deadline_epoch}, workspace)
+    assert (workspace / "candidate").read_text() == "retained candidate"
+    assert (start.root / "checkpoint.json").read_bytes() == original_manifest
 
 
 @pytest.mark.parametrize("selected", [("absent",), ("workspace",), ("context",),

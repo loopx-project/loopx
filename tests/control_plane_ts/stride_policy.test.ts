@@ -94,6 +94,25 @@ test("Explore review keeps bare lowercase digest revisions and unavailable null 
   }
 });
 
+test("each authored review list advertises and enforces its own three-reference bound", () => {
+  const control = strideControlContract({stride_strategy: "evidence_conditioned_v1"})!;
+  assert.equal(control.review_reference_limit, 3);
+  const evidence = ["evidence:first", "evidence:second", "evidence:third"];
+  const review = {reference_decision_ref: "replan-decision-" + "b".repeat(24), adoption: "unknown",
+    information_gain: "unknown", goal_gain: "unknown", lesson: "Interpret three observations together.",
+    evidence_refs: evidence};
+  const explore = {revision: "a".repeat(64), disposition: "used", considered_refs: evidence, reason: "Compared three findings."};
+  const decision = {...proposal, previous_review: review, explore_review: explore};
+  assert.deepEqual(normalizeStrideDecision(decision)[0]!.previous_review, review);
+  for (const extra of ["evidence:fourth", "evidence:first"]) {
+    const refs = extra === "evidence:first" ? [extra, extra] : [...evidence, extra];
+    assert.throws(() => normalizeStrideDecision({...decision, previous_review: {...review, evidence_refs: refs}}),
+      /previous_review\.evidence_refs requires at most 3 distinct/);
+    assert.throws(() => normalizeStrideDecision({...decision, explore_review: {...explore, considered_refs: refs}}),
+      /explore_review\.considered_refs requires at most 3 distinct/);
+  }
+});
+
 test("concrete independent plans retain action choice and fit the shared vision budget", () => {
   for (const basis of ["unexplained_gap", "uncertain_evidence", "supported_progress"]) {
     const decision = normalizeStrideDecision({...proposal, basis})[0]!;

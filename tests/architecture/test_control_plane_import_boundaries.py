@@ -324,6 +324,31 @@ def test_read_adapters_do_not_load_writeback_facades_for_leaf_helpers() -> None:
         assert completed.returncode == 0, completed.stderr
 
 
+def test_turn_run_once_defers_dsh_builders_and_preserves_exports() -> None:
+    completed = subprocess.run(
+        [sys.executable, "-c", """
+import sys
+import loopx.cli_commands.turn_run_once as command
+assert 'loopx.cli_commands.turn_dsh_host' not in sys.modules
+assert 'loopx.dsh_goal_mode.turn_host_adapter' not in sys.modules
+names = {'build_dsh_host_runner', 'build_dsh_operation_host_runner'}
+assert names <= set(dir(command))
+assert not hasattr(command, 'unknown_host_builder')
+from loopx.cli_commands.turn_run_once import build_dsh_host_runner, build_dsh_operation_host_runner
+from loopx.cli_commands import turn_dsh_host
+assert build_dsh_host_runner is turn_dsh_host.build_dsh_host_runner
+assert build_dsh_operation_host_runner is turn_dsh_host.build_dsh_operation_host_runner
+exports = {}
+exec('from loopx.cli_commands.turn_run_once import *', exports)
+assert exports['build_dsh_host_runner'] is build_dsh_host_runner
+assert exports['build_dsh_operation_host_runner'] is build_dsh_operation_host_runner
+assert exports['execute_turn_run_once'] is command.execute_turn_run_once
+"""],
+        cwd=REPOSITORY_ROOT, capture_output=True, check=False, text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_settlement_plan_import_does_not_load_native_capture_io() -> None:
     # A command template needs the native output profile, not capture binding
     # or the complete quota/Goal routing graph. Keep the typed kernel usable
@@ -368,6 +393,54 @@ def test_turn_preview_import_does_not_select_report_delivery_or_lark_hosts() -> 
             "assert not set(unselected) & sys.modules.keys(), "
             "set(unselected) & sys.modules.keys()",
         ))],
+        cwd=REPOSITORY_ROOT, capture_output=True, check=False, text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_host_bridge_defers_process_helpers_and_preserves_exports() -> None:
+    completed = subprocess.run(
+        [sys.executable, "-c", """
+import sys
+import loopx.control_plane.turn_driver.host_bridge_transport as bridge
+assert 'loopx.extensions.process_runtime' not in sys.modules
+names = {'force_terminate_process', 'write_process_stdin_before_deadline'}
+assert names <= set(dir(bridge))
+assert not hasattr(bridge, 'unknown_process_helper')
+from loopx.control_plane.turn_driver.host_bridge_transport import force_terminate_process, write_process_stdin_before_deadline
+from loopx.extensions import process_runtime
+assert force_terminate_process is process_runtime.force_terminate_process
+assert write_process_stdin_before_deadline is process_runtime.write_process_stdin_before_deadline
+exports = {}
+exec('from loopx.control_plane.turn_driver.host_bridge_transport import *', exports)
+assert exports['force_terminate_process'] is force_terminate_process
+assert exports['write_process_stdin_before_deadline'] is write_process_stdin_before_deadline
+assert exports['GuardedHostBridge'] is bridge.GuardedHostBridge
+"""],
+        cwd=REPOSITORY_ROOT, capture_output=True, check=False, text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_doctor_git_defers_cleanup_and_preserves_exports() -> None:
+    completed = subprocess.run(
+        [sys.executable, "-c", """
+import sys
+from pathlib import Path
+from loopx import doctor_git
+assert 'loopx.extensions.process_runtime' not in sys.modules
+assert doctor_git._run_git(Path.cwd(), 'rev-parse', '--show-toplevel').returncode == 0
+assert 'loopx.extensions.process_runtime' not in sys.modules
+assert 'terminate_process_tree' in dir(doctor_git)
+assert not hasattr(doctor_git, 'unknown_process_helper')
+from loopx.doctor_git import terminate_process_tree
+from loopx.extensions import process_runtime
+assert terminate_process_tree is process_runtime.terminate_process_tree
+exports = {}
+exec('from loopx.doctor_git import *', exports)
+assert exports['terminate_process_tree'] is terminate_process_tree
+assert exports['git_source_metadata'] is doctor_git.git_source_metadata
+"""],
         cwd=REPOSITORY_ROOT, capture_output=True, check=False, text=True,
     )
     assert completed.returncode == 0, completed.stderr

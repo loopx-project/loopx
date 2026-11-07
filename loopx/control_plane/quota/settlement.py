@@ -145,6 +145,14 @@ def render_refresh_recovery_markdown(payload: dict[str, Any]) -> str | None:
 
 
 @dataclass(frozen=True, slots=True)
+class QuotaSpendPrecheck:
+    identity: SettlementResult[SettlementIdentity]
+    settlement: SettlementResult[dict[str, Any]]
+    progress: dict[str, Any] | None
+    spend_run_present: bool
+
+
+@dataclass(frozen=True, slots=True)
 class QuotaSettlementReadback:
     identity: SettlementResult[SettlementIdentity]
     writeback: SettlementResult[dict[str, Any]]
@@ -323,27 +331,15 @@ def _semantic_replan_guard(value: Any) -> dict[str, Any] | None:
     return result
 
 
-def read_heartbeat_settlement(
+def _read_heartbeat_settlement_payload(
     runtime_root: Path,
     *,
     goal_id: str,
-    agent_id: str | None,
-    todo_id: str | None,
-    turn_instance_id: str | None,
-    replan_obligation_id: str | None = None,
-    infer_turn_instance_id: bool = False,
-    allow_unbound_binding: bool = False,
-    resolve_original_binding: bool = False,
-    refresh_retry: dict[str, Any] | None = None,
-    registry_path: Path | None = None,
-    goal_ref: Mapping[str, Any] | None = None,
+    fields: Mapping[str, Any],
+    registry_path: Path | None,
+    goal_ref: Mapping[str, Any] | None,
     source_admission: Mapping[str, Any] | None = None,
-    borrow_source_admission: bool = False,
-    heartbeat_reentry_guard: dict[str, Any] | None = None,
-    include_record_bodies: bool = True,
-) -> QuotaSettlementReadback | None:
-    """Read one complete heartbeat settlement through the TS domain owner."""
-
+) -> Mapping[str, Any] | None:
     def read(admission: Mapping[str, Any] | None) -> Any:
         try:
             return effect_runtime_result(
@@ -352,42 +348,11 @@ def read_heartbeat_settlement(
                     "schema_version": QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA,
                     "runtime_root": str(runtime_root.expanduser()),
                     "goal_id": goal_id,
-                    "agent_id": agent_id,
-                    "todo_id": todo_id,
-                    "turn_instance_id": turn_instance_id,
-                    "replan_obligation_id": replan_obligation_id,
-                    "infer_turn_instance_id": infer_turn_instance_id,
-                    "allow_unbound_binding": allow_unbound_binding,
-                    **({"include_record_bodies": include_record_bodies}
-                        if include_record_bodies is not True else {}),
-                    **(
-                        {"resolve_original_binding": True}
-                        if resolve_original_binding
-                        else {}
-                    ),
-                    **(
-                        {"refresh_retry": refresh_retry}
-                        if refresh_retry is not None
-                        else {}
-                    ),
-                    **(
-                        {"goal_ref": dict(goal_ref)}
-                        if goal_ref is not None
-                        else {}
-                    ),
+                    **fields,
+                    **({"goal_ref": dict(goal_ref)} if goal_ref is not None else {}),
                     **(
                         {"source_admission": dict(admission)}
                         if admission is not None
-                        else {}
-                    ),
-                    **(
-                        {"borrow_source_admission": True}
-                        if borrow_source_admission
-                        else {}
-                    ),
-                    **(
-                        {"heartbeat_reentry_guard": heartbeat_reentry_guard}
-                        if heartbeat_reentry_guard is not None
                         else {}
                     ),
                 },
@@ -421,6 +386,103 @@ def read_heartbeat_settlement(
         return None
     if payload.get("found") is not True:
         raise RuntimeError("TypeScript quota settlement readback result shape mismatch")
+    return payload
+
+
+def read_quota_spend_precheck(
+    runtime_root: Path,
+    *,
+    goal_id: str,
+    agent_id: str | None,
+    todo_id: str | None,
+    turn_instance_id: str | None,
+    replan_obligation_id: str | None = None,
+    infer_turn_instance_id: bool = False,
+    allow_unbound_binding: bool = False,
+    registry_path: Path | None = None,
+    goal_ref: Mapping[str, Any] | None = None,
+) -> QuotaSpendPrecheck | None:
+    """Read the identity and replay controls before building a fresh preview."""
+
+    payload = _read_heartbeat_settlement_payload(
+        runtime_root,
+        goal_id=goal_id,
+        fields={
+            "agent_id": agent_id,
+            "todo_id": todo_id,
+            "turn_instance_id": turn_instance_id,
+            "replan_obligation_id": replan_obligation_id,
+            "infer_turn_instance_id": infer_turn_instance_id,
+            "allow_unbound_binding": allow_unbound_binding,
+            "spend_precheck": True,
+        },
+        registry_path=registry_path,
+        goal_ref=goal_ref,
+    )
+    if payload is None:
+        return None
+    spend_run_present = payload.get("spend_run_present")
+    if not isinstance(spend_run_present, bool):
+        raise RuntimeError("TypeScript quota spend precheck result shape mismatch")
+    return QuotaSpendPrecheck(
+        identity=_readback_result(payload.get("identity"), identity=True),
+        settlement=_readback_result(payload.get("settlement")),
+        progress=_optional_readback_record(payload.get("progress")),
+        spend_run_present=spend_run_present,
+    )
+
+
+def read_heartbeat_settlement(
+    runtime_root: Path,
+    *,
+    goal_id: str,
+    agent_id: str | None,
+    todo_id: str | None,
+    turn_instance_id: str | None,
+    replan_obligation_id: str | None = None,
+    infer_turn_instance_id: bool = False,
+    allow_unbound_binding: bool = False,
+    resolve_original_binding: bool = False,
+    refresh_retry: dict[str, Any] | None = None,
+    registry_path: Path | None = None,
+    goal_ref: Mapping[str, Any] | None = None,
+    source_admission: Mapping[str, Any] | None = None,
+    borrow_source_admission: bool = False,
+    heartbeat_reentry_guard: dict[str, Any] | None = None,
+    include_record_bodies: bool = True,
+) -> QuotaSettlementReadback | None:
+    """Read one complete heartbeat settlement through the TS domain owner."""
+
+    payload = _read_heartbeat_settlement_payload(
+        runtime_root,
+        goal_id=goal_id,
+        fields={
+            "agent_id": agent_id,
+            "todo_id": todo_id,
+            "turn_instance_id": turn_instance_id,
+            "replan_obligation_id": replan_obligation_id,
+            "infer_turn_instance_id": infer_turn_instance_id,
+            "allow_unbound_binding": allow_unbound_binding,
+            **(
+                {"include_record_bodies": include_record_bodies}
+                if include_record_bodies is not True
+                else {}
+            ),
+            **({"resolve_original_binding": True} if resolve_original_binding else {}),
+            **({"refresh_retry": refresh_retry} if refresh_retry is not None else {}),
+            **({"borrow_source_admission": True} if borrow_source_admission else {}),
+            **(
+                {"heartbeat_reentry_guard": heartbeat_reentry_guard}
+                if heartbeat_reentry_guard is not None
+                else {}
+            ),
+        },
+        registry_path=registry_path,
+        goal_ref=goal_ref,
+        source_admission=source_admission,
+    )
+    if payload is None:
+        return None
     workspace_causality = _optional_readback_record(
         payload.get("workspace_causality")
     )

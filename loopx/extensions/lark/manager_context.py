@@ -80,6 +80,9 @@ def manager_failure_reply(
     if code in {"model_auth_unavailable", "resume_failed"} and preparation_recovery:
         return code, ("已收到你的消息，但本轮准备执行器连接时失败。请求已保留；只有核验为模型调用前失败、"
                       "连接恢复且没有后续重交时，原队列才会按剩余次数接续。可用 /status 查看状态。")
+    if code == "server_restarted":
+        return code, ("处理被管家服务重启中断，原请求和会话已保留。系统会先核对原执行记录，"
+                      "符合条件的由原队列恢复结果回复；执行效果不明的操作不会直接重做。")
     # Old hosts can terminate with `other` after typed disconnect retries.
     # Describe that observed history without changing the terminal category,
     # inferring an authorization failure, or granting permission to replay.

@@ -352,6 +352,7 @@ def build_explore_finding_event(
     recorded_at: str | None = None,
     execution_observation: Mapping[str, Any] | None = None,
     measurements: Sequence[Mapping[str, Any]] | None = None,
+    work_yardstick: Mapping[str, Any] | None = None,
     _check_execution_measurements: bool = True,
 ) -> dict[str, Any]:
     safe_goal_id = _safe_goal_id(goal_id)
@@ -402,6 +403,12 @@ def build_explore_finding_event(
         if any(item["evidence_ref"] not in event.get("evidence_refs", []) for item in measured):
             raise ValueError("measurement evidence must be included in the finding's evidence_refs")
         event["measurements"] = measured
+    if work_yardstick is not None:
+        from ...control_plane.work_items.yardstick_decision import normalize_work_yardstick_capture
+        event["work_yardstick"] = normalize_work_yardstick_capture(
+            work_yardstick, goal_id=safe_goal_id, agent_id=str(agent_id or ""),
+            evidence_refs=event.get("evidence_refs", []),
+        )
     event["event_id"] = _event_id(event)
     return event
 
@@ -524,6 +531,7 @@ def validate_explore_result_event(
             supersedes=payload.get("supersedes"),
             execution_observation=payload.get("execution_observation"),
             measurements=payload.get("measurements"),
+            work_yardstick=payload.get("work_yardstick"),
             # Canonical history predates the stricter new-write rule. Keep
             # original bytes/identities auditable; current views qualify the
             # folded result separately, and append rechecks new writes below.
@@ -794,7 +802,7 @@ def explore_history_rows(events: Sequence[Mapping[str, Any]], *, goal_id: str | 
         "schema_version", "event_id", "goal_id", "event_kind", "result_id",
         "recorded_at", "title", "summary", "status", "node_kind",
         "blocked_reason", "parent_id", "node_id", "from_node", "to_node",
-        "edge_type", "agent_id", "run_id", "evidence_refs", "supersedes", "confidence", "execution_observation", "measurements",
+        "edge_type", "agent_id", "run_id", "evidence_refs", "supersedes", "confidence", "execution_observation", "measurements", "work_yardstick",
     )
     return [{key: event[key] for key in fields if key in event} for event in events]
 
@@ -906,6 +914,7 @@ def _finding_view(event: Mapping[str, Any]) -> dict[str, Any]:
         else:
             measured.update(measurements=event["measurements"], recorded_order=event["_recorded_order"])
     return {
+        **({"work_yardstick": event["work_yardstick"], "recorded_order": event["_recorded_order"]} if "work_yardstick" in event else {}),
         **({"execution_observation": event["execution_observation"]} if "execution_observation" in event else {}),
         **measured,
         "finding_id": str(event.get("result_id") or ""),

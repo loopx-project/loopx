@@ -1364,6 +1364,25 @@ accepted round counts, cooldown and scoring remain unchanged. Omit the option
 for the original-budget behavior; a changed budget requires a fresh destination,
 not a rewrite of a running study or its original results.
 
+When the audited remaining allowance is shorter than the captured allowance,
+use `--restore-phase-remaining-cap-seconds N` (controller-only:
+`--phase-remaining-cap-seconds N`). The receiving Host, native registration and
+worker all use one deadline derived from the smaller of the captured allowance
+plus any explicit extension, and this cap. A larger cap never grants time.
+The first activation binds the cap; recovery must use the identical value and
+does not refill elapsed time. Omission preserves existing receipts and behavior.
+Zero or an allowance within the existing work reserve cannot start work. This
+operator transport only limits time: it does not recover uncaptured work or
+qualify a stale checkpoint as a complete continuation. Keep that integrity check
+and the remaining-time audit separate, and use a fresh destination.
+
+补跑额度短于快照保留时间时，使用 `--restore-phase-remaining-cap-seconds N`；
+controller 独立入口对应 `--phase-remaining-cap-seconds N`。接收端、原生注册和
+worker 共用同一个截止：取“快照余量加显式扩展”与上限的较小值。上限不能增加额度，
+首次激活后重试必须保持原值和原截止；省略时保持既有行为与回执兼容。零额度或不足
+既有工作保留时间时拒绝启动。该参数只约束时间，不能补回未捕获的工作，也不能把旧
+checkpoint 认证成完整接续；仍须独立核验研究状态及剩余时间，并使用新接收目录。
+
 The earlier import-based worker passed a synthetic joined qualification:
 native session continuation, a new-Goal preparation/review, candidate work and
 released native feedback under the original remaining allowance. That fixture
@@ -1377,3 +1396,150 @@ This used real Codex processes and native HTTP with deterministic local inferenc
 and synthetic grading. It does **not** qualify scientific research utility,
 matched strategy results, or the frontend restore journey. Actual task/profile
 admission and measured continuation outcomes remain required.
+
+### Continue an interrupted Host in its retained filesystem
+
+The explicit `benchmark.runtime.scheduler` budget-continuation entrypoint can
+settle a returned, budget-interrupted native Host before the next normal wake.
+It retains the original scheduler attempt, wake receipt, Goal, Todos and native
+conversation. A new append-only phase records the exact source and one finite
+deadline; retrying that phase cannot refill time. The next wake still performs
+ordinary quota, Stop, current-profile and session checks. No tool is replayed,
+work marked complete, or replan obligation discarded by this settlement.
+
+New scheduler-owned attempts carry an attempt identity and passive process
+cleanup observations. Recovery requires one matching returned budget receipt,
+a terminated original process group, the unchanged session binding, and stable
+native history ending in an interrupted Turn within that process window.
+Unknown failures, live processes, pending native effects, ambiguous receipts,
+changed profiles and stopped Goals remain held. Ordinary scheduler invocation
+does not opt into continuation. Completed-checkpoint admission stays unchanged.
+
+An older worker without the process observation can instead retain its exact
+stopped Docker filesystem. Prepare evidence through the existing Docker archive
+provider; do not substitute an older sealed checkpoint or copy files over the
+current workspace. The declaration names the original `goal_id`, `agent_id`,
+`workspace`, `runtime_root`, `native_home`, `registry`, `scheduler_state`,
+`wake_log_dir`, `phase_clock` and `wake_turn_id` (absolute guest paths for paths).
+For example:
+
+```sh
+python -m benchmark.edgebench.stopped_recovery \
+  --source-container FULL_CONTAINER_ID \
+  --declaration /private/recovery/source.json \
+  --output /private/recovery/source-proof.json --install
+```
+
+The command refuses a running container, non-inert restart command or external
+mounts. It inventories the current workspace, runtime, registry, original wake,
+native history and SQLite WAL/journal companions, then verifies the container
+remained stopped. `--install` places and reads back only a content-addressed
+inert proof in that same container's control directory; omitting it is read-only.
+Neither form starts the container, restores scoring authority or calls a model.
+Keep exclusive ownership of the source during preparation and continuation.
+
+The legacy source may still say `started`, or may already record a returned
+`stopped` attempt with exit code 75. The latter requires the unique latest wake
+receipt at or before that scheduler snapshot, with `host_invoked=true`,
+`budget_exhausted=true` and `timed_out=true`, no failure, and the original agent
+session. It is not the pre-dispatch budget shortcut. Preparation preserves the
+returned stop rather than changing it to `started` or inventing an attempt ID;
+the receiver must still verify the original native interrupted tail and current
+Goal/session admission. A later or ambiguous wake keeps the source held.
+For a returned stop, the native window ends at the receipt's recorded second,
+not a later maintenance stop of the container. The original hard deadline stays
+intact even when an older worker reserved cleanup time before it.
+
+After independently restoring the original native evaluator's history,
+opportunities and actual cooldown, restart only the same inert container and
+pass its returned `installed_proof_path` as `LOOPX_INTERRUPTED_SOURCE` to the
+explicit scheduler continuation. Preserve all original guest paths, native
+configuration and session. Hot-upgraded LoopX source belongs outside inventoried
+directories. Supply the separately admitted remaining allowance through the
+existing `LOOPX_PHASE_DEADLINE_EPOCH`; leave the original phase-clock file intact
+for source verification. Any changed participant, including a missing WAL,
+refuses settlement. A held reason is printed and the original phase remains
+selected; inspect the original evidence rather than delete it or select fresh.
+
+This provider path qualifies transport recovery, not a new sealed research point
+or cross-container restore. It never grants evaluator registration, budget,
+execution authorization or scientific comparability. Keep the prior failed
+segment and new segment separately attributable, and verify actual model activity
+and native feedback after dispatch. Disposable tests exercise real Docker archive
+and proof installation; SQLite/process tests exercise interrupted work followed
+by the same session's next Turn without paid model calls.
+
+The legacy stopped-source path accepts only Docker's default container-ID hostname.
+The receiver derives the current UTS hostname independently and refuses copied
+proofs in a different worker, including custom-hostname sources. This is an
+accidental-cross-worker boundary under the trusted Docker operator, not a
+cryptographic defense against that operator spoofing hostnames. The installed
+proof initially has root ownership and mode `0600`; a non-root worker's operator
+must assign that one inert file to the original execution user before consumption.
+Only verified SQLite `-shm` companions are omitted as rebuildable indexes; arbitrary
+workspace files with that suffix remain protected.
+
+An explicitly continued phase can carry a hash-bound content handoff through
+`LOOPX_RECOVERY_HANDOFF` and `LOOPX_RECOVERY_HANDOFF_SHA256`. Use the existing
+`handoff restore --input FILE --format json` content envelope (`ok: true` and
+`handoff_text`), without ownership arguments. The normal heartbeat presents it;
+a successful same-session Host receipt confirms its digest and stops repeated
+presentation. An uncertain attempt retains the same input, and missing or changed
+bytes fail closed. A legitimate later budget phase can bind its own new handoff;
+the earlier phase and digest remain immutable. Native submission-ID remapping
+belongs in this infrastructure handoff, never a replacement solution Todo.
+
+Recovery settles process transport only. Preserved pending semantic replan
+attempts still require their original settlement owner; an interrupted replan
+is not silently declared complete or cleared to force dispatch.
+
+### Explicitly continue after native account allowance is repaired
+
+A hard native quota failure is still held by default. Repair or replenish the
+authorized experiment account through its existing provider and verify its fresh
+allowance before requesting another phase. This does not change the desktop
+login, waive a Stop, refill evaluator opportunities, or turn hard quota failures
+into automatic timed retries.
+
+For a retained complete worker, the same scheduler entrypoint accepts
+`--retry-failed-state-sha256 SHA256` naming the exact original scheduler file.
+Supply the independently admitted finite remainder in
+`LOOPX_PHASE_DEADLINE_EPOCH`, preserving the original phase clock and failed
+receipt. The caller must retain the workspace, Goal/SQLite, session, evaluator
+history and cooldown; this entrypoint cannot reconstruct missing source data.
+For example, after these provider and source checks:
+
+```sh
+python -m benchmark.runtime.scheduler \
+  --python /runtime/bin/python --source /runtime/source \
+  --state-file /runtime/control/scheduler-state.json --host-timeout 600 \
+  --retry-failed-state-sha256 EXACT_FAILED_STATE_SHA256
+```
+
+The recovery provider requires one returned `quota_exhausted` wake, its original
+session/profile binding, terminated native process group and a stable native
+`failed` tail with the corresponding structured quota error and no pending tool
+effects. Legacy workers can use the same stopped-container proof above, but only
+when the exact last returned failure, original session and complete unchanged
+filesystem are retained. Unknown errors, missing sessions and incomplete history
+remain held. The ordinary completed-checkpoint gate is unchanged; a failed native
+Turn is not rewritten or presented as completed.
+
+The shared Turn retry rule decides explicit-retry eligibility. A new append-only
+phase records the original failure, digest, native cursor and deadline, retains
+the Host attempt count and semantic replan records, and starts through normal
+Goal/Stop/session/work admission. Repeating the request selects that same phase,
+including any later failure; it cannot clear the failure or extend its deadline.
+A later explicit repair must bind that new failure separately. Existing operator
+and account authority remain required; a digest is provenance, not permission.
+
+The explicit failed-phase path additionally uses the installed optional native
+Codex provider's existing availability policy (`loopx-codex-provider-routing`).
+It reads `account/read(refreshToken=false)` and `account/rateLimits/read` in a
+fresh disposable inspection home before creating the phase. Missing provider
+support, unknown allowance, exhausted allowance or a changed Goal/session keep
+the original failure held. Only a bounded availability receipt is retained;
+no account response, login values or token is emitted. The ordinary startup
+probe and automatic retry path keep their previous behavior. This observation
+is not a reservation of future provider capacity; a later failure is retained
+and requires another explicit repair.

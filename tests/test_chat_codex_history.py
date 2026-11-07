@@ -7,11 +7,11 @@ import pytest
 
 from loopx import chat_agent, chat_runtime
 from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter
-from test_chat_manager_model_adoption import conversation, configure  # noqa: F401
-from test_native_steward_private import steward  # noqa: F401
+from test_chat_manager_model_adoption import conversation as conversation, configure
+from test_native_steward_private import steward as steward
 
 
-def test_source_revocation_during_history_compaction_preserves_original_audience(steward, monkeypatch):
+def test_source_revocation_during_history_compaction_preserves_original_audience(steward, monkeypatch):  # noqa: F811
     import threading
     from concurrent.futures import ThreadPoolExecutor
 
@@ -50,7 +50,7 @@ def test_source_revocation_during_history_compaction_preserves_original_audience
 
 
 @pytest.mark.parametrize("action", ["stop", "close"])
-def test_native_history_preparation_observes_user_stop_before_its_adapter_lock(conversation, monkeypatch, action):
+def test_native_history_preparation_observes_user_stop_before_its_adapter_lock(conversation, monkeypatch, action):  # noqa: F811
     import threading
     from concurrent.futures import ThreadPoolExecutor
 
@@ -102,7 +102,7 @@ def test_native_history_preparation_observes_user_stop_before_its_adapter_lock(c
 
 
 @pytest.mark.parametrize("change", ["close", "settings", "requested-model"])
-def test_history_guard_rechecks_after_native_start_before_publishing(conversation, monkeypatch, change):
+def test_history_guard_rechecks_after_native_start_before_publishing(conversation, monkeypatch, change):  # noqa: F811
     from test_chat_manager_model_adoption import Adapter
     root, store, runtime, session, _ = conversation
     sid = session["session_id"]
@@ -130,9 +130,14 @@ def test_history_guard_rechecks_after_native_start_before_publishing(conversatio
     runtime.close()
 
 
-@pytest.mark.parametrize("fault", [None, "image-view", "later-user", "live", "failed", "background", "unknown", "live-tool",
+@pytest.mark.parametrize("fault", [None, "image-view", "known-later", "settled-command", "later-settled-command",
+    "later-image-view", "later-image-moved",
+    "command-no-exit", "command-open", "command-invalid-clock", "command-signal", "command-timeout", "command-bool-exit",
+    "command-no-output", "command-bool-clock", "command-zero-exit",
+    "later-user", "later-failed-effect", "later-moving-items",
+    "later-unknown", "missing-original", "duplicate-turn", "live", "failed", "background", "unknown", "live-tool",
     "declined", "duplicate", "foreign", "second-user", "no-final", "legacy-prose", "moving-turn", "moving-items"])
-def test_completed_work_readback_requires_latest_stable_explicit_settled_inventory(fault):
+def test_completed_work_readback_requires_stable_correlated_settled_inventory(fault):
     from loopx.chat import CHAT_REVIEW_OPEN_TAG, CHAT_REVIEW_CLOSE_TAG
     from loopx.capabilities.native_chat.codex_adapter import completed_work_readback
     import json
@@ -142,17 +147,59 @@ def test_completed_work_readback_requires_latest_stable_explicit_settled_invento
         "message": "", "unfinished_work": work}) + CHAT_REVIEW_CLOSE_TAG
     calls = []
     counts = {"thread/turns/list": 0, "thread/items/list": 0}
+    later_reads = 0
 
     def items(method, params, deadline):
+        nonlocal later_reads
         calls.append(method)
         counts[method] += 1
         if method == "thread/turns/list":
             turns = [{"id": "original-turn", "status": "failed" if fault == "failed" else "completed"}]
-            if fault in {"later-user", "live"} or fault == "moving-turn" and counts[method] > 1:
+            if fault in {"known-later", "later-settled-command", "later-image-view", "later-image-moved", "later-user", "later-failed-effect", "later-moving-items", "later-unknown", "live"} or fault == "moving-turn" and counts[method] > 1:
                 turns.insert(0, {"id": "later", "status": "inProgress" if fault == "live" else "completed"})
+            if fault == "missing-original":
+                turns = [{"id": "later", "status": "completed"}]
+            if fault == "duplicate-turn":
+                turns.append(turns[0])
             return iter(turns)
+        if params == {"turnId": "later"}:
+            later_reads += 1
+            rows = [{"turnId": "later", "item": {"id": "later-user", "type": "userMessage"}},
+                {"turnId": "later", "item": {"id": "later-effect", "type": "fileChange",
+                    "status": "failed" if fault == "later-failed-effect" else "completed"}}]
+            if fault == "later-settled-command":
+                rows[1]["item"].update(type="commandExecution", status="failed", exitCode=1,
+                    startedAtMs=1000, completedAtMs=1001, aggregatedOutput="Process exited with code 1.")
+            if fault in {"later-image-view", "later-image-moved"}:
+                rows.append({"turnId": "later", "item": {"id": "later-image", "type": "imageView",
+                    "path": "/synthetic/changed.png" if fault == "later-image-moved" and later_reads > 1
+                    else "/synthetic/figure.png"}})
+            if fault == "later-unknown" or fault == "later-moving-items" and later_reads > 1:
+                rows.append({"turnId": "later", "item": {"id": "unknown", "type": "futureEffect"}})
+            return iter(rows)
         assert params == {"turnId": "original-turn"}
         effect = {"id": "effect", "type": "fileChange", "status": "completed"}
+        if fault == "settled-command" or str(fault).startswith("command-"):
+            effect.update(type="commandExecution", status="failed", exitCode=1,
+                startedAtMs=1000, completedAtMs=1001, aggregatedOutput="Process exited with code 1.")
+            if fault == "command-no-exit":
+                effect.pop("exitCode")
+            elif fault == "command-open":
+                effect["completedAtMs"] = None
+            elif fault == "command-invalid-clock":
+                effect["completedAtMs"] = 999
+            elif fault == "command-signal":
+                effect["exitCode"] = 137
+            elif fault == "command-timeout":
+                effect["exitCode"] = 124
+            elif fault == "command-bool-exit":
+                effect["exitCode"] = True
+            elif fault == "command-no-output":
+                effect.pop("aggregatedOutput")
+            elif fault == "command-bool-clock":
+                effect["startedAtMs"] = True
+            elif fault == "command-zero-exit":
+                effect["exitCode"] = 0
         if fault == "unknown":
             effect["type"] = "futureEffect"
         if fault == "image-view":
@@ -172,10 +219,68 @@ def test_completed_work_readback_requires_latest_stable_explicit_settled_invento
 
     native = SimpleNamespace(thread_id="native", work_dir=Path("/synthetic/notes"), response_timeout_sec=.1, _control_items=items,
         _background_terminals=lambda deadline: [{"processId": "live"}] if fault == "background" else [])
-    proof = completed_work_readback(native, "original-turn")
-    if fault in {None, "image-view"}:
+    proof = completed_work_readback(native, "original-turn", known_turn_ids={"later"}
+        if fault in {"known-later", "later-settled-command", "later-image-view", "later-image-moved", "later-failed-effect", "later-moving-items", "later-unknown"} else None)
+    if fault in {None, "image-view", "known-later", "settled-command", "later-settled-command", "later-image-view"}:
+        digest = proof.pop("native_inventory_sha256")
+        assert len(digest) == 64 and set(digest) <= set("0123456789abcdef")
         assert proof == {"thread_id": "native", "turn_id": "original-turn", "completed_work": True,
                          "all_effects_settled": True, "unfinished_work": work}
+        assert counts == {"thread/turns/list": 3, "thread/items/list": 4 if fault in {"known-later", "later-settled-command", "later-image-view"} else 2}
+    else:
+        assert proof is None
+    assert set(calls) <= {"thread/turns/list", "thread/items/list"}
+
+
+@pytest.mark.parametrize("fault", [None, "unknown-later", "live", "live-effect", "foreign", "duplicate",
+    "moving-items", "moving-turns", "untyped", "unknown-item", "no-final"])
+def test_completed_result_review_reads_evidence_without_proving_replay_safety(fault):
+    from loopx.chat import CHAT_REVIEW_OPEN_TAG, CHAT_REVIEW_CLOSE_TAG
+    from loopx.capabilities.native_chat.codex_adapter import completed_result_review_readback
+    import json
+
+    work = {"remaining": "Verify the retained update", "dependency": "The source was unavailable", "effects_settled": True}
+    final = "Only part of the update was confirmed.\n" + CHAT_REVIEW_OPEN_TAG + json.dumps({
+        "message": "", "unfinished_work": work}) + CHAT_REVIEW_CLOSE_TAG
+    calls = []
+    counts = {"thread/turns/list": 0, "thread/items/list": 0}
+
+    def items(method, params, deadline):
+        calls.append(method)
+        counts[method] += 1
+        if method == "thread/turns/list":
+            rows = [{"id": "later", "status": "inProgress" if fault == "live" else "interrupted"},
+                {"id": "original", "status": "completed"}]
+            if fault == "moving-turns" and counts[method] > 1:
+                rows.insert(0, {"id": "foreign", "status": "completed"})
+            return iter(rows)
+        assert params == {"turnId": "original"}, "A result-only read need not rescan later business effects"
+        rows = [{"turnId": "original", "item": {"id": "user", "type": "userMessage"}},
+            {"turnId": "original", "item": {"id": "effect", "type": "commandExecution",
+                "status": "inProgress" if fault == "live-effect" else "failed", "exitCode": 130}},
+            {"turnId": "original", "item": {"id": "answer", "type": "agentMessage",
+                "phase": "commentary" if fault == "no-final" else "final_answer",
+                "text": "No structured declaration" if fault == "untyped" else final}}]
+        if fault == "foreign":
+            rows[1]["turnId"] = "other"
+        if fault == "unknown-item":
+            rows[1]["item"]["type"] = "futureEffect"
+        if fault == "duplicate":
+            rows.append(rows[1])
+        if fault == "moving-items" and counts[method] > 1:
+            rows[2]["item"]["text"] += " changed"
+        return iter(rows)
+
+    native = SimpleNamespace(thread_id="native", work_dir=Path("/synthetic/workspace"),
+        response_timeout_sec=1, _control_items=items)
+    proof = completed_result_review_readback(native, "original",
+        known_turn_ids=set() if fault == "unknown-later" else {"later"})
+    if fault is None:
+        assert proof["read_only_review"] is True and proof["completed_result_review"] is True
+        assert proof["unfinished_work"] == work and proof["visible_response"] == final
+        assert proof["thread_id"] == "native" and proof["turn_id"] == "original"
+        assert len(proof["native_inventory_sha256"]) == 64
+        assert "all_effects_settled" not in proof and "completed_work" not in proof
         assert counts == {"thread/turns/list": 2, "thread/items/list": 2}
     else:
         assert proof is None

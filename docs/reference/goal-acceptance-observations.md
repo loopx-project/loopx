@@ -75,6 +75,48 @@ check consumes real status collection over a disposable synthetic Goal; set
 
 ## Default supporting outcomes
 
+Creating a Goal with a selected Agent and explicit **Completion criteria** now
+retains that reviewed field as a supporting outcome before the first Session
+can start. The App and the typed `goal.create` action share this path. Completing
+the initial Todos does not erase the criteria: unmet requirements return to the
+existing Goal frontier and replan owner. No acceptance-check setup or extra
+continuation switch is needed. Criteria without a selected Agent are refused
+before creation; an objective alone is not parsed into invented requirements.
+
+Creation recovery keeps the original declaration operation and provider revision
+through a lost response. A known revision conflict holds the creation for
+reconciliation instead of silently rebasing it or starting a Host. Already
+dispatched historical creations retain their original semantics; this is not a
+retroactive migration. Stop, permissions, available budget, independent checks
+and natural native Goal completion retain their existing owners.
+
+中文：创建 Goal 时，已选择执行 Agent 并明确填写的“完成标准”会在首个会话启动前
+保存为持续要求。App 与 `goal.create` 共用这条路径；首批 Todo 做完后，尚未满足的
+要求仍进入现有 Goal frontier 和重规划流程，无需另开续跑开关或配置检查命令。
+未选择 Agent 时先拒绝创建；系统不会从自由文本目标中猜出新要求。响应丢失沿用原
+操作和 provider revision 恢复；已知版本冲突先保留现场，不自动重基或启动模型。
+已经启动过会话的旧创建记录保持原义，不自动迁移。停止、权限、预算、独立检查及
+原生 Goal 的自然结束规则保持有效。
+
+The first planning step reuses these existing creation requirements and links its
+actual work to them. It adds only missing source-grounded requirements; creating
+another outcome for unchanged completion criteria is not a prerequisite.
+
+The shared `/loopx` and `todo plan` first-planning contract asks the Agent to
+declare source-grounded overall requirements through `goal-acceptance refine`,
+link the actual task Todos and read the declaration back. The caller supplies
+the original task and execution facts; it does not write the Agent's semantic
+requirements. Reuse the same outcome on continuation. Unchanged requirements
+need no rewrite, and independent executable checks remain optional.
+
+An open-ended objective remains open-ended. A maximum timeout is an upper
+bound, not an instruction to use every remaining minute. Local Todo completion
+leaves unmet overall requirements with the existing frontier/replan owner;
+real Stop, budget, refusal and waiting conditions still apply. Benchmark's
+`loopx-planned` ready handoff checks the canonical Agent-owned work links.
+Blocked planning can return its actual blocker without fabricating a declaration.
+The structural readback proves persistence, not model comprehension or task success.
+
 Goal Overview shows supporting outcomes recorded by a bound Agent: original
 objective, cumulative requirements, linked work, sources and separate Agent
 review/check results. The local owner can **Add a requirement** and read the
@@ -140,6 +182,15 @@ lifetime. A fresh lifetime has zero retained bytes; no current reviews means
 zero retained review bytes. These are storage observations, not model tokens, packet size or measured execution cost. The
 64-source limit per outcome remains independent. Omitting `source` on an
 ordinary review avoids adding provenance but cannot bypass either byte budget.
+
+A requirement description permits 2000 UTF-16 code units so the existing
+creation field's full 1000 Unicode code points, including supplementary-plane
+characters, survive without clipping. Previously its 512-unit bound rejected
+that already supported input. This field alignment does not enlarge either
+131072-byte aggregate envelope, source count, outcome count or execution budget;
+oversized declarations still fail atomically. 中文：单条要求的描述上限对齐创建表单已有的
+1000 个 Unicode 码点（最多 2000 个 UTF-16 单元），保留完整确认文本；两个聚合字节
+预算及其他容量、执行预算均不扩大，超限仍原子拒绝。
 
 For review overflow, shorten only the proposed review notes and evidence
 references while preserving each conclusion and its provenance; keep full
@@ -251,13 +302,15 @@ Count the complete task: with an Agent-prepared plan already delivered, the owne
 has one required decision. If the original request still lacks acceptance intent
 or authority, that missing decision is an additional round; preparing a proposal
 alone does not establish a one-round cold-start or live-model experience.
-No-plan/default-off behavior remains unchanged, and no Lark action is introduced.
+The default outcome feedback loop continues while executable verification awaits
+an owner-authorized check.
 
 中文：普通路径由 Agent 根据目标与既有上下文准备方案，负责人在交付处核对要求、覆盖范围和
 执行影响，一次“采用并检查”；已有配置直接“检查交付”。JSON 导入仅保留为高级迁移入口。
 `prepare --execute` 只保存可审阅方案，不修改 Goal 规则、不执行检查。丢失回执先对账，
 不能自动重跑；历史通过不能认证变化后的版本。交互次数从原始意图算起，前置缺失的意图或
-授权不能从计数中省略。此入口沿用可信本机所有者边界，不证明远程身份、独立复核或实际采用。
+授权不能从计数中省略。成果反馈默认运行，可执行检查等待所有者授权。此入口沿用可信本机
+所有者边界，不证明远程身份、独立复核或实际采用。
 显式启用的 Goal LoopX 会话在原生工具声明 `prepare_check` 时，可直接准备相同方案；
 Goal、Agent 与运行目录由宿主固定，暂停、过期 Turn 或撤销配置后不能继续准备。
 旧原生线程的工具声明不会自动升级，也不会为新增工具替换未完成线程；未声明时保留 CLI
@@ -305,11 +358,28 @@ and binding are separate: selected work with no confirmed binding remains held.
 Bindings outside the selected set are rejected. Agents cannot change coverage;
 owner configuration still uses preview, provider CAS and exact operation replay.
 
+`goal` checks the Goal as a whole without gating local Todo execution or
+completion. It requires empty `bindings`; it does not mean every new task needs
+an acceptance association. Use it for an independently checked cross-task
+commitment. With a retained outcome, `{"outcome_id":"...","scope":{"kind":"goal"},"criteria":[...]}`
+uses the original requirement descriptions and needs no placeholder Todo.
+The outcome ID binds the receipt to that outcome. A standalone Goal check
+reports on the Goal as a whole. An unmet configured check cannot be satisfied
+by an Agent's self-review or local Todo completion. The outcome remains available to ordinary replanning when its
+linked work ends; permission, Stop, real blockers and the host's finite budget
+still govern execution. A scope declaration itself never runs a checker.
+
+`goal` 只验收整个 Goal，不给局部 Todo 加执行或完成门禁，`bindings` 必须为空。
+它适用于跨任务的独立验收承诺，可直接引用既有成果要求，无需占位 Todo。
+`outcome_id` 将检查回执绑定到对应成果。独立的 Goal 检查报告整个 Goal 的验证结果。
+局部任务完成或 Agent 自评不能替代已配置检查；未满足的成果在工作结束后仍进入
+原有重规划流程。权限、Stop、真实阻塞及宿主有限预算继续生效。
+
 Legacy persisted documents without `scope` retain their Goal-wide behavior and
 original digest. Reading or upgrading does not narrow them. A fresh configuration
 without scope is rejected with an actionable error; original committed retries
-still recover their receipts. An older runtime that does not understand selected
-coverage rejects it rather than silently ignoring it; update readers before an
+still recover their receipts. An older runtime that does not understand the selected
+coverage kind rejects it rather than silently ignoring it; update readers before an
 owner-approved scope change.
 
 Unselected work retains its ordinary validation, claims, leases, permissions and

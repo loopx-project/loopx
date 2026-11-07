@@ -981,11 +981,9 @@ def main() -> int:
     root_readme_zh = read("README.zh-CN.md")
     governance = read(".github/GOVERNANCE.md")
     support = read(".github/SUPPORT.md")
-    auto_research_command_path = read("demo/auto_research/README.md")
     codex_cli_tui_loop = read("docs/product/runtimes/codex-cli/codex-cli-tui-loop.md")
     project_agent_contract = read("docs/project-agent-todo-contract.md")
     status_contract = read("docs/status-data-contract.md")
-    compact_auto_research_command_path = compact(auto_research_command_path)
     compact_codex_cli_tui_loop = compact(codex_cli_tui_loop)
     compact_project_agent_contract = compact(project_agent_contract)
     compact_status_contract = compact(status_contract)
@@ -1137,8 +1135,6 @@ def main() -> int:
         "docs/development/documentation-layout.md",
         "docs/development/testing-and-quality.md",
         "docs/guides/README.md",
-        "demo/auto_research/README.md",
-        "docs/guides/multi-agent-product-recipe.md",
         "docs/integrations/README.md",
         "docs/reference/README.md",
         "docs/reference/contracts/README.md",
@@ -1268,38 +1264,6 @@ def main() -> int:
         "agent_lane_recommendation",
     ]:
         assert required in compact_status_contract, required
-
-    for required in [
-        "Start From A Clean Workspace",
-        "loopx-auto-research-demo",
-        "auto-research demo-e2e",
-        "auto-research demo-supervisor",
-        "auto-research worker-loop",
-        "research-curator",
-        "hypothesis-proposer",
-        "research-executor",
-        "evaluator-promoter",
-        "tmux attach -t loopx-auto-research",
-        "tmux kill-session -t loopx-auto-research",
-        "not a leader agent",
-    ]:
-        assert required in compact_auto_research_command_path, required
-
-    multi_agent_product_recipe = read("docs/guides/multi-agent-product-recipe.md")
-    compact_multi_agent_product_recipe = compact(multi_agent_product_recipe)
-    for required in [
-        "Multi-Agent Product Recipe",
-        "Product preset",
-        "Multi-agent kernel",
-        "role list",
-        "agent scope",
-        "worker-local skill snippet",
-        "handoff/todo hints",
-        "One-Command Launch",
-        "Attach, Stop, Retry",
-        "Auto-research should stay a reference preset, not the kernel",
-    ]:
-        assert required in compact_multi_agent_product_recipe, required
 
     check_rfc_language_mirrors()
     check_rfc_ledger_entries()

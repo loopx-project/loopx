@@ -38,6 +38,12 @@ class WarmStart:
     research_component_ids: tuple[str, ...] = ()
     fresh_replan: bool = False
     destination_config: Path | None = None
+    research_sidecar: bool = False
+    native_child_limit: int | None = None
+
+    def _selected_research(self, metadata: dict):
+        from .research_artifacts import selected_research_components
+        return selected_research_components(metadata, self.research_component_ids, managed=self.research_sidecar)
 
     def verify(self, workspace: str) -> dict:
         from loopx.hosts.checkpoint_retention import checkpoint_bank_use
@@ -45,6 +51,8 @@ class WarmStart:
             return self._verify(workspace)
 
     def _verify(self, workspace: str) -> dict:
+        if type(self.research_sidecar) is not bool:
+            raise ValueError("research_sidecar requires an explicit boolean")
         if type(self.fresh_replan) is not bool:
             raise ValueError("fresh_replan requires an explicit boolean context treatment")
         if (type(self.normal_cadence) is not int or not 1 <= self.normal_cadence <= 6
@@ -74,9 +82,19 @@ class WarmStart:
             raise ValueError("Warm start paths, configuration or destination lineage differ")
         _loopx_components(self.root, metadata, Path(workspace))
         from loopx.hosts.codex_checkpoint import checkpoint_destination_config
-        checkpoint_destination_config(self.config, native["config_sha256"], self.destination_config)
+        from .codex import Execution
+
+        configuration, _ = checkpoint_destination_config(self.config, native["config_sha256"], self.destination_config)
+        agents = tomllib.loads(configuration.decode("utf-8")).get("agents", {})
+        if not isinstance(agents, dict):
+            raise ValueError("Sealed checkpoint agents configuration must be a TOML table")
+        retained_limit = Execution(mode="plain",
+            native_child_limit=agents.get("max_concurrent_threads_per_session")).native_child_limit
+        requested_limit = Execution(mode="plain", native_child_limit=self.native_child_limit).native_child_limit
+        if retained_limit != requested_limit:
+            raise ValueError("Requested native child limit differs from the sealed checkpoint")
         _workspace_component(self.root, metadata, Path(workspace))
-        _research_components(self.root, metadata, Path(workspace), self.research_component_ids)
+        _research_components(self.root, metadata, Path(workspace), self._selected_research(metadata))
         context = metadata["research_context"]
         context_path = self.root / "components" / context["component_id"] / context["member_path"]
         if not context_path.resolve(strict=True).is_relative_to(self.root / "components"):
@@ -102,7 +120,7 @@ class WarmStart:
                      effective_config: bytes | None = None,
                      provider_base_url: str | None = None) -> list[str]:
         metadata = self._verify(workspace)
-        research = _research_components(self.root, metadata, Path(workspace), self.research_component_ids)
+        research = _research_components(self.root, metadata, Path(workspace), self._selected_research(metadata))
         requested = self.destination_config or self.config
         transport_config = None
         if effective_config is not None:
@@ -150,8 +168,8 @@ class WarmStart:
             await environment.upload_file(self.destination_config, target)
             payload["destination_config"] = target
             protected_files.append(target)
-        if self.research_component_ids:
-            payload["research_component_ids"] = list(self.research_component_ids)
+        if research:
+            payload["research_component_ids"] = [key for key, _, _ in research]
         if self.fresh_replan:
             payload["fresh_replan"] = True
         with tempfile.TemporaryDirectory() as folder:

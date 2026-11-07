@@ -8,7 +8,7 @@ from typing import Any
 
 from ...agent_registry import registered_agent_ids_for_goal
 from ...file_lock import exclusive_cross_runtime_file_lock
-from ..effect_runtime import effect_runtime_result
+from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from ..goals.activation import goal_is_stopped
 from ..goals.source_session_registry_state import exact_goal_ref, guard_path
 from ..projects.registry_codec import (
@@ -185,6 +185,14 @@ class CollaborationLifecycleRejected(ValueError):
         super().__init__(f"collaboration lifecycle rejected: {decision.get('code')}")
 
 
+def _lifecycle_scope_facts(scope: CollaborationGoalScope) -> dict[str, Any]:
+    return {
+        "profile_id": scope.profile_id,
+        "caller_goal_ref": scope.caller_goal_ref,
+        "current_goal_ref": scope.current_goal_ref,
+    }
+
+
 def decide_collaboration_lifecycle(
     scope: CollaborationGoalScope,
     *,
@@ -198,10 +206,8 @@ def decide_collaboration_lifecycle(
     result = effect_runtime_result(
         "collaboration.goal_instance.decide",
         {
-            "profile_id": scope.profile_id,
+            **_lifecycle_scope_facts(scope),
             "operation": operation,
-            "caller_goal_ref": scope.caller_goal_ref,
-            "current_goal_ref": scope.current_goal_ref,
             "record_goal_ref": (
                 record.get("goal_ref") if isinstance(record, dict) else None
             ),
@@ -216,3 +222,38 @@ def decide_collaboration_lifecycle(
     if result.get("kind") == "reject":
         raise CollaborationLifecycleRejected(result)
     return result
+
+
+def inspect_original_request_batch(
+    scope: CollaborationGoalScope, deliveries: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Read independent decisions while the caller holds the existing batch guards."""
+    if not deliveries:
+        return []
+    scope_facts = _lifecycle_scope_facts(scope)
+    items = [{
+        "record_goal_ref": delivery["request"].get("goal_ref"),
+        "route_goal_ref": delivery["route"].get("goal_ref"),
+        "initial_delivery": delivery,
+    } for delivery in deliveries]
+    try:
+        result = effect_runtime_result(
+            "collaboration.goal_instance.inspect_original_requests",
+            {**scope_facts, "items": items},
+        )
+        decisions = result.get("items") if isinstance(result, dict) else None
+    except EffectRuntimeRejected as error:
+        if error.diagnostic_code != "request_too_large":
+            raise
+        # Large historical proofs that fit individually keep the ordinary wire.
+        decisions = [
+            effect_runtime_result("collaboration.goal_instance.decide", {
+                **scope_facts, **item, "operation": "original_request_inspect",
+            }) for item in items
+        ]
+    if not isinstance(decisions, list) or len(decisions) != len(items) or any(
+        not isinstance(decision, dict) or decision.get("kind") not in {"allow", "legacy", "reject"}
+        for decision in decisions
+    ):
+        raise RuntimeError("original request inspection count or decision is invalid")
+    return decisions
