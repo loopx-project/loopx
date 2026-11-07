@@ -599,6 +599,39 @@ R0 可以先于目录移动交付，但不代表内核合格。R3/R4 可选，�
   不关闭完整 R0/V10、M1、拆包安装、R1 managed minimal 或 D1–D7。不改变 preset、
   前端操作、权限或持久化状态；受保护执行仍由既有 owner 所有。
 
+### 2026-11-07 — Registry 检查的选择性加载
+
+- **基线与边界：** `ac6296225`。`registry` 和 `registry-boundary` 使用现有
+  selected CLI 路由。共享注册器与传输适配器留在 `cli_runtime`；显式完整 CLI
+  通过 `support_control` 复用它们，保留原有检查函数与 renderer patch point。
+  Registry 解析、分类及 Git 判定仍归现有 owner。Python 在此只适配 CLI，不新增
+  决策 owner、provider 或 dispatcher 框架。既有导入与 I3 至少一个 minor release
+  的兼容窗口保持不变。
+- **兼容证据：** 源码 CLI 与 support ownership 的 197 个用例通过，包含新增的
+  26 个检查结果、拒绝与 patch-point 用例及两个 help 用例。独立的完整 CLI 加载
+  排除断言经同一公开入口，在不可变基线上失败、候选版本上通过。20 个成功与
+  拒绝请求在源码及独立安装的单体 wheel 控制台上保持输出、状态与异常语义一致。
+  Help 与读取路径在缺少 Node 时仍可用，并排除未选择的 Chat、Dashboard 和
+  benchmark 执行模块。两版本在一次性临时目录中均通过真实 Git registry-boundary
+  smoke；先前放在 `.local` 下的运行失败，因为该祖先路径会按既有规则选择私有
+  registry 分类。这次失败作为 fixture 放置证据保留。
+- **成本资格：** 源码与 wheel 各四条 help/读取路径，每条运行 30 对交替 base/head
+  样本，共 480 个样本，采样耗时 416.7 秒；研究准备、兼容验证及 profiling 另耗时
+  278.1 秒，不含此前环境、wheel 准备及测试。macOS arm64/Python 3.13.5、相同依赖、
+  预编译字节码和暖文件缓存下，新进程控制台 help 中位数从 1.536–1.609 秒降至
+  0.100–0.103 秒；registry 读取从 1.584–1.631 秒降至 0.301–0.310 秒，边界读取从
+  1.542–1.612 秒降至 0.222–0.225 秒。RSS 中位数从约 91–92 MiB 降至 16–30 MiB。
+  两条 help 的 LoopX 模块闭包均从 1,158 降至 9；registry/边界读取降至 148/44。
+  PR 记录逐路径 median/p95、CPU、独立 audit 的文件打开次数及未改变的输出字节。
+  未观察到 Node 启动/IPC 或 Python audit socket 事件；边界读取保留三次 Git 查询。
+  暖缓存块 I/O 为零，准确读取字节数及 audit 之外的原生活动仍未知。这些结果只限定
+  本地 CLI 成本改善，不建立可移植 D6 限值、完整准备/model 成本或采纳结论。
+- **验证与剩余工作：** 改动文件 lint 通过。CI lint 范围仍失败于基线已有的 F841，
+  其修复已另行提案；这里不豁免该结果。源码与 wheel 证据不升级已安装 host。
+  M1/#8011、完整 R0/V10、R1 的真实受管 Turn、context/model 组合、拆包安装、采纳
+  与完整成本仍开放。D2/D5/D6/D3、默认行为及权限判定均不改变。相关有界重构
+  共享既有 grammar 与检查适配器；更大的 support/control 提取不纳入本切片。
+
 ## 附录 B：决策日志
 
 | 日期 | 决策 | 负责人 / 批准 | 备选 | 变更的规范章节 |

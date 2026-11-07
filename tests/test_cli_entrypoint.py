@@ -199,6 +199,116 @@ updated_at: 2026-08-28T00:00:00+00:00
 	return registry, runtime_root
 
 
+@pytest.mark.parametrize("command", ["registry", "registry-boundary"])
+@pytest.mark.parametrize("format_name", ["json", "markdown"])
+@pytest.mark.parametrize("missing", [False, True])
+def test_registry_inspection_keeps_full_cli_result_and_read_only_fixture(
+	tmp_path: Path, command: str, format_name: str, missing: bool,
+) -> None:
+	registry, runtime = write_command_fixture(tmp_path)
+	selected = registry.with_name("missing.json") if missing else registry
+	argv = ["--registry", str(selected), "--runtime-root", str(runtime),
+		"--format", format_name, command]
+	before = {p.relative_to(tmp_path): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+	legacy = run_cli_main("loopx.cli", argv)
+	current = run_cli_main("loopx.entrypoint", argv, forbidden_modules=(
+		"loopx.cli", "loopx.cli_commands.support_control", "loopx.chat_server",
+		"loopx.dashboard_launcher", "loopx.cli_commands.benchmark_dispatch",
+	))
+	assert current.returncode == legacy.returncode == (1 if missing else 0), current.stderr
+	assert current.stdout == legacy.stdout
+	assert current.stderr == legacy.stderr == ""
+	if format_name == "json":
+		payload = json.loads(current.stdout)
+		assert payload["ok"] is not missing
+		if missing:
+			assert payload["error"] == "registry file does not exist"
+		elif command == "registry":
+			assert payload["goal_count"] == 1
+			assert payload["goals"][0]["id"] == "perf-goal"
+			assert payload["goals"][0]["state_file_exists"]
+		else:
+			assert payload["schema_version"] == "loopx_registry_boundary_v0"
+			assert payload["should_be_gitignored"] and not payload["github_push_allowed"]
+	assert {p.relative_to(tmp_path): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == before
+
+
+@pytest.mark.parametrize("argv", [
+	["registry", "--format", "json"], ["registry", "--unknown"],
+	["registry-boundary", "--path"], ["registry-boundary", "--require-not-tr"],
+	["--format", "invalid", "registry"], ["--format", "", "registry"],
+	["--reg", "unused", "registry"], ["--registry"],
+])
+def test_registry_inspection_reuses_canonical_rejection(argv: list[str]) -> None:
+	legacy = run_cli_main("loopx.cli", argv)
+	current = run_cli_main("loopx.entrypoint", argv)
+	assert current.returncode == legacy.returncode == 2
+	assert current.stdout == legacy.stdout == ""
+	assert current.stderr == legacy.stderr
+
+
+@pytest.mark.parametrize("ok", [False, True])
+def test_full_registry_inspection_keeps_support_patch_points(
+	tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ok: bool,
+) -> None:
+	from loopx.cli import main
+	from loopx.cli_commands import support_control
+	registry, runtime = write_command_fixture(tmp_path)
+	calls = []
+	payload = {"ok": ok, "future": {"unknown": [None, True]}}
+	monkeypatch.setattr(support_control, "inspect_registry", lambda path: calls.append(path) or payload)
+	printed = []
+	monkeypatch.setattr(support_control, "render_registry_markdown", lambda value: "preserved renderer")
+	# The full CLI supplies its print callback; preserve that boundary as well.
+	monkeypatch.setattr("loopx.cli.print_payload", lambda value, fmt, render: printed.append(
+		(value, fmt, render(value))))
+	assert main(["--registry", str(registry), "--runtime-root", str(runtime), "registry"]) == (0 if ok else 1)
+	assert calls == [registry]
+	assert printed == [(payload, "markdown", "preserved renderer")]
+
+
+@pytest.mark.parametrize("git, require_not_tracked, require_gitignored, push_allowed, should_ignore, ok", [
+	({"inside_worktree": True, "probe_status": "git_unavailable"}, True, False, False, True, False),
+	({"worktree_discovery_unknown": True, "probe_status": "git_unavailable"}, True, False, False, True, False),
+	({"inside_worktree": False, "probe_status": "git_unavailable"}, True, False, False, True, True),
+	({"inside_worktree": True, "probe_status": "git_unavailable"}, True, False, True, False, True),
+	({"inside_worktree": True, "ignored": False, "tracked": False}, False, True, False, True, False),
+	({"inside_worktree": True, "ignored": True, "tracked": False}, False, True, False, True, True),
+	({"inside_worktree": True, "ignored": False, "tracked": True}, False, True, False, True, False),
+	({"inside_worktree": True, "ignored": False, "tracked": False}, False, True, True, False, True),
+])
+def test_registry_inspection_preserves_git_requirement_precedence(
+	tmp_path: Path, monkeypatch: pytest.MonkeyPatch, git: dict[str, object],
+	require_not_tracked: bool, require_gitignored: bool,
+	push_allowed: bool, should_ignore: bool, ok: bool,
+) -> None:
+	import argparse
+	from loopx.cli_commands import support_control
+	registry = tmp_path / "registry.json"
+	selected = tmp_path / "selected.json"
+	calls = []
+	owner_rejected = bool(git.get("tracked") and not push_allowed)
+	payload = {"ok": not owner_rejected, "git": git, "github_push_allowed": push_allowed,
+		"should_be_gitignored": should_ignore, "future": {"retained": None},
+		"risks": ["registry_tracked_but_not_push_allowed"] if owner_rejected else []}
+	monkeypatch.setattr(support_control, "inspect_registry_boundary", lambda path: calls.append(path) or payload)
+	printed = []
+	args = argparse.Namespace(command="registry-boundary", path=str(selected), format="json",
+		require_not_tracked=require_not_tracked, require_gitignored=require_gitignored)
+	result = support_control.handle_support_control_command(args, registry_path=registry,
+		registry_was_supplied=True, print_payload=lambda value, fmt, render: printed.append((value, fmt)),
+		output_format=lambda args: args.format)
+	assert result == (0 if ok else 1)
+	assert calls == [selected]
+	assert len(printed) == 1 and printed[0][1] == "json"
+	assert printed[0][0]["ok"] is ok
+	assert printed[0][0]["future"] == {"retained": None}
+	if not ok and require_not_tracked:
+		assert printed[0][0]["error"] == "Could not determine whether the registry is tracked by Git."
+	if not ok and require_gitignored and not owner_rejected:
+		assert "registry_should_be_gitignored" in printed[0][0]["risks"]
+
+
 def test_version_flag_skips_full_cli_import() -> None:
     script = """
 import contextlib
@@ -294,6 +404,8 @@ assert payload["groups"]
 	("argv", "registration_module", "handler_module"),
 	[
 		(["commands", "--help"], "loopx.help_surface", "loopx.help_surface"),
+		(["registry", "--help"], "loopx.cli_runtime", "loopx.registry"),
+		(["registry-boundary", "--help"], "loopx.cli_runtime", "loopx.registry"),
 		(["doctor", "--help"], "loopx.cli_commands.doctor", "loopx.cli_commands.doctor"),
 		(["authority-archive", "--help"], "loopx.cli_commands.authority_archive", "loopx.cli_commands.authority_archive"),
 		(["extension", "--help"], "loopx.cli_commands.extension", "loopx.cli_commands.extension"),
