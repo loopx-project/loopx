@@ -110,7 +110,38 @@ def _create_resume_state(target: Path, predecessor: Path, *, recovered: dict | N
             stream.flush()
             os.fsync(stream.fileno())
     except FileExistsError:
-        return
+        if failed_recovery:
+            raise ValueError("Explicit failed continuation phase already exists") from None
+
+
+def _verify_failed_phase_replay(phase: Path, state: dict, recovery: dict, *,
+                                states: list[Path], digest: str) -> None:
+    from .interruption_recovery import _physical_read
+    from loopx.control_plane.turn_driver.host_failure import normalize_host_failure_record
+
+    original_ref = state.get("resume_from")
+    original = Path(original_ref) if isinstance(original_ref, str) else None
+    if original is None or original == phase or original not in states:
+        raise ValueError("Explicit failed continuation requires the original replay source")
+    raw = _physical_read(original)
+    if hashlib.sha256(raw).hexdigest() != digest:
+        raise ValueError("Explicit failed continuation replay source changed")
+    saved = json.loads(raw)
+    prior = saved.get("host_attempt") if isinstance(saved, dict) else None
+    native = recovery.get("native")
+    if not isinstance(prior, dict) or not isinstance(native, dict):
+        raise ValueError("Explicit failed continuation requires the original Host and native session")
+    failure = normalize_host_failure_record(prior.get("host_failure"))
+    session = prior.get("session_id")
+    if (prior.get("status") != "failed" or saved.get("last_wake_status") != "wake_failed"
+            or type(saved.get("last_wake_rc")) is not int or saved["last_wake_rc"] != 1
+            or failure["kind"] != "quota_exhausted" or failure != recovery.get("host_failure")
+            or recovery.get("retry_failed") is not True or native.get("status") != "failed"
+            or not isinstance(session, str) or not session or native.get("session_id") != session
+            or state.get("recovered_session_id") != session
+            or type(state.get("recovered_attempt_count")) is not int
+            or state["recovered_attempt_count"] != failure["attempt"]):
+        raise ValueError("Explicit failed continuation replay differs from the original returned failure")
 
 
 def resume_state_file(state_file: str, *, phase_deadline: float, agent_id: str,
@@ -133,25 +164,30 @@ def resume_state_file(state_file: str, *, phase_deadline: float, agent_id: str,
     from loopx.file_lock import try_exclusive_file_lock
     from scripts.external_scheduler_worker import HOST_LOCK_OPERATION, _host_attempt, _host_pending
 
+    def hold(state: Path, reason: str) -> str:
+        if retry_failed_state_sha256 is not None:
+            raise ValueError(f"Explicit failed continuation {reason}")
+        return str(state)
+
     with ExitStack() as locks:
         # The root serializes phase selection. Locking the existing phase files
         # as well keeps a running/failed phase from moving under that decision.
         if locks.enter_context(try_exclusive_file_lock(
                 path, agent_id=agent_id, operation=HOST_LOCK_OPERATION)) is None:
-            return str(path)
+            return hold(path, "requires the scheduler root lock")
         for phase in _phase_states(path):
             if phase == path:
                 continue
             if locks.enter_context(try_exclusive_file_lock(
                     phase, agent_id=agent_id, operation=HOST_LOCK_OPERATION)) is None:
-                return str(phase)
+                return hold(phase, "requires the retained phase lock")
         states = _phase_states(path)
         if not states:
-            return str(path)
+            return hold(path, "requires the retained scheduler state")
         predecessor = _latest_phase_state(path, states)
         state = _state_object(predecessor)
         if state is None:
-            return str(predecessor)
+            return hold(predecessor, "requires a readable retained scheduler state")
         prior = state.get("host_attempt")
         recovery = state.get("interruption_recovery") or state.get('failed_host_recovery')
         can_continue_stopped_phase = (isinstance(prior, dict) and prior.get("status") == "stopped"
@@ -168,29 +204,34 @@ def resume_state_file(state_file: str, *, phase_deadline: float, agent_id: str,
                 and not (can_continue_stopped_phase or explicit_failed_phase)):
             raise ValueError("Recovered phase deadline is immutable; inspect the current phase before continuing")
         if retry_failed_state_sha256 is not None:
-            if (same_phase and state.get('failed_host_recovery', {}).get('source_state_sha256')
-                    == retry_failed_state_sha256):
+            if (env is None or not wake_log_dir or env.get("LOOPX_EXECUTION_MODE") != "heartbeat"
+                    or env.get("LOOPX_ITERATION_CONTEXT") != "resume"):
+                raise ValueError("Explicit failed continuation requires original native and wake routes")
+            failed_phase = state.get("failed_host_recovery")
+            if (same_phase and isinstance(failed_phase, dict)
+                    and failed_phase.get("source_state_sha256") == retry_failed_state_sha256):
+                _verify_failed_phase_replay(predecessor, state, failed_phase,
+                                            states=states, digest=retry_failed_state_sha256)
                 return str(predecessor)  # Replay never erases a later failure in this phase.
             if not explicit_failed_phase:
                 raise ValueError('Explicit failed continuation source changed; inspect the retained phase')
         if not isinstance(prior, dict):
-            return str(predecessor)
+            return hold(predecessor, "requires the original Host attempt")
         # Validate the captured record with its existing transport owner.
         scope = prior.get("scope")
         if not isinstance(scope, str) or not re.fullmatch(r"[0-9a-f]{64}", scope):
-            return str(predecessor)
+            return hold(predecessor, "requires the original Host attempt scope")
         try:
             _host_attempt(state, scope)
         except (TypeError, ValueError):
-            return str(predecessor)
+            return hold(predecessor, "requires a valid original Host attempt")
         # A returned interrupted wake is distinct from a pre-dispatch stop.
         # Explicit continuation only reconciles transport; all Goal/Stop,
         # replan, lease and launch decisions remain with the normal next wake.
         recovered = None
         failed_recovery = False
         if retry_failed_state_sha256 is not None:
-            if env is None or wake_log_dir is None:
-                raise ValueError('Explicit failed continuation requires original native and wake routes')
+            assert env is not None and wake_log_dir is not None
             from .interruption_recovery import read_failed_host
             recovered = read_failed_host(state, state_file=predecessor, env=env,
                 wake_log_dir=wake_log_dir, source_state_sha256=retry_failed_state_sha256)
