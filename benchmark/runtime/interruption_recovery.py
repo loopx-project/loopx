@@ -208,7 +208,12 @@ def read_interrupted_host(state: dict, *, state_file: Path, env: dict[str, str],
         phase = float(source['source_phase_deadline_epoch'] if legacy else receipt["phase_deadline_epoch"])
     except (KeyError, TypeError, ValueError) as error:
         raise ValueError("Original Host phase clock is unavailable") from error
-    if not math.isfinite(phase) or not started <= phase <= stopped:
+    returned_legacy_stop = source is not None and prior.get('status') == 'stopped'
+    if (returned_legacy_stop
+            and stopped != math.floor(path.stat().st_mtime)):
+        raise ValueError('Returned legacy Host window differs from its receipt')
+    if (not math.isfinite(phase) or not started <= phase
+            or (not returned_legacy_stop and phase > stopped)):
         raise ValueError("Original Host stopped outside its phase deadline")
     session = receipt.get("session") or {}
     if session.get("binding_scope") != "agent" or not session.get("session_id"):

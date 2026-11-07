@@ -37,7 +37,7 @@ function LinkedFindingTask({goalId, todo, statuses, zh, readSourceUrl}: {
 }
 
 /** Saved evidence remains readable after Explore is disabled. No execution here. */
-export function GoalExploreResults({goalId, zh, active = true, readSourceUrl}: {goalId: string; zh: boolean; active?: boolean; readSourceUrl?: string}) {
+export function GoalExploreResults({goalId, originalGoalId = goalId, zh, active = true, readSourceUrl}: {goalId: string; originalGoalId?: string; zh: boolean; active?: boolean; readSourceUrl?: string}) {
   const [page, setPage] = useState<ExploreResultPage | null>(null);
   const [selectedId, setSelectedId] = useState("");
   const [cursor, setCursor] = useState<string>();
@@ -48,17 +48,17 @@ export function GoalExploreResults({goalId, zh, active = true, readSourceUrl}: {
   const loadedQuery = useRef("");
   useEffect(() => {
     if (!active) return;
-    const queryKey = JSON.stringify([goalId, readSourceUrl, cursor, revision]);
+    const queryKey = JSON.stringify([goalId, originalGoalId, readSourceUrl, cursor, revision]);
     if (loadedQuery.current === queryKey) return;
     let current = true;
     setBusy(true); setError(false); setPage(null);
-    void fetchExploreResults(goalId, cursor, readSourceUrl).then(next => {
+    void fetchExploreResults(goalId, cursor, readSourceUrl, originalGoalId).then(next => {
       if (!current) return;
       loadedQuery.current = queryKey;
       setPage(next); setSelectedId(id => next.items.some(item => item.finding_id === id) ? id : next.items[0]?.finding_id ?? "");
     }, () => {if (current) setError(true);}).finally(() => {if (current) setBusy(false);});
     return () => {current = false;};
-  }, [goalId, cursor, revision, active, readSourceUrl]);
+  }, [goalId, originalGoalId, cursor, revision, active, readSourceUrl]);
   const selected = page?.items.find(item => item.finding_id === selectedId);
   const sections = selected ? parseExploreFindingSections(selected.summary) : null;
   const findingCopy = exploreFindingCopy(zh);
