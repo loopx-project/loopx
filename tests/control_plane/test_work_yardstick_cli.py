@@ -6,9 +6,11 @@ or a causal benchmark gain. No evaluator, credentials or active Goal are used.
 import hashlib
 from itertools import groupby
 import json
+import shlex
 
 import pytest
 
+from benchmark.runtime.context_delivery import preflight_context_instruction
 from tests.control_plane.test_quota_settlement_cli import (
     _initialize_fixture_authority, _projected_cli_args, _write_fixture, _run_cli, GOAL_ID, AGENT_ID, TODO_ID,
 )
@@ -78,26 +80,32 @@ def context(runtime, path, *, detail=True):
     return compact
 
 
-def starting_page(project, runtime, path, turn, saved):
+def starting_page(project, runtime, path, turn, saved, monkeypatch):
     data = saved.read_bytes()
     assert json.loads(data)["effective_action"] == "normal_run"
-    page = run(project, runtime, path, "quota", "context-project", *turn,
-               "--capture-file", str(saved), "--capture-sha256", hashlib.sha256(data).hexdigest(),
-               "--initial-read", "--max-page-output-bytes", "18000", "--runtime-profile", "codex_app_heartbeat",
-               "--context-delivery", "on", "--delta-delivery", "auto")
+    native = saved.parent / "native"
+    native.mkdir(mode=0o700)
+    env = {"LOOPX_CLI": "loopx", "LOOPX_GOAL_ID": GOAL_ID, "LOOPX_AGENT_ID": AGENT_ID,
+           "LOOPX_CODEX_CONTEXT_DIR": str(native)}
+    prompt = preflight_context_instruction(env, saved, hashlib.sha256(data).hexdigest(), turn[-1])
+    argv = shlex.split(prompt.split("```sh\n", 1)[1].split("\n```", 1)[0])
+    with monkeypatch.context() as patch:
+        patch.setenv("LOOPX_EXECUTION_MODE", "heartbeat")
+        patch.setenv("LOOPX_CONTEXT_DELIVERY", "on")
+        page = run(project, runtime, path, *argv[argv.index("quota"):])
     assert saved.read_bytes() == data
     return page["content"]
 
 
 @pytest.mark.parametrize("enabled", [False, True])
-def test_yardstick_cue_reaches_the_starting_read_before_candidate_selection(tmp_path, enabled):
+def test_yardstick_cue_reaches_the_starting_read_before_candidate_selection(tmp_path, enabled, monkeypatch):
     project, runtime, path = setup(tmp_path, enabled, active=True)
     turn = binding("yardstick-before-choice")
     capture = tmp_path / "capture"
     guard = run(project, runtime, path, "quota", "should-run", "--codex-app", *turn,
                 "--decision-output-dir", str(capture), "--context-delivery", "on", "--delta-delivery", "off")
     assert guard["schema_version"] == "context_capture_navigation_v1"
-    opening = starting_page(project, runtime, path, turn, capture / "decision.json")
+    opening = starting_page(project, runtime, path, turn, capture / "decision.json", monkeypatch)
     # The independently readable page carries the decision cue. The complete
     # attachment template stays available on the existing Explore reader.
     cue_path = "/content/graph/work_yardstick_capture/guidance"
@@ -149,7 +157,7 @@ def test_measured_yardstick_restarts_comparison_when_the_acceptance_basis_change
     assert comparison["preferred_candidate_ref"] == "candidate:new-d"
 
 
-def test_measured_yardstick_changes_next_work_from_local_screening_to_a_whole_goal_comparison(tmp_path):
+def test_measured_yardstick_changes_next_work_from_local_screening_to_a_whole_goal_comparison(tmp_path, monkeypatch):
     project, runtime, path = setup(tmp_path, active=True)
     acceptance = tmp_path / "acceptance.json"
     acceptance.write_text(json.dumps(dict(outcome_id="encoded-artifact", owner_agent_id=AGENT_ID,
@@ -206,9 +214,13 @@ def test_measured_yardstick_changes_next_work_from_local_screening_to_a_whole_go
     assert "different mechanism or a compatible combination" in compact["comparison_cue"]
     assert "full implementation and validation cost" in compact["comparison_cue"]
     assert compact["comparison_cue"] in json.dumps(guard)
-    opening = starting_page(project, runtime, path, compare_turn, capture / "decision.json")
-    assert '"comparison_candidate_ref":"candidate:dictionary"' in opening
-    assert "/content/graph/work_yardsticks/" in opening
+    opening = starting_page(project, runtime, path, compare_turn, capture / "decision.json", monkeypatch)
+    # A page may end in a later entry. Decode the complete cue before that
+    # boundary without relying on any subsequent context read.
+    cue_start = opening.index(',"value":', opening.index("/content/graph/work_yardsticks/"))
+    delivered, _ = json.JSONDecoder().raw_decode(opening, cue_start + len(',"value":'))
+    assert delivered["todo_id"] == TODO_ID
+    assert delivered["comparison_candidate_ref"] == "candidate:dictionary"
     detailed = run(project, runtime, path, "explore", "turn-context", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
                    "--todo-id", TODO_ID, "--result-node", compact["node_id"])["graph"]["work_yardsticks"][0]
     assert detailed["next_action"] == choice["next_action"]
@@ -219,7 +231,7 @@ def test_measured_yardstick_changes_next_work_from_local_screening_to_a_whole_go
 
     # Deterministic consumer. Combine the evidenced baseline with an independent
     # representation change and verify the original end-to-end outcome.
-    selected_base = {"candidate:dictionary": base}[compact["comparison_candidate_ref"]]
+    selected_base = {"candidate:dictionary": base}[delivered["comparison_candidate_ref"]]
     runs = [[index, len(list(group))] for index, group in groupby(selected_base["indices"])]
     artifact = project / "combined-encoding.json"
     artifact.write_bytes(encode({"keys": selected_base["keys"], "runs": runs}))

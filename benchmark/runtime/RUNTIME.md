@@ -182,8 +182,10 @@ projection command also carries the Goal, Agent, Turn and private cache location
 native tool presents the saved decision using the same native lifecycle projector;
 no guard, checkpoint, admission or debit is repeated. The file view can be full or a qualified exact delta. With `--initial-read`,
 the bounded response includes a first selection page and its continuation in
-top-level `content` and `next_command`. Forward them to the model along with
-`navigation`; use its original full-read fallback for literal recovery.
+top-level `content` and `next_command`. Run the supplied first-read command
+as written so the current decision and enabled policy cues arrive before work.
+Forward the page and `navigation` to the model. Use exact selectors for
+additional detail or recovery from the original capture.
 Invalidated or unavailable baselines keep full input. If enabled native preparation cannot
 establish safe recovery, the command returns a typed transport failure with the
 original full-read reference and receipt; use that explicit reference without
