@@ -31,6 +31,7 @@ def test_feature_off_and_failed_wakes_do_not_read_request_or_settlement(monkeypa
     assert failed["checkpoint"]["captured"] is False
 
 
+@pytest.mark.skipif(os.name != "posix", reason="native benchmark uses the POSIX source launcher")
 @pytest.mark.parametrize("changed_reference", [False, True])
 def test_native_preflight_uses_the_committed_capture(tmp_path, monkeypatch, changed_reference):
     import shlex

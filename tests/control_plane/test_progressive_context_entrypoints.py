@@ -50,7 +50,23 @@ def test_progressive_activation_does_not_require_native_continuity(profile):
 
 @pytest.mark.parametrize("host", [(), ("--runtime-profile", "generic_cli"), ("--trae_app",), ("--antigravity_app",)])
 def test_generic_read_only_cli_defaults_progressive_without_admitting_a_turn(acceptance_goal, host):
-    workspace, document, cli, run = acceptance_goal
+    import os
+    import sys
+
+    from tests.source_cli import run_source_cli
+
+    workspace, document, cli, _ = acceptance_goal
+    registry, runtime = workspace.parent / "registry.json", workspace.parent / "runtime"
+    environment = {**os.environ, "LOOPX_PYTHON": sys.executable}
+    environment.pop("LOOPX_CONTEXT_DELIVERY", None)
+
+    def guard(*arguments):
+        # The generic acceptance fixture runs machine-facing raw CLI reads.
+        # This case exercises the omitted model-facing option instead.
+        response = run_source_cli(["--registry", str(registry), "--runtime-root", str(runtime),
+            "--format", "json", *arguments], env=environment, check=False, timeout=30)
+        return response.returncode, json.loads(response.stdout)
+
     for i in range(8):
         document.write_text(json.dumps({"outcome_id": "export", "owner_agent_id": "agent-a",
             "todo_ids": ["todo_export"], "objective": "Deliver the export.",
@@ -62,7 +78,7 @@ def test_generic_read_only_cli_defaults_progressive_without_admitting_a_turn(acc
         assert code == 0, result
     before = cli("inspect")[1]
     args = ("quota", "should-run", "--goal-id", "goal-acceptance", "--agent-id", "agent-a", *host)
-    code, packet = run(*args)
+    code, packet = guard(*args)
     assert code == 0, packet
     required = required_document(packet)
     assert "heartbeat_receipt" not in required, "plain observation must not invent a work Turn"
@@ -74,7 +90,7 @@ def test_generic_read_only_cli_defaults_progressive_without_admitting_a_turn(acc
     assert "Stop before publication." in json.dumps(required)
     assert "Prior supporting observation" not in json.dumps(required)
     assert "Prior supporting observation" in json.dumps(source)
-    code, off = run(*args, "--context-delivery", "off")
+    code, off = guard(*args, "--context-delivery", "off")
     assert code == 0 and "context_details" not in off and "reference_file" not in off
     assert "Prior supporting observation" in json.dumps(off)
     assert cli("inspect")[1] == before, "presentation must not mutate acceptance or its provider revision"
