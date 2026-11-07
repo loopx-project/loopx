@@ -3879,21 +3879,11 @@ export function DashboardPage() {
     if (search.statusUrl && source.kind === "example") {
       return;
     }
+    // Empty active rows and failed history do not establish Goal absence.
+    // Wait for the complete source before discarding a stopped-Goal bookmark.
+    if (source.kind === "url" && goalArchiveLoadState.phase !== "ready") return;
     const goalIds = new Set(goalRows.map((row) => row.goal.id));
-    if (goalRows.length === 0) {
-      if (search.goalId) {
-        void navigate({
-          replace: true,
-          search: (current) => ({
-            ...current,
-            goalId: "",
-          }),
-        });
-      }
-      return;
-    }
-    if (search.goalId && !goalIds.has(search.goalId)
-      && goalArchiveLoadState.phase !== "loading") {
+    if (search.goalId && !goalIds.has(search.goalId)) {
       void navigate({
         replace: true,
         search: (current) => ({
