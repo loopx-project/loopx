@@ -27,7 +27,8 @@ from ..control_plane.turn_driver.decision_capture import (
     read_context_read_reference, write_context_read_reference, private_capture_uid, read_turn_observation_text,
 )
 from ..control_plane.turn_driver.native_context_profile import (
-    NATIVE_CONTEXT_PAGE_BYTES, NATIVE_CONTEXT_PAGE_OUTPUT_BYTES, native_context_page_budget,
+    NATIVE_CONTEXT_FIRST_READ_FALLBACK_BYTES, NATIVE_CONTEXT_PAGE_BYTES, NATIVE_CONTEXT_PAGE_OUTPUT_BYTES,
+    native_context_page_budget,
 )
 
 
@@ -560,7 +561,7 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
         selections = plan["selections"]
         initial_read_pointers = [item["pointer"] for item in selections]
         try:
-            initial_read_reference = write_initial_context_read_reference(Path(current["path"]), current["sha256"],
+            initial_read_reference, _ = write_initial_context_read_reference(Path(current["path"]), current["sha256"],
                 current_document, selections)
         except OSError:
             # Read-only capture roots keep the existing initial recipe;
@@ -678,8 +679,40 @@ def progressive_context_capture_view(payload: dict[str, Any], args: argparse.Nam
     return readable if len(_native_output_bytes(readable)) < len(_native_output_bytes(required)) else required
 
 
+def _bounded_initial_page(navigation: dict[str, Any], plan: dict[str, Any], *,
+                          output_bytes: int, reader_argv: list[str]) -> dict[str, Any] | None:
+    """Try the typed opening and keep the remainder pinned to the same capture."""
+    if "opening" not in plan or "first_read_command" not in navigation:
+        return None
+    try:
+        path, _, document = _read_capture(plan["capture"]["path"], plan["capture"]["sha256"])
+        digest = plan["capture"]["sha256"]
+        opening, content = write_initial_context_read_reference(path, digest, document, plan["opening"]["selections"])
+        if len(content) >= output_bytes:
+            return None
+        remaining, _ = write_initial_context_read_reference(path, digest, document, plan["remaining"]["selections"])
+
+        def command(reference: Path) -> str:
+            return context_capture_read_command(path, digest, page_bytes=output_bytes,
+                max_page_output_bytes=output_bytes, reference_file=reference, reader_argv=reader_argv)
+
+        navigation = {**navigation, "first_read_command": command(opening), "remaining_read_command": command(remaining),
+            "instruction": ("This opening covers the decision and read obligations. Before work, read its content, "
+                "then follow remaining_read_command and its cursor through the rest of the initial selection. "
+                + navigation["instruction"])}
+        page = _capture_page(path, content, digest, offset=0, size=len(content), output_limit=None,
+            instruction=False, select=[], reference_file=opening, reader_argv=reader_argv)
+        # An opening is useful only as a complete, independently readable
+        # page. Keep the ordinary cursor when even the opening cannot fit.
+        page["navigation"] = navigation
+        return page if len(_native_output_bytes(page)) <= output_bytes else None
+    except (OSError, ValueError):
+        return None  # The same-capture ordinary reader is already available.
+
+
 def _saved_context_read_page(args: argparse.Namespace, navigation: dict[str, Any], *,
-                             initial_reference: str | None, reader_argv: list[str]) -> dict[str, Any]:
+                             initial_reference: str | None, initial_read_plan: dict[str, Any] | None,
+                             output_limit: int | None, reader_argv: list[str]) -> dict[str, Any]:
     """Use the ordinary verified reader; the first page and navigation share its output budget."""
     recovery = navigation["recovery"]
     pinned = initial_reference if args.initial_read else None
@@ -687,9 +720,15 @@ def _saved_context_read_page(args: argparse.Namespace, navigation: dict[str, Any
     read_args = argparse.Namespace(**{**vars(args), "quota_command": "context-read",
         "reference_file": reference, "capture_file": None if reference else recovery["path"],
         "capture_sha256": None if reference else recovery["sha256"],
+        "max_page_output_bytes": output_limit,
         "codex_context_dir": None, "codex_context_root": None, "initial_read": bool(args.initial_read and not pinned)})
     page = read_context_capture(read_args, presentation={"navigation": navigation}, reader_argv=reader_argv)
     if page["ok"]:
+        if (pinned and initial_read_plan and output_limit is not None and not page["eof"]
+                and "previously_delivered_fields" not in page
+                and (opening := _bounded_initial_page(navigation, initial_read_plan,
+                    output_bytes=output_limit, reader_argv=reader_argv)) is not None):
+            return opening
         # Keep the already-budgeted page and cursor ahead of recovery metadata.
         page["navigation"] = page.pop("navigation")
     elif "recovery_command" not in page:
@@ -767,6 +806,12 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
         return {"ok": False, "reason": str(exc) if isinstance(exc, ValueError) else "original capture could not be read",
             "recovery": "Restore the original digest-bound decision; no guard, admission or spend was performed."}
 
+    output_limit = getattr(args, "max_page_output_bytes", None)
+    if args.initial_read:
+        # The derived cap belongs to this read. Selection can re-enter the
+        # original Turn, so its recipe uses only the caller's explicit options.
+        output_limit = (NATIVE_CONTEXT_FIRST_READ_FALLBACK_BYTES if output_limit is None
+            else min(output_limit, NATIVE_CONTEXT_PAGE_OUTPUT_BYTES))
     reference = {"path": str(path), "sha256": args.capture_sha256,
         "command": context_capture_read_command(path, args.capture_sha256, reader_argv=reader_argv)}
     full_reference = dict(reference)
@@ -775,6 +820,7 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
     native_prepared = False
     native_view = None
     initial_reference = None
+    initial_read_plan = None
     if not activation["enabled"] and activation["progressive_enabled"]:
         # Recovery is presentation of this exact saved decision, including its
         # original Turn. It does not need a supported host or a native session.
@@ -797,7 +843,6 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
         if not activation["enabled"]:
             raise ValueError("context delivery is off")
         page_bytes, output_bytes = native_context_page_budget()
-        output_limit = getattr(args, "max_page_output_bytes", None)
         if output_limit is not None:
             if output_limit <= 0:
                 raise QuotaDecisionTransportError("Native context output limit must be positive.")
@@ -838,6 +883,7 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
             progressive_enabled=activation["progressive_enabled"], selection_command_args_template=transport,
             captured_decision_path=reader_path, hook_session=hook_session)
         projected = prepared.delivery
+        initial_read_plan = prepared.initial_read_plan
         native_prepared = True
         if projected.get("schema_version") == "context_delivery_v1":
             # Native publication owns the complete required view. Keep its
@@ -850,7 +896,7 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
             progressive_enabled=activation["progressive_enabled"], initial_read_plan=prepared.initial_read_plan,
             metadata={"recovery": full_reference, "capture_sha256": args.capture_sha256,
                 "context_delivery": activation},
-            max_page_output_bytes=getattr(args, "max_page_output_bytes", None), page_attached=saved_page,
+            max_page_output_bytes=output_limit, page_attached=saved_page,
             reader_argv=reader_argv)
         reference = {key: native_view[key] for key in ("path", "sha256", "command")}
         mode, target = native_view["mode"], native_view.get("target")
@@ -869,7 +915,6 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
                     "original decision and receipt; do not rerun admission."
                 )
             page_bytes, output_bytes = native_context_page_budget()
-            output_limit = getattr(args, "max_page_output_bytes", None)
             if isinstance(output_limit, int) and output_limit > 0:
                 output_bytes = min(output_bytes, output_limit)
                 page_bytes = min(page_bytes, output_bytes)
@@ -897,7 +942,8 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
             + (CONTEXT_CAPTURE_NAVIGATION_GUIDANCE if activation["enabled"] else CONTEXT_CAPTURE_READ_GUIDANCE)}
     navigation = native_view or result
     if saved_page:
-        return _saved_context_read_page(args, navigation, initial_reference=initial_reference, reader_argv=reader_argv)
+        return _saved_context_read_page(args, navigation, initial_reference=initial_reference,
+            initial_read_plan=initial_read_plan, output_limit=output_limit, reader_argv=reader_argv)
     return navigation
 
 
