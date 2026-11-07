@@ -1,6 +1,8 @@
 """Read compatibility at the live Goal-frontier import boundary."""
 
 import pytest
+
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 import json
 import subprocess
 import sys
@@ -129,7 +131,7 @@ def test_real_quota_frontier_reads_canonical_claims(tmp_path, monkeypatch, provi
         "--format", "json", "quota", "should-run", "--goal-id", "goal-a", "--agent-id", "agent-a",
         "--runtime-profile", "generic_cli"],
         text=True, capture_output=True, timeout=60)
-    packet = json.loads(result.stdout)
+    packet = read_cli_policy_payload(result.stdout, returncode=result.returncode)
     assert result.returncode == 0, (packet.get("error"), packet.get("reason"), packet.get("status_health_ok"))
     assert packet["goal_frontier_projection"]["remaining_advancement_frontier"] == {
         "current_agent_claimed_advancement_count": 1, "unclaimed_advancement_count": 1,
