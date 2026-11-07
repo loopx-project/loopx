@@ -24,7 +24,9 @@ from .chat_manager import (
 )
 from .chat.coordination import PROJECT_COORDINATION_GUIDANCE, PROJECT_CONTEXT_VERSION, apply_context_handoff
 from .capabilities.native_chat import codex_context, project_context as project_context_policy
-from .capabilities.native_chat.codex_adapter import CodexAppServerAdapter, NativeHistoryRestoration, start_attachment_turn
+from .capabilities.native_chat.codex_adapter import (
+    CodexAppServerAdapter, NativeHistoryRestoration, NativeWorkingContinuation, start_attachment_turn,
+)
 from .capabilities.native_chat.machine_defaults import codex_profile_home, load_codex_chat_defaults
 from .capabilities.native_chat.steward_managed_mode import prepare_managed_session_route, require_managed_agent_session
 from .capabilities.native_chat.turn_release import TurnReleaseWakeup
@@ -365,6 +367,7 @@ class ChatRuntimeController:
         metadata_review_context: dict[str, Any] | None = None,
         answer_review_context: dict[str, Any] | None = None,
         history_check: Callable[[], None] | None = None,
+        working_continuation: NativeWorkingContinuation | None = None,
     ) -> ChatRuntimeAdapter:
         if project_context is not None:
             project_context_policy.validate_project_native_executor(agent_id, project_context)
@@ -422,7 +425,7 @@ class ChatRuntimeController:
                 project_coordination=project_coordination, loopx_tools=loopx_tools,
                 codex_home_override=codex_home_override, read_only_review=read_only_review,
                 metadata_review_context=metadata_review_context, answer_review_context=answer_review_context,
-                history_check=history_check)
+                history_check=history_check, working_continuation=working_continuation)
         if agent_id == "claude-code":
             return ClaudeCodeAdapter.start(
                 claude_bin=self.claude_bin,
@@ -841,9 +844,11 @@ class ChatRuntimeController:
             check_route_configuration()
         selected_agent = model_allocation["executor_endpoint"] if quota_route else session["agent_id"]
         native_account_epoch = None
-        if (selected_agent == "codex" and active and active_id == accepted_turn_id
-                and active.get("status") == "queued" and not active.get("upstream_turn_id")
-                and active.get("origin") != "native_loopx"):
+        if (selected_agent == "codex" and (
+            active and active_id == accepted_turn_id and active.get("status") == "queued"
+            and not active.get("upstream_turn_id") and active.get("origin") != "native_loopx"
+            or not active and session.get("parked_native_working")
+        )):
             from .capabilities.native_chat.codex_auth import conversation_account_epoch
             native_account_epoch = conversation_account_epoch(self.coordination_runtime_root, selected_codex_home,
                 **({"consumer": "steward", "model": (model_allocation or {}).get("model") or session.get("agent_model_id")}
@@ -853,6 +858,7 @@ class ChatRuntimeController:
             and active.get("loopx_execution") is True
             and (active.get("loopx_request") or {}).get("work_kind") == "report"
             and isinstance((active.get("loopx_request") or {}).get("report_quota_recovery"), dict))
+        working_provider = None
         with self.lock:
             current = self.adapters.get(session_id)
             manager_profile_changed = NativeHistoryRestoration.manager_profile_changed(session, manager_runtime)
@@ -862,6 +868,7 @@ class ChatRuntimeController:
                 and not manager_profile_changed
                 and not recovery.get("history_review")
                 and not recovery.get("quota_attempt")
+                and not (answer_fallback and session.get("parked_native_working"))
                 and not native_quota_refresh
                 and (native_account_epoch is None or getattr(current, "_native_account_epoch", None) == native_account_epoch)
                 and (isinstance(current, CodexAppServerAdapter) and current.session.read_only_review) == bool(recovery.get("read_only_review"))
@@ -874,12 +881,17 @@ class ChatRuntimeController:
                 # transport cannot prove that its original Chat worker exited.
                 raise ValueError("the original Chat worker is still active; read its current Turn")
             elif current is not None:
+                may_park_working = bool(answer_fallback and isinstance(current, CodexAppServerAdapter)
+                    and not current.session.read_only_review
+                    and current.upstream_thread_id == session.get("upstream_thread_id"))
                 if (recovery.get("history_review") is True or recovery.get("read_only_review")
-                        and recovery.get("unfinished_work")) and current.healthcheck():
+                        and recovery.get("unfinished_work") or may_park_working) and current.healthcheck():
                     if (not isinstance(current, CodexAppServerAdapter)
                             or not current.answer_review_replaceable()):
                         raise CodexChatAgentError("The original adapter still owns background work; answer review held.",
                             error_code="host_gate", gate=None)
+                    if may_park_working and getattr(current, "_native_account_epoch", None) == native_account_epoch:
+                        working_provider = current.session.native_model_provider
                 current.close_session()
                 self.adapters.pop(session_id, None)
         if reusable is not None:
@@ -927,13 +939,33 @@ class ChatRuntimeController:
                             payload={"error_code": "server_restarted", "message": failed["error"]},
                         )
         native_recovery = None
+        parked_working = None
+        working_continuation = None
         history_restore = NativeHistoryRestoration(self, session, accepted_turn_id, commit, check_route_configuration, manager_runtime is not None)
         try:
-            stored_messages = history_restore.capture()
+            same_working_route = (manager_runtime is not None and session.get("steward_context") is not None
+                and selected_agent == session["agent_id"] == "codex"
+                and session.get("manager_context_version") == MANAGER_CONTEXT_VERSION
+                and session.get("upstream_mode") == "chat" and not manager_profile_changed
+                and not settings_changed and not quota_route and model_allocation is None and not quota_fallback)
+            stored_messages = history_restore.capture(strict=bool(same_working_route
+                and (working_provider or session.get("parked_native_working"))))
             history = history_restore.messages(stored_messages)
             legacy_manager_context = history_restore.manager_migration(refresh=(manager_profile_changed
                 or model_allocation is not None or quota_fallback or answer_fallback))
             legacy_provider_context = history_restore.provider_migration(stored_messages)
+            if (same_working_route and (working_provider or session.get("parked_native_working"))
+                    and not legacy_provider_context and not legacy_project_context):
+                affinity = history_restore.working_affinity(
+                    work_dir=work_dir, codex_home=selected_codex_home, runtime=manager_runtime,
+                    account_epoch=native_account_epoch)
+                if answer_fallback:
+                    parked_working = history_restore.park_working_context(
+                        stored_messages, provider=working_provider, affinity=affinity)
+                    if parked_working is not None:
+                        history_restore.check()
+                elif session.get("answer_review") is True and not recovery.get("read_only_review"):
+                    working_continuation = history_restore.restore_working_context(stored_messages, affinity=affinity)
             adapter = self._start_adapter(
                 agent_id=str(selected_agent),
                 work_dir=work_dir,
@@ -945,7 +977,7 @@ class ChatRuntimeController:
                 objective=objective,
                 resume_thread_id=(
                     None
-                    if legacy_provider_context or legacy_manager_context or legacy_project_context
+                    if working_continuation or legacy_provider_context or legacy_manager_context or legacy_project_context
                     else str(session["upstream_thread_id"])
                 ),
                 history=(
@@ -953,7 +985,7 @@ class ChatRuntimeController:
                     # request and verified results at dispatch. Importing the
                     # whole conversation here needlessly compacts unrelated
                     # history before an unanswered question can be reviewed.
-                    None if answer_fallback else history
+                    None if answer_fallback or working_continuation else history
                     if legacy_provider_context or legacy_manager_context or legacy_project_context
                     or session.get("agent_id")
                     in {"anthropic-api", "openai-api", MANAGED_TURN_HOST}
@@ -976,6 +1008,7 @@ class ChatRuntimeController:
                 metadata_review_context=session.get("steward_context") if metadata_fallback else None,
                 answer_review_context=session.get("steward_context") if answer_fallback else None,
                 history_check=history_restore.check,
+                **({"working_continuation": working_continuation} if working_continuation is not None else {}),
             )
             try:
                 # Recovery reads back the provider-restored configuration.
@@ -1037,6 +1070,9 @@ class ChatRuntimeController:
                     }
                     if answer_fallback or session.get("answer_review") is True:
                         changes["answer_review"] = answer_fallback
+                    if parked_working is not None or session.get("parked_native_working") is not None:
+                        changes.update(parked_native_working=parked_working,
+                            expected_upstream_thread_id=session["upstream_thread_id"])
                     if legacy_manager_context and adapter.upstream_thread_id != session.get("upstream_thread_id"):
                         # Preserve provenance for read-only checks of failed
                         # native requests after this history migration. Publish

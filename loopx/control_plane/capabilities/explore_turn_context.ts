@@ -20,7 +20,7 @@ export function exploreReusableContextPaths(content: JsonObject = {}): (string |
   return [
     ...["recent_nodes", "recent_findings", "writeback_results", "measurement_feedback", "work_yardsticks", "work_yardstick_capture",
       "path_delta_attachment_template", "linked_question_attachment_template",
-      "optional_question_evolution_example", "result_writeback_guidance",
+      "optional_question_evolution_example", "optional_execution_observation_example", "result_writeback_guidance",
       "result_attachment_template", "optional_measurement_example", "measurement_guidance",
       "record_node_template", "record_finding_template", "guidance",
       "result_writeback_option", "result_writeback_inline_option", "result_writeback_inline_field",
@@ -49,6 +49,7 @@ function resultWritebackFields(writeback: JsonObject): JsonObject {
       path_delta_attachment_template: writeback.path_delta_attachment_template,
       linked_question_attachment_template: writeback.linked_question_attachment_template,
       optional_question_evolution_example: writeback.optional_question_evolution_example,
+      optional_execution_observation_example: writeback.optional_execution_observation_example,
       result_writeback_guidance: writeback.guidance,
       result_attachment_template: writeback.attachment_template,
       optional_measurement_example: writeback.optional_measurement_example,
