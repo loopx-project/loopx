@@ -1,6 +1,7 @@
 import {useEffect, useRef, useState} from "react";
 import {CircleHelp, TriangleAlert} from "lucide-react";
 import type {TrajectorySolverUsage} from "../../../../../../loopx/control_plane/capabilities/trajectory_assessment_types.js";
+import {hasObservedTrajectoryLoopXRequestUsage} from "../../../../../../loopx/control_plane/capabilities/trajectory_loopx_requests.js";
 import {trajectoryUsageComparisonReason, type TrajectoryUsageCapture, type TrajectoryUsageComparison} from "../../../../../../loopx/control_plane/capabilities/trajectory_usage_comparison.js";
 import {ContextHelp} from "./context-help";
 
@@ -12,19 +13,20 @@ const percent = (n: number | null, zh: boolean) => n === null ? "—"
 export function LoopXRequestFootprint({usage, zh}: {usage: TrajectorySolverUsage; zh: boolean}) {
   const v = usage.loopx_requests;
   if (!v) return null; // Historical projections keep their missing observation.
+  const measured = v.status === "observed" && hasObservedTrajectoryLoopXRequestUsage(v);
   return <section className="research-request-coverage" aria-label={zh ? "LoopX 命令请求" : "Requests issuing LoopX commands"}>
     <div className="research-usage-heading"><h4>{zh ? "LoopX 命令请求 · 整次用量" : "LoopX command requests · whole-request usage"}</h4>
       <ContextHelp icon={v.status === "unavailable" ? TriangleAlert : CircleHelp} label={zh ? "整次请求与控制文本的区别" : "Whole requests versus control text"}>
         <p>{zh ? "按调用、原生响应回执和唯一返回的记录顺序，保守关联发出简单 LoopX 命令的请求。数值包含该请求读取的任务历史；与控制文本输入归因、工具返回字节是重叠视角，不能相加。" : "Conservative association by ordered call, native response receipt and unique return identifies requests issuing simple LoopX commands. Their counters include task history. This overlaps control-text attribution and tool-return bytes; never add these views."}</p>
-        <p>{zh ? "只识别已记录的简单调用；复合脚本及未匹配返回保留未归类。同次请求出现其他调用时标为混合调用；其余也不证明纯控制。未知来源不等于没有控制，整次用量不等于可省成本。模型耗时和实扣费用未采集。" : "Only recorded simple calls are recognized; compound scripts and unmatched returns remain unclassified. A request with other calls is marked mixed; the remainder does not establish pure control. Unknown sources do not mean no control, and whole-request usage is not avoidable cost. Model latency and actual charges were not captured."}</p>
+        <p>{zh ? "复合脚本或未匹配返回可能无法归属。若没有请求被识别且仍有此类调用，用量未知。已识别请求的用量只覆盖该子集，不表示纯控制用量或可省成本；同次请求含其他调用时标为混合。模型耗时和实扣费用未采集。" : "Compound scripts and unmatched returns may prevent association. Usage is unknown when no requests are recognized and calls remain unresolved. Reported usage covers only the recognized subset; it does not measure pure control or savings. Requests with other calls are marked mixed. Model latency and actual charges were not captured."}</p>
       </ContextHelp></div>
     {v.status === "unavailable" ? <p role="status">{zh ? "请求关联不可用 · 用量未知" : "Request association unavailable · usage unknown"}</p> : <>
-      <p className="research-input-share-value"><strong>{percent(v.input_fraction, zh)}</strong><span>{v.recognized_requests} / {v.total_requests} {zh ? "次请求已识别 · 归属未全" : "requests recognized · incomplete attribution"}</span></p>
-      <dl className="research-request-values">
+      <p className="research-input-share-value"><strong>{measured ? percent(v.input_fraction, zh) : zh ? "未知" : "Unknown"}</strong><span>{v.recognized_requests} / {v.total_requests} {zh ? "次请求已识别" : "requests recognized"}{v.unclassified_calls || v.unmatched_calls ? (zh ? " · 归属未全" : " · incomplete attribution") : null}</span></p>
+      {measured ? <dl className="research-request-values">
         <div><dt>{zh ? "整次输入（含缓存）" : "Whole input (includes cache)"}</dt><dd>{count(v.tokens.input_tokens, zh)} tokens</dd></div>
         <div><dt>{zh ? "其中未缓存" : "Of which uncached"}</dt><dd>{count(v.tokens.input_tokens - v.tokens.cached_input_tokens, zh)} tokens</dd></div>
         <div><dt>{zh ? "整次输出（含推理）" : "Whole output (includes reasoning)"}</dt><dd>{count(v.tokens.output_tokens, zh)} tokens</dd></div>
-      </dl>
+      </dl> : null}
       <details className="research-usage-detail"><summary>{zh ? "请求关联明细" : "Request association details"}</summary>
         <dl className="research-usage-basis"><dt>{zh ? "方法" : "Method"}</dt><dd>{v.method}</dd>
           <dt>{zh ? "含其他调用的请求" : "Requests with other calls"}</dt><dd>{v.mixed_call_requests}</dd>
