@@ -620,6 +620,7 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                           continuity_generation: str | None = None,
                           include_initial_read_plan: bool = True,
                           progressive_enabled: bool | None = None,
+                          claim_source_sha256: str | None = None,
                           selection_command_args_template: str | None = None,
                           captured_decision_path: str | None = None,
                           hook_session: str | None = None) -> NativeContextPreparation:
@@ -677,7 +678,9 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                 def publish_recovery(reference: dict[str, Any]) -> None:
                     reference["command"] = context_capture_read_command(Path(reference["path"]), reference["sha256"],
                         page_bytes=page_bytes, max_page_output_bytes=output_bytes)
-                    preparation = compact_execution_preparation_request(payload)
+                    preparation = compact_execution_preparation_request(
+                        payload, claim_source_sha256=claim_source_sha256,
+                    )
                     state["recovery"] = {**{key: reference[key] for key in ("path", "sha256", "command")},
                         "goal_id": goal_id, "agent_id": agent_id,
                         "total_bytes": Path(reference["path"]).stat().st_size,

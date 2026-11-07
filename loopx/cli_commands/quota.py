@@ -386,6 +386,17 @@ def _emit_quota_result(
         _export("attach_host_poll_receipt")(
             context.status_payload, args, payload, registry_path=registry_path,
         )
+    native_context = context_delivery_enabled and bool(getattr(args, "codex_context_dir", None) or getattr(args, "codex_context_root", None))
+    claim_preparation = payload.get("execution_preparation")
+    bind_native_claim = (args.quota_command == "should-run" and native_context
+            and capture_directory is not None and payload.get("ok") is True
+            and isinstance(claim_preparation, Mapping) and claim_preparation.get("state") == "claim_required")
+    if bind_native_claim:
+        from ..control_plane.turn_driver.codex_execution_preparation import NATIVE_CLAIM_REPLAY_BOUND
+
+        # Only the live guard may mark immutable bytes as eligible for a
+        # capture-bound claim. Reading or presenting old bytes cannot add it.
+        payload = {**payload, NATIVE_CLAIM_REPLAY_BOUND: True}
     try:
         captured_digest = capture_decision(capture_directory, payload)
         if getattr(args, "prepared_capture_reference", False) and payload.get("ok") is True:
@@ -432,7 +443,6 @@ def _emit_quota_result(
     # Handoff releases the immutable original before any presentation. Native
     # actual-input observation owns its projection when explicitly selected;
     # never wrap one context-delivery wire in a second projection.
-    native_context = context_delivery_enabled and bool(getattr(args, "codex_context_dir", None) or getattr(args, "codex_context_root", None))
     deferred_context = getattr(args, "defer_context_presentation", False)
     if (not deferred_context and args.format == "json" and succeeded and delivery_request is not None and not native_context
             and context_delivery_enabled):
@@ -451,7 +461,7 @@ def _emit_quota_result(
             assert captured_digest is not None  # Native publication requires the captured original.
             payload = project_native_quota_context(payload, args, capture_directory=capture_directory, capture_id=captured_digest,
                 decision_identity=decision_identity, progressive_enabled=activation["progressive_enabled"],
-                reader_argv=reader_argv)
+                reader_argv=reader_argv, claim_source_sha256=captured_digest if bind_native_claim else None)
         except (QuotaDecisionTransportError, OSError, ValueError) as exc:
             if not isinstance(exc, QuotaDecisionTransportError):
                 exc = QuotaDecisionTransportError(
