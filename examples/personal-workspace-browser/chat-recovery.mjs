@@ -566,17 +566,22 @@ export const chatRecoveryScenario = {
       // Keep this Turn running until the operator interrupts it.
       await page.route(controlledTurnEvents, (route) => { heldControlEvents.push(route); });
       page.__loopxRuntime.turnMessages.set(controlledTurnId, "交接期间可调整和中断的中断控制回合");
-      page.__loopxRuntime.sessions.set(busySessionId, { ...page.__loopxRuntime.sessions.get(busySessionId), active_turn_id: controlledTurnId, status: "busy" });
       let controlRejectedPosts = 0;
       await page.route(`**/api/chat/sessions/${busySessionId}/turns`, async (route) => {
         if (route.request().method() !== "POST") return route.fallback();
         controlRejectedPosts += 1;
+        // Expose the competing Turn at the send boundary. A poll before the
+        // POST must not discover it and turn this into a queue test.
+        page.__loopxRuntime.sessions.set(busySessionId, { ...page.__loopxRuntime.sessions.get(busySessionId), active_turn_id: controlledTurnId, status: "busy" });
         await route.fulfill({ contentType: "application/json", status: 409,
           json: { ok: false, error: "another turn is already running for this session", active_turn_id: controlledTurnId } });
       });
+      let holdControlReads = true;
       const heldControlReads = [];
       await page.route("**/api/chat/sessions?*", async (route) => {
-        if (route.request().method() !== "GET") return route.fallback();
+        const request = route.request();
+        if (!holdControlReads || !controlRejectedPosts || request.method() !== "GET"
+          || !new URL(request.url()).searchParams.has("channel_id")) return route.fallback();
         heldControlReads.push(route);
       });
       const steers = [];
@@ -590,12 +595,21 @@ export const chatRecoveryScenario = {
       await composerInput.fill(draft);
       await sendButton.click();
       for (let attempt = 0; attempt < 100 && (!controlRejectedPosts || !heldControlReads.length); attempt += 1) await page.waitForTimeout(50);
-      if (!heldControlReads.length) throw new Error("The 409 did not make the page re-read the Session");
+      if (controlRejectedPosts !== 1 || !heldControlReads.length) {
+        throw new Error(`Expected one rejected POST and a held Session read, got ${controlRejectedPosts} POSTs and ${heldControlReads.length} reads`);
+      }
       await controlledTurnControl.waitFor({ state: "visible", timeout: 5_000 });
+      await page.waitForFunction(({ label, value }) => document.querySelector(`textarea[aria-label="${label}"]`)?.value === value,
+        { label: "向 LoopX 发送消息", value: draft }, { timeout: 5_000 });
       const handoffReply = page.locator(".personal-message").filter({ has: page.getByRole("button", { name: "中断本轮", exact: true }) });
       await handoffReply.getByRole("button", { name: "调整本轮", exact: true }).click();
       await composerInput.fill("交接期间先核对依赖。");
-      await composerInput.press("Meta+Enter");
+      const [steerReceipt] = await Promise.all([
+        page.waitForResponse((response) => response.request().method() === "POST"
+          && new URL(response.url()).pathname.endsWith("/steer"), { timeout: 5_000 }),
+        composerInput.press("Meta+Enter"),
+      ]);
+      if (!steerReceipt.ok()) throw new Error(`Steering failed with HTTP ${steerReceipt.status()}`);
       await page.locator(".personal-action-feedback").filter({hasText: "执行器已接收本轮追加指令。"}).waitFor({ timeout: 5_000 });
       if (steers.length !== 1 || steers[0].sessionId !== busySessionId || steers[0].turnId !== controlledTurnId) {
         throw new Error(`Adjust during the handoff did not reach the reported Turn: ${JSON.stringify(steers)}`);
@@ -615,6 +629,7 @@ export const chatRecoveryScenario = {
       await composerInput.fill("中断后的后续消息草稿");
       if (await sendButton.isDisabled()) throw new Error("A new follow-up draft stayed blocked after interruption");
       if (await composerInput.inputValue() !== "中断后的后续消息草稿") throw new Error("The new follow-up draft was not kept after interruption");
+      holdControlReads = false;
       for (const route of heldControlReads.splice(0)) await route.fallback();
       await page.unroute("**/api/chat/sessions?*");
       await page.waitForTimeout(500);
