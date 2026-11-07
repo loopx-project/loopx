@@ -11,6 +11,7 @@ import pytest
 import loopx
 
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 from test_replan_successor_durable_ack import AGENT, GOAL, history
 
 from loopx.capabilities.machine_configuration.builtins import build_builtin_machine_configuration_registry
@@ -104,6 +105,42 @@ def _add(call, obligation_id: str):
         "--text", "Independently verify the source artifact", "--task-class", "advancement_task",
         "--action-kind", "validate", "--target-key", "independent-source-artifact",
         "--operation-id", "periodic-source-successor", "--replan-obligation-id", obligation_id)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("context_delivery", ["off", "on"])
+def test_successor_cli_reads_policy_with_context_delivery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+    context_delivery: str,
+) -> None:
+    tmp_path = tmp_path.resolve()
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    call, _, _ = _fixture(tmp_path, monkeypatch, provider)
+    native, captures = tmp_path / "native", tmp_path / "captures"
+    native.mkdir(mode=0o700)
+    captures.mkdir(mode=0o700)
+    try:
+        presented = call(
+            "quota", "should-run", "--codex-app", "--goal-id", GOAL,
+            "--agent-id", AGENT, "--turn-instance-id", TURN,
+            "--codex-app-current-rrule", "FREQ=MINUTELY;INTERVAL=3",
+            "--context-delivery", context_delivery,
+            "--codex-context-dir", str(native), "--decision-output-root", str(captures),
+        )
+        if context_delivery == "on":
+            assert presented["schema_version"] == "context_capture_navigation_v1"
+        # Observe the complete current policy after checking native transport.
+        policy = read_cli_policy_payload(json.dumps(presented), returncode=0)
+        assert policy["decision"] == "autonomous_replan_required"
+        assert policy["heartbeat_receipt"]["turn_instance_id"] == TURN
+        identity = policy["heartbeat_receipt"]["settlement_identity"]
+        assert (identity["goal_id"], identity["agent_id"]) == (GOAL, AGENT)
+        assert identity["binding_kind"] == "autonomous_replan"
+        assert policy["execution_obligation"]["must_attempt_work"] is True
+    finally:
+        from loopx.control_plane.effect_runtime import restart_effect_runtime
+
+        restart_effect_runtime(wait_for_exit=True)
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
