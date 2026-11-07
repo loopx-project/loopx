@@ -844,14 +844,10 @@ def handle_refresh_state_command(
             if (material_refresh_ready and isinstance(candidate, Mapping)
                     and candidate.get("validation_bound") is True):
                 # A late reflection may recover after spend already committed.
-                # Read the same settlement; never repeat its accounting effect.
+                # Reuse the settlement read after recording the refresh event.
                 attach_reward_memory_ingest_after_spend(
                     payload, execute=True, registry_path=registry_path,
-                    runtime_root=runtime_root, goal_id=args.goal_id,
-                    agent_id=args.agent_id, todo_id=args.todo_id,
-                    turn_instance_id=args.turn_instance_id,
-                    replan_obligation_id=getattr(args, "replan_obligation_id", None),
-                    goal_ref=goal_ref,
+                    runtime_root=runtime_root, readback=settlement_readback,
                 )
         if material_refresh_ready and post_writeback_hooks:
             settlement_identity = (
