@@ -130,6 +130,12 @@ def _reentry_quota_action(request: Mapping[str, Any]) -> ScriptedExecToolAction:
     return ScriptedExecToolAction(command=command)
 
 
+def _reentry_quota_read(request: Mapping[str, Any]) -> ScriptedExecToolAction:
+    quota = json.loads(request["messages"][-1]["content"])
+    assert quota["schema_version"] == "context_capture_navigation_v1"
+    return ScriptedExecToolAction(command=quota["recovery"]["command"] + " --select /should_run")
+
+
 @pytest.mark.parametrize("cat_options", ["", "-- "])
 @pytest.mark.parametrize("batch_read", [False, True])
 @pytest.mark.parametrize("ordinary_completion", [False, True])
@@ -772,14 +778,20 @@ def test_batch_read_failure_cannot_admit_terminal_writeback(
     assert len(transport.requests) == 2
 
 
+@pytest.mark.parametrize("progressive", [False, True])
 def test_real_rejection_loop_settles_projected_todos_then_stops(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, progressive: bool,
 ) -> None:
+    if progressive:
+        monkeypatch.delenv("LOOPX_CONTEXT_DELIVERY", raising=False)
+    else:
+        monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", "off")
     transport = ScriptedDoubaoExecTransport(
         [
             _reentry_todo_action(0),
             _reentry_todo_action(1),
             _reentry_quota_action,
+            *([_reentry_quota_read] if progressive else []),
             ScriptedAssistantAction(content="Terminal lifecycle is settled."),
         ]
     )
@@ -794,8 +806,8 @@ def test_real_rejection_loop_settles_projected_todos_then_stops(
 
     assert receipt["qualification_passed"] is True, json.dumps(receipt, sort_keys=True)
     assert receipt["failure_code"] is None
-    assert receipt["provider_call_count"] == 4
-    assert receipt["tool_call_count"] == 3
+    assert receipt["provider_call_count"] == 4 + progressive
+    assert receipt["tool_call_count"] == 3 + progressive
     assert receipt["projected_todo_count"] == 2
     assert receipt["settled_todo_count"] == 2
     assert receipt["completion_identity_preserved"] is True
@@ -805,6 +817,7 @@ def test_real_rejection_loop_settles_projected_todos_then_stops(
         "todo_lifecycle_settlement",
         "todo_lifecycle_settlement",
         "terminal_quota_reentry",
+        *(["context_read"] if progressive else []),
     ]
     transition = _latest_reentry_transition(transport.requests[0])
     assert len(transition["triggers"]) == 2
