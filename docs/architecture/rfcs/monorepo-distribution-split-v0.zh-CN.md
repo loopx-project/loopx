@@ -599,6 +599,50 @@ R0 可以先于目录移动交付，但不代表内核合格。R3/R4 可选，�
   不关闭完整 R0/V10、M1、拆包安装、R1 managed minimal 或 D1–D7。不改变 preset、
   前端操作、权限或持久化状态；受保护执行仍由既有 owner 所有。
 
+### 2026-11-07 — Heartbeat pre-quota 按需加载
+
+- **基线与 owner：**`79665b97a`。heartbeat builder 已在 external evidence polling
+  可用时生成 `heartbeat-prequota`。选择性 parser 复用原 heartbeat registrar，dispatch
+  放在现有 heartbeat transport 模块；完整 facade 显式传入原 runner、renderer 和全局
+  registry resolver patch points。显式／隐式路由、别名、格式、timeout、异常、降级返回和
+  controller 语义均已刻画；reconciliation／hook 顺序及 typed owners 保持原路径。
+- **源码与包证据：**新增 50 个 transport／加载／真实后端用例；四个独立核对的源码／
+  wheel console 各运行 22 个场景；16 个配置／降级 File／SQLite console 场景覆盖重放、
+  opaque 原工作保留和零 quota 扣费。删除 `continue_to_quota` 的 mutation 经同一公开
+  console oracle 在两种真实 store 上被拒绝。原 acknowledgement smoke 同时覆盖两个
+  CLI facade。完整源码选择初轮得到 378 pass、两个路由测试失败，精确基线同样失败。
+  fixture 改为读取原 digest-bound progressive capture，不重新准入；受影响文件随后
+  17 个用例全部通过。失败未豁免。聚焦 lint、配置内 mypy 和代码 canary 通过。
+- **配对本地成本：**macOS 27.0 arm64、Python 3.13.5、Node 26.0.0；相同依赖和合成
+  store，预编译 bytecode、全新 Python 进程、热文件缓存及复用的隔离 Node 服务。
+  每个 workload／distribution 30 个交错 base／head 配对，共 360 个样本，采样 339 秒；
+  study 准备／验证另计 260 秒。测量使用共享开发机，并非空闲机器实验。下表是含解释器
+  启动的墙钟 median／p95（秒）和进程 RSS 中位数（MiB）。
+
+| Workload / distribution | 基线 median / p95 | 候选 median / p95 | 基线 → 候选 RSS |
+| --- | --- | --- | --- |
+| `source/prequota-help` | 1.433 / 1.889 | 0.172 / 0.226 | 91.5 → 24.7 |
+| `source/prequota-file-off` | 1.494 / 1.927 | 0.545 / 0.667 | 92.0 → 47.0 |
+| `source/prequota-sqlite-off` | 1.547 / 1.977 | 0.507 / 0.640 | 91.9 → 46.3 |
+| `wheel/prequota-help` | 1.555 / 1.967 | 0.170 / 0.210 | 91.7 → 24.5 |
+| `wheel/prequota-file-off` | 1.545 / 2.155 | 0.536 / 0.650 | 91.7 → 46.7 |
+| `wheel/prequota-sqlite-off` | 1.397 / 1.866 | 0.531 / 0.667 | 92.0 → 46.9 |
+
+- **加载边界与完整成本限制：**help 的 LoopX 模块为 29，基线 1,158；默认关闭的执行
+  为 277，基线 1,160。Python open 观察由 1,292–1,312 降至 81–395；打开文件尺寸之和
+  是 footprint，不是实际读取字节。候选 help 的 user／system 进程 CPU 中位数为
+  0.04／0.02 秒，执行为 0.13–0.14／0.065–0.08 秒；基线为
+  0.40–0.42／0.16–0.185 秒。help 输出仍为 737 字节，JSON 执行仍为 827 字节。
+  独立 SQLite loopback profile 在两版均观察到发送 1,362、接收 668 字节；冷服务启动
+  Node version／server 两个进程，复用服务启动数为零。单次带 instrumentation 的冷／
+  热观察不能拆出 Node readiness 或 service CPU，相关成本未通过资格。初轮 IPC probe
+  误以为使用 Unix socket 而失败，改为 loopback instrumentation 后通过，未修改产品。
+  help p95 为 0.226／0.210 秒，超过提议的 0.200 秒目标；未晋升或重标该 D6 提议。
+- **剩余：**这是一条 R0／V1／V3／V10 caller 的作者提案，I3 至少保留一个 minor release。
+  完整 R0／V10、M1／#8011、R1、context／model、split-install、installed-host 恢复、
+  采纳和完整任务成本仍开放。Python 仅适配 transport，没有新增 decision owner、preset、
+  provider 或权限规则。最终 exact-head review／CI 仍是独立交付门，与这些本地观察分开。
+
 ## 附录 B：决策日志
 
 | 日期 | 决策 | 负责人 / 批准 | 备选 | 变更的规范章节 |
