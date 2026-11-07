@@ -6,6 +6,7 @@ and pagination are production code; execution state is never restored and
 model dispatch is never called. Explicit fixture paths support regressions.
 """
 import argparse
+from contextlib import suppress
 import hashlib
 import json
 from pathlib import Path
@@ -182,6 +183,10 @@ def main():
 
             def do_POST(self):
                 metrics["mutation_attempts"] += 1
+                # Drain bounded request bodies before closing the connection.
+                self.connection.settimeout(5.0)
+                with suppress(ValueError):
+                    self._read_json()
                 self._send_error("The research display fixture is read-only.", status=405)
 
             do_PUT = do_POST
