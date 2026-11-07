@@ -83,8 +83,8 @@ def starting_page(project, runtime, path, turn, saved):
     assert json.loads(data)["effective_action"] == "normal_run"
     page = run(project, runtime, path, "quota", "context-project", *turn,
                "--capture-file", str(saved), "--capture-sha256", hashlib.sha256(data).hexdigest(),
-               "--initial-read", "--max-page-output-bytes", "18000",
-               "--context-delivery", "on", "--delta-delivery", "off")
+               "--initial-read", "--max-page-output-bytes", "18000", "--runtime-profile", "codex_app_heartbeat",
+               "--context-delivery", "on", "--delta-delivery", "auto")
     assert saved.read_bytes() == data
     return page["content"]
 
