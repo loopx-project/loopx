@@ -425,7 +425,7 @@ export function prepareProgressiveContextDelivery(request: JsonObject, legacyFie
     ...(observed ? {observed_first_read: observed} : {}),
     read_sections: inlineReadSections(request, required.context),
     ...(request.include_initial_read_plan === true && groups
-      ? {initial_read_plan: nativeContextReadPlan(required.context, pointers, groups)} : {})}, sourceValues, true);
+      ? {initial_read_plan: nativeContextReadPlan(required.context, pointers, groups)} : {})}, sourceValues, undefined, true);
 }
 
 /** Stateless presentation uses the same plan without inventing a native session,
@@ -434,7 +434,7 @@ export function prepareProgressiveContext(request: JsonObject, plan?: JsonObject
   const values: ProjectionSourceValues = new WeakMap();
   const required = requiredNativeContext(request, values, plan);
   const {operation: _operation, source_edits: _edits, source_number_tokens: _numbers, ...source} = request;
-  return contextProjectionChanges(source, {context: required.context, projected: required.projected}, values, true);
+  return contextProjectionChanges(source, {context: required.context, projected: required.projected}, values, undefined, true);
 }
 
 /** Invocation-local navigation, not captured input or a read/retention receipt.

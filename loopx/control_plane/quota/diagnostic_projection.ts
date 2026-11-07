@@ -52,8 +52,28 @@ export function contextSourceIdentity(source: JsonObject, supplied?: unknown):
  * identity derivation retains their numeric lineage. Python only applies edits. */
 export type ProjectionSourceValues = WeakMap<object, Map<string, ProjectionPath>>;
 
+/** Retain scalar lineage when a display lens copies or renames source fields. */
+export function contextProjectionRetainFields(source: JsonObject, values: ProjectionSourceValues) {
+  const paths = contextObjectPaths(source);
+  return (projected: JsonObject, original: JsonObject,
+      fields: readonly (string | readonly [string, string])[] = Object.keys(projected)): JsonObject => {
+    const path = paths.get(original), originals = values.get(original);
+    if (!path && !originals) return projected;
+    const retained = values.get(projected) ?? new Map<string, ProjectionPath>();
+    for (const field of fields) {
+      const [from, to] = typeof field === "string" ? [field, field] : field;
+      if (!Object.hasOwn(projected, to) || typeof projected[to] !== "number" ||
+          !Object.hasOwn(original, from) || typeof original[from] !== "number") continue;
+      const origin = originals?.get(from) ?? (path && [...path, from]);
+      if (origin) retained.set(to, origin);
+    }
+    if (retained.size) values.set(projected, retained);
+    return projected;
+  };
+}
+
 export function contextProjectionChanges(source: JsonObject, projected: JsonObject,
-    sourceValues?: ProjectionSourceValues, omitSamePathSources = false): JsonObject {
+    sourceValues?: ProjectionSourceValues, base: JsonObject = source, omitSamePathSources = false): JsonObject {
   const paths = contextObjectPaths(source), changes: ProjectionChange[] = [];
   const visit = (before: unknown, after: unknown, path: ProjectionPath, parent?: object): void => {
     const original = parent && sourceValues?.get(parent)?.get(String(path.at(-1)));
@@ -90,7 +110,7 @@ export function contextProjectionChanges(source: JsonObject, projected: JsonObje
       }
     } else changes.push({path, value: after});
   };
-  visit(source, projected, []);
+  visit(base, projected, []);
   return {changes};
 }
 
