@@ -194,7 +194,7 @@ def _raise_public_update_rejection(
             str(result.get("reason") or "external-wait Todo update was rejected"),
             code=reason_code,
             monitor_todo_id=(
-                dependency_id
+                dependency_id.partition("@")[0]
                 if separator and resume_kind == "monitor_changed"
                 else None
             ),

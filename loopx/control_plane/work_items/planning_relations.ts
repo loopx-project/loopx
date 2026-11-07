@@ -83,7 +83,8 @@ export function todoRef(value: string): string | null {
   });
   if (!condition) return null;
   const [kind, target] = condition.split(":");
-  return kind === "todo_done" || kind === "monitor_changed" ? target : null;
+  if (kind === "todo_done") return target;
+  return kind === "monitor_changed" ? target?.split("@", 1)[0] ?? null : null;
 }
 
 export interface PlanningRelationSource {
