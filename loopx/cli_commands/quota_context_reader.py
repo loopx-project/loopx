@@ -377,6 +377,7 @@ def _native_context_reference(projected: dict[str, Any], reference: dict[str, An
                               page_bytes: int, output_bytes: int,
                               first_read_budget: tuple[int, int],
                               page_attached: bool = False,
+                              first_read_requested: bool = False,
                               reader_argv: list[str] | None = None) -> dict[str, Any]:
     """Build the bounded native reference without publishing or registering it."""
     target = projected.get("target") if projected.get("schema_version") == "context_delivery_v1" else None
@@ -412,10 +413,13 @@ def _native_context_reference(projected: dict[str, Any], reference: dict[str, An
     # The reference must fit even under an explicit small caller ceiling.
     def fits() -> bool:
         return len(json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= min(output_bytes, 7900)
-    if initial_read_pointers:
+    if first_read_requested or initial_read_pointers:
         overview = result.pop("overview")
         instruction = result["instruction"]
-        if any(pointer.endswith("/vision_authoring/rule") for pointer in initial_read_pointers):
+        if first_read_requested:
+            instruction = ("If the initial selection names a Vision authoring step, select the complete vision_authoring object "
+                "at that step before composing a Vision. " + instruction)
+        elif any(pointer.endswith("/vision_authoring/rule") for pointer in (initial_read_pointers or ())):
             instruction = ("Before composing a Vision, select the complete vision_authoring object "
                 "at the displayed step in this capture. " + instruction)
         first_read = ("Read the top-level content and follow next_command if eof is false. "
