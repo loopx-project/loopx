@@ -9,7 +9,8 @@ accepting the previous contract, which is the failure the local-time owner test
 was written to prevent.
 
 Layer 1 judges folded values rather than spellings, so a copy written across
-lines, built with ``+``, or interpolated into an f-string is reported too.
+lines, built with ``+``, interpolated into an f-string, or declared with a type
+annotation is reported too.
 Layer 2 pins the consuming module to the owner's object and checks that it keeps
 no local binding. Layer 3 records that the current and legacy receipts stay
 distinct at the boundary that reads a queued receipt.
@@ -54,14 +55,36 @@ def fold_string(node: ast.AST, constants: dict[str, str], depth: int = 0) -> str
     return None
 
 
-def module_constants(tree: ast.Module) -> dict[str, str]:
-    pending: list[tuple[str, ast.AST]] = []
-    constants: dict[str, str] = {}
+def stated_bindings(tree: ast.Module) -> list[tuple[str, int, ast.expr]]:
+    """One extraction rule for module-level string bindings.
+
+    A plain assignment and an annotated assignment with a value state the same
+    thing before anything runs, so both feed the fold and both are census
+    candidates; reading only ``ast.Assign`` leaves ``COPY: Final[str] = ...`` a
+    restatement this guard never sees.
+    """
+    stated: list[tuple[str, int, ast.expr]] = []
     for node in tree.body:
-        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+        if isinstance(node, ast.Assign):
+            if len(node.targets) != 1:
+                continue
             target = node.targets[0]
-            if isinstance(target, ast.Name):
-                pending.append((target.id, node.value))
+        elif isinstance(node, ast.AnnAssign):
+            if node.value is None:
+                continue
+            target = node.target
+        else:
+            continue
+        if isinstance(target, ast.Name):
+            stated.append((target.id, node.lineno, node.value))
+    return stated
+
+
+def module_constants(tree: ast.Module) -> dict[str, str]:
+    pending: list[tuple[str, ast.AST]] = [
+        (bound, value) for bound, _line, value in stated_bindings(tree)
+    ]
+    constants: dict[str, str] = {}
     for _ in range(4):
         unresolved: list[tuple[str, ast.AST]] = []
         for name, value in pending:
@@ -80,16 +103,9 @@ def version_rows(source: str, name: str) -> list[dict[str, object]]:
     tree = ast.parse(source)
     constants = module_constants(tree)
     rows: list[dict[str, object]] = []
-    for node in tree.body:
-        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
-            continue
-        target = node.targets[0]
-        if not isinstance(target, ast.Name):
-            continue
-        if fold_string(node.value, constants) == QUEUE_RECEIPT_VALUE:
-            rows.append(
-                {"file": name, "line": node.lineno, "kind": "queue_receipt_version"}
-            )
+    for _bound, lineno, value in stated_bindings(tree):
+        if fold_string(value, constants) == QUEUE_RECEIPT_VALUE:
+            rows.append({"file": name, "line": lineno, "kind": "queue_receipt_version"})
     return rows
 
 
@@ -162,6 +178,20 @@ OFFENDING = (
         "constant pieces inside adjacent f-strings",
         'COPY = f"issue_fix_reviewer_notification_queue_rece" f"ipt_v1"\n',
     ),
+    (
+        "typed annotation with the full literal",
+        'from typing import Final\n\nCOPY: Final[str] = "issue_fix_reviewer_notification_'
+        'queue_receipt_v1"\n',
+    ),
+    (
+        "typed annotation built with addition",
+        'COPY: str = "issue_fix_reviewer_notification_" + "queue_" + "receipt_v1"\n',
+    ),
+    (
+        "typed annotation over a typed same-file constant",
+        'from typing import Final\nHEAD: Final[str] = "issue_fix_reviewer_notification_queue_"\n'
+        'COPY: Final[str] = HEAD + "receipt_v1"\n',
+    ),
 )
 NON_OFFENDING = (
     (
@@ -171,6 +201,11 @@ NON_OFFENDING = (
     (
         "an unrelated contract name is unrelated",
         'COPY = "issue_fix_reviewer_notification_queue_projection_v1"\n',
+    ),
+    (
+        "a typed legacy receipt is a different decision",
+        'from typing import Final\n\nCOPY: Final[str] = "issue_fix_reviewer_notification_'
+        'queue_receipt_v0"\n',
     ),
 )
 
@@ -201,3 +236,38 @@ def test_a_split_copy_is_rejected_through_the_repository_scan(
     rows = collect(tmp_path)
     assert [row["file"] for row in rows] == ["loopx/capabilities/probe.py"]
     assert offenders(rows)[0].startswith("loopx/capabilities/probe.py:")
+
+
+def test_the_census_flags_a_typed_copy_beside_the_real_owner(
+    tmp_path: pathlib.Path,
+) -> None:
+    owner_dir = tmp_path / "loopx" / "domain_packs"
+    owner_dir.mkdir(parents=True)
+    (owner_dir / "issue_fix.py").write_text(
+        (REPO_ROOT / OWNER_PATH).read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    copy_dir = tmp_path / "loopx" / "capabilities"
+    copy_dir.mkdir(parents=True)
+    (copy_dir / "copy.py").write_text(
+        f"from typing import Final\n\nCOPY: Final[str] = \"{QUEUE_RECEIPT_VALUE}\"\n",
+        encoding="utf-8",
+    )
+    rows = collect(tmp_path)
+    assert sorted(str(row["file"]) for row in rows) == [
+        "loopx/capabilities/copy.py",
+        OWNER_PATH,
+    ]
+    assert offenders(rows) != [], offenders(rows)
+
+
+def test_the_census_leaves_a_typed_legacy_receipt_alone(
+    tmp_path: pathlib.Path,
+) -> None:
+    copy_dir = tmp_path / "loopx" / "capabilities"
+    copy_dir.mkdir(parents=True)
+    (copy_dir / "legacy.py").write_text(
+        'from typing import Final\n\nCOPY: Final[str] = '
+        '"issue_fix_reviewer_notification_queue_receipt_v0"\n',
+        encoding="utf-8",
+    )
+    assert collect(tmp_path) == []
