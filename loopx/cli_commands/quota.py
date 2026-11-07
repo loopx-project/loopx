@@ -310,6 +310,42 @@ def _attach_turn_start_hook_dispatch(
             key: value for key, value in dispatch.items() if key != "contexts"
         }
 
+
+def _prepare_quota_result_context(
+    payload: dict[str, object], args: argparse.Namespace, *,
+    context: QuotaCommandContext | None, registry_path: Path,
+    heartbeat_turn_id: str | None, capture_directory: Path | None, reader_argv: list[str],
+) -> tuple[dict[str, object], dict[str, Any]]:
+    """Bind optional Turn context after the capture and settlement route is decided."""
+    try:
+        activation = native_context_activation(args)
+    except QuotaCommandValidationError:
+        if payload.get("ok") is True:
+            raise
+        # Preserve the original validation error when activation itself failed.
+        activation = {"progressive_enabled": False, "enabled": False}
+    bind_capture_selection_transport(payload, args, capture_directory=capture_directory)
+    if capture_directory is not None and payload.get("replan_action_packet"):
+        payload = {**payload, "replan_read_path": str(capture_directory / "decision.json"),
+            "replan_read_argv": reader_argv}
+    if args.quota_command == "should-run" and context is not None:
+        _export("attach_host_poll_receipt")(
+            context.status_payload,
+            args,
+            payload,
+            registry_path=registry_path,
+        )
+    if args.quota_command == "should-run":
+        # The capture route and optional settlement attachments are already
+        # fixed. Bind the hook to the same typed settlement as the capture.
+        attach_reward_memory_recall_after_should_run(
+            payload, quota_command=args.quota_command, heartbeat_turn_id=heartbeat_turn_id,
+            registry_path=registry_path, goal_id=args.goal_id, agent_id=args.agent_id,
+            composed_settlement=activation["enabled"],
+        )
+    return payload, activation
+
+
 def _emit_quota_result(
     payload: dict[str, object],
     args: argparse.Namespace,
@@ -336,46 +372,13 @@ def _emit_quota_result(
             cli["settlement_plan"], registry_path=registry_path,
             runtime_root=context.runtime_root if context is not None else None,
         )
-    if (args.quota_command == "spend-slot" and args.format == "json" and context is not None
-            and getattr(args, "max_page_output_bytes", None) is not None):
-        observe_quota_result(
-            args, payload, registry_path=registry_path, runtime_root=context.runtime_root,
-            turn_id=_effective_spend_turn_instance_id(payload, heartbeat_turn_id=heartbeat_turn_id),
-            started_at=usage_quota_started,
-        )
-        view, result_code = budgeted_spend_result(payload, args,
-            runtime_root=context.runtime_root, reader_argv=reader_argv)
-        print_payload(view, args.format, _quota_renderer(args))
-        return result_code
-    try:
-        activation = native_context_activation(args)
-        context_delivery_enabled = activation["enabled"]
-    except QuotaCommandValidationError:
-        if payload.get("ok") is True:
-            raise
-        # Preserve the original validation error when activation itself failed.
-        context_delivery_enabled = False
-        activation = {"progressive_enabled": False}
-    bind_capture_selection_transport(payload, args, capture_directory=capture_directory)
-    delivery_request = None
-    decision_identity = ("", "")
-    if capture_directory is not None and payload.get("replan_action_packet"):
-        payload = {**payload, "replan_read_path": str(capture_directory / "decision.json"),
-            "replan_read_argv": reader_argv}
-    if args.quota_command == "should-run" and context is not None:
-        _export("attach_host_poll_receipt")(
-            context.status_payload,
-            args,
-            payload,
-            registry_path=registry_path,
-        )
-    if args.quota_command == "should-run":
-        # The capture route and optional settlement attachments are already
-        # fixed. Bind the hook to the same typed settlement as the capture.
-        attach_reward_memory_recall_after_should_run(
-            payload, quota_command=args.quota_command, heartbeat_turn_id=heartbeat_turn_id,
-            registry_path=registry_path, goal_id=args.goal_id, agent_id=args.agent_id,
-            composed_settlement=context_delivery_enabled,
+    budgeted_spend = (args.quota_command == "spend-slot" and args.format == "json" and context is not None
+        and getattr(args, "max_page_output_bytes", None) is not None)
+    activation = None
+    if not budgeted_spend:
+        payload, activation = _prepare_quota_result_context(
+            payload, args, context=context, registry_path=registry_path, heartbeat_turn_id=heartbeat_turn_id,
+            capture_directory=capture_directory, reader_argv=reader_argv,
         )
     if context is not None:
         observe_quota_result(
@@ -383,6 +386,16 @@ def _emit_quota_result(
             turn_id=_effective_spend_turn_instance_id(payload, heartbeat_turn_id=heartbeat_turn_id),
             started_at=usage_quota_started,
         )
+    if budgeted_spend:
+        assert context is not None
+        view, result_code = budgeted_spend_result(payload, args,
+            runtime_root=context.runtime_root, reader_argv=reader_argv)
+        print_payload(view, args.format, _quota_renderer(args))
+        return result_code
+    assert activation is not None
+    context_delivery_enabled = activation["enabled"]
+    delivery_request = None
+    decision_identity = ("", "")
     # A decided refusal has the same complete contract as an admission. `ok`
     # still controls exit status and host handoff; composition grants no work.
     if args.quota_command == "should-run" and isinstance(payload.get("interaction_contract"), Mapping):
