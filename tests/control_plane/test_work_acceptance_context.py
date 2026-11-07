@@ -17,7 +17,6 @@ from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_s
 from loopx.control_plane.goals.acceptance import inspect_goal_acceptance
 from loopx.control_plane.testing.canary_harness import run_json_cli_result, write_fixture_registry
 from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
-from loopx.control_plane.turn_driver.decision_capture import read_context_capture_file
 from loopx.control_plane.turn_driver.executor import build_loopx_turn_host_request
 from loopx.control_plane.work_items.context_readback import _source_content
 from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
@@ -256,7 +255,10 @@ def test_captured_acceptance_does_not_replace_current_work_admission(acceptance_
     original = configure("inspect")["goal_acceptance_contract"]["outcome_requirements"]
     capture = tmp_path / "decision"
     guard = ("quota", "should-run", "--goal-id", goal, "--agent-id", agent, "--codex-app")
+    # The subprocess helper defaults to raw inspection. A dispatchable
+    # capture must fulfill the Goal source read before it reaches DSH.
     first = cli(*guard, "--todo-id", selected, "--turn-instance-id", "original-delivery",
+        "--context-delivery", "on", "--delta-delivery", "off",
         "--turn-envelope", "--decision-output-dir", str(capture))
     first = read_cli_policy_payload(json.dumps(first), returncode=0)
     saved = (capture / "decision.json").read_bytes()
@@ -313,17 +315,18 @@ def test_captured_acceptance_does_not_replace_current_work_admission(acceptance_
 
     # A capture is an immutable observation. Reading its detail cannot admit
     # changed work, remove a wait or silently rebind the owner's checks.
-    code, current = run(*guard, "--todo-id", target, "--turn-instance-id", "current-delivery")
+    refusal_capture = tmp_path / "current-decision"
+    code, current = run(*guard, "--todo-id", target, "--turn-instance-id", "current-delivery",
+        "--context-delivery", "off", "--decision-output-dir", str(refusal_capture))
     assert code == (0 if change == "checks_removed" else 1), current
-    if code == 0:
-        current = read_cli_policy_payload(json.dumps(current), returncode=0)
-    else:
+    if code != 0:
         assert current["error_code"] == "quota_action_selection_rejected"
         assert current["heartbeat_receipt"]["status"] == "not_committed"
-        # The refusal is authoritative. Its saved detail is an oracle for the
-        # original observation, never permission to run the rejected work.
-        detail = current["captured_decision"]
-        current = read_context_capture_file(detail["path"], detail["sha256"], private=True)[2]
+    # The raw response is the current signed decision. Its capture is an
+    # observation, including when the response denies dispatch.
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+    assert_complete_turn_decision(current)
+    assert current == json.loads((refusal_capture / "decision.json").read_bytes())
     channel = current["interaction_contract"]["agent_channel"]
     assert channel["delivery_allowed"] is (change == "checks_removed")
     if change != "checks_removed":
