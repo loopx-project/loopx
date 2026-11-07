@@ -8,15 +8,18 @@ on one side stayed illegal on the other while every scan that groups by name
 still saw two matching definitions.
 
 Decisions are made on the folded value, not the spelling: a plain set literal, a
-reordered literal, a `set(...)` or `frozenset(...)` wrapper and a comprehension
-over the same members are all offenders, and a construction whose members cannot
-be folded has to be declared with its file and count.
+reordered literal, a `set(...)` or `frozenset(...)` wrapper, and a one-step
+comprehension over the same members are all offenders. Constructions whose
+members cannot be folded statically are not reported; widening the census to
+them means teaching `_folded_members` to decide them and adding a case here,
+rather than declaring a site and trusting it.
 """
 
 from __future__ import annotations
 
 import ast
 import pathlib
+import re
 
 import pytest
 
@@ -37,22 +40,39 @@ CONSUMERS = (
 VOCABULARY = {"applied", "no_change", "rejected", "rolled_back"}
 
 
+def _folded_comprehension(node: ast.SetComp) -> frozenset[str] | None:
+    """Fold the one comprehension shape that cannot change the member set.
+
+    ``{name for name in <foldable literal>}`` with no filter selects exactly the
+    iterable's members, so it states the same vocabulary under another spelling.
+    Anything with a condition, a transform, or several generators is not decided
+    here, and claiming otherwise would put a comment over an unproved match.
+    """
+
+    if len(node.generators) != 1 or node.generators[0].ifs:
+        return None
+    generator = node.generators[0]
+    if not isinstance(generator.target, ast.Name) or not isinstance(node.elt, ast.Name):
+        return None
+    if node.elt.id != generator.target.id:
+        return None
+    return _folded_members(generator.iter)
+
+
 def _folded_members(node: ast.AST) -> frozenset[str] | None:
     """Return the member set of a literal set construction, or None."""
 
+    if isinstance(node, ast.SetComp):
+        return _folded_comprehension(node)
     if isinstance(node, (ast.Set, ast.List, ast.Tuple)):
         members = node.elts
     elif isinstance(node, ast.Call) and getattr(node.func, "id", "") in {"set", "frozenset"}:
-        if len(node.args) != 1:
+        if len(node.args) != 1 or node.keywords:
             return None
         inner = node.args[0]
-        if isinstance(inner, ast.SetComp):
-            return None if inner.generators else frozenset(
-                _folded_members(ast.Set(elts=inner.elt and [inner.elt])) or ()
-            )
-        members = inner.elts if isinstance(inner, (ast.Set, ast.List, ast.Tuple)) else None
-        if members is None:
-            return None
+        if isinstance(inner, (ast.Set, ast.List, ast.Tuple, ast.SetComp)):
+            return _folded_members(inner)
+        return None
     else:
         return None
     values = [
@@ -92,6 +112,16 @@ def set_literals(source: str) -> list[tuple[int, frozenset[str]]]:
     return rows
 
 
+def _posix_prefix(prefix: str) -> str:
+    """Join census sites with forward slashes whatever the host separator was.
+
+    ``str(Path.relative_to(...))`` yields backslashes on Windows, which made the
+    owner comparison fail there even when exactly one correct owner existed.
+    """
+
+    return "/".join(part for part in re.split(r"[\\/]+", prefix) if part)
+
+
 def vocabulary_sites(
     root: pathlib.Path, *, rel_prefix: str = ""
 ) -> list[str]:
@@ -108,7 +138,7 @@ def vocabulary_sites(
         prefix = rel_prefix or str(root.relative_to(REPO_ROOT))
         for line, members in set_literals(source):
             if set(members) == VOCABULARY:
-                sites.append(f"{prefix}/{path.name}:{line}")
+                sites.append(f"{_posix_prefix(prefix)}/{path.name}:{line}")
     return sites
 
 
@@ -128,6 +158,7 @@ def test_only_the_owner_states_the_apply_vocabulary() -> None:
         pytest.param('APPLY = {"rolled_back", "rejected", "no_change", "applied"}\n', id="reordered-literal"),
         pytest.param('APPLY = set(["applied", "no_change", "rejected", "rolled_back"])\n', id="set-wrapper"),
         pytest.param('APPLY = frozenset({"applied", "no_change", "rejected", "rolled_back"})\n', id="frozenset-wrapper"),
+        pytest.param('APPLY = {status for status in ("applied", "no_change", "rejected", "rolled_back")}\n', id="set-comprehension"),
     ],
 )
 def test_a_rewritten_copy_is_still_recognised(tmp_path: pathlib.Path, source: str) -> None:
@@ -232,3 +263,50 @@ def test_a_status_outside_the_vocabulary_is_refused() -> None:
             rollback_ref=None,
             applied_material_refs=["material:one"],
         )
+
+def test_a_comprehension_over_other_members_is_not_the_vocabulary(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The comprehension fold widens reach, not matching: other members stay clean."""
+
+    (tmp_path / "other.py").write_text(
+        'STATUS = {state for state in ("applied", "no_change", "rejected")}\n',
+        encoding="utf-8",
+    )
+
+    assert vocabulary_sites(tmp_path, rel_prefix="copy") == []
+
+
+@pytest.mark.parametrize(
+    ("prefix", "expected"),
+    [
+        ("loopx\\capabilities\\material_lifecycle", "loopx/capabilities/material_lifecycle"),
+        ("loopx/capabilities/material_lifecycle", "loopx/capabilities/material_lifecycle"),
+        ("copy", "copy"),
+    ],
+)
+def test_sites_always_join_with_forward_slashes(prefix: str, expected: str) -> None:
+    """A Windows-shaped relative prefix must not turn the owner into a mismatch."""
+
+    assert _posix_prefix(prefix) == expected
+
+
+def test_the_real_scan_reports_one_owner_regardless_of_separator(
+    tmp_path: pathlib.Path,
+) -> None:
+    module = tmp_path / "loopx" / "capabilities" / "material_lifecycle"
+    module.mkdir(parents=True)
+    (module / "_validation.py").write_text(
+        'APPLY_STATUSES = frozenset({"applied", "no_change", "rejected", "rolled_back"})\n',
+        encoding="utf-8",
+    )
+
+    sites = vocabulary_sites(
+        module,
+        rel_prefix=str(pathlib.PureWindowsPath("loopx", "capabilities", "material_lifecycle")),
+    )
+
+    assert sites == [
+        "loopx/capabilities/material_lifecycle/_validation.py:1"
+    ], sites
+
