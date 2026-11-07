@@ -711,6 +711,54 @@ their existing owners. No worker path, scoring, deadline or capture opportunity
 changes. Select this option only for a new run; it does not relocate a running
 bank or recover a missed point.
 
+## Preserve a failed worker before teardown
+
+For a new heartbeat run with full native controller capture, add
+`--preserve-failed-worker` to preserve the last source after a nonzero or uncertain
+solver exit. This is opt-in and requires agent-only submissions (`--eval-interval 0`);
+ordinary runs, successful exits and Native Goal completion keep their previous
+cleanup behavior. Removing the option disables the policy for later runs; it does
+not delete a previously retained worker.
+
+At the exact solver-return boundary, before the native provider stops its work
+container, the adapter closes the periodic observer and attempts one bounded joint
+capture through the existing Docker writer barrier and native checkpoint owner.
+It captures the complete task workspace, declared external research components,
+Goal state, scheduler/wake evidence, native session/configuration and native SQLite
+participants (including committed WAL data). It never exports the native credential
+home or `auth.json`. The native capsule retains its own submission history,
+incumbent, opportunity counter, cooldown and original phase. No new submission,
+model request, successful settlement or extended clock is created.
+
+The trial's private `terminal-preservation.json` records the original execution,
+export outcome/digest, preservation time and confirmed stopped-container state.
+The file export explicitly remains **unqualified for restoration**: a failed native
+Turn is not a completed conversation checkpoint. Both successful and failed exports
+retain the original stopped container until an operator separately qualifies a
+receiver or authorizes disposal. Compute is stopped before returning to provider final-archive extraction or
+grading drain, and cleanup verifies that stop again;
+a stop failure is reported without deleting the source. Missing participants, full
+storage or an uncertain writer barrier cannot fall through to force-removal.
+The provider still performs its ordinary network/proxy cleanup and grader drain.
+Its best-effort final submission archive may be absent because its extraction
+requires a running container; latest files remain in the stopped source and, on
+successful export, the terminal point. Native graded history/results remain
+independent and are not discarded with that optional archive.
+
+If the optional preservation receipt cannot be written, a redacted warning reports
+that gap; observer shutdown, one capture attempt and verified source stopping
+still proceed. The known solver exit and native grading remain authoritative.
+An unconfirmed stop still fails explicitly, even if receipt storage also fails.
+Missing receipt files never establish successful export or recovery eligibility.
+
+Inspect this receipt, the exported manifest and the exact retained container before
+planning recovery. Do not restart it, treat a file digest as receiver adoption, or
+roll back to an older point to fill a tail gap. Retained containers still occupy
+**disk** and may contain their original private credentials; reserve storage and
+explicitly dispose of the exact owned container after recovery/disposal approval.
+Terminal preservation does not rotate away the last qualified regular checkpoint,
+and it does not increase the daily/fresh-replan capture frequency.
+
 ## Default research checkpoint retention
 
 **Default change:** new controller-enabled native runs automatically keep only
