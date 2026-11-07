@@ -8056,9 +8056,10 @@ def test_completed_todo_reentry_preserves_original_settlement_commands(
     assert settled["interaction_contract"]["agent_channel"]["must_attempt"] is False
 
 
+@pytest.mark.parametrize("goal_commitment", [False, True])
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_original_turn_closes_automatically_archived_todo_once(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, goal_commitment: bool,
 ) -> None:
     from canonical_authority_fixture import isolate_sqlite_runtime
 
@@ -8092,6 +8093,35 @@ def test_original_turn_closes_automatically_archived_todo_once(
         isolate_sqlite_runtime(tmp_path, monkeypatch)
     _initialize_fixture_authority(project, runtime, provider=provider,
                                   handoff_mode="hard_lease", leases=[])
+    goal_counter = project / "goal-validator-count.txt"
+    if goal_commitment:
+        # A failed cross-task Goal check cannot replace or block the local
+        # validator, nor become accepted just because this Todo closes.
+        checks = tmp_path / "goal-checks.json"
+        checks.write_text(json.dumps({
+            "scope": {"kind": "goal"}, "objective": "Fulfil the overall commitment",
+            "non_goals": [], "bindings": [], "criteria": [{
+                "id": "overall-commitment", "description": "Overall work remains incomplete",
+                "validation_argv": [sys.executable, "-c",
+                    "from pathlib import Path; "
+                    f"p=Path({str(goal_counter)!r}); "
+                    "p.write_text(str(int(p.read_text())+1 if p.exists() else 1)); "
+                    "raise SystemExit(1)"],
+            }],
+        }), encoding="utf-8")
+        rc, inspected = _run_cli(registry_path, runtime, "goal-acceptance", "inspect",
+                                 "--goal-id", GOAL_ID)
+        assert rc == 0, inspected
+        rc, configured = _run_cli(
+            registry_path, runtime, "goal-acceptance", "configure", "--goal-id", GOAL_ID,
+            "--document", str(checks), "--operation-id", "overall-check",
+            "--expected-provider-revision", inspected["provider_revision"], "--execute",
+        )
+        assert rc == 0, configured
+        rc, failed = _run_cli(registry_path, runtime, "goal-acceptance", "verify",
+                             "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--execute")
+        assert rc == 1 and failed["checks_passed"] is False, failed
+        assert goal_counter.read_text() == "1"
     claim_id = "original-archive-closeout-claim"
     rc, claim = _run_cli(registry_path, runtime, "todo", "claim",
                         "--goal-id", GOAL_ID, "--todo-id", TODO_ID,
@@ -8178,6 +8208,12 @@ def test_original_turn_closes_automatically_archived_todo_once(
     assert counter.read_text() == validation_runs
     assert _spend_run_count(runtime) == 1
     assert _classification_count(runtime, "archived_result_verified") == 1
+    if goal_commitment:
+        rc, overall = _run_cli(registry_path, runtime, "goal-acceptance", "inspect",
+                               "--goal-id", GOAL_ID)
+        assert rc == 0, overall
+        assert overall["goal_acceptance_contract"]["status"] == "failed"
+        assert goal_counter.read_text() == "1"
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

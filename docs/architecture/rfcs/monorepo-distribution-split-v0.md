@@ -1383,6 +1383,14 @@ receipt, first completion time and archive state without rerunning the validator
 Existing provider conformance retains source/digest, validation, lease and replay
 checks; an isolated real PostgreSQL suite qualifies its shared owner separately.
 
+The author proposal also integrates main `abf144202` (#8161), whose explicit
+Goal-scoped checks do not gate local Todo completion. The archive regression
+covers a failed Goal commitment alongside the local validator: ordinary and
+terminal completion still preserve the original receipt and one debit, never
+rerun the Goal checker, and leave the overall check failed. This is author-side
+integration coverage; it does not replace independent review or reviewed-repair
+wheel qualification.
+
 This is a proposed lifecycle repair enabling the remaining R1/V4 journey and
 large-state comparison. Independent exact-head review, reviewed-repair wheel
 readback and remaining guard/parser characterization still govern the next

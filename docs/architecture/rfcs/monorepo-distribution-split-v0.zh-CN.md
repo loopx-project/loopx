@@ -1038,6 +1038,12 @@ hard-lease／context／model 和拆包安装验收仍开放；采纳仍受独立
 validator。既有 provider conformance 继续检查 source/digest、validation、
 lease 和 replay；隔离真实 PostgreSQL suite 单独验证其共享 owner。
 
+作者提案还集成了 main `abf144202`（#8161）：显式 Goal 范围的检查不约束局部
+Todo 完成。归档回归在局部 validator 之外加入未通过的整体 Goal 承诺检查：
+普通完成和终结仍保留原 receipt 与一次扣账，不重复执行 Goal checker，整体
+检查继续失败。这是作者阶段的集成覆盖，不能替代独立审阅或审阅修复后的
+wheel 资格验证。
+
 这是支持后续 R1/V4 journey 和大状态比较的生命周期修复提案。下一步仍需
 独立 exact-head review、审阅修复后的 wheel 回读，以及剩余 guard/parser
 刻画。它不会升级 installed host，也不验收中断/重启、split installation、
