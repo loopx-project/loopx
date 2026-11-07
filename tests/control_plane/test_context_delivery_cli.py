@@ -181,10 +181,15 @@ def test_bounded_continuation_rechecks_original_capture_and_utf8_cursor(tmp_path
     capture = tmp_path / "original.json"
     raw = json.dumps({"requirements": "🙂" * 900}, ensure_ascii=False).encode()
     capture.write_bytes(raw)
+    # Complete recovery guidance and the pinned executable/path metadata already
+    # exceed 1600 bytes on source checkouts. Keep a bounded partial page without
+    # deleting guidance or changing any product/Host output limit.
+    limit = 2400
     args = argparse.Namespace(capture_file=str(capture), capture_sha256=hashlib.sha256(raw).hexdigest(),
-        offset=0, page_bytes=8192, max_page_output_bytes=1600, format="json")
+        offset=0, page_bytes=8192, max_page_output_bytes=limit, format="json")
     page = read_context_capture(args)
     assert page["ok"] and not page["eof"]
+    assert len(json.dumps(page, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= limit
     args.offset = page["next_offset"] + 1
     assert "UTF-8 boundary" in read_context_capture(args)["reason"]
     args.offset = page["next_offset"]
