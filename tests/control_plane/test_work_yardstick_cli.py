@@ -4,11 +4,12 @@ The deterministic actor proves transport/adoption attribution, not model quality
 or a causal benchmark gain. No evaluator, credentials or active Goal are used.
 """
 import hashlib
+from itertools import groupby
 import json
 
 
 from tests.control_plane.test_quota_settlement_cli import (
-    _write_fixture, _run_cli, GOAL_ID, AGENT_ID, TODO_ID,
+    _initialize_fixture_authority, _projected_cli_args, _write_fixture, _run_cli, GOAL_ID, AGENT_ID, TODO_ID,
 )
 from loopx.capabilities.explore.result_log import explore_result_log_path, load_explore_result_events
 from loopx.capabilities.explore.turn_context import explore_turn_context
@@ -35,13 +36,18 @@ def attachment():
         evidence_refs=["result:reversal"], work_yardstick_decision=decision())
 
 
-def setup(tmp_path, enabled=True):
-    project, runtime, path = _write_fixture(tmp_path, provider="sqlite")
+def setup(tmp_path, enabled=True, *, active=False):
+    project, runtime, path = _write_fixture(tmp_path)
     config = json.loads(path.read_text())
+    if active:
+        config["goals"][0]["status"] = "active"
+        state = project / config["goals"][0]["state_file"]
+        state.write_text(state.read_text().replace("status: active-read-only", "status: active", 1))
     config["goals"][0]["explore_graph"] = {"enabled": True}
     config["goals"][0]["quota"]["allowed_slots"] = 4
     config["goals"][0].setdefault("execution_profile", {})["yardstick_enabled"] = enabled
     path.write_text(json.dumps(config))
+    _initialize_fixture_authority(project, runtime, provider="sqlite")
     return project, runtime, path
 
 
@@ -55,11 +61,11 @@ def binding(turn):
     return ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", turn]
 
 
-def refresh(project, runtime, path, turn, source):
+def refresh(project, runtime, path, turn, source, *options):
     run(project, runtime, path, "quota", "should-run", "--codex-app", *binding(turn))
     return run(project, runtime, path, "refresh-state", *binding(turn), "--classification", "validated_change",
         "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
-        "--explore-result-json", str(source), "--no-global-sync", "--suppress-external-sinks")
+        "--explore-result-json", str(source), "--no-global-sync", "--suppress-external-sinks", *options)
 
 
 def context(runtime, path, *, detail=True):
@@ -69,6 +75,147 @@ def context(runtime, path, *, detail=True):
     if detail and cues:
         return explore_turn_context(**params, result_node=cues[0]["node_id"])
     return compact
+
+
+def test_measured_yardstick_restarts_comparison_when_the_acceptance_basis_changes(tmp_path):
+    project, runtime, path = setup(tmp_path, active=True)
+    source = tmp_path / "finding.json"
+
+    def record(turn, acceptance, candidates, previous=None):
+        finding = attachment()
+        choice = finding["work_yardstick_decision"]
+        choice["target"]["acceptance_ref"] = acceptance
+        choice["counterevidence_refs"] = []
+        choice["prior_finding_id"] = previous
+        finding["measurements"] = [
+            {**choice["authoritative"], "candidate_ref": f"candidate:{name}",
+             "evidence_ref": f"result:{name}", "value": value}
+            for name, value in candidates
+        ]
+        finding["evidence_refs"] = [measurement["evidence_ref"] for measurement in finding["measurements"]]
+        source.write_text(json.dumps(finding))
+        receipt = refresh(project, runtime, path, turn, source, "--delivery-boundary", "in_flight_continuation")
+        assert receipt["explore_result_delivery"]["ok"], receipt
+        run(project, runtime, path, *_projected_cli_args(receipt["settlement_owed"]["command"], turn_instance_id=turn))
+        return receipt["explore_result_delivery"]["finding_id"]
+
+    old = record("turn-old-basis", "acceptance:task-v1", [("old-a", 10), ("old-b", 20)])
+    assert context(runtime, path)["graph"]["work_yardsticks"][0]["search_comparison"]["goal"][
+        "preferred_candidate_ref"] == "candidate:old-b"
+    first = record("turn-first-new-basis", "acceptance:task-v2", [("new-c", 6)], old)
+    compact = context(runtime, path, detail=False)["graph"]["work_yardsticks"][0]
+    assert compact["source_finding_id"] == first and "comparison_candidate_ref" not in compact
+    assert "search_comparison" not in context(runtime, path)["graph"]["work_yardsticks"][0]
+    latest = record("turn-second-new-basis", "acceptance:task-v2", [("new-d", 9)], first)
+    cue = context(runtime, path)["graph"]["work_yardsticks"][0]
+    comparison = cue["search_comparison"]["goal"]
+    assert cue["target"]["acceptance_ref"] == "acceptance:task-v2"
+    assert comparison["previous_best"]["finding_id"] == first and comparison["latest"]["finding_id"] == latest
+    assert comparison["preferred_candidate_ref"] == "candidate:new-d"
+
+
+def test_measured_yardstick_changes_next_work_from_local_screening_to_a_whole_goal_comparison(tmp_path):
+    project, runtime, path = setup(tmp_path, active=True)
+    acceptance = tmp_path / "acceptance.json"
+    acceptance.write_text(json.dumps(dict(outcome_id="encoded-artifact", owner_agent_id=AGENT_ID,
+        objective="Reduce the encoded artifact size", todo_ids=[TODO_ID],
+        requirements=[{"id": "round-trip", "description": "Decoding must preserve every original entry in order"}],
+        source={"ref": "message:encoding-request", "summary": "Preserve the complete input"})))
+    before = run(project, runtime, path, "goal-acceptance", "inspect", "--goal-id", GOAL_ID)
+    run(project, runtime, path, "goal-acceptance", "refine", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--document", str(acceptance), "--operation-id", "declare-encoding", "--expected-provider-revision",
+        before["provider_revision"], "--execute")
+    run(project, runtime, path, "configure-goal", "--goal-id", GOAL_ID, "--execution-replan-after-turns", "2",
+        "--execution-stride-strategy", "evidence_conditioned_v1", "--execute")
+    payload = ["repeated-entry"] * 24 + ["other-entry"] * 24
+
+    def encode(value):
+        return json.dumps(value, separators=(",", ":")).encode()
+
+    def dictionary_encode(items):
+        keys = list(dict.fromkeys(items))
+        return {"keys": keys, "indices": [keys.index(item) for item in items]}
+
+    base = dictionary_encode(payload)
+    trial = attachment()
+    choice = trial["work_yardstick_decision"]
+    choice["authoritative"].update(metric="size", unit="bytes", higher_is_better=False)
+    choice["proxy"].update(metric="size", unit="bytes", higher_is_better=False, comparison_scope="validation:single-entry")
+    choice["counterevidence_refs"] = []
+    choice["next_action"] = dict(method_id="method:plain", reason="Try another plain encoding using the tiny screen",
+                                 cost_bound="One artifact and one bounded end-to-end check")
+    items = [(choice["authoritative"], payload, "goal"), (choice["proxy"], payload[:1], "screen")]
+    trial["measurements"] = [
+        {**profile, "candidate_ref": f"candidate:{name}", "evidence_ref": f"result:{source}-{name}",
+         "value": len(encode(candidate))}
+        for profile, data, source in items
+        for name, candidate in [("dictionary", dictionary_encode(data)), ("plain", data)]
+    ]
+    assert trial["measurements"][0]["value"] < trial["measurements"][1]["value"]
+    assert trial["measurements"][2]["value"] > trial["measurements"][3]["value"]
+    trial["evidence_refs"] = [row["evidence_ref"] for row in trial["measurements"]]
+    source = tmp_path / "measured-pair.json"
+    source.write_text(json.dumps(trial))
+    first = refresh(project, runtime, path, "turn-pair", source, "--delivery-boundary", "in_flight_continuation")
+    assert first["explore_result_delivery"]["ok"]
+    run(project, runtime, path, *_projected_cli_args(first["settlement_owed"]["command"], turn_instance_id="turn-pair"))
+
+    guard = run(project, runtime, path, "quota", "should-run", "--codex-app", *binding("turn-compare"))
+    compact = run(project, runtime, path, "explore", "turn-context", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+                  "--todo-id", TODO_ID)["graph"]["work_yardsticks"][0]
+    assert compact["comparison_candidate_ref"] == "candidate:dictionary"
+    assert compact["cue"] == choice["next_action"]["reason"]
+    assert "different mechanism or a compatible combination" in compact["comparison_cue"]
+    assert "full implementation and validation cost" in compact["comparison_cue"]
+    assert compact["comparison_cue"] in json.dumps(guard)
+    detailed = run(project, runtime, path, "explore", "turn-context", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+                   "--todo-id", TODO_ID, "--result-node", compact["node_id"])["graph"]["work_yardsticks"][0]
+    assert detailed["next_action"] == choice["next_action"]
+    comparison = detailed["search_comparison"]
+    assert comparison["goal"]["preferred_candidate_ref"] == "candidate:dictionary"
+    assert comparison["proxy"]["preferred_candidate_ref"] == "candidate:plain"
+    assert comparison["proxy_order_reversed"] is True
+
+    # Deterministic consumer. Combine the evidenced baseline with an independent
+    # representation change and verify the original end-to-end outcome.
+    selected_base = {"candidate:dictionary": base}[compact["comparison_candidate_ref"]]
+    runs = [[index, len(list(group))] for index, group in groupby(selected_base["indices"])]
+    artifact = project / "combined-encoding.json"
+    artifact.write_bytes(encode({"keys": selected_base["keys"], "runs": runs}))
+    result = json.loads(artifact.read_bytes())
+    assert [result["keys"][i] for i, count in result["runs"] for _ in range(count)] == payload
+    assert artifact.stat().st_size < len(encode(base))
+    digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    follow = attachment()
+    follow["evidence_refs"] = ["result:combined"]
+    follow["work_yardstick_decision"] = {**choice, "prior_finding_id": detailed["source_finding_id"]}
+    follow["execution_observation"] = dict(schema_version="explore_execution_observation_v0", candidate_sha256=digest,
+        input_revision="inputs-v1", planned_method_id="method:plain", executed_method_id="method:dictionary-runs",
+        change_reason="The matched outcome favored the dictionary; test a different representation on that base",
+        elapsed_seconds=None, limit_seconds=None, search_iterations=1, stop_reason="complete",
+        evidence_refs=["result:combined"], result_ref="result:combined", result_candidate_sha256=digest, exit_code=0)
+    follow["measurements"] = [{**choice["authoritative"], "value": artifact.stat().st_size,
+                               "candidate_ref": f"sha256:{digest}", "evidence_ref": "result:combined"}]
+    source.write_text(json.dumps(follow))
+    saved = run(project, runtime, path, "refresh-state", *binding("turn-compare"), "--classification", "validated_change",
+        "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+        "--delivery-boundary", "in_flight_continuation", "--explore-result-json", str(source), "--no-global-sync", "--suppress-external-sinks")
+    assert saved["explore_result_delivery"]["ok"]
+    cue = context(runtime, path)["graph"]["work_yardsticks"][0]
+    assert cue["previous_decision_followthrough"]["executed_method_id"] == "method:dictionary-runs"
+    assert cue["search_comparison"]["goal"]["preferred_candidate_ref"] == f"sha256:{digest}"
+    assert "proxy" not in cue["search_comparison"]  # The old proxy did not measure this new pair.
+    run(project, runtime, path, *_projected_cli_args(saved["settlement_owed"]["command"], turn_instance_id="turn-compare"))
+    review = run(project, runtime, path, "quota", "should-run", "--codex-app",
+                 "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", "turn-review")
+    assert "periodic_review_due" in {trigger["kind"] for trigger in review["autonomous_replan_obligation"]["triggers"]}
+    assert cue["search_comparison"]["guidance"] in json.dumps(review)
+    assert "comparison_candidate_ref" in json.dumps(review)
+    before = context(runtime, path, detail=False)["graph"]["measurement_feedback"]
+    run(project, runtime, path, "configure-goal", "--goal-id", GOAL_ID, "--no-execution-yardstick-enabled", "--execute")
+    disabled = run(project, runtime, path, "explore", "turn-context", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+                   "--todo-id", TODO_ID)["graph"]
+    assert "work_yardsticks" not in disabled and disabled["measurement_feedback"] == before
 
 
 def test_sqlite_current_work_to_ordinary_turn_to_concrete_action_and_readback(tmp_path):
