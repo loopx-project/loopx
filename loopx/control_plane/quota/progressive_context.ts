@@ -6,7 +6,7 @@ import {visionAuthoringContract} from "../goals/vision_checkpoint.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {jsonObject, requireBoolean, requireJsonObject} from "../runtime_decode.ts";
 import {GOAL_OUTCOMES_SCHEMA, OUTCOME_CONTEXT_NAVIGATION_SCHEMA} from "../goals/outcome_requirements.ts";
-import {FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE, progressivePreparationScope}
+import {FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE}
   from "../work_items/interaction_contract.ts";
 import {quotaSummaryReferences, contextSourceIdentity, contextProjectionChanges,
   type ProjectionSourceValues} from "./diagnostic_projection.ts";
@@ -166,7 +166,8 @@ function inlineReadSections(request: JsonObject, required: JsonObject): JsonObje
 
 /** Return paths instead of round-tripping the caller's JSON numeric values
  * through JS. The IO adapter performs only these typed-owner-selected edits. */
-export function progressiveContextPlan(request: JsonObject): JsonObject {
+export function progressiveContextPlan(request: JsonObject,
+    scope?: {path: Path; marker_path: Path; instruction: string}): JsonObject {
   const payload = requireJsonObject(request.payload, "captured context");
   const deferred: JsonObject[] = [], instructions: JsonObject[] = [];
   const unchanged = {deferred, instructions};
@@ -236,7 +237,6 @@ export function progressiveContextPlan(request: JsonObject): JsonObject {
           row.reason.replace(FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE)});
     });
   }
-  const scope = progressivePreparationScope(payload);
   if (scope) {
     deferred.push({path: scope.path, read_instruction: scope.instruction});
     instructions.push({path: scope.marker_path, value: pointer(scope.path)});
