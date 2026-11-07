@@ -4733,7 +4733,10 @@ def test_unbound_visible_goal_spend_returns_typed_mismatch_without_receipt(
         AGENT_ID,
     )
     assert guard_rc == 0, guard
-    actions = guard["interaction_contract"]["cli_channel"]["next_cli_actions"]
+    interaction = guard["interaction_contract"]
+    agent = interaction["agent_channel"]
+    cli = interaction["cli_channel"]
+    actions = cli["next_cli_actions"]
     assert len(actions) == 1
     if profile == "codex_app_ssh_goal":
         assert actions[0].endswith("--begin-turn")
@@ -4741,6 +4744,18 @@ def test_unbound_visible_goal_spend_returns_typed_mismatch_without_receipt(
         assert "--turn-instance-id" in actions[0]
         assert "--begin-turn" not in actions[0]
     assert all("spend-slot" not in action for action in actions)
+    assert guard["should_run"] is True
+    assert guard["normal_delivery_allowed"] is False
+    assert guard["execution_obligation"]["delivery_allowed"] is False
+    assert guard["execution_obligation"]["must_attempt_work"] is False
+    assert guard["recommended_action"] == actions[0] == agent["primary_action"]
+    assert agent["must_attempt"] is True
+    assert agent["delivery_allowed"] is False
+    assert agent["quiet_noop_allowed"] is False
+    assert cli["turn_binding_required"] is True
+    assert cli["spend_after_validation"] is False
+    assert "settlement_plan" not in cli
+    assert not guard.get("heartbeat_receipt")
 
     spend_rc, spend = _run_cli(
         registry_path,
@@ -4770,7 +4785,10 @@ def test_unbound_visible_goal_spend_returns_typed_mismatch_without_receipt(
     )
     bound_rc, bound = _run_generated_cli(command, registry_path=registry_path)
     assert bound_rc == 0, bound
-    plan = bound["interaction_contract"]["cli_channel"]["settlement_plan"]
+    bound_interaction = bound["interaction_contract"]
+    assert bound_interaction["agent_channel"]["delivery_allowed"] is True
+    assert "turn_binding_required" not in bound_interaction["cli_channel"]
+    plan = bound_interaction["cli_channel"]["settlement_plan"]
     assert plan["identity"]["todo_id"] == TODO_ID
     assert plan["identity"]["agent_id"] == AGENT_ID
     if profile != "codex_app_ssh_goal":
@@ -6993,6 +7011,15 @@ def test_unbound_visible_goal_todoless_replan_reenters_through_guided_turn(
     assert actions[0].endswith("--begin-turn")
     assert "refresh-state" not in actions[0]
     assert "spend-slot" not in actions[0]
+    from loopx.control_plane.quota.turn_envelope import build_turn_envelope
+
+    envelope = build_turn_envelope(unbound)
+    assert envelope["action"]["primary_action"] == actions[0]
+    assert envelope["action"]["must_attempt"] is True
+    assert envelope["action"]["delivery_allowed"] is False
+    assert envelope["writeback"]["next_cli_actions"] == actions
+    assert envelope["writeback"]["spend_after_validation"] is False
+    assert envelope["replan_action_packet"] is None
 
     bound_rc, bound = _run_generated_cli(
         actions[0],

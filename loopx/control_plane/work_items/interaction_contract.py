@@ -26,6 +26,7 @@ from ..quota.settlement import (
 from ..quota.spend_sources import (
     build_quota_spend_action,
     host_goal_turn_reentry_action,
+    host_goal_turn_reentry_required,
     quota_spend_source_for_execution_context,
 )
 from ..scheduler.arbitration import SchedulerArbitration, _scheduler_arbitration_facts
@@ -1304,6 +1305,7 @@ def _build_interaction_cli_channel(
     *,
     mode: str,
     selection_recovery_required: bool,
+    turn_binding_required: bool,
     spend_after_validation: bool,
     available_capabilities: Any = None,
     scheduler_execution_context: (
@@ -1354,6 +1356,14 @@ def _build_interaction_cli_channel(
             spend_after_validation=spend_after_selection,
         ),
     }
+    if turn_binding_required:
+        return {
+            "turn_binding_required": True,
+            "next_cli_actions": channel["next_cli_actions"],
+            "spend_allowed_now": False,
+            "spend_after_validation": False,
+            "spend_policy": "bind this Goal's work Turn through the projected guard before work or settlement",
+        }
     work_lane = (
         cast(Mapping[str, Any], payload.get("work_lane_contract"))
         if isinstance(payload.get("work_lane_contract"), Mapping)
@@ -1662,6 +1672,14 @@ def _build_interaction_contract_projection(
     selection_recovery_required = selection.action_selection_needs_recovery(
         payload, agent_must_attempt=must_attempt, agent_delivery_allowed=delivery_allowed,
     )
+    turn_binding_required = (
+        must_attempt
+        and not selection_recovery_required
+        and not selection.action_portfolio_requires_explicit_selection(payload)
+        and host_goal_turn_reentry_required(
+            payload, scheduler_execution_context, turn_instance_id,
+        )
+    )
     spend_after_validation = (
         _interaction_spend_after_validation(mode)
         and todo_lifecycle_settlement_obligation(payload) is None
@@ -1723,6 +1741,7 @@ def _build_interaction_contract_projection(
             mode=mode,
             spend_after_validation=spend_after_validation,
             selection_recovery_required=selection_recovery_required,
+            turn_binding_required=turn_binding_required,
             available_capabilities=available_capabilities,
             scheduler_execution_context=scheduler_execution_context,
             capability_reentry=capability_reentry,
@@ -1731,7 +1750,12 @@ def _build_interaction_contract_projection(
             registry_path=registry_path,
         ),
     }
-    attach_interaction_execution_preparation(contract, payload)
+    if turn_binding_required:
+        agent_channel["delivery_allowed"] = False
+        agent_channel["primary_action"] = contract["cli_channel"]["next_cli_actions"][0]
+        agent_channel.pop("next_task_action", None)
+    else:
+        attach_interaction_execution_preparation(contract, payload)
     response_plan = _build_interaction_response_plan(
         user_channel=user_channel,
         agent_channel=agent_channel,
@@ -1742,7 +1766,8 @@ def _build_interaction_contract_projection(
         payload, contract, runtime_root=runtime_root, registry_path=registry_path,
         agent_scope_frontier_actions=agent_scope_frontier_actions)
     _attach_interaction_required_reads(contract, required_reads)
-    _attach_interaction_post_writeback_actions(contract, payload)
+    if not turn_binding_required:
+        _attach_interaction_post_writeback_actions(contract, payload)
     _attach_interaction_vision_continuation_audit(contract, payload)
     _attach_interaction_vision_wait_state(contract, payload)
     if _interaction_fallback_policy_required(payload, mode=mode):
