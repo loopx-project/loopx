@@ -1,5 +1,6 @@
 """A deferred selection must expose a runnable recovery before settlement."""
 import json
+from pathlib import Path
 import shlex
 
 import pytest
@@ -420,6 +421,12 @@ def test_first_inline_result_has_matching_turn_envelope(tmp_path, discovery):
     rc, envelope = _run_cli(registry, runtime, *guard,
                             "--todo-id", SELECTED_REPLAN_TODO_ID, "--turn-envelope")
     assert rc == 0, envelope
+    from loopx.control_plane.quota.turn_envelope import _turn_envelope_result, build_turn_envelope
+    assert envelope["schema_version"] == "loopx_turn_envelope_v1"
+    assert _turn_envelope_result("complete_consumer", payload=envelope)["ok"]
+    # C1's public writer emits the complete contract. The historical executor
+    # adapter must still derive the same first-call action from that source.
+    envelope = build_turn_envelope(envelope)
     assert envelope["action_signature"]["matches"] is True
     contract = envelope["contract_capsule"]["interaction_contract"]
     assert contract["mode"] == "autonomous_replan"
@@ -495,7 +502,10 @@ def test_native_first_selection_publishes_only_final_bound_capture(tmp_path, mon
     # admission. Reading a selected section does not certify the whole input.
     from loopx.cli import build_parser
     from loopx.cli_commands.quota_capture import read_context_capture
-    from loopx.control_plane.turn_driver.decision_capture import CONTEXT_CAPTURE_PAGE_GUIDANCE
+    from loopx.control_plane.turn_driver.decision_capture import (
+        CONTEXT_CAPTURE_PAGE_GUIDANCE,
+        read_context_read_reference,
+    )
 
     reader = shlex.split(presented["recovery"]["command"])[1:]
     first = read_context_capture(build_parser().parse_args(reader))
@@ -506,7 +516,19 @@ def test_native_first_selection_publishes_only_final_bound_capture(tmp_path, mon
         + ["--select", "/heartbeat_receipt"])
     read = read_context_capture(args)
     assert read["ok"] and read["eof"]
-    assert read["sha256"] == presented["recovery"]["sha256"]
+    # Native model output uses opaque reader references. Compare their complete
+    # machine-owned source identity, not a digest omitted from the model view.
+    _, original_reference = read_context_read_reference(presented["recovery"]["reference_file"])
+    _, selected_reference = read_context_read_reference(read["reference_file"])
+    assert selected_reference["path"] == original_reference["path"]
+    assert selected_reference["sha256"] == original_reference["sha256"]
+    saved_capture = Path(selected_reference["path"])
+    assert json.loads(saved_capture.read_bytes()) == original
     assert json.loads(read["content"])["selections"][0]["value"] == original["heartbeat_receipt"]
+    # Identical JSON semantics with different original bytes still fail closed;
+    # a reader failure cannot allocate another admission or spend.
+    saved_capture.write_bytes(saved_capture.read_bytes() + b" ")
+    rejected = read_context_capture(args)
+    assert rejected["ok"] is False and "content" not in rejected
     assert _heartbeat_receipt_count(runtime, turn) == 1
     assert _spend_run_count(runtime) == 0

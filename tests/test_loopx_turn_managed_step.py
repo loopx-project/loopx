@@ -503,9 +503,9 @@ def test_shared_decision_owner_binds_both_turn_owners_to_one_set_of_inputs(monke
 
     def _record_envelope(decision, *, scheduler_execution_context):
         envelopes.append((decision, scheduler_execution_context))
-        return {"schema_version": "loopx_turn_envelope_v0"}
+        return {"schema_version": "loopx_turn_envelope_v1"}
 
-    monkeypatch.setattr(turn_decision, "build_turn_controller_input", _record_envelope)
+    monkeypatch.setattr(turn_decision, "compose_turn_decision", _record_envelope)
     turn_decision.build_fresh_envelope_for_managed_step(
         args,
         registry_path=registry_path,
@@ -554,6 +554,7 @@ def test_native_cli_retry_and_saved_result_keep_one_original_settlement(
     source = executable.read_text().replace(
         output, "pathlib.Path('validated-artifact').write_text('independent marker')\n" + output,
     )
+    assert "Path('validated-artifact')" in source
     executable.write_text(source)
     monkeypatch.setenv("FAKE_CODEX_LOG", str(invocations))
     monkeypatch.setenv("FAKE_CODEX_FAIL", "1")

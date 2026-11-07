@@ -35,13 +35,14 @@ from loopx.file_lock import lock_holder_host_label  # noqa: E402
 HOST = '''import json, os, sys, time
 from pathlib import Path
 from loopx.control_plane.turn_driver.host_candidate import build_result
+from loopx.control_plane.quota.turn_envelope import turn_host_lineage
 from loopx.control_plane.collaboration.inbox import acknowledge
 from loopx.control_plane.collaboration.peers import return_result
 request = json.load(sys.stdin)
 workspace = Path.cwd()
 root = Path(sys.argv[1])
-envelope = request['turn_envelope']
-actor = envelope['agent_id']
+identity = turn_host_lineage(request)
+actor = identity['agent_id']
 counter = workspace / 'host-invocations'
 counter.write_text(str(int(counter.read_text()) + 1 if counter.exists() else 1))
 if (root / 'ignore-term').exists():
@@ -55,8 +56,8 @@ if (root / 'hold').exists():
     while not (root / 'release').exists(): time.sleep(0.1)
 delegation = json.loads((workspace / 'DELEGATION.json').read_text())
 if not (root / 'skip-adoption').exists():
-    acknowledge(root / 'runtime', envelope['goal_id'], actor, delegation['request_id'], 'adopt', 'Independently checked the requested scope.')
-    return_result(root / 'runtime', envelope['goal_id'], actor, delegation['request_id'], 'Independent member conclusion; host acceptance is separate.')
+    acknowledge(root / 'runtime', identity['goal_id'], actor, delegation['request_id'], 'adopt', 'Independently checked the requested scope.')
+    return_result(root / 'runtime', identity['goal_id'], actor, delegation['request_id'], 'Independent member conclusion; host acceptance is separate.')
 print(json.dumps(build_result(request, {'result_kind':'validated_progress', 'classification':'artifact_written', 'summary':'Fixture host supplied output for independent verification.', 'next_action':'Return verified evidence.', 'work_evidence':['artifact:delegation-output'], 'validation_evidence':['check:independent-member-result']}, host_name='Fixture')))
 '''
 
@@ -1266,7 +1267,9 @@ def test_lost_turn_reply_with_damaged_history_never_restarts_host(service, monke
         path.write_text("{damaged", encoding="utf-8")
     else:
         damaged = json.loads(original)
-        damaged["plan"]["turn_envelope"]["agent_id"] = "foreign-agent"
+        assert damaged["plan"]["schema_version"] == "loopx_turn_plan_v1"
+        assert "turn_envelope" not in damaged["plan"]
+        damaged["plan"]["work_contract"]["agent_identity"]["agent_id"] = "foreign-agent"
         path.write_text(json.dumps(damaged), encoding="utf-8")
     monkeypatch.setattr(runner, "_record_turn_result", record)
     runner.execute("analysis-recovery")

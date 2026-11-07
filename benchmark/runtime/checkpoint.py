@@ -274,7 +274,7 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
         view_path.write_text(guard_run.stdout, encoding="utf-8")
         view_path.chmod(0o600)
         reading = (f"Read the complete CLI view at {view_path} before work, then follow its interaction_contract "
-            "and the next step in the replan review when present. ")
+            "and replan review/writeback reads when present. ")
     preloaded_body = ("Host checkpoint preflight has already executed this wake's original quota guard once. "
         + reading +
         "Do not repeat the initial guard below; use its selection or recovery command when required.\n\n" + body)
