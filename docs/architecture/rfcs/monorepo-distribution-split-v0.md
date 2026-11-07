@@ -1706,6 +1706,71 @@ and model-host V4 recovery, split installation, full R0/V10/R1, M1/#8011,
 D2/D5/D6/D3, context/model, actual adoption and complete-cost benefit remain
 open. I3 remains at least one minor release.
 
+### 2026-11-07 — Guard loading and settled-replay diagnosis
+
+Source-console diagnosis at `6c10e61ad` reuses the real 101-Todo hard-lease
+episode above, with isolated File/SQLite authority and owned Effect processes.
+Five additional episodes preserve accepted evidence, original completion time,
+four committed receipts and one debit through controlled restart; changed
+evidence and renewed execution of the settled Turn remain refusals. Only guard
+and immutable-context reads are profiled. These are single diagnostic
+observations, including profiler overhead, rather than paired performance runs.
+
+| Bytecode condition / provider | Profiled guard | Import cumulative | Traced runtime requests | Request elapsed sum | Loaded LoopX modules |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Bytecode disabled / SQLite | 3.012 s | 2.281 s | 89 | 0.370 s | 503 |
+| Bytecode disabled / File | 1.972 s | 1.255 s | 89 | 0.344 s | 503 |
+| Normal inherited bytecode / SQLite | 1.584 s | 0.845 s | 89 | 0.394 s | 503 |
+| Normal inherited bytecode / File | 1.465 s | 0.772 s | 89 | 0.342 s | 503 |
+
+The disabled-bytecode observations include 0.634 / 0.555 seconds in source
+compilation for SQLite / File; neither normal-bytecode observation invokes
+source compilation. Import, loader-read and compilation values are nested and
+must not be added. Bytecode conditions explain part of startup cost while the
+loaded graph remains unchanged. They do not correct or supersede the frozen
+comparison's failures. In a fifth normal-bytecode SQLite episode, the guard
+loads 503 modules with 89 traced requests, while the immutable context reader
+loads 68 modules with one traced request: profiled elapsed times are 2.140 /
+0.246 seconds, and request elapsed sums are 0.389 / 0.067 seconds respectively.
+This characterizes different required operations, not interchangeable paths.
+
+Runtime request elapsed includes Python transport, shared runtime work and
+provider work. It is an upper bound on the provider contribution within those
+traced requests, not a separate database measurement or complete service CPU.
+The source snapshot takes approximately 0.048–0.050 seconds in the four guard
+observations. The next cost investigation therefore prioritizes the loaded
+decision/status graph over a new provider or fingerprint optimization. Moving
+`quota_context` imports alone cannot eliminate work that the later status
+collector still requires; quota already omits presentation projections, and
+the immutable context reader already has its selected loading path.
+
+Real File/SQLite Monitor episodes also qualify the settled and closed replay
+identity when an independent sibling becomes due. Each original Turn retains
+one poll and zero debits, without dispatching its sibling. Through the public
+`configure-goal --quota-compute 0` entrypoint, pause still takes precedence and
+returns `quota_skip`. The initial probe changed legacy `status` fields instead
+of the typed activation or quota owner; its failed pause expectation is a
+fixture error, retained separately from the corrected checks.
+
+| Provider / replay phase | Profiled replay | Import cumulative | Traced runtime requests | Request elapsed sum | Loaded LoopX modules |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| SQLite / settled | 1.135 s | 0.666 s | 68 | 0.150 s | 486 |
+| SQLite / closed | 1.149 s | 0.726 s | 62 | 0.157 s | 486 |
+| File / settled | 1.113 s | 0.713 s | 68 | 0.143 s | 486 |
+| File / closed | 1.128 s | 0.691 s | 62 | 0.149 s | 486 |
+
+The bounded next step stays with the existing quota/status and typed replay
+owners: identify which live facts and imports each decision actually needs,
+then remove unused loading or redundant shared requests with public-facade
+parity. A receipt-only early return is not yet qualified: current pause, scoped
+gates, independent pending intents, actor/lease/source checks and archived or
+closed lineage must survive. Any implementation still needs the same real
+source/wheel lifecycle and matched, unprofiled default-SQLite comparison;
+supported-backend correctness/recovery and required PostgreSQL qualification
+remain in force when affected. This diagnosis changes no production behavior,
+preset, budget, provider, authority or installed host. All earlier acceptance,
+adoption and complete-cost gaps remain open.
+
 ## Appendix B: Decision log
 
 | Date | Decision | Owner / approval | Alternatives | Normative sections changed |

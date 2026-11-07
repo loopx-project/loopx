@@ -1295,6 +1295,59 @@ grammar owner，也不升级 installed host。
 M1/#8011、D2/D5/D6/D3、context/model、实际 adoption 与完整成本收益仍开放。
 I3 继续保留至少一个 minor release。
 
+### 2026-11-07 — Guard 加载与已结算回放诊断
+
+`6c10e61ad` 的源码 console 诊断复用上述真实 101-Todo hard-lease episode，
+隔离 File/SQLite authority 与自有 Effect 进程。新增五个 episode 均在受控重启
+后保留已验收证据、首次完成时间、四份已提交 receipt 和一次 debit；证据替换与
+已结算 Turn 的再次执行仍被拒绝。只对 guard 和不可变上下文读取做剖析。这些
+包含 profiler 开销的单次诊断观测，不是配对性能运行。
+
+| 字节码条件 / provider | 插桩 guard | import 累计 | 跟踪的 runtime 请求 | 请求耗时之和 | 已加载 LoopX 模块 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 禁用字节码 / SQLite | 3.012 秒 | 2.281 秒 | 89 | 0.370 秒 | 503 |
+| 禁用字节码 / File | 1.972 秒 | 1.255 秒 | 89 | 0.344 秒 | 503 |
+| 正常继承字节码 / SQLite | 1.584 秒 | 0.845 秒 | 89 | 0.394 秒 | 503 |
+| 正常继承字节码 / File | 1.465 秒 | 0.772 秒 | 89 | 0.342 秒 | 503 |
+
+禁用字节码时，SQLite / File 的源码编译分别占 0.634 / 0.555 秒；两次正常
+字节码观测均未调用源码编译。import、loader 读取与编译时间相互嵌套，不能
+相加。字节码条件解释了部分启动成本，加载图仍相同；这不能修正或覆盖冻结
+比较的失败。第五个正常字节码 SQLite episode 中，guard 加载 503 个模块并
+跟踪到 89 次请求，不可变上下文 reader 加载 68 个模块并跟踪到一次请求：插桩
+耗时分别为 2.140 / 0.246 秒，请求耗时之和分别为 0.389 / 0.067 秒。这是在
+刻画不同的必要操作，不代表两条路径可以互换。
+
+runtime 请求耗时包含 Python transport、共享 runtime 与 provider 工作。它只
+是这些已跟踪请求中 provider 贡献的上界，不是单独的数据库计时或完整 service
+CPU。四次 guard 观测的 source snapshot 约为 0.048–0.050 秒。因此下一步
+成本调查优先考察 decision/status 加载图，而不是新 provider 或 fingerprint
+优化。仅移动 `quota_context` import 无法省去后续 status collector 仍需要的
+工作；quota 已省略 presentation projections，不可变上下文 reader 也已有
+选择性加载路径。
+
+真实 File/SQLite Monitor episode 还验证了独立 sibling 到期时，已结算与
+关闭后回放仍保留原身份。每个原 Turn 保留一次 poll、零 debit，不调度 sibling。
+通过公开 `configure-goal --quota-compute 0` 入口，暂停仍优先并返回
+`quota_skip`。初始 probe 修改的是旧 `status` 字段，未修改 typed activation
+或 quota owner；暂停预期失败属于夹具错误，与修正后的检查分开保留。
+
+| Provider / 回放阶段 | 插桩回放 | import 累计 | 跟踪的 runtime 请求 | 请求耗时之和 | 已加载 LoopX 模块 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| SQLite / 已结算 | 1.135 秒 | 0.666 秒 | 68 | 0.150 秒 | 486 |
+| SQLite / 已关闭 | 1.149 秒 | 0.726 秒 | 62 | 0.157 秒 | 486 |
+| File / 已结算 | 1.113 秒 | 0.713 秒 | 68 | 0.143 秒 | 486 |
+| File / 已关闭 | 1.128 秒 | 0.691 秒 | 62 | 0.149 秒 | 486 |
+
+下一步仍在既有 quota/status 与 typed replay owner 内推进：先确定每类 decision
+实际需要的 live facts 和 import，再保持公开 facade 等价性，去除无用加载或
+重复共享请求。仅凭 receipt 提前返回尚未取得资格：当前暂停、scoped gates、
+独立 pending intents、actor/lease/source 检查，以及归档或关闭后的 lineage
+必须保留。实现后仍需相同的真实 source/wheel 生命周期，以及不插桩、匹配条件
+的默认 SQLite 比较；影响到其他受支持后端时，其正确性、恢复与必需的真实
+PostgreSQL 资格继续适用。本诊断没有修改生产行为、preset、budget、provider、
+authority 或 installed host。既有验收、采纳和完整成本缺口继续开放。
+
 ## 附录 B：决策日志
 
 | 日期 | 决策 | 负责人 / 批准 | 备选 | 变更的规范章节 |
