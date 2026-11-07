@@ -6,11 +6,31 @@ import {tmpdir} from "node:os";
 import {performance} from "node:perf_hooks";
 import {fileURLToPath} from "node:url";
 import test from "node:test";
-import {capacityLedger, latency, sameCapacityScan, type CapacityAxis} from "../../examples/coordination/sqlite-capacity-report.ts";
+import {capacityLedger, latency, sameCapacityScan, splitShellCommand,
+  type CapacityAxis} from "../../examples/coordination/sqlite-capacity-report.ts";
 
 test("latency has explicit nearest-rank tails and rejects absent or invalid samples", () => {
   assert.deepEqual(latency([5, 1, 4, 2, 3]), {n: 5, p50_ms: 3, p95_ms: 5, p99_ms: 5});
   for (const samples of [[], [NaN], [Infinity], [-1]]) assert.throws(() => latency(samples));
+});
+
+test("reader commands split exactly as shlex.join quotes them", () => {
+  assert.deepEqual(splitShellCommand("python3 -m loopx.cli --format json quota context-read --offset 0"),
+    ["python3", "-m", "loopx.cli", "--format", "json", "quota", "context-read", "--offset", "0"]);
+  // shlex.join single-quotes a path containing spaces: it stays one argument.
+  assert.deepEqual(splitShellCommand(
+    `python3 -m loopx.cli quota context-read --reference-file '${"/tmp/space dir/capacity.reader.json"}' --offset 0`),
+    ["python3", "-m", "loopx.cli", "quota", "context-read", "--reference-file",
+      "/tmp/space dir/capacity.reader.json", "--offset", "0"]);
+  // An apostrophe inside the path uses the POSIX '"'"' escape sequence.
+  assert.deepEqual(splitShellCommand(
+    `python3 -m loopx.cli quota context-read --reference-file '/tmp/loop'"'"'x y/capacity.reader.json' --offset 0`),
+    ["python3", "-m", "loopx.cli", "quota", "context-read", "--reference-file",
+      "/tmp/loop'x y/capacity.reader.json", "--offset", "0"]);
+  // Double-quoted arguments and escaped quotes inside them survive too.
+  assert.deepEqual(splitShellCommand(`python3 "a b" "say \\"hi\\"" c`), ["python3", "a b", 'say "hi"', "c"]);
+  // A mis-quoted command fails loudly instead of splitting a reference path.
+  assert.throws(() => splitShellCommand("python3 --reference-file '/tmp/space dir/x"));
 });
 
 function axis(count: number, payloadBytes = 65536): CapacityAxis {

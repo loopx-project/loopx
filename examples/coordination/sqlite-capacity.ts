@@ -17,8 +17,8 @@ import {selectLocalSqliteAuthority} from "../../loopx/control_plane/coordination
 import {engageLegacyCoordinationWriterFence} from "../../loopx/control_plane/coordination/legacy_writer_fence.ts";
 import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import {authorityProjectionFixture} from "../../tests/control_plane_ts/authority_projection_fixture.ts";
-import {CAPACITY_PROFILES, capacityLedger, latency, type CapacityAxis, type CapacityProfileId,
-  type QualificationRow} from "./sqlite-capacity-report.ts";
+import {CAPACITY_PROFILES, capacityLedger, latency, splitShellCommand,
+  type CapacityAxis, type CapacityProfileId, type QualificationRow} from "./sqlite-capacity-report.ts";
 
 const {values: options} = parseArgs({options: {
   profile: {type: "string", default: "rehearsal"}, output: {type: "string"},
@@ -146,16 +146,6 @@ async function measureAxis(count: number): Promise<CapacityAxis> {
     NODE_OPTIONS: "--experimental-sqlite", TMPDIR: root, TMP: root, TEMP: root,
     LOOPX_USAGE_PING: "0", DO_NOT_TRACK: "1"};
   let phase = "setup", managedRuntimeUsed = false;
-  const splitReaderCommand = (command: string): string[] => {
-    const argv: string[] = []; let current = "", quoted = false;
-    for (const character of command) {
-      if (character === "\"") quoted = !quoted;
-      else if (character === " " && !quoted) { if (current !== "") argv.push(current); current = ""; }
-      else current += character;
-    }
-    if (current !== "") argv.push(current);
-    return argv;
-  };
   const stopRuntime = () => {
     if (!managedRuntimeUsed) return;
     const child = spawnSync(options.python!, ["-c",
@@ -179,7 +169,7 @@ async function measureAxis(count: number): Promise<CapacityAxis> {
       // follow the returned reader commands page by page until eof, then parse
       // the reassembled original JSON. The sample keeps the whole navigation
       // cost, because a cold reader cannot act before the payload arrives.
-      let follow = splitReaderCommand(String(result.command ?? result.first_read_command ?? ""));
+      let follow = splitShellCommand(String(result.command ?? result.first_read_command ?? ""));
       assert.ok(follow.length > 0, `cold CLI ${args[0]} navigation returned no read command`);
       let payload = "";
       for (let pages = 0; ; pages++) {
@@ -193,7 +183,7 @@ async function measureAxis(count: number): Promise<CapacityAxis> {
         if (page.eof === true) break;
         const next = page.next_command;
         assert.ok(typeof next === "string" && next.length > 0, `cold CLI ${args[0]} context page lacks the next command before eof`);
-        follow = splitReaderCommand(next);
+        follow = splitShellCommand(next);
       }
       samples.push(performance.now() - start); stopRuntime(); return JSON.parse(payload) as Record<string, unknown>;
     }
