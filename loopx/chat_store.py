@@ -18,9 +18,7 @@ from .chat import (
     require_matching_message_replay,
     resolve_attached_completion_replay,
 )
-from .capabilities.steward_executor.allocation import (
-    normalize_manager_executor_allocation,
-)
+from .capabilities.steward_executor.allocation import normalize_manager_executor_allocation
 from .capabilities.native_chat.model_settings import (
     MODEL_SELECTION_UNSET as _MODEL_SELECTION_UNSET, normalize_agent_model_id as normalize_agent_model_id,
     normalize_session_model_settings, session_model_settings_supported, normalize_session_model_changes,
