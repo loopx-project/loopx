@@ -54,6 +54,7 @@ def assert_original_read_and_recovery_duties(body):
     assert any(pointer in text for pointer in (
         'Settle current settlement_plan.ordered_steps in order, else next_cli_actions',
         'Settle current interaction_contract.cli_channel.settlement_plan.ordered_steps in order, else next_cli_actions',
+        'Settle current writeback.settlement_plan.ordered_steps in order, else next_cli_actions',
     ))
 
 

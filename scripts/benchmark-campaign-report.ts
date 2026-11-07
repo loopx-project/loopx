@@ -300,7 +300,11 @@ export function buildReport(raw: unknown) {
   return { schema_version: 'benchmark_campaign_report_v1', input_sha256: digest(d),
     observed_at: d.observed_at, title: d.title, summary, comparisons, selection: d.selection,
     ...(coverage ? { duration_coverage: coverage } : {}),
-    ...(d.duration_policy?.makeup_tolerance_ms !== undefined ? { duration_policy: d.duration_policy } : {}),
+    ...(d.duration_policy?.makeup_tolerance_ms !== undefined ? { duration_policy: {
+      target_ms: d.duration_policy.target_ms,
+      allow_goal_completion: d.duration_policy.allow_goal_completion,
+      makeup_tolerance_ms: d.duration_policy.makeup_tolerance_ms,
+    } } : {}),
     configuration_profiles, score_time_series, incidents: d.incidents,
     execution_audit: d.execution_audit ?? [], notes: d.notes };
 }

@@ -51,6 +51,7 @@ def bind_exact_turn_settlement_task_body(
     task_body: str,
     *,
     turn_instance_id: str | None,
+    captured_envelope: bool = False,
 ) -> str:
     """Bind the rendered guard and name its existing settlement source.
 
@@ -76,14 +77,16 @@ def bind_exact_turn_settlement_task_body(
     # This literal belongs to the shared rendered dispatch rule. Qualify its
     # existing locator instead of appending the same settlement source again.
     # Other templates keep the explicit locator below; no saved body is edited.
+    plan_path = ("writeback.settlement_plan.ordered_steps" if captured_envelope
+                 else "interaction_contract.cli_channel.settlement_plan.ordered_steps")
     dispatch = "Settle current settlement_plan.ordered_steps"
     if dispatch in bound:
         return bound.replace(
             dispatch,
-            "Settle current interaction_contract.cli_channel.settlement_plan.ordered_steps",
+            f"Settle current {plan_path}",
             1,
         )
-    return f"{bound}\n\nSettlement source: `interaction_contract.cli_channel.settlement_plan.ordered_steps`."
+    return f"{bound}\n\nSettlement source: `{plan_path}`."
 
 
 def render_heartbeat_task_body(

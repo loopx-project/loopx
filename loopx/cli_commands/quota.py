@@ -491,9 +491,10 @@ def _record_non_guard_quota_event(
     )
     if args.quota_command == "spend-slot" and spend_turn_instance_id:
         assert context is not None  # A settlement requires a prepared authority context.
-        _export("attach_spend_settlement_result")(
+        readback = _export("attach_spend_settlement_result")(
             payload,
             runtime_root=context.runtime_root,
+            registry_path=registry_path,
             goal_id=args.goal_id,
             agent_id=args.agent_id,
             todo_id=rollout_todo_id,
@@ -506,12 +507,7 @@ def _record_non_guard_quota_event(
             execute=bool(args.execute),
             runtime_root=context.runtime_root,
             registry_path=registry_path,
-            goal_id=args.goal_id,
-            agent_id=args.agent_id,
-            todo_id=rollout_todo_id,
-            turn_instance_id=spend_turn_instance_id,
-            replan_obligation_id=rollout_replan_obligation_id,
-            goal_ref=goal_ref,
+            readback=readback,
         )
 
 

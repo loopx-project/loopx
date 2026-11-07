@@ -1857,3 +1857,184 @@ def test_global_read_preserves_empty_coverage_without_loading_full_cli(tmp_path,
 		assert payload["coverage"]["complete"] is False
 		assert payload["goals"] == []
 	assert registry.read_bytes() == before
+
+
+@pytest.mark.parametrize("arguments", [
+	["--help"], ["--evidence-ref", "absent", "--help"],
+	["repair-index-duplicates", "--help"],
+])
+def test_history_help_loads_only_its_reader(arguments):
+	result = run_cli_main("loopx.entrypoint", ["history", *arguments],
+		forbidden_modules=("loopx.cli", "loopx.chat_server",
+			"loopx.cli_commands.benchmark_dispatch"),
+		environment={"PATH": ""})
+	assert result.returncode == 0, result.stderr
+	assert "--evidence-ref" in result.stdout
+	assert "--agent-id" in result.stdout
+	assert result.stderr == ""
+
+
+@pytest.mark.parametrize("format_name", ["json", "markdown"])
+@pytest.mark.parametrize("limit", [-1, 0, 1, 10])
+def test_history_reader_preserves_scope_chronology_and_limits(tmp_path, format_name, limit):
+	registry, runtime = write_command_fixture(tmp_path)
+	index = runtime / "goals/perf-goal/runs/index.jsonl"
+	index.parent.mkdir(parents=True)
+	rows = [
+		{"goal_id": "perf-goal", "agent_id": "perf-agent",
+		 "generated_at": "2026-08-19T00:30:00+08:00", "classification": "offset-earlier"},
+		{"goal_id": "perf-goal", "agent_id": "perf-agent",
+		 "generated_at": "2026-08-18T17:00:00Z", "classification": "utc-later"},
+		{"goal_id": "perf-goal", "agent_id": "other-agent",
+		 "generated_at": "2026-08-18T18:00:00Z", "classification": "other-lane"},
+	]
+	index.write_text("".join(json.dumps(row) + "\n" for row in rows))
+	before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+	argv = ["--registry=" + str(registry), "--runtime-root=" + str(runtime),
+		"--cli-bin", "loopx", "--format", format_name, "history",
+		"--goal-id", "perf-goal", "--agent-id", "perf-agent", "--limit", str(limit)]
+	selected = run_cli_main("loopx.entrypoint", argv, forbidden_modules=("loopx.cli",))
+	full = run_cli_main("loopx.cli", argv)
+	assert selected.returncode == full.returncode == 0, (selected.stderr, full.stderr)
+	assert selected.stdout == full.stdout
+	assert selected.stderr == full.stderr == ""
+	assert "other-lane" not in selected.stdout
+	if format_name == "json":
+		payload = json.loads(selected.stdout)
+		expected = ["utc-later", "offset-earlier"][:max(0, limit)]
+		assert [row["classification"] for row in payload["runs"]] == expected
+		assert [row["classification"] for row in payload["goals"][0]["latest_runs"]] == expected
+	assert {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == before
+
+
+def test_history_reader_retains_required_native_runtime_failure(tmp_path):
+	registry, runtime = write_command_fixture(tmp_path)
+	index = runtime / "goals/perf-goal/runs/index.jsonl"
+	index.parent.mkdir(parents=True)
+	index.write_text(json.dumps({"goal_id": "perf-goal", "agent_id": "perf-agent",
+		"generated_at": "2026-08-18T17:00:00Z", "classification": "bounded_probe"}) + "\n")
+	argv = ["--registry", str(registry), "--runtime-root", str(runtime),
+		"--format", "json", "history", "--goal-id", "perf-goal"]
+	temporary = tmp_path / "no-node-runtime"
+	temporary.mkdir()
+	environment = {"PATH": "", **{key: str(temporary) for key in ("TMPDIR", "TEMP", "TMP")}}
+	selected = run_cli_main("loopx.entrypoint", argv, forbidden_modules=("loopx.cli",),
+		environment=environment)
+	full = run_cli_main("loopx.cli", argv, environment=environment)
+	assert selected.returncode == full.returncode == 1
+	assert selected.stdout == full.stdout
+	assert selected.stderr == full.stderr == ""
+	assert json.loads(selected.stdout)["error"] == "LoopX Effect runtime requires Node.js 22.22.3 or newer on PATH"
+
+
+@pytest.mark.parametrize("case", ["current", "other-agent", "stale", "no-node"])
+def test_history_reader_preserves_native_evidence_reference_window(tmp_path, case):
+	from loopx.control_plane.work_items.replan_context_codec import project_replan_context
+
+	registry, runtime = write_command_fixture(tmp_path)
+	index = runtime / "goals/perf-goal/runs/index.jsonl"
+	index.parent.mkdir(parents=True)
+	observation = "Keep independent failure evidence.\nPreserve the next decision's constraint."
+	index.write_text(json.dumps({"goal_id": "perf-goal", "agent_id": "perf-agent",
+		"generated_at": "2026-08-18T17:00:00Z", "classification": "bounded_probe",
+		"health_check": observation}) + "\n")
+	context = project_replan_context(goal_id="perf-goal", agent_id="perf-agent", runs=(),
+		source_status={"registry": str(registry), "runtime_root": str(runtime),
+			"run_history": {"goals": []}})
+	argv = ["--registry", str(registry), "--runtime-root", str(runtime),
+		"--format", "json", "history", "--goal-id", "perf-goal", "--agent-id",
+		"other-agent" if case == "other-agent" else "perf-agent",
+		"--evidence-ref", context["evidence"][0]["evidence_ref"], "--limit", "0"]
+	if case == "stale":
+		index.write_text("")
+	before = index.read_bytes()
+	environment = None
+	if case == "no-node":
+		temporary = tmp_path / "no-node-runtime"
+		temporary.mkdir()
+		environment = {"PATH": "", **{key: str(temporary) for key in ("TMPDIR", "TEMP", "TMP")}}
+	selected = run_cli_main("loopx.entrypoint", argv, forbidden_modules=("loopx.cli",),
+		environment=environment)
+	full = run_cli_main("loopx.cli", argv, environment=environment)
+	assert selected.returncode == full.returncode == (0 if case == "current" else 1)
+	assert selected.stdout == full.stdout
+	assert selected.stderr == full.stderr == ""
+	payload = json.loads(selected.stdout)
+	if case == "current":
+		assert payload["evidence"]["health_check"] == observation
+	elif case == "no-node":
+		assert "requires Node.js" in payload["error"]
+	else:
+		assert "unavailable" in payload["error"]
+	assert index.read_bytes() == before
+
+
+def test_history_reader_keeps_complete_parser_diagnostics():
+	cases = [
+		["history", "unknown-action"], ["history", "--unknown"],
+		["history", "--agent-i", "agent"], ["history", "--evidence-ref"],
+		["history", "--limit", "invalid"], ["history", "--format", "json"],
+		["--format", "unknown", "history"], ["--cli-bin", "", "history"],
+		["--registry", "history"], ["--runtime-root", "history"],
+	]
+	selected, full = run_cli_batch("loopx.entrypoint", cases), run_cli_batch("loopx.cli", cases)
+	assert selected == full
+	assert all(result["returncode"] == 2 and not result["stdout"] for result in selected)
+
+
+@pytest.mark.parametrize("arguments,error", [
+	(["--agent-id", "perf-agent"], "--agent-id requires --goal-id without a history action"),
+	(["--evidence-ref", "absent", "--goal-id", "perf-goal"],
+	 "--evidence-ref requires --goal-id and --agent-id without a history action"),
+])
+def test_history_reader_validation_refusals_match_full_cli(tmp_path, arguments, error):
+	argv = ["--registry", str(tmp_path / "missing.json"), "--format", "json", "history", *arguments]
+	selected = run_cli_main("loopx.entrypoint", argv, forbidden_modules=("loopx.cli",))
+	full = run_cli_main("loopx.cli", argv)
+	assert selected.returncode == full.returncode == 1
+	assert selected.stdout == full.stdout
+	assert selected.stderr == full.stderr == ""
+	assert json.loads(selected.stdout) == {"ok": False, "error": error}
+	assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("action", [
+	None, "inspect-index-duplicates", "repair-index-duplicates",
+	"rebuild-index-collisions", "trajectory-hygiene",
+])
+def test_history_maintenance_and_explicit_full_cli_keep_patch_points(tmp_path, action):
+	arguments = ["history", *([action] if action else []), "--goal-id", "perf-goal"]
+	# Direct full-CLI bindings retain their handler even for ordinary reads.
+	module = "loopx.entrypoint" if action else "loopx.cli"
+	script = f"""
+import loopx.cli as full
+from {module} import main
+seen = []
+def original_path(args, **kwargs):
+    seen.append((args.history_action, args.goal_id))
+    return 73
+full.handle_history_command = original_path
+assert main(["--registry", {str(tmp_path / 'absent.json')!r}, *{arguments!r}]) == 73
+assert seen == [({action!r}, "perf-goal")]
+"""
+	result = run_isolated_script(script)
+	assert result.returncode == 0, result.stderr
+	assert not list(tmp_path.iterdir())
+
+
+def test_history_entrypoint_retains_preloaded_full_cli_handler(tmp_path):
+	script = f"""
+import loopx.cli as full
+from loopx.entrypoint import main
+seen = []
+def original_path(args, **kwargs):
+    seen.append((args.history_action, args.goal_id))
+    return 73
+full.handle_history_command = original_path
+assert main(["--registry", {str(tmp_path / 'absent.json')!r},
+             "history", "--goal-id", "perf-goal"]) == 73
+assert seen == [(None, "perf-goal")]
+"""
+	result = run_isolated_script(script)
+	assert result.returncode == 0, result.stderr
+	assert not list(tmp_path.iterdir())
