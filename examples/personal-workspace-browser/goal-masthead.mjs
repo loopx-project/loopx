@@ -241,8 +241,9 @@ export const goalMastheadScenario = {
       throw error;
     }
     // The canonical producer retains 21 open decisions and bounds its overview
-    // to three. Pass its payload through the shipped parser
-    // and adapter, rather than manufacturing a complete three-item queue.
+    // to three. Complete cases use the cold read; partial cases supply the
+    // producer's bounded rows to both groups consumed by the shipped adapter.
+    // Keep the full owner count: three listed rows do not classify all 21.
     const fixtureEnv = { ...process.env, LOOPX_USAGE_PING: "0" };
     if (!["LOOPX_TEST_PYTHON", "LOOPX_PYTHON_BIN", "LOOPX_PYTHON"].some(key => process.env[key])) fixtureEnv.PYTHONPATH = repoRoot;
     const native = JSON.parse(execFileSync(resolveTestPython(), [
@@ -320,6 +321,9 @@ export const goalMastheadScenario = {
             const source = mode === "mixed" ? mixed : mode === "complete" ? complete
               : mode === "mixed-complete" ? mixedComplete : mode === "optional" ? optionalComplete : native;
             Object.assign(queue, structuredClone(source));
+            if (!["complete", "mixed-complete", "optional"].includes(mode)) {
+              queue.user_todos.items = structuredClone(queue.project_asset.user_todos.items);
+            }
             if (mode === "empty") {
               queue.user_todos.items = [];
               queue.project_asset.user_todos.items = [];
@@ -336,7 +340,7 @@ export const goalMastheadScenario = {
         await openGoal(ui.page, title);
         const needs = await vital(ui.page, locale === "en" ? "Needs you" : "等你决定");
         const expected = mode === "complete" ? "21" : mode === "mixed-complete" ? "1" : mode === "optional" ? "0" : "—";
-        assert.equal(needs.value, expected, "Only complete classified rows qualify a blocking total; open User Todo totals do not classify hidden rows");
+        assert.equal(needs.value, expected, `Only complete classified rows qualify a blocking total; open User Todo totals do not classify hidden rows (${locale}/${mode})`);
         const partial = !["complete", "mixed-complete", "optional"].includes(mode);
         const coverageHelp = partial ? await readVitalHelp(ui.page, needs.cell) : "";
         if (partial) assert.match(coverageHelp, locale === "en" ? /oldest unknown/ : /最早时间未知/);
