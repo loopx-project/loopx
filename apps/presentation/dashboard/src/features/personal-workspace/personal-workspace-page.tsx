@@ -1310,18 +1310,25 @@ export function PersonalWorkspacePage({
     refreshKey: `${managerMessages.length}:${Boolean(managerMessages.at(-1)?.pending)}:${steering}`,
   });
   const queuedTurnKeys = new Set(conversationQueue.turns.map(turn => JSON.stringify([conversationSessionId, turn.turn_id])));
-  const observedQueueTurn = useRef("");
+  const observedQueue = useRef<{scope: string; snapshot: string} | null>(null);
   useEffect(() => {
     const turnId = conversationQueue.activeTurnId;
-    if (!conversationSessionId || !turnId || turnId === runningMessage?.sourceTurnId || !callbacks.onObserveConversationTurn) return;
-    const key = JSON.stringify([statusSourceControl?.activeSource.statusUrl, conversationKey, conversationSessionId, turnId]);
-    if (observedQueueTurn.current === key) return;
-    observedQueueTurn.current = key;
-    void callbacks.onObserveConversationTurn(conversationKey, conversationSessionId, turnId).catch(() => {
-      if (observedQueueTurn.current === key) observedQueueTurn.current = "";
+    if (!conversationSessionId || !conversationQueue.readReady || !callbacks.onObserveConversationQueue) return;
+    const scope = JSON.stringify([statusSourceControl?.activeSource.statusUrl, conversationKey, conversationSessionId]);
+    const snapshot = JSON.stringify([turnId, conversationQueue.turns.map(turn => turn.turn_id)]);
+    const previous = observedQueue.current;
+    if (previous?.scope === scope && previous.snapshot === snapshot) return;
+    observedQueue.current = {scope, snapshot};
+    if (previous?.scope !== scope && (!turnId || turnId === runningMessage?.sourceTurnId)) return;
+    // A queued Turn can start and finish between polls after reconnect. Its
+    // disappearance still requires original history, even with no live Turn.
+    void callbacks.onObserveConversationQueue(conversationKey, conversationSessionId).catch(() => {
+      if (observedQueue.current?.scope === scope && observedQueue.current.snapshot === snapshot) {
+        observedQueue.current = {scope, snapshot: ""};
+      }
     });
-  }, [conversationQueue.activeTurnId, conversationQueue.turns, conversationSessionId, runningMessage?.sourceTurnId,
-    callbacks.onObserveConversationTurn, conversationKey, statusSourceControl?.activeSource.statusUrl]);
+  }, [conversationQueue.activeTurnId, conversationQueue.turns, conversationQueue.readReady, conversationSessionId, runningMessage?.sourceTurnId,
+    callbacks.onObserveConversationQueue, conversationKey, statusSourceControl?.activeSource.statusUrl]);
   const legacyDrafts = conversationSessionId ? legacySteeringRequests(conversationSessionId, composerDraftKey) : [];
   function restoreLegacyDraft(key: string) {
     if (composer.trim() || !conversationSessionId) return;

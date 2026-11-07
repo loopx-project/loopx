@@ -1143,8 +1143,11 @@ function planUnfinishedWork(recovery: JsonObject, row: JsonObject, current: Json
       || recovery.attachments_present !== false
       || typeof completed.upstream_turn_id !== "string" || !completed.upstream_turn_id) return no;
   const observedResult = recovery.native_observation as JsonObject | null | undefined;
-  if (previous?.read_only_review === true || recovery.later_equivalent_input_present === true
-      || observedResult?.completed_result_review === true) {
+  // An admitted continuation may already have appended the original input.
+  // Recover its existing receipt before considering a fresh result review.
+  const existingWorkTurn = previous?.work_attempt === 1 && recovery.admitted_turn != null;
+  if (previous?.read_only_review === true || (!existingWorkTurn
+      && (recovery.later_equivalent_input_present === true || observedResult?.completed_result_review === true))) {
     return planCompletedResultReview(recovery, row, current, completed, previous, version, work);
   }
   const client = `external-${ref(row.request_ref, "original request")}-recovery-${version}-work-1`;

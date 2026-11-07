@@ -5,13 +5,31 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import sys as _sys
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any
+from typing import TYPE_CHECKING as _TYPE_CHECKING
 from urllib.parse import urlsplit
 
-from .extensions.process_runtime import terminate_process_tree
+if _TYPE_CHECKING:
+    from .extensions.process_runtime import terminate_process_tree as terminate_process_tree
+
+
+# Successful read-only Git probes do not need process cleanup. Keep the former
+# helper export and patch point, resolving its owner only when requested.
+def __getattr__(name: str) -> Any:
+    if name != "terminate_process_tree":
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    from .extensions.process_runtime import terminate_process_tree
+
+    globals()[name] = terminate_process_tree
+    return terminate_process_tree
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | {"terminate_process_tree"})
 
 
 # `doctor` inspects a checkout the operator may not control, so every Git read
@@ -64,7 +82,7 @@ def _retire_owned_probe(process: subprocess.Popen[str]) -> None:
     """
 
     try:
-        terminate_process_tree(process, grace_seconds=0.2)
+        getattr(_sys.modules[__name__], "terminate_process_tree")(process, grace_seconds=0.2)
     except (OSError, RuntimeError):
         # The answer is already unknown; an unconfirmed cleanup must not turn a
         # read-only diagnostic into a traceback.
@@ -324,3 +342,6 @@ def trusted_release_ref_for_root(
                 "git_ref": f"{remote}/{expected_ref}",
             }
     return None
+
+
+__all__ = [name for name in globals() if not name.startswith("_")] + ["terminate_process_tree"]

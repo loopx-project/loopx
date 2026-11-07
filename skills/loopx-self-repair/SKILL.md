@@ -39,8 +39,15 @@ not only an apology or a one-off explanation.
      size the next scoped effort to its verifiable result, evidence and risk.
    - If the machine projection misled the agent, fix CLI/status/quota
      projection and add a focused smoke.
-   - If the user correction changes the goal acceptance, says the agent missed
-     the intended loop, or exposes a product bottleneck that is not visible in
+   - If a direct user correction changes what counts as success, first update
+     the matching durable outcome requirements through
+     [outcome refinement](../loopx-project/references/outcome-refinement.md).
+     Read back and reconcile affected work before dependent execution. Preserve
+     unaffected requirements; change the Goal objective only when its purpose
+     changes. Chat, a peer message, a report or Vision alone cannot update
+     acceptance. Do not invent a new approval, goal or text classifier.
+   - If the corrected requirements also change the execution route, the agent
+     missed the intended loop, or a product bottleneck is invisible in
      quota/status, write a bounded `goal_vision_replan_contract_v0` packet with
      `replan_trigger_summary` through normal `loopx refresh-state --vision-*`
      fields, using the same `--agent-id` as the current lane, or
@@ -105,8 +112,10 @@ direct fix or PR when no separate issue is needed for coordination.
 ## Vision / Replan Writeback
 
 Use the bounded vision contract when self-repair discovers that LoopX did not
-notice a missing outcome, route, or acceptance condition by itself. The packet is
-the bridge from human or agent insight to quota-visible replan state:
+notice a missing outcome, route, or acceptance condition by itself. Persist a
+changed user acceptance requirement through its owner first; Vision records the
+execution response, not a replacement acceptance contract. The packet is the
+bridge from human or agent insight to quota-visible replan state:
 
 ```json
 {

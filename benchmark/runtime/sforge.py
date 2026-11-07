@@ -101,7 +101,7 @@ class SForgeWorker(CodexAgent):
                  planning_horizon_goal: bool | None = None,
                  checkpoint_request_path: str | None = None,
                  checkpoint_request: bytes | None = None,
-                 warm_start=None):
+                 warm_start=None, research_sidecar: bool = False):
         super().__init__(config)
         if profile not in PROFILES:
             raise ValueError("Unknown benchmark worker profile")
@@ -184,8 +184,13 @@ class SForgeWorker(CodexAgent):
                 raise ValueError("checkpoint_request_path requires a heartbeat profile")
             from .checkpoint import normalize_checkpoint_request_path
             self.checkpoint_request_path = normalize_checkpoint_request_path(checkpoint_request_path)
+        if type(research_sidecar) is not bool:
+            raise ValueError("research_sidecar requires an explicit boolean")
+        self.research_sidecar = research_sidecar
         self.warm_start = warm_start
         if warm_start is not None:
+            if research_sidecar and not warm_start.research_sidecar:
+                raise ValueError("Managed research storage requires matching warm receiver selection")
             if not profile.startswith("heartbeat-") or feedback != "native" or self.task_entry != "loopx-planned":
                 raise ValueError("Warm checkpoint continuation requires a planned native heartbeat worker")
             warm_start.verify(cwd)
@@ -242,9 +247,26 @@ class SForgeWorker(CodexAgent):
             # Solver execution must never inherit this setup-only proxy.
             self.environment.setup_env = {}
 
+    def _install_research_directory(self, backend, handle, *, restored: bool):
+        from .research_artifacts import RESEARCH_DIRECTORY
+        directory = shlex.quote(RESEARCH_DIRECTORY)
+        # Fresh images cannot contribute unrelated data at this reserved path.
+        # Warm restore has already verified bytes and modes; do not chmod them.
+        prepare = (f"test -d {directory} && test ! -L {directory}" if restored else
+                   f"mkdir -m 0700 {directory}")
+        result = backend.exec_run(handle, ["/bin/sh", "-c",
+            f'test "$(readlink -f /tmp)" = /tmp && '
+            f'workspace=$(readlink -f -- {shlex.quote(self.cwd)}) && test -n "$workspace" && '
+            f'case {directory}/ in "$workspace/"*) exit 1;; esac && '
+            f'case "$workspace/" in {directory}/*) exit 1;; esac && '
+            f'{prepare} && chown agent:agent {directory}'], user="root")
+        if result.exit_code:
+            raise RuntimeError("Research directory is unavailable or conflicts with existing task data")
+
     def _install_worker(self, backend, handle, log_dir, logger):
         self.backend, self.handle = backend, handle
         self.log_dir = log_dir
+        research_paths = []
         effort = self._config.agent_effort
         common = dict(logs_dir=log_dir / "worker", model_name=self._config.agent_model,
                       reasoning_effort=effort)
@@ -362,6 +384,9 @@ class SForgeWorker(CodexAgent):
                     f"chmod 0600 {shlex.quote(self.checkpoint_request_path)}"], user="root")
                 if result.exit_code:
                     raise RuntimeError("Could not protect the explicit checkpoint declaration")
+        if self.research_sidecar:
+            from .research_artifacts import RESEARCH_DIRECTORY
+            self._install_research_directory(backend, handle, restored=RESEARCH_DIRECTORY in research_paths)
         # Prompt replacement describes the policy; the feedback mode owns access.
         if self.feedback != "native":
             result = backend.exec_run(handle, ["rm", "-f", "/usr/local/bin/sforge-submit"], user="root")
@@ -397,6 +422,7 @@ class SForgeWorker(CodexAgent):
             "task_entry": self.task_entry,
             "reasoning_effort": effort, "timeout_seconds": self.timeout_seconds,
             "loopx_usage_ping_enabled": False,
+            **({"research_directory": RESEARCH_DIRECTORY} if self.research_sidecar else {}),
             **({"checkpoint_capture_enabled": True}
                if self.checkpoint_request_path is not None else {}),
             **({"planning_timeout_seconds": None}
@@ -416,8 +442,11 @@ class SForgeWorker(CodexAgent):
         }, indent=2))
 
     def format_run_cmd(self, prompt_path, *, model=None, cwd="", internet=True, resume=False):
-        if self.workspace_instructions is not None and not self.instructions_installed and self.warm_start is None:
-            self._install_workspace_instructions()
+        if self.workspace_instructions is not None and not self.instructions_installed:
+            if self.warm_start is None:
+                self._install_workspace_instructions()
+            elif self.research_sidecar:
+                self._install_restored_research_instructions()
         if self.feedback_prompt is not None and not self.prompt_installed:
             with tempfile.TemporaryDirectory(prefix="benchmark-prompt-") as directory:
                 prompt = Path(directory) / "task.md"
@@ -500,8 +529,16 @@ class SForgeWorker(CodexAgent):
             # environment. Do not duplicate it in the logged shell command.
             env.pop("OPENAI_API_KEY", None)
         exports = " ".join(f"{key}={shlex.quote(value)}" for key, value in env.items())
+        # Run once at receiver execution entry, before its phase clock and
+        # scheduler. Do not turn route failures into an unknown native request
+        # or count setup failure against solver time. Custom API providers keep
+        # their own admission path; no observer runs on every heartbeat wake.
+        readiness = ""
+        if not self._config.agent_api_base_url:
+            readiness = (f"env {exports} {shlex.quote(f'{_PYTHON}/bin/python3')} "
+                         "-m benchmark.runtime.codex_readiness; ")
         return self._execution_command(
-            f"set -eu; {clock}"
+            f"set -eu; {readiness}{clock}"
             f"export LOOPX_PHASE_DEADLINE_EPOCH=$(cat {deadline}); "
             f"remaining=$(( LOOPX_PHASE_DEADLINE_EPOCH - $(date +%s) )); "
             f'if test "$remaining" -le 0; then test -f {started}; exit $?; fi; '
@@ -534,9 +571,21 @@ class SForgeWorker(CodexAgent):
 
     def _install_workspace_instructions(self):
         """Preserve task instructions and verify the policy before model entry."""
+        self._append_workspace_policy("<!-- EdgeBench native feedback policy -->", self.workspace_instructions)
+
+    def _install_restored_research_instructions(self):
+        from benchmark.edgebench.prompts import research_artifact_instructions
+        # Preserve the sealed task instructions and earlier feedback policy.
+        # Only the runner-owned storage location changes in this continuation;
+        # the original checkpoint remains untouched and independently verifiable.
+        self._append_workspace_policy("<!-- EdgeBench restored research storage -->",
+            "For this continuation, the following research storage instructions "
+            "replace earlier workspace-storage guidance. Existing implementation and "
+            "research artifacts are retained.\n\n" + research_artifact_instructions(checkpoint=True))
+
+    def _append_workspace_policy(self, marker: str, policy: str):
         path = shlex.quote(str(PurePosixPath(self.cwd) / "AGENTS.md"))
-        marker = "<!-- EdgeBench native feedback policy -->"
-        block = f"\n\n{marker}\n\n{self.workspace_instructions}"
+        block = f"\n\n{marker}\n\n{policy}"
         check = f"test ! -L {path} && {{ test ! -e {path} || test -f {path}; }}"
         read = asyncio.run(self.environment.exec(f"{check} && {{ test ! -f {path} || cat {path}; }}"))
         if read.return_code:

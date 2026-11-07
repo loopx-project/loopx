@@ -7,6 +7,7 @@ import sys
 from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
 from . import __version__
 from .cli_commands.summary_all_registration import GLOBAL_READ_COMMANDS
@@ -70,14 +71,17 @@ _STATUS_COMMANDS = frozenset({"check", "status", "diagnose", "review-packet"})
 PROJECT_LIFECYCLE_COMMANDS = {
 	"refresh-state", "checkpoint-context", "read-only-map", "reward", "operator-gate",
 }
-_SELECTED_COMMANDS = _STATUS_COMMANDS | GLOBAL_READ_COMMANDS | PROJECT_LIFECYCLE_COMMANDS | {
-	"todo", "quota", "task-lease", "change-window", "delegation", "turn", "doctor", "commands",
+# Existing CLI vocabulary; this group selects loading, not registry authority.
+_REGISTRY_INSPECTION_COMMANDS = frozenset({"registry", "registry-boundary"})
+_SELECTED_COMMANDS = _STATUS_COMMANDS | GLOBAL_READ_COMMANDS | PROJECT_LIFECYCLE_COMMANDS | _REGISTRY_INSPECTION_COMMANDS | {
+	"todo", "quota", "task-lease", "change-window", "delegation", "turn", "doctor", "commands", "version",
 	"authority-archive", "coordination-shadow", "extension", "slash-commands",
 	"manager-inbox",
 	"agent-context", "agent-directory", "agent-capabilities",
 	"handoff", "handoff-mode",
 	"performance-diagnosis",
 	"heartbeat-prompt",
+	"heartbeat-prequota",
 	"goal-acceptance",
 	"host-mode-plan",
 	"capability",
@@ -310,9 +314,84 @@ def cli_invocation_route(argv: list[str]):
 		yield
 
 
+def _register_registry_inspection_commands(subparsers: argparse._SubParsersAction) -> None:
+	"""Share the existing registry grammar with the complete support parser."""
+	subparsers.add_parser(
+		"registry", help="Inspect registry goals and adapter declarations."
+	)
+	registry_boundary_parser = subparsers.add_parser(
+		"registry-boundary",
+		help="Classify a registry file as local-only, global-local, public projection, or public fixture.",
+	)
+	registry_boundary_parser.add_argument(
+		"--path",
+		help="Registry path to classify. Defaults to the active --registry path.",
+	)
+	registry_boundary_parser.add_argument(
+		"--require-not-tracked",
+		action="store_true",
+		help=(
+			"For registries that cannot be pushed, return non-zero if tracked "
+			"or if Git cannot verify the tracking state."
+		),
+	)
+	registry_boundary_parser.add_argument(
+		"--require-gitignored",
+		action="store_true",
+		help="Return non-zero if the registry should be ignored but is neither ignored nor tracked.",
+	)
+
+
+def _handle_registry_inspection_command(
+	args: argparse.Namespace,
+	*,
+	registry_path: Path,
+	print_payload: Callable[[dict[str, Any], str, Callable[[dict[str, Any]], str]], None],
+	inspect_registry: Callable[[Path], dict[str, Any]],
+	render_registry_markdown: Callable[[dict[str, Any]], str],
+	inspect_registry_boundary: Callable[[Path], dict[str, Any]],
+	render_registry_boundary_markdown: Callable[[dict[str, Any]], str],
+) -> int:
+	"""Keep one inspection adapter and the full CLI's existing patch points."""
+	if args.command == "registry":
+		payload = inspect_registry(registry_path)
+		print_payload(payload, args.format, render_registry_markdown)
+		return 0 if payload.get("ok") else 1
+
+	boundary_path = Path(args.path).expanduser() if args.path else registry_path
+	payload = inspect_registry_boundary(boundary_path)
+	git = payload.get("git") if isinstance(payload.get("git"), dict) else {}
+	if (
+		args.require_not_tracked
+		and payload.get("ok")
+		and not payload.get("github_push_allowed")
+		and git.get("probe_status") == "git_unavailable"
+		and (git.get("inside_worktree") or git.get("worktree_discovery_unknown"))
+	):
+		payload["ok"] = False
+		payload["error"] = "Could not determine whether the registry is tracked by Git."
+	if (
+		args.require_gitignored
+		and payload.get("ok")
+		and payload.get("should_be_gitignored")
+	):
+		if (
+			git.get("inside_worktree")
+			and not git.get("ignored")
+			and not git.get("tracked")
+		):
+			payload = dict(payload)
+			payload["ok"] = False
+			payload.setdefault("risks", []).append("registry_should_be_gitignored")
+	print_payload(payload, args.format, render_registry_boundary_markdown)
+	return 0 if payload.get("ok") else 1
+
+
 def _build_selected_parser(command: str) -> LoopXArgumentParser:
 	parser, subparsers = build_cli_parser(parser_class=_SelectedArgumentParser)
-	if command in _STATUS_COMMANDS:
+	if command in _REGISTRY_INSPECTION_COMMANDS:
+		_register_registry_inspection_commands(subparsers)
+	elif command in _STATUS_COMMANDS:
 		from .cli_commands.status_registration import register_status_commands
 
 		register_status_commands(subparsers, add_subcommand_format)
@@ -396,11 +475,15 @@ def _build_selected_parser(command: str) -> LoopXArgumentParser:
 		from .help_surface import register_command_reference
 
 		register_command_reference(subparsers)
+	elif command == "version":
+		from .cli_commands.version import register_version_command
+
+		register_version_command(subparsers, add_subcommand_format)
 	elif command == "performance-diagnosis":
 		from .capabilities.performance_diagnosis.cli import register_performance_diagnosis_commands
 
 		register_performance_diagnosis_commands(subparsers, add_subcommand_format)
-	elif command == "heartbeat-prompt":
+	elif command in {"heartbeat-prompt", "heartbeat-prequota"}:
 		from .cli_commands.support_control_heartbeat_registration import register_heartbeat_control_commands
 
 		register_heartbeat_control_commands(subparsers, add_subcommand_format)
@@ -710,12 +793,38 @@ def _dispatch_selected(args: argparse.Namespace, raw_argv: list[str]) -> int:
 	if guard_result is not None:
 		return guard_result
 	registry_path, _registry_was_configured = resolve_cli_registry(args, raw_argv)
-	if args.command == "capability":
+	if args.command in _REGISTRY_INSPECTION_COMMANDS:
+		from .registry import (
+			inspect_registry, inspect_registry_boundary,
+			render_registry_markdown, render_registry_boundary_markdown,
+		)
+
+		result = _handle_registry_inspection_command(
+			args, registry_path=registry_path, print_payload=print_payload,
+			inspect_registry=inspect_registry, render_registry_markdown=render_registry_markdown,
+			inspect_registry_boundary=inspect_registry_boundary,
+			render_registry_boundary_markdown=render_registry_boundary_markdown,
+		)
+	elif args.command == "version":
+		from .cli_commands.version import handle_version_command
+
+		result = handle_version_command(
+			args, output_format=output_format, print_payload=print_payload,
+		)
+	elif args.command == "capability":
 		from .cli_commands.capability import handle_capability_command
 
 		# Keep the explicit full CLI's handler and protected operations unchanged.
 		result = handle_capability_command(
 			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
+			output_format=output_format, print_payload=print_payload,
+		)
+	elif args.command == "heartbeat-prequota":
+		from .cli_commands.support_control_heartbeat import handle_heartbeat_prequota_command
+
+		result = handle_heartbeat_prequota_command(
+			args, registry_path=registry_path,
+			registry_was_supplied=user_supplied_registry(raw_argv),
 			output_format=output_format, print_payload=print_payload,
 		)
 	else:
@@ -766,6 +875,16 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _run_command(command: str | None, raw_argv: list[str]) -> int:
+	if command == "version":
+		version_exports = sys.modules.get("loopx.cli_commands")
+		# Inspect bound exports without triggering the lazy facade. Explicit
+		# package/full-CLI imports retain their registrar and handler patch points.
+		if "loopx.cli" in sys.modules or (
+			version_exports is not None
+			and ("handle_version_command" in vars(version_exports)
+				or "register_version_command" in vars(version_exports))
+		):
+			return _run_full_cli(raw_argv)
 	if command in _SELECTED_COMMANDS:
 		try:
 			args = _build_selected_parser(command).parse_args(raw_argv)

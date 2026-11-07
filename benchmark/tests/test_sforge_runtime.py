@@ -430,11 +430,13 @@ def test_native_goal_and_heartbeat_use_trial_budget_without_independent_wake_lim
             "/python", "-m", "benchmark.runtime.worker"]
 
 
-def test_artifact_collection_preserves_both_session_homes_without_auth(tmp_path, monkeypatch):
+@pytest.mark.parametrize("research_sidecar", [False, True])
+def test_artifact_collection_preserves_both_session_homes_without_auth(tmp_path, monkeypatch, research_sidecar):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
     from benchmark.runtime.sforge_backend import RecordingDockerBackend, DockerBackend
     backend = object.__new__(RecordingDockerBackend)
+    backend.research_sidecar = research_sidecar
     backend.checkpoint = None
     backend.log_dir = tmp_path / "artifacts"
     backend.feedback = None
@@ -459,6 +461,7 @@ def test_artifact_collection_preserves_both_session_homes_without_auth(tmp_path,
     assert "/home/agent/.codex" not in copied
     assert "/opt/loopx-benchmark/codex-home" not in copied
     assert all("auth.json" not in path for path in copied)
+    assert ("/tmp/loopx-benchmark-research" in copied) is research_sidecar
     assert cleaned == ["fixture-container"]
     assert all(row["collected"] for row in json.loads(
         (backend.log_dir / "artifact-collection.json").read_text()))
@@ -475,6 +478,7 @@ def test_provider_observation_failure_cannot_skip_native_cleanup(tmp_path, monke
     pytest.importorskip("harbor")
     from benchmark.runtime.sforge_backend import RecordingDockerBackend, DockerBackend
     backend = object.__new__(RecordingDockerBackend)
+    backend.research_sidecar = False
     backend.checkpoint = None
     backend.log_dir = tmp_path / "artifacts"
     backend.feedback = None
@@ -526,6 +530,7 @@ def test_blind_policy_removes_judge_route_and_credentials_native_is_unchanged(mo
     pytest.importorskip("harbor")
     from benchmark.runtime.sforge_backend import RecordingDockerBackend, DockerBackend, AllowedEndpoint
     backend = object.__new__(RecordingDockerBackend)
+    backend.research_sidecar = False
     backend.checkpoint = None
     backend.auth_ips = []
     backend.blind_api_endpoint = None
@@ -677,6 +682,7 @@ def test_sforge_command_preserves_native_timing_and_planning_boundary(tmp_path, 
     assert first == resumed
     assert ("benchmark.runtime.sforge_entry" in first) is (entry == "loopx-planned")
     assert "test -f /opt/loopx-benchmark/control/phase-deadline ||" in first
+    assert first.index("-m benchmark.runtime.codex_readiness") < first.index("test -f /opt/loopx-benchmark/control/phase-deadline ||")
     assert first.index("export LOOPX_PHASE_DEADLINE_EPOCH") < first.index("timeout --signal")
     profile = json.loads((tmp_path / "worker-profile.json").read_text())
     assert profile["task_entry"] == entry
@@ -1088,6 +1094,7 @@ def test_recorded_solver_exit_does_not_take_status_from_output(tmp_path, monkeyp
     from types import SimpleNamespace
     from benchmark.runtime.sforge_backend import RecordingDockerBackend, DockerBackend
     backend = object.__new__(RecordingDockerBackend)
+    backend.research_sidecar = False
     backend.checkpoint = None
     backend.log_dir = tmp_path / "collected"
     backend.blind_api_endpoint = None
@@ -1211,6 +1218,7 @@ def test_custom_provider_uses_environment_credential_without_copying_login(tmp_p
         worker.prepared = True
     command = worker.format_run_cmd('/task/prompt.md')
     assert config.agent_api_key not in command
+    assert "benchmark.runtime.codex_readiness" not in command
     assert all(config.agent_api_key not in contents for contents in copied.values())
     config.agent_api_key = None
     with pytest.raises(ValueError, match='API credential'):
@@ -1420,7 +1428,7 @@ def test_native_checkpoint_storage_guidance_reaches_both_prompt_surfaces(tmp_pat
     pytest.importorskip("harbor")
     from types import SimpleNamespace
     from benchmark.edgebench import run
-    from benchmark.edgebench.prompts import native_task_prompt, native_task_instructions
+    from benchmark.edgebench.prompts import research_artifact_instructions, native_task_instructions
 
     monkeypatch.setenv("LOOPX_SRC_DIR", str(tmp_path))
     monkeypatch.setenv("LOOPX_EXPECTED_COMMIT", "fixture")
@@ -1440,12 +1448,12 @@ def test_native_checkpoint_storage_guidance_reaches_both_prompt_surfaces(tmp_pat
         assert worker.task_objective == "Original acceptance."
         assert worker.feedback_prompt.startswith(worker.workspace_instructions)
         assert worker.feedback_prompt.endswith("---\n\nOriginal acceptance.\n")
-        assert ("### Durable Research Artifacts" in worker.workspace_instructions) is capture
-        if not capture:
-            policy = dict(submission_cooldown=3600, eval_interval=0, internet=False,
-                          selection="score_first", score_direction="maximize")
-            assert worker.workspace_instructions == native_task_instructions(["solver.py"], **policy)
-            assert worker.feedback_prompt == native_task_prompt("Original acceptance.", ["solver.py"], **policy)
+        assert worker.research_sidecar is True
+        assert ("verified continuation restores" in worker.workspace_instructions) is capture
+        policy = dict(submission_cooldown=3600, eval_interval=0, internet=False,
+                      selection="score_first", score_direction="maximize")
+        assert worker.workspace_instructions == (native_task_instructions(["solver.py"], **policy)
+            + research_artifact_instructions(checkpoint=capture))
         raise RuntimeError("validated before model execution")
     monkeypatch.setattr(run, "run_agent", before_solver)
     args = ["--task", "fixture", "--tasks-dir", str(tmp_path), "--log-dir", str(tmp_path),

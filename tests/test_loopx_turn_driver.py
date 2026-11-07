@@ -2586,7 +2586,16 @@ def test_managed_start_interruption_preserves_reservation_and_attempt(
 
 def test_turn_run_once_cli_dsh_fresh_sessions_and_iteration_failure(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    original_builder = turn_run_once_command.build_dsh_host_runner
+    builder_calls: list[Path] = []
+
+    def patched_builder(*args: Any, **kwargs: Any) -> Any:
+        builder_calls.append(kwargs["workspace"])
+        return original_builder(*args, **kwargs)
+
+    monkeypatch.setattr(turn_run_once_command, "build_dsh_host_runner", patched_builder)
     project, runtime, registry = _write_live_fixture(tmp_path)
     host_project = tmp_path / "isolated-dsh-workspace"
     host_project.mkdir()
@@ -2661,6 +2670,7 @@ def run_dsh_turn(**kwargs):
     run("fresh-fixture-2", "fresh")
     run("resume-fixture-1", "resume")
     run("resume-fixture-2", "resume")
+    assert builder_calls == [host_project] * 4
 
     session_ids = (host_project / "dsh-session-ids.txt").read_text(
         encoding="utf-8"
