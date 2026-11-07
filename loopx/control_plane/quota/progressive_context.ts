@@ -314,7 +314,8 @@ function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSour
       const sourcePath: Path = ["interaction_contract", "agent_channel", "work_context", "sources"];
       const sources = at(context, sourcePath);
       required.context_details = {path: details.path, sha256: details.sha256,
-        command_template: details.command_template, source_path: details.path,
+        ...(details.command_template === undefined ? {} : {command_template: details.command_template}),
+        source_path: details.path,
       unread_context_index: {
         source: {path: details.path, sha256: details.sha256},
         coverage_confirmed: false,

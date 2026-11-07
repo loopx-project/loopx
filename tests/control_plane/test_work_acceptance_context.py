@@ -109,8 +109,11 @@ def test_selected_acceptance_read_keeps_global_requirements_and_exact_binding(
         goal_id=goal, todo_id="todo_missing")
     assert missing == {**full, "tasks": []}, "missing work must not fall back to another binding"
 
-    packet = read_cli_policy_payload(json.dumps(cli(
-        "quota", "should-run", "--goal-id", goal, "--agent-id", "agent-a")), returncode=0)
+    # The synthetic CLI subprocess defaults to raw output. Test the profile
+    # that enables outcome navigation while leaving delta delivery disabled.
+    guard_args = ("quota", "should-run", "--goal-id", goal, "--agent-id", "agent-a",
+                  "--context-delivery", "on", "--delta-delivery", "off")
+    packet = read_cli_policy_payload(json.dumps(cli(*guard_args)), returncode=0)
     channel = packet["interaction_contract"]["agent_channel"]
     assert channel["delivery_allowed"] is True and channel["work_context"]["complete"] is True
     # The public canonical reader retains its full format metadata. Host context
@@ -186,7 +189,7 @@ def test_selected_acceptance_read_keeps_global_requirements_and_exact_binding(
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
             code = main(["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
-                "quota", "should-run", "--goal-id", goal, "--agent-id", "agent-a", ])
+                *guard_args])
         failed = read_cli_policy_payload(output.getvalue(), returncode=code)["interaction_contract"]["agent_channel"]
         assert code == 0 and failed["delivery_allowed"] is False
         assert failed["work_context"]["complete"] is False
@@ -196,8 +199,7 @@ def test_selected_acceptance_read_keeps_global_requirements_and_exact_binding(
         assert set(source) == {"selected_todo", "task_orchestration_contract", "effective_action", "interaction_contract"}
         assert set(source["interaction_contract"]["cli_channel"]) <= {"selection_required"}
         assert set(source["task_orchestration_contract"]) <= {"schema_version", "mode", "primary_todo_id"}
-    recovered = read_cli_policy_payload(json.dumps(cli(
-        "quota", "should-run", "--goal-id", goal, "--agent-id", "agent-a")), returncode=0)
+    recovered = read_cli_policy_payload(json.dumps(cli(*guard_args)), returncode=0)
     assert recovered["interaction_contract"]["agent_channel"]["work_context"]["complete"] is True
 
 
