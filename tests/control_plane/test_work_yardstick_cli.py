@@ -77,6 +77,43 @@ def context(runtime, path, *, detail=True):
     return compact
 
 
+def test_measured_yardstick_restarts_comparison_when_the_acceptance_basis_changes(tmp_path):
+    project, runtime, path = setup(tmp_path, active=True)
+    source = tmp_path / "finding.json"
+
+    def record(turn, acceptance, candidates, previous=None):
+        finding = attachment()
+        choice = finding["work_yardstick_decision"]
+        choice["target"]["acceptance_ref"] = acceptance
+        choice["counterevidence_refs"] = []
+        choice["prior_finding_id"] = previous
+        finding["measurements"] = [
+            {**choice["authoritative"], "candidate_ref": f"candidate:{name}",
+             "evidence_ref": f"result:{name}", "value": value}
+            for name, value in candidates
+        ]
+        finding["evidence_refs"] = [measurement["evidence_ref"] for measurement in finding["measurements"]]
+        source.write_text(json.dumps(finding))
+        receipt = refresh(project, runtime, path, turn, source, "--delivery-boundary", "in_flight_continuation")
+        assert receipt["explore_result_delivery"]["ok"], receipt
+        run(project, runtime, path, *_projected_cli_args(receipt["settlement_owed"]["command"], turn_instance_id=turn))
+        return receipt["explore_result_delivery"]["finding_id"]
+
+    old = record("turn-old-basis", "acceptance:task-v1", [("old-a", 10), ("old-b", 20)])
+    assert context(runtime, path)["graph"]["work_yardsticks"][0]["search_comparison"]["goal"][
+        "preferred_candidate_ref"] == "candidate:old-b"
+    first = record("turn-first-new-basis", "acceptance:task-v2", [("new-c", 6)], old)
+    compact = context(runtime, path, detail=False)["graph"]["work_yardsticks"][0]
+    assert compact["source_finding_id"] == first and "comparison_candidate_ref" not in compact
+    assert "search_comparison" not in context(runtime, path)["graph"]["work_yardsticks"][0]
+    latest = record("turn-second-new-basis", "acceptance:task-v2", [("new-d", 9)], first)
+    cue = context(runtime, path)["graph"]["work_yardsticks"][0]
+    comparison = cue["search_comparison"]["goal"]
+    assert cue["target"]["acceptance_ref"] == "acceptance:task-v2"
+    assert comparison["previous_best"]["finding_id"] == first and comparison["latest"]["finding_id"] == latest
+    assert comparison["preferred_candidate_ref"] == "candidate:new-d"
+
+
 def test_measured_yardstick_changes_next_work_from_local_screening_to_a_whole_goal_comparison(tmp_path):
     project, runtime, path = setup(tmp_path, active=True)
     acceptance = tmp_path / "acceptance.json"

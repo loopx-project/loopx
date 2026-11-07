@@ -98,7 +98,7 @@ test("goal and proxy join the same two candidates regardless of declared order a
     const shared = projectWorkYardstickCue({...binding, enabled: true, findings: [foreign, measured],
       measurement_feedback: projectExploreMeasurementFeedback([foreign, measured])})!;
     assert.equal(shared.source_finding_id, measured.finding_id);
-    assert.equal(shared.search_comparison, undefined);
+    assert.deepEqual(shared.search_comparison, result);
   }
 });
 

@@ -131,6 +131,9 @@ end-to-end gain and full implementation and validation cost. Use a bounded
 check that can change the choice while honoring the accepted constraints and
 budget. The compact cue keeps the recorded next-action reason and adds a
 separate comparison cue. The detail read retains the complete work decision.
+The comparison uses findings from the current work, target, and acceptance
+reference. A different target or acceptance reference needs its own eligible
+pair, even when the measured metric, evaluator and inputs stay the same.
 The comparison is advisory and carries no retention or execution obligation.
 
 Manually captured measured findings also appear in the existing result pages
