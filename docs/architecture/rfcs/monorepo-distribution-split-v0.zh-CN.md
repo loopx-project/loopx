@@ -1259,14 +1259,41 @@ wheel 资格验证。
 省略或空 evidence 保留原值；CLI 原有的完成说明要求继续适用。
 历史 fingerprint 和旧 receipt 继续兼容，active completion 行为保持原样。
 回归在 terminal replay 前后检查 canonical evidence、原 validation 和完成时间，
-以及只执行一次的 validation/writeback/debit。此前被审阅的 head 仍未获验收，
-修订 head 仍需独立审阅。
+以及只执行一次的 validation/writeback/debit。此前被审阅的 head 仍未获验收。
+修订 `7ec8d19b9` 已获得独立
+[APPROVE 审阅](https://github.com/loopx-project/loopx/pull/8264#pullrequestreview-5811807012)，
+#8264 已以 `172d80d63` 合入。
 
-这是支持后续 R1/V4 journey 和大状态比较的生命周期修复提案。下一步仍需
-独立 exact-head review、审阅修复后的 wheel 回读，以及剩余 guard/parser
-刻画。它不会升级 installed host，也不验收中断/重启、split installation、
-完整 R0/V10/R1、M1/#8011、D2/D5/D6/D3、context/model、adoption 或完整成本
-收益。I3 继续保留至少一个 minor release。
+基于 target main `32167518b` 的验证现在覆盖源码 console 和新构建、隔离安装的
+单体 wheel。构建 wheel 前，已通过既有 owner 构建并验证 Chat bundle。
+File/SQLite × source/wheel 四组 episode 均包含 101 个合成 Todo，使用真实
+console、普通 hard-lease claim，以及独立验证的 JSON 产物。在一次扣账提交后，
+fixture 只停止自己的 Effect 进程；新的 console 进程通过重启后的 runtime
+恢复原 terminal 结果。Canonical 回读保留已接受证据、首次完成时间和归档状态。
+Completion、写回、扣账和 terminal 重试仍保留四步已提交 receipt 和一次扣账；
+terminal commit 前和 replay 时都拒绝替换证据。最后一次原 Turn guard 不再声明
+可执行工作或执行义务。Wheel 的 console/import provenance 与源码 fixture
+准备环境分开核对。
+
+| 分发 / provider | 完整 episode | 初始 guard | 结果 |
+| --- | ---: | ---: | --- |
+| Source / File | 22.682 s | 2.148 s | 恢复原结果；一次扣账 |
+| Source / SQLite | 22.220 s | 2.219 s | 恢复原结果；一次扣账 |
+| Wheel / File | 20.929 s | 2.020 s | 恢复原结果；一次扣账 |
+| Wheel / SQLite | 24.205 s | 2.787 s | 恢复原结果；一次扣账 |
+
+这些是 macOS、Python 3.13.5、Node 26.0.0 下的单次正确性 episode，包含负例、
+回放检查和受控进程停止。它们没有重跑冻结的配对成本研究，也不证明延迟收益。
+原八组大状态失败与此前的不确定性继续保留为历史证据。三个隔离 parser 输入
+还确认 source/wheel 接受 writer 输出的 archive pointer，同时继续拒绝意外正文
+和错配 region marker。旧 reader 的 pointer 失败继续保留；这个比较不更换
+grammar owner，也不升级 installed host。
+
+本轮验证修复后的大状态 source/wheel 终结与受控 Effect 重启边界。剩余 guard
+加载／共享 projection 成本 profile 和完整比较继续由既有工作承接。
+突发中断与模型宿主 V4 recovery、split installation、完整 R0/V10/R1、
+M1/#8011、D2/D5/D6/D3、context/model、实际 adoption 与完整成本收益仍开放。
+I3 继续保留至少一个 minor release。
 
 ## 附录 B：决策日志
 

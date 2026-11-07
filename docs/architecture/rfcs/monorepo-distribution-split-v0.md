@@ -1664,15 +1664,47 @@ note keeps the original value; the CLI's completion-note requirement still appli
 Historical fingerprints and older receipts remain compatible; active
 completion behavior is unchanged. The regression checks canonical evidence,
 original validation and completion time, and once-only validation/writeback/debit
-before and after terminal replay. The earlier reviewed head remains unaccepted;
-the revised head still needs independent review.
+before and after terminal replay. The earlier reviewed head remains unaccepted.
+The revised `7ec8d19b9` received an independent
+[APPROVE review](https://github.com/loopx-project/loopx/pull/8264#pullrequestreview-5811807012)
+and #8264 merged as `172d80d63`.
 
-This is a proposed lifecycle repair enabling the remaining R1/V4 journey and
-large-state comparison. Independent exact-head review, reviewed-repair wheel
-readback and remaining guard/parser characterization still govern the next
-step. It does not upgrade an installed host or qualify interruption/restart,
-split installation, full R0/V10/R1, M1/#8011, D2/D5/D6/D3, context/model,
-adoption or complete-cost benefit. I3 remains at least one minor release.
+Qualification against target main `32167518b` now covers both the source console
+and a freshly built, isolated monolithic wheel. The Chat bundle was built and
+verified through its existing owner before wheel construction. All four
+File/SQLite × source/wheel episodes contain 101 synthetic Todos and use the real
+console, ordinary hard-lease claim and an independently verified JSON artifact.
+After the single committed debit, the fixture stops only its own Effect processes;
+new console processes recover the original terminal result through a restarted
+runtime. Canonical readback retains the accepted evidence, first completion time
+and archived state. Completion, writeback, debit and terminal retries retain four
+committed receipts and one debit; changed evidence is refused before terminal
+commit and on replay. The final original-Turn guard reports no runnable work or
+execution attempt. Wheel console/import provenance is checked separately from
+the source fixture authoring environment.
+
+| Distribution / provider | Complete episode | Initial guard | Result |
+| --- | ---: | ---: | --- |
+| Source / File | 22.682 s | 2.148 s | Original result recovered; one debit |
+| Source / SQLite | 22.220 s | 2.219 s | Original result recovered; one debit |
+| Wheel / File | 20.929 s | 2.020 s | Original result recovered; one debit |
+| Wheel / SQLite | 24.205 s | 2.787 s | Original result recovered; one debit |
+
+These are single correctness episodes, including negative/replay checks and
+controlled process stops, on macOS with Python 3.13.5 and Node 26.0.0. They do
+not rerun the frozen paired cost study or establish a latency improvement.
+The original eight large-state failures and the earlier uncertainty remain
+historical evidence. Three isolated parser inputs also confirm source/wheel
+acceptance of an emitted archive pointer while unexpected prose and mismatched
+region markers remain refusals. The older reader's pointer failure is preserved;
+this comparison neither changes the grammar owner nor upgrades an installed host.
+
+This qualifies the repaired large-state source/wheel closeout and controlled
+Effect restart boundary. The remaining guard loading/shared-projection cost
+profile and complete comparison stay with the existing work. Abrupt-interruption
+and model-host V4 recovery, split installation, full R0/V10/R1, M1/#8011,
+D2/D5/D6/D3, context/model, actual adoption and complete-cost benefit remain
+open. I3 remains at least one minor release.
 
 ## Appendix B: Decision log
 
