@@ -2147,6 +2147,67 @@ made. Keep the original task, independent exact-head review, whole-path/full-cos
 and host/model/adoption acceptance open, with I3, M1/#8011, R0/V10/R1,
 D2/D5/D6/D3, context/split-install and all frozen failures retained.
 
+### 2026-11-07: selected SQLite snapshot read lifecycle
+
+The existing `AuthorityStore` now offers an optional storage-only paired
+identity/head read, consumed by the existing canonical snapshot owner.
+`SqliteAuthorityStore` exposes it only for `existingOnly` stores. Identity and
+the complete proven head share one synchronous read transaction; no connection,
+head or provider authority is retained between calls. General SQLite stores,
+File, PostgreSQL and custom stores without the optional method retain the
+original identity/load ordering and failure precedence. No persisted state,
+wire vocabulary, capability, selector or Python rule owner is added.
+
+Provider selection still validates the configured incarnation, and snapshot
+admission still independently reopens the pathname after loading the head.
+Revision, cursor, full read-model digest, stale continuation, WAL, lease and
+receipt/replay checks remain. A real directory replacement after the head read
+is refused without partial rows. Suppressing the final incarnation check in a
+private mutation makes that same public snapshot oracle fail.
+
+Runtime commit `61f7c3c33` passes 873 related TypeScript cases and type checking,
+four complete source/wheel File/SQLite 101-Todo lifecycles, and isolated real
+PostgreSQL 16.15 store391/service11, with no skips. The lifecycles preserve sum45,
+original completion time, four receipts, one debit, restart and refusal/replay;
+all 23 changed production files match the wheel. Native before/head diagnostics
+retain identical complete response and database hashes, reducing read-only
+connections from four to three and observed daemon disk-counter bytes from
+147,456 to 110,592 per snapshot. Those counters do not measure physical-device
+writes, and the instrumented diagnostic does not qualify elapsed performance.
+
+Five new interleaved, unprofiled complete default-SQLite groups compare the
+same 101-Todo fixture at main `8a4d4f9da`, prior `c40d8ec31` and runtime
+`61f7c3c33`, on CPython3.13.5 / Node26.0.0 / qualified SQLite3.53.1. All fifteen
+lifecycles preserve the same independently verified outcome and settlement.
+
+| Observed metric, median (range where shown) | Main | Prior | Paired read |
+| --- | --- | --- | --- |
+| Lifecycle wall time | 14.945 s (12.664–16.597) | 14.924 s (14.570–19.232) | 14.871 s (14.412–16.775) |
+| CLI + sampled daemon CPU after setup | 7.084 s | 7.388 s | 7.292 s |
+| Daemon disk-counter bytes after setup | 8,896,512 | 10,076,160 | 8,314,880 |
+| Daemon logical-write counter bytes after setup | 13,897,728 | 15,618,048 | 12,840,960 |
+| Fixture setup / final teardown wall time | 2.373 / 0.060 s | 2.387 / 0.062 s | 2.336 / 0.062 s |
+
+Two of five candidate episodes are slower than main and two slower than the
+prior head; the wall-time ranges overlap. Reduced observed writes do not remove
+the higher median CPU than main or qualify overall benefit. CPU uses the
+verified Mach timebase125/3, subtracting each daemon's setup baseline. Sampling
+excludes final daemon exit, unsampled restart helpers, provenance and harness
+CPU. CLI RSS and daemon boundary footprint are separate observations, not a
+continuous whole-system peak. No heavy validation ran during these groups;
+model cost, human attention and installed-host adoption remain unmeasured.
+These new observations do not replace or relabel any historical campaign.
+The next route is independent review and attribution of the remaining complete
+CLI CPU cost before another optimization, retaining the fresh read fences.
+
+The standard premerge passes six direct checks and 18 of 19 selected checks.
+The peer hard-cut scanner still fails on the same unchanged benchmark README
+at both main and candidate. The original task remains open for independent
+exact-head review, matched whole-path/full marginal costs and host/model/adoption
+acceptance. Preserve I3 for a minor release, M1/#8011, R0/V10/R1, D2/D5/D6/D3,
+context/split-install and every prior failure; neither connection counts nor
+passing validation establishes the complete minimal-kernel outcome.
+
 ## Appendix B: Decision log
 
 | Date | Decision | Owner / approval | Alternatives | Normative sections changed |
