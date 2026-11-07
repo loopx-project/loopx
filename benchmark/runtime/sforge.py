@@ -114,12 +114,8 @@ class SForgeWorker(CodexAgent):
             raise ValueError("turn_envelope requires a heartbeat worker")
         self.turn_envelope = turn_envelope
         self.native_child_limit = Execution(mode="plain", native_child_limit=native_child_limit).native_child_limit
-        if native_child_limit is not None:
-            if not feedback_prompt or not workspace_instructions:
-                raise ValueError("Native child authorization requires the explicit task prompt and workspace instructions")
-            authorization = native_child_instructions(native_child_limit)
-            feedback_prompt = authorization + feedback_prompt
-            workspace_instructions = authorization + workspace_instructions
+        if self.native_child_limit is not None and (not feedback_prompt or not workspace_instructions):
+            raise ValueError("Native child authorization requires the explicit task prompt and workspace instructions")
         self.context_delivery = Execution(
             mode="heartbeat" if profile.startswith("heartbeat-") else "plain",
             context_delivery=context_delivery,
@@ -206,6 +202,8 @@ class SForgeWorker(CodexAgent):
                 raise ValueError("Managed research storage requires matching warm receiver selection")
             if not profile.startswith("heartbeat-") or feedback != "native" or self.task_entry != "loopx-planned":
                 raise ValueError("Warm checkpoint continuation requires a planned native heartbeat worker")
+            if getattr(warm_start, "native_child_limit", None) != self.native_child_limit:
+                raise ValueError("Worker native child limit differs from the warm start request")
             warm_start.verify(cwd)
         self.profile, self.cwd = profile, cwd
         if feedback not in FEEDBACK_MODES:
@@ -228,6 +226,11 @@ class SForgeWorker(CodexAgent):
             or task_objective not in feedback_prompt
         ):
             raise ValueError("Task objective must occur in the native task prompt")
+        if self.native_child_limit is not None:
+            assert feedback_prompt is not None and workspace_instructions is not None
+            authorization = native_child_instructions(self.native_child_limit)
+            feedback_prompt = authorization + feedback_prompt
+            workspace_instructions = authorization + workspace_instructions
         self.feedback = feedback
         self.feedback_prompt = feedback_prompt
         self.workspace_instructions = workspace_instructions

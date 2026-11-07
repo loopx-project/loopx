@@ -32,8 +32,8 @@ LoopX Agents; this adds no peer scheduler, persistent Agent or delegation
 binding. The existing native-child receipt and context owners remain unchanged.
 The adapter reads back that Goal policy before later phases and restored work;
 it does not change an existing Goal to make a mismatch pass. Repeated same-session
-entry preserves the fixed configuration. Restore with the same declared limit;
-a different or omitted limit cannot silently replace the sealed native config.
+entry preserves the fixed configuration. Warm restore compares the requested
+limit, including omission, with the sealed native config before native activation.
 
 Omitting the option preserves prior configuration, instructions and receipt
 fields. The worker environment explicitly emits an empty child-limit value for

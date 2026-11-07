@@ -364,7 +364,8 @@ def main(argv=None):
             args.restore_goal, args.restore_agent, args.restore_source_todo,
             int(time.time()) + args.timeout, args.replan_after_turns or 6,
             tuple(args.restore_research_component), args.restore_fresh_replan,
-            destination_config=args.restore_model_config, research_sidecar=research_sidecar)
+            destination_config=args.restore_model_config, research_sidecar=research_sidecar,
+            native_child_limit=args.native_child_limit)
         metadata = candidate.verify(task.cwd)
         if args.restore_model_config is not None:
             from loopx.hosts.codex_checkpoint import checkpoint_destination_config

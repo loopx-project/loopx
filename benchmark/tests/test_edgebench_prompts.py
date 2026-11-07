@@ -195,6 +195,21 @@ def test_native_goal_transport_rejects_objective_outside_task_prompt(objective, 
             workspace_instructions="Resolved native policy.\n", task_objective=objective)
 
 
+@pytest.mark.parametrize("native_child_limit", [None, 3])
+def test_sforge_native_child_authorization_preserves_original_wrapper_validation(tmp_path, monkeypatch, native_child_limit):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker
+
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-credential")
+    with pytest.raises(ValueError, match="Workspace feedback instructions"):
+        SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
+            profile="heartbeat-resume", cwd=str(tmp_path),
+            feedback_prompt=" \tSynthetic task", workspace_instructions=" \t",
+            native_child_limit=native_child_limit)
+
+
 @pytest.mark.parametrize("profile", ["heartbeat-resume", "heartbeat-explore"])
 @pytest.mark.parametrize("native_child_limit", [None, 3])
 def test_native_research_objective_and_full_planning_input_survive_real_goal_bootstrap(
