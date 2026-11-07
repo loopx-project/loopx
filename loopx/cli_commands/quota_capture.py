@@ -954,18 +954,18 @@ def prepare_decision_capture(args: argparse.Namespace) -> Path | None:
 
 
 def capture_decision(directory: Path | None, payload: dict[str, object], *,
-                     native_args: argparse.Namespace | None = None) -> str | None:
+                     args: argparse.Namespace | None = None, native_context: bool = False) -> str | None:
     if directory is None:
         return
     from ..control_plane.turn_driver.decision_capture import write_decision_capture
 
     try:
         digest = write_decision_capture(directory / "decision.json", payload, publish=os.replace)
-        if native_args is not None and native_args.quota_command == "should-run" and payload.get("ok") is True:
+        if native_context and args is not None and args.quota_command == "should-run" and payload.get("ok") is True:
             from ..control_plane.turn_driver.codex_context import record_native_claim_source
 
-            record_native_claim_source(payload, digest, directory=native_args.codex_context_dir,
-                context_root=getattr(native_args, "codex_context_root", None))
+            record_native_claim_source(payload, digest, directory=args.codex_context_dir,
+                context_root=getattr(args, "codex_context_root", None))
         return digest
     except (OSError, ValueError) as exc:
         raise QuotaDecisionTransportError(

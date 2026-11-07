@@ -388,7 +388,7 @@ def _emit_quota_result(
         )
     native_context = context_delivery_enabled and bool(getattr(args, "codex_context_dir", None) or getattr(args, "codex_context_root", None))
     try:
-        captured_digest = capture_decision(capture_directory, payload, native_args=args if native_context else None)
+        captured_digest = capture_decision(capture_directory, payload, args=args, native_context=native_context)
         if getattr(args, "prepared_capture_reference", False) and payload.get("ok") is True:
             assert captured_digest is not None  # Preflight requires an explicit capture directory.
             from ..control_plane.turn_driver.codex_execution_preparation import prepared_capture_reference
