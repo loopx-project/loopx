@@ -852,4 +852,33 @@ cross-package breaking change for three consecutive releases.
 
 ## Appendix E: Incident and review lessons
 
-None yet.
+### Generated Todo pointer read compatibility (non-normative)
+
+The generated archive and active-field omission pointers belong to the existing
+Todo projection owner. An older strict `machine_region.py` reader rejects their
+`loopx:todo-archive-pointer` line as foreign content. The reader repair is already
+on `main` through [#7834](https://github.com/loopx-project/loopx/pull/7834); an
+installed reader whose bytes predate that repair needs composition qualification,
+rather than another source fix or removal of live projection metadata.
+
+Author qualification at `97cc1e0c4` used the same synthetic source and real
+File/SQLite stores under Python 3.13 and 3.14 with Node 26. The prior reader's
+grammar matches `8d314af49`. Across the prior snapshot, current source and its
+built wheel, 36 cases produced 20 expected successes and 16 expected refusals:
+four prior-reader pointer failures and twelve foreign-narrative failures. All
+four prior-reader failures recovered and replayed through the current source
+under the original Turn identity. Canonical work remained unchanged and quota
+debits stayed zero. Eight additional source/wheel console cases read the native
+capture back with synthetic Session identities; fixture preparation failures
+remain failures, and a committed capture was recovered without rerunning
+admission. The existing region, projection and SQLite archive regressions passed
+(83 cases).
+
+The 36-case matrix took 135.6 seconds; this is observation cost, not a speed or
+long-horizon benefit qualification. Total model, service CPU and human costs are
+unmeasured. Actual installed-host upgrade and readback remain unqualified.
+Preserve I3 for at least one minor release. This evidence does not close full
+R0/V10, M1/#8011, R1, context/model or split installation, or promote D2/D5/D6/D3.
+Use the existing self-repair lookup for `marked_todo_archive_pointer_reader_drift`
+to distinguish a shipped repair from installed-reader drift without weakening
+foreign-content rejection or rewriting active state.

@@ -622,4 +622,26 @@ R0 可以先于目录移动交付，但不代表内核合格。R3/R4 可选，�
 
 ## 附录 E：事故与评审经验
 
-暂无。
+### 生成式 Todo 指针的读取兼容性（非规范性）
+
+归档和活跃字段省略指针由既有 Todo 投影 owner 生成。较旧的严格
+`machine_region.py` reader 会把 `loopx:todo-archive-pointer` 行作为外来内容拒绝。
+reader 修复已通过 [#7834](https://github.com/loopx-project/loopx/pull/7834) 进入
+`main`；实际 reader 字节早于该修复的安装需要装配资格验证，不能据此重复源码修复
+或删除活跃投影元数据。
+
+作者在 `97cc1e0c4` 上，以相同合成 source 和真实 File/SQLite store，在 Python
+3.13、3.14 与 Node 26 下验证。旧 reader 的语法与 `8d314af49` 一致。旧快照、当前
+源码及其构建 wheel 共 36 个场景得到 20 个预期成功、16 个预期拒绝：4 个旧 reader
+指针失败和 12 个外来叙述失败。4 个旧 reader 失败均通过当前源码按原 Turn 身份恢复
+并重放；canonical work 保持不变，quota 扣费为零。另外 8 个 source/wheel console
+场景以合成 Session 身份完成 native capture 回读；fixture 准备失败仍保留为失败，
+已提交 capture 的恢复未重跑准入。既有 region、projection 和 SQLite archive 回归
+通过（83 个场景）。
+
+36 场景矩阵耗时 135.6 秒；这是观察成本，不是速度或长程收益资格。完整 model、
+service CPU 与人工成本未测量。真实安装宿主的升级及回读仍未验证。I3 至少保留一个
+minor release。这些证据不关闭完整 R0/V10、M1/#8011、R1、context/model 或拆分安装，
+也不晋升 D2/D5/D6/D3。使用既有 self-repair lookup 中的
+`marked_todo_archive_pointer_reader_drift`，区分已交付修复和安装 reader 漂移；保留
+外来内容拒绝，不重写活跃状态。
