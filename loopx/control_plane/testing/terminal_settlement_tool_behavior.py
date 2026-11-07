@@ -30,6 +30,7 @@ from .model_tool_behavior import (
     argument_value,
     digest_text,
     execute_loopx_cli,
+    is_context_read_command,
     loopx_command_tokens,
     snapshot_disposable_fixture,
 )
@@ -112,6 +113,7 @@ class _ReentryQualificationState:
     settled_todo_ids: list[str] = field(default_factory=list)
     provider_call_count: int = 0
     terminal_quota_observed: bool = False
+    terminal_quota_context: QuotaToolContext | None = None
 
 
 @dataclass
@@ -1196,7 +1198,9 @@ class DoubaoTerminalSettlementToolBehaviorActor:
                         "projected Todo lifecycle settlement with a concise "
                         "public-safe note; do not repeat refresh-state, inspect the "
                         "workspace, spend quota, or invent filler work. Then run "
-                        "the projected quota should-run command. When it reports "
+                        "the projected quota should-run command. If it returns a "
+                        "context reference, use its recovery reader with "
+                        "--select /should_run. When the tool reports "
                         "should_run=false, return a concise final response without "
                         "another tool call."
                     ),
@@ -1277,9 +1281,24 @@ class DoubaoTerminalSettlementToolBehaviorActor:
             try:
                 if state.terminal_quota_observed:
                     raise _TerminalToolViolation("model_called_tool_after_terminal_quota")
-                if command_kind == "refresh_state":
+                if state.terminal_quota_context is not None:
+                    if not is_context_read_command(tool_call.command):
+                        raise _TerminalToolViolation("terminal_quota_read_required")
+                    output = state.terminal_quota_context.read(
+                        tool_call.command, source_root=fixture.source_root,
+                        project_root=fixture.project_root,
+                    )
+                    page = json.loads(output)
+                    if not (page.get("ok") is True
+                            and page.get("schema_version") == "context_capture_selection_page_v1"
+                            and json.loads(page["content"]).get("selections")
+                            == [{"pointer": "/should_run", "value": False}]):
+                        raise _TerminalToolViolation("terminal_quota_read_incomplete")
+                    state.terminal_quota_observed = True
+                    kind = "context_read"
+                elif command_kind == "refresh_state":
                     raise _TerminalToolViolation("repeated_refresh_state")
-                if command_kind == "todo" and command_action == "complete":
+                elif command_kind == "todo" and command_action == "complete":
                     if not tokens:
                         raise _TerminalToolViolation("lifecycle_settlement_command_malformed")
                     todo_id = argument_value(tokens, "--todo-id") or ""
@@ -1337,11 +1356,15 @@ class DoubaoTerminalSettlementToolBehaviorActor:
                         state=state,
                         accepted_return_codes=(0, 1),
                     )
-                    if payload.get("should_run") is not False:
+                    quota_context = QuotaToolContext.from_output(
+                        json.dumps(payload, ensure_ascii=False, sort_keys=True)
+                    )
+                    if quota_context.packet.get("should_run") is not False:
                         raise _TerminalToolViolation("quota_reentry_did_not_terminate")
-                    state.terminal_quota_observed = True
+                    state.terminal_quota_context = quota_context
+                    state.terminal_quota_observed = quota_context.capture_path is None
                     kind = "terminal_quota_reentry"
-                    output = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+                    output = quota_context.output
                 elif command_kind == "todo" and command_action == "add":
                     raise _TerminalToolViolation("invented_lifecycle_successor")
                 elif command_kind == "quota" and command_action == "spend-slot":

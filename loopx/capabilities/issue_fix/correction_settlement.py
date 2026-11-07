@@ -316,7 +316,7 @@ def _settle_maintainer_correction_entries(
     entries = issue_fix_maintainer_correction_entries(row)
     payload["maintainer_corrections"] = entries
     if origin:
-        from ...todos import list_goal_todos
+        from ...control_plane.todos.list_readback import list_goal_todos
         from ...control_plane.collaboration.inbox import reply_status
         from ..manager_context.roundtrip import report
 

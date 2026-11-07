@@ -21,6 +21,7 @@ from loopx.control_plane.capability_hooks import (
 )
 from tests.capabilities.test_agent_turn_recall import RecallProvider, active_record
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 from tests.control_plane.reward_memory_host_fixture import enable_live_memory
 from tests.control_plane.test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, _initialize_fixture_authority, _write_fixture,
@@ -32,7 +33,7 @@ def run_cli(args: list[str]) -> dict:
     with redirect_stdout(output):
         code = main(args)
     assert code == 0, output.getvalue()[:1200]
-    return json.loads(output.getvalue())
+    return read_cli_policy_payload(output.getvalue(), returncode=code)
 
 
 def quota_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str):

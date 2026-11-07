@@ -12,6 +12,8 @@ import sysconfig
 
 import pytest
 
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
+
 from canonical_authority_fixture import assert_todo_read_unchanged, isolate_sqlite_runtime, promoted_create_fixture
 from test_quota_authority_settlement_journey import _source
 import test_quota_settlement_cli as settlement
@@ -301,7 +303,7 @@ def test_leased_delivery_settlement_and_recovery_without_source_todo_writers(tmp
             cwd=project, capture_output=True, text=True, timeout=45,
         )
         assert (result.returncode == 0) is succeeds, result.stdout + result.stderr
-        return json.loads(result.stdout)
+        return read_cli_policy_payload(result.stdout, returncode=result.returncode)
 
     identity = ["--goal-id", settlement.GOAL_ID, "--agent-id", settlement.AGENT_ID,
                 "--todo-id", settlement.TODO_ID]

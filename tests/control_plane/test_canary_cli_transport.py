@@ -16,17 +16,16 @@ from loopx.control_plane.testing import canary_harness
 
 
 @pytest.mark.parametrize("parent_setting", ["on", "off"])
-def test_machine_cli_child_is_inline_without_changing_parent_or_raw_helper(monkeypatch, tmp_path, parent_setting):
+def test_machine_cli_children_are_inline_without_changing_parent(monkeypatch, tmp_path, parent_setting):
     monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", parent_setting)
     observed = []
     def run(*args, **kwargs):
-        observed.append(kwargs.get("env"))
+        observed.append((kwargs.get("env") or {}).get("LOOPX_CONTEXT_DELIVERY"))
         return SimpleNamespace(stdout='{"ok":true,"unknown":null}', stderr="", returncode=0)
     monkeypatch.setattr(canary_harness.subprocess, "run", run)
     assert canary_harness.run_json_cli("probe", registry_path=tmp_path / "registry.json")["ok"] is True
-    assert observed[0]["LOOPX_CONTEXT_DELIVERY"] == "off"
     canary_harness.run_json_cli_result("probe", registry_path=tmp_path / "registry.json")
-    assert observed[1] is None  # Raw-wire callers retain their own transport.
+    assert observed == ["off", "off"]
     assert os.environ["LOOPX_CONTEXT_DELIVERY"] == parent_setting
 
 

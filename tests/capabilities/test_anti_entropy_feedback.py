@@ -852,6 +852,7 @@ def test_heartbeat_should_run_routes_into_shared_turn_context(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """The heartbeat production path still calls the shared turn-context owner."""
+    from loopx.capabilities import turn_context
     from loopx.cli_commands import quota_reward_memory
 
     captured: dict[str, object] = {}
@@ -860,7 +861,7 @@ def test_heartbeat_should_run_routes_into_shared_turn_context(
         captured["payload"] = payload
         captured["kwargs"] = kwargs
 
-    monkeypatch.setattr(quota_reward_memory, "attach_turn_context", fake_attach)
+    monkeypatch.setattr(turn_context, "attach_turn_context", fake_attach)
     payload = {
         "ok": True,
         "should_run": True,
@@ -889,6 +890,7 @@ def test_heartbeat_without_should_run_does_not_route(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """The heartbeat routing guard is unchanged by this fix."""
+    from loopx.capabilities import turn_context
     from loopx.cli_commands import quota_reward_memory
 
     called = False
@@ -897,7 +899,7 @@ def test_heartbeat_without_should_run_does_not_route(
         nonlocal called
         called = True
 
-    monkeypatch.setattr(quota_reward_memory, "attach_turn_context", fake_attach)
+    monkeypatch.setattr(turn_context, "attach_turn_context", fake_attach)
     quota_reward_memory.attach_reward_memory_recall_after_should_run(
         {"ok": True, "should_run": False, "heartbeat_receipt": {"status": "committed"}},
         quota_command="should-run",

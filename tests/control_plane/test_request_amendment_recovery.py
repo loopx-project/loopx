@@ -542,7 +542,10 @@ def test_turn_agenda_follows_current_request_revision_and_cancellation(source_go
     assert current["returns"] == [{"result_key": "conclusion", "request_revision": 1,
         "status": "queued", "consumed": False}]
     assert current["pending_return_count"] == current["unconsumed_return_count"] == 1
-    assert agenda("agent-b")["items"][0]["step"] == "await_peer_result"
+    outgoing = agenda("agent-b")["items"][0]
+    assert outgoing["step"] == "consume_peer_result"
+    assert outgoing["request_revision"] == 2 and outgoing["receipt_state"] == "pending"
+    assert outgoing["returns"] == current["returns"]
     _control(f, rid, "cancel", {"operation_id": "agenda-cancel", **_basis(revised), "reason": "Stop current request"})
     assert agenda("agent-a")["items"] == []
     assert agenda("agent-b")["items"] == []
