@@ -173,6 +173,8 @@ def main(argv=None):
                         help="Start a fresh conversation before the retained pending replan while preserving full Goal state")
     parser.add_argument("--restore-phase-extension-seconds", type=int, default=0,
                         help="Explicit authorized extra continuation time; omitted preserves the checkpoint's remaining phase")
+    parser.add_argument("--restore-phase-remaining-cap-seconds", type=int,
+                        help="Only reduce the warm continuation allowance to the audited remaining solver time")
     parser.add_argument("--eval-interval", type=int,
                         help="Native default: 0 (no periodic evaluation); other modes use task defaults; explicit 0 disables")
     parser.add_argument("--submission-cooldown", type=int,
@@ -243,6 +245,9 @@ def main(argv=None):
     if (not 0 <= args.restore_phase_extension_seconds < 2 ** 53 or
             (args.restore_phase_extension_seconds and not args.restore_checkpoint)):
         parser.error("A non-negative phase extension requires an explicit warm checkpoint continuation")
+    if args.restore_phase_remaining_cap_seconds is not None and (
+            not 0 <= args.restore_phase_remaining_cap_seconds < 2 ** 53 or not args.restore_checkpoint):
+        parser.error("A non-negative phase cap requires an explicit warm checkpoint continuation")
     if args.restore_research_component and not args.restore_checkpoint:
         parser.error("Research component restoration requires an explicit warm checkpoint continuation")
     if args.restore_fresh_replan and not args.restore_checkpoint:
@@ -415,7 +420,8 @@ def main(argv=None):
     if warm_start is not None:
         activated = restore(args.checkpoint_controller_file, root=capsule,
             expected_sha256=snapshot["native_capsule_sha256"], run_id=args.run_id,
-            phase_deadline_file=clock, phase_extension_seconds=args.restore_phase_extension_seconds)
+            phase_deadline_file=clock, phase_extension_seconds=args.restore_phase_extension_seconds,
+            phase_remaining_cap_seconds=args.restore_phase_remaining_cap_seconds)
         epoch = int(clock.read_text())
         warm_start = replace(candidate, deadline_epoch=epoch)
         reference = json.loads((capsule / "checkpoint.json").read_bytes())["point_metadata"]["native_reference"]
@@ -446,6 +452,8 @@ def main(argv=None):
         "status": "starting", "score_countable": False,
         **({"restore_phase_extension_seconds": args.restore_phase_extension_seconds}
            if args.restore_phase_extension_seconds else {}),
+        **({"restore_phase_remaining_cap_seconds": args.restore_phase_remaining_cap_seconds}
+           if args.restore_phase_remaining_cap_seconds is not None else {}),
         **({"restore_fresh_replan": True} if args.restore_fresh_replan else {}),
         **({"restored_checkpoint_sha256": warm_start.sha256,
             "original_deadline_epoch": warm_start.deadline_epoch,
