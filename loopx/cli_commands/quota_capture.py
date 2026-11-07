@@ -143,6 +143,17 @@ def _validate_context_page_window(offset: int, size: int, output_limit: int | No
             "larger pages require a sufficient --max-page-output-bytes within the capture limit.")
 
 
+def _validate_pinned_selection(selection: dict[str, Any]) -> None:
+    if (set(selection) - {"present_goal_narrative"} != {"select", "initial_read", "list_fields", "list_depth", "sha256"}
+            or type(selection["initial_read"]) is not bool or type(selection["list_fields"]) is not bool
+            or ("present_goal_narrative" in selection and (
+                selection["present_goal_narrative"] is not True
+                or selection["list_fields"] or selection["initial_read"]))
+            or not isinstance(selection["sha256"], str)
+            or BARE_SHA256_PATTERN.fullmatch(selection["sha256"]) is None):
+        raise ValueError("reader selection reference is incomplete or unsupported")
+
+
 def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, Any] | None = None,
                          next_page_bytes: int | None = None,
                          next_page_output_bytes: int | None = None,
@@ -204,30 +215,31 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
         if pinned_selection is not None:
             if selectors is not None or initial_read or list_fields or list_depth is not None or selection_digest is not None:
                 raise ValueError("a pinned selection reference cannot change selectors; use the original capture reference")
-            if (set(pinned_selection) - {"present_goal_narrative"} !=
-                    {"select", "initial_read", "list_fields", "list_depth", "sha256"}
-                    or type(pinned_selection["initial_read"]) is not bool or type(pinned_selection["list_fields"]) is not bool
-                    or ("present_goal_narrative" in pinned_selection and (
-                        pinned_selection["present_goal_narrative"] is not True
-                        or pinned_selection["list_fields"] or pinned_selection["initial_read"]))
-                    or not isinstance(pinned_selection["sha256"], str)
-                    or BARE_SHA256_PATTERN.fullmatch(pinned_selection["sha256"]) is None):
-                raise ValueError("reader selection reference is incomplete or unsupported")
+            _validate_pinned_selection(pinned_selection)
             if observation := reference.get("observed_read"):
-                from ..control_plane.turn_driver.native_first_read import observation_current
+                from ..control_plane.turn_driver.native_first_read import observation_current, observed_first_read_fallback
 
                 if not observation_current(observation, path, digest):
+                    fallback = observed_first_read_fallback(observation, path, digest)
+                    if fallback is not None:
+                        try:
+                            _validate_pinned_selection(fallback[1])
+                        except ValueError:
+                            fallback = None
                     if offset:
                         return {"ok": False, "reason": "Observed first-read scope changed during paging.",
-                            "recovery_command": context_capture_read_command(path, digest, initial_read=True,
+                            "recovery_command": context_capture_read_command(path, digest, initial_read=fallback is None,
+                                reference_file=fallback[0] if fallback is not None else None,
                                 page_bytes=size, max_page_output_bytes=output_limit, reader_argv=reader_argv)}
                     # Restart in the ordinary complete view of this same capture.
-                    # Subsequent pages must pin that view even if the journal changes.
-                    pinned_selection, initial_read = None, True
-                    try:
-                        reference_file = write_context_read_reference(path, digest)
-                    except OSError:
-                        reference_file = None
+                    if fallback is not None:
+                        reference_file, pinned_selection = fallback
+                    else:
+                        pinned_selection, initial_read = None, True
+                        try:
+                            reference_file = write_context_read_reference(path, digest)
+                        except OSError:
+                            reference_file = None
                 elif offset == 0:
                     presentation = {**(presentation or {}), "previously_delivered_fields": list(observation["fields"]),
                         "field_recovery": "These unchanged fields still apply. If needed or uncertain, append --select "
