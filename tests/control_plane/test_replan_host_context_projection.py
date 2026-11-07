@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
+import shlex
+import subprocess
+import sys
 
 import pytest
 
@@ -112,6 +117,84 @@ def _quota_payload(*, include_legacy_receipt: bool = False, stride_strategy: str
         agent_id=AGENT_ID,
         scheduler_execution_context=GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT,
     )
+
+
+def test_staged_replan_preserves_source_numbers_and_distinct_outcome_refs(tmp_path) -> None:
+    def encoded(value: object) -> str:
+        return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+    def legacy_ref(normalized: dict[str, object]) -> str:
+        return "sha256:" + hashlib.sha256(encoded(normalized).encode()).hexdigest()
+
+    capture = tmp_path / "decision.json"
+    source = _quota_payload()
+    source["replan_read_path"] = str(capture)
+    exact = [1.0, -0.0, 2**53 + 1]
+    rounded = [1, 0, 2**53]
+    outcomes = [
+        {"id": "outcome", "revision": 1, "requirements": [{"values": values}]}
+        for values in (exact, rounded)
+    ]
+    separate = {**outcomes[0], "id": "unambiguous"}
+    context = source["autonomous_replan_obligation"]["replan_context"]
+    core = {
+        "evidence_value": 2**53 + 1,
+        "acceptance_contract": {"outcome_requirements": {"outcomes": [*outcomes, separate]}},
+    }
+    context["core_goal"] = core
+    context["explore_basis"] = {"availability": "available", "revision": -0.0, "values": exact}
+    context["decision_followthrough"] = {"recorded_progress_count": 2**53 + 1}
+    context["evidence"][0]["occurrences"] = 1.0
+    source["planning_horizon"] = {"core_goal": {**core, "evidence_value": 2**53}}
+    source["replan_action_packet"]["writeback_contract"] = {
+        "vision_authoring": {"sample_count": 1.0},
+        "captured_scalar": -0.0,
+        "captured_values": exact,
+    }
+    raw = encoded(source).encode()
+    capture.write_bytes(raw)
+    envelope = build_turn_envelope(source)
+    digest = envelope["action_signature"]["source_decision_hash"]
+    registry = tmp_path / "absent-registry.json"
+    runtime = tmp_path / "absent-runtime"
+    cli = [sys.executable, "-m", "loopx.entrypoint", "--registry", str(registry),
+           "--runtime-root", str(runtime), "--format", "json"]
+
+    def read(*args: str, expected: int = 0):
+        process = subprocess.run([*cli, *args], capture_output=True, text=True, timeout=15)
+        result = json.loads(process.stdout)
+        assert process.returncode == expected, result
+        return result
+
+    route = ("quota", "replan-view", "--decision-file", str(capture), "--source-hash", digest)
+    review = read(*route, "--replan-stage", "review")
+    assert review["core_goal"]["evidence_value"] == 2**53 + 1
+    assert review["planning_horizon"]["core_goal"]["evidence_value"] == 2**53
+    assert review["decision_followthrough"]["observation_count"] == 2**53 + 1
+    assert encoded(review["evidence"][0]["occurrences"]) == "1.0"
+    assert encoded(review["capabilities"]["explore"]["revision"]) == "-0.0"
+    index = review["acceptance_index"]
+    refs = [row["outcome_ref"] for row in index["outcomes"]]
+    assert len(set(refs)) == 3
+    assert envelope["action"]["core_goal"]["outcome_requirements_index"]["outcome_refs"] == refs
+    for ref, outcome in zip(refs, [*outcomes, separate], strict=True):
+        detail = shlex.split(index["read_action_template"].replace("{outcome_ref}", ref))
+        assert detail[detail.index("quota"):][:2] == ["quota", "replan-view"]
+        assert encoded(read(*detail[detail.index("quota"):])["outcome"]) == encoded(outcome)
+
+    old_ambiguous = read(*route, "--replan-stage", "acceptance", "--outcome-ref",
+                         legacy_ref(outcomes[1]), expected=1)
+    assert not old_ambiguous["ok"] and "ambiguous" in old_ambiguous["reason"]
+    old_separate = legacy_ref({**outcomes[1], "id": "unambiguous"})
+    assert refs[-1] == old_separate
+    assert encoded(read(*route, "--replan-stage", "acceptance", "--outcome-ref", old_separate)["outcome"]) == encoded(separate)
+
+    explore = read(*route, "--replan-stage", "explore")
+    assert encoded(explore["explore_basis"]) == encoded(context["explore_basis"])
+    writer = read(*route, "--replan-stage", "writeback")
+    assert encoded(writer["writeback_contract"]) == encoded(source["replan_action_packet"]["writeback_contract"])
+    assert capture.read_bytes() == raw
+    assert not registry.exists() and not runtime.exists()
 
 
 def test_quota_delivers_coverage_context_and_minimal_replan_action() -> None:
