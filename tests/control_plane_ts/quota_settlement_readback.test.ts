@@ -594,6 +594,17 @@ test("settlement progress requires both effects and exact receipts", async t => 
         }
       }
       assert.deepEqual(controls, expected, "Pending recovery and all controls/receipts retain complete parity");
+      const precheck = await readQuotaSettlement(request(root, {spend_precheck: true}));
+      const settlement = requireJsonObject(result.settlement, "full settlement bundle");
+      const outcome = requireJsonObject(settlement.result, "full settlement result");
+      assert.deepEqual(precheck, {
+        schema_version: result.schema_version,
+        found: true,
+        identity: result.identity,
+        settlement: {...settlement, result: {...outcome, value: null}},
+        progress: result.progress,
+        spend_run_present: entry.spend === true,
+      });
       await assert.rejects(readQuotaSettlement(request(root, {include_record_bodies: "false"})), /must be a boolean/);
     } finally { await rm(root, { recursive: true, force: true }); }
   });
