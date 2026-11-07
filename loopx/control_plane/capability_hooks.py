@@ -246,13 +246,23 @@ def dispatch_turn_context_hooks(
             if any(key in payload for key in registration.readback_slots):
                 raise ValueError("context readback slot already contributed")
             result = registration.producer()
+            source = turn_context_source(payload)
+            readback_only = (
+                result.get("context_fields") == {}
+                and result.get("instructions") == []
+                and result.get("result_fields") == {}
+            )
+            binding: dict[str, Any] = (
+                {"readback_only": True} if readback_only else {"source": source}
+            )
+            if not readback_only and composed_settlement:
+                binding["composed_settlement"] = True
             contribution = effect_runtime_result(
                 "capability_hook.turn_context.validate",
                 {
                     "registration": registration.contract(),
                     "result": result,
-                    "source": turn_context_source(payload),
-                    **({"composed_settlement": True} if composed_settlement else {}),
+                    **binding,
                 },
             )
             readback = contribution.pop("readback")

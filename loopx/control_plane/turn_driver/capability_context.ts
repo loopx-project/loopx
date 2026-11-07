@@ -71,6 +71,15 @@ export function validateTurnContextContribution(input: JsonObject): JsonObject {
   }
   const normalized = {hook_id: registration.hook_id, capability_id: registration.capability_id,
     readback_slots: slots, context_fields: context, instructions, result_fields: resultFields, readback};
+  if (input.readback_only !== undefined && requireBoolean(input.readback_only, "readback_only")) {
+    // A status-only result is returned to the guard and is never a reusable
+    // context contribution. Keep its registration, slot and budget checks.
+    if (Object.hasOwn(input, "source") || Object.hasOwn(input, "composed_settlement") || Object.keys(context).length ||
+        instructions.length || Object.keys(resultFields).length) {
+      throw new Error("readback-only context validation cannot carry a source or a contribution");
+    }
+    return normalized;
+  }
   const composedSettlement = input.composed_settlement === undefined ? false
     : requireBoolean(input.composed_settlement, "composed_settlement");
   return {...normalized, basis_digest: canonicalAuthoritySha256({
