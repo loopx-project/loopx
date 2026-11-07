@@ -599,6 +599,69 @@ R0 可以先于目录移动交付，但不代表内核合格。R3/R4 可选，�
   不关闭完整 R0/V10、M1、拆包安装、R1 managed minimal 或 D1–D7。不改变 preset、
   前端操作、权限或持久化状态；受保护执行仍由既有 owner 所有。
 
+### 2026-11-06 — Version 按需加载及匹配成本
+
+独立候选 `8a79d8602e699e51452ca1f43dc9b9527c81aa1b` 对比基线
+`5a58635028fbef1316dc66531daf5fdb655e9b13`，由 `cli_runtime` 选择既有
+version registrar 与 handler，复用规范全局语法、format 优先级、usage hook
+及 controller guard。解析拒绝保留完整 CLI fallback 与诊断；已显式加载完整
+CLI 或绑定 package 导出的调用保留其 registrar/handler patch 点；普通查询不会
+触发 lazy exports。公开 import、身份及类型不变。
+不新增 capability、provider、package、权限、preset 或 TypeScript 决策 owner。
+独立 DSH/helper 及负面成本提案仍在 [#8185](https://github.com/loopx-project/loopx/pull/8185)；
+其 E7/E8 与本次 version 对照分开，也不构成依赖。
+
+初始 `55e3ef45a` 对照的 120 个普通查询观察继续保留：source 中位数
+1.546 → 0.059 秒、wheel 1.554 → 0.072 秒。随后独立用例发现它忽略已替换的
+package-facade handler，返回 0 而非 37；此前通过的 premerge 未覆盖该分支。
+原输入、数据和失败保留，不将其视为 facade 兼容资格。提案补回 package
+registrar 与 handler 的采纳后，另行冻结下列精确 head 对照。
+
+- **真实调用：** 两个不可变版本的源码及新安装单体 wheel 均经实际 `loopx`
+  console 执行。每种发行形态的 27 个用例，stdout、stderr、退出状态完全一致，
+  覆盖全局／局部／重复 format、显式路径、help、未知／缩写参数、缺失／空值及
+  fallback。独立未知命令／参数 oracle 以 exit 2 拒绝且无结果。四个组合在缺少
+  Node 时均可查询 version；outer-controller 读行为及完整 CLI patch 点兼容。
+- **加载清点：** 独立 parent 插桩记录，两种发行形态均为 1,157 → 10 个 LoopX
+  模块，候选是基线的子集。Source read-open 1,286 → 28，wheel 1,289 → 29。
+  每个 version 捕获的 write-open、子进程、观测到的本地 IPC 连接及覆盖 socket
+  字节均为零。Stdout 保持 81 字节，stderr 为空。
+- **冻结对照：** 四个环境均核验来源，使用 CPython 3.13.5 及相同 57 个依赖
+  版本。标准库、依赖及全部 1,421 个 LoopX 源文件，在独占 cache prefix 具有
+  有效时间戳字节码；测量／profile 后的源码及 header 清点与预检一致，无缺失／
+  无效缓存。每次采样是新 Python 进程，禁止字节码写入；磁盘缓存不受控，不比较
+  broker／warm broker。顺序为源码先于 wheel，偶数对 AB、奇数对 BA。两组各
+  完成 30 对，共 120 个有效观察，采样 62.246 秒。计入首轮后合计采样
+  166.191 秒，低于不变的 1,200 秒上限；全部观察保留。
+
+| 发行形态 | 基线秒数，中位数 / p95 | 候选秒数，中位数 / p95 | CPU 秒数，中位数（基线 → 候选） | RSS MiB，中位数（基线 → 候选） | 配对候选减基线的中位数，秒 |
+| --- | --- | --- | --- | --- | --- |
+| Source | 0.980 / 1.056 | 0.055 / 0.075 | 0.520 → 0.037 | 90.17 → 16.81 | -0.9242 |
+| 单体 wheel | 0.948 / 1.147 | 0.056 / 0.077 | 0.511 → 0.038 | 89.89 → 16.60 | -0.8993 |
+
+p95 使用 nearest rank；配对差中位数与两 arm 中位数之差不同。本次 macOS
+arm64 条件下，source 与 wheel 中位延迟均约下降 94%，CPU 与 target RSS
+也下降。一分钟宿主负载为 8.25–9.06。本片证明冻结条件下的明显版本查询收益，
+不采纳可移植 D6 预算，不声明真实 managed Turn 或长程节省。用量覆盖 target
+及等待子进程，清点中未启动子进程；native 细节及完整编写／模型／维护成本未知。
+
+从本次唤醒时间戳到最终冻结约 2,404 秒，包含有重叠的入口恢复、首轮实验、修正、
+依赖／构建／安装、测试、缓存及一致性验证；重叠阶段不可求和。缓存准备单独记录。
+修正后的 console/facade 一致性为 82.759 秒、插桩 2.539 秒、四个 parent
+profile 4.155 秒；首轮 136.239 / 3.830 / 7.089 秒成本继续保留。
+不同轮的耗时水平不作为代码对照。既有
+`performance-diagnosis` recipe 在基线采样栈中显示 export loading 及完整 parser
+构建；栈权重与重复延迟分开。已验证单体打包，不代表拆包安装或已安装宿主升级。
+
+七项 selected-loading 用例在基线失败、候选通过。Package registrar/handler
+用例在基线通过、初始候选失败、修正后通过；规范诊断及完整 CLI patch 点在基线／
+候选均通过。完整入口 161 项及聚焦 lint 通过。Owner-scoped mypy 使用
+`--follow-imports=skip`，基线与候选在行号归一后均有 33 项相同错误，不是通过或
+完整配置的类型检查。采纳仍需最终 head 验证、独立评审及 merge readiness。
+I3 至少一个 minor release 的窗口继续有效，不作 D3／到期决策。R0 更广清点、
+R1/minimal、D2/D5/D6、hard-lease／context／model 及拆包安装验收仍开放。
+有界重构复用既有 parser/handler；更大 runtime/package 改动保留在其已接受 owner。
+
 ### 2026-11-06 — 发现路径集成与下一条可执行边界
 
 - **已集成：** [#8012](https://github.com/loopx-project/loopx/pull/8012)
@@ -969,6 +1032,7 @@ hard-lease／context／model 和拆包安装验收仍开放；采纳仍受独立
 | E4 | 所选 CLI 加载接缝 | `9cae3b28939f72fa4aadab5cfe49e19bcbdab372` | 第 4 节链接的入口/CLI | 源码审计 | 无新性能测量 |
 | E5 | DSH 装配范例 | 固定上游 commit | [`minimal.patch.yml`](https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/bundle/web-app/presets/minimal.patch.yml)、[`standard.patch.yml`](https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/bundle/web-app/presets/standard.patch.yml)、[`sdk-minimal`](https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/bundle/sdk-minimal/README.md) | 源码审计 | 共享预设装配与自包含 SDK bundle；不代表 LoopX 宿主资格或权限建议 |
 | E6 | Pi core/上下文范例 | 固定上游 commit | [`agent` core](https://github.com/badlogic/pi-mono/blob/f14813e96510a7cf7562a120e809c6a134af073d/packages/agent/README.md) | 源码审计 | Agent/tool/event core，以及 `transformContext`、`convertToLlm`、`prepareRequest`、`finishTurn` 接缝；无 LoopX authority 或性能声明 |
+| E9 | Version 按需加载及匹配成本 | `5a5863502` / `8a79d8602`；macOS arm64 / CPython 3.13.5 | 上述 version checkpoint；既有 console/version 及 performance-diagnosis owner | 修正后两组各 30 对，共 120 个观察；公开 facade／一致性／缓存读回通过；版本查询明显改善 | 首轮 120 个观察及 facade 失败保留；仅公开安全汇总；完整 Turn/minimal、拆包安装、宿主升级及完整成本未取得资格；E7/E8 保留在 #8185 |
 | E7 | 有界成对成本实验 | `a9485073f` / `86d9c542d`；上述具名环境 | 上述成对成本 checkpoint；既有入口／SQLite 夹具及 performance-diagnosis owner | 499 个观察；源码组完整，wheel 不完整；缓存归因未取得资格 | 仅公开安全汇总；不证明提速、完整 V10、拆包安装或模型成本 |
 | E8 | 字节码匹配的代表性对照 | `546c08c0d` / `0df5ad792`；上述具名环境 | 上述匹配字节码 checkpoint；相同 CLI/SQLite 及 performance-diagnosis owner | 六组各 30 对，共 360 个观察；语义／拒绝及缓存读回通过；未证明明显收益 | 仅公开安全汇总；后续集成、完整 V10、minimal、拆包安装及模型成本未取得资格 |
 

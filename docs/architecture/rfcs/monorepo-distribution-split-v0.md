@@ -824,6 +824,91 @@ Approval needs a reviewed decision, not implementation progress or silence.
   installation, R1 managed minimal or D1–D7. No preset, frontend operation,
   permission or persisted state changes; protected execution keeps its owner.
 
+### 2026-11-06 — Selected version loading and matched costs
+
+The independent proposal `8a79d8602e699e51452ca1f43dc9b9527c81aa1b` at baseline
+`5a58635028fbef1316dc66531daf5fdb655e9b13` selects the existing version registrar
+and handler through `cli_runtime`. It reuses the canonical global grammar,
+format precedence, usage hooks and controller guard. Rejected parsing retains
+full-CLI fallback and diagnostics; explicitly bound package or full-CLI exports
+retain their registrar/handler patch points without triggering lazy exports
+on ordinary queries. Public imports, identity and types remain
+unchanged. No capability, provider, package, permission, preset or TypeScript
+decision owner is added. The separate DSH/helper and negative cost proposal is
+[#8185](https://github.com/loopx-project/loopx/pull/8185); its E7/E8 observations
+are distinct from this version-path comparison and are not a dependency.
+
+The initial `55e3ef45a` comparison retains 120 ordinary-query observations
+(source median 1.546 → 0.059 seconds; wheel 1.554 → 0.072). A later independent
+case finds that it ignores a patched package-facade handler, returning 0 instead
+of 37. Its passing premerge did not cover that branch. The failure and original
+inputs/data remain retained; they do not qualify facade compatibility. The
+proposal repairs both package registrar and handler adoption, then freezes the
+new exact-head comparison below.
+
+- **Real caller:** source and freshly installed monolithic wheels at both
+  immutable revisions exercise the actual `loopx` console. All 27 cases per
+  distribution have identical stdout, stderr and exit status, including
+  global/local/repeated formats, explicit paths, help, unknown/abbreviated
+  options, missing/empty values and fallback. Independent unknown-command/
+  option cases reject with exit 2 and no result. Version works with Node absent
+  in all four variants; outer-controller read behavior and full-CLI patch points
+  remain compatible.
+- **Loading census:** separate parent instrumentation records 1,157 → 10
+  LoopX modules in both distributions, with the candidate contained in the
+  baseline set. Source read-opens are 1,286 → 28 and wheel 1,289 → 29.
+  Each version capture has zero write-opens, subprocesses, observed local IPC
+  connections and covered socket bytes. Stdout remains 81 bytes; stderr is empty.
+- **Frozen comparison:** all four environments have verified provenance,
+  CPython 3.13.5 and identical 57 dependency versions. Stdlib, dependencies and
+  all 1,421 LoopX sources have valid timestamp bytecode in owned cache prefixes;
+  post-measurement/profile source/header inventories have no missing/invalid
+  caches and match the preflight. Every sample has fresh Python and disables
+  bytecode writes; disk cache is uncontrolled. No broker/warm-broker comparison
+  is made. Order is source then wheel, AB on even pairs and BA on odd pairs.
+  Both corrected groups complete 30 pairs: 120 accepted observations in 62.246
+  seconds. Including the first study, aggregate sampling is 166.191 seconds,
+  below the unchanged 1,200-second cap. All observations are retained.
+
+| Distribution | Baseline seconds, median / p95 | Proposal seconds, median / p95 | CPU seconds, median (base → proposal) | RSS MiB, median (base → proposal) | Median paired proposal minus baseline, seconds |
+| --- | --- | --- | --- | --- | --- |
+| Source | 0.980 / 1.056 | 0.055 / 0.075 | 0.520 → 0.037 | 90.17 → 16.81 | -0.9242 |
+| Monolithic wheel | 0.948 / 1.147 | 0.056 / 0.077 | 0.511 → 0.038 | 89.89 → 16.60 | -0.8993 |
+
+p95 uses nearest rank; paired differences and differences of arm medians are
+distinct statistics. Median latency falls about 94% in both source and wheel
+on this macOS arm64 environment; CPU and target RSS also fall. One-minute host
+load ranges from 8.25 to 9.06. This qualifies a material version-query
+improvement under frozen conditions, without adopting portable D6 budgets or
+claiming real managed-Turn/long-horizon savings. Usage covers the target and
+waited descendants; no child is launched in the census. Native detail and
+complete authoring/model/maintenance costs remain unknown.
+
+The heartbeat-to-final-freeze interval is about 2,404 seconds, including
+overlapping recovery, initial study, correction, dependency/build/install,
+test, cache and parity work; overlapping phases cannot be summed. Cache
+preparation is recorded separately. Corrected console/facade parity takes
+82.759 seconds, instrumentation 2.539 and four parent profiles 4.155. Earlier
+parity/instrumentation/profile costs of 136.239 / 3.830 / 7.089 seconds remain
+retained. Cross-study timing levels are not treated as a code comparison.
+Existing `performance-diagnosis` recipes show export loading and full parser
+construction in baseline sampled stacks; weights remain separate from repeated
+latency. Monolithic packaging is verified, without split-install or installed
+host-upgrade qualification.
+
+Seven selected-loading cases fail on the baseline and pass on the proposal.
+The package registrar/handler case passes on the baseline, fails on the initial
+candidate and passes on the correction; canonical diagnostic and full-CLI
+patch-point cases pass in both baseline and proposal. All 161 entrypoint cases and
+focused lint pass. Owner-scoped mypy with `--follow-imports=skip` fails with
+33 identical diagnostics at base/proposal after line normalization; this is
+neither a pass nor the full configured type check. Adoption requires final-head
+validation, independent review and merge readiness. I3's minimum one minor
+release window remains in force; no D3/expiry decision is made. R0's wider census,
+R1/minimal, D2/D5/D6, hard-lease/context/model and split-install acceptance remain
+open. The bounded refactor reuses its existing parser/handler; larger runtime
+and package changes retain their accepted owners.
+
 ### 2026-11-06 — Discovery integration and the next executable boundary
 
 - **Integrated:** [#8012](https://github.com/loopx-project/loopx/pull/8012)
@@ -1288,6 +1373,7 @@ open; independent exact-head review and required validation govern adoption.
 | E4 | Selected CLI loading seam | `9cae3b28939f72fa4aadab5cfe49e19bcbdab372` | Linked entrypoint/CLI in Section 4 | Source-audited | No new timing claim |
 | E5 | DSH composition example | Pinned upstream commit | [`minimal.patch.yml`](https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/bundle/web-app/presets/minimal.patch.yml), [`standard.patch.yml`](https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/bundle/web-app/presets/standard.patch.yml), [`sdk-minimal`](https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/bundle/sdk-minimal/README.md) | Source-audited | Shared preset composition and a self-contained SDK bundle; not a LoopX host qualification or permission recommendation |
 | E6 | Pi core/context example | Pinned upstream commit | [`agent` core](https://github.com/badlogic/pi-mono/blob/f14813e96510a7cf7562a120e809c6a134af073d/packages/agent/README.md) | Source-audited | Agent/tool/event core with `transformContext`, `convertToLlm`, `prepareRequest` and `finishTurn` seams; no LoopX authority or performance claim |
+| E9 | Selected version loading and matched cost | `5a5863502` / `8a79d8602`; macOS arm64 / CPython 3.13.5 | Version checkpoint above; existing console/version and performance-diagnosis owners | Corrected two groups × 30 pairs; 120 observations; public-facade/parity/cache readback pass; material query improvement | Initial 120 observations and facade failure retained; public-safe aggregates; full Turn/minimal, split install, host upgrade and complete costs unqualified; E7/E8 remain with #8185 |
 | E7 | Bounded paired cost campaign | `a9485073f` / `86d9c542d`; named environment above | Paired cost checkpoint above; existing entrypoint/SQLite fixture and performance-diagnosis owners | 499 observations; source groups complete, wheel incomplete; cache attribution unqualified | Aggregate public-safe evidence only; no speedup, full V10, split-install or model-cost qualification |
 | E8 | Matched-bytecode representative comparison | `546c08c0d` / `0df5ad792`; named environment above | Matched-bytecode checkpoint above; same CLI/SQLite and performance-diagnosis owners | Six groups × 30 pairs; 360 observations; parity/rejection and cache readback pass; no demonstrated material benefit | Aggregate public-safe evidence only; later integration, full V10, minimal, split install and model costs unqualified |
 
