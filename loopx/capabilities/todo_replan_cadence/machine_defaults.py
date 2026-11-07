@@ -229,7 +229,7 @@ def resolve_todo_replan_cadence_goal(
     return apply_todo_replan_cadence_machine_default(goal, machine)
 
 
-def work_yardstick_enabled(goal: dict[str, Any], runtime_root) -> bool:
+def work_yardstick_enabled(goal: dict[str, Any], runtime_root: Path | None) -> bool:
     """Independent opt-in resolved through the existing review configuration."""
     resolved = resolve_todo_replan_cadence_goal(goal, runtime_root)
     return (resolved.get("execution_profile") or {}).get("yardstick_enabled") is True
