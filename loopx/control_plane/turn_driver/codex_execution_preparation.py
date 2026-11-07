@@ -7,6 +7,7 @@ the same Todo (and Turn when present) is ready before returning a Host receipt.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
@@ -189,16 +190,29 @@ def execute_codex_execution_preparation(
     ):
         raise ValueError("Codex execution preparation requires a physical workspace")
     invoke = runner or _default_runner
-    if context_directory is not None and (capture_directory is None or not turn_instance_id):
-        raise ValueError("Native execution preparation requires a bound captured Turn")
+    claim_args = expected_claim
+    claim_operation_id = None
+    if context_directory is not None:
+        if capture_directory is None or not turn_instance_id:
+            raise ValueError("Native execution preparation requires a bound captured Turn")
+        source_sha256 = request.get("source_sha256")
+        if not isinstance(source_sha256, str) or re.fullmatch(r"[0-9a-f]{64}", source_sha256) is None:
+            raise ValueError("Native execution preparation requires its original capture digest")
+        # The same capture can reappear after a lost readiness result. Let the
+        # managed claim owner recover the original receipt and current lease.
+        claim_operation_id = f"todo-claim:codex-capture:{source_sha256}"
+        claim_args = [*expected_claim, "--claim-operation-id", claim_operation_id]
     claimed = _run_json(
-        expected_claim,
+        claim_args,
         registry_path=registry_path,
         runtime_root=runtime_root,
         cwd=workspace,
         timeout=timeout / 2,
         runner=invoke,
     )
+    claim_reference = claimed.get("claim_operation_id")
+    if claim_operation_id is not None and claim_reference != claim_operation_id:
+        raise RuntimeError("Native execution preparation did not recover its original managed claim")
     guard = [
         "quota", "should-run",
         "--goal-id", goal_id,
@@ -259,7 +273,6 @@ def execute_codex_execution_preparation(
         if not isinstance(digest, str) or len(digest) != 64:
             raise ValueError("The guard did not return its published capture digest")
         receipt["capture_sha256"] = digest
-    claim_reference = claimed.get("claim_operation_id")
     if isinstance(claim_reference, str) and claim_reference:
         receipt["claim_operation_id"] = claim_reference
     # The Host already paid for the captured complete decision. Its caller
