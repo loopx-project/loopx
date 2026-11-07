@@ -1718,12 +1718,14 @@ def test_turn_activity_does_not_invent_goal_reads_or_successful_checks(
     assert any(kind == "answer.delta" and p["text"] == "Ready." for kind, p in events)
 
 
-def test_turn_activity_steps_merge_started_and_completed_items(monkeypatch, tmp_path):
+@pytest.mark.parametrize("execution_mode", [False, True])
+def test_turn_activity_steps_merge_started_and_completed_items(monkeypatch, tmp_path, execution_mode):
     session = chat_agent.CodexChatAgentSession(
         process=_FakeAppServerProcess(),
         messages=queue.Queue(),
         thread_id="thread-fixture",
         work_dir=tmp_path,
+        execution_mode=execution_mode,
     )
     command = {"type": "commandExecution", "id": "exec-1", "status": "inProgress",
                "command": f"/bin/zsh -lc 'cat {tmp_path}/notes.md'",
@@ -1731,22 +1733,32 @@ def test_turn_activity_steps_merge_started_and_completed_items(monkeypatch, tmp_
     upstream = iter([
         {"method": "turn/started", "params": {"turn": {"id": "turn-fixture"}}},
         {"method": "item/started", "params": {"item": {"type": "reasoning", "id": "rs_1", "summary": [], "content": []}}},
+        {"method": "item/reasoning/summaryTextDelta", "params": {"itemId": "rs_1", "delta": "Checking the available notes.", "summaryIndex": 0}},
         {"method": "item/reasoning/textDelta", "params": {"itemId": "rs_1", "delta": "Read the notes first.", "contentIndex": 0}},
-        {"method": "item/completed", "params": {"item": {"type": "reasoning", "id": "rs_1", "summary": [], "content": ["Read the notes first."]}}},
+        {"method": "item/completed", "params": {"item": {"type": "reasoning", "id": "rs_1", "summary": ["Checking the available notes."], "content": ["Read the notes first."]}}},
         {"method": "item/started", "params": {"item": command}},
         {"method": "item/completed", "params": {"item": {**command, "status": "completed", "exitCode": 0, "durationMs": 5,
                                                          "aggregatedOutput": "private-output-fixture"}}},
         {"method": "item/agentMessage/delta", "params": {"delta": "Ready."}},
         {"method": "turn/completed", "params": {"turn": {"status": "completed"}}},
     ])
-    monkeypatch.setattr(session, "_request", lambda *a, **kw: {"turn": {"id": "turn-fixture"}})
+    requests = []
+    monkeypatch.setattr(session, "_request", lambda method, params, **kw:
+        requests.append((method, params)) or {"turn": {"id": "turn-fixture"}})
     monkeypatch.setattr(session, "_next_event", lambda **kw: next(upstream))
     events = []
     session.send("Reply briefly.", on_event=lambda kind, payload: events.append((kind, payload)))
+    # The versioned app-server API accepts a per-Turn summary override, which
+    # also replaces an inherited `none` on resumed Chat threads. Worker hosts
+    # must keep their own summary policy, independent of this Chat default.
+    assert len(requests) == 1 and requests[0][0] == "turn/start"
+    assert requests[0][1].get("summary") == (None if execution_mode else "concise")
     steps = [p["step"] for kind, p in events if kind == "agent.phase" and "step" in p]
     assert [(s["id"], s["state"]) for s in steps] == [
         ("rs_1", "running"), ("rs_1", "completed"), ("exec-1", "running"), ("exec-1", "completed")]
-    assert steps[1]["title"] == "" and "detail" not in steps[1]
+    # This immediate delta stays within the existing display throttle; the
+    # authoritative completion still retains its public summary.
+    assert steps[1]["reasoning_summary"] is True and steps[1]["title"] == "Checking the available notes."
     assert "Read the notes first." not in json.dumps(events)
     assert (steps[3]["verb"], steps[3]["title"], steps[3]["exit_code"]) == ("read", "notes.md", 0)
     assert steps[3]["detail"] == "cat notes.md"

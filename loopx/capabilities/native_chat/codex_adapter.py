@@ -67,6 +67,14 @@ class NativeHistoryRestoration:
         return bool(is_manager_channel(self.session.get("channel_id")) and self.session.get("upstream_mode") != UPSTREAM_MODE
             and (self.session.get("manager_context_version") != MANAGER_CONTEXT_VERSION or refresh or self.session.get("answer_review") is True))
 
+    @staticmethod
+    def manager_profile_changed(session: Mapping[str, Any], manager_runtime: Mapping[str, Any] | None) -> bool:
+        """Use the same runtime fields when deciding native context restoration."""
+        from ..manager_runtime import manager_runtime_session_fields
+        return bool(manager_runtime is not None
+            and (session.get("manager_runtime_profile") is not None or manager_runtime.get("runtime_profile") != "restricted")
+            and any(session.get(key) != value for key, value in manager_runtime_session_fields(manager_runtime).items()))
+
     def provider_migration(self, stored: list[dict[str, Any]]) -> bool:
         from ...chat_codex_goal import UPSTREAM_MODE
         return bool(self.session.get("agent_id") == "codex" and self.session.get("upstream_mode") not in {"chat", UPSTREAM_MODE}
@@ -448,6 +456,28 @@ class CodexAppServerAdapter:
         if self.upstream_thread_id not in thread_ids or not self.healthcheck():
             return None
         return completed_work_readback(self.session, turn_id, known_turn_ids=known_turn_ids)
+
+    def answer_review_replaceable(self) -> bool:
+        """Observe whether replacing this live transport would abandon work.
+
+        This is not proof of settled business effects and never resumes a
+        thread. Both observations use the original owning process.
+        """
+        if not self.healthcheck():
+            return False
+        deadline = time.monotonic() + 5
+        try:
+            def inventory():
+                return list(self.session._control_items("thread/turns/list",
+                    {"sortDirection": "desc", "itemsView": "summary"}, deadline))
+            turns = inventory()
+            ids = [row.get("id") for row in turns]
+            return (bool(turns) and all(isinstance(ref, str) and ref for ref in ids)
+                and len(ids) == len(set(ids))
+                and all(row.get("status") in {"completed", "failed", "interrupted"} for row in turns)
+                and not self.session._background_terminals(deadline) and inventory() == turns)
+        except (RuntimeError, ValueError, OSError):
+            return False
 
     @staticmethod
     def failed_request_observation(*, codex_bin: str, codex_home: Path,
