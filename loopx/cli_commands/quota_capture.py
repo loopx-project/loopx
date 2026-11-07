@@ -19,7 +19,7 @@ from ..control_plane.effect_runtime import EffectRuntimeRejected, EffectRuntimeR
 from ..control_plane.quota.error_codes import QuotaCommandValidationError, QuotaDecisionTransportError
 from ..control_plane.turn_driver.decision_capture import (
     context_index_fields as _context_index_fields,
-    context_selection_bytes as _context_selection_bytes,
+    context_selection_binding, write_initial_context_read_reference,
     context_selection_view as _context_selection_view,
     validate_handoff_socket, CONTEXT_CAPTURE_READ_GUIDANCE, CONTEXT_CAPTURE_PAGE_GUIDANCE, context_capture_read_command,
     CONTEXT_CAPTURE_NAVIGATION_GUIDANCE,
@@ -208,8 +208,12 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
         if pinned_selection is not None:
             if selectors is not None or initial_read or list_fields or list_depth is not None or selection_digest is not None:
                 raise ValueError("a pinned selection reference cannot change selectors; use the original capture reference")
-            if (set(pinned_selection) != {"select", "initial_read", "list_fields", "list_depth", "sha256"}
+            if (set(pinned_selection) - {"present_goal_narrative"} !=
+                    {"select", "initial_read", "list_fields", "list_depth", "sha256"}
                     or type(pinned_selection["initial_read"]) is not bool or type(pinned_selection["list_fields"]) is not bool
+                    or ("present_goal_narrative" in pinned_selection and (
+                        pinned_selection["present_goal_narrative"] is not True
+                        or pinned_selection["list_fields"] or pinned_selection["initial_read"]))
                     or not isinstance(pinned_selection["sha256"], str)
                     or BARE_SHA256_PATTERN.fullmatch(pinned_selection["sha256"]) is None):
                 raise ValueError("reader selection reference is incomplete or unsupported")
@@ -254,7 +258,9 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
             pinned_explicit = pinned_selection is not None and not initial_read
             plan, selected_raw, expected = _context_selection_view(payload, select=selectors,
                 initial_read=initial_read, list_fields=list_fields, list_depth=list_depth,
-                expected_sha256=selection_digest, preserve_selection_order=pinned_explicit)
+                expected_sha256=selection_digest, preserve_selection_order=pinned_explicit,
+                present_goal_narrative=(pinned_selection.get("present_goal_narrative") is True
+                    if pinned_selection is not None else None))
             if rejection := plan.get("rejected_selection"):
                 # TS alone resolves the nearest container. Reuse the original
                 # escaped tokens, without parsing diagnostic prose or traversing
@@ -280,9 +286,9 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
                     # Pin the resolved addresses, not the initial navigation
                     # recipe. Existing explicit readers can replay these exact
                     # bytes after a navigation change, with both digests checked.
-                    reference_file = write_context_read_reference(path, digest, selection={
-                        "select": selectors, "initial_read": False,
-                        "list_fields": list_fields, "list_depth": list_depth, "sha256": expected})
+                    reference_file = write_context_read_reference(path, digest, selection=context_selection_binding(
+                        selectors, list_fields=list_fields, list_depth=list_depth, sha256=expected,
+                        presented=bool(plan.get("presentation_pointers"))))
                 except OSError:
                     # A verified read must not require a writable capture root.
                     # Legacy cursors pin the same capture, selection and digest.
@@ -560,11 +566,9 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
         nonlocal initial_read_pointers, initial_read_reference
         selections = plan["selections"]
         initial_read_pointers = [item["pointer"] for item in selections]
-        selected = _context_selection_bytes(current_document, selections, list_fields=False, list_depth=None)
         try:
-            initial_read_reference = write_context_read_reference(Path(current["path"]), current["sha256"], selection={
-                "select": initial_read_pointers, "initial_read": False, "list_fields": False, "list_depth": None,
-                "sha256": hashlib.sha256(selected).hexdigest()})
+            initial_read_reference = write_initial_context_read_reference(Path(current["path"]), current["sha256"],
+                current_document, selections)
         except OSError:
             # Read-only capture roots keep the existing initial recipe;
             # metadata is optional and never a read/authority receipt.
