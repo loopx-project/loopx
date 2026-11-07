@@ -231,13 +231,23 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
     try:
         body = checkpoint.capture_before_replan(env, receipt, "original heartbeat instructions")
         assert len(commands) == 1 and "--turn-envelope" not in commands[0]
-        assert "--decision-output-root" in commands[0]
         source_path, view_path = wake / "checkpoint-start-guard.json", wake / "checkpoint-start-view.json"
         if context_delivery:
+            assert "--prepared-capture-reference" in commands[0]
             argv = shlex.split(body.split("```sh\n", 1)[1].split("\n```", 1)[0])
             view_path = Path(argv[argv.index("--capture-file") + 1])
             assert view_path.parent != wake and view_path.is_relative_to(wake)
+        else:
+            assert "--decision-output-root" in commands[0]
         source, view = json.loads(source_path.read_bytes()), json.loads(view_path.read_bytes())
+        if context_delivery and replan:
+            original_dir = Path(commands[0][commands[0].index("--decision-output-dir") + 1])
+            selection = source["interaction_contract"]["cli_channel"]["selection_command"]
+            followup = shlex.split(selection["command_args_template"])
+            assert followup[followup.index("--decision-output-root") + 1] == str(original_dir.parent)
+            assert followup[followup.index("--context-delivery") + 1] == "on"
+            assert followup[followup.index("--codex-context-dir") + 1] == str(native)
+            assert "--decision-output-dir" not in followup and "--prepared-capture-reference" not in followup
         assert str(view_path) in body and str(source_path) not in body
         assert body.endswith("original heartbeat instructions")
         if context_delivery:
@@ -298,6 +308,15 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
         assert {key: fixture[key].read_bytes() for key in before} == before
         assert capture.read_bytes() == source_path.read_bytes()
         assert len(commands) == 1  # Reads did not re-enter checkpoint preflight.
+        if context_delivery:
+            selected = shlex.split(selection["route_prefix"]) + followup
+            selected[selected.index("{todo_id}")] = TODO
+            result = run(selected, cwd=fixture["project"], env=env, capture_output=True, text=True, timeout=60)
+            assert result.returncode == 0, result.stdout
+            [next_capture] = set(original_dir.parent.glob("*/decision.json")) - {capture}
+            identity = json.loads(next_capture.read_bytes())["heartbeat_receipt"]["settlement_identity"]
+            assert (identity["todo_id"], identity["turn_instance_id"]) == (TODO, TURN)
+            assert capture.read_bytes() == source_path.read_bytes()
     finally:
         restart_effect_runtime(wait_for_exit=True)
 
