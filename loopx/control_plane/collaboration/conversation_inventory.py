@@ -44,7 +44,9 @@ def _locked_request_batch(root, scope, requests):
             key = (request_id, None if scope.exact else path)
             if key not in lock_keys:
                 try:
-                    locks.enter_context(_request_lock(root, request_id, scope, path.with_suffix(".lock")))
+                    locks.enter_context(
+                        _request_lock(root, request_id, scope, path.with_suffix(".lock"), preserve_holder=True)
+                    )
                 except (OSError, ValueError, KeyError, TypeError):
                     continue
                 lock_keys.add(key)
