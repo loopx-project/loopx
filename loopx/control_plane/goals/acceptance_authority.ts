@@ -1,5 +1,5 @@
 import {bindGoalOutcomesStateOwner, GoalOutcomeValidationError, goalOutcomeCheckBasis, refineGoalOutcome,
-  outcomeContextNavigation} from "./outcome_requirements.ts";
+  outcomeContextNavigation, outcomePlanningReadback} from "./outcome_requirements.ts";
 /** Acceptance effects use the existing canonical head, CAS and operation journal.
  * Only trusted local owner/host adapters may invoke these mutation exports. */
 import {isAbsolute} from "node:path";
@@ -600,6 +600,7 @@ export async function inspectGoalAcceptance(
     ...(agentId === undefined || currentGoalObjective(head.head) === null ? {} : {objective_work_digest: goalObjectiveWorkDigest(head.head, agentId),
       goal_objective_guard: goalObjectiveWorkGuard(head.head, agentId)}),
     ...(context === null ? {} : {outcome_context: {...context, provider_revision: head.provider_revision}}),
+    ...(agentId === undefined ? {} : {planning_requirements: outcomePlanningReadback(contract, agentId)}),
     goal_acceptance_contract: contract});
 }
 

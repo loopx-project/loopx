@@ -68,7 +68,7 @@ def authoring_input_observations(text: str) -> dict[str, bool]:
         # not exact must not mask a later complete instruction.
         rendered_candidates = re.finditer(
             r"^\d+\. `read_back_authored_todos` \(operator_or_agent_actions\): (?P<purpose>.*?)\n"
-            r"   - command/source: `loopx [^\n]*--todo-id '<todo-id>'`$",
+            r"   - (?:command/source: )?`loopx [^\n]*--todo-id '<todo-id>'`$",
             text, re.MULTILINE,
         )
         observed["complete_todo_readback"] = any(

@@ -824,6 +824,50 @@ Approval needs a reviewed decision, not implementation progress or silence.
   installation, R1 managed minimal or D1–D7. No preset, frontend operation,
   permission or persisted state changes; protected execution keeps its owner.
 
+### 2026-11-07 — Registry inspection selected loading
+
+- **Baseline and boundary:** `ac6296225`. `registry` and `registry-boundary`
+  use the existing selected CLI route. Their shared registrar and transport
+  adapter stay in `cli_runtime`; the explicit full CLI reuses them through
+  `support_control`, retaining its inspection and renderer patch points.
+  Registry parsing, classification and Git decisions keep their existing owner.
+  Python adapts the CLI here; no new decision owner, provider or dispatcher
+  framework is introduced. Existing imports and I3's minimum one-minor-release
+  compatibility window remain intact.
+- **Compatibility evidence:** 197 source CLI and support-ownership cases pass,
+  including 26 new inspection/result/rejection/patch-point cases and two help
+  cases. An independent full-CLI loading exclusion fails on the immutable base
+  and passes on the candidate through the same public entrypoint. Twenty
+  successful and rejected requests preserve output, status and exception
+  semantics across source and independently installed monolithic-wheel consoles.
+  Help and read paths also work with Node absent and exclude the unselected
+  Chat, Dashboard and benchmark execution modules. Both revisions pass the real
+  Git registry-boundary smoke in disposable temporary directories; the earlier
+  run under `.local` failed because that ancestor intentionally selects a private
+  registry classification. The failure is retained as fixture-placement evidence.
+- **Cost qualification:** 30 interleaved base/head pairs for each of four
+  help/read workloads on both source and wheel yield 480 samples in 416.7s;
+  study setup/compatibility/profiling takes another 278.1s, excluding earlier
+  environment/wheel preparation and tests. On macOS arm64/Python 3.13.5 with
+  identical dependencies, precompiled bytecode and warm filesystem caches,
+  fresh-console help medians fall from 1.536–1.609s to 0.100–0.103s; registry
+  reads from 1.584–1.631s to 0.301–0.310s, and boundary reads from 1.542–1.612s
+  to 0.222–0.225s. Median RSS falls from about 91–92 MiB to 16–30 MiB.
+  Both help closures fall from 1,158 to 9 LoopX modules; registry/boundary reads
+  fall to 148/44. The PR records per-workload median/p95, CPU, separate audit
+  open counts and unchanged output bytes. No Node starts/IPC or Python-audit
+  socket events are observed; boundary reads keep their three Git queries.
+  Warm-cache block I/O is zero, while exact bytes read and native activity
+  outside the audit remain unknown. These results qualify local CLI cost
+  reductions, not portable D6 limits, full preparation/model costs or adoption.
+- **Validation and remaining work:** changed-file lint passes. The CI lint scope
+  still fails on the baseline-existing F841, whose repair is already proposed
+  separately; this result is not waived. Source and wheel evidence does not
+  upgrade an installed host. M1/#8011, full R0/V10, R1's real managed Turn,
+  context/model composition, split installation, adoption and complete costs
+  remain open. No D2/D5/D6/D3, default or authority decision changes. The related
+  bounded refactor shares the existing grammar and inspection adapter; larger
+  support/control extraction remains outside this slice.
 ### 2026-11-06 — Selected Turn host loading seam
 
 Following the generic-cli/SQLite candidate in

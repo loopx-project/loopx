@@ -99,6 +99,7 @@ def _evolution_plan(attachment, projection, *, agent_id):
 
 
 def _events(attachment, *, goal_id, agent_id, source_id, recorded_at, existing_node=None,
+            todo_id=None, turn_instance_id=None,
             _check_execution_measurements=True):
     previous = existing_node or {}
     update = attachment.get("question_update") or {}
@@ -136,6 +137,10 @@ def _events(attachment, *, goal_id, agent_id, source_id, recorded_at, existing_n
         tags=["writeback-result"],
         execution_observation=attachment.get("execution_observation"),
         measurements=attachment.get("measurements"),
+        work_yardstick=({"decision": attachment["work_yardstick_decision"], "binding": {
+            "goal_id": goal_id, "agent_id": agent_id, "todo_id": todo_id,
+            "turn_instance_id": turn_instance_id,
+        }} if "work_yardstick_decision" in attachment else None),
         _check_execution_measurements=_check_execution_measurements,
         recorded_at=recorded_at,
     )
@@ -193,6 +198,8 @@ def prepare_result_attachment(
     agent_id,
     todo_id,
     turn_instance_id,
+    _replay_committed_at=None,
+    _current_events=None,
 ):
     """Validate before primary commit; this path never appends graph evidence."""
     result = normalize_result_attachment(attachment)
@@ -200,7 +207,7 @@ def prepare_result_attachment(
         raise ValueError(
             "Explore result attachment requires agent, Todo and Turn identity"
         )
-    _, graph, gate = _policy(registry_path, goal_id)
+    goal, graph, gate = _policy(registry_path, goal_id)
     if not (graph or gate["enabled"]):
         raise ValueError(
             "Explore result attachment requires enabled Explore evidence or planning mode"
@@ -221,11 +228,24 @@ def prepare_result_attachment(
         agent_id=agent_id,
         source_id="validation",
         recorded_at="2000-01-01T00:00:00Z",
+        todo_id=todo_id, turn_instance_id=turn_instance_id,
     )
-    current_events = load_explore_result_events_strict(
+    current_events = _current_events if _current_events is not None else load_explore_result_events_strict(
         explore_result_log_path(runtime_root, goal_id), goal_id=goal_id
     )
-    existing = build_explore_result_projection(current_events, goal_id=goal_id)
+    existing = build_explore_result_projection(current_events, goal_id=goal_id,
+        **({"finding_limit": len(current_events)} if "work_yardstick_decision" in result else {}))
+    if "work_yardstick_decision" in result:
+        from ..todo_replan_cadence.machine_defaults import work_yardstick_enabled
+        effect_runtime_result("work_item.yardstick.continuation", {
+            # Only replay of the original committed attachment may finish after
+            # disable; it cannot grant a new capture or change its contents.
+            "enabled": _replay_committed_at is not None or work_yardstick_enabled(goal, runtime_root),
+            "replay_committed_at": _replay_committed_at,
+            "decision": result["work_yardstick_decision"], "evidence_refs": result["evidence_refs"],
+            "binding": {"goal_id": goal_id, "agent_id": agent_id, "todo_id": todo_id},
+            "findings": existing["findings"],
+        })
     if _evolves_question(result):
         _evolution_plan(result, existing, agent_id=agent_id)
     for node in existing.get("nodes", []):
@@ -324,6 +344,7 @@ def deliver_result_attachment(
             agent_id=agent_id,
             source_id=intent["idempotency_key"],
             recorded_at=committed_at,
+            todo_id=todo_id, turn_instance_id=turn_instance_id,
             # A durable terminal intent can describe an old writer's event.
             # Structural reconstruction is only for exact canonical readback;
             # a missing event still goes through strict preparation below.
@@ -358,6 +379,12 @@ def deliver_result_attachment(
             result["graph"] = {"ok": True, "appended_event_count": 0,
                                "idempotent_replay": True}
         else:
+            # The continuation check, evolution plan and append CAS must use
+            # one snapshot. A second read after validation could silently admit
+            # a predecessor made stale by a concurrent same-work delivery.
+            current_events = load_explore_result_events_strict(
+                explore_result_log_path(runtime_root, goal_id), goal_id=goal_id
+            )
             attachment = prepare_result_attachment(
                 intent["payload"]["attachment"],
                 registry_path=registry_path,
@@ -366,9 +393,8 @@ def deliver_result_attachment(
                 agent_id=agent_id,
                 todo_id=todo_id,
                 turn_instance_id=turn_instance_id,
-            )
-            current_events = load_explore_result_events_strict(
-                explore_result_log_path(runtime_root, goal_id), goal_id=goal_id
+                _replay_committed_at=(committed_at if payload.get("idempotent_replay") is True else None),
+                _current_events=current_events,
             )
             evolves = _evolves_question(attachment)
             plan = (_evolution_plan(attachment,
@@ -379,12 +405,14 @@ def deliver_result_attachment(
                 attachment, goal_id=goal_id, agent_id=agent_id,
                 source_id=intent["idempotency_key"], recorded_at=committed_at,
                 existing_node=plan.get("existing_node"),
+                todo_id=todo_id, turn_instance_id=turn_instance_id,
             )
             result["graph"] = append_explore_result_events(
                 explore_result_log_path(runtime_root, goal_id), events,
                 expected_goal_id=goal_id,
                 create_only_node_ids=[] if evolves else [attachment["node_id"]],
-                expected_event_ids=([row["event_id"] for row in current_events] if evolves else None),
+                expected_event_ids=([row["event_id"] for row in current_events]
+                                    if evolves or "work_yardstick_decision" in attachment else None),
             )
         linked = update_goal_todo(
             **_link_arguments(

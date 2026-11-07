@@ -90,6 +90,9 @@ def run_json_cli_result(
         command,
         cwd=cwd or REPO_ROOT,
         check=False,
+        # Match run_cli: machine consumers need the raw projection, not the
+        # model-facing navigation wrapper. Explicit argv can still opt in.
+        env={**os.environ, "LOOPX_CONTEXT_DELIVERY": "off"},
         text=True, encoding="utf-8", errors="replace",
         capture_output=True,
     )
