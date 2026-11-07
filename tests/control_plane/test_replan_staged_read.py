@@ -494,6 +494,29 @@ def _views(source):
     return envelope, _turn_envelope_result("replan_view", **params, stage="review"), params
 
 
+def test_complete_review_indexes_current_requirements_without_changing_historical_index(tmp_path):
+    from replan_packet_fixture import populated_replan_source
+    from loopx.control_plane.quota.turn_envelope import compose_turn_decision
+
+    source = populated_replan_source(tmp_path, acceptance=True)
+    _, historical, _ = _views(source)
+    complete = compose_turn_decision(source)
+    _, current, params = _views(complete)
+    originals = source["autonomous_replan_obligation"]["replan_context"]["core_goal"][
+        "acceptance_contract"]["outcome_requirements"]["outcomes"]
+    assert len(current["acceptance_index"]["outcomes"]) == len(originals)
+    assert all("requirement_states" not in row for row in historical["acceptance_index"]["outcomes"])
+    for row, original in zip(current["acceptance_index"]["outcomes"], originals, strict=True):
+        assert row["requirement_count"] == len(original["requirements"])
+        assert sorted(key for group in row["requirement_states"] for key in group["requirement_ids"]) == sorted(
+            requirement["id"] for requirement in original["requirements"])
+        for field in ("owner_agent_id", "work"):
+            if field in original:
+                assert row[field] == original[field]
+        detail = _turn_envelope_result("replan_view", **params, stage="acceptance", outcome_ref=row["outcome_ref"])
+        assert detail["outcome"] == original
+
+
 def test_populated_history_and_cumulative_acceptance_have_separate_budgets(tmp_path):
     from replan_packet_fixture import populated_replan_source
 

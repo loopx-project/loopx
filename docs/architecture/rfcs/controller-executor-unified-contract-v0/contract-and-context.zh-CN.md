@@ -405,10 +405,21 @@ Draft，不是仅等待评审。尚无模型或成本收益证据。历史 effec
 受支持恢复窗口核清前保留历史 decoder。回退同样区分未结工作与新准入。版本迁移不能
 把保存的 prompt、journal 或源 hash 改写成仿佛一直使用新契约。
 
-C1 首个 PR 必须覆盖上述两个生产组合调用点，并交付至少一条从生产端到最终输入的
+C1 首次跨入口切换必须覆盖上述两个生产组合调用点，并交付至少一条从生产端到最终输入的
 完整旅程，同时明确剩余 reader。这个有界切片通过资格，不代表可向未验收 host 开启
 新 writer，也不关闭 C1。最终切换须在全部受支持 reader 验收后删除活跃格式选择。
 临时 decoder 有具名 caller 与退出条件，不是面向用户的兼容视图。
+
+Turn 生命周期可以在 C1 父提案下单独评审，但须一起覆盖规划、最终 Host 输入、capture
+发布、journal 检查、原会话恢复及结算消费者。已迁移 Turn 使用一个完整来源及其已校验
+reader；这个分阶段边界保留普通 quota writer 和 thin-heartbeat 的现有契约。共享投影
+改动须保留这些未迁移 caller。历史 v0 decoder 服务已记录的 plan、request 和 journal，
+不能为非法的已提供 v1 来源兜底；其删除仍依赖未结工作及受支持恢复窗口核清。
+
+这属于 C1 的部分交付，不代表跨入口切换取得资格，也不证明上下文或成本收益。父提案
+仍负责普通 quota 与 heartbeat 迁移、最终输入／材料读取覆盖、全宿主配置，以及原单会话
+成果与完整成本对照。评审须包含匹配基线／候选版本的真实 provider 成果、拒绝敏感性和
+打包恢复。只有切片合入 main、父提案集成 main 后，父提案的差异才会减少；开 PR 不算。
 
 对 normal、selection、replan、wait、recovery 和 capability-off 的每个 fixture，
 在**三个边界**核对独立编写的义务：组合契约、重建交付、最终模型输入及必需材料读取。
@@ -434,6 +445,26 @@ C1 首个 PR 必须覆盖上述两个生产组合调用点，并交付至少一�
 恢复先前合格 profile。不能静默替换 native session 或重解释 pending 回执。删除字段/
 decoder 前证明 export、旧版本 readback 与降级行为；满足受支持保留/升级边界前保留旧
 reader。本文不单独授权破坏性迁移。
+
+#### Turn 消费方准备与指令保真
+
+独立 Turn 提案让普通 quota producer 保持已记录契约；更广的 quota／heartbeat 切换
+仍归父提案。未迁移 producer 的测试须守住这个边界。当前 Turn 规划直接消费完整来源，
+发布自己的不可变 capture；新组合来源与较早 executor envelope 错配时继续拒绝。
+
+原生所选 Task 在 kernel delivery guard 之前准备普通 managed lease，并在模型后验证时
+复用该 proof。claim 标签本身不足，不能借用另一次执行的 lease。来源检查先于独立
+Task argv；拒绝和原结果恢复保留原会话与一次性效果。
+
+现代 Codex 与结构化 Host 指令共用既有 audit 读取规则：在判断 Goal acceptance 或提出
+closeout 前读取已声明 audit，即使 Goal 保持开放。通知策略不授予或取消执行权；所供
+delivery、attempt、quiet-noop、execution 与 orchestration 约束仍须遵守。状态、quota
+和 scheduler 效果仍归 Core。完整契约可以声明待执行的原材料读取：发布不等于已读，
+测试须真正执行 reader，并保留原正文与停止条件。
+
+一次性 research-team launcher 与 initializer 共同定位实际加载的 Core，包括隔离 wheel，
+仍保留 runtime 独占创建。源码和打包消费者验证，分别区别于已安装 App 采用、真实可选
+provider／模型行为及相对原 quota 的完整成本收益。这些修复不关闭 C1，也不授权部署或合并。
 
 ### C1 基线边界与复用盘点
 
