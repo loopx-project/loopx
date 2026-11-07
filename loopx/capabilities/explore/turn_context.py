@@ -79,6 +79,8 @@ def explore_turn_context(
     require_registered_agent_id(
         registry_path=registry_path, goal_id=goal_id, agent_id=agent_id
     )
+    from ..todo_replan_cadence.machine_defaults import work_yardstick_enabled
+    yardstick = work_yardstick_enabled(goal, runtime_root)
     projection, plan, focus, todos = {}, {}, {}, {}
     page_tasks = {row["todo_id"] for row in review_pages
                   if isinstance(row, Mapping) and isinstance(row.get("todo_id"), str)} if isinstance(review_pages, list) else set()
@@ -92,7 +94,7 @@ def explore_turn_context(
             events, goal_id=goal_id, finding_limit=len(events),
             mermaid_node_limit=3,
         )
-    if gate["enabled"] or graph and (todo_id is not None or page_tasks):
+    if gate["enabled"] or graph and (todo_id is not None or page_tasks or yardstick):
         todos = list_goal_todos(
             registry_path=registry_path,
             goal_id=goal_id,
@@ -137,6 +139,9 @@ def explore_turn_context(
             "harness_gate": gate,
             "projection": projection,
             "plan": plan,
+            **({"yardstick_enabled": True, "work_todos": [{key: row[key] for key in (
+                "todo_id", "role", "status", "done", "claimed_by", "explore_result_node_refs") if key in row}
+                for row in todos.get("todos", [])]} if yardstick else {}),
             **focus,
             **({"review_todos": [scopes[key] for key in sorted(page_tasks) if key in scopes]} if page_tasks else {}),
             "route": route,

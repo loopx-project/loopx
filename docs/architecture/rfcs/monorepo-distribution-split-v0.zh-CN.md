@@ -599,6 +599,81 @@ R0 可以先于目录移动交付，但不代表内核合格。R3/R4 可选，�
   不关闭完整 R0/V10、M1、拆包安装、R1 managed minimal 或 D1–D7。不改变 preset、
   前端操作、权限或持久化状态；受保护执行仍由既有 owner 所有。
 
+### 2026-11-07 — Heartbeat pre-quota 按需加载
+
+- **基线与 owner：**`79665b97a`。heartbeat builder 已在 external evidence polling
+  可用时生成 `heartbeat-prequota`。选择性 parser 复用原 heartbeat registrar，dispatch
+  放在现有 heartbeat transport 模块；完整 facade 显式传入原 runner、renderer 和全局
+  registry resolver patch points。显式／隐式路由、别名、格式、timeout、异常、降级返回和
+  controller 语义均已刻画；reconciliation／hook 顺序及 typed owners 保持原路径。
+- **源码与包证据：**新增 50 个 transport／加载／真实后端用例；四个独立核对的源码／
+  wheel console 各运行 22 个场景；16 个配置／降级 File／SQLite console 场景覆盖重放、
+  opaque 原工作保留和零 quota 扣费。删除 `continue_to_quota` 的 mutation 经同一公开
+  console oracle 在两种真实 store 上被拒绝。原 acknowledgement smoke 同时覆盖两个
+  CLI facade。完整源码选择初轮得到 378 pass、两个路由测试失败，精确基线同样失败。
+  fixture 改为读取原 digest-bound progressive capture，不重新准入；受影响文件随后
+  17 个用例全部通过。失败未豁免。聚焦 lint、配置内 mypy 和代码 canary 通过。
+- **配对本地成本：**macOS 27.0 arm64、Python 3.13.5、Node 26.0.0；相同依赖和合成
+  store，预编译 bytecode、全新 Python 进程、热文件缓存及复用的隔离 Node 服务。
+  每个 workload／distribution 30 个交错 base／head 配对，共 360 个样本，采样 339 秒；
+  study 准备／验证另计 260 秒。测量使用共享开发机，并非空闲机器实验。下表是含解释器
+  启动的墙钟 median／p95（秒）和进程 RSS 中位数（MiB）。
+
+| Workload / distribution | 基线 median / p95 | 候选 median / p95 | 基线 → 候选 RSS |
+| --- | --- | --- | --- |
+| `source/prequota-help` | 1.433 / 1.889 | 0.172 / 0.226 | 91.5 → 24.7 |
+| `source/prequota-file-off` | 1.494 / 1.927 | 0.545 / 0.667 | 92.0 → 47.0 |
+| `source/prequota-sqlite-off` | 1.547 / 1.977 | 0.507 / 0.640 | 91.9 → 46.3 |
+| `wheel/prequota-help` | 1.555 / 1.967 | 0.170 / 0.210 | 91.7 → 24.5 |
+| `wheel/prequota-file-off` | 1.545 / 2.155 | 0.536 / 0.650 | 91.7 → 46.7 |
+| `wheel/prequota-sqlite-off` | 1.397 / 1.866 | 0.531 / 0.667 | 92.0 → 46.9 |
+
+- **加载边界与完整成本限制：**help 的 LoopX 模块为 29，基线 1,158；默认关闭的执行
+  为 277，基线 1,160。Python open 观察由 1,292–1,312 降至 81–395；打开文件尺寸之和
+  是 footprint，不是实际读取字节。候选 help 的 user／system 进程 CPU 中位数为
+  0.04／0.02 秒，执行为 0.13–0.14／0.065–0.08 秒；基线为
+  0.40–0.42／0.16–0.185 秒。help 输出仍为 737 字节，JSON 执行仍为 827 字节。
+  独立 SQLite loopback profile 在两版均观察到发送 1,362、接收 668 字节；冷服务启动
+  Node version／server 两个进程，复用服务启动数为零。单次带 instrumentation 的冷／
+  热观察不能拆出 Node readiness 或 service CPU，相关成本未通过资格。初轮 IPC probe
+  误以为使用 Unix socket 而失败，改为 loopback instrumentation 后通过，未修改产品。
+  help p95 为 0.226／0.210 秒，超过提议的 0.200 秒目标；未晋升或重标该 D6 提议。
+- **剩余：**这是一条 R0／V1／V3／V10 caller 的作者提案，I3 至少保留一个 minor release。
+  完整 R0／V10、M1／#8011、R1、context／model、split-install、installed-host 恢复、
+  采纳和完整任务成本仍开放。Python 仅适配 transport，没有新增 decision owner、preset、
+  provider 或权限规则。最终 exact-head review／CI 仍是独立交付门，与这些本地观察分开。
+### 2026-11-07 — Registry 检查的选择性加载
+
+- **基线与边界：** `ac6296225`。`registry` 和 `registry-boundary` 使用现有
+  selected CLI 路由。共享注册器与传输适配器留在 `cli_runtime`；显式完整 CLI
+  通过 `support_control` 复用它们，保留原有检查函数与 renderer patch point。
+  Registry 解析、分类及 Git 判定仍归现有 owner。Python 在此只适配 CLI，不新增
+  决策 owner、provider 或 dispatcher 框架。既有导入与 I3 至少一个 minor release
+  的兼容窗口保持不变。
+- **兼容证据：** 源码 CLI 与 support ownership 的 197 个用例通过，包含新增的
+  26 个检查结果、拒绝与 patch-point 用例及两个 help 用例。独立的完整 CLI 加载
+  排除断言经同一公开入口，在不可变基线上失败、候选版本上通过。20 个成功与
+  拒绝请求在源码及独立安装的单体 wheel 控制台上保持输出、状态与异常语义一致。
+  Help 与读取路径在缺少 Node 时仍可用，并排除未选择的 Chat、Dashboard 和
+  benchmark 执行模块。两版本在一次性临时目录中均通过真实 Git registry-boundary
+  smoke；先前放在 `.local` 下的运行失败，因为该祖先路径会按既有规则选择私有
+  registry 分类。这次失败作为 fixture 放置证据保留。
+- **成本资格：** 源码与 wheel 各四条 help/读取路径，每条运行 30 对交替 base/head
+  样本，共 480 个样本，采样耗时 416.7 秒；研究准备、兼容验证及 profiling 另耗时
+  278.1 秒，不含此前环境、wheel 准备及测试。macOS arm64/Python 3.13.5、相同依赖、
+  预编译字节码和暖文件缓存下，新进程控制台 help 中位数从 1.536–1.609 秒降至
+  0.100–0.103 秒；registry 读取从 1.584–1.631 秒降至 0.301–0.310 秒，边界读取从
+  1.542–1.612 秒降至 0.222–0.225 秒。RSS 中位数从约 91–92 MiB 降至 16–30 MiB。
+  两条 help 的 LoopX 模块闭包均从 1,158 降至 9；registry/边界读取降至 148/44。
+  PR 记录逐路径 median/p95、CPU、独立 audit 的文件打开次数及未改变的输出字节。
+  未观察到 Node 启动/IPC 或 Python audit socket 事件；边界读取保留三次 Git 查询。
+  暖缓存块 I/O 为零，准确读取字节数及 audit 之外的原生活动仍未知。这些结果只限定
+  本地 CLI 成本改善，不建立可移植 D6 限值、完整准备/model 成本或采纳结论。
+- **验证与剩余工作：** 改动文件 lint 通过。CI lint 范围仍失败于基线已有的 F841，
+  其修复已另行提案；这里不豁免该结果。源码与 wheel 证据不升级已安装 host。
+  M1/#8011、完整 R0/V10、R1 的真实受管 Turn、context/model 组合、拆包安装、采纳
+  与完整成本仍开放。D2/D5/D6/D3、默认行为及权限判定均不改变。相关有界重构
+  共享既有 grammar 与检查适配器；更大的 support/control 提取不纳入本切片。
 ### 2026-11-06 — 所选 Turn 宿主的加载接缝
 
 承接 [#8180](https://github.com/loopx-project/loopx/pull/8180) 的
@@ -807,7 +882,6 @@ owner；采纳性能变更前必须另做匹配的真实路径对照。本 check
 预算、preset 或默认行为。R0 完整清点、R1/minimal、D2/D5/D6、I3/D3、
 hard-lease／context／model 和拆包安装验收仍开放；采纳仍受独立 exact-head
 评审及必需验证约束。
-
 ## 附录 B：决策日志
 
 | 日期 | 决策 | 负责人 / 批准 | 备选 | 变更的规范章节 |

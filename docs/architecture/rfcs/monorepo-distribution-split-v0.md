@@ -824,6 +824,105 @@ Approval needs a reviewed decision, not implementation progress or silence.
   installation, R1 managed minimal or D1–D7. No preset, frontend operation,
   permission or persisted state changes; protected execution keeps its owner.
 
+### 2026-11-07 — Heartbeat pre-quota selected loading
+
+- **Baseline and owner:** `79665b97a`. The heartbeat builder already emits
+  `heartbeat-prequota` when external evidence polling is available. Its selected
+  parser reuses the existing heartbeat registrar; dispatch uses the existing
+  heartbeat transport module. The complete facade passes its original runner,
+  renderer and global-registry resolver patch points. Explicit/implicit routing,
+  aliases, format, timeout, exception, degraded-return and controller semantics
+  remain characterized; reconciliation/hook ordering and typed owners are unchanged.
+- **Source and package evidence:** 50 new transport/loading/real-backend cases;
+  22 cases on each of four independently verified source/wheel consoles; 16
+  configured/degraded File/SQLite console scenarios with replay, retained opaque
+  work and zero quota debit. Dropping `continue_to_quota` is rejected by the same
+  public-console oracle on both real stores. The existing acknowledgement smoke
+  now exercises both CLI facades. The full source selection initially has 378
+  passes and two route-test failures reproduced on the immutable baseline. The
+  fixture now reads the original digest-bound progressive capture without
+  re-admission; its complete affected file then passes all 17 cases. No failure
+  was waived. Focused lint, configured mypy and the code canary pass.
+- **Matched local cost:** macOS 27.0 arm64, Python 3.13.5, Node 26.0.0; identical
+  dependencies and synthetic stores, precompiled bytecode, fresh Python processes,
+  warm filesystem caches and reused isolated Node services. Thirty alternating
+  base/head pairs for each workload/distribution yield 360 samples in 339 seconds;
+  study setup/validation takes 260 seconds separately. This shared development
+  host was not an idle-machine experiment. Values below are wall median/p95 in
+  seconds and median process RSS in MiB, including interpreter startup.
+
+| Workload / distribution | Base median / p95 | Candidate median / p95 | Base → candidate RSS |
+| --- | --- | --- | --- |
+| `source/prequota-help` | 1.433 / 1.889 | 0.172 / 0.226 | 91.5 → 24.7 |
+| `source/prequota-file-off` | 1.494 / 1.927 | 0.545 / 0.667 | 92.0 → 47.0 |
+| `source/prequota-sqlite-off` | 1.547 / 1.977 | 0.507 / 0.640 | 91.9 → 46.3 |
+| `wheel/prequota-help` | 1.555 / 1.967 | 0.170 / 0.210 | 91.7 → 24.5 |
+| `wheel/prequota-file-off` | 1.545 / 2.155 | 0.536 / 0.650 | 91.7 → 46.7 |
+| `wheel/prequota-sqlite-off` | 1.397 / 1.866 | 0.531 / 0.667 | 92.0 → 46.9 |
+
+- **Closure and complete-cost limits:** help loads 29 LoopX modules instead of
+  1,158; default-off execution loads 277 instead of 1,160. Python open observations
+  fall from 1,292–1,312 to 81–395. Opened-file size sums are footprints, not actual
+  read bytes. Median user/system process CPU is 0.04/0.02 seconds for candidate
+  help and 0.13–0.14/0.065–0.08 for execution, versus 0.40–0.42/0.16–0.185 at base.
+  Output remains 737 bytes for help and 827 for JSON execution. A separate SQLite
+  loopback profile observes 1,362 sent and 668 received bytes on each revision,
+  two Node starts for version/server discovery with a cold service and none with
+  a reused service. Its single instrumented cold/warm observations do not isolate
+  Node readiness or service CPU; those costs remain unqualified. The initial IPC
+  probe assumed Unix sockets and failed; loopback instrumentation corrected the
+  probe without changing product behavior. Help p95 of 0.226/0.210 seconds exceeds
+  the proposed 0.200-second target; that D6 proposal is not promoted or relabeled.
+- **Remaining:** this is one R0/V1/V3/V10 caller proposal, preserving I3 for at
+  least one minor release. Full R0/V10, M1/#8011, R1, context/model and split-install
+  qualification, installed-host recovery, adoption and complete task costs remain
+  open. The bounded Python change adapts transport; it adds no decision owner,
+  preset, provider or authority rule. Required final-head review/CI remains a
+  delivery gate distinct from these local observations.
+### 2026-11-07 — Registry inspection selected loading
+
+- **Baseline and boundary:** `ac6296225`. `registry` and `registry-boundary`
+  use the existing selected CLI route. Their shared registrar and transport
+  adapter stay in `cli_runtime`; the explicit full CLI reuses them through
+  `support_control`, retaining its inspection and renderer patch points.
+  Registry parsing, classification and Git decisions keep their existing owner.
+  Python adapts the CLI here; no new decision owner, provider or dispatcher
+  framework is introduced. Existing imports and I3's minimum one-minor-release
+  compatibility window remain intact.
+- **Compatibility evidence:** 197 source CLI and support-ownership cases pass,
+  including 26 new inspection/result/rejection/patch-point cases and two help
+  cases. An independent full-CLI loading exclusion fails on the immutable base
+  and passes on the candidate through the same public entrypoint. Twenty
+  successful and rejected requests preserve output, status and exception
+  semantics across source and independently installed monolithic-wheel consoles.
+  Help and read paths also work with Node absent and exclude the unselected
+  Chat, Dashboard and benchmark execution modules. Both revisions pass the real
+  Git registry-boundary smoke in disposable temporary directories; the earlier
+  run under `.local` failed because that ancestor intentionally selects a private
+  registry classification. The failure is retained as fixture-placement evidence.
+- **Cost qualification:** 30 interleaved base/head pairs for each of four
+  help/read workloads on both source and wheel yield 480 samples in 416.7s;
+  study setup/compatibility/profiling takes another 278.1s, excluding earlier
+  environment/wheel preparation and tests. On macOS arm64/Python 3.13.5 with
+  identical dependencies, precompiled bytecode and warm filesystem caches,
+  fresh-console help medians fall from 1.536–1.609s to 0.100–0.103s; registry
+  reads from 1.584–1.631s to 0.301–0.310s, and boundary reads from 1.542–1.612s
+  to 0.222–0.225s. Median RSS falls from about 91–92 MiB to 16–30 MiB.
+  Both help closures fall from 1,158 to 9 LoopX modules; registry/boundary reads
+  fall to 148/44. The PR records per-workload median/p95, CPU, separate audit
+  open counts and unchanged output bytes. No Node starts/IPC or Python-audit
+  socket events are observed; boundary reads keep their three Git queries.
+  Warm-cache block I/O is zero, while exact bytes read and native activity
+  outside the audit remain unknown. These results qualify local CLI cost
+  reductions, not portable D6 limits, full preparation/model costs or adoption.
+- **Validation and remaining work:** changed-file lint passes. The CI lint scope
+  still fails on the baseline-existing F841, whose repair is already proposed
+  separately; this result is not waived. Source and wheel evidence does not
+  upgrade an installed host. M1/#8011, full R0/V10, R1's real managed Turn,
+  context/model composition, split installation, adoption and complete costs
+  remain open. No D2/D5/D6/D3, default or authority decision changes. The related
+  bounded refactor shares the existing grammar and inspection adapter; larger
+  support/control extraction remains outside this slice.
 ### 2026-11-06 — Selected Turn host loading seam
 
 Following the generic-cli/SQLite candidate in
@@ -1084,7 +1183,6 @@ comparison before adopting a performance change. This checkpoint creates no
 new owner, budget, preset or default. R0's complete census, R1/minimal,
 D2/D5/D6, I3/D3, hard-lease/context/model and split-install acceptance remain
 open; independent exact-head review and required validation govern adoption.
-
 ## Appendix B: Decision log
 
 | Date | Decision | Owner / approval | Alternatives | Normative sections changed |
