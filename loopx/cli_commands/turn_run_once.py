@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import sys as _sys
 from collections.abc import Callable, Mapping
 from pathlib import Path
+from typing import TYPE_CHECKING as _TYPE_CHECKING
 from typing import Any
 
 from ..capabilities.explore.composition_frontier import (
@@ -42,14 +44,36 @@ from ..control_plane.todos.path_resolution import resolve_todo_state_path
 from .turn_cadence import managed_cadence_start
 from .turn_host_request import build_codex_cli_host_runner, prepare_turn_host_request
 from .turn_decision import collect_turn_status_payload, current_turn_host_launch_decision
-from .turn_dsh_host import build_dsh_host_runner, build_dsh_operation_host_runner
 from .turn_rendering import build_turn_error_payload
 from .turn_post_writeback import drain_committed_turn_post_writeback_hooks
 from .turn_todo_writeback import captured_todo_text_sha256, write_turn_validated_completion
 
+if _TYPE_CHECKING:
+    from .turn_dsh_host import (
+        build_dsh_host_runner as build_dsh_host_runner,
+        build_dsh_operation_host_runner as build_dsh_operation_host_runner,
+    )
+
 EXACT_SETTLEMENT_READBACK_NOT_FOUND = (
     "exact settlement readback unexpectedly returned not-found"
 )
+
+# Keep the existing import and patch seams without loading an unselected host.
+_DSH_HOST_EXPORTS = ("build_dsh_host_runner", "build_dsh_operation_host_runner")
+
+
+def __getattr__(name: str) -> Any:
+    if name not in _DSH_HOST_EXPORTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    from . import turn_dsh_host
+
+    value = getattr(turn_dsh_host, name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(_DSH_HOST_EXPORTS))
 
 
 def execute_turn_run_once(
@@ -816,7 +840,7 @@ def execute_turn_run_once(
             session_binding_resolver = resolve_built_in_session_binding
         elif args.host == "dsh":
             if getattr(args, "dsh_operation_module", None):
-                host_runner = build_dsh_operation_host_runner(
+                host_runner = getattr(_sys.modules[__name__], "build_dsh_operation_host_runner")(
                     args, runtime_root=runtime_root, registry_path=registry_path,
                     workspace=project, environ=operator_environ,
                     goal_admission=goal_admission,
@@ -829,7 +853,7 @@ def execute_turn_run_once(
 
                 session_binding_resolver = resolve_dsh_operation_session
             else:
-                host_runner = build_dsh_host_runner(
+                host_runner = getattr(_sys.modules[__name__], "build_dsh_host_runner")(
                     args, workspace=project, environ=operator_environ,
                 )
 
@@ -937,3 +961,6 @@ def execute_turn_run_once(
             execution_started=execution_started,
             journal_readback=journal_readback,
         )
+
+
+__all__ = [name for name in globals() if not name.startswith("_")] + list(_DSH_HOST_EXPORTS)

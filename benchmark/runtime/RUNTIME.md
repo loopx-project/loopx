@@ -385,6 +385,41 @@ Budget exhaustion is distinct from task completion: this clock does not override
 provider failures, Stop, blocked planning, or a valid terminal LoopX decision.
 Campaign duration coverage must still classify an early exit as missing time.
 
+### Optional native execution evidence
+
+A benchmark host can expose finalized and live solver intervals through the
+existing campaign duration owner. This read-only provider does not declare
+Goal requirements, configure acceptance checks or decide whether to continue.
+The Agent owns semantic requirements in the shared first-planning checkpoint;
+independent executable checks remain optional. A maximum timeout alone never
+creates a minimum execution commitment.
+
+```python
+from benchmark.edgebench.execution_commitment import (
+    NativeExecutionEvidence, install_execution_commitment,
+)
+
+evidence = NativeExecutionEvidence(
+    run_id=run_id, task_id=task_id, trial=trial,
+    target_seconds=explicit_caller_target_seconds,
+    runner_active=lambda: worker is not None and worker.poll() is None,
+)
+install_execution_commitment(
+    app, run_id=run_id, task_id=task_id, observe=evidence.fulfilled,
+)
+```
+
+Use the native trial directory containing `solver_execution.json` and the exact
+worker process. For continuation, supply finalized earlier receipts as explicit
+`(Path, sha256)` pairs in `previous`. Setup, grading and downtime contribute no
+execution credit; missing, altered or unfinished previous evidence stays unknown.
+The scoped feedback route resolves the exact `(run_id, task_id)` pair. Reinstalling
+the same observer is idempotent; replacing it is rejected. The command adapter
+`python -m benchmark.runtime.execution_commitment probe|check --task-id TASK`
+reads the explicitly selected native relay and rejects stale or malformed data.
+Apps without this extension and ordinary worker entry/restore behavior remain
+unchanged. No default semantic requirement or automatic check is installed.
+
 To compare entry policies, hold the execution mode, session policy, model,
 effort, tools, feedback and total budget fixed, and use separate trials:
 

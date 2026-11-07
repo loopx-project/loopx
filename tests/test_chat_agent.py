@@ -202,7 +202,8 @@ def test_native_turn_preserves_operator_material(monkeypatch, tmp_path, mode):
 
 
 @pytest.mark.parametrize("fault", [None, "active", "completed", "final", "missing-phase", "correction",
-    "unknown", "foreign", "duplicate", "live-tool", "late-items", "late-turn"])
+    "unknown", "foreign", "duplicate", "live-tool", "late-items", "late-turn", "dynamic-tool", "live-dynamic-tool", "later-completed",
+    "image-view", "moving-image-view", "unknown-image-view", "image-without-effect"])
 def test_interrupted_result_review_requires_stable_full_inventory_without_final_or_live_effects(tmp_path, monkeypatch, fault):
     session = chat_agent.CodexChatAgentSession(process=SimpleNamespace(poll=lambda: None),
         messages=queue.Queue(), thread_id="original", work_dir=tmp_path, response_timeout_sec=.2)
@@ -220,6 +221,8 @@ def test_interrupted_result_review_requires_stable_full_inventory_without_final_
                 {"id": "interrupted", "status": "completed" if fault == "completed" else "interrupted"}]
             if fault == "late-turn" and turns_read > 1:
                 rows.append({"id": "new", "status": "inProgress"})
+            if fault == "later-completed" and turns_read > 2:
+                rows.append({"id": "other-completed", "status": "completed"})
             result = {"data": rows}
         else:
             assert method == "thread/items/list"
@@ -232,8 +235,17 @@ def test_interrupted_result_review_requires_stable_full_inventory_without_final_
                 item.update({"type": "futureItem"} if fault == "unknown" else
                     {"id": "user"} if fault == "duplicate" else
                     {"status": "inProgress"} if fault == "live-tool" else {})
+                if fault in {"dynamic-tool", "live-dynamic-tool"}:
+                    item.update(type="dynamicToolCall", status="completed" if fault == "dynamic-tool" else "inProgress")
                 rows = [{"turnId": "foreign" if fault == "foreign" else "interrupted", "item": item},
                     {"turnId": "interrupted", "item": {"id": "comment", "type": "agentMessage", "phase": "commentary"}}]
+                if fault in {"image-view", "moving-image-view", "unknown-image-view", "image-without-effect"}:
+                    rows.append({"turnId": "interrupted", "item": {"id": "image",
+                        "type": "futureImageView" if fault == "unknown-image-view" else "imageView",
+                        "path": "/synthetic/changed.png" if fault == "moving-image-view" and items_read > 1
+                        else "/synthetic/figure.png"}})
+                    if fault == "image-without-effect":
+                        rows.pop(0)
                 if fault in {"final", "missing-phase", "correction"} or fault == "late-items" and items_read > 1:
                     rows.append({"turnId": "interrupted", "item": {"id": "extra",
                         "type": "userMessage" if fault == "correction" else "agentMessage",
@@ -243,10 +255,14 @@ def test_interrupted_result_review_requires_stable_full_inventory_without_final_
 
     monkeypatch.setattr(session, "_write", write)
     proof = interrupted_result_readback(session, "interrupted")
-    if fault is None:
+    if fault in {None, "dynamic-tool", "later-completed", "image-view"}:
+        digest = proof.pop("native_inventory_sha256")
+        assert len(digest) == 64 and set(digest) <= set("0123456789abcdef")
         assert proof == {"thread_id": "original", "turn_id": "interrupted", "read_only_review": True,
             "no_final_answer": True, "effects_observed": True}
         assert turns_read == items_read == 2
+        if fault == "later-completed":
+            assert interrupted_result_readback(session, "interrupted")["native_inventory_sha256"] == digest
     else:
         assert proof is None
     assert set(calls) <= {"thread/turns/list", "thread/items/list"}
@@ -1702,12 +1718,14 @@ def test_turn_activity_does_not_invent_goal_reads_or_successful_checks(
     assert any(kind == "answer.delta" and p["text"] == "Ready." for kind, p in events)
 
 
-def test_turn_activity_steps_merge_started_and_completed_items(monkeypatch, tmp_path):
+@pytest.mark.parametrize("execution_mode", [False, True])
+def test_turn_activity_steps_merge_started_and_completed_items(monkeypatch, tmp_path, execution_mode):
     session = chat_agent.CodexChatAgentSession(
         process=_FakeAppServerProcess(),
         messages=queue.Queue(),
         thread_id="thread-fixture",
         work_dir=tmp_path,
+        execution_mode=execution_mode,
     )
     command = {"type": "commandExecution", "id": "exec-1", "status": "inProgress",
                "command": f"/bin/zsh -lc 'cat {tmp_path}/notes.md'",
@@ -1715,22 +1733,32 @@ def test_turn_activity_steps_merge_started_and_completed_items(monkeypatch, tmp_
     upstream = iter([
         {"method": "turn/started", "params": {"turn": {"id": "turn-fixture"}}},
         {"method": "item/started", "params": {"item": {"type": "reasoning", "id": "rs_1", "summary": [], "content": []}}},
+        {"method": "item/reasoning/summaryTextDelta", "params": {"itemId": "rs_1", "delta": "Checking the available notes.", "summaryIndex": 0}},
         {"method": "item/reasoning/textDelta", "params": {"itemId": "rs_1", "delta": "Read the notes first.", "contentIndex": 0}},
-        {"method": "item/completed", "params": {"item": {"type": "reasoning", "id": "rs_1", "summary": [], "content": ["Read the notes first."]}}},
+        {"method": "item/completed", "params": {"item": {"type": "reasoning", "id": "rs_1", "summary": ["Checking the available notes."], "content": ["Read the notes first."]}}},
         {"method": "item/started", "params": {"item": command}},
         {"method": "item/completed", "params": {"item": {**command, "status": "completed", "exitCode": 0, "durationMs": 5,
                                                          "aggregatedOutput": "private-output-fixture"}}},
         {"method": "item/agentMessage/delta", "params": {"delta": "Ready."}},
         {"method": "turn/completed", "params": {"turn": {"status": "completed"}}},
     ])
-    monkeypatch.setattr(session, "_request", lambda *a, **kw: {"turn": {"id": "turn-fixture"}})
+    requests = []
+    monkeypatch.setattr(session, "_request", lambda method, params, **kw:
+        requests.append((method, params)) or {"turn": {"id": "turn-fixture"}})
     monkeypatch.setattr(session, "_next_event", lambda **kw: next(upstream))
     events = []
     session.send("Reply briefly.", on_event=lambda kind, payload: events.append((kind, payload)))
+    # The versioned app-server API accepts a per-Turn summary override, which
+    # also replaces an inherited `none` on resumed Chat threads. Worker hosts
+    # must keep their own summary policy, independent of this Chat default.
+    assert len(requests) == 1 and requests[0][0] == "turn/start"
+    assert requests[0][1].get("summary") == (None if execution_mode else "concise")
     steps = [p["step"] for kind, p in events if kind == "agent.phase" and "step" in p]
     assert [(s["id"], s["state"]) for s in steps] == [
         ("rs_1", "running"), ("rs_1", "completed"), ("exec-1", "running"), ("exec-1", "completed")]
-    assert steps[1]["title"] == "" and "detail" not in steps[1]
+    # This immediate delta stays within the existing display throttle; the
+    # authoritative completion still retains its public summary.
+    assert steps[1]["reasoning_summary"] is True and steps[1]["title"] == "Checking the available notes."
     assert "Read the notes first." not in json.dumps(events)
     assert (steps[3]["verb"], steps[3]["title"], steps[3]["exit_code"]) == ("read", "notes.md", 0)
     assert steps[3]["detail"] == "cat notes.md"

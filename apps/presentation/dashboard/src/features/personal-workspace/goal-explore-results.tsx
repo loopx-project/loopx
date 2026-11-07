@@ -1,3 +1,4 @@
+import {WorkYardstickReadback} from "./work-yardstick-readback";
 import {exploreFindingCopy} from "./explore-finding-copy";
 import {useEffect, useRef, useState} from "react";
 import {AlertTriangle, ChevronRight, RefreshCw} from "lucide-react";
@@ -127,6 +128,7 @@ export function GoalExploreResults({goalId, zh, active = true, readSourceUrl}: {
               <ul>{sections.decision![key].map((text, index) => <li key={index}>{text}</li>)}</ul>
             </div> : null)}</section> : null}
         </div> : <p className="explore-finding-raw">{selected.summary}</p>}
+        {selected.work_yardstick ? <WorkYardstickReadback capture={selected.work_yardstick} zh={zh}/> : null}
         <details className="explore-reader-details"><summary>{zh ? "来源与范围" : "Sources and scope"}</summary>
           <dl><dt>{zh ? "记录时间" : "Recorded at"}</dt><dd><time dateTime={selected.last_updated_at}>{selected.last_updated_at}</time></dd>
             <dt>{zh ? "记录者" : "Recorded by"}</dt><dd>{selected.agent_id || "—"}</dd>

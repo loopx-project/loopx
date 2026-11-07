@@ -15,6 +15,8 @@ from ..cli_transport import (
     command_error,
     run_command,
 )
+from .kanban import _redact_credential_shapes, _redact_public_safe_shapes
+from .sink_visibility import SINK_VISIBILITY_SHARED
 
 
 class StageDocumentConfig(Protocol):
@@ -36,20 +38,30 @@ def _stage_section_title(*, role: str, stage_index: int) -> str:
     return f"{_stage_section_prefix(role=role)} {stage_index:02d}"
 
 
-def _stage_section_xml(stage: Mapping[str, Any], *, role: str) -> str:
+def _stage_section_xml(
+    stage: Mapping[str, Any], *, role: str, sink_visibility: str
+) -> str:
     stage_index = int(stage.get("stage_index") or 0)
     lane_labels = {
         "fix_pr": "PR issue-fix",
         "capability": "LoopX capability",
         "default": "Explore work",
     }
-    lanes = (
-        ", ".join(
-            lane_labels.get(str(item), str(item).replace("_", " ").title())
-            for item in stage.get("lanes") or []
+    lane_texts: list[str] = []
+    for item in stage.get("lanes") or []:
+        raw = str(item)
+        safe = (
+            _redact_public_safe_shapes(raw)
+            if sink_visibility == SINK_VISIBILITY_SHARED
+            else _redact_credential_shapes(raw)
         )
-        or "Explore work"
-    )
+        lane_texts.append(
+            lane_labels.get(
+                safe,
+                safe.replace("_", " ").title() if safe == raw else safe,
+            )
+        )
+    lanes = ", ".join(lane_texts) or "Explore work"
     return (
         f"<h2>{_stage_section_title(role=role, stage_index=stage_index)}</h2>"
         "<p>"
@@ -214,6 +226,7 @@ def ensure_stage_whiteboards(
     role_sink: Mapping[str, Any],
     stage_views: list[Mapping[str, Any]],
     config_path: Path,
+    sink_visibility: str,
     execute: bool,
     runner: CommandRunner,
     read_local_config: LocalConfigReader,
@@ -598,7 +611,9 @@ def ensure_stage_whiteboards(
                 "--command",
                 "append",
                 "--content",
-                _stage_section_xml(stage, role=role),
+                _stage_section_xml(
+                    stage, role=role, sink_visibility=sink_visibility
+                ),
                 "--format",
                 "json",
             ],
