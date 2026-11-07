@@ -208,6 +208,15 @@ class GoalSource:
             "--goal-id", goal_id, "--todo-id", todo_id,
         ]))
 
+    def read_completed_todos(self, goal_id):
+        self.check_access(goal_id)
+        return json.loads(self._execute([
+            self.cli, "--format", "json", "--registry", self.registry,
+            "--runtime-root", self.runtime_root, "todo", "list",
+            "--goal-id", goal_id, "--role", "agent", "--status", "done",
+            "--include-archived",
+        ]))
+
     def read_events(self, goal_id):
         """Read JSON objects; the capability-owned projector verifies semantics."""
         selected = self.check_access(goal_id)
@@ -328,13 +337,16 @@ def linked_source_goals(registry):
         raise ValueError("Invalid Goal source catalog")
     sources = []
     for link in raw:
-        if not isinstance(link, dict) or set(link) != {"parent_goal_id", "source"}:
+        if (not isinstance(link, dict) or not {"parent_goal_id", "source"} <= link.keys()
+                or link.keys() - {"parent_goal_id", "source", "workspace_goal_id"}):
             raise ValueError("Invalid Goal source link")
         source = GoalSource.parse(link["source"])
         if source.goal_id is None:
             raise ValueError("A child link must select one original Goal")
         sources.append({"goal_id": source.goal_id, "parent_goal_id": link["parent_goal_id"],
-                        "namespace": source.namespace, "label": source.label})
+                        "namespace": source.namespace, "label": source.label,
+                        **({"workspace_goal_id": link["workspace_goal_id"]}
+                           if "workspace_goal_id" in link else {})})
     from ..effect_runtime import effect_runtime_result
     from ...registry import registry_goals
 
@@ -366,7 +378,7 @@ class GoalSourceCatalog:
         if row is None:
             return None
         raw = next(link["source"] for link in registry["goal_source_links"]
-                   if link["source"]["scope"].get("goal_id") == goal_id)
+                   if link.get("workspace_goal_id", link["source"]["scope"].get("goal_id")) == goal_id)
         source = GoalSource.parse(raw)
         with self._lock:
             namespaces = {goal["source_access"]["namespace"] for goal in rows}
@@ -381,14 +393,14 @@ class GoalSourceCatalog:
         if resolved is None:
             return None
         row, reader = resolved
-        status = reader.registered_status(goal_id)
+        original_goal_id = reader.source.goal_id
+        status = reader.registered_status(original_goal_id)
         source_goal = next((goal for goal in status["run_history"]["goals"]
-                            if goal["id"] == goal_id and goal.get("registry_member") is True), None)
+                            if goal["id"] == original_goal_id and goal.get("registry_member") is True), None)
         if source_goal is None:
             raise SourceScopeError("The original Goal is no longer registered")
-        source_goal["native_parent_goal_id"] = source_goal.get("parent_goal_id")
-        source_goal.update({key: row[key] for key in ("parent_goal_id", "source_access")})
-        return status
+        from ..effect_runtime import effect_runtime_result
+        return effect_runtime_result("presentation.goal_sources.status", {"status": status, "row": row})
 
     def analysis_scope(self, goal_id, *, namespace, fresh, verify_source=True):
         resolved = self.resolve(goal_id)
@@ -398,20 +410,23 @@ class GoalSourceCatalog:
         if namespace != reader.source.namespace:
             raise SourceScopeError("Analysis source identity changed")
         if verify_source:
-            reader.registered_status(goal_id, fresh=fresh)
+            reader.registered_status(reader.source.goal_id, fresh=fresh)
         return self.runtime_root / "goal-sources" / row["source_access"]["namespace"]
 
-    def update(self, *, parent_goal_id, raw_source):
+    def update(self, *, parent_goal_id, raw_source, workspace_goal_id=None):
         from ...registry import load_registry
         from ..projects.registry_codec import mutate_project_registry
 
         source = GoalSource.parse(raw_source)
         link = {"parent_goal_id": parent_goal_id, "source": raw_source}
+        if workspace_goal_id is not None:
+            link["workspace_goal_id"] = workspace_goal_id
+        selected = workspace_goal_id if workspace_goal_id is not None else source.goal_id
 
         def proposed(registry):
             links = list(registry.get("goal_source_links", []))
             existing = next((item for item in links
-                if item["source"]["scope"].get("goal_id") == source.goal_id), None)
+                if item.get("workspace_goal_id", item["source"]["scope"].get("goal_id")) == selected), None)
             if existing is not None and existing != link:
                 raise SourceScopeError("The original source identity and parent are already linked")
             if existing is None:
@@ -421,7 +436,7 @@ class GoalSourceCatalog:
         def admitted(registry):
             links = proposed(registry)
             rows = linked_source_goals({**registry, "goal_source_links": links})
-            if not any(row["id"] == source.goal_id for row in rows):
+            if not any(row["id"] == selected for row in rows):
                 raise SourceScopeError("Choose an existing local parent")
             return links
 
@@ -448,7 +463,8 @@ class GoalSourceCatalog:
             links = []
             for link in registry.get("goal_source_links", []):
                 source = GoalSource.parse(link["source"])
-                if source.goal_id == goal_id and link["parent_goal_id"] == parent_goal_id:
+                if (link.get("workspace_goal_id", source.goal_id) == goal_id
+                        and link["parent_goal_id"] == parent_goal_id):
                     if source.namespace != namespace:
                         raise SourceScopeError("The source link changed; read its current identity")
                 else:

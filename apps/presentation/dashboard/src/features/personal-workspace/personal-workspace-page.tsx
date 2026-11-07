@@ -2757,7 +2757,7 @@ export function PersonalWorkspacePage({
             </div>
              : null;
   const taskBoard = (active: boolean) => selectedGoal ? (<GoalTasksView digest={workspaceDigest}
-                    historyEnabled={!readOnly} historyActive={active}
+                    historyEnabled={!readOnly || Boolean(selectedGoal.sourceAccess)} historyActive={active}
                     historyRefreshRevision={historyRefreshRevision}
                     goal={selectedGoal}
                     items={items}
