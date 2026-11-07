@@ -40,13 +40,14 @@ type CapabilityMutationState = Readonly<{
   draft: Record<string, unknown>;
   cadenceOverride: boolean;
   horizonOverride: boolean;
+  yardstickOverride: boolean;
   exploreModeOverride: boolean;
   partialWrite: GoalConfigurationPartialWrite | null;
   readbackPending: boolean;
   preview: GoalConfigurationPreview | null;
 }>;
 
-function goalWriteDraft(selected: CapabilityConfigurationCatalog["capabilities"][number], draft: Record<string, unknown>, editorMode: "guided" | "json", cadenceOverride: boolean, horizonOverride: boolean, exploreModeOverride: boolean) {
+function goalWriteDraft(selected: CapabilityConfigurationCatalog["capabilities"][number], draft: Record<string, unknown>, editorMode: "guided" | "json", cadenceOverride: boolean, horizonOverride: boolean, exploreModeOverride: boolean, yardstickOverride: boolean) {
   const defaults = selected.capability_id === "todo_replan_cadence"
     ? editorMode === "json" ? undefined : replanCadenceEditorDefaults(selected.effective_configuration?.configuration, selected.default)
     : selected.default;
@@ -54,7 +55,7 @@ function goalWriteDraft(selected: CapabilityConfigurationCatalog["capabilities"]
   if (selected.capability_id === "reward_memory") return rewardMemoryWriteValue(writable);
   if (selected.capability_id === "explore_harness") return goalExploreWriteValue(writable, exploreModeOverride);
   if (selected.capability_id === "todo_replan_cadence" && editorMode === "guided") {
-    return goalReplanCadenceWriteValue(writable, cadenceOverride, horizonOverride);
+    return goalReplanCadenceWriteValue(writable, cadenceOverride, horizonOverride, yardstickOverride);
   }
   if (selected.capability_id === "pull_request_review" && !Object.hasOwn(selected.current ?? {}, "owner_logins")
     && JSON.stringify(writable.owner_logins ?? []) === JSON.stringify(selected.effective_configuration?.configuration?.owner_logins ?? [])) {
@@ -83,6 +84,7 @@ function useCapabilityMutation({ goalId, loading, onApplied, selected, t }: Read
     draft: {},
     cadenceOverride: false,
     horizonOverride: false,
+    yardstickOverride: false,
     exploreModeOverride: false,
     partialWrite: null,
     readbackPending: false,
@@ -122,6 +124,7 @@ function useCapabilityMutation({ goalId, loading, onApplied, selected, t }: Read
       ),
       cadenceOverride: hasReplanCadenceOverride(selected?.current),
       horizonOverride: Object.hasOwn(selected?.current ?? {}, "planning_horizon_goal"),
+      yardstickOverride: Object.hasOwn(selected?.current ?? {}, "yardstick_enabled"),
       exploreModeOverride: Object.hasOwn(selected?.current ?? {}, "mode"),
       partialWrite: null,
       readbackPending: false,
@@ -137,7 +140,7 @@ function useCapabilityMutation({ goalId, loading, onApplied, selected, t }: Read
     setMutation((current) => ({ ...current, busy: "preview", partialWrite: null, readbackPending: false }));
     setError(null);
     try {
-      const nextPreview = await previewGoalConfiguration(goalId, selected.capability_id, configuration === null ? null : goalWriteDraft(selected, configuration, editorMode, mutation.cadenceOverride, mutation.horizonOverride, mutation.exploreModeOverride));
+      const nextPreview = await previewGoalConfiguration(goalId, selected.capability_id, configuration === null ? null : goalWriteDraft(selected, configuration, editorMode, mutation.cadenceOverride, mutation.horizonOverride, mutation.exploreModeOverride, mutation.yardstickOverride));
       if (generation === editorGeneration.current) setMutation((current) => ({ ...current, preview: nextPreview }));
     } catch (reason) {
       if (generation === editorGeneration.current) setError(reason instanceof Error ? reason.message : t("capabilities.previewFailed"));
@@ -152,7 +155,7 @@ function useCapabilityMutation({ goalId, loading, onApplied, selected, t }: Read
     setMutation((current) => ({ ...current, busy: "apply" }));
     setError(null);
     try {
-      const writableDraft = goalWriteDraft(selected, mutation.draft, editorMode, mutation.cadenceOverride, mutation.horizonOverride, mutation.exploreModeOverride);
+      const writableDraft = goalWriteDraft(selected, mutation.draft, editorMode, mutation.cadenceOverride, mutation.horizonOverride, mutation.exploreModeOverride, mutation.yardstickOverride);
       const result = await applyGoalConfiguration(
         goalId,
         selected.capability_id,
@@ -190,6 +193,7 @@ function useCapabilityMutation({ goalId, loading, onApplied, selected, t }: Read
         : { ...current.draft, [key]: value },
       cadenceOverride: current.cadenceOverride || (selected?.capability_id === "todo_replan_cadence" && (key === "count_unit" || key === "count")),
       horizonOverride: current.horizonOverride || (selected?.capability_id === "todo_replan_cadence" && key === "planning_horizon_goal"),
+      yardstickOverride: current.yardstickOverride || (selected?.capability_id === "todo_replan_cadence" && key === "yardstick_enabled"),
       exploreModeOverride: current.exploreModeOverride || (selected?.capability_id === "explore_harness" && key === "mode"),
       preview: null,
     }));
@@ -212,6 +216,8 @@ function useCapabilityMutation({ goalId, loading, onApplied, selected, t }: Read
         ? hasReplanCadenceOverride(parsed) : current.cadenceOverride,
       horizonOverride: selected.capability_id === "todo_replan_cadence" && parsed
         ? Object.hasOwn(parsed, "planning_horizon_goal") : current.horizonOverride,
+      yardstickOverride: selected.capability_id === "todo_replan_cadence" && parsed
+        ? Object.hasOwn(parsed, "yardstick_enabled") : current.yardstickOverride,
       exploreModeOverride: selected.capability_id === "explore_harness" && parsed
         ? Object.hasOwn(parsed, "mode") : current.exploreModeOverride,
     }));
@@ -222,7 +228,7 @@ function useCapabilityMutation({ goalId, loading, onApplied, selected, t }: Read
     if (loading || mutation.busy || !jsonValid) return;
     if (editorMode === "guided" && selected) {
       const jsonValue = ["todo_replan_cadence", "explore_harness"].includes(selected.capability_id)
-        ? goalWriteDraft(selected, mutation.draft, editorMode, mutation.cadenceOverride, mutation.horizonOverride, mutation.exploreModeOverride)
+        ? goalWriteDraft(selected, mutation.draft, editorMode, mutation.cadenceOverride, mutation.horizonOverride, mutation.exploreModeOverride, mutation.yardstickOverride)
         : mutation.draft;
       setJsonDraft(JSON.stringify(jsonValue, null, 2));
     }

@@ -178,3 +178,14 @@ assert.deepEqual(goalReplanCadenceEditorValue(null, enabledStrideDefault), enabl
 assert.equal(goalReplanCadenceEditorValue({stride_strategy: "off"}, enabledStrideDefault).stride_strategy, "off");
 assert.equal(goalReplanCadenceEditorValue({count_unit: "effective_turns", count: 3}, enabledStrideDefault).stride_strategy, "off");
 assert.equal(projectEditableCapabilityConfiguration(cadenceEditor, {}, enabledStrideDefault).stride_strategy, "evidence_conditioned_v1");
+
+// Independent Yardstick inheritance must not be pinned by editing the interval.
+const yardstickEffective = {...inheritedReview, yardstick_enabled: true};
+assert.equal(goalReplanCadenceEditorValue({count_unit: "effective_turns", count: 2}, yardstickEffective).yardstick_enabled, true);
+assert.deepEqual(goalReplanCadenceWriteValue({...yardstickEffective, count: 2}, true, false, false),
+  {...inheritedReview, count: 2}, "an unchanged inherited measurement choice stays live");
+for (const enabled of [true, false]) {
+  assert.deepEqual(goalReplanCadenceWriteValue({...yardstickEffective, yardstick_enabled: enabled}, false, false, true),
+    {stride_strategy: "off", yardstick_enabled: enabled}, "explicit measurement opt-in and opt-out survive form saving");
+}
+assert.equal(replanCadenceEditorDefaults(yardstickEffective, {...cadenceDefault, yardstick_enabled: false}).yardstick_enabled, true);

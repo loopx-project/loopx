@@ -4,6 +4,7 @@
  */
 import {normalizeExploreExecutionObservation} from "../capabilities/explore_execution_observation.ts";
 import {normalizeExploreMeasurements, projectExploreMeasurementFeedback, type ExploreMeasurement} from "../capabilities/explore_measurements.ts";
+import {normalizeWorkYardstickCapture, type WorkYardstickCapture} from "../work_items/yardstick_decision.ts";
 import type {JsonObject} from "../runtime_decode.ts";
 export type ExploreHistoryEvent = {
   schema_version: string; event_id: string; goal_id: string; event_kind: string;
@@ -13,6 +14,7 @@ export type ExploreHistoryEvent = {
   agent_id: string; run_id: string; evidence_refs: string[]; supersedes: string; confidence: number | null;
   execution_observation?: JsonObject;
   measurements?: ExploreMeasurement[];
+  work_yardstick?: WorkYardstickCapture;
 };
 export type ExploreHistoryPage = {goal_id: string; items: ExploreHistoryEvent[]; total: number; next_cursor: string | null};
 export type ExploreHistoryNode = {id: string; latest: ExploreHistoryEvent; updates: ExploreHistoryEvent[]; findings: ExploreHistoryEvent[]; revisions: ExploreHistoryEvent[]};
@@ -66,6 +68,9 @@ export function parseExploreHistoryPage(input: unknown, goalId: string): Explore
       ...(raw.execution_observation === undefined ? {} : {
         execution_observation: normalizeExploreExecutionObservation({observation: raw.execution_observation}),
       }),
+      ...(raw.work_yardstick === undefined ? {} : {work_yardstick: normalizeWorkYardstickCapture({
+        capture: raw.work_yardstick, goal_id: goalId, agent_id: raw.agent_id ?? "", evidence_refs: raw.evidence_refs ?? [],
+      })}),
       ...(raw.measurements === undefined ? {} : {measurements: normalizeExploreMeasurements(raw.measurements)}),
     } as ExploreHistoryEvent;
   });
