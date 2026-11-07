@@ -2,7 +2,6 @@
 import hashlib
 from html import escape
 import json
-from pathlib import Path
 import shlex
 
 import pytest
