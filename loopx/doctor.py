@@ -147,14 +147,16 @@ def python_distribution_install(module_path: Path) -> dict[str, Any]:
         return {"available": False}
     installer = (installed.read_text("INSTALLER") or "").strip() or "unknown"
     expected = module_path.resolve()
+    module_suffix = os.path.join("loopx", "doctor.py")
     for item in installed.files or ():
-        record_path = item.as_posix()
-        if not record_path.endswith("loopx/doctor.py"):
+        entry = item.as_posix()
+        if not os.path.normcase(entry).endswith(module_suffix):
             continue
-        # A RECORD entry is a POSIX string. Let the native path parser
-        # interpret an absolute Windows drive before joining the install root.
-        location = installed.locate_file(record_path)
-        if isinstance(location, (str, os.PathLike)) and Path(location).resolve() == expected:
+        # A PackagePath uses POSIX components, so locating a drive-qualified
+        # RECORD entry can lose its Windows root on Python 3.11.
+        record_path = Path(entry)
+        located = record_path if record_path.is_absolute() else Path(item.locate())
+        if located.resolve() == expected:
             break
     else:
         return {"available": False}

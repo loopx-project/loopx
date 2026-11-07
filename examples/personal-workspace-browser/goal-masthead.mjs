@@ -245,15 +245,12 @@ export const goalMastheadScenario = {
     // and adapter, rather than manufacturing a complete three-item queue.
     const fixtureEnv = { ...process.env, LOOPX_USAGE_PING: "0" };
     if (!["LOOPX_TEST_PYTHON", "LOOPX_PYTHON_BIN", "LOOPX_PYTHON"].some(key => process.env[key])) fixtureEnv.PYTHONPATH = repoRoot;
-    const native = JSON.parse(execFileSync(resolveTestPython(), [
-      resolve(repoRoot, "examples/personal-workspace-browser/goal-attention-fixture.py"),
-    ], { cwd: repoRoot, env: fixtureEnv, encoding: "utf8", timeout: 30_000 }));
     const nativeCase = (...args) => JSON.parse(execFileSync(resolveTestPython(), [
       resolve(repoRoot, "examples/personal-workspace-browser/goal-attention-fixture.py"), ...args,
     ], { cwd: repoRoot, env: fixtureEnv, encoding: "utf8", timeout: 30_000 }));
+    const native = nativeCase();
     const mixed = nativeCase("--mixed");
     const complete = nativeCase("--full");
-    const mixedComplete = nativeCase("--mixed", "--full");
     const optionalComplete = nativeCase("--optional", "--full");
     // Exercise source -> parser -> adapter -> digest -> packaged rendering.
     // Counts are removed from a real producer payload, not a prebuilt UI model.
@@ -307,6 +304,7 @@ export const goalMastheadScenario = {
       } finally { coverageEntries.push(...await ui.close()); }
     }
     for (const locale of ["zh-CN", "en"]) for (const mode of ["mixed", "bounded", "optional", "complete", "mixed-complete", "empty", "unknown"]) {
+      const partial = !["complete", "mixed-complete", "optional"].includes(mode);
       const ui = await openWorkspacePage(browser, url, {
         collectCoverage,
         viewport: { width: locale === "en" ? 390 : 1512, height: 982 },
@@ -317,14 +315,12 @@ export const goalMastheadScenario = {
           api.transformStatus = (fixture) => {
             previous(fixture);
             const queue = fixture.attention_queue.items.find(item => item.goal_id === goalId);
-            const source = mode === "mixed" ? mixed : mode === "complete" ? complete
-              : mode === "mixed-complete" ? mixedComplete : mode === "optional" ? optionalComplete : native;
+            const source = mode === "mixed" || mode === "mixed-complete" ? mixed : mode === "complete" ? complete
+              : mode === "optional" ? optionalComplete : native;
             Object.assign(queue, structuredClone(source));
-            if (["mixed", "bounded", "unknown"].includes(mode)) {
-              // The producer can now return all 21 canonical rows. Keep the
-              // bounded case on the actual three-row projection from that read.
-              queue.user_todos.items = structuredClone(queue.project_asset.user_todos.items);
-            }
+            // Workspace prefers the owner-facing group. Bound its rows as well
+            // for partial cases while retaining the producer's total.
+            if (partial) queue.user_todos.items = queue.project_asset.user_todos.items;
             if (mode === "empty") {
               queue.user_todos.items = [];
               queue.project_asset.user_todos.items = [];
@@ -341,13 +337,15 @@ export const goalMastheadScenario = {
         await openGoal(ui.page, title);
         const needs = await vital(ui.page, locale === "en" ? "Needs you" : "等你决定");
         const expected = mode === "complete" ? "21" : mode === "mixed-complete" ? "1" : mode === "optional" ? "0" : "—";
-        assert.equal(needs.value, expected, `${locale}/${mode}: Only complete classified rows qualify a blocking total`);
-        const partial = !["complete", "mixed-complete", "optional"].includes(mode);
+        assert.equal(needs.value, expected, `${locale} ${mode}: only complete classified rows qualify a blocking total`);
         const coverageHelp = partial ? await readVitalHelp(ui.page, needs.cell) : "";
         if (partial) assert.match(coverageHelp, locale === "en" ? /oldest unknown/ : /最早时间未知/);
         const listed = ["complete", "mixed-complete", "optional"].includes(mode) ? 21 : mode === "empty" ? 0 : 3;
         if (partial) assert.match(coverageHelp, new RegExp(`${listed} ${locale === "en" ? "listed" : "项"}`));
-        if (mode === "optional") assert.match(needs.sub, locale === "en" ? /21 optional/ : /21 项可选/);
+        if (mode === "optional" || mode === "mixed-complete") {
+          const optional = mode === "optional" ? 21 : 20;
+          assert.match(needs.sub, new RegExp(`${optional} ${locale === "en" ? "optional" : "项可选"}`));
+        }
         if (mode === "unknown") assert.doesNotMatch(needs.sub, /Nothing waiting|暂无等待/);
         await ui.page.getByRole("navigation", { name: /^(Goal 视图|Goal view)$/ }).getByRole("button", { name: /^(概览|Overview)$/ }).click();
         const rail = ui.page.locator(".goal-overview-attention");
