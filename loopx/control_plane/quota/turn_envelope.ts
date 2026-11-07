@@ -1791,7 +1791,8 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     return {sections: contextReadSectionDigests(request,
       (selected.selections as {path: (string | number)[]}[]).map(row => row.path))};
   }
-  if (operation === "progressive_context_delivery") return prepareProgressiveContext(request, contextPresentationPlan(request));
+  if (operation === "progressive_context_delivery")
+    return prepareProgressiveContext(request, nativeReplanPresentation(request) ?? contextPresentationPlan(request));
   if (operation === "context_delivery") return request.native_projection === undefined
     ? prepareContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS)
     : prepareProgressiveContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS, INITIAL_CONTEXT_DECISION_FIELDS,
