@@ -124,6 +124,8 @@ def main(argv=None):
                         help="Opt-in short heartbeat context with same-invocation full captures")
     parser.add_argument("--context-delivery", choices=("off", "on"),
                         help="Native Codex context delivery: on by default for heartbeat workers; pass off to disable")
+    parser.add_argument("--execution-observation", choices=("local_probe",),
+                        help="Optional local execution probe for heartbeat workers")
     parser.add_argument("--provider-request-admission", action="store_true",
                         help="Opt-in canonical admission before each heartbeat custom Responses request")
     parser.add_argument("--native-goal-continue", action="store_true",
@@ -204,6 +206,8 @@ def main(argv=None):
         args.context_delivery = Execution(mode="heartbeat" if args.worker.startswith("heartbeat-") else "plain").context_delivery
     if args.context_delivery != "off" and not args.worker.startswith("heartbeat-"):
         parser.error("--context-delivery requires a heartbeat worker")
+    if args.execution_observation is not None and not args.worker.startswith("heartbeat-"):
+        parser.error("--execution-observation requires a heartbeat worker")
     if args.provider_request_admission:
         if not args.worker.startswith("heartbeat-"):
             parser.error("--provider-request-admission requires a heartbeat worker")
@@ -374,6 +378,8 @@ def main(argv=None):
                          task_entry=args.task_entry,
                          turn_envelope=args.turn_envelope,
                          context_delivery=args.context_delivery,
+                         **({"execution_observation": args.execution_observation}
+                            if args.execution_observation is not None else {}),
                          **({"provider_request_admission": True} if args.provider_request_admission else {}),
                          native_goal_continue=args.native_goal_continue,
                          replan_after_turns=args.replan_after_turns,
@@ -444,6 +450,8 @@ def main(argv=None):
         "sforge_source": active_source_receipt(),
         **turn_envelope_receipt(explicit=args.turn_envelope),
         **({"context_delivery": "on"} if args.context_delivery != "off" else {}),
+        **({"execution_observation": args.execution_observation}
+           if args.execution_observation is not None else {}),
         **({"provider_request_admission": "on"} if args.provider_request_admission else {}),
         **({"native_goal_continue": True} if args.native_goal_continue else {}),
         "task_sha256": hashlib.sha256(task_file.read_bytes()).hexdigest(),
