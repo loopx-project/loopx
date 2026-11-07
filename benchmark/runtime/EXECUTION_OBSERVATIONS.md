@@ -39,6 +39,15 @@ merely to produce an attachment. Configuration and readback invoke neither a
 probe nor a model. Runtime receipts record the selected producer, which does
 not attest execution, adoption or improvement.
 
+The native SForge runner accepts the same producer with
+`--execution-observation local_probe` on a heartbeat worker. It forwards the
+selection to the shared installer and records it in both runner and worker
+receipts. The wrapper uses isolated Python to execute the staged probe source
+while keeping the task working directory for candidate paths. The installer
+checks the wrapper's `--help` once as the worker user before model entry.
+An unavailable wrapper fails setup for an explicitly selected producer.
+The observation runs only when a worker invokes it.
+
 Choose the settlement plan's ordinary `command_template` for in-flight progress
 without new decision evidence. Use `semantic_closeout_command_template` for new
 evidence from this admitted work, a route change or Todo completion; bind the
@@ -126,6 +135,25 @@ Malformed optional diagnostics preserve reliable host measurements and retain
 a bounded diagnostic-error receipt. Evidence paths must be fresh; raw output
 stays local. The probe neither submits nor accesses hidden evaluation.
 
+When simultaneous memory could change a candidate choice, run the complete
+representative workload with the same probe and pass
+`--memory-limit-bytes <applicable-reference-limit>`. On Linux the producer
+estimates group proportional set size by reading one PID at a time. It skips
+samples with unstable membership. A stable group can move retained memory
+between PID reads, so the sampled sum can overstate simultaneous occupancy.
+The adjacent `.memory.json` binds that estimate and reference to the exact
+candidate and input revision. The main observation cites its digest only after
+a successful write. Missing samples stay unknown. A sidecar failure preserves
+the original process result. Processes in other groups and peaks between samples
+are outside coverage, and PSS accounting differs from a container limit.
+
+When this estimate could change a choice, check actual overlap independently
+and record the supported next comparison in the existing Yardstick decision.
+Keep the best authoritative evidence, reuse the matching incumbent observation,
+and compare a lower-footprint mechanism on the same complete workload where
+overlap matters. The estimate alone supplies no limit verdict or selected
+action. A native timeout alone supplies no memory observation.
+
 The adjacent `.candidate.json` preserves selected relative paths and hashes.
 `candidate_sha256` hashes the sorted JSON file manifest, not native archive
 container bytes. Pins cover only declared files at the probe boundaries, not
@@ -188,6 +216,24 @@ Stop、原预算和真实阻塞继续有效，不为填满时长制造任务。
 证据路径必须新建，原始输出留在本地；不提交原生评测，不读取隐藏评测。候选
 变化拒绝归因；文件清单哈希不是原生归档哈希，只覆盖明确选择的文件及探针
 边界，不覆盖传递依赖或独立写入者，结果仍须证明对应实际评测快照和输入版本。
+
+SForge heartbeat worker 可显式传入 `--execution-observation local_probe`，
+沿用共享安装路径，并在 runner 和 worker 回执中记录选择。入口以隔离 Python
+执行已部署的探针源码，候选路径仍相对于任务工作目录。安装时用 worker 身份
+核对一次 `--help`。该入口不可用时在模型进入前报告安装失败。测量只在
+worker 自己调用探针时发生。
+
+当并行内存占用会影响候选选择时，用同一入口执行完整代表性工作集并传入
+`--memory-limit-bytes <参考上限>`。Linux 逐 PID 读取 PSS，组成员变化或数据
+不完整时跳过该次采样。组成员稳定时，内存仍可能在两次读取之间转移，累加值
+可能高于真实同时占用。相邻 `.memory.json` 将估计和参考值绑定到候选及输入
+版本。写入成功才把其摘要记入原观测，写入失败仍保留原进程结果。组外进程和
+采样间峰值未覆盖，PSS 与容器内存限额的统计口径有差异。
+
+这项估计会影响选择时，独立核对真实同时占用，再通过原 Yardstick 写入有证据
+的下一比较。保留最好的权威结果，复用同口径 incumbent 测量；确有并行保留
+影响时，把下一次有界试验用于同一完整工作集上的较低占用机制。估计本身不产生
+超限判定或自动选择。只有超时回执时，内存保持未知。
 
 当前授权工作实际产生或取得新的决策证据后，才进入相应工作段的检查点。旧反馈读回、
 记账和没有新增信息的确定性重复验证只是上下文，应先用于推进原任务。使用当前
