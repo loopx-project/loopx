@@ -1664,15 +1664,163 @@ note keeps the original value; the CLI's completion-note requirement still appli
 Historical fingerprints and older receipts remain compatible; active
 completion behavior is unchanged. The regression checks canonical evidence,
 original validation and completion time, and once-only validation/writeback/debit
-before and after terminal replay. The earlier reviewed head remains unaccepted;
-the revised head still needs independent review.
+before and after terminal replay. The earlier reviewed head remains unaccepted.
+The revised `7ec8d19b9` received an independent
+[APPROVE review](https://github.com/loopx-project/loopx/pull/8264#pullrequestreview-5811807012)
+and #8264 merged as `172d80d63`.
 
-This is a proposed lifecycle repair enabling the remaining R1/V4 journey and
-large-state comparison. Independent exact-head review, reviewed-repair wheel
-readback and remaining guard/parser characterization still govern the next
-step. It does not upgrade an installed host or qualify interruption/restart,
-split installation, full R0/V10/R1, M1/#8011, D2/D5/D6/D3, context/model,
-adoption or complete-cost benefit. I3 remains at least one minor release.
+Qualification against target main `32167518b` now covers both the source console
+and a freshly built, isolated monolithic wheel. The Chat bundle was built and
+verified through its existing owner before wheel construction. All four
+File/SQLite × source/wheel episodes contain 101 synthetic Todos and use the real
+console, ordinary hard-lease claim and an independently verified JSON artifact.
+After the single committed debit, the fixture stops only its own Effect processes;
+new console processes recover the original terminal result through a restarted
+runtime. Canonical readback retains the accepted evidence, first completion time
+and archived state. Completion, writeback, debit and terminal retries retain four
+committed receipts and one debit; changed evidence is refused before terminal
+commit and on replay. The final original-Turn guard reports no runnable work or
+execution attempt. Wheel console/import provenance is checked separately from
+the source fixture authoring environment.
+
+| Distribution / provider | Complete episode | Initial guard | Result |
+| --- | ---: | ---: | --- |
+| Source / File | 22.682 s | 2.148 s | Original result recovered; one debit |
+| Source / SQLite | 22.220 s | 2.219 s | Original result recovered; one debit |
+| Wheel / File | 20.929 s | 2.020 s | Original result recovered; one debit |
+| Wheel / SQLite | 24.205 s | 2.787 s | Original result recovered; one debit |
+
+These are single correctness episodes, including negative/replay checks and
+controlled process stops, on macOS with Python 3.13.5 and Node 26.0.0. They do
+not rerun the frozen paired cost study or establish a latency improvement.
+The original eight large-state failures and the earlier uncertainty remain
+historical evidence. Three isolated parser inputs also confirm source/wheel
+acceptance of an emitted archive pointer while unexpected prose and mismatched
+region markers remain refusals. The older reader's pointer failure is preserved;
+this comparison neither changes the grammar owner nor upgrades an installed host.
+
+This qualifies the repaired large-state source/wheel closeout and controlled
+Effect restart boundary. The remaining guard loading/shared-projection cost
+profile and complete comparison stay with the existing work. Abrupt-interruption
+and model-host V4 recovery, split installation, full R0/V10/R1, M1/#8011,
+D2/D5/D6/D3, context/model, actual adoption and complete-cost benefit remain
+open. I3 remains at least one minor release.
+
+### 2026-11-07 — Guard loading and settled-replay diagnosis
+
+Source-console diagnosis at `6c10e61ad` reuses the real 101-Todo hard-lease
+episode above, with isolated File/SQLite authority and owned Effect processes.
+Five additional episodes preserve accepted evidence, original completion time,
+four committed receipts and one debit through controlled restart; changed
+evidence and renewed execution of the settled Turn remain refusals. Only guard
+and immutable-context reads are profiled. These are single diagnostic
+observations, including profiler overhead, rather than paired performance runs.
+
+| Bytecode condition / provider | Profiled guard | Import cumulative | Traced runtime requests | Request elapsed sum | Loaded LoopX modules |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Bytecode disabled / SQLite | 3.012 s | 2.281 s | 89 | 0.370 s | 503 |
+| Bytecode disabled / File | 1.972 s | 1.255 s | 89 | 0.344 s | 503 |
+| Normal inherited bytecode / SQLite | 1.584 s | 0.845 s | 89 | 0.394 s | 503 |
+| Normal inherited bytecode / File | 1.465 s | 0.772 s | 89 | 0.342 s | 503 |
+
+The disabled-bytecode observations include 0.634 / 0.555 seconds in source
+compilation for SQLite / File; neither normal-bytecode observation invokes
+source compilation. Import, loader-read and compilation values are nested and
+must not be added. Bytecode conditions explain part of startup cost while the
+loaded graph remains unchanged. They do not correct or supersede the frozen
+comparison's failures. In a fifth normal-bytecode SQLite episode, the guard
+loads 503 modules with 89 traced requests, while the immutable context reader
+loads 68 modules with one traced request: profiled elapsed times are 2.140 /
+0.246 seconds, and request elapsed sums are 0.389 / 0.067 seconds respectively.
+This characterizes different required operations, not interchangeable paths.
+
+Runtime request elapsed includes Python transport, shared runtime work and
+provider work. It is an upper bound on the provider contribution within those
+traced requests, not a separate database measurement or complete service CPU.
+The source snapshot takes approximately 0.048–0.050 seconds in the four guard
+observations. The next cost investigation therefore prioritizes the loaded
+decision/status graph over a new provider or fingerprint optimization. Moving
+`quota_context` imports alone cannot eliminate work that the later status
+collector still requires; quota already omits presentation projections, and
+the immutable context reader already has its selected loading path.
+
+Real File/SQLite Monitor episodes also qualify the settled and closed replay
+identity when an independent sibling becomes due. Each original Turn retains
+one poll and zero debits, without dispatching its sibling. Through the public
+`configure-goal --quota-compute 0` entrypoint, pause still takes precedence and
+returns `quota_skip`. The initial probe changed legacy `status` fields instead
+of the typed activation or quota owner; its failed pause expectation is a
+fixture error, retained separately from the corrected checks.
+
+| Provider / replay phase | Profiled replay | Import cumulative | Traced runtime requests | Request elapsed sum | Loaded LoopX modules |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| SQLite / settled | 1.135 s | 0.666 s | 68 | 0.150 s | 486 |
+| SQLite / closed | 1.149 s | 0.726 s | 62 | 0.157 s | 486 |
+| File / settled | 1.113 s | 0.713 s | 68 | 0.143 s | 486 |
+| File / closed | 1.128 s | 0.691 s | 62 | 0.149 s | 486 |
+
+The bounded next step stays with the existing quota/status and typed replay
+owners: identify which live facts and imports each decision actually needs,
+then remove unused loading or redundant shared requests with public-facade
+parity. A receipt-only early return is not yet qualified: current pause, scoped
+gates, independent pending intents, actor/lease/source checks and archived or
+closed lineage must survive. Any implementation still needs the same real
+source/wheel lifecycle and matched, unprofiled default-SQLite comparison;
+supported-backend correctness/recovery and required PostgreSQL qualification
+remain in force when affected. This diagnosis changes no production behavior,
+preset, budget, provider, authority or installed host. All earlier acceptance,
+adoption and complete-cost gaps remain open.
+
+### 2026-11-07 — Guard cost candidate selection and context transport composition
+
+An isolated source-console counterfactual defers three Monitor adapter imports
+until their functions are invoked. The 101-Todo SQLite lifecycle still retains
+the original artifact, completion time, four receipts and one debit. The guard
+loads 502 rather than 503 modules and still makes 89 traced runtime calls;
+only `todos.external_wait_contract` disappears. Monitor history lookup and
+quota accounting admission execute on the guard path, so their dependencies
+remain necessary. This rejects that import deferral as the next cost-reduction
+slice; the temporary wrapper is not a production or compatibility qualification.
+
+The existing context-transport candidates are separate from loading reduction:
+[#8286](https://github.com/loopx-project/loopx/pull/8286) at `efce6cb9c` skips
+inactive Anti-Entropy validation, and
+[#8290](https://github.com/loopx-project/loopx/pull/8290) at `9537687be` omits the
+governing source from status-only context validation. A temporary combined
+overlay against runtime base `32167518b` was exercised through four complete
+File/SQLite × base/overlay source-console episodes with 101 Todos. Accepted
+evidence, first completion time, controlled Effect restart, four committed
+receipts and one debit remain intact; evidence replacement and settled-Turn
+execution remain refusals. The combined source also passes 91 focused Python
+cases and 20 TypeScript cases with zero skips. The applied paths are restored
+after qualification; this creates no competing implementation or merge.
+
+| Provider | Traced guard calls, base → overlay | JSON parameter bytes, base → overlay | Loaded modules, base → overlay |
+| --- | ---: | ---: | ---: |
+| SQLite | 89 → 87 | 1,904,862 → 1,772,448 (−6.95%) | 503 → 503 |
+| File | 89 → 87 | 1,903,569 → 1,771,587 (−6.93%) | 503 → 503 |
+
+These single instrumented observations count the UTF-8 JSON parameters passed
+to the shared runtime. They exclude transport headers, retries, responses,
+startup and service CPU; they are not total wire bytes or a latency comparison.
+The SQLite status-only validation inputs total 134,868 bytes on base; the one
+remaining input is 2,045 bytes in the overlay. Immutable context and settlement
+owners remain in place. This independently confirms a bounded transport delta,
+without qualifying either candidate's merge, a combined wheel, installed-host
+adoption or complete task benefit. The frozen cost studies remain unchanged.
+
+The largest remaining guard parameter producers are `todo.context.page`
+(789,198 bytes across nine calls), `todo.quota_planning.project` (390,361 bytes)
+and `goal.vision_wait.project` (185,559 bytes), identical in the SQLite base and
+overlay. The next bounded investigation targets reuse of the canonical Todo
+source in those existing typed projection owners, before implementing one
+coherent source-read transaction. It must preserve source/provider revisions,
+actor/lease fences, complete exact reads, archive/replay lineage, pause/gates
+and pending intents. More leaf RPCs or lossy source-field pruning do not qualify
+the transaction cutover. Existing Goal-route work in #8123 and its unresolved
+performance holds remain separate. Full source/wheel correctness and a matched,
+unprofiled default-SQLite whole-path comparison are still required for a new
+implementation; all earlier milestone, adoption and complete-cost gaps remain.
 
 ## Appendix B: Decision log
 

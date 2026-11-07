@@ -110,6 +110,17 @@ current source witnesses and unknown fields remain literal. Cold delivery and
 full-capture recovery retain the complete original text, including arbitrary
 sections, comments and final stops.
 
+The native initial selection may render a generated Objective once when the
+frontmatter entry and the entire generated Markdown blockquote agree exactly
+under the writer's format. The selected text is marked as a presentation.
+Literal `--select` and full recovery on the same immutable capture retain the
+original bytes. Differing or unrecognized formats keep both values. The native
+read observer does not count the presented leaf as reading its literal source.
+
+原生首读仅在生成的 frontmatter 目标与正文整段生成引用相符时展示一次目标。
+首读会标记这一呈现；同一捕获的显式选读与完整恢复保留原字节。两处不一致
+或格式无法确认时保留原文。首读观察不会把呈现文本记为已读原始字段。
+
 Enabled native quota delivery separates known acceptance requirements from their
 supporting material before full/delta presentation. The TypeScript acceptance
 projection keeps every scoped outcome objective, requirement description,
@@ -252,24 +263,49 @@ evidence and the complete operation/settlement contract before depending on them
 The original SHA-bound full recovery remains available; a selected page's EOF
 does not prove complete source delivery, model retention or fresh authority.
 
+The generated `first_read_command` and its paging cursor default to a 12,000-byte
+serialized UTF-8 output limit when the caller supplied no tool budget. This
+applies after explicit Todo selection as well. An explicit output limit still
+controls the opening, and the ordinary bulk and recovery commands keep their
+existing budgets.
+
+中文：调用方未指定工具预算时，生成的 `first_read_command` 与续页默认每次最多
+返回 12,000 个序列化 UTF-8 字节。显式选择 Todo 后的首读也适用。调用方可以显式
+指定首读预算，完整读取与恢复命令继续使用原有预算。
+
 For a saved benchmark preflight, the ordinary wake prompt carries the command for
 the first page: native JSON `quota context-project --initial-read` publishes the
 saved decision and reads it in one call. Replace `--initial-read` with repeated
-`--select` for known fields. The output is a normal bounded reader page with its
-navigation attached. Forward the whole response within the tool's output
-budget and read its top-level `content`. When `eof` is false, follow the
-top-level `next_command` for remaining bytes. Use
-`navigation.first_read_command`, when present, to recover missing initial
-context, and `navigation.recovery.command` for other fields. A smaller
-`--max-page-output-bytes` bounds the combined response for tighter tool limits.
-If the response is lost, use the original digest-bound capture in the wake
-prompt. Read recovery reuses the saved decision and its original receipt.
+`--select` for known fields. The opening defaults to 12,000 serialized UTF-8
+bytes including navigation. With a known tool and retained-history budget,
+set `--max-page-output-bytes` to a compatible byte limit, up to 64,000. A byte
+limit is not a model-token or retention guarantee. An optional `--page-bytes`
+also bounds UTF-8 content on the attached page and its cursor, using the same
+window rules as `context-read`. The output budget still applies to the complete
+serialized response.
+
+Read the top-level `content` and follow its `next_command` until that selection's
+`eof`. If the whole initial selection would need paging and its decision and
+read obligations fit in one page, the opening contains those controls and
+`navigation.remaining_read_command` points to the rest. Read it and follow
+its cursor before work. Both selections pin the same immutable capture.
+`navigation.first_read_command` replays the opening. Use
+`navigation.recovery.command` for other fields. If the response is lost, use the
+original digest-bound capture in the wake prompt. Recovery reuses the saved
+decision and its original receipt.
 
 中文：对于已保存的 benchmark 准入结果，唤醒正文直接给出首读命令。一次调用即可
-取得首屏，已知字段可改用多个 `--select`。在工具输出预算内转发完整结果并阅读顶层
-`content`，`eof` 为 false 时按顶层 `next_command` 续读。`navigation.first_read_command`
-用于补读缺失的首读上下文，其他字段沿 `navigation.recovery.command` 读取。工具预算较小时可
-降低 `--max-page-output-bytes`。结果丢失时，用唤醒正文中的原文件及其摘要恢复，复用原决策和回执。
+取得首屏，已知字段可改用多个 `--select`。首读默认最多 12,000 个 UTF-8 字节，含导航。
+已知工具直出与历史保留上限时，可用 `--max-page-output-bytes` 指定匹配的字节预算，最高
+64,000。字节数不能保证模型实际收到的 token 数或历史保留。附带页及续读也可用
+`--page-bytes` 限制正文的 UTF-8 字节数，沿用 `context-read` 的窗口规则。
+输出预算仍约束整个序列化响应。
+
+阅读顶层 `content`，按 `next_command` 续读到当前选区的 `eof`。首读内容需要分页且决策
+和读取义务能完整放在一页时，首屏先交付这些控制信息，并给出
+`navigation.remaining_read_command`。工作前沿这条命令及其游标读完余下的首读内容。
+两个选区绑定同一份不可变捕获。`navigation.first_read_command` 可重读首屏，其他字段沿
+`navigation.recovery.command` 读取。结果丢失时，用唤醒正文中的原文件及摘要恢复，复用原决策和回执。
 
 When the existing acceptance owner supplies complete `outcome_context`
 navigation matching this capture's Goal, Agent, selected Todo, outcome revision
