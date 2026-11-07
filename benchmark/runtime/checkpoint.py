@@ -262,10 +262,14 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
     guard_path.write_bytes(raw_guard)
     guard_path.chmod(0o600)
     if native_context:
+        from loopx.control_plane.quota.turn_envelope import COMPLETE_TURN_DECISION_VERSION
+
         from .context_delivery import preflight_context_instruction
 
         assert guard_digest is not None
-        if guard.get("replan_read_path"):
+        # Complete decisions already carry the replan contract. Rewriting it
+        # as a legacy staged view would invalidate its signed source.
+        if guard.get("schema_version") != COMPLETE_TURN_DECISION_VERSION and guard.get("replan_read_path"):
             from loopx.control_plane.quota.turn_envelope import _turn_envelope_result
             from loopx.control_plane.turn_driver.decision_capture import write_decision_capture
 
