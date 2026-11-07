@@ -90,6 +90,42 @@ def test_queue_admission_reuses_terminal_observation_but_reads_replay(
     assert store.turn_for_client(sid, request["client_turn_id"])["response"]["message"] == "Updated answer"
 
 
+def test_managed_admission_uses_terminal_observations_and_full_replay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx.capabilities.native_chat.file_discovery import file_change_fingerprint
+
+    store, sid = _dedup_store(tmp_path)
+    request = {"client_turn_id": "original-managed", "message": "Original App request"}
+    original, _ = store.create_turn(sid, **request)
+    tid = original["turn_id"]
+    store.update_turn(sid, tid, status="completed", response={"message": "Original App answer"})
+    assert store.release_active_turn(sid, tid)
+    path = store._turn_path(sid, tid)
+    assert store.queued_turns(sid, strict=True) == []
+
+    read_json = chat_store._read_json
+    reads = []
+
+    def observe_read(candidate: Path) -> dict:
+        if candidate == path:
+            reads.append(candidate)
+        return read_json(candidate)
+
+    monkeypatch.setattr(chat_store, "_read_json", observe_read)
+    _, created = store.create_turn(sid, client_turn_id="new-managed", message="New App request")
+    assert created
+    if file_change_fingerprint(path) is not None:
+        assert not reads
+
+    store.update_turn(sid, tid, response={"message": "Updated App answer"})
+    replay, created = store.create_turn(sid, **request)
+    assert not created
+    assert replay["turn_id"] == tid and replay["response"]["message"] == "Updated App answer"
+    with pytest.raises(ValueError, match="different request"):
+        store.create_turn(sid, **{**request, "message": "Conflicting App request"})
+
+
 @pytest.mark.parametrize("fault", [None, "changed-turn", "failed", "wrong-invocation", "immutable"])
 def test_completed_native_retention_is_fenced_and_private(tmp_path: Path, fault: str | None) -> None:
     store, sid = _dedup_store(tmp_path)
