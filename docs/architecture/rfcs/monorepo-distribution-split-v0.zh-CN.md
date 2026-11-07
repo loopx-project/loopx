@@ -1703,6 +1703,22 @@ CPython3.13.5／Node26.0.0／已合格 SQLite3.53.1。十五条生命周期均�
 一个 minor release 的 I3、M1／#8011、R0／V10／R1、D2／D5／D6／D3、context／
 split-install 及全部历史失败；连接数或验证通过均不证明完整最小化内核目标已完成。
 
+在最新 main `df67371c3` 上的集成 `ce0e41a26` 保持 23 个 PR production-source
+hash 不变。重新通过四条完整 source／wheel File／SQLite 生命周期、49 个 TS
+用例、类型检查和隔离 PostgreSQL391／11。保存上下文／旧格式 Python 检查为
+107 passed、14 skipped；要求显式 native Codex 的用例仍未合格。Main 已修复
+原 missing-return annotation，新的 kernel mypy 通过；历史失败保留。标准
+premerge 仍通过六项直接及 18／19 项选中检查，既有 peer scanner 失败保留。
+
+集成后的五组新默认 SQLite 无插桩对照保留同一 101-Todo 成果。Main／候选
+生命周期墙钟中位数为 14.631／14.633 秒（范围 14.260–16.869／14.122–14.941），
+setup 后已观测 CLI＋daemon CPU 为 7.038／7.080 秒，daemon disk-counter 为
+8,880,128／8,290,304 字节，logical-write counter 为 14,966,784／14,282,752 字节。
+Fixture setup 中位数 2.362／2.346 秒、最终 teardown 0.062／0.058 秒仍分开。
+两次候选更慢，范围重叠；上文采样缺口仍适用，写入计数下降不证明完整提速、
+边际成本或采纳收益。先补齐剩余成本覆盖，并确认可重复的 CPU 退化，再选后续
+实现；不能假定应继续优化读取或 import。
+
 ## 附录 B：决策日志
 
 | 日期 | 决策 | 负责人 / 批准 | 备选 | 变更的规范章节 |
