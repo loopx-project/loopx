@@ -1721,6 +1721,18 @@ hide cancellation or reopen a closed Session.
 All prefixes share the configured hard Turn time budget; it is not renewed for
 each compaction.
 
+A bound Codex steward can retain its working thread across an isolated answer
+review. Before entering review, Core verifies the current working adapter is
+idle and stores its native identity, provider and source-policy basis with the
+review Turn. On return with the same authority, the adapter resumes that native
+thread directly if there are no new visible review answers. Otherwise it uses a
+native fork to inherit the compaction checkpoint and injects only those answers.
+The recovered user input already belongs to the original request. It is not a
+new history message. The child is published only after the exact policy, source,
+queued Turn and imported suffix are verified. An unknown fork or injection
+leaves the original binding and history intact. Unverified legacy or changed
+authority retains the existing context migration path.
+
 Discovery uses the local enabled binding and the same typed candidate planner,
 without provider identity IO for every historical failure. This is a queue hint;
 admission still re-resolves current App/owner/grant and exact source/native proof
