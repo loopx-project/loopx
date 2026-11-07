@@ -1,0 +1,145 @@
+"""Old preflight callers adopt staged reads through the installed CLI owner."""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import shlex
+
+import pytest
+
+from canonical_authority_fixture import isolate_sqlite_runtime
+from loopx.control_plane.effect_runtime import restart_effect_runtime
+from loopx.control_plane.quota.turn_envelope import _turn_envelope_result
+from loopx.control_plane.turn_driver.codex_context import codex_context_hook
+from loopx.control_plane.turn_driver.decision_capture import write_decision_capture
+from test_context_capture_registry_independence import run_cli
+from test_replan_progress_native_cli import (
+    AGENT, GOAL, TODO, TURN, call_progress_cli, make_progress_cli_fixture,
+)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("entry", ["original", "staged", "selected", "off", "projection_failure"])
+def test_saved_replan_reads_keep_original_authority(tmp_path, monkeypatch, provider, entry):
+    tmp_path = tmp_path.resolve()
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    monkeypatch.setenv("CODEX_THREAD_ID", "saved-replan-session")
+    monkeypatch.delenv("CODEX_ROLLOUT_TRACE_ROOT", raising=False)
+    fixture = make_progress_cli_fixture(tmp_path, provider, "advanced")
+    native = tmp_path / "native"
+    native.mkdir(mode=0o700)
+    try:
+        prepared = call_progress_cli(fixture, "quota", "should-run", "--codex-app",
+            "--goal-id", GOAL, "--agent-id", AGENT, "--todo-id", TODO,
+            "--turn-instance-id", TURN, "--decision-output-dir", str(tmp_path / "capture"),
+            "--prepared-capture-reference", "--context-delivery", "on",
+            "--codex-context-dir", str(native), "--defer-context-presentation")
+        capture = tmp_path / "capture" / "decision.json"
+        original = capture.read_bytes()
+        source = json.loads(original)
+        assert prepared["capture_sha256"] == hashlib.sha256(original).hexdigest()
+        assert "review" not in source["replan_action_packet"]
+        identity = source["heartbeat_receipt"]["settlement_identity"]
+        obligation = source["autonomous_replan_obligation"]["obligation_id"]
+        # SessionStart may follow the original Host guard. Neither projection
+        # nor its stage readers may replay admission or mutate durable work.
+        codex_context_hook(str(native), dict(session_id="saved-replan-session",
+            cwd=str(fixture["project"]), hook_event_name="SessionStart", source="startup"))
+        if entry == "staged":
+            capture = tmp_path / "already-staged.json"
+            write_decision_capture(capture, _turn_envelope_result("replan_cli_view", payload=source))
+        selected_raw = capture.read_bytes()
+
+        def snapshot():
+            return {str(p): p.read_bytes() for root in (fixture["project"], fixture["runtime"])
+                for p in root.rglob("*") if p.is_file()} | {"registry": fixture["registry"].read_bytes()}
+
+        before = snapshot()
+        options = ["--context-delivery", "off", "--delta-delivery", "off"] if entry == "off" else [
+            "--context-delivery", "on", "--codex-app", "--codex-context-dir", str(native),
+            *(["--select", "/replan_action_packet"] if entry == "selected" else ["--initial-read"])]
+        command = ["quota", "context-project", "--capture-file", str(capture),
+            "--capture-sha256", hashlib.sha256(selected_raw).hexdigest(),
+            "--goal-id", GOAL, "--agent-id", AGENT, "--turn-instance-id", TURN, *options]
+        if entry == "projection_failure":
+            # Only the presentation provider fails. The ordinary CLI must
+            # return this same admitted capture, not hide it or admit again.
+            marker = tmp_path / "presentation-failed"
+            script = "from pathlib import Path\nmarker = Path(" + repr(str(marker)) + ")\n" + """from unittest.mock import patch
+from loopx.control_plane.quota import turn_envelope
+from loopx.control_plane.effect_runtime import EffectRuntimeStartupError
+from loopx.entrypoint import main
+original = turn_envelope._turn_envelope_result
+def fail(operation, **kwargs):
+    if operation == 'replan_cli_view':
+        marker.write_text('replan_cli_view')
+        raise EffectRuntimeStartupError('synthetic presentation outage')
+    return original(operation, **kwargs)
+with patch.object(turn_envelope, '_turn_envelope_result', fail):
+    raise SystemExit(main())
+"""
+            result = subprocess.run([sys.executable, "-c", script, "--format", "json", *command],
+                cwd=fixture["project"], env={**os.environ,
+                    "PYTHONPATH": str(Path(__file__).resolve().parents[2]), "LOOPX_USAGE_PING": "0"},
+                capture_output=True, text=True, timeout=30)
+            response = json.loads(result.stdout)
+            assert result.returncode == 1 and response["ok"] is False
+            assert response["capture_sha256"] == hashlib.sha256(original).hexdigest()
+            assert response["heartbeat_receipt"] == source["heartbeat_receipt"]
+            assert response["recovery"]["path"] == str(capture)
+            assert response["recovery"]["sha256"] == hashlib.sha256(original).hexdigest()
+            assert marker.read_text() == "replan_cli_view"
+            assert "do not rerun admission" in response["reason"]
+            assert snapshot() == before and capture.read_bytes() == original
+            return
+        result = run_cli("loopx.entrypoint", fixture["project"], *command)
+        assert result.returncode == 0, result.stdout + result.stderr
+        response = json.loads(result.stdout)
+        assert response["ok"], response
+        navigation = response.get("navigation", response)
+        command, observed = navigation["recovery"]["command"], bytearray()
+        while True:
+            argv = shlex.split(command)
+            output = run_cli("loopx.entrypoint", fixture["project"], *argv[argv.index("quota"):])
+            assert output.returncode == 0, output.stdout + output.stderr
+            page = json.loads(output.stdout)
+            assert page["ok"] and page["offset"] == len(observed)
+            observed.extend(page["content"].encode())
+            if page["eof"]:
+                assert len(observed) == page["total_bytes"]
+                break
+            command = page["next_command"]
+        recovered = json.loads(observed)
+        assert recovered["heartbeat_receipt"]["settlement_identity"] == identity
+        assert recovered["autonomous_replan_obligation"]["obligation_id"] == obligation
+        if entry in {"original", "staged"}:
+            packet = recovered["replan_action_packet"]
+            assert "review" in packet and "writeback" in packet
+            assert "replan_context" not in recovered["autonomous_replan_obligation"]
+
+            def read(command):
+                argv = shlex.split(command)
+                output = run_cli("loopx.entrypoint", fixture["project"], *argv[argv.index("quota"):])
+                assert output.returncode == 0, output.stdout + output.stderr
+                value = json.loads(output.stdout)
+                assert value["ok"] and value["obligation_id"] == obligation
+                return value
+
+            review = read(packet["review"])
+            writeback = read(packet["writeback"])
+            assert review["source_hash"] == writeback["source_hash"]
+            assert writeback["writeback"]["settlement_plan"]["identity"] == identity
+            assert review["context_id"] == source["autonomous_replan_obligation"]["replan_context"]["context_id"]
+        else:
+            # Explicit raw selectors and disabled transport keep their existing
+            # content. They are not implicitly converted to a different view.
+            assert recovered["replan_action_packet"] == source["replan_action_packet"]
+        assert snapshot() == before
+        assert capture.read_bytes() == selected_raw
+        assert (tmp_path / "capture" / "decision.json").read_bytes() == original
+    finally:
+        restart_effect_runtime(wait_for_exit=True)

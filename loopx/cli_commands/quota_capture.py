@@ -781,6 +781,20 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
         # Carry the now-active transport into its selection presentation, not
         # into the immutable source or a second admission. Native lifecycle
         # still owns when the following full/delta view can be published.
+        if (args.initial_read and isinstance(payload.get("replan_read_path"), str)
+                and Path(payload["replan_read_path"]).resolve() == path.resolve()):
+            # Older Hosts pass the original preflight capture here. Reuse the
+            # staged presentation without another guard. Already-derived views
+            # point to a different original file; projecting them again would
+            # bind reads to the wrong source hash.
+            from ..control_plane.quota.turn_envelope import _turn_envelope_result
+
+            try:
+                payload = _turn_envelope_result("replan_cli_view", payload=payload)
+            except (EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
+                raise QuotaDecisionTransportError(
+                    "Saved replan presentation could not be prepared; read the original capture."
+                ) from exc
         transport = _capture_selection_transport_template(payload, args, capture_root=root)
         prepared = prepare_codex_context(payload, directory=directory, capture_directory=cache,
             goal_id=args.goal_id, agent_id=args.agent_id,
