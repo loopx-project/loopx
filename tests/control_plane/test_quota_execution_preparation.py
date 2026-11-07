@@ -397,7 +397,10 @@ def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("case", ["same-execution", "released-execution", "legacy-released-execution"])
+@pytest.mark.parametrize("case", [
+    "same-execution", "released-execution", "legacy-released-execution",
+    "reencoded-released-execution", "legacy-marked-released-execution",
+])
 def test_native_hook_replays_the_original_claim_after_guard_timeout(
     tmp_path, monkeypatch, capsys, provider, case,
 ):
@@ -415,7 +418,7 @@ def test_native_hook_replays_the_original_claim_after_guard_timeout(
              "hook_event_name": "SessionStart", "source": "startup"}
     assert codex_context.codex_context_hook(str(native), event) == {}
     capture = tmp_path / "before-claim"
-    legacy = case == "legacy-released-execution"
+    legacy = case.startswith("legacy-")
     released = case != "same-execution"
     native_args = () if legacy else ("--defer-context-presentation", "--codex-context-dir", str(native))
     before = _run(tmp_path, monkeypatch, provider, [], "--codex-app",
@@ -472,19 +475,27 @@ def test_native_hook_replays_the_original_claim_after_guard_timeout(
         read("task-lease", "release", "--goal-id", GOAL, "--todo-id", TODO, "--owner", AGENT,
             "--expected-version", str(lease["version"]), "--idempotency-key", lease["idempotency_key"])
 
-    if legacy:
-        legacy_result = hook()
-        guidance = legacy_result["hookSpecificOutput"]["additionalContext"]
-        assert "predates capture-bound Host claims" in guidance and "fresh capture" in guidance
-        assert "host_execution_prepared" not in guidance
-    assert _present_saved_guard(tmp_path, native, capture, "codex_app_heartbeat", turn) == digest
+    presented_capture = capture
+    unverified_copy = case in ("reencoded-released-execution", "legacy-marked-released-execution")
+    if unverified_copy:
+        presented_capture = tmp_path / "unverified"
+        presented_capture.mkdir(mode=0o700)
+        copy = presented_capture / "decision.json"
+        if legacy:
+            copy.write_text(json.dumps({**json.loads(original_bytes), "native_claim_replay_bound": True}))
+        else:
+            copy.write_bytes(original_bytes + b" ")
+        copy.chmod(0o600)
+    presented_digest = _present_saved_guard(tmp_path, native, presented_capture, "codex_app_heartbeat", turn)
+    assert (presented_digest != digest) == unverified_copy
     result = hook()
-    if legacy:
-        assert result == legacy_result
     current = read("task-lease", "inspect", "--goal-id", GOAL, "--todo-id", TODO)
     assert source.read_bytes() == original_bytes
-    if legacy:
-        assert not claims and not guards
+    if legacy or unverified_copy:
+        guidance = result["hookSpecificOutput"]["additionalContext"]
+        assert "no verified live guard binding" in guidance and "fresh capture" in guidance
+        assert "host_execution_prepared" not in guidance
+        assert len(claims) == len(guards) == (0 if legacy else 1)
         assert not current["active"] and current["lease"]["lease_epoch"] == lease["lease_epoch"]
     elif released:
         assert len(claims) == 2
@@ -625,6 +636,7 @@ def test_codex_lifecycle_hook_uses_captured_authority_from_another_project(
     context_root = tmp_path / "context"
     capture_root = tmp_path / "capture"
     context_root.mkdir(mode=0o700)
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
     before = _run(
         tmp_path,
         monkeypatch,

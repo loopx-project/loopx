@@ -183,8 +183,7 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
 
 def project_native_quota_context(payload: dict[str, Any], args: argparse.Namespace, *,
                                  capture_directory: Path, capture_id: str, decision_identity: tuple[str, str],
-                                 progressive_enabled: bool, reader_argv: list[str] | None,
-                                 claim_source_sha256: str | None = None) -> dict[str, Any]:
+                                 progressive_enabled: bool, reader_argv: list[str] | None) -> dict[str, Any]:
     """Prepare one already-decided native view; callers retain receipt failures."""
     from ..control_plane.turn_driver.codex_context import (
         NativeContextSessionUnavailable, codex_context_directory, prepare_codex_context,
@@ -198,7 +197,7 @@ def project_native_quota_context(payload: dict[str, Any], args: argparse.Namespa
         capture_directory=capture_directory, goal_id=decision_identity[0], agent_id=decision_identity[1],
         surface="turn_envelope" if getattr(args, "turn_envelope", False) else "quota_packet",
         capture_id=capture_id, continuity_generation=getattr(args, "_context_delivery_generation", None),
-        progressive_enabled=progressive_enabled, claim_source_sha256=claim_source_sha256)
+        progressive_enabled=progressive_enabled)
     recovery = prepared.delivery.get("recovery")
     view = native_context_capture_view(prepared.delivery, capture_directory, context_directory=directory,
         progressive_enabled=progressive_enabled, initial_read_plan=prepared.initial_read_plan,
@@ -319,7 +318,6 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
             pass  # The complete original reference remains the fallback below.
     try:
         from ..control_plane.turn_driver.codex_context import codex_context_directory, prepare_codex_context
-        from ..control_plane.turn_driver.codex_execution_preparation import NATIVE_CLAIM_REPLAY_BOUND
 
         if not activation["enabled"]:
             raise ValueError("context delivery is off")
@@ -354,12 +352,23 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
         # into the immutable source or a second admission. Native lifecycle
         # still owns when the following full/delta view can be published.
         bind_capture_selection_transport(payload, args, capture_root=root)
-        prepared = prepare_codex_context(payload, directory=directory, capture_directory=cache,
+        presentation = payload
+        if getattr(args, "initial_read", False) and activation["progressive_enabled"]:
+            from .quota_presentation import _project_quota_cli_payload
+
+            # Match the ordinary selection guard's view while keeping the
+            # digest-bound original available for detail recovery.
+            presentation = _project_quota_cli_payload(
+                payload, argparse.Namespace(quota_command="should-run"), frozenset(), None,
+                captured_decision_path=str(path),
+            )
+            if "host_poll_receipt" in payload:
+                presentation["host_poll_receipt"] = payload["host_poll_receipt"]
+        prepared = prepare_codex_context(presentation, directory=directory, capture_directory=cache,
             goal_id=args.goal_id, agent_id=args.agent_id, surface="quota_packet",
             capture_id=hashlib.sha256(raw).hexdigest(),
             continuity_generation=getattr(args, "_context_delivery_generation", None),
             progressive_enabled=activation["progressive_enabled"],
-            claim_source_sha256=args.capture_sha256 if payload.get(NATIVE_CLAIM_REPLAY_BOUND) is True else None,
             hook_session=hook_session)
         projected = prepared.delivery
         native_prepared = True
@@ -504,13 +513,20 @@ def prepare_decision_capture(args: argparse.Namespace) -> Path | None:
     return directory
 
 
-def capture_decision(directory: Path | None, payload: dict[str, object]) -> str | None:
+def capture_decision(directory: Path | None, payload: dict[str, object], *,
+                     args: argparse.Namespace | None = None, native_context: bool = False) -> str | None:
     if directory is None:
         return
     from ..control_plane.turn_driver.decision_capture import write_decision_capture
 
     try:
-        return write_decision_capture(directory / "decision.json", payload, publish=os.replace)
+        digest = write_decision_capture(directory / "decision.json", payload, publish=os.replace)
+        if native_context and args is not None and args.quota_command == "should-run" and payload.get("ok") is True:
+            from ..control_plane.turn_driver.codex_context import record_native_claim_source
+
+            record_native_claim_source(payload, digest, directory=args.codex_context_dir,
+                context_root=getattr(args, "codex_context_root", None))
+        return digest
     except (OSError, ValueError) as exc:
         raise QuotaDecisionTransportError(
             "Decision capture failed after guard evaluation; the Turn receipt may "

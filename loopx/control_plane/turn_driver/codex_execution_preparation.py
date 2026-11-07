@@ -17,15 +17,14 @@ from ..content_digest import BARE_SHA256_PATTERN
 
 
 CommandRunner = Callable[..., subprocess.CompletedProcess[str]]
-NATIVE_CLAIM_REPLAY_BOUND = "native_claim_replay_bound"
 
 
 class LegacyNativePreparationCapture(ValueError):
-    """The capture cannot identify any claim made by an older Host."""
+    """The capture cannot prove a live guard bound its claim."""
 
     def __init__(self) -> None:
         super().__init__(
-            "This saved capture predates capture-bound Host claims. Preserve any existing claim receipt. "
+            "This saved capture has no verified live guard binding for Host claims. Preserve any existing claim receipt. "
             "If preparation is still needed, run the current quota should-run for the original Goal, "
             "Agent, Todo and Turn with a fresh capture and follow its preparation only if eligible."
         )
