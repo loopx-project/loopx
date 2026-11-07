@@ -232,6 +232,61 @@ def test_completed_work_readback_requires_stable_correlated_settled_inventory(fa
     assert set(calls) <= {"thread/turns/list", "thread/items/list"}
 
 
+@pytest.mark.parametrize("fault", [None, "unknown-later", "live", "live-effect", "foreign", "duplicate",
+    "moving-items", "moving-turns", "untyped", "unknown-item", "no-final"])
+def test_completed_result_review_reads_evidence_without_proving_replay_safety(fault):
+    from loopx.chat import CHAT_REVIEW_OPEN_TAG, CHAT_REVIEW_CLOSE_TAG
+    from loopx.capabilities.native_chat.codex_adapter import completed_result_review_readback
+    import json
+
+    work = {"remaining": "Verify the retained update", "dependency": "The source was unavailable", "effects_settled": True}
+    final = "Only part of the update was confirmed.\n" + CHAT_REVIEW_OPEN_TAG + json.dumps({
+        "message": "", "unfinished_work": work}) + CHAT_REVIEW_CLOSE_TAG
+    calls = []
+    counts = {"thread/turns/list": 0, "thread/items/list": 0}
+
+    def items(method, params, deadline):
+        calls.append(method)
+        counts[method] += 1
+        if method == "thread/turns/list":
+            rows = [{"id": "later", "status": "inProgress" if fault == "live" else "interrupted"},
+                {"id": "original", "status": "completed"}]
+            if fault == "moving-turns" and counts[method] > 1:
+                rows.insert(0, {"id": "foreign", "status": "completed"})
+            return iter(rows)
+        assert params == {"turnId": "original"}, "A result-only read need not rescan later business effects"
+        rows = [{"turnId": "original", "item": {"id": "user", "type": "userMessage"}},
+            {"turnId": "original", "item": {"id": "effect", "type": "commandExecution",
+                "status": "inProgress" if fault == "live-effect" else "failed", "exitCode": 130}},
+            {"turnId": "original", "item": {"id": "answer", "type": "agentMessage",
+                "phase": "commentary" if fault == "no-final" else "final_answer",
+                "text": "No structured declaration" if fault == "untyped" else final}}]
+        if fault == "foreign":
+            rows[1]["turnId"] = "other"
+        if fault == "unknown-item":
+            rows[1]["item"]["type"] = "futureEffect"
+        if fault == "duplicate":
+            rows.append(rows[1])
+        if fault == "moving-items" and counts[method] > 1:
+            rows[2]["item"]["text"] += " changed"
+        return iter(rows)
+
+    native = SimpleNamespace(thread_id="native", work_dir=Path("/synthetic/workspace"),
+        response_timeout_sec=1, _control_items=items)
+    proof = completed_result_review_readback(native, "original",
+        known_turn_ids=set() if fault == "unknown-later" else {"later"})
+    if fault is None:
+        assert proof["read_only_review"] is True and proof["completed_result_review"] is True
+        assert proof["unfinished_work"] == work and proof["visible_response"] == final
+        assert proof["thread_id"] == "native" and proof["turn_id"] == "original"
+        assert len(proof["native_inventory_sha256"]) == 64
+        assert "all_effects_settled" not in proof and "completed_work" not in proof
+        assert counts == {"thread/turns/list": 2, "thread/items/list": 2}
+    else:
+        assert proof is None
+    assert set(calls) <= {"thread/turns/list", "thread/items/list"}
+
+
 @pytest.mark.parametrize("resume", [False, True])
 @pytest.mark.parametrize("count", [2, 400])
 def test_history_is_persisted_once_before_publishing_a_new_adapter(monkeypatch, tmp_path, resume, count):

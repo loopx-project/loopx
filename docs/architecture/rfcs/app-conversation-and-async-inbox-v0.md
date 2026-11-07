@@ -2025,6 +2025,27 @@ unknown review stays pending and cannot become another review or business retry.
 Other malformed actions and completed Turns without a recovered native result
 remain explicit holds; this path is not a generic action or execution replayer.
 
+### Completed private project result reviews
+
+A completed original project Turn with typed `unfinished_work` can fall back to
+one restricted result review when its effects cannot qualify writable
+continuation. The provider must read the same stable, closed native final and
+unfinished declaration; later native inputs must be correlated to Core. This
+observation does **not** certify settled effects. A failed or signal-terminated
+command cannot acquire replay authority through this route.
+
+The original worker uses its existing Session, queue and project binding. Fresh
+source and grant checks, an idle queue, the backoff, and stop/steering/attachment
+guards still apply. A live adapter with owned background work is retained. The
+review uses the existing workspace-only read permission profile without network
+access; it may inspect current local artifacts and receipts but cannot write,
+send, delegate or replace the original work declaration. References in the old
+question use its original-time Core context. The original partial Turn and
+delivery remain immutable, and the same Lark worker returns the new answer in a
+separate, idempotent phase. Reservation crashes adopt that exact queued review.
+The retained business obligation stays pending independently of the review's
+prose or failure; a review never starts a writable retry or another review.
+
 ### File-backed idle recovery observations
 
 Repeated recovery checks must not reparse every historical Turn and source body
