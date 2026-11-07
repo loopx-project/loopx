@@ -670,6 +670,35 @@ Grouping is presentation, not independent acceptance evidence. The earlier
 rich-index measurement and its 20 KiB candidate allowance remain evidence for
 the complete-source path; they do not increase the historical reader's budget.
 
+#### Turn consumer preparation and instruction parity
+
+The separate Turn proposal keeps the ordinary quota producer on its recorded
+contract; the parent retains the broader quota/heartbeat cutover. Tests of an
+unmigrated producer must preserve that boundary. Current Turn planning consumes
+its complete source directly and publishes its own immutable capture; pairing a
+newly composed source with an older executor envelope is rejected.
+
+Native selected-task execution prepares its ordinary managed lease before the
+kernel delivery guard and reuses that proof during post-model validation. A
+claim label alone is insufficient, and another execution's lease remains
+unavailable. Source checks precede the independent task argv; rejection and
+original-result recovery retain the original session and once-only effects.
+
+Modern Codex and structured Host instructions share the existing audit read
+rule: read a declared audit before judging Goal acceptance or proposing
+closeout, including when the Goal stays open. Notification policy does not grant
+or cancel execution authority; supplied delivery, attempt, quiet-noop, execution
+and orchestration constraints still apply. Core retains state, quota and
+scheduler effects. A complete contract can declare a pending original material
+read: publication does not fulfill it, and tests must execute its reader and
+preserve the original body and stops.
+
+The disposable research-team launcher and initializer locate the actually loaded
+Core together, including an isolated wheel, while retaining exclusive runtime
+creation. Source and packaged consumer checks are distinct from installed App
+adoption, live optional-provider/model behavior and original-quota complete-cost
+benefit. These repairs do not close C1 or authorize rollout or merge.
+
 ### C1 baseline boundary and reuse inventory
 
 The baseline is the **original caller-visible quota delivery**, not the raw

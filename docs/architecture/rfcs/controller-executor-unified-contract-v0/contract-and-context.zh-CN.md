@@ -488,6 +488,26 @@ reader。本文不单独授权破坏性迁移。
 丰富索引的测量及其 20 KiB 候选预算继续作为完整来源路径的证据，不提高历史 reader
 的预算。
 
+#### Turn 消费方准备与指令保真
+
+独立 Turn 提案让普通 quota producer 保持已记录契约；更广的 quota／heartbeat 切换
+仍归父提案。未迁移 producer 的测试须守住这个边界。当前 Turn 规划直接消费完整来源，
+发布自己的不可变 capture；新组合来源与较早 executor envelope 错配时继续拒绝。
+
+原生所选 Task 在 kernel delivery guard 之前准备普通 managed lease，并在模型后验证时
+复用该 proof。claim 标签本身不足，不能借用另一次执行的 lease。来源检查先于独立
+Task argv；拒绝和原结果恢复保留原会话与一次性效果。
+
+现代 Codex 与结构化 Host 指令共用既有 audit 读取规则：在判断 Goal acceptance 或提出
+closeout 前读取已声明 audit，即使 Goal 保持开放。通知策略不授予或取消执行权；所供
+delivery、attempt、quiet-noop、execution 与 orchestration 约束仍须遵守。状态、quota
+和 scheduler 效果仍归 Core。完整契约可以声明待执行的原材料读取：发布不等于已读，
+测试须真正执行 reader，并保留原正文与停止条件。
+
+一次性 research-team launcher 与 initializer 共同定位实际加载的 Core，包括隔离 wheel，
+仍保留 runtime 独占创建。源码和打包消费者验证，分别区别于已安装 App 采用、真实可选
+provider／模型行为及相对原 quota 的完整成本收益。这些修复不关闭 C1，也不授权部署或合并。
+
 ### C1 基线边界与复用盘点
 
 基线是**原路径中调用者实际收到的 quota 交付**，不是内部原始 decision。
