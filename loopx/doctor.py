@@ -149,7 +149,9 @@ def python_distribution_install(module_path: Path) -> dict[str, Any]:
     expected = module_path.resolve()
     owns_module = any(
         item.as_posix().endswith("loopx/doctor.py")
-        and Path(item.locate()).resolve() == expected
+        # A RECORD entry is a POSIX string. Let the native path parser
+        # interpret an absolute Windows drive before joining the install root.
+        and Path(installed.locate_file(item.as_posix())).resolve() == expected
         for item in installed.files or ()
     )
     if not owns_module:
