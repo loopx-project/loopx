@@ -19,6 +19,7 @@ from loopx.control_plane.testing.canary_harness import (
     run_json_cli_result,
     write_fixture_registry,
 )
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 
 
 @pytest.fixture(params=["file", "sqlite"])
@@ -82,11 +83,14 @@ def acceptance_goal(tmp_path, monkeypatch, request):
     document_path.write_text(json.dumps(document))
 
     def run(*arguments):
-        return run_json_cli_result(
+        code, payload = run_json_cli_result(
             *arguments,
             registry_path=registry,
             runtime_root=runtime,
         )
+        if arguments[:2] == ("quota", "should-run"):
+            payload = read_cli_policy_payload(json.dumps(payload), returncode=code)
+        return code, payload
 
     def cli(*arguments):
         return run("goal-acceptance", *arguments, "--goal-id", "goal-acceptance")
@@ -540,17 +544,43 @@ def test_owner_scope_correction_restores_independent_work_through_real_cli(accep
 def test_goal_only_checks_keep_local_work_free_and_outcome_unmet(acceptance_goal):
     project, checks_file, cli, run = acceptance_goal
     outcome_file = project / "goal-outcome.json"
-    outcome_file.write_text(json.dumps({"outcome_id": "campaign", "owner_agent_id": "agent-a",
-        "objective": "Complete the authorized ongoing work", "requirements": [
-            {"id": "commitment", "description": "The external work commitment is fulfilled"}],
-        "source": {"ref": "owner:commitment", "summary": "The owner retained a Goal-wide commitment"}}))
-    code, refined = cli("refine", "--agent-id", "agent-a", "--document", str(outcome_file),
+    description = "The external work commitment is fulfilled"
+    for outcome_id in ("campaign", "independent"):
+        outcome_file.write_text(json.dumps({"outcome_id": outcome_id, "owner_agent_id": "agent-a",
+            "objective": f"Complete the authorized {outcome_id} work", "requirements": [
+                {"id": "commitment", "description": description}],
+            "source": {"ref": f"owner:{outcome_id}", "summary": "The owner retained a Goal-wide commitment"}}))
+        code, refined = cli("refine", "--agent-id", "agent-a", "--document", str(outcome_file),
+            "--expected-provider-revision", cli("inspect")[1]["provider_revision"],
+            "--operation-id", f"goal-only-{outcome_id}", "--execute")
+        assert code == 0, refined
+    default_contract = cli("inspect")[1]["goal_acceptance_contract"]
+    assert default_contract.get("verification") is None
+    assert {gap["outcome_id"] for gap in default_contract["outcome_requirements"]["acceptance_gaps"]} == {
+        "campaign", "independent"}
+
+    command = [sys.executable, "-c",
+        "from pathlib import Path; assert Path('commitment.txt').read_text() == 'fulfilled'"]
+    checks_file.write_text(json.dumps({"scope": {"kind": "goal"}, "objective": "Verify the Goal artifact",
+        "non_goals": [], "bindings": [], "criteria": [
+            {"id": "commitment", "description": description, "validation_argv": command}]}))
+    code, configured = cli("configure", "--document", str(checks_file),
         "--expected-provider-revision", cli("inspect")[1]["provider_revision"],
-        "--operation-id", "goal-only-outcome", "--execute")
-    assert code == 0, refined
+        "--operation-id", "standalone-goal-check", "--execute")
+    assert code == 0, configured
+    artifact = project / "commitment.txt"
+    artifact.write_text("fulfilled")
+    code, passed = cli("verify", "--agent-id", "agent-a", "--execute")
+    assert code == 0 and passed["checks_passed"] is True, passed
+    current = cli("inspect")[1]["goal_acceptance_contract"]
+    assert current["status"] == "accepted"
+    outcomes = current["outcome_requirements"]["outcomes"]
+    assert {outcome["id"]: outcome["requirements"][0]["status"] for outcome in outcomes} == {
+        "campaign": "unverified", "independent": "unverified"}
+    artifact.unlink()
+
     checks_file.write_text(json.dumps({"outcome_id": "campaign", "scope": {"kind": "goal"},
-        "criteria": [{"id": "commitment", "validation_argv": [sys.executable, "-c",
-            "from pathlib import Path; assert Path('commitment.txt').read_text() == 'fulfilled'"]}]}))
+        "criteria": [{"id": "commitment", "validation_argv": command}]}))
     code, configured = cli("configure", "--document", str(checks_file),
         "--expected-provider-revision", cli("inspect")[1]["provider_revision"],
         "--operation-id", "goal-only-configure", "--execute")
@@ -558,7 +588,7 @@ def test_goal_only_checks_keep_local_work_free_and_outcome_unmet(acceptance_goal
     contract = configured["goal_acceptance_contract"]
     assert contract["scope"] == {"kind": "goal"}
     assert contract["tasks"] == [] and contract["held_todo_ids"] == []
-    assert contract["status"] == "unverified"
+    assert contract["status"] == "stale"
     assert contract["outcome_requirements"]["acceptance_gaps"][0]["kind"] == "goal_outcome_uncovered"
     code, failed = cli("verify", "--agent-id", "agent-a", "--execute")
     assert code == 1 and failed["checks_passed"] is False, failed
@@ -566,15 +596,16 @@ def test_goal_only_checks_keep_local_work_free_and_outcome_unmet(acceptance_goal
     code, completed = run("todo", "complete", "--goal-id", "goal-acceptance",
         "--todo-id", "todo_export", "--agent-id", "agent-a")
     assert code == 0, completed
-    code, quota = run("quota", "should-run", "--goal-id", "goal-acceptance", "--agent-id", "agent-a",
-        "--context-delivery", "off", "--delta-delivery", "off")
+    code, quota = run("quota", "should-run", "--goal-id", "goal-acceptance", "--agent-id", "agent-a")
     assert code == 0, quota
     assert quota["decision"] == "autonomous_replan_required", quota
     assert quota["goal_frontier_projection"].get("terminal_state") is None
-    (project / "commitment.txt").write_text("fulfilled")
+    artifact.write_text("fulfilled")
     code, passed = cli("verify", "--agent-id", "agent-a", "--execute")
     assert code == 0 and passed["checks_passed"] is True, passed
     current = cli("inspect")[1]["goal_acceptance_contract"]
     assert current["status"] == "accepted"
-    assert current["outcome_requirements"]["acceptance_gaps"] == []
-    assert current["outcome_requirements"]["outcomes"][0]["requirements"][0]["status"] == "accepted"
+    outcomes = current["outcome_requirements"]["outcomes"]
+    assert {outcome["id"]: outcome["requirements"][0]["status"] for outcome in outcomes} == {
+        "campaign": "accepted", "independent": "unverified"}
+    assert {gap["outcome_id"] for gap in current["outcome_requirements"]["acceptance_gaps"]} == {"independent"}
