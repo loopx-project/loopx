@@ -16,7 +16,9 @@ from loopx.capabilities.native_chat import external_conversations
 from loopx.extensions.lark.conversation_identity import identity_ref
 
 
-@pytest.mark.parametrize("fault", [None, "stop", "source-changed", "unknown-native", "no-capacity", "native-changed", "review-action", "post-enqueue-crash", "image-view"])
+@pytest.mark.parametrize("fault", [None, "stop", "source-changed", "unknown-native", "no-capacity", "native-changed",
+    "review-action", "post-enqueue-crash", "image-view", "checkpoint-live", "checkpoint-cold",
+    "checkpoint-injection-unknown", "checkpoint-empty", "checkpoint-settings-change"])
 def test_restarted_codex_steward_gets_one_original_read_only_answer(steward, monkeypatch, fault):
     from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter
     from loopx.chat_agent import CodexChatAgentError
@@ -24,11 +26,36 @@ def test_restarted_codex_steward_gets_one_original_read_only_answer(steward, mon
 
     store, runtime, provider, transport, binding, capture, workspace = steward
     fake = Path(runtime.codex_bin)
+    checkpoint = bool(fault and fault.startswith("checkpoint-"))
+    original_thread = "working-thread" if checkpoint else "durable-thread"
     code = fake.read_text().replace('result = {"thread": {"id": "durable-thread"}}', '''result = {"thread": {"id": "durable-thread"}, "model": "gpt-6.1-sol"}
         permissions = request.get("params", {}).get("permissions")
         if permissions:
             result.update(activePermissionProfile={"id": permissions}, runtimeWorkspaceRoots=[request["params"]["cwd"]])''')
-    if fault == "review-action":
+    if checkpoint:
+        code = code.replace('"durable-thread"', 'thread_id')
+        code = code.replace('active_turn = None', 'active_turn = None\nthread_id = "working-thread"', 1)
+        begin = code.index('    elif method in {"thread/start", "thread/resume"}:')
+        end = code.index('    elif method == "thread/goal/get":', begin)
+        code = code[:begin] + '''    elif method in {"thread/start", "thread/resume", "thread/fork"}:
+        params = request["params"]
+        permissions = params.get("permissions")
+        thread_id = ("continued-thread" if method == "thread/fork" else params.get("threadId")
+            if method == "thread/resume" else "review-thread" if permissions else "working-thread")
+        result = {"thread": {"id": thread_id}, "model": "gpt-6.1-sol", "modelProvider": "openai",
+                  "cwd": params["cwd"], "approvalPolicy": "never"}
+        if method == "thread/fork":
+            result["thread"]["forkedFromId"] = params["threadId"]
+            result["sandbox"] = {"type": {"danger-full-access": "dangerFullAccess",
+                "workspace-write": "workspaceWrite", "read-only": "readOnly"}[params["sandbox"]]}
+        if permissions:
+            result.update(activePermissionProfile={"id": permissions}, runtimeWorkspaceRoots=[params["cwd"]])
+''' + code[end:]
+        if fault == "checkpoint-injection-unknown":
+            code = code.replace('    elif method == "turn/start":', '''    elif method == "thread/inject_items" and thread_id == "continued-thread":
+        sys.exit(2)
+    elif method == "turn/start":''')
+    if fault in {"review-action", "checkpoint-empty"}:
         start = code.index("        response = 'Visible runtime response.")
         end = code.index('        print(json.dumps({"method": "item/agentMessage/delta"', start)
         reply = '<loopx-review-json>' + json.dumps({"message": "Forbidden repeat",
@@ -67,6 +94,8 @@ def test_restarted_codex_steward_gets_one_original_read_only_answer(steward, mon
     def start_scoped_review(**kwargs):
         if kwargs.get("answer_review_context") is not None:
             assert kwargs["history"] is None, "a restricted answer must not import the whole conversation"
+        if fault == "checkpoint-settings-change" and kwargs.get("working_continuation") is not None:
+            store.update_session(original["session_id"], requested_agent_model_id="gpt-6-luna")
         return start_adapter(**kwargs)
     monkeypatch.setattr(runtime, "_start_adapter", start_scoped_review)
     class Ahead(datetime):
@@ -106,7 +135,7 @@ def test_restarted_codex_steward_gets_one_original_read_only_answer(steward, mon
             return interrupted_result_readback(SimpleNamespace(thread_id="durable-thread",
                 response_timeout_sec=1, _control_items=items), failed["upstream_turn_id"])
         changed = fault == "native-changed" and bool((transport.core.read_request(ref).get("context_recovery") or {}).get("answer_review"))
-        return {"thread_id": "durable-thread", "turn_id": failed["upstream_turn_id"],
+        return {"thread_id": original_thread, "turn_id": failed["upstream_turn_id"],
             "read_only_review": True, "no_final_answer": True, "effects_observed": True,
             "native_inventory_sha256": ("2" if changed else "1") * 64}
     monkeypatch.setattr(CodexAppServerAdapter, "failed_request_observation", staticmethod(observe))
@@ -134,7 +163,7 @@ def test_restarted_codex_steward_gets_one_original_read_only_answer(steward, mon
         assert recovery["answer_review"] is True and recovery["read_only_review"] is True
         assert not any(recovery.get(key) for key in ["work_attempt", "quota_attempt", "routing_attempt"])
         done = runtime.wait_for_turn(session_id=current["session_id"], turn_id=current["turn_id"], timeout_sec=15)
-        assert done["status"] == ("failed" if fault in {"native-changed", "review-action"} else "completed"), done
+        assert done["status"] == ("failed" if fault in {"native-changed", "review-action", "checkpoint-empty"} else "completed"), done
         restarted.reconcile_request(path)
         delivered = json.loads(path.read_text())
         terminal = delivered["deliveries"]["terminal.recovery.22.review.1"]
@@ -160,6 +189,48 @@ def test_restarted_codex_steward_gets_one_original_read_only_answer(steward, mon
         writes = list(provider.writes)
         restarted.reconcile_request(path)
         assert provider.writes == writes
+        if checkpoint:
+            sid = original["session_id"]
+            review_session = store.load_session(sid)
+            parked = review_session["parked_native_working"]
+            assert parked["thread_id"] == "working-thread" and parked["review_turn_ids"] == [done["turn_id"]]
+            assert review_session["upstream_thread_id"] == "review-thread"
+            if fault == "checkpoint-cold":
+                runtime.adapters.pop(sid).close_session()
+                assert store.load_session(sid)["parked_native_working"] == parked
+            monkeypatch.setattr(CodexAppServerAdapter, "start_turn", start_turn)
+            later = provider.event("steward-app", "after-working-checkpoint", "Next independent question")
+            restarted.admit("steward-app", later)
+            next_row = restarted.core.read_request(identity_ref(binding["provider_ref"], later["message_id"]))
+            next_turn = runtime.wait_for_turn(session_id=sid, turn_id=next_row["turn_id"], timeout_sec=15)
+            packets = [json.loads(line) for line in capture.read_text().splitlines()][len(calls):]
+            methods = [packet["method"] for packet in packets]
+            assert "thread/start" not in methods and "thread/compact/start" not in methods
+            if fault == "checkpoint-settings-change":
+                assert next_turn["status"] == "failed"
+                assert not {"thread/fork", "thread/resume", "thread/inject_items", "turn/start"}.intersection(methods)
+                assert store.load_session(sid)["parked_native_working"] == parked
+                assert store.load_session(sid)["upstream_thread_id"] == "review-thread"
+            elif fault == "checkpoint-empty":
+                assert next_turn["status"] == "completed"
+                assert [p["params"]["threadId"] for p in packets if p["method"] == "thread/resume"] == ["working-thread"]
+                assert "thread/inject_items" not in methods
+            else:
+                assert [p["params"]["threadId"] for p in packets if p["method"] == "thread/fork"] == ["working-thread"]
+                injected = [p["params"] for p in packets if p["method"] == "thread/inject_items"]
+                assert len(injected) == 1 and injected[0]["threadId"] == "continued-thread"
+                suffix = [(item["role"], item["content"][0]["text"]) for item in injected[0]["items"]]
+                assert suffix == [("assistant", done["response"]["message"])]
+                assert "Next independent question" not in str(suffix)
+                if fault == "checkpoint-injection-unknown":
+                    assert next_turn["status"] == "failed" and "turn/start" not in methods
+                    assert store.load_session(sid)["parked_native_working"] == parked
+                    assert store.load_session(sid)["upstream_thread_id"] == "review-thread"
+                else:
+                    assert next_turn["status"] == "completed"
+                    assert store.load_session(sid)["upstream_thread_id"] == "continued-thread"
+            if fault not in {"checkpoint-injection-unknown", "checkpoint-settings-change"}:
+                assert store.load_session(sid).get("parked_native_working") is None
     assert store._turn_path(original["session_id"], original["turn_id"]).read_bytes() == failure_bytes
     assert artifact.read_text() == "Original effect, do not repeat"
 
