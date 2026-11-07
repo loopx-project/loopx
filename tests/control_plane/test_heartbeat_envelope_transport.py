@@ -354,7 +354,7 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(
         '--todo-id', ALTERNATIVE_TODO_ID, '--turn-instance-id', TURN_ID,
         '--classification', 'validated_progress', '--delivery-batch-scale', 'implementation',
         '--delivery-outcome', 'outcome_progress', '--delivery-boundary', 'in_flight_continuation',
-        '--no-global-sync', '--suppress-external-sinks')
+        '--no-global-sync', '--suppress-external-sinks', cwd=project)
     assert rc == 0, refresh
     spend = refresh['settlement_owed']['command']
     for _ in range(2):

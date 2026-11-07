@@ -824,6 +824,372 @@ Approval needs a reviewed decision, not implementation progress or silence.
   installation, R1 managed minimal or D1–D7. No preset, frontend operation,
   permission or persisted state changes; protected execution keeps its owner.
 
+### 2026-11-07 — Caller process-transport loading proposal
+
+- **Baseline and boundary:** `7f521ff4505fa916a98a7401032922189eef414a`
+  loads `extensions.process_runtime` during the pure Turn-decision import.
+  Doctor Git, contract scanning, caller validation and Host bridge transport
+  now resolve their existing reexports on use. The original function objects,
+  signatures, direct/from/star imports, discovery, caller patch points,
+  preloaded-owner bindings and reload behavior remain available. This uses the
+  existing lazy-export pattern; the export-name set is local compatibility
+  metadata, not a shared state vocabulary. Python retains platform transport;
+  TypeScript retains decisions, deadlines, authority and receipts. No provider,
+  capability, default or process algorithm is added.
+- **Executable evidence:** the four cold-caller oracles fail on the immutable
+  baseline. Focused compatibility checks and the existing architecture oracle
+  pass on the proposal; the Turn-preview unselected-module guard is retained.
+  Real isolated Git, validation and bridge tests cover timeout, cancellation,
+  exited-leader descendants, stdin policy, framing and unconfirmed cleanup.
+  A newly built monolithic wheel repeats compatibility and real-process checks
+  outside the checkout. Complete public discovery/star name sets and transport
+  signatures match the baseline. This is source/wheel proposal evidence, not an
+  upgrade or adoption result.
+- **Measured scope:** pure Turn-decision import loads 337 LoopX modules instead
+  of 338. Pure import and help start no processes or connections; supported help
+  and unknown-command output/exit status remain identical. Shared synthetic
+  SQLite fixtures exercise accepted and rejected registered Turn plans: both
+  revisions start two Node processes and thirteen Git probes, with 62/61
+  connection observations respectively. Their complete returned envelopes match
+  except the source-decision digest from fresh observations. Registered plans
+  still select process transport; the entire preview dependency closure is not
+  qualified as cold. One removed import does not establish latency, RSS,
+  complete-cost, managed-Turn or long-horizon benefit.
+- **Remaining and rollback:** retain I3 for at least one minor release. D2, D5,
+  D6, I3, D3 and full R0/V10/M1/R1/context/model/install acceptance remain open.
+  Canary passes its six direct checks and 17 of 18 selected checks.
+  `first-connect-contract-smoke.py` fails with `KeyError: should_run` on both
+  baseline and proposal; its inline-field assumption needs separate repair.
+  This failure and existing broader lint/browser failures remain open.
+  The completed author proposal may enter normal review with disclosed
+  holds; protected runtime merge still requires maintainer authorization.
+  Revert this caller loading change to restore eager binding without state
+  migration; no unrelated language rewrite is required.
+
+### 2026-11-06 — History reader selected loading
+
+- **Baseline and boundary:** `22b0f6c25`. Ordinary `history` reads and help use
+  the existing registrar/handler through the shared CLI grammar and guard.
+  Maintenance actions, rejected parser requests and a preloaded full CLI retain
+  the original route, including handler/renderer patch points. History algorithms,
+  evidence windows, public imports and the TS owner remain unchanged. This is a
+  reversible R0 reader slice in the monolithic distribution; I3 still requires
+  at least one minor release for public moves.
+- **Real-path evidence:** 27 actual-console cases per baseline/candidate source
+  and installed-wheel environment preserve stdout/stderr/exit codes, UTC order,
+  Agent filtering, limits, empty/unknown inputs and current/stale evidence reads.
+  Four additional installed/source facade probes preserve patched handlers and
+  renderers. The preloaded-handler oracle failed before its correction; final
+  history/parser selection passes 26 tests. Existing durable history, artifact
+  and evidence oracles are retained. Required native services use disposable
+  process and data namespaces, with authenticated exit readback.
+- **Matched measurement:** Apple M4 Pro, 48 GiB, macOS 27 arm64, Python 3.13.5,
+  Node 26.0.0; matched Python dependencies and source-pair Node dependencies.
+  Each of four workloads has 30 interleaved baseline/candidate pairs, precompiled
+  bytecode and fresh Python processes with warm native-service reuse. The final
+  sampling takes 229 seconds; all three rounds total 698 seconds, below the
+  frozen 20-minute sampling bound. Setup, validation and tracing are separate.
+  Earlier environment/refinement observations retain their original scope.
+
+| Workload | Median / p95 elapsed ms, base → candidate | Median CPU ms | Median CLI peak RSS MiB |
+| --- | --- | --- | --- |
+| Source help | 1552 / 1862 → 204 / 349 | 670 → 100 | 91.4 → 31.3 |
+| Source Agent read | 1603 / 1833 → 417 / 482 | 665 → 150 | 91.9 → 34.4 |
+| Wheel help | 1621 / 2053 → 220 / 375 | 695 → 100 | 91.8 → 31.0 |
+| Wheel Agent read | 1648 / 1825 → 414 / 462 | 725 → 150 | 92.2 → 34.6 |
+
+- **Loading and effects:** source/wheel help loads 155 rather than 1157 LoopX
+  modules; registered reads load 208 rather than 1158, evidence reads 210 rather
+  than 1159. Python audit read-open observations decrease from 1290 to 246 for
+  source help and 1311 to 723 for its cold native read; wheel observations are
+  1291 → 247 and 1710 → 723. Help has zero observed writes/processes/connections.
+  Cold registered reads retain six write-opens, two process starts and one
+  connection, with 252/355 client IPC bytes sent/received. Evidence reads retain
+  one write-open, two connections and 1377/804 IPC bytes. These required effects
+  are not optional activation. A serving runtime can work without Node on PATH;
+  cold absence retains the existing failure. Output bytes match. Timing includes
+  interpreter and process invocation; descendant CPU/RSS/I/O, full model and
+  attention costs remain unknown.
+- **Holds and remaining work:** measured help p95 remains above the proposed
+  200 ms target; D6 is not adopted. Source-session loader inventory and Turn
+  preview import checks fail identically on the untouched baseline. Their failures
+  are retained as qualification holds. This does not close full R0/V10, M1,
+  split installation, R1/context/host qualification or open design decisions.
+  Revert the loader slice for rollback; no state migration is involved.
+
+### 2026-11-06 — Selected version loading and matched costs
+
+The independent proposal `8a79d8602e699e51452ca1f43dc9b9527c81aa1b` at baseline
+`5a58635028fbef1316dc66531daf5fdb655e9b13` selects the existing version registrar
+and handler through `cli_runtime`. It reuses the canonical global grammar,
+format precedence, usage hooks and controller guard. Rejected parsing retains
+full-CLI fallback and diagnostics; explicitly bound package or full-CLI exports
+retain their registrar/handler patch points without triggering lazy exports
+on ordinary queries. Public imports, identity and types remain
+unchanged. No capability, provider, package, permission, preset or TypeScript
+decision owner is added. The separate DSH/helper and negative cost proposal is
+[#8185](https://github.com/loopx-project/loopx/pull/8185); its E7/E8 observations
+are distinct from this version-path comparison and are not a dependency.
+
+The initial `55e3ef45a` comparison retains 120 ordinary-query observations
+(source median 1.546 → 0.059 seconds; wheel 1.554 → 0.072). A later independent
+case finds that it ignores a patched package-facade handler, returning 0 instead
+of 37. Its passing premerge did not cover that branch. The failure and original
+inputs/data remain retained; they do not qualify facade compatibility. The
+proposal repairs both package registrar and handler adoption, then freezes the
+new exact-head comparison below.
+
+- **Real caller:** source and freshly installed monolithic wheels at both
+  immutable revisions exercise the actual `loopx` console. All 27 cases per
+  distribution have identical stdout, stderr and exit status, including
+  global/local/repeated formats, explicit paths, help, unknown/abbreviated
+  options, missing/empty values and fallback. Independent unknown-command/
+  option cases reject with exit 2 and no result. Version works with Node absent
+  in all four variants; outer-controller read behavior and full-CLI patch points
+  remain compatible.
+- **Loading census:** separate parent instrumentation records 1,157 → 10
+  LoopX modules in both distributions, with the candidate contained in the
+  baseline set. Source read-opens are 1,286 → 28 and wheel 1,289 → 29.
+  Each version capture has zero write-opens, subprocesses, observed local IPC
+  connections and covered socket bytes. Stdout remains 81 bytes; stderr is empty.
+- **Frozen comparison:** all four environments have verified provenance,
+  CPython 3.13.5 and identical 57 dependency versions. Stdlib, dependencies and
+  all 1,421 LoopX sources have valid timestamp bytecode in owned cache prefixes;
+  post-measurement/profile source/header inventories have no missing/invalid
+  caches and match the preflight. Every sample has fresh Python and disables
+  bytecode writes; disk cache is uncontrolled. No broker/warm-broker comparison
+  is made. Order is source then wheel, AB on even pairs and BA on odd pairs.
+  Both corrected groups complete 30 pairs: 120 accepted observations in 62.246
+  seconds. Including the first study, aggregate sampling is 166.191 seconds,
+  below the unchanged 1,200-second cap. All observations are retained.
+
+| Distribution | Baseline seconds, median / p95 | Proposal seconds, median / p95 | CPU seconds, median (base → proposal) | RSS MiB, median (base → proposal) | Median paired proposal minus baseline, seconds |
+| --- | --- | --- | --- | --- | --- |
+| Source | 0.980 / 1.056 | 0.055 / 0.075 | 0.520 → 0.037 | 90.17 → 16.81 | -0.9242 |
+| Monolithic wheel | 0.948 / 1.147 | 0.056 / 0.077 | 0.511 → 0.038 | 89.89 → 16.60 | -0.8993 |
+
+p95 uses nearest rank; paired differences and differences of arm medians are
+distinct statistics. Median latency falls about 94% in both source and wheel
+on this macOS arm64 environment; CPU and target RSS also fall. One-minute host
+load ranges from 8.25 to 9.06. This qualifies a material version-query
+improvement under frozen conditions, without adopting portable D6 budgets or
+claiming real managed-Turn/long-horizon savings. Usage covers the target and
+waited descendants; no child is launched in the census. Native detail and
+complete authoring/model/maintenance costs remain unknown.
+
+The heartbeat-to-final-freeze interval is about 2,404 seconds, including
+overlapping recovery, initial study, correction, dependency/build/install,
+test, cache and parity work; overlapping phases cannot be summed. Cache
+preparation is recorded separately. Corrected console/facade parity takes
+82.759 seconds, instrumentation 2.539 and four parent profiles 4.155. Earlier
+parity/instrumentation/profile costs of 136.239 / 3.830 / 7.089 seconds remain
+retained. Cross-study timing levels are not treated as a code comparison.
+Existing `performance-diagnosis` recipes show export loading and full parser
+construction in baseline sampled stacks; weights remain separate from repeated
+latency. Monolithic packaging is verified, without split-install or installed
+host-upgrade qualification.
+
+Seven selected-loading cases fail on the baseline and pass on the proposal.
+The package registrar/handler case passes on the baseline, fails on the initial
+candidate and passes on the correction; canonical diagnostic and full-CLI
+patch-point cases pass in both baseline and proposal. All 161 entrypoint cases and
+focused lint pass. Owner-scoped mypy with `--follow-imports=skip` fails with
+33 identical diagnostics at base/proposal after line normalization; this is
+neither a pass nor the full configured type check. Adoption requires final-head
+validation, independent review and merge readiness. I3's minimum one minor
+release window remains in force; no D3/expiry decision is made. R0's wider census,
+R1/minimal, D2/D5/D6, hard-lease/context/model and split-install acceptance remain
+open. The bounded refactor reuses its existing parser/handler; larger runtime
+and package changes retain their accepted owners.
+
+### 2026-11-06 — Discovery integration and the next executable boundary
+
+- **Integrated:** [#8012](https://github.com/loopx-project/loopx/pull/8012)
+  merged the proposed head `58442be4d` as `83f569178` on November 4. On the
+  independently prepared `main` revision `62e234c93`, all 23 discovery and
+  protected-dispatch cases pass. Replay with
+  `uv run --extra test python -m pytest -q tests/test_cli_entrypoint.py -k 'capability_discovery or capability_non_discovery'`.
+  This verifies current source integration; the earlier installed-wheel and
+  paired performance evidence remains bound to its original revision and
+  environment. No installed host or new wheel is qualified by this replay.
+- **Resolved prerequisite:** [#8054](https://github.com/loopx-project/loopx/pull/8054)
+  (`886f2cdff`) removed capture I/O from the settlement plan's cold import.
+  `uv run --extra test python -m pytest -q tests/architecture/test_control_plane_import_boundaries.py::test_settlement_plan_import_does_not_load_native_capture_io`
+  passes on `62e234c93`. The November 4 failure remains historical evidence;
+  the later fix removes that specific import blocker. The broader suite and
+  configured mypy were not rerun on this revision, so their earlier results
+  do not become a current passing qualification.
+- **Next source slice:** characterize the existing `generic-cli` managed Turn
+  path with SQLite authority and optional task hooks disabled, as a candidate
+  for the selected D2/D5 composition. Reuse the Turn, host selector and typed
+  authority owners. Existing CLI interruption and successor-replay tests in
+  `tests/test_loopx_turn_driver.py` locate integration seams; they do not
+  establish a minimal preset. The next slice must name the actual dependency
+  closure and exercise an isolated task-producing host process, interruption,
+  restart and independently validated result readback with original identities
+  and no repeated confirmed effects. A deterministic local host can qualify
+  its synthetic transport boundary, not a model host or complete V4 journey.
+- **Remaining:** full R0/V10, M1/I3/D3, the separate status proposal #8011,
+  split installation and R1 remain open. D2/D5 are still owner decisions;
+  this candidate changes no preset, default, execution authority or release
+  commitment. Further directory moves are not the next execution evidence.
+
+### 2026-11-06 — Proposed generic-cli/SQLite composition and recovery evidence
+
+This is a D2/D5 candidate and source characterization, not an approved preset.
+It reuses the existing Turn, host selection, authority and settlement owners.
+
+| Dimension | Candidate / observed boundary |
+| --- | --- |
+| Installation | Current monolithic `loopx` source checkout; Python 3.13.5 and Node 26.0.0 on macOS arm64. Test extras prepare the experiment, not a minimal install. No split distribution or installed host is qualified |
+| Host | Existing `generic-cli`, `isolated-headless`, JSON stdio via `--host-adapter-command-json`; one local deterministic task-producing process and a separate trusted argv validator. No model session or workspace/IM service is needed by this fixture |
+| Authority | Canonical SQLite through the existing TypeScript effect runtime and its local RPC transport; existing Turn journal, validation and settlement. The test scaffold seeds a `soft_claim` shadow; this evidence cannot alone qualify normal hard-lease V2 parity |
+| Required logical core | Bootstrap/selected CLI, TurnEnvelope and host admission, current authority/stop/budget/claim rules, journal/recovery, process supervision, independent validation and result/settlement readback. Their owners remain shared with standard |
+| Optional activation | No task-memory or other optional hook is enabled in the fixture; no model jobs or external operations. Imported settings/policy helpers are not proof of activation or permission to remove them |
+| Identity and recovery | Resume the original journal with `--resume-turn-key`; a fresh `--turn-instance-id` is intentionally refused on that path. Cached confirmed host work is reused; unconfirmed work and other interruption points remain separately governed |
+
+- **Actual task and recovery:** a real host process writes the squared integers
+  zero through seven; an independent process checks the expected literal array.
+  Both the ordinary path and an OS `SIGKILL` of the owned CLI after its typed host
+  result was persisted end with one host invocation, one writeback and one debit
+  per isolated SQLite fixture. The interrupted path has no debit before restart;
+  restart validates the cached result without invoking the host again. A further
+  committed replay reports no repeated host/writeback/debit/scheduler effect.
+  The artifact bytes match across both paths. No active project state was faulted.
+- **Actual loading:** at product revision `62e234c93`, the ordinary Python path
+  loads 538 LoopX modules across 21 capability namespaces, without `loopx.cli`
+  or the `loopx.chat` tree. A second drill uses an isolated existing-runtime
+  broker and a transparent Node module-load observer: its bootstrap, execution
+  and recovery load 231 TypeScript files and eight JSON files under
+  `control_plane`. These are observed closures, not approved core membership.
+  The private broker's identity, shutdown acknowledgement and process exit were
+  verified; shared services were not stopped.
+- **Costs and limits:** parent-side tracing distinguishes required local RPC
+  from external network connections; none of the latter is observed. The
+  ordinary invocation observes 34 Git subprocesses, one Node version probe, one
+  Node host supervisor and one Python validator; the supervisor launches the
+  task host. Child/broker CPU and RSS, full wire/context bytes and model-host
+  costs remain unmeasured. These small instrumented drills are not repeated
+  matched performance samples, a D6 budget or long-horizon benefit evidence.
+- **Independent regression evidence:** the six SQLite cases of
+  `test_managed_start_interruption_preserves_reservation_and_attempt`, plus
+  `test_turn_run_once_cli_rejects_unproven_host_claim_before_writeback` and
+  `test_turn_run_once_cli_replays_declared_successor_after_interruption` pass in
+  `tests/test_loopx_turn_driver.py`. Probe setup refusals remain separate from
+  product failures: an overbroad network observer, an incorrect host-request
+  schema and conflicting resume flags were corrected without changing production
+  code or relaxing authority; failed observations were retained.
+- **Next owner change:** `loopx/cli_commands/turn_run_once.py` imports DSH host
+  builders before selecting the host, although their call sites are under
+  `args.host == "dsh"`. The generic path therefore loads
+  `turn_dsh_host` and `dsh_goal_mode.turn_host_adapter` despite selecting neither.
+  Characterize the existing exports/patch points, then defer those builders at
+  their owning seam and recheck generic/DSH/Codex behavior and default-off parity.
+  Namespace counts alone do not justify deleting shared policy helpers.
+- **Remaining:** opt-in minimal selection, complete D2/D5 adoption, hard-lease
+  and context V2/V5 parity, interruption during unconfirmed host work, model-host
+  V4, full V10 and split-install qualification remain open. No new engine,
+  provider, default, authority field or runtime self-merge is introduced.
+
+### 2026-11-07 — Heartbeat pre-quota selected loading
+
+- **Baseline and owner:** `79665b97a`. The heartbeat builder already emits
+  `heartbeat-prequota` when external evidence polling is available. Its selected
+  parser reuses the existing heartbeat registrar; dispatch uses the existing
+  heartbeat transport module. The complete facade passes its original runner,
+  renderer and global-registry resolver patch points. Explicit/implicit routing,
+  aliases, format, timeout, exception, degraded-return and controller semantics
+  remain characterized; reconciliation/hook ordering and typed owners are unchanged.
+- **Source and package evidence:** 50 new transport/loading/real-backend cases;
+  22 cases on each of four independently verified source/wheel consoles; 16
+  configured/degraded File/SQLite console scenarios with replay, retained opaque
+  work and zero quota debit. Dropping `continue_to_quota` is rejected by the same
+  public-console oracle on both real stores. The existing acknowledgement smoke
+  now exercises both CLI facades. The full source selection initially has 378
+  passes and two route-test failures reproduced on the immutable baseline. The
+  fixture now reads the original digest-bound progressive capture without
+  re-admission; its complete affected file then passes all 17 cases. No failure
+  was waived. Focused lint, configured mypy and the code canary pass.
+- **Matched local cost:** macOS 27.0 arm64, Python 3.13.5, Node 26.0.0; identical
+  dependencies and synthetic stores, precompiled bytecode, fresh Python processes,
+  warm filesystem caches and reused isolated Node services. Thirty alternating
+  base/head pairs for each workload/distribution yield 360 samples in 339 seconds;
+  study setup/validation takes 260 seconds separately. This shared development
+  host was not an idle-machine experiment. Values below are wall median/p95 in
+  seconds and median process RSS in MiB, including interpreter startup.
+
+| Workload / distribution | Base median / p95 | Candidate median / p95 | Base → candidate RSS |
+| --- | --- | --- | --- |
+| `source/prequota-help` | 1.433 / 1.889 | 0.172 / 0.226 | 91.5 → 24.7 |
+| `source/prequota-file-off` | 1.494 / 1.927 | 0.545 / 0.667 | 92.0 → 47.0 |
+| `source/prequota-sqlite-off` | 1.547 / 1.977 | 0.507 / 0.640 | 91.9 → 46.3 |
+| `wheel/prequota-help` | 1.555 / 1.967 | 0.170 / 0.210 | 91.7 → 24.5 |
+| `wheel/prequota-file-off` | 1.545 / 2.155 | 0.536 / 0.650 | 91.7 → 46.7 |
+| `wheel/prequota-sqlite-off` | 1.397 / 1.866 | 0.531 / 0.667 | 92.0 → 46.9 |
+
+- **Closure and complete-cost limits:** help loads 29 LoopX modules instead of
+  1,158; default-off execution loads 277 instead of 1,160. Python open observations
+  fall from 1,292–1,312 to 81–395. Opened-file size sums are footprints, not actual
+  read bytes. Median user/system process CPU is 0.04/0.02 seconds for candidate
+  help and 0.13–0.14/0.065–0.08 for execution, versus 0.40–0.42/0.16–0.185 at base.
+  Output remains 737 bytes for help and 827 for JSON execution. A separate SQLite
+  loopback profile observes 1,362 sent and 668 received bytes on each revision,
+  two Node starts for version/server discovery with a cold service and none with
+  a reused service. Its single instrumented cold/warm observations do not isolate
+  Node readiness or service CPU; those costs remain unqualified. The initial IPC
+  probe assumed Unix sockets and failed; loopback instrumentation corrected the
+  probe without changing product behavior. Help p95 of 0.226/0.210 seconds exceeds
+  the proposed 0.200-second target; that D6 proposal is not promoted or relabeled.
+- **Remaining:** this is one R0/V1/V3/V10 caller proposal, preserving I3 for at
+  least one minor release. Full R0/V10, M1/#8011, R1, context/model and split-install
+  qualification, installed-host recovery, adoption and complete task costs remain
+  open. The bounded Python change adapts transport; it adds no decision owner,
+  preset, provider or authority rule. Required final-head review/CI remains a
+  delivery gate distinct from these local observations.
+### 2026-11-07 — Registry inspection selected loading
+
+- **Baseline and boundary:** `ac6296225`. `registry` and `registry-boundary`
+  use the existing selected CLI route. Their shared registrar and transport
+  adapter stay in `cli_runtime`; the explicit full CLI reuses them through
+  `support_control`, retaining its inspection and renderer patch points.
+  Registry parsing, classification and Git decisions keep their existing owner.
+  Python adapts the CLI here; no new decision owner, provider or dispatcher
+  framework is introduced. Existing imports and I3's minimum one-minor-release
+  compatibility window remain intact.
+- **Compatibility evidence:** 197 source CLI and support-ownership cases pass,
+  including 26 new inspection/result/rejection/patch-point cases and two help
+  cases. An independent full-CLI loading exclusion fails on the immutable base
+  and passes on the candidate through the same public entrypoint. Twenty
+  successful and rejected requests preserve output, status and exception
+  semantics across source and independently installed monolithic-wheel consoles.
+  Help and read paths also work with Node absent and exclude the unselected
+  Chat, Dashboard and benchmark execution modules. Both revisions pass the real
+  Git registry-boundary smoke in disposable temporary directories; the earlier
+  run under `.local` failed because that ancestor intentionally selects a private
+  registry classification. The failure is retained as fixture-placement evidence.
+- **Cost qualification:** 30 interleaved base/head pairs for each of four
+  help/read workloads on both source and wheel yield 480 samples in 416.7s;
+  study setup/compatibility/profiling takes another 278.1s, excluding earlier
+  environment/wheel preparation and tests. On macOS arm64/Python 3.13.5 with
+  identical dependencies, precompiled bytecode and warm filesystem caches,
+  fresh-console help medians fall from 1.536–1.609s to 0.100–0.103s; registry
+  reads from 1.584–1.631s to 0.301–0.310s, and boundary reads from 1.542–1.612s
+  to 0.222–0.225s. Median RSS falls from about 91–92 MiB to 16–30 MiB.
+  Both help closures fall from 1,158 to 9 LoopX modules; registry/boundary reads
+  fall to 148/44. The PR records per-workload median/p95, CPU, separate audit
+  open counts and unchanged output bytes. No Node starts/IPC or Python-audit
+  socket events are observed; boundary reads keep their three Git queries.
+  Warm-cache block I/O is zero, while exact bytes read and native activity
+  outside the audit remain unknown. These results qualify local CLI cost
+  reductions, not portable D6 limits, full preparation/model costs or adoption.
+- **Validation and remaining work:** changed-file lint passes. The CI lint scope
+  still fails on the baseline-existing F841, whose repair is already proposed
+  separately; this result is not waived. Source and wheel evidence does not
+  upgrade an installed host. M1/#8011, full R0/V10, R1's real managed Turn,
+  context/model composition, split installation, adoption and complete costs
+  remain open. No D2/D5/D6/D3, default or authority decision changes. The related
+  bounded refactor shares the existing grammar and inspection adapter; larger
+  support/control extraction remains outside this slice.
 ### 2026-11-06 — Selected Turn host loading seam
 
 Following the generic-cli/SQLite candidate in
@@ -1084,7 +1450,6 @@ comparison before adopting a performance change. This checkpoint creates no
 new owner, budget, preset or default. R0's complete census, R1/minimal,
 D2/D5/D6, I3/D3, hard-lease/context/model and split-install acceptance remain
 open; independent exact-head review and required validation govern adoption.
-
 ### 2026-11-07 — Governed CLI composition cost and archived closeout boundary
 
 The complete small-state CLI sequence is compared on main
@@ -1270,6 +1635,7 @@ its oracles, not a distributed benchmark runner or public reproduction receipt.
 | E4 | Selected CLI loading seam | `9cae3b28939f72fa4aadab5cfe49e19bcbdab372` | Linked entrypoint/CLI in Section 4 | Source-audited | No new timing claim |
 | E5 | DSH composition example | Pinned upstream commit | [`minimal.patch.yml`](https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/bundle/web-app/presets/minimal.patch.yml), [`standard.patch.yml`](https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/bundle/web-app/presets/standard.patch.yml), [`sdk-minimal`](https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/bundle/sdk-minimal/README.md) | Source-audited | Shared preset composition and a self-contained SDK bundle; not a LoopX host qualification or permission recommendation |
 | E6 | Pi core/context example | Pinned upstream commit | [`agent` core](https://github.com/badlogic/pi-mono/blob/f14813e96510a7cf7562a120e809c6a134af073d/packages/agent/README.md) | Source-audited | Agent/tool/event core with `transformContext`, `convertToLlm`, `prepareRequest` and `finishTurn` seams; no LoopX authority or performance claim |
+| E9 | Selected version loading and matched cost | `5a5863502` / `8a79d8602`; macOS arm64 / CPython 3.13.5 | Version checkpoint above; existing console/version and performance-diagnosis owners | Corrected two groups × 30 pairs; 120 observations; public-facade/parity/cache readback pass; material query improvement | Initial 120 observations and facade failure retained; public-safe aggregates; full Turn/minimal, split install, host upgrade and complete costs unqualified; E7/E8 remain with #8185 |
 | E7 | Bounded paired cost campaign | `a9485073f` / `86d9c542d`; named environment above | Paired cost checkpoint above; existing entrypoint/SQLite fixture and performance-diagnosis owners | 499 observations; source groups complete, wheel incomplete; cache attribution unqualified | Aggregate public-safe evidence only; no speedup, full V10, split-install or model-cost qualification |
 | E8 | Matched-bytecode representative comparison | `546c08c0d` / `0df5ad792`; named environment above | Matched-bytecode checkpoint above; same CLI/SQLite and performance-diagnosis owners | Six groups × 30 pairs; 360 observations; parity/rejection and cache readback pass; no demonstrated material benefit | Aggregate public-safe evidence only; later integration, full V10, minimal, split install and model costs unqualified |
 

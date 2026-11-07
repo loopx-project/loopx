@@ -3,7 +3,7 @@ import type { ReviewExportLabels } from "../../data/delivery-review.js";
 export const goalAcceptanceContractCopy = {
   en: {
     title: "Delivery check", boundary: "Artifact checks do not establish independent review, adoption or Goal completion.",
-    scope: "Contract coverage", allWork: "All advancement work (including future tasks)", selectedWork: "Only explicitly selected tasks",
+    goalOnly: "Goal completion only", scope: "Contract coverage", allWork: "All advancement work (including future tasks)", selectedWork: "Only explicitly selected tasks",
     source: "Goal source", revision: "Contract revision", digest: "Contract digest", objective: "Objective", criteria: "Acceptance criteria", nonGoals: "Outside scope",
     tasks: "Task associations", verification: "Artifact verification", unknown: "Unknown", noTasks: "No task associations reported. Coverage is unknown.",
     noCriteria: "No acceptance criteria reported.", retained: "Retained snapshot; refresh to read current acceptance facts.",
@@ -17,7 +17,7 @@ export const goalAcceptanceContractCopy = {
   },
   "zh-CN": {
     title: "交付检查", boundary: "产物检查不等于独立复核、实际采用或 Goal 完成。",
-    scope: "合同覆盖范围", allWork: "全部推进任务（包括后续新增任务）", selectedWork: "仅明确选定的任务",
+    goalOnly: "仅 Goal 整体验收", scope: "合同覆盖范围", allWork: "全部推进任务（包括后续新增任务）", selectedWork: "仅明确选定的任务",
     source: "Goal 来源", revision: "合同版本", digest: "合同摘要", objective: "目标", criteria: "验收条件", nonGoals: "范围之外",
     tasks: "任务关联", verification: "产物验证", unknown: "未知", noTasks: "未提供任务关联，覆盖范围未知。",
     noCriteria: "未提供验收条件。", retained: "当前保留旧快照，请刷新读取最新验收事实。",

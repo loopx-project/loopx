@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 from loopx.control_plane.coordination.canonical_snapshot import read_canonical_snapshot
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.effect_runtime import effect_runtime_result, restart_effect_runtime
@@ -130,6 +131,40 @@ def call_progress_cli(fixture: dict, *args: str, expected_code: int = 0) -> dict
         capture_output=True, text=True, timeout=60)
     assert result.returncode == expected_code, (result.stdout, result.stderr)
     return json.loads(result.stdout)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("context_delivery", ["off", "on"])
+def test_progress_cli_reads_policy_with_context_delivery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+    context_delivery: str,
+) -> None:
+    tmp_path = tmp_path.resolve()
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    fixture = make_progress_cli_fixture(tmp_path, provider, "advanced")
+    native, captures = tmp_path / "native", tmp_path / "captures"
+    native.mkdir(mode=0o700)
+    captures.mkdir(mode=0o700)
+    try:
+        presented = call_progress_cli(
+            fixture, "quota", "should-run", "--codex-app", "--goal-id", GOAL,
+            "--agent-id", AGENT, "--turn-instance-id", TURN, "--todo-id", TODO,
+            "--context-delivery", context_delivery,
+            "--codex-context-dir", str(native), "--decision-output-root", str(captures),
+        )
+        if context_delivery == "on":
+            assert presented["schema_version"] == "context_capture_navigation_v1"
+        # The fixture keeps raw transport output. This policy observation uses
+        # the current complete recovery, without claiming a model read.
+        policy = read_cli_policy_payload(json.dumps(presented), returncode=0)
+        assert policy["decision"] == "autonomous_replan_required"
+        assert policy["heartbeat_receipt"]["turn_instance_id"] == TURN
+        identity = policy["heartbeat_receipt"]["settlement_identity"]
+        assert (identity["goal_id"], identity["agent_id"]) == (GOAL, AGENT)
+        assert identity["todo_id"] == TODO
+        assert policy["execution_obligation"]["must_attempt_work"] is True
+    finally:
+        restart_effect_runtime(wait_for_exit=True)
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

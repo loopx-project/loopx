@@ -367,6 +367,8 @@ def test_cli_native_context_default_and_explicit_controls_reach_registration(tmp
     def handoff(**kwargs):
         selected = mode or "native"
         assert kwargs["agent"].feedback == selected
+        assert kwargs["agent"].research_sidecar is (selected == "native")
+        assert constructed["research_sidecar"] is (selected == "native")
         assert kwargs["max_submissions"] == (None if selected == "native" else 0)
         assert (constructed["feedback"] is not None) == (selected == "best-only")
         assert ("host_registration_callback" in kwargs) == (selected == "best-only")

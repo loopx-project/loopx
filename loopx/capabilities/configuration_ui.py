@@ -144,6 +144,8 @@ def capability_configuration_editor(
                 _field("stride_strategy", "Stride strategy", "select",
                        options=list(stride_strategy_options()),
                        description="Off retains ordinary review. Evidence-conditioned v1 independently reviews work-slice size, route changes and validation scope; fresh Vision path reviews require a structured proposal, without automatic execution."),
+                _field("yardstick_enabled", "Review measurement criteria", "boolean",
+                       description="Default off. Use available Explore evidence to review measurement scope and feedback before choosing work. Requires Explore evidence; does not enable it or authorize execution."),
             ],
         },
         "periodic_report": {
@@ -655,7 +657,7 @@ def _attach_effective_configuration(entry: dict[str, Any]) -> None:
         entry["capability_id"] == "todo_replan_cadence"
         and goal_override is not None
         and bool(goal_override)
-        and set(goal_override) <= {"stride_strategy", "planning_horizon_goal"}
+        and set(goal_override) <= {"stride_strategy", "planning_horizon_goal", "yardstick_enabled"}
     ):
         from .todo_replan_cadence.machine_defaults import (
             cadence_configuration_value,
@@ -679,9 +681,12 @@ def _attach_effective_configuration(entry: dict[str, Any]) -> None:
         # values and atomic Goal cadence overrides. Keep stored/current values
         # sparse: reading Settings must never pin or migrate an override.
         goal_override = None if goal_override is None else {
-            "planning_horizon_goal": DEFAULT_PLANNING_HORIZON_GOAL, **goal_override}
+            "planning_horizon_goal": DEFAULT_PLANNING_HORIZON_GOAL,
+            "yardstick_enabled": (machine_default or {}).get("yardstick_enabled", False),
+            **goal_override}
         machine_default = None if machine_default is None else {
-            "planning_horizon_goal": DEFAULT_PLANNING_HORIZON_GOAL, **machine_default}
+            "planning_horizon_goal": DEFAULT_PLANNING_HORIZON_GOAL,
+            "yardstick_enabled": False, **machine_default}
     if entry["capability_id"] == "explore_harness":
         from .explore.machine_defaults import resolve_explore_configuration
         from ..explore_graph import plan_explore_configuration

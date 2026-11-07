@@ -125,13 +125,42 @@ def test_raw_worker_rejects_invalid_observation_before_creating_a_wake(tmp_path,
     assert not wakes.exists()
 
 
-@pytest.mark.parametrize("settings", [{}, {"execution_observation": "local_probe"}])
-def test_install_records_and_exposes_only_the_selected_observation_producer(tmp_path, monkeypatch, settings):
+@pytest.mark.parametrize("entry", ["omitted", "ready", "workspace-shadow", "symlink", "missing-interpreter"])
+def test_install_records_and_exposes_only_the_selected_observation_producer(tmp_path, monkeypatch, entry):
     pytest.importorskip("harbor")
-    from benchmark.runtime.harbor import BenchmarkCodex, CodexOffline
+    if not Path("/bin/sh").is_file():
+        pytest.skip("requires a POSIX shell for the actual worker entrypoint")
+    from benchmark.runtime import harbor
 
-    agent = BenchmarkCodex(logs_dir=tmp_path, model_name="fixture", **settings)
+    selected = entry != "omitted"
+    profile = tmp_path / "profile"
+    bin_dir = profile / "bin"
+    bin_dir.mkdir(parents=True)
+    interpreter_dir = tmp_path / "python" / "bin"
+    interpreter_dir.mkdir(parents=True)
+    if entry != "missing-interpreter":
+        (interpreter_dir / "python3").symlink_to(sys.executable)
+    wrapper = bin_dir / "loopx-research-probe"
+    sentinel = tmp_path / "untouched"
+    if entry == "symlink":
+        sentinel.write_text("unchanged")
+        wrapper.symlink_to(sentinel)
+    if entry == "workspace-shadow":
+        shadow = tmp_path / "benchmark"
+        (shadow / "runtime").mkdir(parents=True)
+        (shadow / "__init__.py").write_text("")
+        (shadow / "runtime" / "research_probe.py").write_text(
+            "from pathlib import Path\nPath('shadow-called').touch()\nprint('--candidate-file --memory-limit-bytes')\n")
+        shadow_loopx = tmp_path / "loopx"
+        shadow_loopx.mkdir()
+        (shadow_loopx / "__init__.py").write_text("from pathlib import Path\nPath('shadow-called').touch()\n")
+    monkeypatch.setattr(harbor, "_PROFILE", str(profile))
+    monkeypatch.setattr(harbor, "_PYTHON", str(interpreter_dir.parent))
+    monkeypatch.setattr(harbor, "_SRC", str(Path(__file__).resolve().parents[2]))
+    agent = harbor.BenchmarkCodex(logs_dir=tmp_path, model_name="fixture",
+                                 execution_observation="local_probe" if selected else None)
     commands = []
+    wrapper_reads = []
 
     async def no_op(*args, **kwargs):
         pass
@@ -141,28 +170,71 @@ def test_install_records_and_exposes_only_the_selected_observation_producer(tmp_
         return "fixture"
 
     async def execute(*args, **kwargs):
-        commands.append(kwargs["command"])
+        command = kwargs["command"]
+        commands.append(command)
+        if "benchmark/runtime/research_probe.py" in command:
+            result = subprocess.run(["/bin/sh", "-c", command], cwd=tmp_path,
+                                    env={"PATH": "/usr/bin:/bin", "PYTHONPATH": str(tmp_path),
+                                         "PYTHONDONTWRITEBYTECODE": "1"},
+                                    text=True, capture_output=True, timeout=10)
+            wrapper_reads.append(result)
+            return SimpleNamespace(stdout=result.stdout, stderr=result.stderr, return_code=result.returncode)
         return SimpleNamespace(stdout='{"ok":true}', stderr="", return_code=0)
 
     async def task_exec(**kwargs):
         return SimpleNamespace(stdout="/usr/local/bin:/usr/bin:/bin", return_code=0)
 
+    async def execute_root(*args, **kwargs):
+        assert "benchmark/runtime/research_probe.py" not in kwargs["command"]
+        return await execute(*args, **kwargs)
+
     for key in ("LOOPX_SRC_DIR", "LOOPX_PORTABLE_PYTHON", "LOOPX_NODE_DIR"):
         monkeypatch.setenv(key, str(tmp_path))
-    monkeypatch.setattr(CodexOffline, "install", no_op)
+    monkeypatch.setattr(harbor.CodexOffline, "install", no_op)
     monkeypatch.setattr(agent, "_stage_source", stage)
-    monkeypatch.setattr(agent, "exec_as_root", execute)
+    monkeypatch.setattr(agent, "exec_as_root", execute_root)
     monkeypatch.setattr(agent, "exec_as_agent", execute)
     monkeypatch.setattr(agent, "_get_env", lambda key: None)
-    asyncio.run(agent.install(SimpleNamespace(default_user="fixture", upload_dir=no_op, exec=task_exec)))
-    selected = bool(settings)
-    assert any("-m benchmark.runtime.research_probe" in command for command in commands) is selected
+    environment = SimpleNamespace(default_user="fixture", upload_dir=no_op, exec=task_exec)
+    if entry in {"symlink", "missing-interpreter"}:
+        with pytest.raises(RuntimeError, match="Local execution probe is unavailable"):
+            asyncio.run(agent.install(environment))
+        assert len(wrapper_reads) == 1 and wrapper_reads[0].returncode != 0
+        assert not any("> /logs/agent/loopx-install.json" in command for command in commands)
+        if entry == "symlink":
+            assert wrapper.is_symlink() and sentinel.read_text() == "unchanged"
+        return
+
+    asyncio.run(agent.install(environment))
+    assert any("benchmark/runtime/research_probe.py" in command for command in commands) is selected
+    assert len(wrapper_reads) == int(selected)
+    if selected:
+        assert os.access(wrapper, os.X_OK) and "--memory-limit-bytes" in wrapper_reads[0].stdout
+    else:
+        assert not wrapper.exists()
     command = next(command for command in commands if "> /logs/agent/loopx-install.json" in command)
     receipt = json.loads(shlex.split(command)[2])
     assert receipt.get("execution_observation") == ("local_probe" if selected else None)
     assert "research_loop" not in receipt
     assert receipt["task_entry"] == "loopx-planned"
     assert receipt.get("stride_strategy") is None
+    if entry == "workspace-shadow":
+        candidate = tmp_path / "candidate.py"
+        candidate.write_text("print('real probe kept the task cwd')")
+        invocation = subprocess.run([str(wrapper),
+            "--candidate-file", candidate.name, "--output", "probe.json", "--input-revision", "inputs-v1",
+            "--planned-method-id", "method:local", "--executed-method-id", "method:local",
+            "--evidence-ref", "probe:trusted", "--limit-seconds", "5", "--memory-limit-bytes", "8388608",
+            "--", sys.executable, candidate.name],
+            cwd=tmp_path, env={**os.environ, "PYTHONPATH": str(tmp_path)},
+            capture_output=True, text=True, timeout=12)
+        assert invocation.returncode == 0, invocation.stderr
+        observation = json.loads(invocation.stdout)
+        assert observation == json.loads((tmp_path / "probe.json").read_text())
+        memory = json.loads((tmp_path / "probe.json.memory.json").read_text())
+        assert memory["reference_memory_bytes"] == 8388608 and memory["candidate_sha256"] == observation["candidate_sha256"]
+        assert (tmp_path / "probe.json.stdout").read_text().strip() == "real probe kept the task cwd"
+        assert not (tmp_path / "shadow-called").exists()
 
 
 @pytest.fixture
@@ -229,6 +301,20 @@ def planning_env(tmp_path):
 import json, os, pathlib, subprocess, sys
 print(json.dumps({"type": "thread.started", "thread_id": "planning-fixture-session"}), flush=True)
 packet = json.loads(sys.stdin.read().split("Host-supplied planning checkpoint:\\n", 1)[1])
+prefix = [os.environ["LOOPX_CLI"], "--format", "json", "--registry", os.environ["LOOPX_REGISTRY"],
+          "--runtime-root", os.environ["LOOPX_RUNTIME_ROOT"], "goal-acceptance"]
+route = ["--goal-id", "planning-goal", "--agent-id", "planner"]
+current = packet["goal_acceptance"]
+own = [o for o in current["goal_acceptance_contract"].get("outcome_requirements", {}).get("outcomes", []) if o["owner_agent_id"] == "planner"]
+refinement = pathlib.Path(os.environ["LOOPX_PLANNING_RESULT"]).with_name("agent-requirements.json")
+if not own:
+    document = {"outcome_id": "repair", "owner_agent_id": "planner", "objective": "Repair the failure and preserve a regression test.",
+                "requirements": [{"id": "repair", "description": "The failure is repaired and a regression test retained."}],
+                "source": {"ref": "user-task", "summary": packet["text"].strip()}}
+    refinement.write_text(json.dumps(document))
+    subprocess.run(prefix + ["refine"] + route + ["--document", str(refinement),
+                   "--expected-provider-revision", current["provider_revision"], "--operation-id", "planner-requirements", "--execute"],
+                   check=True, capture_output=True, text=True)
 command = [os.environ["LOOPX_CLI"], "--format", "json", "--registry", os.environ["LOOPX_REGISTRY"],
            "--runtime-root", os.environ["LOOPX_RUNTIME_ROOT"], "todo", "add", "--goal-id", "planning-goal",
            "--role", "agent", "--claimed-by", "planner",
@@ -239,6 +325,13 @@ if not packet["runnable_todo_ids"]:
     todo_id = written["todo_id"]
 else:
     todo_id = packet["runnable_todo_ids"][0]
+if not own or todo_id not in own[0]["todo_ids"]:
+    current = json.loads(subprocess.run(prefix + ["inspect"] + route, check=True, capture_output=True, text=True).stdout)
+    document = {"outcome_id": "repair", "todo_ids": [todo_id]}
+    refinement.write_text(json.dumps(document))
+    subprocess.run(prefix + ["refine"] + route + ["--document", str(refinement),
+                   "--expected-provider-revision", current["provider_revision"], "--operation-id", "planner-requirements-work", "--execute"],
+                   check=True, capture_output=True, text=True)
 result = {"input_digest": packet["input_digest"], "status": "ready", "todo_ids": [todo_id]}
 pathlib.Path(sys.argv[sys.argv.index("--output-last-message") + 1]).write_text(json.dumps(result))
 pathlib.Path(os.environ["CODEX_HOME"], "seen-argv.json").write_text(json.dumps(sys.argv))
@@ -303,11 +396,50 @@ def test_planning_writes_real_todo_then_reuses_it_without_executing_task(
     )
 
 
+def test_real_planning_rejects_todos_without_agent_requirements(planning_env):
+    binary = Path(planning_env["CODEX_BIN"])
+    source = binary.read_text().replace("if not own:", "if False:").replace(
+        'if not own or todo_id not in own[0]["todo_ids"]:', "if False:")
+    binary.write_text(source)
+    with pytest.raises(ValueError, match="canonical overall requirements"):
+        run_once(planning_env)
+    assert not Path(planning_env["LOOPX_PLANNING_RESULT"]).exists()
+    receipts = list(Path(planning_env["LOOPX_WAKE_LOG_DIR"]).glob("*/receipt.json"))
+    assert len(receipts) == 1 and not json.loads(receipts[0].read_text())["ok"]
+    from benchmark.runtime.planning import task_plan_packet
+    from benchmark.runtime.worker import loopx_command
+    packet = task_plan_packet(planning_env, loopx_command(planning_env))
+    assert len(packet["runnable_todo_ids"]) == 1, "An actual task alone cannot satisfy ready"
+    assert not packet["goal_acceptance"]["planning_requirements"]["declaration_current"]
+
+
+def test_stopped_goal_cannot_launch_first_planner_or_fabricate_requirements(planning_env):
+    from loopx.control_plane.goals.first_party_host_admission import FirstPartyHostRuntimeRejected
+    from benchmark.runtime.planning import task_plan_packet
+    from benchmark.runtime.worker import loopx_command
+
+    command = loopx_command(planning_env) + ["goal-lifecycle", "--goal-id", "planning-goal", "--operation", "stop"]
+    preview = json.loads(subprocess.run(command, env=planning_env, capture_output=True,
+        text=True, check=True).stdout)
+    stopped = subprocess.run(command + ["--actor-kind", "owner", "--expected-state-fingerprint",
+        preview["observed_state_fingerprint"], "--execute"], env=planning_env, capture_output=True,
+        text=True, check=True)
+    assert json.loads(stopped.stdout)["after_state"] == "stopped"
+    with pytest.raises(FirstPartyHostRuntimeRejected, match="goal_stopped"):
+        run_once(planning_env)
+    packet = task_plan_packet(planning_env, loopx_command(planning_env))
+    assert not packet["existing_todos"]
+    assert not packet["goal_acceptance"]["planning_requirements"]["declaration_current"]
+    assert not Path(planning_env["LOOPX_PLANNING_RESULT"]).exists()
+    assert not (Path(planning_env["LOOPX_CODEX_HOME"]) / "seen-argv.json").exists()
+
+
 def test_prose_or_fabricated_todo_does_not_qualify_planning(planning_env):
     binary = Path(planning_env["CODEX_BIN"])
     binary.write_text(
         binary.read_text().replace(
-            '"todo_ids": [todo_id]', '"todo_ids": ["todo_fabricated"]'
+            '"status": "ready", "todo_ids": [todo_id]',
+            '"status": "ready", "todo_ids": ["todo_fabricated"]'
         )
     )
     with pytest.raises(ValueError, match="missing or unrelated"):
@@ -398,6 +530,10 @@ def test_plan_readback_rejects_stale_input_unclaimed_work_and_false_blockers():
         ],
         "runnable_todo_ids": ["todo_owned"],
         "blocking_todo_ids": ["todo_gate"],
+        "goal_acceptance": {"planning_requirements": {
+            "agent_id": "agent", "declaration_current": True,
+            "outcome_ids": ["repair"], "linked_todo_ids": ["todo_owned"],
+        }},
     }
     result = {"input_digest": "input-a", "status": "ready", "todo_ids": ["todo_owned"]}
     assert validate_plan_readback(result, packet, packet)["status"] == "ready"
@@ -415,6 +551,13 @@ def test_plan_readback_rejects_stale_input_unclaimed_work_and_false_blockers():
     ]:
         with pytest.raises(ValueError):
             validate_plan_readback(invalid, packet, packet)
+    for bad in ({}, {"declaration_current": False}, {"agent_id": "peer"}, {"linked_todo_ids": []}):
+        after = packet | {"goal_acceptance": {"planning_requirements": packet["goal_acceptance"]["planning_requirements"] | bad}}
+        if not bad:
+            after["goal_acceptance"] = {}
+        with pytest.raises(ValueError, match="canonical overall requirements"):
+            validate_plan_readback(result, packet, after)
+        assert validate_plan_readback(result | {"status": "blocked", "todo_ids": ["todo_gate"]}, packet, after)["status"] == "blocked"
 
 
 def test_planned_phase_preserves_waits_and_does_not_prewrite_a_todo(

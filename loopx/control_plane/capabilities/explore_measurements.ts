@@ -72,8 +72,10 @@ export function normalizeExploreMeasurements(value: unknown, context?: unknown, 
       value: row.value as number | null, higher_is_better: row.higher_is_better,
       comparison_scope: ref("comparison_scope"), input_revision: text("input_revision", 160),
       evaluation_ref: ref("evaluation_ref"), candidate_ref: ref("candidate_ref"), evidence_ref: ref("evidence_ref")};
-    const key = comparisonKey("", result);
-    if (seen.has(key)) throw new EffectRuntimeRequestError("measurement metric/scope is duplicated");
+    // A comparison batch can contain distinct candidates under identical
+    // conditions. Candidate identity distinguishes observations, not groups.
+    const key = JSON.stringify([comparisonKey("", result), result.candidate_ref]);
+    if (seen.has(key)) throw new EffectRuntimeRequestError("measurement candidate/metric/scope is duplicated");
     seen.add(key);
     return result;
   });
@@ -97,7 +99,9 @@ function comparisonKey(node: string, metric: ExploreMeasurement): string {
     metric.comparison_scope, metric.input_revision, metric.evaluation_ref]);
 }
 
-/** Latest means latest appended finding, never the current or retained candidate.
+/** Latest means the last declared observation in the latest appended finding,
+ * not execution chronology or the current/retained candidate. Within a batch,
+ * previous best includes earlier declared observations; order is not inferred.
  * Keep all matching evidence when computing best; presentation limits apply later.
  */
 export function projectExploreMeasurementFeedback(findings: readonly JsonObject[]): ExploreMeasurementFeedback[] {

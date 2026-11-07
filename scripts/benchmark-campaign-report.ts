@@ -56,7 +56,7 @@ export type CampaignInput = {
   observed_at: string; title: string; case_ids: string[];
   arms: { arm_id: string; label: string }[];
   selection: Selection[]; incidents: Incident[]; notes: string[];
-  duration_policy?: { target_ms: number; allow_goal_completion: string[] };
+  duration_policy?: { target_ms: number; allow_goal_completion: string[]; makeup_tolerance_ms?: number };
   execution_audit?: ExecutionAudit[];
 };
 
@@ -94,6 +94,9 @@ export function validateInput(raw: unknown): CampaignInput {
   if (d.duration_policy !== undefined) {
     const policy = d.duration_policy;
     requireThat(policy && Number.isSafeInteger(policy.target_ms) && policy.target_ms > 0, 'positive active duration target required');
+    requireThat(policy.makeup_tolerance_ms === undefined ||
+      (Number.isSafeInteger(policy.makeup_tolerance_ms) && policy.makeup_tolerance_ms >= 0 &&
+        policy.makeup_tolerance_ms < policy.target_ms), 'makeup tolerance must be a nonnegative integer below target');
     requireThat(Array.isArray(policy.allow_goal_completion) && distinct(policy.allow_goal_completion) &&
       policy.allow_goal_completion.every(id => armIds.has(id)), 'unknown or duplicate early completion arm');
   }
@@ -192,6 +195,7 @@ function durationCoverage(d: CampaignInput, policy: NonNullable<CampaignInput['d
     else if (acceptedGoal) disposition = 'goal_completed';
     else if (row.status === 'planned' || row.status === 'running') disposition = row.status;
     else if (remaining_ms === null) disposition = 'verify_duration';
+    else if (active_ms !== null && active_ms > 0 && remaining_ms <= (policy.makeup_tolerance_ms ?? 0)) disposition = 'within_tolerance';
     else disposition = 'needs_makeup';
     return { case_id, arm_id, run_id, active_ms, remaining_ms, disposition };
   });
@@ -200,7 +204,7 @@ function durationCoverage(d: CampaignInput, policy: NonNullable<CampaignInput['d
 export function buildReport(raw: unknown) {
   const d = validateInput(raw);
   const coverage = d.duration_policy && durationCoverage(d, d.duration_policy);
-  const covered = new Set(coverage?.filter(row => ['covered', 'goal_completed'].includes(row.disposition)).map(key));
+  const covered = new Set(coverage?.filter(row => ['covered', 'goal_completed', 'within_tolerance'].includes(row.disposition)).map(key));
   const selected = new Map(d.selection.map(r => [key(r), r]));
   const summary = d.arms.map(a => {
     const rows = d.selection.filter(r => r.arm_id === a.arm_id);
@@ -296,6 +300,11 @@ export function buildReport(raw: unknown) {
   return { schema_version: 'benchmark_campaign_report_v1', input_sha256: digest(d),
     observed_at: d.observed_at, title: d.title, summary, comparisons, selection: d.selection,
     ...(coverage ? { duration_coverage: coverage } : {}),
+    ...(d.duration_policy?.makeup_tolerance_ms !== undefined ? { duration_policy: {
+      target_ms: d.duration_policy.target_ms,
+      allow_goal_completion: d.duration_policy.allow_goal_completion,
+      makeup_tolerance_ms: d.duration_policy.makeup_tolerance_ms,
+    } } : {}),
     configuration_profiles, score_time_series, incidents: d.incidents,
     execution_audit: d.execution_audit ?? [], notes: d.notes };
 }
@@ -331,7 +340,10 @@ export function renderMarkdown(r: Report): string {
     table(['实验组','运行数','Source','Scorer','Model','预算(h)','主动提交冷却(s)','后台评测(s)','资源档位','证据覆盖'],r.configuration_profiles.map(p => [labels.get(p.arm_id),p.run_count,known(p.source_revision_id),known(p.scorer_revision_id),known(p.model_id),hours(p.budget_ms),seconds(p.active_submission_cooldown_ms),seconds(p.background_evaluation_interval_ms),known(p.resource_profile),`${p.configuration_supplied ? p.run_count : 0}/${p.run_count}`])) +
     '\n\n均分使用相同题目交集、相同归一化规则，尺度 0–100。未出分不填 0；授权的故障判零单独保留来源。以下为描述性比较；源版本、协议、资源差异和完整性复核仍需独立审查。\n\n' +
     table(['对比范围','共同题数',...r.summary.map(a => a.label),'第二组−第一组','共同题中双方/各方可计数'],r.comparisons.map(c => [c.arms.map(a => labels.get(a)).join(' / '),c.n,...r.summary.map(a => number(c.means[a.arm_id] ?? null)),number(c.delta_second_minus_first),c.qualified_common_n])) +
-    (r.duration_coverage ? '\n\n## 各臂有效运行时间\n\n' + table(['题目','实验臂','已运行（小时）','距目标（小时）','状态'],
+    (r.duration_coverage ? '\n\n## 各臂有效运行时间\n\n' +
+      ((r.duration_policy?.makeup_tolerance_ms ?? 0) > 0
+        ? `已终止运行的补时容差：${r.duration_policy!.makeup_tolerance_ms! / 60000} 分钟。within_tolerance 表示容差内免补；实际时长和缺口保持原值，不提前停止正在运行的任务。\n\n` : '') +
+      table(['题目','实验臂','已运行（小时）','距目标（小时）','状态'],
       r.duration_coverage.map(row => [row.case_id, labels.get(row.arm_id), hours(row.active_ms), hours(row.remaining_ms), row.disposition])) : '') +
     '\n\n' + r.notes.map(n => '- ' + cell(n)).join('\n') + '\n\n## 共同题目与排除记录\n\n' +
     r.comparisons.map(c => `- ${c.arms.map(a => labels.get(a)).join(' / ')}：${c.case_ids.join('、') || '无'}。`).join('\n') +
