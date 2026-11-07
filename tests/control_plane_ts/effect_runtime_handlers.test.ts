@@ -254,3 +254,21 @@ for (const retired of [
       {code: "unsupported_method"});
   });
 }
+
+
+test("explicit Host retry is registered and requires a valid typed failure and intent", async () => {
+  const failure = {schema_version: "loopx_turn_host_failure_v0", kind: "quota_exhausted",
+    attempt: 1, retryable: false};
+  assert.deepEqual(await dispatchEffectRuntimeMethod(handlers, "host_failure.retry",
+    {failure, retry_failed: true}), {allowed: true, check: null});
+  const held = await dispatchEffectRuntimeMethod(handlers, "host_failure.retry",
+    {failure, retry_failed: false}) as Record<string, unknown>;
+  assert.equal(held.allowed, false);
+  for (const params of [{failure}, {failure, retry_failed: "true"},
+    {failure, retry_failed: true, extra: true}, {retry_failed: true},
+    {failure: {...failure, kind: "not_registered"}, retry_failed: true},
+    {failure: {...failure, attempt: true}, retry_failed: true},
+    {failure: {...failure, retryable: true}, retry_failed: true}]) {
+    await assert.rejects(dispatchEffectRuntimeMethod(handlers, "host_failure.retry", params));
+  }
+});

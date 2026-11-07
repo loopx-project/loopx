@@ -217,7 +217,8 @@ def test_recovery_handoff_missing_changed_and_default_parity(tmp_path):
 
 
 @pytest.mark.parametrize('status', ['started', 'unknown', 'returned'])
-def test_new_transport_phase_does_not_clear_unsettled_semantic_replan(tmp_path, monkeypatch, status):
+@pytest.mark.parametrize("failed_recovery", [False, True])
+def test_new_transport_phase_does_not_clear_unsettled_semantic_replan(tmp_path, monkeypatch, status, failed_recovery):
     from tests.test_external_scheduler_worker import _guarded_host, worker
     from tests.test_external_scheduler_replan_retry import _replan
     from benchmark.runtime.scheduler import _create_resume_state
@@ -230,8 +231,8 @@ def test_new_transport_phase_does_not_clear_unsettled_semantic_replan(tmp_path, 
     attempts = state['replan_attempts']
     attempts[0]['status'] = status
     target = tmp_path / 'continued.json'
-    _create_resume_state(target, old, recovered={'native': {'session_id': 'same-session'}},
-                         replan_attempts=attempts)
+    _create_resume_state(target, old, recovered={'native': {'session_id': 'same-session'},
+        'host_failure': {'attempt': 1}}, replan_attempts=attempts, failed_recovery=failed_recovery)
     args.state_file = str(target)
     assert worker.run_worker(args, clock=lambda: 1031.0) in (0, 2)
     assert count.read_text() == '1'

@@ -104,6 +104,54 @@ def native_interrupted_turn(env: dict[str, str], session_id: str, *,
                 "turn_count": len(turns)}
 
 
+def native_failed_turn(env: dict[str, str], session_id: str, *, failure_kind: str,
+                       process_started_at: float, process_stopped_at: float,
+                       timeout: float = 30) -> dict[str, Any]:
+    """Read a retained quota-failed cursor without rewriting it as completed.
+
+    The caller independently proves the exact Host returned and explicitly
+    requests recovery after repairing its provider allowance. This observation
+    neither starts/resumes a native Thread nor supplies a checkpoint certificate.
+    """
+    from loopx.control_plane.turn_driver.codex_cli import _codex_error_info_category
+
+    if (failure_kind != "quota_exhausted" or not session_id
+            or any(type(x) not in (int, float) or not math.isfinite(x)
+                   for x in (process_started_at, process_stopped_at, timeout))
+            or process_started_at > process_stopped_at or timeout <= 0):
+        raise ValueError("Failed native recovery requires its quota failure and process window")
+    deadline = time.monotonic() + timeout
+    with native_checkpoint_reader(env, timeout=timeout, deadline=deadline) as transport:
+        def request(method, params):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("Failed native recovery readback window closed")
+            transport.response_timeout_sec = remaining
+            return transport.request(method, params)
+        _native_thread_readback(request, env, session_id)
+        turns = _retained_history(request, session_id)
+        tail = turns[-1]
+        error = tail.get("error")
+        category, structured = _codex_error_info_category(
+            error.get("codexErrorInfo") if isinstance(error, dict) else None)
+        start, end = tail.get("startedAt"), tail.get("completedAt")
+        if (tail.get("status") != "failed" or not structured or category != failure_kind
+                or any(type(value) not in (int, float) or not math.isfinite(value)
+                       for value in (start, end))
+                or not math.floor(process_started_at) <= start <= end <= math.ceil(process_stopped_at)):
+            raise ValueError("Native failure differs from the original returned Host")
+        if any(item.get("status") in {"inProgress", "running", "pending"}
+               for item in tail.get("items", [])):
+            raise ValueError("Failed native cursor still has pending effects")
+        encoded = json.dumps(turns, sort_keys=True, separators=(",", ":")).encode()
+        if json.dumps(_retained_history(request, session_id), sort_keys=True,
+                      separators=(",", ":")).encode() != encoded:
+            raise ValueError("Failed native history advanced during readback")
+        return {"session_id": session_id, "turn_id": tail["id"], "status": "failed",
+                "failure_kind": failure_kind, "turn_count": len(turns),
+                "visible_history_sha256": hashlib.sha256(encoded).hexdigest()}
+
+
 def _guard_cli_arguments(command: str, guard: dict) -> list[str]:
     """Parse the provider shell wrapper plus the renderer's optional Turn assignment."""
     outer = shlex.split(command)
