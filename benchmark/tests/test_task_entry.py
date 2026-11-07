@@ -125,7 +125,7 @@ def test_raw_worker_rejects_invalid_observation_before_creating_a_wake(tmp_path,
     assert not wakes.exists()
 
 
-@pytest.mark.parametrize("entry", ["omitted", "ready", "symlink", "missing-interpreter"])
+@pytest.mark.parametrize("entry", ["omitted", "ready", "workspace-shadow", "symlink", "missing-interpreter"])
 def test_install_records_and_exposes_only_the_selected_observation_producer(tmp_path, monkeypatch, entry):
     pytest.importorskip("harbor")
     if not Path("/bin/sh").is_file():
@@ -145,6 +145,15 @@ def test_install_records_and_exposes_only_the_selected_observation_producer(tmp_
     if entry == "symlink":
         sentinel.write_text("unchanged")
         wrapper.symlink_to(sentinel)
+    if entry == "workspace-shadow":
+        shadow = tmp_path / "benchmark"
+        (shadow / "runtime").mkdir(parents=True)
+        (shadow / "__init__.py").write_text("")
+        (shadow / "runtime" / "research_probe.py").write_text(
+            "from pathlib import Path\nPath('shadow-called').touch()\nprint('--candidate-file --memory-limit-bytes')\n")
+        shadow_loopx = tmp_path / "loopx"
+        shadow_loopx.mkdir()
+        (shadow_loopx / "__init__.py").write_text("from pathlib import Path\nPath('shadow-called').touch()\n")
     monkeypatch.setattr(harbor, "_PROFILE", str(profile))
     monkeypatch.setattr(harbor, "_PYTHON", str(interpreter_dir.parent))
     monkeypatch.setattr(harbor, "_SRC", str(Path(__file__).resolve().parents[2]))
@@ -163,9 +172,10 @@ def test_install_records_and_exposes_only_the_selected_observation_producer(tmp_
     async def execute(*args, **kwargs):
         command = kwargs["command"]
         commands.append(command)
-        if "-m benchmark.runtime.research_probe" in command:
+        if "benchmark/runtime/research_probe.py" in command:
             result = subprocess.run(["/bin/sh", "-c", command], cwd=tmp_path,
-                                    env={"PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1"},
+                                    env={"PATH": "/usr/bin:/bin", "PYTHONPATH": str(tmp_path),
+                                         "PYTHONDONTWRITEBYTECODE": "1"},
                                     text=True, capture_output=True, timeout=10)
             wrapper_reads.append(result)
             return SimpleNamespace(stdout=result.stdout, stderr=result.stderr, return_code=result.returncode)
@@ -175,7 +185,7 @@ def test_install_records_and_exposes_only_the_selected_observation_producer(tmp_
         return SimpleNamespace(stdout="/usr/local/bin:/usr/bin:/bin", return_code=0)
 
     async def execute_root(*args, **kwargs):
-        assert "-m benchmark.runtime.research_probe" not in kwargs["command"]
+        assert "benchmark/runtime/research_probe.py" not in kwargs["command"]
         return await execute(*args, **kwargs)
 
     for key in ("LOOPX_SRC_DIR", "LOOPX_PORTABLE_PYTHON", "LOOPX_NODE_DIR"):
@@ -196,7 +206,7 @@ def test_install_records_and_exposes_only_the_selected_observation_producer(tmp_
         return
 
     asyncio.run(agent.install(environment))
-    assert any("-m benchmark.runtime.research_probe" in command for command in commands) is selected
+    assert any("benchmark/runtime/research_probe.py" in command for command in commands) is selected
     assert len(wrapper_reads) == int(selected)
     if selected:
         assert os.access(wrapper, os.X_OK) and "--memory-limit-bytes" in wrapper_reads[0].stdout
@@ -208,6 +218,23 @@ def test_install_records_and_exposes_only_the_selected_observation_producer(tmp_
     assert "research_loop" not in receipt
     assert receipt["task_entry"] == "loopx-planned"
     assert receipt.get("stride_strategy") is None
+    if entry == "workspace-shadow":
+        candidate = tmp_path / "candidate.py"
+        candidate.write_text("print('real probe kept the task cwd')")
+        invocation = subprocess.run([str(wrapper),
+            "--candidate-file", candidate.name, "--output", "probe.json", "--input-revision", "inputs-v1",
+            "--planned-method-id", "method:local", "--executed-method-id", "method:local",
+            "--evidence-ref", "probe:trusted", "--limit-seconds", "5", "--memory-limit-bytes", "8388608",
+            "--", sys.executable, candidate.name],
+            cwd=tmp_path, env={**os.environ, "PYTHONPATH": str(tmp_path)},
+            capture_output=True, text=True, timeout=12)
+        assert invocation.returncode == 0, invocation.stderr
+        observation = json.loads(invocation.stdout)
+        assert observation == json.loads((tmp_path / "probe.json").read_text())
+        memory = json.loads((tmp_path / "probe.json.memory.json").read_text())
+        assert memory["reference_memory_bytes"] == 8388608 and memory["candidate_sha256"] == observation["candidate_sha256"]
+        assert (tmp_path / "probe.json.stdout").read_text().strip() == "real probe kept the task cwd"
+        assert not (tmp_path / "shadow-called").exists()
 
 
 @pytest.fixture

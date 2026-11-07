@@ -42,9 +42,11 @@ not attest execution, adoption or improvement.
 The native SForge runner accepts the same producer with
 `--execution-observation local_probe` on a heartbeat worker. It forwards the
 selection to the shared installer and records it in both runner and worker
-receipts. The installer runs the wrapper's `--help` once as the worker user
-before model entry. An unavailable wrapper fails setup for an explicitly
-selected producer. The observation runs only when a worker invokes it.
+receipts. The wrapper uses isolated Python to execute the staged probe source
+while keeping the task working directory for candidate paths. The installer
+checks the wrapper's `--help` once as the worker user before model entry.
+An unavailable wrapper fails setup for an explicitly selected producer.
+The observation runs only when a worker invokes it.
 
 Choose the settlement plan's ordinary `command_template` for in-flight progress
 without new decision evidence. Use `semantic_closeout_command_template` for new
@@ -216,9 +218,10 @@ Stop、原预算和真实阻塞继续有效，不为填满时长制造任务。
 边界，不覆盖传递依赖或独立写入者，结果仍须证明对应实际评测快照和输入版本。
 
 SForge heartbeat worker 可显式传入 `--execution-observation local_probe`，
-沿用共享安装路径，并在 runner 和 worker 回执中记录选择。安装时用 worker
-身份执行一次入口的 `--help`，该入口不可用时在模型进入前报告安装失败。
-测量只在 worker 自己调用探针时发生。
+沿用共享安装路径，并在 runner 和 worker 回执中记录选择。入口以隔离 Python
+执行已部署的探针源码，候选路径仍相对于任务工作目录。安装时用 worker 身份
+核对一次 `--help`。该入口不可用时在模型进入前报告安装失败。测量只在
+worker 自己调用探针时发生。
 
 当并行内存占用会影响候选选择时，用同一入口执行完整代表性工作集并传入
 `--memory-limit-bytes <参考上限>`。Linux 逐 PID 读取 PSS，组成员变化或数据
