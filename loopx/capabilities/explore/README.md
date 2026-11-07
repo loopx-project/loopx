@@ -12,6 +12,10 @@ This records producer evidence, not verified execution or utility. Findings,
 replan context and the existing research-history detail retain it; omission
 preserves old events. See the [local probe producer](../../../benchmark/runtime/EXECUTION_OBSERVATIONS.md).
 
+When the observed execution used the finding's tested input revision, result
+attachments can bind it once and select the evidence to reuse. Readback and
+standalone observations keep the complete observation form. [Execution evidence authoring](../../../docs/reference/protocols/explore-result-from-path-delta-v0.md#execution-evidence-on-the-same-input)
+
 ## Quantitative findings
 
 An ordinary result attachment can include `measurements`, saved on its existing

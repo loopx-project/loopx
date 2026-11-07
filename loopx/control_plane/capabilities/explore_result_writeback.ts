@@ -5,13 +5,17 @@ import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {jsonObject, requireJsonObject, requireNonEmptyString, requireStringArray, requireStringLiteral} from "../runtime_decode.ts";
 import {contextSourceIdentity} from "../quota/diagnostic_projection.ts";
 import {normalizeGoalPathDelta} from "../goals/vision_checkpoint.ts";
-import {normalizeExploreExecutionObservation} from "./explore_execution_observation.ts";
+import {EXPLORE_EXECUTION_OBSERVATION_SCHEMA, normalizeExploreExecutionObservation} from "./explore_execution_observation.ts";
 import {isExploreEvidenceRef} from "./explore_evidence_ref.ts";
 import {normalizeWorkYardstickDecision} from "../work_items/yardstick_decision.ts";
 import {normalizeExploreMeasurements} from "./explore_measurements.ts";
 
 export const EXPLORE_RESULT_ATTACHMENT_SCHEMA = "explore_result_attachment_v0";
 export const EXPLORE_PATH_DELTA_ATTACHMENT_SCHEMA = "explore_result_from_path_delta_v0";
+const EXPLORE_EXECUTION_FROM_FINDING_SCHEMA = "explore_execution_from_finding_v0";
+const FINDING_EVIDENCE_SELECTION = "finding";
+const QUESTION_LIMIT = 180;
+const APPLICABILITY_LIMIT = 200;
 // The complete scoped finding fits the result-log owner: 160 revision + 200
 // applicability + 320 observation + 1200 interpretation + four labels < 2000.
 export const EXPLORE_WRITEBACK_SUMMARY_LIMIT = 2000;
@@ -62,6 +66,12 @@ export function exploreResultWritebackAffordance(): JsonObject {
       unit: "ratio", higher_is_better: true, comparison_scope: "validation:fixed-budget-v1",
       input_revision: "dataset-v1", evaluation_ref: "evaluator:validation-v1",
       candidate_ref: "candidate:revision-2", evidence_ref: "result:validation-2"}]},
+    optional_execution_observation_example: {execution_observation: {
+      schema_version: EXPLORE_EXECUTION_FROM_FINDING_SCHEMA,
+      candidate_sha256: "a".repeat(64), planned_method_id: "bounded-probe", executed_method_id: "bounded-probe",
+      change_reason: null, elapsed_seconds: 0.125, limit_seconds: 10, search_iterations: 2,
+      stop_reason: "iteration_limit", evidence_refs: FINDING_EVIDENCE_SELECTION,
+    }},
     guidance: [
       "After validating reusable evidence, put explore_result in the vision JSON already submitted with --agent-vision-json.",
       EXPLORE_BEFORE_WORK.openLease,
@@ -94,7 +104,8 @@ export function exploreResultWritebackAffordance(): JsonObject {
       "To reuse explicitly verified conditions, optional measurement_context supplies comparison_scope, input_revision and evaluation_ref for observations that omit those fields; conflicting fields reject. CLI finding accepts the same context via --measurement-context-json. This copies declared conditions, not proof of comparability.",
       EXPLORE_BEFORE_WORK.feedbackBeforeWork,
       EXPLORE_BEFORE_WORK.executionEvidence,
-      "Observations allow 320 characters, interpretations 1200; the complete scoped summary is preserved within 2000 characters.",
+      `Use optional_execution_observation_example when the execution used this finding's tested input. Omit the nested input_revision and set its evidence_refs to "${FINDING_EVIDENCE_SELECTION}" only if all finding refs describe this execution, or list the exact opaque subset. Supply the actual candidate and execution facts. A released result still needs its result_ref and matching result_candidate_sha256.`,
+      `Questions allow ${QUESTION_LIMIT} characters, applicability ${APPLICABILITY_LIMIT}, observations 320, and interpretations 1200. The complete scoped summary is preserved within 2000 characters.`,
     ].join(" "),
     // Blank evidence fields deliberately fail validation until the caller
     // supplies observed facts. Goal/Agent/Todo/Turn bind in ordinary writeback;
@@ -163,6 +174,20 @@ function explicitNodeId(value: unknown): string {
   }
   return value.trim();
 }
+/** Expand an explicit same-finding binding before the canonical codec. */
+function normalizeAttachedExecution(value: unknown, inputRevision: unknown, refs: string[]): JsonObject {
+  const authored = jsonObject(value);
+  if (authored?.schema_version !== EXPLORE_EXECUTION_FROM_FINDING_SCHEMA) {
+    return normalizeExploreExecutionObservation({observation: value});
+  }
+  if (Object.hasOwn(authored, "input_revision")) {
+    throw new EffectRuntimeRequestError("execution observation cannot override its explicit finding input revision");
+  }
+  return normalizeExploreExecutionObservation({observation: {...authored,
+    schema_version: EXPLORE_EXECUTION_OBSERVATION_SCHEMA, input_revision: inputRevision,
+    evidence_refs: authored.evidence_refs === FINDING_EVIDENCE_SELECTION ? refs : authored.evidence_refs,
+  }});
+}
 function normalizeAttachment(value: unknown, visionPacket?: unknown, linkedScope?: unknown): JsonObject {
   const row = requireJsonObject(value, "Explore result attachment");
   if (row.schema_version === EXPLORE_PATH_DELTA_ATTACHMENT_SCHEMA) {
@@ -172,8 +197,8 @@ function normalizeAttachment(value: unknown, visionPacket?: unknown, linkedScope
     throw new EffectRuntimeRequestError("Explore result attachment contains unknown fields");
   }
   requireStringLiteral(row.schema_version, [EXPLORE_RESULT_ATTACHMENT_SCHEMA], "attachment schema");
-  const question = text(row.question, "question", 180);
-  const applicability = text(row.applicability, "applicability", 200);
+  const question = text(row.question, "question", QUESTION_LIMIT);
+  const applicability = text(row.applicability, "applicability", APPLICABILITY_LIMIT);
   // Identity is mechanical, never inferred evidence. Exact scoped text, not
   // revision/status/observation, binds successive results to the same question.
   const node = Object.hasOwn(row, "node_id")
@@ -190,7 +215,7 @@ function normalizeAttachment(value: unknown, visionPacket?: unknown, linkedScope
     return ref;
   });
   const execution = Object.hasOwn(row, "execution_observation")
-    ? normalizeExploreExecutionObservation({observation: row.execution_observation}) : null;
+    ? normalizeAttachedExecution(row.execution_observation, row.input_revision, refs) : null;
   if (Object.hasOwn(row, "measurement_context") && !Object.hasOwn(row, "measurements")) {
     throw new EffectRuntimeRequestError("measurement_context requires measurements");
   }
@@ -260,8 +285,8 @@ function questionScope(row: JsonObject, value: unknown): JsonObject {
   if (!refs.includes(nodeId) || matches.length !== 1) {
     throw new EffectRuntimeRequestError("Explore capture requires an existing question linked to this Todo");
   }
-  return {question: text(matches[0].title, "question", 180),
-    applicability: text(matches[0].summary, "applicability", 200)};
+  return {question: text(matches[0].title, "question", QUESTION_LIMIT),
+    applicability: text(matches[0].summary, "applicability", APPLICABILITY_LIMIT)};
 }
 export function normalizeExploreResultAttachment(params: JsonObject): JsonObject {
   const result = normalizeAttachment(params.attachment, params.vision_packet, params.linked_scope);

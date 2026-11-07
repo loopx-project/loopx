@@ -606,7 +606,8 @@ export function initialContextReadPointers(context: JsonObject, decisionFields: 
           // Keep its identity and actual read/authoring routes discoverable.
           for (const key of Object.keys(object(attachment)!)) {
             if (["guidance", "attachment_template", "linked_question_attachment_template", "path_delta_attachment_template",
-              "optional_measurement_example", "optional_question_evolution_example"].includes(key)) continue;
+              "optional_measurement_example", "optional_question_evolution_example"].includes(key) ||
+              (key === "optional_execution_observation_example" && object(attachment)?.capability_id === "explore")) continue;
             include(...path, key); // Unknown attachment controls are never hidden.
           }
         });

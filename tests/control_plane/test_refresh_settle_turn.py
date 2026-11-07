@@ -532,6 +532,84 @@ def test_fresh_turn_honors_the_written_route_and_keeps_unfinished_requirements(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_execution_evidence_uses_explicit_finding_binding_in_settlement(tmp_path, monkeypatch, provider):
+    from loopx.capabilities.explore.result_log import explore_result_log_path
+    from loopx.configure_goal import configure_goal
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    configure_goal(registry_path=registry, goal_id=GOAL_ID, execute=True, explore_mode="evidence")
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID]
+    rc, entry = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding,
+        "--context-delivery", "on", "--decision-output-dir", str(tmp_path / "capture"), cwd=project)
+    assert rc == 0 and entry["schema_version"] == "context_capture_navigation_v1", entry
+    rc, detail = _run_cli(registry, runtime, "quota", "context-read", "--reference-file",
+        entry["recovery"]["reference_file"], "--select", "/interaction_contract/cli_channel/settlement_plan",
+        "--page-bytes", "24000", "--max-page-output-bytes", "64000", cwd=project)
+    assert rc == 0 and detail["eof"], detail
+    plan = json.loads(detail["content"])["selections"][0]["value"]
+    writeback = next(step for step in plan["ordered_steps"] if step["kind"] == "durable_writeback")
+
+    refs = ["result:probe", "source:" + "e" * 64]
+    revision = "dataset:" + "d" * 64
+    observation = {"schema_version": "explore_execution_observation_v0",
+        "candidate_sha256": "c" * 64, "input_revision": revision,
+        "planned_method_id": "initial", "executed_method_id": "revised",
+        "change_reason": "A boundary check selected the revised method.",
+        "elapsed_seconds": 0.125, "limit_seconds": 10, "search_iterations": 2,
+        "stop_reason": "iteration_limit", "evidence_refs": sorted(refs),
+        "result_ref": refs[0], "result_candidate_sha256": "c" * 64}
+    vision = tmp_path / "vision.json"
+    packet = {"schema_version": "goal_vision_replan_contract_v0", "state": "vision_patch_proposed",
+        "vision_patch": {"acceptance_summary": "The bounded execution has a reproducible result."},
+        "path_delta": {"schema_version": "goal_path_delta_v0", "outcome": "continue",
+            "prior_assumption": "The first method could cover the boundary.",
+            "observed_reality": "The revised method handled the boundary case.",
+            "retained": ["Validate the remaining cases."],
+            "evidence_refs": [*refs, ".loopx/evidence/probe.json"]},
+        "explore_result": {"schema_version": "explore_result_from_path_delta_v0",
+            "question": "Which method handles the boundary?", "applicability": "Synthetic boundary case only",
+            "input_revision": revision, "status": "confirmed", "evidence_refs": refs}}
+    command = writeback["semantic_closeout_command_template"]
+    for key, value in {"<validated_progress>": "verified_slice", "<scale>": "implementation",
+                       "<outcome>": "outcome_progress", "<file>": shlex.quote(str(vision))}.items():
+        command = command.replace(key, value)
+    if "--settle-turn" not in shlex.split(command):
+        command += " --settle-turn --settlement-receipt"
+    command += " --no-global-sync --suppress-external-sinks"
+
+    packet["explore_result"]["execution_observation"] = {**observation, "input_revision": "foreign-input"}
+    vision.write_text(json.dumps(packet))
+    rc, rejected = _run_generated_cli(command, registry_path=registry, cwd=project)
+    assert rc == 1 and rejected["appended"] is False, rejected
+    assert "execution observation must retain this finding's input revision" in rejected["error"], rejected
+    log = explore_result_log_path(runtime, GOAL_ID)
+    assert _spend_run_count(runtime) == 0 and not log.exists()
+
+    compact = {key: value for key, value in observation.items() if key != "input_revision"}
+    compact.update(schema_version="explore_execution_from_finding_v0", evidence_refs="finding")
+    packet["explore_result"]["execution_observation"] = compact
+    vision.write_text(json.dumps(packet))
+    rc, settled = _run_generated_cli(command, registry_path=registry, cwd=project)
+    assert rc == 0 and settled["settlement_progress"]["state"] == "settled", settled.get("error", settled)
+    assert settled["settlement_identity"] == plan["identity"]
+    assert settled["quota_spend"]["ok"] and "settlement_owed" not in settled
+
+    example = writeback["optional_attachments"][0]["optional_execution_observation_example"]
+    assert example["execution_observation"]["schema_version"] == compact["schema_version"]
+    assert compact["schema_version"] not in json.dumps(entry)
+    assert settled["explore_result"]["execution_observation"] == observation
+    rc, context = _run_cli(registry, runtime, "explore", "turn-context", "--goal-id", GOAL_ID,
+                          "--agent-id", AGENT_ID, cwd=project)
+    assert rc == 0 and context["graph"]["writeback_results"][0]["execution_observation"] == observation
+    before = log.read_bytes()
+    rc, replay = _run_generated_cli(command, registry_path=registry, cwd=project)
+    assert rc == 0 and replay["idempotent_replay"] and replay["settlement_identity"] == plan["identity"], replay
+    assert _spend_run_count(runtime) == 1 and log.read_bytes() == before
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_owed_command_identity_and_lost_response_recover_without_another_debit(tmp_path, monkeypatch, provider):
     from loopx.cli_commands import refresh_settlement
 

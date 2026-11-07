@@ -237,7 +237,11 @@ function freshPaths(context: JsonObject, surface: Surface, legacyQuotaFields: re
             detail.forEach((attachment, j) => {
               const item = jsonObject(attachment), prefix = [...path, key, i, field, j];
               if (!item) { paths.push(prefix); return; }
-              for (const property of Object.keys(item)) if (property !== "guidance") paths.push([...prefix, property]);
+              for (const property of Object.keys(item)) {
+                if (property === "guidance" || (property === "optional_execution_observation_example"
+                    && item.capability_id === "explore" && item.required === false)) continue;
+                paths.push([...prefix, property]);
+              }
             });
           } else paths.push([...path, key, i, field]);
         }
