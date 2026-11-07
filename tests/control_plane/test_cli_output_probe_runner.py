@@ -294,11 +294,11 @@ def test_signed_todo_row_projection_recovers_its_original_decision(tmp_path):
         "preserving the original constraint. " * 36))
     import_fixture_authority(registry, probe.GOAL_ID)
     command = probe._surface_commands(project=project, runtime=runtime, registry_path=registry,
-        state_file=state, output_format="json")["quota_should_run"]
+        state_file=state, output_format="json", context_delivery="auto")["quota_should_run"]
     code, navigation = probe._invoke_cli([
         *command, "--todo-id", "todo_fixture_000", "--turn-instance-id", "fixture-signed-rows",
     ])
-    assert code == 0
+    assert code == 0, navigation
     events = rollout_event_log_path(runtime, probe.GOAL_ID)
     before = events.read_bytes()
     view, _ = cli_output_fixture.read_cli_context_for_oracle(navigation)
