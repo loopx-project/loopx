@@ -1000,14 +1000,18 @@ def budgeted_settlement_result(
         # Large or unknown controls are mandatory selected reads, never cut text.
         pointers = ["/" + key.replace("~", "~0").replace("/", "~1")
             for key in payload if key not in deferred]
+        snapshot_note = ""
+        if supporting_fields is not None:
+            snapshot_note = " Supporting snapshots remain available in the same immutable result."
+        elif deferred:
+            snapshot_note = " before/after remain available in the same immutable result."
         view = {"ok": payload.get("ok"), "result_details": details,
             "command": context_capture_read_command(saved, digest, reference_file=reference, select=pointers,
                 page_bytes=min(NATIVE_CONTEXT_PAGE_BYTES, output_bytes),
                 max_page_output_bytes=output_bytes, reader_argv=reader_argv),
             "instruction": "Read the complete selected result controls before acting. The operation was "
                 "already evaluated; preserve its original Turn/effect identity. No execution authority "
-                "or context baseline is granted. " + ("Supporting snapshots remain available in the same immutable result."
-                    if supporting_fields is not None else "before/after remain available in the same immutable result.")}
+                "or context baseline is granted." + snapshot_note}
         if fits(view):
             return view
         raise ValueError(f"result reader metadata exceeds the output budget; complete result: {saved}")
