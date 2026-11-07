@@ -11,7 +11,11 @@ import sys
 
 import pytest
 
-from loopx.control_plane.quota.turn_envelope import build_turn_envelope, turn_envelope_action_signature_document
+import loopx
+
+from loopx.control_plane.quota.turn_envelope import (
+    build_turn_envelope, compose_turn_decision, turn_envelope_action_signature_document,
+)
 from loopx.control_plane.turn_driver.decision_capture import prepare_turn_decision_capture
 from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
 from loopx.control_plane.turn_driver.executor import build_loopx_turn_host_request
@@ -31,9 +35,9 @@ from tests.control_plane.test_quota_settlement_cli import (
 def test_captured_context_reaches_actual_host_without_readmission(tmp_path, monkeypatch, provider, mode):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)
-    # Child cwd is the disposable Goal, so the interpreter's installed Core
-    # may differ from this checkout. Bind and independently check test-only IO.
-    checkout = Path(__file__).resolve().parents[2]
+    # Keep subprocess IO on the Core under test, including an isolated wheel;
+    # the test harness directory must never become a borrowed Core checkout.
+    checkout = Path(loopx.__file__).resolve().parents[1]
     monkeypatch.setenv("PYTHONPATH", os.pathsep.join(filter(None,
         [str(checkout), os.environ.get("PYTHONPATH")])))
     imported = subprocess.run([sys.executable, "-c", "import loopx; print(loopx.__file__)"],
@@ -73,8 +77,7 @@ def test_captured_context_reaches_actual_host_without_readmission(tmp_path, monk
     original = (capture / "decision.json").read_bytes()
     source = json.loads(original)
     if mode == "legacy_reference":
-        assert json.loads(produced.stdout) == source
-    assert source["schema_version"] == "loopx_turn_envelope_v1"
+        assert json.loads(produced.stdout)["schema_version"] == "loopx_turn_envelope_v0"
     envelope = build_turn_envelope(source, captured_decision_path=str(capture / "decision.json"))
     context = source["interaction_contract"].get("agent_context")
     assert bool(context) is (mode != "off")
@@ -99,10 +102,14 @@ def test_captured_context_reaches_actual_host_without_readmission(tmp_path, monk
     )
     command = [sys.executable, "-m", "loopx.dsh_goal_mode", "--workspace", str(project),
                "--dsh-home", str(tmp_path / "host-home"), "--dsh-runner", str(runner)]
-    plan = build_loopx_turn_plan(envelope, host="dsh", execution_mode="isolated-headless",
-                                 turn_instance_id="host-context-turn")
+    # Ordinary quota still emits v0 in this extraction. Its recorded envelope
+    # must not be paired with a newly normalized source. Current Turn planning
+    # accepts that complete source directly and publishes its own capture.
+    plan = build_loopx_turn_plan(envelope if mode == "legacy_reference" else compose_turn_decision(source),
+        host="dsh", execution_mode="isolated-headless", turn_instance_id="host-context-turn")
     if mode != "legacy_reference":
-        plan["work_contract"] = source
+        plan = prepare_turn_decision_capture(plan, journal_path=tmp_path / "current-turn" / "journal.json",
+            decision=plan["work_contract"], existing_journal=False)
     request = build_loopx_turn_host_request(plan)
     before = {p: p.read_bytes() for p in runtime.rglob("*") if p.is_file()}
     result = subprocess.run(command, input=json.dumps(request), text=True, capture_output=True, timeout=30)
@@ -135,9 +142,12 @@ def test_captured_context_reaches_actual_host_without_readmission(tmp_path, monk
         assert prompt_path.read_text() == prompt
     else:
         actual, _ = json.JSONDecoder().raw_decode(prompt.split("Turn request:\n", 1)[1])
-        # Compare at the real subprocess/provider seam with the independent
-        # immutable capture, including full acceptance, context and stop facts.
-        assert actual["work_contract"] == source
+        # The current producer's own immutable capture is the transport oracle;
+        # the original long task and optional context remain independent inputs.
+        detail = actual["detail_ref"]["captured_decision"]
+        assert json.loads(Path(detail["path"]).read_text()) == actual["work_contract"]
+        assert actual["work_contract"] == plan["work_contract"]
+        assert "Validate the complete acceptance: " + "preserve original evidence; " * 180 in json.dumps(actual["work_contract"])
         assert "turn_envelope" not in actual and "turn_authority" not in actual
         delivered_context = actual["work_contract"]["interaction_contract"].get("agent_context")
         assert delivered_context == context
@@ -192,16 +202,14 @@ def test_bound_replan_reaches_actual_host_with_original_evidence(tmp_path, monke
     assert code == 0, envelope
     original = (capture / "decision.json").read_bytes()
     source = json.loads(original)
-    assert envelope == source
-    assert source["schema_version"] == "loopx_turn_envelope_v1"
+    assert envelope["schema_version"] == "loopx_turn_envelope_v0"
     agent_channel = source["interaction_contract"]["agent_channel"]
     assert agent_channel["delivery_allowed"] is False
     assert agent_channel["must_attempt"] is True
-    envelope = build_turn_envelope(source)
-    plan = build_loopx_turn_plan(envelope, host="dsh", execution_mode="isolated-headless",
+    plan = build_loopx_turn_plan(compose_turn_decision(source), host="dsh", execution_mode="isolated-headless",
                                  turn_instance_id=turn)
     plan = prepare_turn_decision_capture(plan, journal_path=tmp_path / "turn" / "journal.json",
-        decision=source, existing_journal=False)
+        decision=plan["work_contract"], existing_journal=False)
     assert plan["route"]["kind"] == "replan_required"
     assert plan["route"]["would_invoke_host"] is True
     assert source["heartbeat_receipt"]["settlement_identity"]["todo_id"] == SELECTED_REPLAN_TODO_ID
@@ -215,7 +223,7 @@ def test_bound_replan_reaches_actual_host_with_original_evidence(tmp_path, monke
     )
     command = [sys.executable, "-m", "loopx.dsh_goal_mode", "--workspace", str(project),
                "--dsh-home", str(tmp_path / "host-home"), "--dsh-runner", str(runner)]
-    request = build_loopx_turn_host_request({**plan, "work_contract": source})
+    request = build_loopx_turn_host_request(plan)
     codex_prompt, _ = prepare_codex_cli_input(request)
     assert "Read detail_ref.replan_action_packet.review" in codex_prompt
     assert "before reading detail_ref.replan_action_packet.writeback" in codex_prompt
@@ -226,7 +234,9 @@ def test_bound_replan_reaches_actual_host_with_original_evidence(tmp_path, monke
     prompt_path = project / "received.txt"
     prompt = prompt_path.read_text()
     actual, _ = json.JSONDecoder().raw_decode(prompt.split("Turn request:\n", 1)[1])
-    assert actual["work_contract"] == source
+    assert actual["work_contract"] == plan["work_contract"]
+    # This Goal body is a pending original read, exercised below; a complete
+    # contract does not require every retained source to be inline.
     assert "turn_envelope" not in actual and "turn_authority" not in actual
     # Execute the original observation readers actually delivered to the provider.
     detail = actual["detail_ref"]
@@ -237,7 +247,7 @@ def test_bound_replan_reaches_actual_host_with_original_evidence(tmp_path, monke
     captured = detail["captured_decision"]
     assert (captured["goal_id"], captured["agent_id"], captured["turn_instance_id"]) == (GOAL_ID, AGENT_ID, turn)
     read = subprocess.run(shlex.split(detail["full_decision"]), capture_output=True, check=True).stdout
-    assert read == original
+    assert json.loads(read) == plan["work_contract"]
     assert build_turn_envelope(json.loads(read))["action_signature"]["source_decision_hash"] == actual["source_decision_hash"]
     assert context["obligation_id"] == source["replan_action_packet"]["obligation_id"]
     goal_read = next(r for r in agent_channel["required_reads"] if r["source"] == "goal_state")

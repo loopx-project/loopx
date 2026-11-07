@@ -47,6 +47,79 @@ def test_complete_wire_roundtrip_has_one_source_and_original_readers(complete_ho
     assert internal == before
 
 
+@pytest.mark.parametrize("host", ["codex", "structured"])
+@pytest.mark.parametrize("declared_audit", [True, False])
+def test_open_goal_acceptance_judgment_keeps_its_read_audit(
+    complete_host_request, tmp_path, host, declared_audit,
+):
+    from loopx.control_plane.turn_driver.codex_cli import _prompt
+    from loopx.control_plane.turn_driver.host_candidate import render_prompt
+    from loopx.control_plane.quota.turn_envelope import compose_turn_decision
+
+    # This is ordinary admitted work, with no Goal-completion result requested.
+    # Judging its acceptance must still read the original ordered audit first.
+    _, original = complete_host_request
+    source = deepcopy({key: value for key, value in original.items()
+                       if key not in {"schema_version", "contract_binding"}})
+    audit = {"required": True,
+             "required_before_closeout": ["derive_requirements_from_active_vision_and_current_todo",
+                                          "name_authoritative_evidence_for_each_requirement"],
+             "vision_gap_judge": {"done": False, "decision": "continue"}}
+    source.pop("vision_continuation_audit", None)
+    source["interaction_contract"]["cli_channel"].pop("vision_continuation_audit", None)
+    if declared_audit:
+        source["vision_continuation_audit"] = audit
+        source["interaction_contract"]["cli_channel"]["vision_continuation_audit"] = deepcopy(audit)
+    contract = compose_turn_decision(source)
+    plan = build_loopx_turn_plan(contract, host="generic-cli",
+        execution_mode="isolated-headless", turn_instance_id="open-goal-acceptance")
+    plan = prepare_turn_decision_capture(plan, journal_path=tmp_path / "audit" / "journal.json",
+        decision=contract, existing_journal=False)
+    request = build_loopx_turn_host_request(plan)
+    before = deepcopy(request)
+    wire = complete_host_input(request)
+    assert wire["work_contract"]["should_run"] is True
+    if declared_audit:
+        assert wire["work_contract"]["vision_continuation_audit"] == audit
+    else:
+        assert "vision_continuation_audit" not in wire["work_contract"]
+    prompt = (_prompt(request) if host == "codex"
+              else render_prompt(extract_turn_authority(request), allow_completion=False))
+    instructions, encoded = prompt.split("Turn request:\n", 1)
+    if declared_audit:
+        assert "Read vision_continuation_audit before judging Goal acceptance or proposing closeout" in instructions
+        assert "ordered required_before_closeout" in instructions
+        assert "evidence requirements" in instructions and "vision_gap_judge" in instructions
+    else:
+        assert "vision_continuation_audit" not in instructions
+    assert "Do not write LoopX state" in instructions
+    assert "owns those effects" in instructions
+    assert json.JSONDecoder().raw_decode(encoded)[0] == wire
+    assert request == before
+
+
+@pytest.mark.parametrize("host", ["codex", "structured"])
+def test_complete_host_keeps_notification_and_execution_boundaries(
+    complete_host_request, tmp_path, host,
+):
+    from loopx.control_plane.turn_driver.codex_cli import _prompt
+    from loopx.control_plane.turn_driver.host_candidate import render_prompt
+
+    request = _captured_request(complete_host_request, tmp_path)
+    wire = complete_host_input(request)
+    prompt = (_prompt(request) if host == "codex"
+              else render_prompt(extract_turn_authority(request), allow_completion=False))
+    instructions, encoded = prompt.split("Turn request:\n", 1)
+    assert "User notification policy does not grant or cancel execution authority" in instructions
+    for field in ("must_attempt", "delivery_allowed", "quiet_noop_allowed",
+                  "execution_policy", "task_orchestration_contract"):
+        assert field in instructions
+    assert "alternatives and capability intents do not override admission or scope" in instructions
+    assert "Do not write LoopX state" in instructions
+    assert "owns those effects" in instructions
+    assert json.JSONDecoder().raw_decode(encoded)[0] == wire
+
+
 def test_private_plan_lineage_is_not_a_host_wire(complete_host_request):
     request, source = complete_host_request
     plan = build_loopx_turn_plan(request["turn_envelope"], work_contract=source,

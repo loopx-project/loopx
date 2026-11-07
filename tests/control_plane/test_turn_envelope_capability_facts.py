@@ -56,11 +56,9 @@ def test_real_captured_guard_preserves_required_and_missing_capabilities(
         "--turn-envelope", "--decision-output-dir", str(capture), cwd=project)
     assert code == (0 if network_available else 1), envelope
     full = json.loads((capture / "decision.json").read_text())
-    # Both admission and refusal carry the same complete source. Keep the
-    # historical decoder checks below without choosing a second producer path.
-    from loopx.control_plane.quota.turn_envelope import build_turn_envelope
-    assert envelope == full and full["schema_version"] == "loopx_turn_envelope_v1"
-    envelope = build_turn_envelope(full, captured_decision_path=str(capture / "decision.json"))
+    # This ordinary quota producer retains its recorded v0 contract; the
+    # current Turn producer is qualified independently in the cutover tests.
+    assert envelope["schema_version"] == "loopx_turn_envelope_v0"
     gate = full["capability_gate"]
     assert "network" in gate["required"]
     assert ("network" in gate["missing"]) is (not network_available)
@@ -135,11 +133,7 @@ def test_captured_vision_contract_preserves_closeout_and_original_observation(
         "--decision-output-dir", str(capture), cwd=project)
     assert code == 0, envelope
     full = json.loads((capture / "decision.json").read_text())
-    assert envelope == full and full["schema_version"] == "loopx_turn_envelope_v1"
-    # The real CLI now emits the complete contract. Retain the historical
-    # decoder and its independent signature/refusal checks below.
-    from loopx.control_plane.quota.turn_envelope import build_turn_envelope
-    envelope = build_turn_envelope(full, captured_decision_path=str(capture / "decision.json"))
+    assert envelope["schema_version"] == "loopx_turn_envelope_v0"
     audit = full["vision_continuation_audit"]
     assert audit["required"] and audit["required_before_closeout"]
     assert audit["vision_gap_judge"]["done"] is False
