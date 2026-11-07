@@ -789,5 +789,104 @@ export function materializeTaskLeaseAcquire(identity: {goal_id: string; todo_id:
 
 /** Goal allow scopes use case-sensitive fnmatch, unlike folded lease overlap. */
 export function schedulingWriteScopeAllowed(required: string, allowed: readonly string[]): boolean {
-  return !required || allowed.some(pattern => pattern === required || fnmatchcase(required, pattern, false, false));
+  if (!required || allowed.includes(required)) return true;
+  if (allowed.length === 0) return false;
+  // A literal requirement still uses the existing path matcher. A glob denotes
+  // all possible writes, including files that have not been created yet.
+  if (!/[?*[]/u.test(required)) return allowed.some(pattern => fnmatchcase(required, pattern, false, false));
+  return scopeLanguageCovered(required, allowed);
+}
+
+type ScopeInterval = readonly [number, number];
+type ScopeTransition = readonly ScopeInterval[] | null;
+
+/** Compile case-sensitive fnmatch tokens to an epsilon-NFA. null is a star. */
+function scopeTransitions(pattern: string): ScopeTransition[] {
+  return globTokens(pattern, false).flatMap((token): ScopeTransition[] => {
+    if (token.kind === "star") return [null];
+    if (token.kind === "question") return [[[0, 0x10ffff]]];
+    if (token.kind === "literal") return [...token.folded].map(character => {
+      const code = character.codePointAt(0)!;
+      return [[code, code]];
+    });
+    const members = characterClass(token.body);
+    const ranges: ScopeInterval[] = [...members.ranges,
+      ...members.literals.map(character => [character.codePointAt(0)!, character.codePointAt(0)!] as const)]
+      .filter(([low, high]) => low <= high).sort(([a], [b]) => a - b);
+    if (!token.negated) return [ranges];
+    const complement: ScopeInterval[] = [];
+    let start = 0;
+    for (const [low, high] of ranges) {
+      if (start < low) complement.push([start, low - 1]);
+      start = Math.max(start, high + 1);
+    }
+    if (start <= 0x10ffff) complement.push([start, 0x10ffff]);
+    return [complement];
+  });
+}
+
+/** Search required × complement(union(grants)) for a counterexample path.
+ * Alphabet intervals make wide/negated Unicode classes exact without scanning
+ * characters or the filesystem. Each grant has its own accepting state.
+ */
+function scopeLanguageCovered(required: string, allowed: readonly string[]): boolean {
+  const tokens = scopeTransitions(required);
+  const requiredEnd = tokens.length;
+  tokens.push([]); // accepting states have no outgoing transition
+  const starts: number[] = [], grantEnds = new Set<number>();
+  for (const pattern of new Set(allowed)) {
+    starts.push(tokens.length);
+    tokens.push(...scopeTransitions(pattern));
+    grantEnds.add(tokens.length);
+    tokens.push([]);
+  }
+  const boundaries = new Set([0, 0x110000]);
+  for (const ranges of tokens) for (const [low, high] of ranges ?? []) {
+    boundaries.add(low);
+    boundaries.add(high + 1);
+  }
+  const alphabet = [...boundaries].filter(code => code < 0x110000).sort((a, b) => a - b);
+  const closure = (positions: readonly number[]): number[] => {
+    const result = new Set(positions);
+    for (const position of result) if (tokens[position] === null) result.add(position + 1);
+    return [...result].sort((a, b) => a - b);
+  };
+  const step = (positions: readonly number[], code: number): number[] => closure(positions.flatMap(position => {
+    const ranges = tokens[position];
+    if (ranges === null) return [position];
+    return ranges.some(([low, high]) => low <= code && code <= high) ? [position + 1] : [];
+  }));
+  const initial: [number[], number[]] = [closure([0]), closure(starts)];
+  const key = (left: number[], right: number[]) => `${left.join(",")}|${right.join(",")}`;
+  const queue = [initial], seen = new Set([key(...initial)]);
+  // Subset construction can be exponential. Unproven coverage must never grant
+  // authority; callers can narrow pathological declarations to concrete scopes.
+  let remaining = 100_000;
+  for (let index = 0; index < queue.length; index += 1) {
+    const [left, right] = queue[index];
+    if (left.includes(requiredEnd) && !right.some(position => grantEnds.has(position))) return false;
+    for (const code of alphabet) {
+      if (--remaining < 0) return false;
+      const nextLeft = step(left, code);
+      if (nextLeft.length === 0) continue;
+      const nextRight = step(right, code), nextKey = key(nextLeft, nextRight);
+      if (!seen.has(nextKey)) {
+        if (seen.size >= 4096) return false;
+        seen.add(nextKey);
+        queue.push([nextLeft, nextRight]);
+      }
+    }
+  }
+  return true;
+}
+
+/** One transport crossing for the selected Todo and inactive-authority hints. */
+export function evaluateWriteScopeCoverage(value: unknown): JsonObject {
+  const input = requireJsonObject(value, "write-scope coverage");
+  if (!Array.isArray(input.checks)) throw new EffectRuntimeRequestError("checks must be an array");
+  return {covered: input.checks.map((raw, index) => {
+    const check = requireJsonObject(raw, `checks[${index}]`);
+    return schedulingWriteScopeAllowed(stringValue(check.required, "required"),
+      decisionStringArray(check.allowed, "allowed"));
+  })};
 }
