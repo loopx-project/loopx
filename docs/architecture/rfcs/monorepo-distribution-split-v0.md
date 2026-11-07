@@ -2109,6 +2109,9 @@ became null; a `next`-only input bypassed the missing-Todo-ID refusal.
 Production `4c3ed5d39` makes the existing selector return both source and its
 existing projection kind. Every display/inventory caller still uses the same
 selected source. No new vocabulary, persisted field or authority is introduced.
+Final static validation required an explicit variadic source-candidate tuple
+annotation. Its execution bytecode remains identical; the typing failure is
+retained and the corrected mypy run leaves only main's existing annotation hold.
 Thirteen new cases compare complete summaries with the independent original
 selector for both roles, shared/copy inputs, canonical precedence and actual
 guard selection/refusal. Six fail at the preceding head; all pass after repair.
