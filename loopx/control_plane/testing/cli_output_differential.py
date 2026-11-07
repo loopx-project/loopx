@@ -902,10 +902,6 @@ def _turn_projection_migration(
     stride_route = stride_routes.get(str(base.get("row_id")))
     if stride_route and candidate.get("row_id") == base.get("row_id"):
         root, bound = stride_route
-        # A same-carrier Stride addition has the same bound. The carrier
-        # replacement itself cannot use this allowance.
-        if root == "$.turn_envelope" and "$.work_contract" in old_paths & new_paths:
-            root = "$.work_contract"
         control = f"{root}.replan_action_packet.stride_control"
         strategy = f"{root}.autonomous_replan_obligation.replan_context.stride_strategy"
         required = {f"{control}.{key}" for key in (

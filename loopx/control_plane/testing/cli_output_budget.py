@@ -199,7 +199,7 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
             "--include-transaction-detail, turn run-once, TurnEnvelope detail_ref "
             "commands, and full quota should-run decision"
         ),
-        semantic_json_keys=("route", "work_contract", "effects", "boundary"),
+        semantic_json_keys=("route", "turn_envelope", "effects", "boundary"),
         markdown_anchor="# LoopX Turn Plan",
         max_chars={
             "small": {"json": 14_000, "markdown": 600},
@@ -520,7 +520,7 @@ CLI_OUTPUT_MODE_VARIANT_SPECS: tuple[CliOutputModeVariantSpec, ...] = (
             "route",
             "session",
             "transaction",
-            "work_contract",
+            "turn_envelope",
             "effects",
             "boundary",
         ),

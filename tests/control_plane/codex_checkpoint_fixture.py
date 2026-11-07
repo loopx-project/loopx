@@ -56,9 +56,7 @@ def delivered_context(request, digest):
                 delivered[offset] = value
     if not delivered:
         return ""
-    assert set(delivered) == set(range(len(delivered))), (
-        f"Non-contiguous native context: received {len(delivered)} bytes; "
-        f"first offset {min(delivered, default=None)}, last offset {max(delivered, default=None)}")
+    assert set(delivered) == set(range(len(delivered)))
     raw = bytes(delivered[i] for i in range(len(delivered)))
     assert hashlib.sha256(raw).hexdigest() == digest
     return raw.decode().rstrip("\n")
@@ -262,29 +260,6 @@ def native_context_command(request, *, todo_id=None):
     if todo_id:
         argv += ["--todo-id", todo_id]
     return shlex.join(argv)
-
-def native_capture_wire(descriptor, *, recovery=None):
-    """Independent saved-byte oracle; full delivery needs no duplicate wire file.
-
-    Native requests must still consume every returned page. This fixture reads
-    the exact capture separately to verify those actual model-visible bytes.
-    """
-    import hashlib
-    from pathlib import Path
-    from loopx.control_plane.quota.turn_envelope import prepare_context_delivery
-
-    raw = Path(descriptor["path"]).read_bytes()
-    assert hashlib.sha256(raw).hexdigest() == descriptor["sha256"]
-    if descriptor["mode"] != "full":
-        return json.loads(raw)
-    target = descriptor["target"]
-    wire = prepare_context_delivery(json.loads(raw),
-        scope={key: target[key] for key in ("goal_id", "agent_id", "session_id", "context_epoch", "continuity_generation")
-            if key in target}, capture_id=target["capture_id"], surface=target["surface"])
-    assert wire["target"] == target
-    wire["recovery"] = recovery if recovery is not None else descriptor["recovery"]
-    return wire
-
 
 @contextmanager
 def local_inference_provider(response_builder=None, usage_builder=None):

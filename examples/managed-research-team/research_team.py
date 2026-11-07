@@ -13,7 +13,6 @@ import subprocess
 import sys
 import uuid
 
-import loopx
 from loopx.control_plane.operator_provider import operator_provider_environ
 
 from scenario import REVISIONS, roster, encoded, evidence, task
@@ -21,7 +20,6 @@ from acceptance import GOAL, canonical_tasks, require_completed, todo_id, valida
 from execution import host_arguments, configure_delegations
 
 HERE = Path(__file__).resolve().parent
-PACKAGE_ROOT = Path(loopx.__file__).resolve().parent
 
 
 def write(path: Path, value: dict) -> None:
@@ -124,7 +122,7 @@ def prepare(root: Path, provider: str = "file", topology: str = "cloud-led",
     }})
     initialized = subprocess.run(
         ["node", "--no-warnings", "--experimental-sqlite", "--experimental-strip-types",
-         str(HERE / "bootstrap.ts"), str(root), provider, str(PACKAGE_ROOT)],
+         str(HERE / "bootstrap.ts"), str(root), provider],
         capture_output=True, text=True, timeout=45,
     )
     if initialized.returncode:

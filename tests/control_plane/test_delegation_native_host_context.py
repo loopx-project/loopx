@@ -32,9 +32,8 @@ def preview(worker, binding, operation, *, include_context=True, **override):
         *worker._execution_arguments(binding, operation), *context)
 
 
-def original_context(contract):
-    context = contract["interaction_contract"]["agent_channel"]["work_context"]
-    return next(source["content"] for source in context["sources"]
+def original_context(envelope):
+    return next(source["content"] for source in envelope["work_context"]["sources"]
                 if source.get("source") == "delegation_work")
 
 
@@ -53,9 +52,7 @@ def test_original_material_reaches_capture_and_actual_codex_stdin(saved_handoff,
     worker.execute(operation)
     assert worker.read(operation)["status"] == "accepted"
     host_request = json.loads((root / "received-request.json").read_text())
-    assert host_request["schema_version"] == "loopx_turn_host_request_v1"
-    assert "turn_envelope" not in host_request
-    content = original_context(host_request["work_contract"])
+    content = original_context(host_request["turn_envelope"])
     assert content["source_request"]["message"] == ORIGINAL
     assert content["source_request"]["request_id"] == receipt["request_id"]
     assert content["brief"] == content["source_request"]["brief"] == request["brief"]
@@ -100,7 +97,7 @@ def test_worker_consumes_captured_work_without_reading_compatibility_bootstrap(s
     host = root / "fixture-host.py"
     host.write_text(host.read_text().replace(
         "delegation = json.loads((workspace / 'DELEGATION.json').read_text())",
-        "delegation = next(s['content'] for s in request['work_contract']['interaction_contract']['agent_channel']['work_context']['sources'] if s.get('source') == 'delegation_work')\n"
+        "delegation = next(s['content'] for s in envelope['work_context']['sources'] if s.get('source') == 'delegation_work')\n"
         "(root / 'received-work.json').write_text(json.dumps(delegation))"))
     worker.execute(operation)
     assert worker.read(operation)["status"] == "accepted"

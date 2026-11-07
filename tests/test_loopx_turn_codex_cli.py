@@ -142,7 +142,6 @@ log = pathlib.Path(os.environ["FAKE_CODEX_LOG"])
 with log.open("a", encoding="utf-8") as handle:
     handle.write(json.dumps(args) + "\\n")
 turn_key = re.search(r'"turn_key":"([^"]+)"', prompt).group(1)
-time.sleep(float(os.environ.get("FAKE_CODEX_BEFORE_SESSION_SLEEP", "0")))
 print(json.dumps({
     "type": "thread.started",
     "thread_id": "session-fixture-0001",
@@ -863,7 +862,7 @@ def test_executable_legacy_goal_stop_after_selection_prevents_host_launch(
     run_codex_cli_host(request, **options)
     binding = _session_files(tmp_path / "runtime")[0]
     original_binding = binding.read_bytes()
-    original_input = codex_cli.prepare_codex_cli_input
+    original_prompt = codex_cli._prompt
 
     def stop_before_dispatch(current):
         with project_registry_transaction(registry_path, operation="fixture_stop_before_launch") as transaction:
@@ -873,9 +872,9 @@ def test_executable_legacy_goal_stop_after_selection_prevents_host_launch(
                 "updated_at": "2026-10-10T12:00:00Z", "reason": "Owner stopped this Goal",
             }
             transaction.commit(registry)
-        return original_input(current)
+        return original_prompt(current)
 
-    monkeypatch.setattr(codex_cli, "prepare_codex_cli_input", stop_before_dispatch)
+    monkeypatch.setattr(codex_cli, "_prompt", stop_before_dispatch)
     request["session"]["context_policy"]["mode"] = context
     request["session"]["action"] = "resume" if context == "resume" else "start_new"
     with pytest.raises(FirstPartyHostRuntimeRejected, match="goal_stopped"):
@@ -902,7 +901,7 @@ def test_default_turn_cli_blocks_native_launch_after_canonical_goal_stop(
     project, runtime, registry_path = _write_live_fixture(tmp_path, provider=provider)
     executable, log = _fake_codex(tmp_path)
     monkeypatch.setenv("FAKE_CODEX_LOG", str(log))
-    original_input = codex_cli.prepare_codex_cli_input
+    original_prompt = codex_cli._prompt
     reached_host = []
 
     def stop_before_dispatch(current):
@@ -914,9 +913,9 @@ def test_default_turn_cli_blocks_native_launch_after_canonical_goal_stop(
                 "updated_at": "2026-10-10T12:00:00Z", "reason": "Owner stopped this Goal",
             }
             transaction.commit(registry)
-        return original_input(current)
+        return original_prompt(current)
 
-    monkeypatch.setattr(codex_cli, "prepare_codex_cli_input", stop_before_dispatch)
+    monkeypatch.setattr(codex_cli, "_prompt", stop_before_dispatch)
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
         code = cli_main([
@@ -954,7 +953,7 @@ def test_source_goal_change_after_session_selection_prevents_host_launch(
     run_codex_cli_host(request, **options)
     binding = _session_files(tmp_path / "runtime")[0]
     original_binding = binding.read_bytes()
-    original_input = codex_cli.prepare_codex_cli_input
+    original_prompt = codex_cli._prompt
 
     def change_before_dispatch(current):
         # Session selection has succeeded, but no new Host request exists yet.
@@ -970,9 +969,9 @@ def test_source_goal_change_after_session_selection_prevents_host_launch(
                     "updated_at": "2026-10-10T12:00:00Z", "reason": "Owner stopped this Goal",
                 }
             transaction.commit(registry)
-        return original_input(current)
+        return original_prompt(current)
 
-    monkeypatch.setattr(codex_cli, "prepare_codex_cli_input", change_before_dispatch)
+    monkeypatch.setattr(codex_cli, "_prompt", change_before_dispatch)
     request["session"]["context_policy"]["mode"] = context
     request["session"]["action"] = "resume" if context == "resume" else "start_new"
     with pytest.raises(FirstPartyHostRuntimeRejected) as error:
@@ -1278,58 +1277,6 @@ def test_codex_cli_host_preserves_observed_session_after_timeout(
     project.mkdir()
     request = _request()
 
-    # This case needs a known-observed Session, not a bet that a Python Host
-    # starts before the deadline on a loaded machine. Control only the native
-    # supervisor timer; actual spawn, pipes, parsing, cleanup and persistence run.
-    # The separate real-deadline case below covers timeout before observation.
-    from loopx.control_plane.turn_driver import codex_cli
-
-    marker = tmp_path / "observed-session.json"
-    clock = tmp_path / "session-timeout.mjs"
-    clock.write_text("""
-import {writeFileSync} from 'node:fs';
-const timer = globalThis.setTimeout;
-let expire, pending = '';
-globalThis.setTimeout = (callback, ms, ...args) => {
-  // The guarded bridge subtracts startup from the transport's one-second
-  // minimum. No other timer in this fixture uses that interval.
-  if (!expire && ms > 0 && ms <= 1000) {
-    const watchdog = timer(callback, 5000, ...args);
-    expire = () => { clearTimeout(watchdog); callback(...args); };
-    return watchdog;
-  }
-  return timer(callback, ms, ...args);
-};
-const write = process.stdout.write.bind(process.stdout);
-process.stdout.write = (chunk, ...args) => {
-  const flushed = write(chunk, ...args);
-  const frame = JSON.parse(String(chunk));
-  if (frame.kind === 'stdout') {
-    pending += frame.text;
-    let newline;
-    while ((newline = pending.indexOf('\\n')) >= 0) {
-      const line = pending.slice(0, newline); pending = pending.slice(newline + 1);
-      const event = JSON.parse(line);
-      if (event.type === 'thread.started') {
-        if (!expire) throw new Error('supervisor deadline not controlled');
-        writeFileSync(__MARKER__, JSON.stringify({session_id: event.thread_id}));
-        queueMicrotask(expire);
-      }
-    }
-  }
-  return flushed;
-};
-""".replace("__MARKER__", json.dumps(str(marker))), encoding="utf-8")
-    transport = codex_cli.run_host_process
-
-    def observed_deadline(*args, **kwargs):
-        environment = dict(os.environ)
-        environment["NODE_OPTIONS"] = (
-            environment.get("NODE_OPTIONS", "") + " --import=" + clock.as_uri()
-        ).strip()
-        return transport(*args, **kwargs, environment=environment)
-
-    monkeypatch.setattr(codex_cli, "run_host_process", observed_deadline)
     with pytest.raises(RuntimeError, match="codex_cli_timeout"):
         run_codex_cli_host(
             request,
@@ -1339,35 +1286,9 @@ process.stdout.write = (chunk, ...args) => {
             timeout_seconds=0.1,
         )
 
-    assert json.loads(marker.read_text()) == {"session_id": "session-fixture-0001"}
     envelope = request["turn_envelope"]
     assert isinstance(envelope, dict)
     assert codex_cli_session_binding(runtime_root, envelope) is not None
-
-
-def test_codex_cli_host_timeout_before_session_does_not_invent_binding(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    executable, log_path = _fake_codex(tmp_path)
-    monkeypatch.setenv("FAKE_CODEX_LOG", str(log_path))
-    # The real transport's minimum is one second; this event cannot arrive
-    # before that deadline. No timer or timeout policy is replaced in this arm.
-    monkeypatch.setenv("FAKE_CODEX_BEFORE_SESSION_SLEEP", "2")
-    runtime_root = tmp_path / "runtime"
-    project = tmp_path / "project"
-    project.mkdir()
-    request = _request()
-
-    with pytest.raises(BuiltInHostError, match="codex_cli_timeout") as failure:
-        run_codex_cli_host(request, runtime_root=runtime_root, project=project,
-                           codex_bin=str(executable), timeout_seconds=0.1)
-
-    assert failure.value.recovery_kind is None
-    envelope = request["turn_envelope"]
-    assert isinstance(envelope, dict)
-    assert codex_cli_session_binding(runtime_root, envelope) is None
-    assert _session_files(runtime_root) == []
 
 
 def test_codex_cli_host_classifies_failure_without_persisting_stderr(
@@ -1763,7 +1684,7 @@ def test_default_turn_cli_rejects_stopped_source_behind_stale_global_mirror(
         1,
     ))
     monkeypatch.setenv("FAKE_CODEX_LOG", str(native_log))
-    original_input = codex_cli.prepare_codex_cli_input
+    original_prompt = codex_cli._prompt
     stopped = []
 
     def stop_source_before_dispatch(request):
@@ -1780,9 +1701,9 @@ def test_default_turn_cli_rejects_stopped_source_behind_stale_global_mirror(
         assert json.loads(source_registry.read_text())["goals"][0]["activation"]["state"] == "stopped"
         assert mirror.read_bytes() == original_mirror
         stopped.append(result)
-        return original_input(request)
+        return original_prompt(request)
 
-    monkeypatch.setattr(codex_cli, "prepare_codex_cli_input", stop_source_before_dispatch)
+    monkeypatch.setattr(codex_cli, "_prompt", stop_source_before_dispatch)
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
         code = cli_main([

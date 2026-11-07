@@ -84,55 +84,14 @@ and an independent validator:
 
 1. Run `loopx turn plan` to inspect the live typed decision without launching
    the host or changing state.
-2. The host adapter reads one `loopx_turn_host_request_v1` JSON object from
+2. The host adapter reads one `loopx_turn_host_request_v0` JSON object from
    stdin, invokes the selected agent CLI in the governed workspace, and writes
-   exactly one `loopx_turn_result_v0` JSON object to stdout.
+   exactly one `loopx_turn_host_result_v0` JSON object to stdout.
 3. The validator reads the normalized host result from stdin and independently
    checks the claimed postcondition. Exit zero means passed; non-zero means the
    result is rejected. A timeout or unavailable validator is inconclusive.
 4. `loopx turn run-once --execute` performs writeback and quota spend only when
    the typed result and independent validation both pass.
-
-Default `turn plan` output is an inspection projection. Current plans retain
-their one complete `work_contract`, including selected work, portfolio, required
-reads and writeback rules, and omit session/transaction metadata. There is no
-second adapter body. Its `boundary.inspection_only=true` prevents execution even
-if a caller restores that metadata. `--include-transaction-detail` retains the
-session/transaction input; it does not select another decision format.
-`turn run-once` retains and validates the original complete contract before
-dispatch; an inspection does not authorize that operation.
-
-Complete-source requests use Host request v1: `work_contract` is the complete
-admitted input; `turn_key`, session/result transport and original `detail_ref`
-readers retain their roles. The external stdin and native model prompt omit the
-private `turn_envelope` effect adapter. They do not contain a competing
-`turn_authority` decision. Unsupported versions, missing or invalid complete
-sources, mixed v1/adapter carriers and mismatched capture headers are rejected.
-This changes the complete-source Host wire; external adapters that read v0's
-`turn_envelope` must read v1's `work_contract` before accepting new Turns.
-
-New complete-source planning writes `loopx_turn_plan_v1`: one `work_contract`,
-its `source_decision_hash`, and the original capture header when present. It
-does not generate or persist a `turn_envelope`. Plan, capture, Host dispatch,
-CLI resume, native conversation recovery, capability context, child-result
-context and journal inspection/query derive work facts from the same checked
-TypeScript source owner. Existing session, route, action-hash codec, GoalRef,
-scoped settlement identity and receipt/effect owners retain their roles.
-
-Recorded `loopx_turn_plan_v0` journals keep two explicit readers: transitional
-plans cross-check their complete source against their recorded adapter;
-historical adapter-only plans keep their original decoder. Missing source in
-a v1 plan, a mixed v1/adapter carrier, unknown versions and invalid source or
-capture bindings refuse recovery rather than selecting an older format. No
-journal, capture or settlement receipt is rewritten to migrate its version.
-The shipped DSH stdio adapter likewise retains both Host wire readers.
-
-Quota's explicit legacy presentation and the managed controller's quota preview
-remain separate v0 consumers; this private-plan transition does not retire them
-or qualify whole-workflow outcomes and complete costs. Rollback may stop new v1
-admission, but outstanding v1 plans must retain a compatible reader until their
-pending effects and supported recovery window are reconciled. An older binary
-alone cannot resume a v1 journal; do not strip its version or recreate its input.
 
 The adapter and validator executable names below are placeholders supplied by
 the integration. They are separate programs because the executor must not
@@ -1073,25 +1032,6 @@ never bypasses a fresh Turn decision, task lease, independent validation, or
 writeback ordering.
 
 ## Cross-Iteration Context Policy
-
-Saved acceptance detail uses the existing generic `quota context-read --select`
-reader and the original capture's file SHA-256. Exact JSON pointers can select
-several related outcomes in one read; `--selection-sha256` binds the selected
-layout across continuation pages. Offsets and EOF describe that selected view,
-not complete model retention. The complete original source remains available.
-Advisory `outcome_context_navigation_v1` describes registered relationships and
-limitations; it neither establishes semantic independence nor imposes a separate
-reading gate. Goal intent, cumulative constraints, permissions and stops remain
-binding. Staged `replan-view --replan-stage acceptance --outcome-ref REF` retains
-its existing exact decision-bound reference; it is not a second ordinary reader.
-
-已保存的验收详情使用既有通用 `quota context-read --select` 和原 capture 的文件
-SHA-256，可一次选取多项精确 JSON pointer。接续 `--selection-sha256` 绑定所选
-布局，offset 和 EOF 仅描述所选视图，不证明模型完整保留；原完整来源仍可读取。
-`outcome_context_navigation_v1` 只建议注册关系下的读取顺序并披露限制，不证明语义
-独立，也不增加另一层读取门禁。Goal 原意、累计约束、权限和停止条件保持。
-Staged `replan-view --replan-stage acceptance --outcome-ref REF` 保留原 decision
-绑定的精确引用，不成为普通读取的另一条路径。
 
 Each `turn plan` or `turn run-once` invocation declares an iteration context
 policy independently from the Todo and Goal lifecycle:

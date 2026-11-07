@@ -12,35 +12,6 @@ import {DELIVERY_BOUNDARIES} from "../turn_driver/delivery_continuity.ts";
 import {PROGRESS_RESULT_CLASSES} from "../work_items/replan_history.ts";
 import {HANDOFF_MODES} from "../coordination/handoff_mode_vocabulary.ts";
 
-export const COMPOSED_CLI_SETTLEMENT_PLAN_SCHEMA_VERSION = "quota_settlement_plan_v2";
-
-/** Current complete-contract caller of the shipped refresh/spend adapter.
- * Historical/manual plans keep v1. This changes presentation and command
- * ownership, never admission, validation, accounting or recovery authority. */
-export function composedCliSettlementPlan(plan: JsonObject): JsonObject | null {
-  if (plan.schema_version !== "quota_settlement_plan_v1" || !Array.isArray(plan.ordered_steps)
-      || !plan.ordered_steps.every(step => step !== null && typeof step === "object" && !Array.isArray(step))) return null;
-  const steps = plan.ordered_steps as JsonObject[];
-  const writeback = steps.find(step => step.kind === "durable_writeback");
-  const spend = steps.find(step => step.kind === "quota_spend");
-  if (!writeback || !spend || writeback.owner !== "agent" || spend.owner !== "agent"
-      || typeof writeback.command_template !== "string" || typeof spend.command_template !== "string") return null;
-  const composed = (command: string) => command + " --settle-turn --settlement-receipt";
-  return {...plan, schema_version: COMPOSED_CLI_SETTLEMENT_PLAN_SCHEMA_VERSION, ordered_steps: steps.map(step => {
-    if (step === writeback) return {...step, command_template: composed(step.command_template as string),
-      ...(typeof step.semantic_closeout_command_template === "string"
-        ? {semantic_closeout_command_template: composed(step.semantic_closeout_command_template)} : {}),
-      precondition: step.precondition + " The command executes the canonical owed quota step and reads back its exact receipts. " +
-        "After settled success do not run another spend; after a partial failure follow only the returned settlement_owed for this original identity."};
-    if (step === spend) {
-      const {command_template: _manualCommand, ...receiptStep} = step;
-      return {...receiptStep, owner: "runtime", precondition: step.precondition +
-        "; executed by refresh-state --settle-turn. On failure use only its canonical settlement_owed command; never infer a debit from transport success."};
-    }
-    return step;
-  })};
-}
-
 export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan {
   const identity = settlementIdentity(
     requireJsonObject(params.identity, "identity") as unknown as SettlementIdentityInput,

@@ -109,8 +109,8 @@ def test_selected_acceptance_read_keeps_global_requirements_and_exact_binding(
         goal_id=goal, todo_id="todo_missing")
     assert missing == {**full, "tasks": []}, "missing work must not fall back to another binding"
 
-    packet = read_cli_policy_payload(json.dumps(cli(
-        "quota", "should-run", "--goal-id", goal, "--agent-id", "agent-a")), returncode=0)
+    packet = cli("quota", "should-run", "--goal-id", goal, "--agent-id", "agent-a",
+        )
     channel = packet["interaction_contract"]["agent_channel"]
     assert channel["delivery_allowed"] is True and channel["work_context"]["complete"] is True
     # The public canonical reader retains its full format metadata. Host context
@@ -124,14 +124,8 @@ def test_selected_acceptance_read_keeps_global_requirements_and_exact_binding(
     }
     observed = next(row["content"] for row in channel["work_context"]["sources"]
         if row.get("source") == "goal_acceptance")
-    navigation = inspect_goal_acceptance(registry_path=registry, runtime_root=str(runtime), goal_id=goal,
-        todo_id=selected, context_agent_id="agent-a", include_work_details=False)
-    assert observed == navigation
-    assert {key: value for key, value in observed.items() if key != "outcome_context"} == exact
-    goal_source = next(row["content"] for row in channel["work_context"]["sources"]
-        if row.get("source") == "goal_state")
-    assert goal_source["full_source"] is True and goal_source["text"] == state.read_text()
-    assert not any(row.get("source") == "goal_state" for row in channel["required_reads"])
+    assert observed == exact
+    assert any(row.get("source") == "goal_state" for row in channel["required_reads"])
     # The normal guard's complete captured basis is the envelope input; no
     # second guard may substitute a different observation for the host.
     from loopx.control_plane.quota.turn_envelope import build_turn_envelope
@@ -178,12 +172,11 @@ def test_selected_acceptance_read_keeps_global_requirements_and_exact_binding(
         with contextlib.redirect_stdout(output):
             code = main(["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
                 "quota", "should-run", "--goal-id", goal, "--agent-id", "agent-a", ])
-        failed = read_cli_policy_payload(output.getvalue(), returncode=code)["interaction_contract"]["agent_channel"]
+        failed = json.loads(output.getvalue())["interaction_contract"]["agent_channel"]
         assert code == 0 and failed["delivery_allowed"] is False
         assert failed["work_context"]["complete"] is False
         assert any(row.get("source") == "goal_acceptance" for row in failed["required_reads"])
-    recovered = read_cli_policy_payload(json.dumps(cli(
-        "quota", "should-run", "--goal-id", goal, "--agent-id", "agent-a")), returncode=0)
+    recovered = cli("quota", "should-run", "--goal-id", goal, "--agent-id", "agent-a", )
     assert recovered["interaction_contract"]["agent_channel"]["work_context"]["complete"] is True
 
 
@@ -245,25 +238,19 @@ def test_captured_acceptance_does_not_replace_current_work_admission(acceptance_
     first = read_cli_policy_payload(json.dumps(first), returncode=0)
     saved = (capture / "decision.json").read_bytes()
     full = json.loads(saved)
-    from loopx.control_plane.quota.turn_envelope import build_turn_envelope
-    first_envelope = build_turn_envelope(first, captured_decision_path=str(capture / "decision.json"))
-    assert first["schema_version"] == "loopx_turn_envelope_v1"
-    assert first == full
-    basis = next(row["content"] for row in first_envelope["work_context"]["sources"]
+    basis = next(row["content"] for row in first["work_context"]["sources"]
         if row.get("source") == "goal_acceptance")
-    assert first["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
+    assert first["action"]["delivery_allowed"] is True
     assert basis["tasks"][0]["state"] == "ready"
     assert basis["goal_acceptance_contract"]["outcome_requirements"] == original
-    request = build_loopx_turn_host_request(build_loopx_turn_plan(first_envelope, work_contract=first,
+    request = build_loopx_turn_host_request(build_loopx_turn_plan(first,
         host="codex-cli", execution_mode="isolated-headless", turn_instance_id="original-delivery"))
     result = subprocess.run(_recording_host(project), input=json.dumps(request),
         capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
     prompt = (project / "received.txt").read_text()
-    authority = json.loads(prompt.split("Turn request:\n", 1)[1].split("\n\nWhen finished", 1)[0])
-    assert authority["schema_version"] == "loopx_turn_host_request_v1"
-    assert authority["work_contract"] == first
-    assert authority["work_contract"]["interaction_contract"]["agent_channel"]["work_context"] == first["interaction_contract"]["agent_channel"]["work_context"]
+    authority = json.loads(prompt.split("Turn authority JSON:\n", 1)[1].split("\n\nWhen finished", 1)[0])
+    assert authority["work_context"] == first["work_context"]
 
     # Finish the original synthetic work before attempting another managed
     # Turn. An unsettled receipt is its own legitimate recovery boundary.
@@ -274,8 +261,7 @@ def test_captured_acceptance_does_not_replace_current_work_admission(acceptance_
         "--turn-instance-id", "original-delivery")
     cli("refresh-state", *identity, "--classification", "validated_progress",
         "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
-        "--delivery-boundary", "in_flight_continuation", "--delivery-workspace-path", str(project),
-        "--no-global-sync", "--suppress-external-sinks")
+        "--delivery-boundary", "in_flight_continuation", "--no-global-sync", "--suppress-external-sinks")
     for appended in (True, False):
         spent = cli("quota", "spend-slot", *identity, "--slots", "1", "--source", "heartbeat", "--execute")
         assert spent["appended"] is appended
@@ -335,13 +321,13 @@ def test_captured_acceptance_does_not_replace_current_work_admission(acceptance_
         assert current["interaction_contract"]["user_channel"]["action_required"] is False
     # The unselected normal/replan/wait view follows the same current owner,
     # including all cumulative requirements whenever execution needs a read.
-    inspection = read_cli_policy_payload(json.dumps(cli(*guard[:-1])), returncode=0)
+    inspection = cli(*guard[:-1])
     current_context = inspection["interaction_contract"]["agent_channel"].get("work_context", {})
     for source in current_context.get("sources", []):
         if source.get("source") == "goal_acceptance":
             assert source["content"]["goal_acceptance_contract"] == cold["goal_acceptance_contract"]
     before_read = {p: p.read_bytes() for p in capture.rglob("*") if p.is_file()}
-    detail = subprocess.run(shlex.split(first_envelope["detail_ref"]["full_decision"]),
+    detail = subprocess.run(shlex.split(first["detail_ref"]["full_decision"]),
         capture_output=True, check=True).stdout
     assert detail == saved and json.loads(detail) == full
     assert {p: p.read_bytes() for p in capture.rglob("*") if p.is_file()} == before_read

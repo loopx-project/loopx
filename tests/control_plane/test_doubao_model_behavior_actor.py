@@ -457,36 +457,3 @@ def test_actor_rejects_noncanonical_request_before_transport() -> None:
     with pytest.raises(ValueError, match="canonical no-write contract"):
         actor(request)
     assert called is False
-
-
-@pytest.mark.parametrize("arm", ["full_packet", "candidate_packet"])
-def test_direct_actor_delivers_complete_source_with_matching_field_instructions(arm: str) -> None:
-    from loopx.control_plane.quota.turn_envelope import compose_turn_decision
-    from tests.control_plane.test_model_behavior_qualification import _full_packet
-
-    packet = compose_turn_decision(_full_packet(), composed_settlement=True)
-    captured = []
-    def transport(**kwargs):
-        captured.append(json.loads(kwargs["body"]))
-        return {"choices": [{"message": {"content": json.dumps(_decision())}}]}
-    actor = DoubaoModelBehaviorActor(api_key="fixture-key-not-a-secret", transport=transport)
-    request = build_model_behavior_actor_request(packet, qualification_id="current-provider-wire",
-        arm=arm, semantic_contract_required=True,
-        semantic_contract_fields=("required_reads", "peer_route", "write_scope"))
-    actor(request)
-    assert len(captured) == 1
-    body = captured[0]
-    wire = json.loads(body["messages"][1]["content"])
-    assert wire["arm"] == arm
-    assert wire["packet"] == packet
-    assert wire["packet"]["selected_todo"]["todo_id"] == "todo_fixture001"
-    assert "tools" not in body
-    instruction = " ".join(body["messages"][0]["content"].split())
-    assert "interaction_contract.agent_channel" in instruction
-    assert "packet.agent_identity.agent_id" in instruction
-    assert "packet.selected_todo" in instruction
-    assert "goal_boundary.write_scope" in instruction
-    assert "copy packet.required_reads exactly" not in instruction
-    assert "use packet.action and packet.writeback" not in instruction
-    assert "action signature" not in instruction
-    assert "simulator has no external-effect authority" in instruction

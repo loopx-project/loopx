@@ -38,7 +38,7 @@ def _ordinary_binding(delegation_service):
     }
     runner.config.write_text(json.dumps(config))
     source = HOST.replace("delegation = json.loads((workspace / 'DELEGATION.json').read_text())",
-        "delegation = next(s['content'] for s in request['work_contract']['interaction_contract']['agent_channel']['work_context']['sources'] if s.get('source') == 'delegation_work')")
+        "delegation = next(s['content'] for s in envelope['work_context']['sources'] if s.get('source') == 'delegation_work')")
     source = source.replace("print(json.dumps(build_result", """
 (workspace / 'output.json').write_text(json.dumps({'answer': 17 + 25}))
 (workspace / 'received-request.json').write_text(json.dumps(request))
@@ -77,9 +77,7 @@ def test_original_request_executes_and_settles_without_changing_todos(delegation
     workspace = Path(binding["workspace"])
     assert (workspace / "host-invocations").read_text() == "1"
     received = json.loads((workspace / "received-request.json").read_text())
-    assert received["schema_version"] == "loopx_turn_host_request_v1"
-    assert "turn_envelope" not in received
-    identity = received["work_contract"]["interaction_contract"]["cli_channel"]["settlement_plan"]["identity"]
+    identity = received["turn_envelope"]["writeback"]["settlement_plan"]["identity"]
     assert identity["binding_kind"] == "request"
     assert identity["request_subject"]["request_id"] == initial["request_id"]
     assert "todo_id" not in identity
@@ -202,8 +200,8 @@ output_path = pathlib.Path''')
     host.write_text(host.read_text().replace("print(json.dumps(build_result", """
 from loopx.capabilities.manager_context.roundtrip import report
 original = delegation['source_request']
-acknowledge(root / 'runtime', identity['goal_id'], actor, original['request_id'], 'adopt', 'Read the original requested arithmetic.')
-report(root / 'runtime', identity['goal_id'], actor, original['request_id'], 'conclusion', 'The independently checked result is 42.')
+acknowledge(root / 'runtime', envelope['goal_id'], actor, original['request_id'], 'adopt', 'Read the original requested arithmetic.')
+report(root / 'runtime', envelope['goal_id'], actor, original['request_id'], 'conclusion', 'The independently checked result is 42.')
 print(json.dumps(build_result"""))
     monkeypatch.setattr(execution.Delegations, "_spawn", lambda *_: None)
     submitted = execution.dispatch(runner.root, runner.registry, session=session, turn=turn,
@@ -235,9 +233,7 @@ def test_original_chat_request_returns_without_creating_a_task(ordinary_source):
     assert result["todo_id"] is None
     assert result["request_subject"]["request_id"] == receipt["request_id"]
     received = json.loads((Path(binding["workspace"]) / "received-request.json").read_text())
-    assert received["schema_version"] == "loopx_turn_host_request_v1"
-    assert "turn_envelope" not in received
-    content = next(s["content"] for s in received["work_contract"]["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+    content = next(s["content"] for s in received["turn_envelope"]["work_context"]["sources"]
         if s.get("source") == "delegation_work")
     assert content["source_request"]["message"] == ORIGINAL_MESSAGE
     assert content["source_request"]["brief"] == request["brief"]

@@ -6,13 +6,9 @@ from collections.abc import Mapping, Sequence
 from hashlib import sha256
 from typing import Any, Protocol
 
-from ..effect_runtime import EffectRuntimeRejected
 from ..quota.turn_envelope import (
-    COMPLETE_TURN_DECISION_VERSION,
     PLANNING_HORIZON_DETAIL_REFS_REF,
     TURN_ENVELOPE_SCHEMA_VERSION,
-    assert_complete_turn_decision,
-    compose_turn_decision,
     quota_action_signature_document,
     turn_envelope_action_signature_document,
 )
@@ -252,15 +248,9 @@ def _reject_private_or_secret_material(value: Any, *, path: str = "packet") -> N
 
 
 def _packet_schema(packet: Mapping[str, Any], *, arm: str) -> str:
-    if arm not in ("full_packet", "candidate_packet"):
-        raise ValueError("arm must be full_packet or candidate_packet")
-    if packet.get("schema_version") == COMPLETE_TURN_DECISION_VERSION or "contract_binding" in packet:
-        assert_complete_turn_decision(packet)
-        return COMPLETE_TURN_DECISION_VERSION
     if arm == "full_packet":
         if (
-            "schema_version" in packet
-            or packet.get("mode") != "should-run"
+            packet.get("mode") != "should-run"
             or not isinstance(packet.get("interaction_contract"), Mapping)
             or not packet.get("goal_id")
         ):
@@ -269,7 +259,7 @@ def _packet_schema(packet: Mapping[str, Any], *, arm: str) -> str:
     if arm == "candidate_packet":
         if packet.get("schema_version") != TURN_ENVELOPE_SCHEMA_VERSION:
             raise ValueError(
-                "candidate_packet must use a supported LoopX TurnEnvelope schema"
+                "candidate_packet must use the current LoopX TurnEnvelope schema"
             )
         return str(TURN_ENVELOPE_SCHEMA_VERSION)
     raise ValueError("arm must be full_packet or candidate_packet")
@@ -280,10 +270,10 @@ def _packet_action_signature(
     *,
     arm: str,
 ) -> dict[str, Any]:
-    schema = _packet_schema(packet, arm=arm)
+    _packet_schema(packet, arm=arm)
     return (
         quota_action_signature_document(packet)
-        if arm == "full_packet" or schema == COMPLETE_TURN_DECISION_VERSION
+        if arm == "full_packet"
         else turn_envelope_action_signature_document(packet)
     )
 
@@ -473,7 +463,7 @@ def model_behavior_semantic_contract_from_packet(
             )
         )
     )
-    if arm == "full_packet" or packet.get("schema_version") == COMPLETE_TURN_DECISION_VERSION:
+    if arm == "full_packet":
         source_horizon = packet.get("planning_horizon")
         source_detail_refs = (
             source_horizon.get("detail_refs")
@@ -673,23 +663,17 @@ def run_model_behavior_qualification_arm(
 ) -> dict[str, Any]:
     """Run one in-memory actor arm and return only a compact decision receipt."""
 
+    required_semantic_fields = _semantic_contract_field_names(
+        required=semantic_contract_required,
+        requested=semantic_contract_fields,
+    )
     request = build_model_behavior_actor_request(
         packet,
         qualification_id=qualification_id,
         arm=arm,
         semantic_contract_required=semantic_contract_required,
-        semantic_contract_fields=semantic_contract_fields,
+        semantic_contract_fields=required_semantic_fields,
     )
-    return _run_model_behavior_qualification_request(request, actor=actor)
-
-
-def _run_model_behavior_qualification_request(
-    request: Mapping[str, Any], *, actor: ModelBehaviorActor,
-) -> dict[str, Any]:
-    packet = request["packet"]
-    arm = str(request["arm"])
-    semantic_contract_required = bool(request["semantic_contract_required"])
-    required_semantic_fields = tuple(request["response_contract"]["semantic_contract_fields"])
     result = normalize_model_behavior_actor_result(
         actor(request),
         semantic_contract_required=semantic_contract_required,
@@ -906,59 +890,40 @@ def run_model_behavior_qualification_pair(
         raise ModelBehaviorPairValidationError(
             "arm_order must contain full_packet and candidate_packet once"
         )
+    action_signature = candidate_packet.get("action_signature")
+    if not isinstance(action_signature, Mapping):
+        raise ModelBehaviorPairValidationError(
+            "candidate_packet is missing its TurnEnvelope action signature"
+        )
+    if action_signature.get("matches") is not True:
+        raise ModelBehaviorPairValidationError(
+            "candidate_packet action signature parity must be verified"
+        )
+    if action_signature.get("source_decision_hash") != _digest(dict(full_packet)):
+        raise ModelBehaviorPairValidationError(
+            "candidate_packet does not derive from the paired full packet"
+        )
+    if quota_action_signature_document(
+        full_packet
+    ) != turn_envelope_action_signature_document(candidate_packet):
+        raise ModelBehaviorPairValidationError(
+            "candidate_packet action semantics drift from the full packet"
+        )
     packets = {
         "full_packet": full_packet,
         "candidate_packet": candidate_packet,
     }
-    try:
-        full_schema = _packet_schema(full_packet, arm="full_packet")
-        candidate_schema = _packet_schema(candidate_packet, arm="candidate_packet")
-        if candidate_schema == COMPLETE_TURN_DECISION_VERSION:
-            # A captured complete source retains its original host binding and
-            # settlement composition. Raw fixtures use the Core's default
-            # complete composition; never infer another binding from a candidate.
-            expected = (dict(full_packet) if full_schema == COMPLETE_TURN_DECISION_VERSION
-                        else compose_turn_decision(full_packet))
-            if dict(candidate_packet) != expected:
-                raise ModelBehaviorPairValidationError(
-                    "candidate_packet does not derive from the paired full packet"
-                )
-        else:
-            # Explicit historical controls keep their original signature and
-            # full-source digest. They are not the default current producer.
-            action_signature = candidate_packet.get("action_signature")
-            if not isinstance(action_signature, Mapping):
-                raise ModelBehaviorPairValidationError(
-                    "candidate_packet is missing its TurnEnvelope action signature"
-                )
-            if action_signature.get("matches") is not True:
-                raise ModelBehaviorPairValidationError(
-                    "candidate_packet action signature parity must be verified"
-                )
-            if action_signature.get("source_decision_hash") != _digest(dict(full_packet)):
-                raise ModelBehaviorPairValidationError(
-                    "candidate_packet does not derive from the paired full packet"
-                )
-        if _packet_action_signature(full_packet, arm="full_packet") != _packet_action_signature(
-            candidate_packet, arm="candidate_packet"
-        ):
-            raise ModelBehaviorPairValidationError(
-                "candidate_packet action semantics drift from the full packet"
-            )
-        # Check both confidentiality boundaries before either provider call.
-        requests = {
-            arm: build_model_behavior_actor_request(
-                packet, qualification_id=qualification_id, arm=arm,
-                semantic_contract_required=semantic_contract_required,
-                semantic_contract_fields=semantic_contract_fields,
-            ) for arm, packet in packets.items()
-        }
-    except (ValueError, EffectRuntimeRejected) as exc:
-        raise ModelBehaviorPairValidationError(str(exc)) from None
     receipts: dict[str, dict[str, Any]] = {}
     for arm in arm_order:
         try:
-            receipts[arm] = _run_model_behavior_qualification_request(requests[arm], actor=actor)
+            receipts[arm] = run_model_behavior_qualification_arm(
+                packets[arm],
+                qualification_id=qualification_id,
+                arm=arm,
+                actor=actor,
+                semantic_contract_required=semantic_contract_required,
+                semantic_contract_fields=semantic_contract_fields,
+            )
         except Exception as exc:
             raise ModelBehaviorArmExecutionError(
                 _arm_failure_receipt(

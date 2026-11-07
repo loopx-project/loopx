@@ -18,9 +18,9 @@ from loopx.control_plane.effect_runtime import effect_runtime_result
 from loopx.control_plane.todos.active_state_todo_parser import parse_todo_source
 from loopx.control_plane.todos.goal_todo_projection import retained_todo_summary_fields
 from loopx.control_plane.turn_driver.codex_cli import _prompt
+from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
 from loopx.control_plane.turn_driver.executor import build_loopx_turn_host_request
 from loopx.control_plane.turn_driver.host_candidate import extract_turn_authority, render_prompt
-from tests.control_plane.cli_output_fixture import read_cli_context_for_oracle
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -85,10 +85,10 @@ def test_inline_user_context_preserves_full_scoped_gates_without_granting_delive
 
     def guard(*extra, expected_exit=0):
         code, packet = run_json_cli_result("quota", "should-run", "--goal-id", "requirements-goal",
-            "--agent-id", "agent-a", "--context-delivery", "off", *extra,
+            "--agent-id", "agent-a",  *extra,
             registry_path=registry, runtime_root=runtime)
         assert code == expected_exit, json.dumps(packet, indent=2)
-        return json.loads(read_cli_context_for_oracle(json.dumps(packet))[0])
+        return packet
 
     if provider == "legacy":
         refused = guard(expected_exit=1)
@@ -147,7 +147,7 @@ def test_inline_user_context_preserves_full_scoped_gates_without_granting_delive
     assert packet["scoped_user_gate_fallback"]["selected_executable"]["todo_id"] == "todo_inspect"
     assert channel["work_context"]["complete"] is True
     envelope = guard("--turn-envelope")
-    assert envelope["interaction_contract"]["agent_channel"]["work_context"]["user_todos"] == channel["work_context"]["user_todos"]
+    assert envelope["work_context"]["user_todos"] == channel["work_context"]["user_todos"]
     assert state.read_text() == state_text
     # Canonical tasks still exist: the full Goal source must fail closed,
     # rather than silently substituting a Todo summary for missing intent.
@@ -204,19 +204,15 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
     def guard(*extra: str) -> dict:
         code, packet = run_json_cli_result("--cli-bin", str(cli_bin),
             "quota", "should-run", "--goal-id", "requirements-goal",
-            "--agent-id", "agent-a", "--context-delivery", "off", *extra,
+            "--agent-id", "agent-a",  *extra,
             registry_path=registry, runtime_root=runtime)
         assert code == 0, json.dumps(packet, indent=2)
-        packet = json.loads(read_cli_context_for_oracle(json.dumps(packet))[0])
         assert packet["should_run"] is True, packet.get("reason")
-        # The harness adds transport metadata outside the signed CLI stdout.
-        packet.pop("_returncode", None)
         return packet
 
     envelope = guard("--turn-envelope")
     before = state.read_bytes()
-    # Run the actual default product prompt, including its native capture
-    # transport. Read only this invocation's complete current source.
+    # Run the actual default product prompt's guard: no capture/envelope opt-in.
     code, generated = run_json_cli_result("heartbeat-prompt", "--goal-id", "requirements-goal",
         "--agent-id", "agent-a", "--codex-app", "--cli-bin", str(cli_bin),
         registry_path=registry, runtime_root=runtime)
@@ -224,8 +220,7 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
     body = generated["task_body"]
     assert "work_context" in body
     script = re.search(r"```sh\n(.*?)\n```", body, re.S).group(1)
-    assert "--turn-envelope" not in script
-    assert "--context-delivery on" not in script and "--decision-output-root" in script
+    assert "--turn-envelope" not in script and "--decision-output-root" not in script
     env = {
         **os.environ,
         "LOOPX_REGISTRY": str(registry),
@@ -233,10 +228,11 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
     }
     result = subprocess.run(["sh", "-c", script.replace("<current_time_iso>", "requirements-default-wake")],
         cwd=REPO, env=env, capture_output=True, text=True, check=True)
-    full = json.loads(read_cli_context_for_oracle(result.stdout)[0])
+    full = json.loads(result.stdout)
     assert full["should_run"] is True, full.get("reason")
     channel = full["interaction_contract"]["agent_channel"]
-    assert channel["required_reads"] == []
+    assert [read["source"] for read in channel["required_reads"]] == ["goal_state"]
+    goal_read = channel["required_reads"][0]
     assert "required_reads" not in full["interaction_contract"]["cli_channel"]
     context = channel["work_context"]
     assert context["complete"] and not context.get("failures", [])
@@ -244,28 +240,25 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
     assert "unknown, not unchanged" in context["instruction"]
     assert "summaries cannot replace full requirements" in context["instruction"]
     reads = context["sources"]
-    assert [read["source"] for read in reads] == ["goal_state", "selected_todo"]
-    goal_read = reads[0]
-    assert goal_read["content"]["full_source"] is True
-    assert goal_read["content"]["text"] == before.decode()
-    assert goal_requirements in goal_read["content"]["text"]
-    assert "Stop before an unauthorized deployment." in goal_read["content"]["text"]
+    assert [read["source"] for read in reads] == ["selected_todo"]
+    assert not any(read["source"] == "goal_state" for read in reads)
+    goal_result = subprocess.run(shlex.split(goal_read["command"]), capture_output=True, text=True, check=True)
+    assert goal_requirements in goal_result.stdout
+    assert "Stop before an unauthorized deployment." in goal_result.stdout
     assert full["selected_todo"]["todo_id"] == "todo_cursor_work"
     assert full["selected_todo"]["text"] != expected  # Deliberately bounded hot view.
     assert "_context_text_sha256" not in full["selected_todo"]
     assert reads[-1]["content"]["todo"]["text"] == expected
     assert json.dumps(context).count(expected) == 1
-    envelope_channel = envelope["interaction_contract"]["agent_channel"]
-    # Ordinary delivery-off quota retains the original progressive Goal read;
-    # native default has fulfilled that same source before capture.
-    assert [row["source"] for row in envelope_channel["required_reads"]] == ["goal_state"]
-    assert envelope_channel["required_reads"][0]["command"] == goal_read["command"]
+    assert envelope["required_reads"] == channel["required_reads"]
     assert context["selected_todo_text_verified"] is True
-    assert envelope_channel["work_context"] == {
-        **context, "sources": [row for row in reads if row["source"] != "goal_state"],
+    assert envelope["work_context"] == {
+        key: value
+        for key, value in context.items()
+        if key != "selected_todo_text_verified"
     }
-    assert envelope_channel["work_context"]["selected_todo_text_verified"] is True
-    selected = envelope["selected_todo"]
+    assert envelope["action"]["selected_todo"]["text_source_verified"] is True
+    selected = envelope["action"]["selected_todo"]
     assert selected["todo_id"] == "todo_cursor_work"
     read = reads[-1]
     tokens = shlex.split(read["command"])
@@ -285,58 +278,20 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
     assert not {"todos", "agent_todos", "user_todos"}.intersection(detail)
     assert json.dumps(detail).count(expected) == 1
     assert detail["todo"]["claimed_by"] == "agent-a"
+    assert envelope["action_signature"]["matches"] is True
     assert state.read_bytes() == before
 
-    def native_plan(turn):
-        # Use the production native entrypoint and its own host binding rather
-        # than silently rebinding an App heartbeat capture to a Codex executor.
-        code, plan = run_json_cli_result("--cli-bin", str(cli_bin), "turn", "plan",
-            "--goal-id", "requirements-goal", "--agent-id", "agent-a",
-            "--host", "codex-cli", "--execution-mode", "isolated-headless",
-            "--turn-instance-id", turn, "--include-transaction-detail",
-            registry_path=registry, runtime_root=runtime)
-        assert code == 0 and plan["ok"], plan
-        assert plan["route"]["would_invoke_host"] is True
-        assert plan["route"]["host_invocation_allowed"] is False
-        return plan
-
-    plan = native_plan("requirements-synthetic-turn")
+    plan = build_loopx_turn_plan(envelope, host="codex-cli", execution_mode="isolated-headless",
+        turn_instance_id="requirements-synthetic-turn")
     request = build_loopx_turn_host_request(plan)
     assert read["command"] in _prompt(request)
     assert "work_context" in _prompt(request)
-    model_input = json.loads(_prompt(request).split("Turn request:\n", 1)[1])
-    assert model_input["work_contract"] == plan["work_contract"]
-    assert "turn_envelope" not in model_input and "turn_authority" not in model_input
-    assert expected in _prompt(request)
     authority = extract_turn_authority(request)
     assert authority["selected_todo"]["todo_id"] == "todo_cursor_work"
-    authority_channel = authority["interaction_contract"]["agent_channel"]
-    assert authority_channel["required_reads"] == []
-    native_context = authority_channel["work_context"]
-    delivered_goal = [row for row in native_context["sources"] if row["source"] == "goal_state"]
-    assert len(delivered_goal) == 1 and delivered_goal[0]["command"] == goal_read["command"]
-    assert delivered_goal[0]["content"]["full_source"] is True
-    assert delivered_goal[0]["content"]["text"] == before.decode()
-    assert json.dumps(before.decode(), ensure_ascii=False) in render_prompt(authority)
-    assert {key: value for key, value in native_context.items() if key != "sources"} == {
-        key: value for key, value in context.items() if key != "sources"
-    }
-    assert [row for row in native_context["sources"] if row["source"] != "goal_state"] == [
-        row for row in context["sources"] if row["source"] != "goal_state"
-    ]
-    assert native_context["selected_todo_text_verified"] is True
+    assert authority["required_reads"] == channel["required_reads"]
+    assert authority["work_context"] == envelope["work_context"]
+    assert authority["selected_todo"]["text_source_verified"] is True
     assert read["command"] in render_prompt(authority)
-    # Keep the old layout's independent requirement assertions while the
-    # complete source uses its canonical channel instead of duplicate aliases.
-    from loopx.control_plane.quota.turn_envelope import build_turn_envelope
-    historical = extract_turn_authority({"turn_envelope": build_turn_envelope(envelope)})
-    assert historical["required_reads"] == envelope_channel["required_reads"]
-    assert historical["work_context"] == {
-        key: value for key, value in envelope_channel["work_context"].items()
-        if key != "selected_todo_text_verified"
-    }
-    assert historical["selected_todo"]["text_source_verified"] is True
-    assert read["command"] in render_prompt(historical)
 
     # A fresh CLI process must recover current requirements from the same owner,
     # including a changed last condition, rather than reusing a cached summary.
@@ -351,8 +306,8 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
     fresh_reads = fresh["interaction_contract"]["agent_channel"]["work_context"]["sources"]
     assert fresh_reads[-1]["content"]["todo"]["text"] == replacement
     fresh_envelope = guard("--turn-envelope")
-    assert fresh_envelope["interaction_contract"]["agent_channel"]["work_context"]["sources"][-1]["content"]["todo"]["text"] == replacement
-    fresh_plan = native_plan("requirements-next-turn")
+    fresh_plan = build_loopx_turn_plan(fresh_envelope, host="codex-cli", execution_mode="isolated-headless",
+        turn_instance_id="requirements-next-turn")
     fresh_prompt = _prompt(build_loopx_turn_host_request(fresh_plan))
     assert replacement in fresh_prompt
     assert "unknown, not unchanged" in fresh_prompt
@@ -449,7 +404,6 @@ def test_selected_todo_body_change_between_selection_and_readback_blocks_deliver
     )
     assert code == 0, json.dumps(packet, indent=2)
     assert changed
-    packet = json.loads(read_cli_context_for_oracle(json.dumps(packet))[0])
     assert packet["selected_todo"]["todo_id"] == "todo_selected_work"
     selected_revision = projected_request["selected_todo"]["content_revision"]
     assert selected_revision
@@ -501,15 +455,12 @@ def test_short_selected_todo_deduplicates_body_but_keeps_canonical_note(
     }
     result = subprocess.run(["sh", "-c", script.replace("<current_time_iso>", "short-note-wake")],
         cwd=REPO, env=env, capture_output=True, text=True, check=True)
-    full = json.loads(read_cli_context_for_oracle(result.stdout)[0])
+    full = json.loads(result.stdout)
     channel = full["interaction_contract"]["agent_channel"]
     context = channel["work_context"]
     assert context["complete"] is True
     assert context["selected_todo_ref"] == "selected_todo"
-    assert channel["required_reads"] == []
-    goal_source = next(source for source in context["sources"] if source["source"] == "goal_state")
-    assert goal_source["content"]["full_source"] is True
-    assert goal_source["content"]["text"] == state.read_text()
+    assert [read["source"] for read in channel["required_reads"]] == ["goal_state"]
     selected_source = next(source for source in context["sources"] if source["source"] == "selected_todo")
     source_todo = selected_source["content"]["todo"]
     assert source_todo.get("text") is None
@@ -521,8 +472,7 @@ def test_short_selected_todo_deduplicates_body_but_keeps_canonical_note(
         "--agent-id", "agent-a",  "--turn-envelope",
         registry_path=registry, runtime_root=runtime)
     assert code == 0 and turn["ok"], turn
-    turn = json.loads(read_cli_context_for_oracle(json.dumps(turn))[0])
-    turn_context = turn["interaction_contract"]["agent_channel"]["work_context"]
+    turn_context = turn["work_context"]
     assert turn_context["complete"] is True
     assert turn_context["selected_todo_ref"] == "selected_todo"
     turn_source = next(source for source in turn_context["sources"] if source["source"] == "selected_todo")

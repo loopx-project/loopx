@@ -9,8 +9,6 @@ import zlib
 from collections.abc import Mapping
 from typing import Any
 
-from ..quota.turn_envelope import COMPLETE_TURN_DECISION_VERSION
-
 _FACTS_FLAG = "--scheduler-host-facts-chunk"
 # Match the existing native follow-up decoder, without invoking its effects.
 _MAX_ENCODED_CHARS = 4_096
@@ -149,8 +147,7 @@ def scheduler_transport_validation_view(packet: Mapping[str, Any], *, arm: str) 
     caller must recursively scan it, and must send the original packet onward.
     """
     view: dict[str, Any] = _validation_copy(packet)
-    source_packet = arm == "full_packet" or packet.get("schema_version") == COMPLETE_TURN_DECISION_VERSION
-    if source_packet:
+    if arm == "full_packet":
         scheduler = view.get("scheduler_hint")
     else:
         scheduler = view.get("scheduler")
@@ -159,7 +156,7 @@ def scheduler_transport_validation_view(packet: Mapping[str, Any], *, arm: str) 
     app_automation = scheduler.get("app_automation") or scheduler.get("codex_app")
     if not isinstance(app_automation, Mapping):
         return view
-    if source_packet:
+    if arm == "full_packet":
         for kind, command in (("ack", "scheduler-ack-current"), ("failure", "scheduler-fail-current")):
             hint = app_automation.get(kind + "_hint")
             args = hint.get("cli_args") if isinstance(hint, Mapping) else None

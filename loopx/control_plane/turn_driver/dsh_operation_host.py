@@ -33,7 +33,7 @@ from . import managed_operation_host as operations
 from .operation_requests import operation_request_source, request_reference_instruction
 from .codex_sessions import _lineage, select_managed_operation_session
 from .dsh_operation_connection import DshOperationConnection
-from .host_candidate import assert_turn_host_request_version
+from .executor import LOOPX_TURN_HOST_REQUEST_SCHEMA_VERSION
 from .host_failure import BuiltInHostError
 
 DSH_OPERATION_TRANSPORT = "dsh-native-operation-tools-v0"
@@ -159,8 +159,9 @@ def _run_dsh_operation_host(
     owner: OwnedDshOperationHost,
 ) -> dict[str, Any]:
     """One owned SDK run; final prose cannot create an operation outcome."""
-    assert_turn_host_request_version(request)
-    authority = extract_turn_authority(request, include_session_lineage=True)
+    if request.get("schema_version") != LOOPX_TURN_HOST_REQUEST_SCHEMA_VERSION:
+        raise ValueError("unsupported LoopX Turn host request")
+    authority = extract_turn_authority(request)
     if not all(
         isinstance(value, str) and value
         for value in (provider, model, reasoning_effort)
@@ -174,8 +175,7 @@ def _run_dsh_operation_host(
         raise ValueError("DSH operation run requires bounded token and time budgets")
     from deepseek_harness import DeepSeekHarness, DeepSeekHarnessConfig  # type: ignore
 
-    lineage = _lineage(request, checked_lineage=(authority["_session_lineage"]
-                       if "work_contract" in request else None))
+    lineage = _lineage(request)
     module = operation_module.resolve(strict=True)
     patch = cordis.resolve(strict=True) if cordis else None
     request_source = operation_request_source(operation_request_file, operation_request_sha256)

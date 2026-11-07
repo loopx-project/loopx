@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import copy
 from dataclasses import replace
 import json
 from pathlib import Path
@@ -14,7 +13,6 @@ from loopx_memt_turn.config import AdapterError
 from loopx_memt_turn.host import run
 
 from memt_fixtures import turn, with_tools
-from tests.control_plane.test_turn_host_decision_capture import complete_host_request as complete_host_request
 
 
 def execute(config, request=None):
@@ -196,133 +194,3 @@ def test_receipt_is_not_a_transcript_or_credential_log(config, provider):
     execute(config)
     receipts = [json.loads(path.read_text()) for path in Path(config.state_dir).rglob("*.json")]
     assert not any("input_ids" in receipt or "responses" in receipt for receipt in receipts)
-
-
-@pytest.mark.parametrize("wire", [False, True])
-def test_complete_cli_input_without_exact_lifetime_cannot_open_memory(preflight_config, complete_host_request, wire):
-    request, _ = complete_host_request
-    if wire:
-        from loopx.control_plane.turn_driver.host_candidate import complete_host_input
-        request = complete_host_input(request)
-    assert "goal_ref" not in request
-    with pytest.raises(AdapterError, match="exact_goal_instance_required"):
-        execute(preflight_config, request)
-    assert not Path(preflight_config.state_dir).exists()
-
-
-def test_complete_identity_reaches_the_unchanged_lifetime_gate(complete_host_request):
-    from loopx_memt_turn.host import work_identity
-
-    class ExecutorLayout(dict):
-        def get(self, key, *default):
-            if key in {"goal_id", "agent_id", "action"}:
-                raise AssertionError("provider decoded the historical executor layout")
-            return super().get(key, *default)
-
-    request, _ = complete_host_request
-    request = {**request, "turn_envelope": ExecutorLayout(request["turn_envelope"])}
-    # The actual CLI still has no admitted exact lifetime. Moving its identity
-    # reader must reach this same refusal, never manufacture a Goal instance.
-    with pytest.raises(AdapterError, match="exact_goal_instance_required"):
-        work_identity(request)
-
-
-@pytest.mark.parametrize("invalidate_source", [False, True])
-@pytest.mark.parametrize("wire", [False, True])
-def test_generation_validation_retains_the_complete_source(complete_host_request, monkeypatch, invalidate_source, wire):
-    from types import SimpleNamespace
-    from loopx_memt_turn import host
-
-    request, _ = complete_host_request
-    if wire:
-        from loopx.control_plane.turn_driver.host_candidate import complete_host_input
-        request = complete_host_input(request)
-    request = copy.deepcopy(request)
-    vision = {"schema_version": "goal_vision_replan_contract_v0", "state": "active",
-        "vision_patch": {"acceptance_summary": "Validate the preserved work."},
-        "path_delta": {"outcome": "replan", "prior_assumption": "Existing work remains useful.",
-            "observed_reality": "The artifact is independently checked.",
-            "changed": ["Use the verified artifact for the next work step."],
-            "evidence_refs": ["fixture:checked-work"]}}
-    candidate = {"result_kind": "replan_required", "classification": "validated_fixture_replan",
-        "summary": "Original work remains useful.", "next_action": "Continue the original work.",
-        "path_delta_mode": "material_replan", "agent_vision_json": json.dumps(vision),
-        "work_evidence": ["fixture:artifact"], "validation_evidence": ["fixture:checked-work"]}
-
-    class Session:
-        def chat(self, *_args, **_kwargs):
-            return {"turn_completed": True, "answer": json.dumps(candidate)}
-
-    real_build = host.build_result
-
-    def build_then_invalidate(*args, **kwargs):
-        result = real_build(*args, **kwargs)
-        if invalidate_source:
-            request["work_contract"]["reason"] = "source changed after candidate conversion"
-        return result
-
-    monkeypatch.setattr(host, "build_result", build_then_invalidate)
-    # This exercises the converter only. It does not supply a synthetic lifetime
-    # to the actual CLI or qualify opening/exporting native memory.
-    config = SimpleNamespace(max_new_tokens=128, max_tool_calls=4)
-    call = host.generate(Session(), None, request, config)
-    if invalidate_source:
-        with pytest.raises(AdapterError, match="invalid_typed_candidate"):
-            asyncio.run(call)
-    else:
-        assert asyncio.run(call)["result_kind"] == "replan_required"
-
-
-def test_lifecycle_only_profile_cannot_supply_an_executable_turn(tmp_path):
-    from tests.control_plane.test_turn_host_decision_capture import _fixture_module
-    from loopx.control_plane.projects.registry_codec import source_session_registry_transaction
-
-    fixture = _fixture_module()
-    _, runtime, _, legacy = fixture._write_fixture(tmp_path, turn_count=2)
-    registration = json.loads(legacy.read_text())
-    registration.update(schema_version="0.2", registry_role="project-local", profile_id="source_session_v1",
-        projects=[], session_bindings=[], session_receipts=[], lifetime_receipts=[], retired_goal_instances=[])
-    registration["goals"][0].update(goal_instance_id="ginst_" + "a" * 32, execution_authority=False)
-    registry = legacy.with_name("source-registry.json")
-    with source_session_registry_transaction(registry, operation="optional_host_fixture", create=lambda: registration) as tx:
-        tx.commit(registration)
-    before = registry.read_bytes()
-    code, rejected = fixture._run_cli(["--registry", str(registry), "--runtime-root", str(runtime),
-        "--format", "json", "turn", "plan", "--goal-id", fixture.GOAL_ID,
-        "--agent-id", fixture.AGENT_ID, "--host", "generic-cli", "--iteration-context", "fresh"])
-    assert code == 1 and rejected["ok"] is False
-    assert "lifecycle-only profile" in rejected["error"]
-    assert registry.read_bytes() == before
-    assert not list(runtime.rglob("decisions/*.json"))
-    assert fixture._quota_spend_count(runtime) == 0
-
-
-@pytest.mark.parametrize("mutation", ["source", "version", "binding", "missing"])
-@pytest.mark.parametrize("wire", [False, True])
-def test_complete_cli_input_rejects_corruption_before_memory(preflight_config, complete_host_request, mutation, wire):
-    original, _ = complete_host_request
-    if wire:
-        from loopx.control_plane.turn_driver.host_candidate import complete_host_input
-        original = complete_host_input(original)
-    request = copy.deepcopy(original)
-    if mutation == "source":
-        request["work_contract"]["goal_id"] = "different-goal"
-    elif mutation == "version":
-        request["work_contract"]["schema_version"] = "unsupported-contract"
-    elif mutation == "binding":
-        request["work_contract"]["contract_binding"]["scheduler_execution_args"] = "different-host"
-    else:
-        request["work_contract"] = None
-    with pytest.raises(ValueError, match="complete Turn contract rejected"):
-        execute(preflight_config, request)
-    assert not Path(preflight_config.state_dir).exists()
-
-
-def test_unknown_host_version_never_opens_memory(preflight_config, complete_host_request):
-    from loopx.control_plane.turn_driver.host_candidate import complete_host_input
-
-    request, _ = complete_host_request
-    for original in (request, complete_host_input(request)):
-        with pytest.raises(AdapterError, match="invalid_request_schema"):
-            execute(preflight_config, {**original, "schema_version": "unsupported_host_fixture"})
-    assert not Path(preflight_config.state_dir).exists()

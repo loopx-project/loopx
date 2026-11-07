@@ -13,13 +13,11 @@ import {
 } from "../effect_program.ts";
 import { EffectRuntimeConflictError, EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { stripPythonWhitespace } from "../coordination/todo_agents.ts";
-import { turnPlanWorkSource } from "../quota/turn_envelope.ts";
 import {
   parseExactGoalRef,
   type ExactGoalRef,
 } from "../goals/goal_instance_identity.ts";
-import { jsonObject, parseJsonSource, parsedSourceNumberTokens, requireJsonObject, sourceNumberTokens,
-  requireNonEmptyString, type SourceNumbers } from "../runtime_decode.ts";
+import { jsonObject, requireJsonObject, requireNonEmptyString } from "../runtime_decode.ts";
 import {
   interpretTurnJournal,
   parseTurnJournalGoalBinding,
@@ -80,7 +78,6 @@ function evidenceForJournal(
   turnKey: string,
   expected: BoundSettlementIdentity,
   expectedGoalRef: ExactGoalRef | null,
-  numbers: SourceNumbers,
 ): JournalEvidence | null {
   const journal = jsonObject(value);
   const plan = jsonObject(journal?.plan);
@@ -121,7 +118,6 @@ function evidenceForJournal(
   const inspection = interpretTurnJournal({
     schema_version: "loopx_turn_journal_interpretation_request_v0",
     journal, goal_id: expected.goal_id, agent_id: expected.agent_id, turn_key: turnKey,
-    source_number_tokens: parsedSourceNumberTokens(journal, numbers),
   });
   if (!inspection.journal_consistent) {
     journalConflict(`Turn journal history is inconsistent: ${inspection.violations.join(", ")}`);
@@ -129,9 +125,7 @@ function evidenceForJournal(
   return {
     turn_key: turnKey,
     observed_capabilities: inspection.replay_legal
-      ? observedCapabilities(turnPlanWorkSource(plan ?? {}, sourceNumberTokens(journal,
-        parsedSourceNumberTokens(journal, numbers)).filter(({path}) => path[0] === "plan" && path[1] === "work_contract")
-        .map(({path, token}) => [path.slice(2), token])).work) : null,
+      ? observedCapabilities(jsonObject(plan?.turn_envelope) ?? {}) : null,
   };
 }
 
@@ -159,7 +153,7 @@ async function querySettlementJournal(
   for (const entry of entries.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)) {
     if (!/^[a-f0-9]{64}\.json$/u.test(entry.name)) continue;
     if (!entry.isFile()) journalConflict("Turn journal history contains a non-regular snapshot; reconcile it before retrying");
-    let parsed: ReturnType<typeof parseJsonSource>;
+    let value: unknown;
     // Journals are atomic-replace files. Read one complete version without
     // creating reader lock files; do not follow a replaced symlink. This is
     // not a snapshot of the directory or proof of provider-side absence.
@@ -167,7 +161,7 @@ async function querySettlementJournal(
     try {
       if (!(await handle.stat()).isFile()) journalConflict("Turn journal snapshot is not a regular file");
       try {
-        parsed = parseJsonSource(new TextDecoder("utf-8", { fatal: true }).decode(await handle.readFile()));
+        value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(await handle.readFile()));
       } catch (error) {
         if (error instanceof SyntaxError || error instanceof TypeError) journalConflict("Turn journal history is unreadable; reconcile it before retrying");
         throw error;
@@ -176,11 +170,10 @@ async function querySettlementJournal(
       await handle.close();
     }
     const evidence = evidenceForJournal(
-      parsed.value,
+      value,
       `sha256:${entry.name.slice(0, -5)}`,
       identity,
       goalRef,
-      parsed.numbers,
     );
     if (evidence === null) continue;
     if (matched !== null) journalConflict("LoopX Turn settlement identity matched multiple journals");
