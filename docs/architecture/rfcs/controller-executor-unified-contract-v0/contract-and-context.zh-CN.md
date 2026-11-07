@@ -6,11 +6,21 @@
 
 ### C1 源码核对：已有共享 owner 与剩余分叉
 
+当前完整来源 validator 也将可执行必读校验交给既有 interaction owner。显式
+command／ordering 不得消失或引入不支持的执行顺序；纯文字和合法待执行义务保持
+完整。同一规则无需调用方各加判断即可到达 quota、managed preview 和真实 Turn／Host
+planning；直接完整 carrier 即使版本不支持，也交 typed reader 处理。
+[配对检查点](../ledger/controller-executor-unified-contract-v0/2026-10-30-c1-source-convergence.zh-CN.md#可执行必读义务与原生-runner-的体积归因)
+记录反例、兼容、维护范围及原生 runner 体积归因；不豁免未过体积门，不退役已有 reader，
+也不证明安装、模型或成果收益。
+
 绑定 Turn 的原生执行准备保留普通 managed claim 原引用，并在 CLI 压缩前捕获同一
 Turn 的 ready 决策。Host 将该原件交给既有 saved-capture 展示/reader owner，不丢弃
 它再要求模型重算 guard 才能取得当前契约。发布前须核对 Goal、Agent、Todo 和 Turn。
-必需材料读取（包括显式的完整 Goal 读取）仍须执行，ready 回执或已保存文件不能代替
-读取。可选展示失败保留原摘要绑定的恢复引用；显式 off 不产生动作，未绑定请求沿原
+具备资格的原生复查保留已启用的 profile，使用既有延后展示路径；强制 off 会将完整
+composer 的组合结算换回旧分步计划。随后仅由 saved-capture owner 展示已验证来源。
+必需材料仍保持完整：消费完整内联 Goal，未内联时执行其声明的读取；ready 回执或
+已保存文件不能代替消费。可选展示失败保留原摘要绑定的恢复引用；显式 off 不产生动作，未绑定请求沿原
 readiness 路径，不补造 Turn。这只是有界的 Host 交接修复，不代表 C1 切换、已安装
 采用，或模型费用与长程收益已取得资格。
 
@@ -56,6 +66,13 @@ Journal owner 在原子发布前恢复这些数值，并在重放与不可变 pl
 Python 标量与空白解码，原记录和数字值不变。这退役的是一条重复规则，不是历史
 envelope 格式；完整 writer/consumer 切换和相对原 quota 的成果／完整成本资格仍
 开放。新增 bridge 调用必须计入，代码收敛本身不证明成本降低。
+
+本次与当前 main 的集成也核查验证夹具的来源。`read_fixture_todos` 原先将 attention
+摘要作为 canonical 初值，捕获前就丢掉了正文 500 字符后的要求。现在复用现有完整
+source parser 与 Todo normalizer。真实 File／SQLite CLI 用例将末尾条款带过完整
+capture、子进程 Host 的产物、独立验证、结算和重放。保留原来两个截断失败；修复
+的是测试输入，不是 runtime policy。当前尺寸与兼容失败仍开放。确定性产物一致和
+CLI／RPC 字节实测，不构成模型理解、原生验收成果、总成本或完整 C1 切换的资格。
 
 | 当前来源 / 义务 | 当前 envelope 处理 | C1 必须保留的归属与语义 |
 | --- | --- | --- |
@@ -373,10 +390,20 @@ reader 覆盖仍保留。八项聚焦用例通过，使用注入的记录 runner
 File/SQLite 原生输入检查确认不支持的内层版本在 Codex prompt 执行或 DSH runner
 加载前拒绝，且不扣额。完整契约/context/DSH/stdio 集合 352 项通过，TypeScript
 检查及聚焦 lint 通过。这只证明上述交互语义，不代表所有必需字段或打包宿主已验收。
+Heartbeat 模板现统一提供按顺序结算的执行要求；精确 Turn 绑定只补充 canonical
+来源定位，不再重复执行和禁止静态重建的条款。Thin 将完整 capture 与所需上下文的
+行动前读取合并，复用未变的进展／outcome 条款。原完整路由 fixture（320 字符
+scope、显式 CLI、五项能力）中，未绑定提示从 4,981 降至 4,895 个预算字符，通过
+原 4,900 上限；精确 Turn 变体从 5,198 降至 4,987，仍超过该上限。超长路由反例
+仍拒绝；没有缩短路由、能力、fixture 规模或修改上限。提示／平台集合 115 项通过、
+1 项跳过。这只证明展示和条款保留，不代表模型采用或费用收益。其余原 CLI 预算
+仍有四项失败。与 opaque reader reference 整合还暴露两项过时的 digest 字段断言；
+File/SQLite 消费者现读取已钉住的 machine descriptor，保留原 receipt，并确认
+capture 字节改变后拒绝读取，不产生新 admission 或 spend。
 剩余 cache 一致性调查、其他旧 reader 断言、分阶段指令等价和实际 optional/external
 消费者、版本准入及打包宿主连续性仍未完成。缺少显式原生 runtime 的 operation SDK
-检查属于未测，不能算资格。默认 writer 变更尚未交付；PR 因作者实现未完而保持
-Draft，不是仅等待评审。尚无模型或成本收益证据。历史 effect 解码只是临时迁移，
+检查属于未测，不能算资格。默认 writer 变更尚未交付；候选以普通 PR 进入评审，
+整个 C1 采用和原 quota 净成本资格仍开放，尚无模型或完整成本收益证据。历史 effect 解码只是临时迁移，
 不得成为第二份永久可执行视图。
 
 ### C1 消费链替换与切换单元
@@ -394,6 +421,14 @@ Draft，不是仅等待评审。尚无模型或成本收益证据。历史 effec
 | `turn_driver/decision_capture.py` 与 `cli_commands/quota_capture.py` | 复用不可变 capture、校验读取器和 full/delta 交付。首次交付和保存后恢复必须重建同一契约；不能仅因 Turn 身份相同，就把某投影的 continuity baseline 用于另一投影。 |
 | `benchmark/runtime/worker.py`、`benchmark/runtime/sessions.py` 与 `scripts/external_scheduler_worker.py` | 迁移它们实际调用的产品入口。保留评估配置与外层唤醒归属，不新增 benchmark 专用转换，也不把 managed-host 测试算作 attached-host 验收。 |
 
+本提议的[私有 plan 检查点](../ledger/controller-executor-unified-contract-v0/2026-10-30-c1-source-convergence.zh-CN.md#当前私有-plan-边界)
+成套迁移完整源 Turn writer 及其 capture、Host、CLI resume、原生会话、capability、
+子任务结果和 journal 消费者。随后的 [quota 与 managed-controller 切换](../ledger/controller-executor-unified-contract-v0/2026-10-30-c1-source-convergence.zh-CN.md#当前-quota-与-managed-controller-切换)
+还删除普通 presentation 的 v0 builder 分支与 managed preview 的临时 v0 producer。
+两条当前路径消费既有完整源 owner，历史版本 reader 显式保留；单 owner 缺材料演练
+到达两个真实 CLI 入口。这是未合入的源码提议；installed 采用、剩余受支持 reader，
+以及相对原 quota 的验收成果与完整成本仍使 C1 保持开放。
+
 替换任一接缝前，实现 PR 记录源路径、字段或指令条款、当前 reader、目标 owner、表示、
 恢复与退役条件。字段搬迁须包含引用解析；删除诊断须证明其中不含动作、权限、必读或
 验收义务。未知数据不得静默消失；未知的必需执行语义也不能靠转发 JSON 就变安全，
@@ -404,6 +439,16 @@ Draft，不是仅等待评审。尚无模型或成本收益证据。历史 effec
 不能因此创建第二个活跃 writer。已准入工作继续使用记录的版本和原回执；在这些工作及
 受支持恢复窗口核清前保留历史 decoder。回退同样区分未结工作与新准入。版本迁移不能
 把保存的 prompt、journal 或源 hash 改写成仿佛一直使用新契约。
+
+代码收敛属于每个迁移切片，不只留给最终 C9 清理。两个入口须共用 composition、引用
+校验、上下文重建与结算的语义实现。真实的宿主 launch/observation 差异留在薄 adapter；
+不为强行统一不同生命周期而另造通用 runner。各项决策仍由既有 typed owner 负责。
+
+每个切片记录迁移前后调用点、共享 owner、已删除的重复算法，以及剩余兼容 caller 和
+退出条件。两条路径共用独立编写的语义用例，并分别验证真实传输与恢复。仅委托调用的
+wrapper 可以过渡保留；给公共模块起新名字却继续保留两套规则实现，不算收敛。下一次
+修改共同规则，应只改、只测一个 owner 并传递到两条路径。代码行数下降不是验收指标，
+也不能为此删除宿主独有的验证覆盖。
 
 C1 首个 PR 必须覆盖上述两个生产组合调用点，并交付至少一条从生产端到最终输入的
 完整旅程，同时明确剩余 reader。这个有界切片通过资格，不代表可向未验收 host 开启
@@ -434,6 +479,42 @@ C1 首个 PR 必须覆盖上述两个生产组合调用点，并交付至少一�
 恢复先前合格 profile。不能静默替换 native session 或重解释 pending 回执。删除字段/
 decoder 前证明 export、旧版本 readback 与降级行为；满足受支持保留/升级边界前保留旧
 reader。本文不单独授权破坏性迁移。
+
+#### 已记录验收索引的兼容边界
+
+分阶段 Turn 切片让已记录的未版本化／v0 replan 读取继续使用原计数索引和 12 KiB
+索引预算。完整 v1 读取保留当前 owner／work 事实及按精确状态分组的验收条件，并通过
+绑定摘要的明细 reader 提供完整原 outcome。分组只是投影，不是独立验收证据。此前
+丰富索引的测量及其 20 KiB 候选预算继续作为完整来源路径的证据，不提高历史 reader
+的预算。
+
+#### Turn 消费方准备与指令保真
+
+独立 Turn 提案让普通 quota producer 保持已记录契约；更广的 quota／heartbeat 切换
+仍归父提案。未迁移 producer 的测试须守住这个边界。当前 Turn 规划直接消费完整来源，
+发布自己的不可变 capture；新组合来源与较早 executor envelope 错配时继续拒绝。
+
+原生所选 Task 在 kernel delivery guard 之前准备普通 managed lease，并在模型后验证时
+复用该 proof。claim 标签本身不足，不能借用另一次执行的 lease。来源检查先于独立
+Task argv；拒绝和原结果恢复保留原会话与一次性效果。
+
+现代 Codex 与结构化 Host 指令共用既有 audit 读取规则：在判断 Goal acceptance 或提出
+closeout 前读取已声明 audit，即使 Goal 保持开放。通知策略不授予或取消执行权；所供
+delivery、attempt、quiet-noop、execution 与 orchestration 约束仍须遵守。状态、quota
+和 scheduler 效果仍归 Core。完整契约可以声明待执行的原材料读取：发布不等于已读，
+测试须真正执行 reader，并保留原正文与停止条件。
+
+一次性 research-team launcher 与 initializer 共同定位实际加载的 Core，包括隔离 wheel，
+仍保留 runtime 独占创建。源码和打包消费者验证，分别区别于已安装 App 采用、真实可选
+provider／模型行为及相对原 quota 的完整成本收益。这些修复不关闭 C1，也不授权部署或合并。
+
+#### 已就绪的渐进首读只展示一份结算步骤
+
+仅当 `next_cli_actions` 逐字重复已识别的有序结算计划，且计划与就绪 Todo 和原效果
+身份相同，渐进 reader 才省略这份副本。普通 quota 计划分别给出写回和扣额命令；
+C1 完整计划给出一条合并写回命令，扣额由运行时执行并返回回执。两者原命令、顺序
+和前提都在捕获的计划中保留。不同的备用命令或未知计划继续展示；原字段仍可精确
+补读，直接输出不变。
 
 ### C1 基线边界与复用盘点
 

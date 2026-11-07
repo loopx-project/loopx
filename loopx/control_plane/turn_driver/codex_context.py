@@ -7,8 +7,8 @@ This neither proves retained model input nor grants execution authority.
 from __future__ import annotations
 
 from contextlib import contextmanager
-from dataclasses import dataclass
 from collections.abc import Iterator, Mapping
+from dataclasses import dataclass
 from typing import Any
 import json
 import os
@@ -621,6 +621,7 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                           include_initial_read_plan: bool = True,
                           progressive_enabled: bool | None = None,
                           selection_command_args_template: str | None = None,
+                          captured_recovery: dict[str, Any] | None = None,
                           captured_decision_path: str | None = None,
                           hook_session: str | None = None) -> NativeContextPreparation:
     """Commit current recovery before optional projection or candidate updates.
@@ -628,7 +629,10 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
     Serialization prevents invalidation from moving the epoch during preparation.
     Full fallback must recover this capture or refuse lookup, never an older one.
     Saved-file comparison is independent of any complete model-read observation.
+    A trusted caller may reuse the identical source it just published; this
+    reference must never come from the external continuity request.
     """
+    from ...command_invocation import current_loopx_cli_argv
     from ..quota.error_codes import QuotaDecisionTransportError
     from ..quota.turn_envelope import prepare_context_delivery
     from ..effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
@@ -649,7 +653,7 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                 native_session = hook_session or os.environ.get("CODEX_THREAD_ID")
                 if (not isinstance(session, str) or not session
                         or (native_session and session != native_session)):
-                    return NativeContextPreparation(payload)  # Do not replace a different native session's recovery.
+                    return NativeContextPreparation(payload)  # Do not replace another session's recovery.
                 # Native lifecycle events own workspace identity and epoch.
                 # A shell tool may run in another checkout without changing
                 # the host session or losing its previously delivered context.
@@ -668,15 +672,15 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                         state.pop(key, None)
                 state["read_scope"] = read_scope
                 request = _native_context_request(state, scope, capture_id)
-                recovery = capture_context_projection(payload, directory=capture_directory,
-                    read_guidance=CONTEXT_CAPTURE_PAGE_GUIDANCE)
+                recovery = dict(captured_recovery) if captured_recovery is not None else capture_context_projection(
+                    payload, directory=capture_directory, read_guidance=CONTEXT_CAPTURE_PAGE_GUIDANCE)
                 state["source_recovery"] = {key: recovery[key] for key in ("path", "sha256")}
                 state.pop("section_reads", None)  # partial reads of an older source are not current coverage
                 page_bytes, output_bytes = native_context_page_budget()
 
                 def publish_recovery(reference: dict[str, Any]) -> None:
                     reference["command"] = context_capture_read_command(Path(reference["path"]), reference["sha256"],
-                        page_bytes=page_bytes, max_page_output_bytes=output_bytes)
+                        page_bytes=page_bytes, max_page_output_bytes=output_bytes, reader_argv=current_loopx_cli_argv())
                     preparation = compact_execution_preparation_request(payload)
                     state["recovery"] = {**{key: reference[key] for key in ("path", "sha256", "command")},
                         "goal_id": goal_id, "agent_id": agent_id,
@@ -697,8 +701,7 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                     transaction = prepare_context_delivery(payload, scope=scope, capture_id=capture_id,
                         surface=surface, baseline=request.get("baseline"),
                         retained=request.get("retained"), continuity=request.get("continuity"),
-                        include_initial_read_plan=include_initial_read_plan if progressive else False,
-                        native_projection={
+                        include_initial_read_plan=include_initial_read_plan and progressive, native_projection={
                             "path": recovery["path"], "sha256": recovery["sha256"],
                             "source_path": recovery["path"],
                             **({"selection_command_args_template": selection_command_args_template}

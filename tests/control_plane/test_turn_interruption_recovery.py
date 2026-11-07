@@ -234,12 +234,13 @@ def test_export_interruption_preserves_requirements_and_original_settlement(
                         ).fetchall()
                     )
                 )
-            capture_path = Path(
-                before["plan"]["turn_envelope"]["detail_ref"]["captured_decision"][
-                    "path"
-                ]
-            )
+            plan = before["plan"]
+            capture_ref = plan["detail_ref"]["captured_decision"]
+            assert capture_ref["turn_key"] == before["turn_key"]
+            assert capture_ref["turn_instance_id"] == plan["transaction"]["settlement_plan"]["identity"]["turn_instance_id"]
+            capture_path = Path(capture_ref["path"])
             capture = capture_path.read_bytes()
+            assert json.loads(capture) == plan["work_contract"]
             assert REQUIREMENT in capture.decode()
             running.kill()
             running.wait(timeout=10)

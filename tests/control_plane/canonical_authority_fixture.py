@@ -92,14 +92,15 @@ def initialize_canonical_authority(runtime_root: Path, goal_id: str, projection:
 
 def read_fixture_todos(state_path: Path) -> list[dict]:
     """Read authored input before initializing a disposable canonical fixture."""
-    from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
+    from loopx.control_plane.todos.active_state_todo_parser import parse_todo_source
+    from loopx.control_plane.todos.todo_summary import structured_todo_item
 
-    summary = parse_active_state_todos(
-        state_path.read_text(encoding="utf-8"), state_path=state_path, item_limit=None,
-    )
+    # Attention summaries intentionally shorten text. Seeding their preview as
+    # canonical authority would erase the tail before the consumer is tested.
+    items, _, _ = parse_todo_source(state_path.read_text(encoding="utf-8"), state_path=state_path)
     return [
-        *(summary.get("user_todos", {}).get("items") or []),
-        *(summary.get("agent_todos", {}).get("items") or []),
+        structured_todo_item(item, role=role, source_section=item["source_section"], text_limit=None)
+        for role in ("user", "agent") for item in items[role]
     ]
 
 

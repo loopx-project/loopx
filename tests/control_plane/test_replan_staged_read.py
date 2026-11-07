@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import shlex
 import os
@@ -16,10 +17,9 @@ from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 from canonical_authority_fixture import isolate_sqlite_runtime
 from loopx.control_plane.effect_runtime import EffectRuntimeRejected, restart_effect_runtime
 from loopx.control_plane.quota.turn_envelope import (
-    _turn_envelope_result, build_turn_envelope, quota_action_signature_document,
+    _turn_envelope_result, build_turn_envelope, compose_turn_decision, quota_action_signature_document,
     turn_envelope_action_signature_document, prepare_context_delivery, restore_context_delivery,
 )
-from tests.control_plane.codex_checkpoint_fixture import reference_metadata_oracle
 from test_replan_host_context_projection import _quota_payload
 from test_replan_progress_native_cli import (
     AGENT, GOAL, TODO, TURN, call_progress_cli, make_progress_cli_fixture,
@@ -111,8 +111,11 @@ def test_pure_replan_does_not_advertise_unavailable_explore_attachment(tmp_path,
             "--agent-id", agent, "--turn-instance-id", turn, "--decision-output-dir", str(capture))
         entry = read_cli_policy_payload(json.dumps(entry), returncode=0)
         source = json.loads((capture / "decision.json").read_bytes())
-        original = explore_source(source)["content"]["graph"]
+        raw_context = call("explore", "turn-context", "--goal-id", goal, "--agent-id", agent)
+        original = raw_context["graph"]
         graph = explore_source(entry)["content"]["graph"]
+        assert entry == source  # Applicability is composed before immutable capture.
+        assert entry["schema_version"] == "loopx_turn_envelope_v1"
         assert entry["heartbeat_receipt"]["settlement_identity"]["binding_kind"] == "autonomous_replan"
         assert not entry.get("selected_todo")
         assert "result_attachment_template" not in graph and "result_writeback_read" not in graph
@@ -124,7 +127,7 @@ def test_pure_replan_does_not_advertise_unavailable_explore_attachment(tmp_path,
                     "record_node_template", "record_finding_template", "guidance"):
             assert graph.get(key) == original.get(key)
         assert json_bytes(original) - json_bytes(graph) > 2000
-        writer_run = subprocess.run(shlex.split(entry["replan_action_packet"]["writeback"]),
+        writer_run = subprocess.run(shlex.split(build_turn_envelope(entry)["replan_action_packet"]["writeback"]),
             capture_output=True, text=True, check=True)
         writer = json.loads(writer_run.stdout)
         assert all(not row.get("optional_attachments")
@@ -141,6 +144,9 @@ def test_pure_replan_does_not_advertise_unavailable_explore_attachment(tmp_path,
         # identity keep the old payload rather than guessing applicability.
         for mutation in ("capture", "custom", "identity", "attachment"):
             changed = copy.deepcopy(source)
+            changed.pop("schema_version")
+            changed.pop("contract_binding")
+            explore_source(changed)["content"]["graph"] = copy.deepcopy(original)
             expected = explore_source(changed)["content"]
             if mutation == "capture":
                 changed.pop("replan_read_path")
@@ -154,6 +160,30 @@ def test_pure_replan_does_not_advertise_unavailable_explore_attachment(tmp_path,
                 step["optional_attachments"] = [{"capability_id": "explore", "guidance": "Custom authoring"}]
             projected = _turn_envelope_result("replan_cli_view", payload=changed)
             assert explore_source(projected)["content"] == expected
+        # Complete composition uses the same conservative owner before capture,
+        # without depending on a staged-reader path. Unsupported/custom source
+        # semantics remain inline, rather than being silently normalized away.
+        for mutation in ("custom", "template", "identity", "attachment", "bound"):
+            changed = {key: copy.deepcopy(value) for key, value in source.items()
+                       if key not in {"schema_version", "contract_binding"}}
+            changed.pop("replan_read_path")
+            expected = explore_source(changed)["content"]
+            expected["graph"] = copy.deepcopy(original)
+            if mutation == "custom":
+                expected["graph"]["result_writeback_guidance"] += " Preserve a custom obligation."
+            elif mutation == "template":
+                expected["graph"]["result_attachment_template"]["input_revision"] = "custom-revision"
+            elif mutation == "identity":
+                changed["interaction_contract"]["cli_channel"]["settlement_plan"]["identity"].pop("binding_kind")
+            elif mutation == "bound":
+                changed["selected_todo"] = {"todo_id": "todo_synthetic_bound"}
+            else:
+                step = next(row for row in changed["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"]
+                            if row["kind"] == "durable_writeback")
+                step["optional_attachments"] = [{"capability_id": "explore", "guidance": "Custom authoring"}]
+            before = copy.deepcopy(changed)
+            assert explore_source(compose_turn_decision(changed))["content"] == expected
+            assert changed == before
         assert json.loads((capture / "decision.json").read_bytes()) == source
     finally:
         restart_effect_runtime(wait_for_exit=True)
@@ -189,8 +219,8 @@ def assert_explore_entry_and_writer(source, entry, writer):
 def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source(tmp_path, monkeypatch, provider, replan, context_delivery):
     """Exercise the production preflight without a model or evaluator.
 
-    A full-source fixture alone missed the original bug: the model must be sent
-    the captured reader, while checkpoint selection still sees full context.
+    The production preflight must deliver the complete immutable decision to
+    both model transport and checkpoint selection without a second admission.
     """
     from benchmark.runtime import checkpoint
 
@@ -224,19 +254,25 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
         lambda *a, **k: {"capture_allowed": False, "reason": "synthetic_no_native_capture"})
     run, commands = checkpoint.subprocess.run, []
     def observe(command, **kwargs):
-        commands.append(command)
+        # Count the pinned preflight CLI, not the independent hash oracle.
+        if command[0] == str(executable):
+            commands.append(command)
         return run(command, **kwargs)
     monkeypatch.setattr(checkpoint.subprocess, "run", observe)
     receipt = {"turn_id": TURN, "mode": "heartbeat", "stage": "execute"}
     try:
         body = checkpoint.capture_before_replan(env, receipt, "original heartbeat instructions")
         assert len(commands) == 1 and "--turn-envelope" not in commands[0]
-        assert "--decision-output-root" in commands[0]
         source_path, view_path = wake / "checkpoint-start-guard.json", wake / "checkpoint-start-view.json"
         if context_delivery:
+            assert "--prepared-capture-reference" in commands[0]
             argv = shlex.split(body.split("```sh\n", 1)[1].split("\n```", 1)[0])
             view_path = Path(argv[argv.index("--capture-file") + 1])
             assert view_path.parent != wake and view_path.is_relative_to(wake)
+            capture = Path(commands[0][commands[0].index("--decision-output-dir") + 1])
+            assert view_path == capture / "decision.json"
+        else:
+            assert "--decision-output-root" in commands[0]
         source, view = json.loads(source_path.read_bytes()), json.loads(view_path.read_bytes())
         assert str(view_path) in body and str(source_path) not in body
         assert body.endswith("original heartbeat instructions")
@@ -256,22 +292,62 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
             else:
                 assert len(delivered) == 1 and delivered[0]["full_source"] is True
                 assert delivered[0]["text"] == fixture["state"].read_text()
-            # The optional full/delta transport must present the staged CLI
-            # view too. Its full recovery must not restore old inline hints.
+            # The complete-source checkpoint now starts with its pinned read,
+            # avoiding a presentation-only tool call before required context.
             command = body.split("```sh\n", 1)[1].split("\n```", 1)[0]
             projected = run(shlex.split(command), cwd=fixture["project"], env=env,
                 capture_output=True, text=True, timeout=60)
             assert projected.returncode == 0, projected.stdout
-            presentation = reference_metadata_oracle(json.loads(projected.stdout))
-            assert presentation["ok"] and presentation["mode"] == "full"
-            assert reference_metadata_oracle(presentation)["recovery"]["path"] == str(view_path)
-            assert read_cli_policy_payload(projected.stdout, returncode=projected.returncode) == view
+            presentation = json.loads(projected.stdout)
+            assert presentation["ok"] and presentation["schema_version"] == "context_capture_selection_page_v1"
+            from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
+
+            reference = presentation["reference_file"]
+            _, metadata = read_context_read_reference(Path(reference))
+            assert metadata["path"] == str(view_path)
+            assert metadata["sha256"] == hashlib.sha256(view_path.read_bytes()).hexdigest()
+            chunks, offset = [], 0
+            while True:
+                assert presentation["offset"] == offset
+                assert presentation["reference_file"] == reference
+                chunks.append(presentation["content"])
+                offset += len(presentation["content"].encode())
+                if presentation["eof"]:
+                    assert offset == presentation["total_bytes"]
+                    break
+                projected = run(shlex.split(presentation["next_command"]), cwd=fixture["project"], env=env,
+                    capture_output=True, text=True, timeout=60)
+                assert projected.returncode == 0, projected.stdout
+                presentation = json.loads(projected.stdout)
+                assert presentation["ok"]
+            selected_body = "".join(chunks)
+            assert hashlib.sha256(selected_body.encode()).hexdigest() == metadata["selection"]["sha256"]
+            selected = json.loads(selected_body)
+            assert selected["schema_version"] == "context_capture_selection_v1"
+            pointers = [row["pointer"] for row in selected["selections"]]
+            for required in ["/goal_boundary", "/heartbeat_receipt", "/execution_obligation"]:
+                assert any(required == pointer or required.startswith(pointer + "/") or pointer == ""
+                           for pointer in pointers), (required, pointers)
+            for row in selected["selections"]:
+                expected = source
+                for token in row["pointer"].split("/")[1:]:
+                    token = token.replace("~1", "/").replace("~0", "~")
+                    expected = expected[int(token)] if isinstance(expected, list) else expected[token]
+                assert row["value"] == expected
+        assert source["schema_version"] == "loopx_turn_envelope_v1"
+        assert view == source  # The checkpoint sends one complete source, not a second fact lens.
         assert source["heartbeat_receipt"]["turn_instance_id"] == TURN
         assert source["heartbeat_receipt"] == view["heartbeat_receipt"]
         assert receipt["checkpoint"]["reason"] == "synthetic_no_native_capture"
         selection = view["interaction_contract"]["cli_channel"].get("selection_command")
         if selection:
             assert "--decision-output-root" in selection["command_args_template"]
+        if context_delivery and replan:
+            followup = shlex.split(selection["command_args_template"])
+            assert followup[followup.index("--decision-output-root") + 1] == str(view_path.parent.parent)
+            assert followup[followup.index("--context-delivery") + 1] == "on"
+            assert followup[followup.index("--codex-context-dir") + 1] == str(native)
+            assert "--decision-output-dir" not in followup and "--prepared-capture-reference" not in followup
         selector = checkpoint.effect_runtime_result("runtime.checkpoint_artifacts", {
             "action": "select_replan", "quota": source, "goal_id": GOAL, "agent_id": AGENT,
             "turn_instance_id": TURN}, large_local_snapshot=True)
@@ -281,9 +357,12 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
             assert "replan_action_packet" not in view
             return
         assert source["autonomous_replan_obligation"]["replan_context"]["context_id"]
-        assert "replan_context" not in view["autonomous_replan_obligation"]
-        packet = view["replan_action_packet"]
-        assert "planning_guidance" not in packet
+        assert view["autonomous_replan_obligation"]["replan_context"] == source["autonomous_replan_obligation"]["replan_context"]
+        assert view["replan_action_packet"]["planning_guidance"] == source["replan_action_packet"]["planning_guidance"]
+        assert view["replan_action_packet"]["writeback_contract"] == source["replan_action_packet"]["writeback_contract"]
+        # Historical staged consumers still use the original hash-bound reads.
+        # This does not qualify their discoverability in the complete CLI input.
+        packet = build_turn_envelope(source)["replan_action_packet"]
         capture = Path(source["replan_read_path"])
         assert capture.read_bytes() == source_path.read_bytes()
         before = {key: fixture[key].read_bytes() for key in ("registry", "state", "index")}
@@ -294,10 +373,46 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
             assert read["obligation_id"] == selector["obligation_id"]
             assert read["stage"] == stage
             if stage == "writeback":
-                assert_explore_entry_and_writer(source, view, read)
+                # Complete delivery preserves original capability authoring;
+                # the old writer still supplies the exact applicable attachment.
+                original = explore_source(source)["content"]["graph"]
+                assert explore_source(view)["content"]["graph"] == original
+                plan = read["writeback"].get("settlement_plan", {})
+                steps = plan.get("ordered_steps", [])
+                attachments = [attachment for step in steps
+                    for attachment in step.get("optional_attachments", [])
+                    if attachment.get("capability_id") == "explore"]
+                if "settlement_plan" in read["writeback"]:
+                    assert len(attachments) == 1
+                    assert attachments[0]["attachment_template"] == original["result_attachment_template"]
+                    assert attachments[0]["guidance"] == original["result_writeback_guidance"]
+        # Correct outer bytes cannot rescue unsupported inner version semantics.
+        malformed = copy.deepcopy(source)
+        malformed["schema_version"] = "unsupported-future-version"
+        from tests.control_plane.test_complete_turn_decision import _canonical_digest
+        bad_path = tmp_path / "unsupported.json"
+        bad_path.write_text(json.dumps(malformed))
+        # Use the independent historical JS-number oracle so the outer hash
+        # passes and this fixture reaches the unsupported-version boundary.
+        digest = _canonical_digest(malformed)
+        command = shlex.split(packet["review"])
+        command[command.index("--decision-file") + 1] = str(bad_path)
+        command[command.index("--source-hash") + 1] = digest
+        refused = run(command, cwd=fixture["project"], env=env, capture_output=True, text=True, timeout=60)
+        assert refused.returncode != 0
+        assert "unsupported complete Turn decision version" in refused.stdout + refused.stderr
         assert {key: fixture[key].read_bytes() for key in before} == before
         assert capture.read_bytes() == source_path.read_bytes()
         assert len(commands) == 1  # Reads did not re-enter checkpoint preflight.
+        if context_delivery:
+            selected = shlex.split(selection["route_prefix"]) + followup
+            selected[selected.index("{todo_id}")] = TODO
+            result = run(selected, cwd=fixture["project"], env=env, capture_output=True, text=True, timeout=60)
+            assert result.returncode == 0, result.stdout
+            [next_capture] = set(view_path.parent.parent.glob("*/decision.json")) - {capture}
+            identity = json.loads(next_capture.read_bytes())["heartbeat_receipt"]["settlement_identity"]
+            assert (identity["todo_id"], identity["turn_instance_id"]) == (TODO, TURN)
+            assert capture.read_bytes() == source_path.read_bytes()
     finally:
         restart_effect_runtime(wait_for_exit=True)
 
@@ -322,7 +437,11 @@ def test_review_routes_to_selection_before_the_bound_writer(tmp_path, monkeypatc
             "--context-delivery", mode, "--delta-delivery", "auto" if mode == "on" else "off",
             "--decision-output-root", str(captures),
             "--codex-context-dir", str(native), *(["--defer-context-presentation"] if mode == "on" else []))
-        review_argv = shlex.split(entry["replan_action_packet"]["review"])
+        # C1's complete decision exposes the executable selection directly.
+        # The staged compatibility reader must point back to that same selection.
+        assert entry["interaction_contract"]["cli_channel"]["selection_required"] is True
+        assert not entry["interaction_contract"]["cli_channel"].get("settlement_plan")
+        review_argv = shlex.split(build_turn_envelope(entry)["replan_action_packet"]["review"])
         review = json.loads(invoke(review_argv).stdout)
         assert review["next"]["selection_required"] is True and "writeback" not in review["next"]
         selection = entry
@@ -393,22 +512,35 @@ def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, m
         guard = call_progress_cli(fixture, "--cli-bin", pinned_cli, "quota", "should-run", "--codex-app",
             "--goal-id", GOAL, "--agent-id", AGENT, "--turn-instance-id", TURN,
             "--todo-id", TODO, "--decision-output-dir", str(capture),
+            # This case consumes the authority decision to test its retained
+            # material codec. Native presentation has its own matrix above.
+            "--context-delivery", "off",
             *(["--turn-envelope"] if envelope else []))
-        guard = read_cli_policy_payload(json.dumps(guard), returncode=0)
-        packet = guard["replan_action_packet"]
-        if not envelope:
-            assert "settlement_plan" not in guard["interaction_contract"]["cli_channel"]
-            assert guard["interaction_contract"]["cli_channel"]["settlement_read_ref"] == "$.replan_action_packet.writeback"
+        # Exercise the retained historical material-reader codec against the
+        # actual new capture. Complete input itself needs no deferred body.
+        packet = build_turn_envelope(guard)["replan_action_packet"]
+        assert guard["schema_version"] == "loopx_turn_envelope_v1"
+        assert "settlement_plan" in guard["interaction_contract"]["cli_channel"]
+        assert "settlement_read_ref" not in guard["interaction_contract"]["cli_channel"]
         saved = (capture / "decision.json").read_bytes()
         source = json.loads(saved)
+        assert guard == source
         # Unknown old/custom prose, different templates, ambiguous/missing
         # writers and missing capture must remain fully inline.
         for mutation in ("custom", "template", "duplicate", "missing", "capture"):
             changed = copy.deepcopy(source)
+            changed.pop("schema_version")
+            changed.pop("contract_binding")
             graph = explore_source(changed)["content"]["graph"]
             step = next(row for row in changed["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"]
                 if row["kind"] == "durable_writeback")
             attachment = next(row for row in step["optional_attachments"] if row["capability_id"] == "explore")
+            # Reconstruct the historical inline fixture before mutating it.
+            # The complete producer now shares this exact same-capture owner.
+            assert graph.pop("result_writeback_guidance_ref") == (
+                f"$.interaction_contract.cli_channel.settlement_plan.ordered_steps[{changed['interaction_contract']['cli_channel']['settlement_plan']['ordered_steps'].index(step)}]"
+                f".optional_attachments[{step['optional_attachments'].index(attachment)}].guidance")
+            graph["result_writeback_guidance"] = attachment["guidance"]
             if mutation == "custom":
                 graph["result_writeback_guidance"] += " Stop before a new operation."
                 attachment["guidance"] = graph["result_writeback_guidance"]
@@ -422,9 +554,8 @@ def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, m
                 changed.pop("replan_read_path")
             projected = _turn_envelope_result("replan_cli_view", payload=changed)
             assert explore_source(projected)["content"]["graph"] == graph
-        entry_writeback = guard["writeback"] if envelope else guard["interaction_contract"]["cli_channel"]
-        assert "settlement_plan" not in entry_writeback and "next_cli_actions" not in entry_writeback
-        assert entry_writeback["settlement_identity"] == source["heartbeat_receipt"]["settlement_identity"]
+        entry_writeback = guard["interaction_contract"]["cli_channel"]
+        assert entry_writeback["settlement_plan"]["identity"] == source["heartbeat_receipt"]["settlement_identity"]
         original_files = {key: fixture[key].read_bytes() for key in ("registry", "state", "index")}
         # Executable commands come from the production packet. Deliberately use
         # an absent registry: the reader must never collect state or re-admit.
@@ -442,25 +573,32 @@ def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, m
             assert result.returncode == expected_code, (result.stdout, result.stderr)
             return json.loads(result.stdout)
         review, writer = read("review"), read("writeback")
-        if not envelope:
-            assert_explore_entry_and_writer(source, guard, writer)
-        else:
-            assert_explore_entry_and_writer(source, {
-                "interaction_contract": {"agent_channel": {"work_context": guard["work_context"]}},
-                "replan_action_packet": packet}, writer)
+        # Complete input keeps supported authoring inline. Historical staged
+        # reads remain exact material reads, not a second execution contract.
+        assert explore_source(guard)["content"] == explore_source(source)["content"]
+        original_graph = explore_source(source)["content"]["graph"]
+        writer_step = next(row for row in writer["writeback"]["settlement_plan"]["ordered_steps"]
+                           if row["kind"] == "durable_writeback")
+        attachment = next(row for row in writer_step["optional_attachments"]
+                          if row["capability_id"] == "explore")
+        assert "result_writeback_guidance" not in original_graph
+        assert original_graph["result_writeback_guidance_ref"] == (
+            f"$.interaction_contract.cli_channel.settlement_plan.ordered_steps[{writer['writeback']['settlement_plan']['ordered_steps'].index(writer_step)}]"
+            f".optional_attachments[{writer_step['optional_attachments'].index(attachment)}].guidance")
+        assert attachment["attachment_template"] == original_graph["result_attachment_template"]
         assert writer["writeback"]["settlement_plan"] == source["interaction_contract"]["cli_channel"]["settlement_plan"]
         assert writer["settlement_command"].endswith(" --settle-turn")
-        # Real CLI/default-off and native readers both deliver the original
-        # planning facts after admission, without a second body in the entry.
+        # Both retired flag values deliver complete planning facts. The
+        # original captured material reads cannot replace them with fresh state.
         expected_goal = source["autonomous_replan_obligation"]["replan_context"]["core_goal"]
         assert review["core_goal"] == expected_goal
         assert review["action_portfolio"] == source.get("action_portfolio")
-        if not envelope:
-            assert "core_goal" not in guard and "planning_horizon" not in guard
-            assert guard.get("action_portfolio") == source.get("action_portfolio")
+        assert guard.get("core_goal") == source.get("core_goal")
+        assert guard.get("planning_horizon") == source.get("planning_horizon")
+        assert guard.get("action_portfolio") == source.get("action_portfolio")
         assert review["context_id"] == writer["context_id"]
         assert review["obligation_id"] == source["replan_action_packet"]["obligation_id"]
-        assert {k: v for k, v in writer["writeback_contract"].items() if k not in {"successor_binding_args", "successor_settlement"}} == without_example(source["replan_action_packet"]["writeback_contract"])
+        assert writer["writeback_contract"] == without_example(source["replan_action_packet"]["writeback_contract"])
         assert (capture / "decision.json").read_bytes() == saved
         assert {key: fixture[key].read_bytes() for key in original_files} == original_files
         assert not reader_fixture["registry"].exists()
@@ -479,7 +617,7 @@ def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, m
             target[field] = value
             (capture / "decision.json").write_text(json.dumps(source))
             rejected = read("review", expected_code=1)
-            assert "source hash" in rejected["reason"]
+            assert rejected["reason"] == "complete Turn decision content integrity mismatch"
         (capture / "decision.json").write_bytes(saved)
         # A valid next operation still reaches the existing writer and semantic gate.
         result = call_progress_cli(fixture, *fixture["refresh"])
@@ -492,6 +630,30 @@ def _views(source):
     envelope = build_turn_envelope(source)
     params = {"payload": source, "source_hash": envelope["action_signature"]["source_decision_hash"]}
     return envelope, _turn_envelope_result("replan_view", **params, stage="review"), params
+
+
+def test_complete_review_indexes_current_requirements_without_changing_historical_index(tmp_path):
+    from replan_packet_fixture import populated_replan_source
+    from loopx.control_plane.quota.turn_envelope import compose_turn_decision
+
+    source = populated_replan_source(tmp_path, acceptance=True)
+    _, historical, _ = _views(source)
+    complete = compose_turn_decision(source)
+    _, current, params = _views(complete)
+    originals = source["autonomous_replan_obligation"]["replan_context"]["core_goal"][
+        "acceptance_contract"]["outcome_requirements"]["outcomes"]
+    assert len(current["acceptance_index"]["outcomes"]) == len(originals)
+    assert all("requirement_states" not in row for row in historical["acceptance_index"]["outcomes"])
+    for row, original in zip(current["acceptance_index"]["outcomes"], originals, strict=True):
+        assert row["requirement_count"] == len(original["requirements"])
+        assert sorted(key for group in row["requirement_states"] for key in group["requirement_ids"]) == sorted(
+            requirement["id"] for requirement in original["requirements"])
+        for field in ("owner_agent_id", "work"):
+            if field in original:
+                assert row[field] == original[field]
+        detail = _turn_envelope_result("replan_view", **params, stage="acceptance", outcome_ref=row["outcome_ref"])
+        assert detail["outcome"] == original
+
 
 
 def test_populated_history_and_cumulative_acceptance_have_separate_budgets(tmp_path):
@@ -536,8 +698,8 @@ def test_populated_history_and_cumulative_acceptance_have_separate_budgets(tmp_p
     assert expanded["planning_horizon"]["core_goal_ref"] == "$.core_goal"
     index = expanded["acceptance_index"]
     assert len(index["outcomes"]) == 24
-    # Cumulative acceptance earns its own index allocation; it cannot spend the
-    # generic review allowance by duplicating entire historical reviews.
+    # Recorded unversioned/v0 reads retain the original count-only allocation.
+    # Rich current requirement states belong to the complete-source reader below.
     assert 0 < json_bytes(expanded) - json_bytes(review) <= 12 * 1024
     originals = original["acceptance_contract"]["outcome_requirements"]["outcomes"]
     for row, outcome in zip(index["outcomes"], originals, strict=True):
@@ -790,3 +952,17 @@ def test_replan_reader_rejects_replaced_entries_and_recovers_original(tmp_path):
         original.unlink()
     saved.rename(original)
     assert read() == (0, review)
+
+
+def test_historical_staged_writeback_returns_the_bound_successor_action():
+    source = _quota_payload()
+    source["replan_action_packet"]["writeback_contract"]["successor_command"] = "loopx todo create"
+    source["interaction_contract"]["cli_channel"]["settlement_plan"] = {
+        "identity": {"turn_instance_id": "original-turn"}, "goal_ref": {"goal_instance_id": "original-goal"},
+    }
+    digest = build_turn_envelope(source)["action_signature"]["source_decision_hash"]
+    view = _turn_envelope_result("replan_view", payload=source, source_hash=digest, stage="writeback")
+    expected = ["loopx", "todo", "create", "--turn-instance-id", "original-turn",
+                "--goal-instance-id", "original-goal"]
+    assert shlex.split(view["writeback_contract"]["successor_command"]) == expected
+    assert [shlex.split(command) for command in view["writeback"]["next_cli_actions"]] == [expected]

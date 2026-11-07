@@ -34,6 +34,10 @@ def test_real_captured_guard_preserves_required_and_missing_capabilities(
     state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     state.write_text(state.read_text().replace("action_kind=validate ",
         "action_kind=validate continuation_policy=same_agent_non_delivery "))
+    # Initialize only this disposable fixture; ordinary reads must refuse
+    # unregistered projections instead of restoring canonical work from them.
+    code, refused = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID)
+    assert code == 1 and refused["error_code"] == "canonical_authority_required"
     projection = build_todo_runtime_shadow_projection(
         goal_id=GOAL_ID, handoff_mode="soft_claim", todos=read_fixture_todos(state),
     )
@@ -52,6 +56,11 @@ def test_real_captured_guard_preserves_required_and_missing_capabilities(
         "--turn-envelope", "--decision-output-dir", str(capture), cwd=project)
     assert code == (0 if network_available else 1), envelope
     full = json.loads((capture / "decision.json").read_text())
+    # Both admission and refusal carry the same complete source. Keep the
+    # historical decoder checks below without choosing a second producer path.
+    from loopx.control_plane.quota.turn_envelope import build_turn_envelope
+    assert envelope == full and full["schema_version"] == "loopx_turn_envelope_v1"
+    envelope = build_turn_envelope(full, captured_decision_path=str(capture / "decision.json"))
     gate = full["capability_gate"]
     assert "network" in gate["required"]
     assert ("network" in gate["missing"]) is (not network_available)
@@ -86,6 +95,10 @@ def test_captured_vision_contract_preserves_closeout_and_original_observation(
     state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     state.write_text(state.read_text().replace("action_kind=validate ",
         "action_kind=validate continuation_policy=same_agent_non_delivery "))
+    # Initialize only this disposable fixture; ordinary reads must refuse
+    # unregistered projections instead of restoring canonical work from them.
+    code, refused = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID)
+    assert code == 1 and refused["error_code"] == "canonical_authority_required"
     initialize_canonical_authority(runtime, GOAL_ID, build_todo_runtime_shadow_projection(
         goal_id=GOAL_ID, handoff_mode="soft_claim", todos=read_fixture_todos(state),
     ), state_path=state, provider=provider)
@@ -122,6 +135,11 @@ def test_captured_vision_contract_preserves_closeout_and_original_observation(
         "--decision-output-dir", str(capture), cwd=project)
     assert code == 0, envelope
     full = json.loads((capture / "decision.json").read_text())
+    assert envelope == full and full["schema_version"] == "loopx_turn_envelope_v1"
+    # The real CLI now emits the complete contract. Retain the historical
+    # decoder and its independent signature/refusal checks below.
+    from loopx.control_plane.quota.turn_envelope import build_turn_envelope
+    envelope = build_turn_envelope(full, captured_decision_path=str(capture / "decision.json"))
     audit = full["vision_continuation_audit"]
     assert audit["required"] and audit["required_before_closeout"]
     assert audit["vision_gap_judge"]["done"] is False
@@ -181,6 +199,7 @@ def test_captured_vision_contract_preserves_closeout_and_original_observation(
     plan = build_loopx_turn_plan(envelope, host="dsh", execution_mode="isolated-headless",
                                  turn_instance_id="vision-contract-turn")
     assert plan["route"]["would_invoke_host"] is True
+    # A replan route permits planning, not ordinary delivery.
     assert envelope["action"]["delivery_allowed"] is (not replan)
     request = {"schema_version": "loopx_turn_host_request_v0", "turn_key": plan["transaction"]["turn_key"],
                "route": "replan_required" if replan else "primary_delivery", "turn_envelope": envelope}
