@@ -27,6 +27,7 @@ from ..quota.spend_sources import (
     build_quota_spend_action,
     host_goal_turn_reentry_action,
     host_goal_turn_reentry_required,
+    host_goal_turn_start_args,
     quota_spend_source_for_execution_context,
 )
 from ..scheduler.arbitration import SchedulerArbitration, _scheduler_arbitration_facts
@@ -726,6 +727,8 @@ def _admitted_interaction_next_cli_actions(
         registry_path=registry_path,
     )
     if selection_command_template:
+        if turn_instance_id is None:
+            selection_command_template += host_goal_turn_start_args(scheduler_execution_context)
         return [selection_command_template + _goal_ref_cli_arg(payload)]
     goal_ref_arg = _goal_ref_cli_arg(payload)
     typed_quota_guard = (

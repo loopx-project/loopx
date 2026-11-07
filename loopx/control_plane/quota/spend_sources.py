@@ -84,14 +84,21 @@ def host_goal_turn_reentry_action(
         payload, scheduler_execution_context, turn_instance_id
     ):
         return None
+    return typed_quota_guard + host_goal_turn_start_args(scheduler_execution_context)
+
+
+def host_goal_turn_start_args(
+    scheduler_execution_context: (
+        Mapping[str, Any] | SchedulerExecutionContextResolution | None
+    ),
+) -> str:
     profile = scheduler_runtime_profile_for_execution_context(scheduler_execution_context)
     if profile is SchedulerRuntimeProfile.CODEX_APP_SSH_VISIBLE:
-        return f"{typed_quota_guard} --begin-turn"
+        return " --begin-turn"
+    if profile not in VISIBLE_GOAL_SETTLEMENT_RUNTIME_PROFILES:
+        return ""
     # CLI/managed Goal hosts own their iteration identity.
-    return (
-        f"{typed_quota_guard} --turn-instance-id "
-        "'<unique-work-iteration-id-reuse-on-retry>'"
-    )
+    return " --turn-instance-id '<unique-work-iteration-id-reuse-on-retry>'"
 
 
 def build_quota_spend_action(
