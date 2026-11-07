@@ -164,14 +164,30 @@ class StdioNativeGoalTransport:
 
 
 @contextmanager
-def native_checkpoint_reader(env: dict[str, str], *, timeout: float):
-    """Keep one native inspection process open across a sealed capture window."""
+def native_checkpoint_reader(
+    env: dict[str, str], *, timeout: float, deadline: float | None = None,
+):
+    """Keep one native inspection process open across a sealed capture window.
+
+    Startup observers may supply their existing monotonic deadline so spawning
+    cannot reset their IO budget. Other inspection callers retain relative timeouts.
+    """
+    def observation_timeout() -> float:
+        if deadline is None:
+            return timeout
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise NativeGoalProtocolError("app_server_response_timeout:initialize")
+        return remaining
+
     with StdioNativeGoalTransport.spawn(
         [env["CODEX_BIN"], "-c", "features.goals=false", "app-server", "--listen", "stdio://"],
         cwd=env["LOOPX_PROJECT"], env=env, stderr=subprocess.DEVNULL,
-        response_timeout_sec=timeout,
+        response_timeout_sec=observation_timeout(),
     ) as transport:
+        transport.response_timeout_sec = observation_timeout()
         transport.request("initialize", {"clientInfo": {"name": "loopx_checkpoint", "version": "0.1.0"},
                                           "capabilities": {"experimentalApi": True}})
+        observation_timeout()
         transport.notify("initialized", {})
         yield transport
