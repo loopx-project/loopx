@@ -1223,6 +1223,51 @@ stale claim 使用普通 release 后的 lease。它们必须在 writeback/debit 
 Vision/workspace 同样保留拒绝。临时测量 harness 和 raw capture 保持私有；这个 recipe
 描述重复的 workload/oracle，不是分发的 benchmark runner 或公共复现 receipt。
 
+### 2026-11-07 — 原 Turn 终结在 Todo 自动归档后仍可完成
+
+#8257 的完整 CLI 比较在 101 个合成 Todo 下暴露了生命周期故障。基于
+`4a33eb4b5` 的新源码 console 复现在 File 和默认 SQLite 上均保留同一
+`todo_archived`：普通完成、持久写回和一次额度扣账已提交。冻结比较保持原样，
+这些失败 episode 不计入验收通过的延迟样本。
+
+修复提案仍由 `todo_terminal_lifecycle.ts` 拥有。在仅限 active 的拒绝之前，
+复用已有同 Turn fence 与精确普通 completion receipt 校验，验证已归档 Todo
+的终结资格。一个文件内 helper 统一 active 和已归档路径的父 receipt 检查。
+原 claim/lease、任务 digest、validation 声明与 receipt、provider CAS 校验
+继续生效；归档选择与保留阈值保持原样。允许的只是原 completion 的终结阶段，
+不会重新开放已归档工作。
+
+真实 File/SQLite console fixture 现在可以完成大状态整轮，并回放 completion、
+写回、扣账和 terminal closeout：只有一次扣账，独立验证的 JSON 结果保持原样。
+持久 CLI 回归使用真实 validator 和普通 hard-lease claim，拒绝过早结算、
+无关归档工作、其他 actor、claim 或 Turn，以及变更后的 completion intent。
+终结保留原已通过的 validation receipt、首次完成时间和归档状态，不重复执行
+validator。既有 provider conformance 继续检查 source/digest、validation、
+lease 和 replay；隔离真实 PostgreSQL suite 单独验证其共享 owner。
+
+作者提案还集成了 main `abf144202`（#8161）：显式 Goal 范围的检查不约束局部
+Todo 完成。归档回归在局部 validator 之外加入未通过的整体 Goal 承诺检查：
+普通完成和终结仍保留原 receipt 与一次扣账，不重复执行 Goal checker，整体
+检查继续失败。这是作者阶段的集成覆盖，不能替代独立审阅或审阅修复后的
+wheel 资格验证。
+
+#8264 `12627eff8` 的独立审阅发现：只改 `--evidence` 就能替换已归档 Todo
+接受的产物，却仍返回旧 validation receipt。File/SQLite × 有无整体 Goal 检查
+的四个 fixture 均在该 head 复现失败。修订集成 target main `10f66ec5e`，在归档
+终结前拒绝不同的显式 evidence；新归档 closeout receipt 同时保存已接受证据，
+让变更后的重试不能通过 receipt recovery 绕过检查。带有效 completion note 时，
+省略或空 evidence 保留原值；CLI 原有的完成说明要求继续适用。
+历史 fingerprint 和旧 receipt 继续兼容，active completion 行为保持原样。
+回归在 terminal replay 前后检查 canonical evidence、原 validation 和完成时间，
+以及只执行一次的 validation/writeback/debit。此前被审阅的 head 仍未获验收，
+修订 head 仍需独立审阅。
+
+这是支持后续 R1/V4 journey 和大状态比较的生命周期修复提案。下一步仍需
+独立 exact-head review、审阅修复后的 wheel 回读，以及剩余 guard/parser
+刻画。它不会升级 installed host，也不验收中断/重启、split installation、
+完整 R0/V10/R1、M1/#8011、D2/D5/D6/D3、context/model、adoption 或完整成本
+收益。I3 继续保留至少一个 minor release。
+
 ## 附录 B：决策日志
 
 | 日期 | 决策 | 负责人 / 批准 | 备选 | 变更的规范章节 |
