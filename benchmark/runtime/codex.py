@@ -29,8 +29,13 @@ class Execution:
     task_entry: str | None = None
     turn_envelope: bool = False
     context_delivery: str | None = None
+    native_child_limit: int | None = None
 
     def __post_init__(self) -> None:
+        if self.native_child_limit is not None and (
+            type(self.native_child_limit) is not int or self.native_child_limit < 1
+        ):
+            raise ValueError("native_child_limit must be a positive integer or None")
         if self.context is None:
             object.__setattr__(self, "context", "resume" if self.mode in {"heartbeat", "turn"} else "fresh")
         if self.context_delivery is None:
@@ -81,6 +86,24 @@ def turn_envelope_receipt(*, explicit: bool) -> dict:
     return {}
 
 
+def native_child_instructions(limit: int | None) -> str:
+    """One explicit task authorization shared by every opted-in study arm."""
+    if limit is None:
+        return ""
+    Execution(mode="plain", native_child_limit=limit)
+    return (
+        "\n\n## Optional native collaboration\n\n"
+        f"You are authorized to use up to {limit} open host-native child sessions "
+        "for independent work on this task. Delegation is optional; do not create work "
+        "merely to fill capacity. Continue useful parent work and verify child results. "
+        "Completed children still occupy slots; close them when their work is no longer "
+        "needed to free capacity. "
+        "Children share the original task scope, permissions, total time allowance and "
+        "evaluation opportunities. Only the parent submits candidates to the evaluator. "
+        "This does not authorize registering persistent LoopX Agents, expanding access, "
+        "starting another experiment, or extending a deadline. Preserve explicit Stop "
+        "and close child work before the parent finishes.\n"
+    )
 
 def validate_model_catalog(model_catalog: Path, model: str) -> dict:
     """Admit only catalog entries that keep Codex's function-tool surface.
@@ -164,6 +187,8 @@ def codex_settings(
             "[features]",
             f"goals = {str(execution.native_goal).lower()}",
             "unified_exec = true",
+            *(["[agents]", f"max_concurrent_threads_per_session = {execution.native_child_limit}"]
+              if execution.native_child_limit is not None else []),
             "[memories]",
             "generate_memories = false",
             "use_memories = false",

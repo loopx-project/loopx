@@ -39,6 +39,7 @@ class WarmStart:
     fresh_replan: bool = False
     destination_config: Path | None = None
     research_sidecar: bool = False
+    native_child_limit: int | None = None
 
     def _selected_research(self, metadata: dict):
         from .research_artifacts import selected_research_components
@@ -81,7 +82,17 @@ class WarmStart:
             raise ValueError("Warm start paths, configuration or destination lineage differ")
         _loopx_components(self.root, metadata, Path(workspace))
         from loopx.hosts.codex_checkpoint import checkpoint_destination_config
-        checkpoint_destination_config(self.config, native["config_sha256"], self.destination_config)
+        from .codex import Execution
+
+        configuration, _ = checkpoint_destination_config(self.config, native["config_sha256"], self.destination_config)
+        agents = tomllib.loads(configuration.decode("utf-8")).get("agents", {})
+        if not isinstance(agents, dict):
+            raise ValueError("Sealed checkpoint agents configuration must be a TOML table")
+        retained_limit = Execution(mode="plain",
+            native_child_limit=agents.get("max_concurrent_threads_per_session")).native_child_limit
+        requested_limit = Execution(mode="plain", native_child_limit=self.native_child_limit).native_child_limit
+        if retained_limit != requested_limit:
+            raise ValueError("Requested native child limit differs from the sealed checkpoint")
         _workspace_component(self.root, metadata, Path(workspace))
         _research_components(self.root, metadata, Path(workspace), self._selected_research(metadata))
         context = metadata["research_context"]
