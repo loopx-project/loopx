@@ -2063,8 +2063,18 @@ separate, idempotent phase. Reservation crashes adopt that exact queued review.
 If writable continuation was already admitted before the request journal was
 updated, the worker first recovers that same queued Turn. Dispatch still
 requires the original source, queue and native effect checks.
-The retained business obligation stays pending independently of the review's
-prose or failure; a review never starts a writable retry or another review.
+The retained business obligation stays pending after the review. Once a
+successful plain-text review is delivered, the original worker can independently
+qualify the still-unspent `work-1` continuation against the original typed
+partial. The current owner of the same native thread must prove settled effects
+again, including the intervening review and other later inputs. Core rechecks
+the original source and grant, queue, stop and steering, and exact original and
+review identities. The worker verifies the inventory again before execution and
+returns the result separately from both earlier replies. A review failure,
+review gate, loss of native ownership, superseding input or an uncertain effect
+leaves the original obligation pending. An admitted continuation stays visible
+while it is failed, gated, unfinished or awaiting verified result delivery.
+The review itself grants no execution authority and can run only once.
 
 ### File-backed idle recovery observations
 

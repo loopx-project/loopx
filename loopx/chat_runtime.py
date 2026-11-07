@@ -862,6 +862,12 @@ class ChatRuntimeController:
         with self.lock:
             current = self.adapters.get(session_id)
             manager_profile_changed = NativeHistoryRestoration.manager_profile_changed(session, manager_runtime)
+            if recovery.get("work_original_turn_id") and (
+                    not isinstance(current, CodexAppServerAdapter)
+                    or current.upstream_thread_id != session.get("upstream_thread_id")
+                    or not current.answer_review_replaceable()):
+                raise CodexChatAgentError("The reviewed work no longer has an idle native owner; continuation held.",
+                    error_code="host_gate", gate=None)
             if (
                 current is not None
                 and current.healthcheck()
