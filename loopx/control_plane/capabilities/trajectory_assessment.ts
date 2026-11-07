@@ -5,6 +5,7 @@ import {BARE_SHA256_PATTERN} from '../content_digest.ts';
 import {EffectRuntimeRequestError} from '../effect_runtime_errors.ts';
 import {parseExploreHistoryPage, projectExploreHistory} from '../presentation/explore_history.ts';
 import {trajectoryDisplayFields, trajectoryDisplaySnapshotText, maskTrajectoryDisplayText} from './trajectory_assessment_display.ts';
+import {qualifyTrajectoryCaseStudy} from './trajectory_case_study.ts';
 
 export const TRAJECTORY_METHOD = 'research-episodes-v2';
 import {TRAJECTORY_METRICS} from './trajectory_assessment_types.ts';
@@ -326,6 +327,7 @@ Keep JSON field names, IDs, metric/verdict tokens and citation ranges unchanged.
     || input.episodes.some(e => e.source_ids.includes(source.id))
     || input.display_snapshot?.contexts?.some(row => row.citations.some(citation => citation.source_id === source.id)));
   return {analysis_key, method_version: method, config: configIdentity, input,
+    ...(params.case_study === undefined ? {} : {case_study: qualifyTrajectoryCaseStudy(params.case_study, input)}),
     ...(display ? {display_request: {schema_version: display.schema_version, snapshot_key: display.snapshot_key,
       source_id: display.source_id, source_namespace: display.source_namespace, eligible: display.fields.length}} : {}),
     ...(measured ? {native_outcomes: measured} : {}),
