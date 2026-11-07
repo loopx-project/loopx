@@ -35,7 +35,9 @@ def test_dependency_links_replay_and_recovery_preserve_real_lease_authority(tmp_
         (workspace / "src/node_modules/.bin").mkdir(parents=True)
         (workspace / "src/node_modules/tool").mkdir()
         (workspace / "src/node_modules/tool/bin.mjs").write_text("export {};\n")
-    goal, task_a, task_b = "checkout-admission", "todo_worker_a", "todo_worker_b"
+    goal, task_a, task_b, task_c = (
+        "checkout-admission", "todo_worker_a", "todo_worker_b", "todo_worker_c"
+    )
     state = project / "state.md"
     state.write_text("# Synthetic worktree admission\n\n## Agent Todo\n")
     registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": [{
@@ -47,7 +49,11 @@ def test_dependency_links_replay_and_recovery_preserve_real_lease_authority(tmp_
         "text": "Edit isolated source", "archive_state": "active", "source_section": "Agent Todo",
         "index": index, "task_class": "advancement_task", "claimed_by": owner,
         "task_repository": "git:github.com/example/project", "required_write_scopes": ["src/**"],
-    } for index, task, owner in [(1, task_a, "agent-a"), (2, task_b, "agent-b")]])
+    } for index, task, owner in [
+        (1, task_a, "agent-a"),
+        (2, task_b, "agent-b"),
+        (3, task_c, "agent-a"),
+    ]])
     initialize_canonical_authority(runtime, goal, projection, state_path=state, provider=provider)
 
     def cli(action, task, *flags, exit_code=0):
@@ -100,6 +106,23 @@ def test_dependency_links_replay_and_recovery_preserve_real_lease_authority(tmp_
 
         denied = acquire(task_b, "agent-b", "same-checkout", 0, first, exit_code=1)
         assert denied["error_code"] == "write_scope_conflict"
+        assert "recovery" not in denied
+        assert denied["conflicts"][0]["todo_id"] == task_a
+        own_denied = acquire(task_c, "agent-a", "own-same-checkout", 0, first, exit_code=1)
+        assert own_denied["error_code"] == "write_scope_conflict"
+        assert "conflicts" not in own_denied
+        assert own_denied["own_conflicting_lease"] == {
+            "todo_id": task_a,
+            "owner": "agent-a",
+            "write_scopes": ["src/**"],
+            "version": current["version"],
+        }
+        recovery = own_denied["recovery"]
+        assert recovery["action"] == "inspect_own_conflicting_lease"
+        assert recovery["execution_authority_granted"] is False
+        assert recovery["inspect"]["cli_args"][-1] == task_a
+        assert recovery["release"]["cli_args"][-1] == str(current["version"])
+        assert cli("inspect", task_a)["lease"] == current
         independent = acquire(task_b, "agent-b", "separate-checkout", 0, second)
         assert any(row["todo_id"] == task_a for row in independent["integration_overlap_advisories"])
         assert independent["lease"]["write_workspace"]["worktree"] != admitted["lease"]["write_workspace"]["worktree"]
