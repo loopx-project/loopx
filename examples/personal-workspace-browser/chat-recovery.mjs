@@ -441,17 +441,34 @@ export const chatRecoveryScenario = {
       // with the running Turn. The page must adopt that Turn with its
       // controls and keep the draft; the owner can explicitly queue it next.
       const busySessionId = api.turnRequests.at(-1).sessionId;
+      const submissionRoute = `**/api/chat/sessions/${busySessionId}/turns`;
+      const queuePosts = [];
+      const competeOnSubmit = (turnId, rejected) => async (route) => {
+        const request = route.request();
+        if (request.method() !== "POST") return route.fallback();
+        const body = request.postDataJSON();
+        if (body.delivery === "queue") {
+          queuePosts.push(body);
+          // The transport retries one 5xx with the same ingress before the
+          // composer can surface the still-unconfirmed delivery.
+          if (queuePosts.length <= 2) {
+            return route.fulfill({ status: 503, json: { ok: false, error: "queue acknowledgement unavailable" } });
+          }
+          return route.fulfill({ status: 429, json: { ok: false, error: "Session queue is full; the message was not accepted.",
+            error_code: "session_queue_full", delivery_state: "not_delivered", turn_replay_safe: true } });
+        }
+        rejected();
+        // A poll before this submission must still see the prior idle Session.
+        const session = page.__loopxRuntime.sessions.get(busySessionId);
+        page.__loopxRuntime.sessions.set(busySessionId, { ...session, active_turn_id: turnId, status: "busy" });
+        return route.fulfill({ status: 409,
+          json: { ok: false, error: "another turn is already running for this session", active_turn_id: turnId } });
+      };
       const foreignTurnId = `turn-foreign-${Date.now()}`;
       const foreignTurnControl = page.locator(`.personal-composer-stop[data-turn-id="${foreignTurnId}"]`);
       page.__loopxRuntime.turnMessages.set(foreignTurnId, "另一页面发起的中断控制回合");
-      page.__loopxRuntime.sessions.set(busySessionId, { ...page.__loopxRuntime.sessions.get(busySessionId), active_turn_id: foreignTurnId, status: "busy" });
       let rejectedPosts = 0;
-      await page.route(`**/api/chat/sessions/${busySessionId}/turns`, async (route) => {
-        if (route.request().method() !== "POST") return route.fallback();
-        rejectedPosts += 1;
-        await route.fulfill({ contentType: "application/json", status: 409,
-          json: { ok: false, error: "another turn is already running for this session", active_turn_id: foreignTurnId } });
-      });
+      await page.route(submissionRoute, competeOnSubmit(foreignTurnId, () => { rejectedPosts += 1; }));
       // Hold the conversation's own Session re-read that follows the 409, so
       // the check covers the handoff before the recovery adopts the Turn, not
       // only after.
@@ -480,6 +497,30 @@ export const chatRecoveryScenario = {
         await page.waitForTimeout(100);
       }
       if (rejectedPosts !== 1) throw new Error(`The composer posted ${rejectedPosts} times before the recovery adopted the Turn`);
+      if (queuePosts.length) throw new Error("The ordinary 409 unexpectedly dispatched a queue request");
+      // Deliberately lose a queue acknowledgement. A changed draft must stay
+      // local until the original identity receives a definite non-delivery.
+      const queueFeedback = page.locator(".personal-action-feedback");
+      const queuedDraft = "这条队列请求正在等待回执";
+      await composerInput.fill(queuedDraft);
+      await sendButton.click();
+      await queueFeedback.filter({ hasText: "queue acknowledgement unavailable" }).waitFor();
+      const newDraft = "保留的另一条草稿";
+      await composerInput.fill(newDraft);
+      await sendButton.click();
+      await queueFeedback.filter({ hasText: "上条投递尚未确认" }).waitFor();
+      if (queuePosts.length !== 2 || await composerInput.inputValue() !== newDraft) {
+        throw new Error("An uncertain queue request did not fence the replacement draft");
+      }
+      await composerInput.fill("");
+      await page.getByRole("button", { name: "恢复未确认的消息", exact: true }).click();
+      await sendButton.click();
+      await queueFeedback.filter({ hasText: "Session queue is full; the message was not accepted." }).waitFor();
+      if (queuePosts.length !== 3 || !queuePosts[0].client_turn_id
+        || queuePosts.some(post => post.client_turn_id !== queuePosts[0].client_turn_id || post.message !== queuedDraft)) {
+        throw new Error("Queue recovery changed the original message or request identity");
+      }
+      await composerInput.fill(draft);
       holdReads = false;
       for (const route of heldReads.splice(0)) await route.fallback();
       await page.unroute("**/api/chat/sessions?*");
@@ -497,7 +538,7 @@ export const chatRecoveryScenario = {
       await foreignTurnControl.waitFor({ state: "hidden", timeout: 10_000 });
       if (await sendButton.isDisabled()) throw new Error("Send stayed blocked after the adopted Turn completed");
       if (rejectedPosts !== 1) throw new Error(`The composer posted ${rejectedPosts} times into a running Turn`);
-      await page.unroute(`**/api/chat/sessions/${busySessionId}/turns`);
+      await page.unroute(submissionRoute);
       await composerInput.fill("");
       pass("composer-running-turn-409", "A 409 hands off the reported Turn with its controls and draft, and offers explicit queuing without dispatching automatically");
       // A failed Session read after the 409 says nothing about the reported
@@ -506,14 +547,8 @@ export const chatRecoveryScenario = {
       const retriedTurnId = `turn-foreign-retry-${Date.now()}`;
       const retriedTurnControl = page.locator(`.personal-composer-stop[data-turn-id="${retriedTurnId}"]`);
       page.__loopxRuntime.turnMessages.set(retriedTurnId, "读取失败后仍在运行的中断控制回合");
-      page.__loopxRuntime.sessions.set(busySessionId, { ...page.__loopxRuntime.sessions.get(busySessionId), active_turn_id: retriedTurnId, status: "busy" });
       let retryRejectedPosts = 0;
-      await page.route(`**/api/chat/sessions/${busySessionId}/turns`, async (route) => {
-        if (route.request().method() !== "POST") return route.fallback();
-        retryRejectedPosts += 1;
-        await route.fulfill({ contentType: "application/json", status: 409,
-          json: { ok: false, error: "another turn is already running for this session", active_turn_id: retriedTurnId } });
-      });
+      await page.route(submissionRoute, competeOnSubmit(retriedTurnId, () => { retryRejectedPosts += 1; }));
       let failedReads = 0;
       const heldRetryReads = [];
       let failReads = false;
@@ -549,7 +584,7 @@ export const chatRecoveryScenario = {
       await retriedTurnControl.waitFor({ state: "hidden", timeout: 10_000 });
       if (await sendButton.isDisabled()) throw new Error("Send stayed blocked after the retried recovery saw the Turn complete");
       if (retryRejectedPosts !== 1) throw new Error(`The composer posted ${retryRejectedPosts} times into a running Turn`);
-      await page.unroute(`**/api/chat/sessions/${busySessionId}/turns`);
+      await page.unroute(submissionRoute);
       await composerInput.fill("");
       pass("composer-running-turn-409-read-failure", "A failed read retries the reported Turn with its controls and draft, while preserving explicit next-Turn queuing");
       // Switch back to an observed steering-capable executor before exercising
@@ -567,15 +602,7 @@ export const chatRecoveryScenario = {
       await page.route(controlledTurnEvents, (route) => { heldControlEvents.push(route); });
       page.__loopxRuntime.turnMessages.set(controlledTurnId, "交接期间可调整和中断的中断控制回合");
       let controlRejectedPosts = 0;
-      await page.route(`**/api/chat/sessions/${busySessionId}/turns`, async (route) => {
-        if (route.request().method() !== "POST") return route.fallback();
-        controlRejectedPosts += 1;
-        // Expose the competing Turn at the send boundary. A poll before the
-        // POST must not discover it and turn this into a queue test.
-        page.__loopxRuntime.sessions.set(busySessionId, { ...page.__loopxRuntime.sessions.get(busySessionId), active_turn_id: controlledTurnId, status: "busy" });
-        await route.fulfill({ contentType: "application/json", status: 409,
-          json: { ok: false, error: "another turn is already running for this session", active_turn_id: controlledTurnId } });
-      });
+      await page.route(submissionRoute, competeOnSubmit(controlledTurnId, () => { controlRejectedPosts += 1; }));
       let holdControlReads = true;
       const heldControlReads = [];
       const controlledChannelId = page.__loopxRuntime.sessions.get(busySessionId).channel_id;
@@ -645,9 +672,9 @@ export const chatRecoveryScenario = {
         throw new Error("A late Session read revived the interrupted handoff Turn");
       }
       if (await sendButton.isDisabled()) throw new Error("A late Session read closed Send after the interrupt");
-      if (controlRejectedPosts !== 1) throw new Error(`The composer posted ${controlRejectedPosts} times during the handoff`);
+      if (controlRejectedPosts !== 1 || queuePosts.length !== 3) throw new Error("The handoff dispatched an unexpected submission");
       await page.unroute("**/steer");
-      await page.unroute(`**/api/chat/sessions/${busySessionId}/turns`);
+      await page.unroute(submissionRoute);
       await composerInput.fill("");
       pass("composer-running-turn-409-controls", "Before any Session read returns, Adjust and Interrupt on the 409 handoff reply reach the exact reported Session and Turn, and the interrupt settles the reply and reopens Send");
       if (failures.length) throw new Error(failures.join(" | "));
