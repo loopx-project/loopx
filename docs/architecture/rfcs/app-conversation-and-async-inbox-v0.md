@@ -2046,6 +2046,9 @@ send, delegate or replace the original work declaration. References in the old
 question use its original-time Core context. The original partial Turn and
 delivery remain immutable, and the same Lark worker returns the new answer in a
 separate, idempotent phase. Reservation crashes adopt that exact queued review.
+If writable continuation was already admitted before the request journal was
+updated, the worker first recovers that same queued Turn. Dispatch still
+requires the original source, queue and native effect checks.
 The retained business obligation stays pending independently of the review's
 prose or failure; a review never starts a writable retry or another review.
 

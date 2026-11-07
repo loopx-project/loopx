@@ -1055,8 +1055,14 @@ test("unfinished completed work requires typed intent and pinned settled native/
     message: packet.request.message, origin: "lark", attachments: [], status: "completed"};
   const crash = {...packet, request: {...packet.request, context_recovery: reserved},
     current_session: {...session, status: "busy", active_turn_id: admitted.turn_id},
-    context_recovery: {...packet.context_recovery, native_observation: null, admitted_turn: admitted}};
-  assert.equal(planBoundConversationRequest(crash).admitted_turn_id, admitted.turn_id);
+    context_recovery: {...packet.context_recovery, native_observation: null, admitted_turn: admitted,
+      later_equivalent_input_present: true, queued_input_present: true}};
+  const recovered = planBoundConversationRequest(crash);
+  assert.equal(recovered.admitted_turn_id, admitted.turn_id);
+  assert.equal(recovered.work_attempt, 1);
+  assert.equal(recovered.read_only_review, undefined);
+  assert.equal(planBoundConversationRequest({...crash, context_recovery: {...crash.context_recovery,
+    source_verified: false}}).recovery_eligible, false);
   assert.equal(planBoundConversationRequest({...crash, context_recovery: {...crash.context_recovery,
     admitted_turn: {...admitted, message: "Changed input"}}}).recovery_eligible, false);
   for (const status of ["completed", "failed"]) {
