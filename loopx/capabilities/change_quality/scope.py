@@ -6,8 +6,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from ...extensions.process_runtime import terminate_process_tree
-
+from ...extensions.process_runtime import retire_owned_process
 
 CHANGE_QUALITY_SCOPE_SCHEMA_VERSION = "change_quality_scope_v0"
 
@@ -32,17 +31,11 @@ def _retire_owned_probe(process: subprocess.Popen[Any]) -> None:
     """
 
     try:
-        terminate_process_tree(process, grace_seconds=0.2)
-    except (OSError, RuntimeError):
+        retire_owned_process(process, process_tree_owned=True)
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
+        # Cleanup is best effort. The read's own timeout or cancellation is the
+        # result the caller must receive, even when termination is unconfirmed.
         pass
-    finally:
-        for stream in (process.stdout, process.stderr):
-            if stream is not None:
-                stream.close()
-        try:
-            process.wait(timeout=1.0)
-        except subprocess.TimeoutExpired:
-            pass
 
 
 def _git(

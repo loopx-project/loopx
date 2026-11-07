@@ -20,6 +20,21 @@ from pathlib import Path
 import pytest
 
 from loopx.capabilities.change_quality import scope
+from loopx.extensions import process_runtime
+
+
+class _WindowsNameProxy:
+    """Report Windows only to the runtime under test, keeping pathlib host-native."""
+
+    def __init__(self, module):
+        self._module = module
+
+    def __getattr__(self, name):
+        return getattr(self._module, name)
+
+    @property
+    def name(self):
+        return "nt"
 
 
 def _worktree(tmp_path: Path) -> Path:
@@ -147,10 +162,12 @@ def test_a_cancelled_read_takes_the_helper_it_started(tmp_path: Path) -> None:
     command = subprocess.Popen(
         [
             sys.executable, "-c",
-            "import sys\n"
-            "from pathlib import Path\n"
-            "from loopx.capabilities.change_quality.scope import build_change_quality_scope\n"
-            "build_change_quality_scope(repo_path=Path(sys.argv[1]))\n",
+            (
+                "import sys\n"
+                "from pathlib import Path\n"
+                "from loopx.capabilities.change_quality.scope import build_change_quality_scope\n"
+                "build_change_quality_scope(repo_path=Path(sys.argv[1]))\n"
+            ),
             str(repo),
         ],
         stdout=subprocess.PIPE,
@@ -190,3 +207,62 @@ def test_a_healthy_repository_still_builds_its_scope(tmp_path: Path) -> None:
     assert result["sources"]["untracked"] == ["untracked.txt"]
     assert result["changed_file_count"] == len(result["changed_files"])
     assert scope.resolve_git_root(repo) == repo.resolve()
+
+_TASKKILL_FAILURES = (
+    "#!/bin/sh\nwhile :; do :; done\n",
+    "#!/bin/sh\nexit 1\n",
+)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="the fake binaries are POSIX scripts")
+@pytest.mark.parametrize("taskkill_script", _TASKKILL_FAILURES)
+def test_a_failed_windows_cleanup_still_returns_the_git_timeout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    taskkill_script: str,
+) -> None:
+    """A stuck or refused taskkill must not replace the read's timeout."""
+
+    repo = _worktree(tmp_path)
+    bin_dir = _fake_git(
+        tmp_path, "#!/bin/sh\nwhile :; do :; done\n", monkeypatch
+    )
+    taskkill = bin_dir / "taskkill"
+    taskkill.write_text(taskkill_script, encoding="utf-8")
+    taskkill.chmod(0o755)
+    monkeypatch.setattr(process_runtime, "os", _WindowsNameProxy(os))
+    monkeypatch.setattr(scope, "GIT_PROBE_TIMEOUT_SECONDS", 0.25)
+
+    started = time.monotonic()
+    with pytest.raises(ValueError, match="did not answer"):
+        scope.resolve_git_root(repo)
+    assert time.monotonic() - started < 3
+
+
+@pytest.mark.skipif(os.name != "posix", reason="the fake binaries are POSIX scripts")
+@pytest.mark.parametrize("taskkill_script", _TASKKILL_FAILURES)
+def test_a_failed_windows_cleanup_still_propagates_cancellation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    taskkill_script: str,
+) -> None:
+    """Ctrl-C keeps travelling even when Windows termination is unconfirmed."""
+
+    repo = _worktree(tmp_path)
+    bin_dir = _fake_git(
+        tmp_path, "#!/bin/sh\nwhile :; do :; done\n", monkeypatch
+    )
+    taskkill = bin_dir / "taskkill"
+    taskkill.write_text(taskkill_script, encoding="utf-8")
+    taskkill.chmod(0o755)
+    monkeypatch.setattr(process_runtime, "os", _WindowsNameProxy(os))
+
+    def interrupted(self, timeout=None, input=None):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(subprocess.Popen, "communicate", interrupted)
+
+    started = time.monotonic()
+    with pytest.raises(KeyboardInterrupt):
+        scope.resolve_git_root(repo)
+    assert time.monotonic() - started < 3

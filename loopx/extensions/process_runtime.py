@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
 import math
 import os
 import shutil
@@ -11,9 +9,10 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO
-
+from typing import Any, BinaryIO
 
 _PROCESS_IO_CHUNK_BYTES = 64 * 1024
 _PROCESS_TERMINATE_GRACE_SECONDS = 1.0
@@ -310,7 +309,15 @@ def _force_terminate_windows_process_tree(
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
         try:
-            if taskkill.wait(timeout=max(0, deadline - time.monotonic()) / 2) != 0:
+            try:
+                exit_code = taskkill.wait(
+                    timeout=max(0, deadline - time.monotonic()) / 2
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise RuntimeError(
+                    "owned Windows process-tree cleanup unconfirmed"
+                ) from exc
+            if exit_code != 0:
                 raise RuntimeError("owned Windows process-tree cleanup unconfirmed")
         finally:
             # subprocess.run(timeout=...) internally waits without a timeout
@@ -343,6 +350,68 @@ def force_terminate_process(
     else:
         _kill_and_reap_before_deadline(process, deadline)
 
+
+
+def _close_owned_streams_before_deadline(
+    process: subprocess.Popen[bytes] | subprocess.Popen[str], deadline: float,
+) -> None:
+    """Close a process's pipe ends without waiting on a blocked reader.
+
+    ``communicate`` retains reader threads on Windows; a descendant holding the
+    other end of a pipe can keep that reader, and the stream's lock, alive.
+    Closing from the caller would then wait past the read budget, so each close
+    runs on a daemon thread and is joined only until the deadline. A close that
+    cannot finish is left to the reader it is waiting for.
+    """
+
+    threads: list[threading.Thread] = []
+    for stream in (process.stdin, process.stdout, process.stderr):
+        if stream is None:
+            continue
+
+        def close(stream: Any = stream) -> None:
+            try:
+                stream.close()
+            except (OSError, ValueError):
+                pass
+
+        thread = threading.Thread(
+            target=close,
+            name="loopx-process-stream-close",
+            daemon=True,
+        )
+        thread.start()
+        threads.append(thread)
+    for thread in threads:
+        thread.join(timeout=max(0, deadline - time.monotonic()))
+
+
+def retire_owned_process(
+    process: subprocess.Popen[bytes] | subprocess.Popen[str], *,
+    process_tree_owned: bool, timeout: float = _PROCESS_TERMINATE_GRACE_SECONDS,
+) -> None:
+    """Force-retire an owned process and release its pipes within a deadline.
+
+    ``force_terminate_process`` bounds the native termination path, including
+    Windows taskkill and its helper. ``communicate`` may still retain a reader
+    thread, so pipe closure uses the same deadline and cannot turn a timed-out
+    read into an unbounded wait. The original timeout or cancellation remains
+    the caller's result even when termination cannot be confirmed.
+    """
+
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("native process cleanup timeout must be positive and finite")
+    deadline = time.monotonic() + timeout
+    try:
+        # Reserve part of the single cleanup budget for the pipe handles that a
+        # Windows reader thread may still own.
+        force_terminate_process(
+            process,
+            process_tree_owned=process_tree_owned,
+            timeout=max(0.05, timeout * 0.8),
+        )
+    finally:
+        _close_owned_streams_before_deadline(process, deadline)
 
 
 def prepare_owned_process_cleanup(process: subprocess.Popen[bytes]) -> Callable[[], None]:
