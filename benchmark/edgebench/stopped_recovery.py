@@ -19,6 +19,7 @@ import tarfile
 import tempfile
 import time
 
+from .checkpoint_controller import _remaining
 from .checkpoint_worker import _archive_component, _guest_path
 
 
@@ -66,6 +67,9 @@ def source_paths(declaration: dict) -> dict[str, str]:
 
 def prepare_stopped_recovery(client, *, container_id: str, declaration: dict,
                              output: Path, timeout: float = 120, install: bool = False) -> dict:
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError('Stopped recovery timeout must be finite and positive')
+    deadline = time.monotonic() + timeout
     if not re.fullmatch(r'[a-f0-9]{64}', container_id):
         raise ValueError('Stopped recovery requires one full container identity')
     paths = source_paths(declaration)
@@ -87,7 +91,6 @@ def prepare_stopped_recovery(client, *, container_id: str, declaration: dict,
     if box.attrs.get('Mounts'):
         raise ValueError('Stopped worker has externally writable mounts')
     finished = datetime.fromisoformat(before['FinishedAt'].replace('Z', '+00:00')).timestamp()
-    deadline = time.time() + timeout
     components = []
     with tempfile.TemporaryDirectory(prefix='.stopped-source-', dir=output.parent) as temporary:
         copied = {}
@@ -205,21 +208,24 @@ def prepare_stopped_recovery(client, *, container_id: str, declaration: dict,
             raise ValueError('Original worker changed before proof installation')
         with tempfile.TemporaryDirectory(prefix='.proof-existing-', dir=output.parent) as directory:
             try:
-                existing = _archive_component(box, str(parent / name), Path(directory) / 'proof', deadline=time.time() + timeout)
+                existing = _archive_component(box, str(parent / name), Path(directory) / 'proof', deadline=deadline)
             except NotFound:
                 existing = None
             if existing is not None and existing.read_bytes() != raw:
                 raise ValueError('Original worker recovery proof path is already occupied')
-        if existing is None and not box.put_archive(str(parent), package.getvalue()):
-            raise ValueError('Original worker did not accept its inert recovery proof')
+        if existing is None:
+            _remaining(deadline)
+            if not box.put_archive(str(parent), package.getvalue()):
+                raise ValueError('Original worker did not accept its inert recovery proof')
         with tempfile.TemporaryDirectory(prefix='.proof-readback-', dir=output.parent) as directory:
-            copied = _archive_component(box, str(parent / name), Path(directory) / 'proof', deadline=time.time() + timeout)
+            copied = _archive_component(box, str(parent / name), Path(directory) / 'proof', deadline=deadline)
             if copied.read_bytes() != raw:
                 raise ValueError('Original worker recovery proof readback differs')
         box.reload()
         if box.attrs['State'] != before:
             raise ValueError('Original worker changed during proof installation')
         result['installed_proof_path'] = str(parent / name)
+    _remaining(deadline)
     with os.fdopen(os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'w') as stream:
         json.dump(result, stream, indent=2)
         stream.flush()
