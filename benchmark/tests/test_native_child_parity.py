@@ -1,6 +1,9 @@
 """Matched optional host-native delegation, with immutable continuing profiles."""
+import asyncio
 from dataclasses import replace
+from pathlib import Path
 import tomllib
+from types import SimpleNamespace
 
 import pytest
 
@@ -87,6 +90,44 @@ def test_worker_environment_propagates_only_explicit_capacity(tmp_path, monkeypa
         assert env["LOOPX_NATIVE_CHILD_LIMIT"] == "3"
         agent.execution = replace(agent.execution, native_child_limit=None)
         assert agent._worker_env(cwd=str(tmp_path))["LOOPX_NATIVE_CHILD_LIMIT"] == ""
+
+
+@pytest.mark.parametrize("limit", [None, 3])
+def test_harbor_registry_failure_keeps_default_task_document_order(tmp_path, limit):
+    pytest.importorskip("harbor")
+    from benchmark.runtime.harbor import BenchmarkCodex
+
+    agent = BenchmarkCodex(logs_dir=tmp_path, model_name="fixture", native_child_limit=limit)
+    agent._phase_number = 2
+    events = []
+
+    async def execute(*, command, **kwargs):
+        if command.startswith("test -e "):
+            events.append("pending")
+            return SimpleNamespace(return_code=1)
+        if command.startswith("test -s "):
+            events.append("registry")
+            raise ConnectionError("registry transport unavailable")
+        assert command.removeprefix("set -o pipefail; ").startswith("chmod 0644 ")
+        events.append("chmod")
+        return SimpleNamespace(return_code=0, stdout="", stderr="")
+
+    async def upload(source, destination):
+        name = Path(destination).name
+        events.append(name)
+        (tmp_path / name).write_bytes(source.read_bytes())
+
+    transport = SimpleNamespace(exec=execute, upload_file=upload)
+    with pytest.raises(ConnectionError, match="registry transport unavailable"):
+        asyncio.run(agent._prepare_phase(transport, "Synthetic phase task.", cwd=str(tmp_path)))
+
+    if limit is None:
+        assert events == ["pending", "task.md", "task-phase-002.md", "chmod", "registry"]
+        for name in ("task.md", "task-phase-002.md"):
+            assert (tmp_path / name).read_text() == "# Current benchmark task\n\nSynthetic phase task.\n"
+    else:
+        assert events == ["pending", "registry"]
+        assert not list(tmp_path.glob("task*.md"))
 
 
 @pytest.mark.parametrize("limit,feedback", [("0", "native"), ("-1", "native"), ("3", "blind")])

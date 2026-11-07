@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import subprocess
 import sys
 import time
 
@@ -18,6 +19,94 @@ from loopx.control_plane.turn_driver.host_failure import (
     build_host_failure_record, explicit_host_failure_retry_available, host_failure_retry_available,
 )
 from loopx.hosts import codex_checkpoint as native
+
+
+def _run_scheduler_probe(tmp_path, state, *, deadline, digest):
+    marker = tmp_path / "worker-invoked"
+    worker = tmp_path / "scripts" / "external_scheduler_worker.py"
+    worker.parent.mkdir()
+    worker.write_text(f"from pathlib import Path\nPath({str(marker)!r}).touch()\n")
+    env = {key: value for key, value in os.environ.items() if not key.startswith("LOOPX_")}
+    env.update(LOOPX_PHASE_DEADLINE_EPOCH=str(deadline), LOOPX_AGENT_ID="fixture-agent",
+        LOOPX_GOAL_ID="fixture-goal", LOOPX_EXECUTION_MODE="heartbeat", LOOPX_ITERATION_CONTEXT="resume",
+        LOOPX_CLI=str(tmp_path / "fixture-cli"), LOOPX_REGISTRY=str(tmp_path / "registry.json"),
+        LOOPX_RUNTIME_ROOT=str(tmp_path / "runtime"), LOOPX_WAKE_LOG_DIR=str(tmp_path / "wakes"))
+    command = [sys.executable, "-m", "benchmark.runtime.scheduler",
+        "--python", sys.executable, "--source", str(tmp_path), "--state-file", str(state), "--host-timeout", "10"]
+    if digest is not None:
+        command.extend(["--retry-failed-state-sha256", digest])
+    result = subprocess.run(command, cwd=Path(__file__).resolve().parents[2], env=env,
+                            capture_output=True, text=True, timeout=30, check=False)
+    return result, marker.exists()
+
+
+@pytest.mark.parametrize("source", [
+    pytest.param(None, id="missing"),
+    pytest.param(b"\xff", id="unreadable"),
+    pytest.param(b"{}", id="no-attempt"),
+    pytest.param(b'{"host_attempt":{"scope":"unknown"}}', id="invalid-scope"),
+    pytest.param(json.dumps({"host_attempt": {"scope": "a" * 64, "attempt": False}}).encode(),
+                 id="invalid-attempt"),
+])
+def test_explicit_scheduler_never_launches_without_qualified_source(tmp_path, source):
+    state = tmp_path / "scheduler.json"
+    if source is not None:
+        state.write_bytes(source)
+    digest = hashlib.sha256(source).hexdigest() if source is not None else "a" * 64
+    result, invoked = _run_scheduler_probe(tmp_path, state, deadline=time.time() + 60, digest=digest)
+    assert result.returncode != 0 and "Explicit failed continuation" in result.stderr
+    assert not invoked and not list(tmp_path.glob("scheduler.phase-*.json"))
+    assert (state.read_bytes() if state.exists() else None) == source
+
+
+def test_ordinary_scheduler_can_launch_without_explicit_source(tmp_path):
+    state = tmp_path / "scheduler.json"
+    result, invoked = _run_scheduler_probe(tmp_path, state, deadline=time.time() + 60, digest=None)
+    assert result.returncode == 0 and invoked and not state.exists()
+
+
+@pytest.mark.parametrize("locked_file", ["scheduler.json", "scheduler.phase-other.json"])
+def test_explicit_scheduler_does_not_launch_when_phase_selection_is_locked(tmp_path, locked_file):
+    from loopx.file_lock import try_exclusive_file_lock
+    from scripts.external_scheduler_worker import HOST_LOCK_OPERATION
+
+    held = tmp_path / locked_file
+    held.write_bytes(b"{}")
+    with try_exclusive_file_lock(held, agent_id="fixture-agent", operation=HOST_LOCK_OPERATION) as lock:
+        assert lock is not None
+        result, invoked = _run_scheduler_probe(tmp_path, tmp_path / "scheduler.json",
+            deadline=time.time() + 60, digest=hashlib.sha256(b"{}").hexdigest())
+    assert result.returncode != 0 and "Explicit failed continuation" in result.stderr
+    assert not invoked and held.read_bytes() == b"{}"
+
+
+@pytest.mark.parametrize("original_returned", [False, True])
+def test_explicit_scheduler_requires_complete_same_phase_evidence(tmp_path, original_returned):
+    state = tmp_path / "scheduler.json"
+    session = "original-native"
+    failure = build_host_failure_record("quota_exhausted", attempt=1)
+    source = {
+        "last_wake_status": "wake_failed", "last_wake_rc": 1,
+        "host_attempt": {"scope": "a" * 64, "status": "failed", "attempt": 1,
+                         "session_id": session, "host_failure": failure, "not_before": time.time()},
+    } if original_returned else {}
+    original = json.dumps(source).encode()
+    state.write_bytes(original)
+    digest = hashlib.sha256(original).hexdigest()
+    deadline = time.time() + 60
+    suffix = hashlib.sha256(deadline.hex().encode()).hexdigest()[:20]
+    phase = tmp_path / f"scheduler.phase-{suffix}.json"
+    phase.write_text(json.dumps({
+        "resume_from": str(state), "recovered_session_id": session, "recovered_attempt_count": 1,
+        "failed_host_recovery": {
+            "phase_deadline_epoch": deadline, "source_state_sha256": digest, "host_failure": failure,
+            "retry_failed": True, "native": {"session_id": session, "status": "failed"},
+        },
+    }))
+    before = phase.read_bytes()
+    result, invoked = _run_scheduler_probe(tmp_path, state, deadline=deadline, digest=digest)
+    assert result.returncode != 0 and "Explicit failed continuation" in result.stderr
+    assert not invoked and phase.read_bytes() == before and state.read_bytes() == original
 
 
 @pytest.mark.parametrize('kind,attempt,explicit,allowed', [
@@ -40,12 +129,18 @@ def test_failed_native_readback_preserves_strict_checkpoint_and_unknown_error_ga
     turns = [dict(id='first', status='completed', items=[]), dict(id='last', status='failed',
         startedAt=110, completedAt=120, error={'codexErrorInfo': 'usageLimitExceeded'},
         items=[{'type': 'commandExecution', 'status': 'completed'}])]
-    if fault == 'in_progress': turns[-1]['status'] = 'inProgress'
-    elif fault == 'pending_effect': turns[-1]['items'][0]['status'] = 'inProgress'
-    elif fault == 'wrong_error': turns[-1]['error']['codexErrorInfo'] = 'unknownFutureCode'
-    elif fault == 'prose_only': turns[-1]['error'] = {'message': 'usageLimitExceeded'}
-    elif fault == 'outside_window': turns[-1]['startedAt'] = 90
-    elif fault == 'empty': turns = []
+    if fault == 'in_progress':
+        turns[-1]['status'] = 'inProgress'
+    elif fault == 'pending_effect':
+        turns[-1]['items'][0]['status'] = 'inProgress'
+    elif fault == 'wrong_error':
+        turns[-1]['error']['codexErrorInfo'] = 'unknownFutureCode'
+    elif fault == 'prose_only':
+        turns[-1]['error'] = {'message': 'usageLimitExceeded'}
+    elif fault == 'outside_window':
+        turns[-1]['startedAt'] = 90
+    elif fault == 'empty':
+        turns = []
     calls = []
     class Transport:
         def request(self, method, params):
@@ -59,13 +154,15 @@ def test_failed_native_readback_preserves_strict_checkpoint_and_unknown_error_ga
                 rows[0]['items'] = [{'type': 'agentMessage', 'text': 'new'}]
             return {'data': rows, 'nextCursor': None}
     @contextmanager
-    def reader(*a, **kw): yield Transport()
+    def reader(*a, **kw):
+        yield Transport()
     monkeypatch.setattr(native, 'native_checkpoint_reader', reader)
     def read():
         return native.native_failed_turn({'LOOPX_PROJECT': str(tmp_path)}, 'original',
             failure_kind='quota_exhausted', process_started_at=100, process_stopped_at=125)
     if fault:
-        with pytest.raises(ValueError): read()
+        with pytest.raises(ValueError):
+            read()
     else:
         result = read()
         assert result['status'] == 'failed' and result['turn_count'] == 2
@@ -117,7 +214,8 @@ history.write_text(json.dumps({'id':'quota-failed-work','status':'failed',
 print(json.dumps({'type':'turn.failed','error':{'codexErrorInfo':'usageLimitExceeded'}}),flush=True)
 sys.exit(1)
 ''')
-    for key, value in env.items(): monkeypatch.setenv(key, value)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
     deadline = time.time() + 120
     monkeypatch.setenv('LOOPX_PHASE_DEADLINE_EPOCH', str(deadline))
     args, _ = scheduler_fixture._guarded_host(tmp_path / 'scheduler')
@@ -145,11 +243,13 @@ sys.exit(1)
         from loopx.control_plane.goals.activation_service import set_goal_activation_state
         assert set_goal_activation_state(registry_path=Path(args.registry), goal_id=args.goal_id,
             state='stopped', reason='Owner stopped work', actor_kind='owner', execute=True)['ok']
-    elif fault == 'profile': monkeypatch.setenv('MODEL_NAME', 'other-model')
+    elif fault == 'profile':
+        monkeypatch.setenv('MODEL_NAME', 'other-model')
     elif fault == 'session':
         receipt['session']['session_id'] = 'different-native'
         receipts[0].write_text(json.dumps(receipt))
-    elif fault == 'source_digest': digest = 'a' * 64
+    elif fault == 'source_digest':
+        digest = 'a' * 64
     elif fault in ('exhausted', 'unknown_allowance'):
         (project / 'observed-allowance.json').write_text(json.dumps({'rateLimits': {}} if fault == 'unknown_allowance' else
             {'rateLimits': {'primary': {'usedPercent': 100, 'resetsAt': int(time.time()) + 1000}, 'credits': {'hasCredits': False}}}))
@@ -158,7 +258,8 @@ sys.exit(1)
             wake_log_dir=env['LOOPX_WAKE_LOG_DIR'], env=dict(os.environ),
             retry_failed_state_sha256=digest, **kwargs)
     if fault and fault != 'stop_after_prepare':
-        with pytest.raises((ValueError, RuntimeError)): resume()
+        with pytest.raises((ValueError, RuntimeError)):
+            resume()
         assert original.read_bytes() == original_bytes
         assert not list(original.parent.glob('*.phase-*.json'))
         return
@@ -171,6 +272,34 @@ sys.exit(1)
     assert phase_initial['failed_host_recovery']['native']['status'] == 'failed'
     assert phase_initial['failed_host_recovery']['phase_deadline_epoch'] == deadline
     assert resume() == str(phase)
+    if fault is None:
+        from benchmark.runtime import codex_readiness
+
+        def unexpected_observer(*args, **kwargs):
+            pytest.fail("Exact replay must reuse the original native and allowance observations")
+
+        with monkeypatch.context() as replay:
+            replay.setattr(native, "native_failed_turn", unexpected_observer)
+            replay.setattr(codex_readiness, "require_native_receiver_allowance", unexpected_observer)
+            assert resume() == str(phase)
+        original.write_bytes(original_bytes + b"\n")
+        with pytest.raises(ValueError, match="replay source changed"):
+            resume()
+        original.write_bytes(original_bytes)
+        receipt_path = receipts[0]
+        returned_bytes = receipt_path.read_bytes()
+        receipt_path.write_bytes(returned_bytes + b"\n")
+        with pytest.raises(ValueError, match="wake receipt changed"):
+            resume()
+        receipt_path.write_bytes(returned_bytes)
+        for field in ("allowance", "native", "receipt_sha256", "session_profile_digest"):
+            incomplete = copy.deepcopy(phase_initial)
+            del incomplete["failed_host_recovery"][field]
+            phase.write_text(json.dumps(incomplete))
+            with pytest.raises(ValueError, match="Explicit failed continuation"):
+                resume()
+        phase.write_text(json.dumps(phase_initial))
+        assert json.loads(phase.read_bytes()) == phase_initial
     if fault == 'stop_after_prepare':
         from loopx.control_plane.goals.activation_service import set_goal_activation_state
         assert set_goal_activation_state(registry_path=Path(args.registry), goal_id=args.goal_id,
@@ -222,12 +351,17 @@ def test_legacy_quota_failure_proof_retains_complete_same_container_source(tmp_p
     receipt = json.loads(receipt_path.read_bytes())
     receipt.pop('budget_exhausted')
     receipt.update(return_code=1, host_failure=build_host_failure_record(failure['kind'], attempt=1))
-    if fault == 'other_receipt': receipt['session']['session_id'] = 'different'
-    receipt_path.write_text(json.dumps(receipt));os.utime(receipt_path, (110, 110))
+    if fault == 'other_receipt':
+        receipt['session']['session_id'] = 'different'
+    receipt_path.write_text(json.dumps(receipt))
+    os.utime(receipt_path, (110, 110))
     if fault == 'late_wake':
         late = receipt_path.parent.with_name('later') / 'receipt.json'
-        late.parent.mkdir();late.write_text('{}');os.utime(late, (112, 112))
-    if fault == 'live': box.attrs['State'].update(Status='running', Running=True, Pid=44)
+        late.parent.mkdir()
+        late.write_text('{}')
+        os.utime(late, (112, 112))
+    if fault == 'live':
+        box.attrs['State'].update(Status='running', Running=True, Pid=44)
     before = state_path.read_bytes()
     output = tmp_path / 'quota-failure-proof.json'
     if fault not in (None, 'wrong_container'):
