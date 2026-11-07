@@ -181,7 +181,7 @@ def test_managed_creation_retains_requirements_before_one_host_dispatch(environm
     original = getattr(target, method)
 
     def lose_response(*args, **kwargs):
-        result = original(*args, **kwargs)
+        original(*args, **kwargs)
         raise TimeoutError("Committed creation response was lost")
 
     monkeypatch.setattr(target, method, lose_response)
