@@ -923,7 +923,7 @@ def _run_worker_locked(
                         _save_host_pending(state_path, True)
                         state["host_attempt"] = {"scope": scope, "status": "started",
                             "attempt_id": uuid.uuid4().hex,
-                            "attempt": prior.get("attempt", 0) + 1,
+                            "attempt": prior.get("attempt", state.get("recovered_attempt_count", 0)) + 1,
                             "session_id": prior.get("session_id") or state.get("recovered_session_id"),
                             **({"replan_obligation_id": attempt["obligation_id"]}
                                if attempt is not None else {})}

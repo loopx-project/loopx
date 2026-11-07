@@ -413,10 +413,14 @@ def test_real_planning_rejects_todos_without_agent_requirements(planning_env):
     assert not packet["goal_acceptance"]["planning_requirements"]["declaration_current"]
 
 
-def test_stopped_goal_cannot_launch_first_planner_or_fabricate_requirements(planning_env):
+@pytest.mark.parametrize("native_child_limit", [None, 3])
+def test_stopped_goal_cannot_launch_first_planner_or_fabricate_requirements(planning_env, native_child_limit):
     from loopx.control_plane.goals.first_party_host_admission import FirstPartyHostRuntimeRejected
     from benchmark.runtime.planning import task_plan_packet
     from benchmark.runtime.worker import loopx_command
+
+    if native_child_limit is not None:
+        planning_env["LOOPX_NATIVE_CHILD_LIMIT"] = str(native_child_limit)
 
     command = loopx_command(planning_env) + ["goal-lifecycle", "--goal-id", "planning-goal", "--operation", "stop"]
     preview = json.loads(subprocess.run(command, env=planning_env, capture_output=True,

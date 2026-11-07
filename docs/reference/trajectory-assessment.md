@@ -7,6 +7,51 @@ These use the S5/S11
 [research episode assessment](../architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.md#evidence-based-episode-evaluation-proposed-refinement).
 It does not change solver prompts, benchmark scoring, checkpoints or research budgets.
 
+## Authored case studies
+
+A registered pack can include an authored reading companion through
+`trajectory-pack-register --case-study-json case-study.json`. This is an optional
+benchmark-toolkit presentation, qualified by its TypeScript owner. It requires
+no model receipt. Goals with a companion open a case reading view; the existing
+research records and analysis remain accessible. Without one, the existing
+reader is unchanged. The CLI registration is the authoring entrypoint; the
+workbench selects, reads and traces the saved result without model execution.
+For benchmark research, each case is an ordinary child Goal of the benchmark
+Goal using the existing `parent_goal_id`. Register that case's evidence packs
+under its child Goal, not under a parent-level case selector. The parent links
+to child research spaces; each child links back and retains its own records,
+findings, documents and reading versions. Parentage neither merges evidence
+nor grants execution. Navigation stays within the same status source.
+
+The document has `title`, `language` (`zh` or `en`), `summary`, summary
+`citations`, `sections` and `limitations`. Each section has a unique `id`,
+`title`, Markdown `text` and `citations`, and can combine a table
+(`columns`, `rows`), categorical numeric series (`label`, `unit`, `points`
+of `{label, value}` with null for missing measurements), or a timeline
+of `{label, title, text}` entries. Authors choose the order and composition.
+Reading should explain conclusions, unfamiliar domain concepts, competing
+approaches, decisive observations and remaining uncertainty. It does not require
+exercises, actions or note-taking. Charts preserve gaps and show exact values;
+they do not infer interpolation, ranking or comparability.
+
+Citations use the pack's absolute source-line ranges. Registration verifies the
+artifact bytes and qualifies every range, but does not establish entailment or
+scientific validity. The companion becomes part of pack identity; editing it
+requires a new registration and preserves the prior version. It does not change
+the model prompt, analysis key or scoring owner. Source changes preserve the
+registered reading and cited snapshot with a historical warning. Language
+switches show the saved original with a notice, without inventing a translation.
+Rendering uses the existing Markdown renderer and host-owned components, with
+no executable HTML. Porthole is not a runtime dependency of this reader.
+
+Documents are bounded to 160,000 serialized characters and 24 sections, with
+smaller per-block limits. This bounds the existing full-pack HTTP read and DOM
+render without truncating conclusions or evidence. Larger studies should split
+into separate source-scoped packs; rejected documents are not silently shortened.
+Select **Research records and analysis** to return to the original reader;
+this view choice is retained in the URL. Registering a pack without a companion
+does not delete an existing study, historical source or saved result.
+
 ## Researcher synthesis in the existing reader
 
 New registrations using the default configuration and CLI previews request

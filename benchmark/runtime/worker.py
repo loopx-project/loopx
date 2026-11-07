@@ -505,6 +505,8 @@ def run_once(env: dict[str, str]) -> dict:
         task_entry=env.get("LOOPX_TASK_ENTRY"),
         turn_envelope=env.get("LOOPX_TURN_ENVELOPE", "0") == "1",
         context_delivery=env.get("LOOPX_CONTEXT_DELIVERY"),
+        native_child_limit=(int(env["LOOPX_NATIVE_CHILD_LIMIT"])
+                            if env.get("LOOPX_NATIVE_CHILD_LIMIT") else None),
     )
     request_admission = False
     if env.get("LOOPX_PROVIDER_REQUEST_ADMISSION", "off") != "off":
@@ -551,6 +553,8 @@ def run_once(env: dict[str, str]) -> dict:
         **({"turn_envelope": True, "turn_envelope_source": "explicit"}
            if execution.turn_envelope else {}),
         **({"context_delivery": "on"} if execution.context_delivery != "off" else {}),
+        **({"native_child_limit": execution.native_child_limit}
+           if execution.native_child_limit is not None else {}),
         **({"provider_request_admission": "on"} if request_admission else {}),
         "stage": stage,
         "home_scope": "trial",

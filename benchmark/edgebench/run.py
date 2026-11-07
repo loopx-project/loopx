@@ -126,6 +126,8 @@ def main(argv=None):
                         help="Native Codex context delivery: on by default for heartbeat workers; pass off to disable")
     parser.add_argument("--execution-observation", choices=("local_probe",),
                         help="Optional local execution probe for heartbeat workers")
+    parser.add_argument("--native-child-limit", type=int,
+                        help="Explicit native child capacity and optional task delegation authorization, shared across study arms; omitted preserves existing behavior")
     parser.add_argument("--provider-request-admission", action="store_true",
                         help="Opt-in canonical admission before each heartbeat custom Responses request")
     parser.add_argument("--native-goal-continue", action="store_true",
@@ -189,6 +191,9 @@ def main(argv=None):
                         help="Host services run on Docker's default bridge (e.g. runner inside a VM); "
                              "pin host.docker.internal there instead of Docker's host-gateway alias")
     args = parser.parse_args(argv)
+    if args.native_child_limit is not None and (
+            args.native_child_limit < 1 or args.feedback != "native"):
+        parser.error("--native-child-limit requires a positive limit and native feedback")
     api_base_url = os.environ.get("OPENAI_BASE_URL") or None
     api_key = os.environ.get("OPENAI_API_KEY") if api_base_url else None
     if api_base_url and not api_key:
@@ -292,6 +297,8 @@ def main(argv=None):
                 archive_source(runner, pins[1], Path(directory) / "runner.tar", ("benchmark/runtime",))
     task_file = args.tasks_dir / f"{args.task}.json"
     task = make_task_spec(task_file, load_benchmark(args.tasks_dir))
+    if args.native_child_limit is not None and task.game_mode:
+        parser.error("--native-child-limit requires a non-game task with workspace instructions")
     research_sidecar = args.feedback == "native" and not task.game_mode
     if research_sidecar:
         from benchmark.runtime.research_artifacts import validate_research_scope, with_research_capture
@@ -363,7 +370,8 @@ def main(argv=None):
             args.restore_goal, args.restore_agent, args.restore_source_todo,
             int(time.time()) + args.timeout, args.replan_after_turns or 6,
             tuple(args.restore_research_component), args.restore_fresh_replan,
-            destination_config=args.restore_model_config, research_sidecar=research_sidecar)
+            destination_config=args.restore_model_config, research_sidecar=research_sidecar,
+            native_child_limit=args.native_child_limit)
         metadata = candidate.verify(task.cwd)
         if args.restore_model_config is not None:
             from loopx.hosts.codex_checkpoint import checkpoint_destination_config
@@ -380,6 +388,7 @@ def main(argv=None):
                          warm_start=warm_start, research_sidecar=research_sidecar,
                          timeout_seconds=args.timeout, feedback_prompt=feedback_prompt, feedback=args.feedback,
                          workspace_instructions=workspace_instructions,
+                         native_child_limit=args.native_child_limit,
                          task_objective=task_objective,
                          task_entry=args.task_entry,
                          turn_envelope=args.turn_envelope,
