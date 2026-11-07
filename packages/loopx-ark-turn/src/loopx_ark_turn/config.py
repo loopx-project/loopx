@@ -62,22 +62,23 @@ class Config:
 
 
 def require_request(request: Mapping[str, Any]) -> dict[str, str]:
-    from loopx.control_plane.turn_driver.host_candidate import extract_turn_authority
+    from loopx.extensions.turn_host import assert_turn_host_request_version, extract_turn_work_identity
 
-    if request.get("schema_version") != "loopx_turn_host_request_v0":
-        raise AdapterError("request_schema_mismatch")
-    extract_turn_authority(request)
+    try:
+        assert_turn_host_request_version(request)
+    except ValueError as exc:
+        raise AdapterError("request_schema_mismatch") from exc
+    work = extract_turn_work_identity(request)
     key = request.get("turn_key")
     if not isinstance(key, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", key):
         raise AdapterError("invalid_turn_key")
     if request.get("session", {}).get("context_policy", {}).get("mode") != "fresh":
         raise AdapterError("ark_turn_requires_iteration_context_fresh")
-    envelope = request["turn_envelope"]
     identity = {
         "KEY": key,
-        "GOAL_ID": envelope.get("goal_id"),
-        "AGENT_ID": envelope.get("agent_id"),
-        "TODO_ID": envelope.get("action", {}).get("selected_todo", {}).get("todo_id"),
+        "GOAL_ID": work.get("goal_id"),
+        "AGENT_ID": work.get("agent_id"),
+        "TODO_ID": work.get("todo_id"),
     }
     if any(not isinstance(v, str) or not v or "\x00" in v for v in identity.values()):
         raise AdapterError("signed_work_identity_required")

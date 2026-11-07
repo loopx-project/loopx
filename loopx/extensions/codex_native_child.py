@@ -17,8 +17,16 @@ from ..capabilities.multi_subagent.native_child_receipts import (
 
 
 def configured_native_child_limit(request: Mapping[str, Any]) -> int | None:
-    envelope = request.get("turn_envelope")
-    context = envelope.get("agent_context") if isinstance(envelope, Mapping) else None
+    # Invocation metadata only: the Host still verifies the complete source
+    # before launch, and the existing recorder owns receipt admission. Live
+    # requests read their original context; only old journals use the v0 view.
+    if "work_contract" in request:
+        contract = request["work_contract"]
+        interaction = contract.get("interaction_contract") if isinstance(contract, Mapping) else None
+        context = interaction.get("agent_context") if isinstance(interaction, Mapping) else None
+    else:
+        envelope = request.get("turn_envelope")
+        context = envelope.get("agent_context") if isinstance(envelope, Mapping) else None
     contributions = context.get("contributions") if isinstance(context, Mapping) else None
     if not isinstance(contributions, list):
         return None
