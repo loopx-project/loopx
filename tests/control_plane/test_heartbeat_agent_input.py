@@ -170,6 +170,33 @@ def test_thin_agent_input_keeps_exact_turn_and_bootstrap_identity_when_present()
     assert projected["bootstrap"] is True
 
 
+@pytest.mark.parametrize("mode", ["full", "compact", "brief", "thin"])
+@pytest.mark.parametrize("windows", [False, True])
+def test_bound_prompt_keeps_original_turn_without_wake_time_substitution(mode, windows, monkeypatch):
+    import loopx.project_prompt as prompt_shell
+
+    monkeypatch.setattr(prompt_shell, "_is_windows_host", lambda: windows)
+    args = dict(goal_id="bound-heartbeat", agent_id="agent-a",
+                runtime_profile="codex_app_heartbeat", **{mode: True})
+    dynamic = build_heartbeat_prompt(**args)
+    bound = build_heartbeat_prompt(**args, turn_instance_id="original-turn")
+    # A reusable wake template still needs timestamp substitution. A producer-
+    # bound prompt must preserve that original identity, including on retry.
+    assert "Per wake replace `<current_time_iso>` once; reuse on retries" in dynamic["task_body"]
+    assert "Per wake replace" not in bound["task_body"]
+    assert "<current_time_iso>" not in bound["task_body"]
+    assignment = ('$LOOPX_TURN = "original-turn"' if windows
+                  else "LOOPX_TURN=original-turn")
+    lines = bound["task_body"].splitlines()
+    assert lines.count(assignment) == 1
+    assert bound["quota_guard_command"] in lines
+    assert lines.index(assignment) < lines.index(bound["quota_guard_command"])
+    # Binding does not replace the dynamic shell read with an unscoped guard.
+    assert "--turn-instance-id" in bound["quota_guard_command"]
+    assert "LOOPX_TURN" in bound["quota_guard_command"]
+    assert "interaction_contract.cli_channel.settlement_plan.ordered_steps" in bound["task_body"]
+
+
 def test_thin_agent_input_error_is_actionable_without_generator_diagnostics() -> None:
     generated = build_heartbeat_prompt_error_payload(
         goal_id="heartbeat-agent-input",
