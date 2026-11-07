@@ -615,8 +615,7 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
             field_index=field_index, initial_read_pointers=initial_read_pointers,
             progressive_enabled=progressive_enabled, initial_read_reference=initial_read_reference,
             page_bytes=page_bytes, output_bytes=output_bytes, first_read_budget=first_read_budget,
-            page_attached=page_attached, first_read_requested=stateless_first_read,
-            reader_argv=reader_argv)
+            page_attached=page_attached, first_read_requested=stateless_first_read, reader_argv=reader_argv)
 
     if typed and mode == "delta":
         result = None
@@ -787,7 +786,7 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
         activation = native_context_activation(args)
         saved_page = bool(getattr(args, "initial_read", False) or getattr(args, "select", None))
         if saved_page and (args.format != "json" or not _context_page_output_enabled(args, activation) or args.offset != 0
-                or args.reference_file or args.selection_sha256
+                or args.reference_file or args.selection_sha256 or args.page_bytes is not None
                 or (args.initial_read and args.select)):
             raise ValueError("Use JSON context-project at offset zero with native delivery or progressive --initial-read. "
                 "Choose either --initial-read or --select. Use context-read for replay or continuation.")
@@ -835,7 +834,7 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
                 directory=None, reader_argv=reader_argv, captured_decision_path=str(path), page_attached=saved_page)
             if saved_page:
                 return _saved_context_read_page(args, navigation, initial_reference=None,
-                    initial_read_plan=None, output_limit=output_limit, reader_argv=reader_argv)
+                    initial_read_plan=None, output_limit=caller_output_limit, reader_argv=reader_argv)
             return navigation
         except EffectRuntimeRejected as exc:
             # A valid file digest does not validate the decision inside it. The
