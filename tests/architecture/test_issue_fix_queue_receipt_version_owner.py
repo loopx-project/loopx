@@ -20,6 +20,8 @@ from __future__ import annotations
 import ast
 import pathlib
 
+import pytest
+
 from loopx.capabilities.issue_fix import reviewer_notification
 from loopx.domain_packs import issue_fix as issue_fix_pack
 
@@ -75,8 +77,6 @@ def module_constants(tree: ast.Module) -> dict[str, str]:
 
 
 def version_rows(source: str, name: str) -> list[dict[str, object]]:
-    if "queue_receipt" not in source:
-        return []
     tree = ast.parse(source)
     constants = module_constants(tree)
     rows: list[dict[str, object]] = []
@@ -142,3 +142,62 @@ def test_current_and_legacy_receipt_versions_stay_distinct_at_the_boundary() -> 
     )
     assert owner_value != legacy, (owner_value, legacy)
     assert owner_value.endswith("_v1") and legacy.endswith("_v0")
+
+
+OFFENDING = (
+    (
+        "split literal addition",
+        'COPY = "issue_fix_reviewer_notification_" + "queue_" + "receipt_v1"\n',
+    ),
+    (
+        "adjacent literals across lines",
+        'COPY = (\n    "issue_fix_reviewer_notification_queue_" "receipt_v1"\n)\n',
+    ),
+    (
+        "same-file constants concatenated",
+        'HEAD = "issue_fix_reviewer_notification_queue_"\nTAIL = "receipt_v1"\n'
+        "COPY = HEAD + TAIL\n",
+    ),
+    (
+        "constant pieces inside adjacent f-strings",
+        'COPY = f"issue_fix_reviewer_notification_queue_rece" f"ipt_v1"\n',
+    ),
+)
+NON_OFFENDING = (
+    (
+        "the legacy receipt is a different decision",
+        'COPY = "issue_fix_reviewer_notification_queue_receipt_v0"\n',
+    ),
+    (
+        "an unrelated contract name is unrelated",
+        'COPY = "issue_fix_reviewer_notification_queue_projection_v1"\n',
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    ("label", "source"), OFFENDING, ids=[row[0] for row in OFFENDING]
+)
+def test_the_scan_reports_a_restated_queue_receipt_version(label: str, source: str) -> None:
+    rows = version_rows(source, "loopx/capabilities/probe.py")
+    assert rows, label
+    assert offenders(rows) != [], label
+
+
+@pytest.mark.parametrize(
+    ("label", "source"), NON_OFFENDING, ids=[row[0] for row in NON_OFFENDING]
+)
+def test_the_scan_leaves_a_different_contract_alone(label: str, source: str) -> None:
+    assert version_rows(source, "loopx/capabilities/probe.py") == [], label
+
+
+def test_a_split_copy_is_rejected_through_the_repository_scan(
+    tmp_path: pathlib.Path,
+) -> None:
+    source = 'COPY = "issue_fix_reviewer_notification_" + "queue_" + "receipt_v1"\n'
+    probe_root = tmp_path / "loopx" / "capabilities"
+    probe_root.mkdir(parents=True)
+    (probe_root / "probe.py").write_text(source, encoding="utf-8")
+    rows = collect(tmp_path)
+    assert [row["file"] for row in rows] == ["loopx/capabilities/probe.py"]
+    assert offenders(rows)[0].startswith("loopx/capabilities/probe.py:")
