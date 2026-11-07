@@ -578,17 +578,18 @@ export const chatRecoveryScenario = {
       });
       let holdControlReads = true;
       const heldControlReads = [];
+      const controlledChannelId = page.__loopxRuntime.sessions.get(busySessionId).channel_id;
       await page.route("**/api/chat/sessions?*", async (route) => {
         const request = route.request();
         if (!holdControlReads || !controlRejectedPosts || request.method() !== "GET"
-          || !new URL(request.url()).searchParams.has("channel_id")) return route.fallback();
+          || new URL(request.url()).searchParams.get("channel_id") !== controlledChannelId) return route.fallback();
         heldControlReads.push(route);
       });
       const steers = [];
       await page.route("**/steer", async (route) => {
         const body = route.request().postDataJSON();
         const [sessionId, turnId] = new URL(route.request().url()).pathname.match(/sessions\/([^/]+)\/turns\/([^/]+)\/steer/).slice(1);
-        steers.push({ sessionId, turnId });
+        steers.push({ sessionId, turnId, message: body.message });
         await route.fulfill({ json: { ok: true, session_id: sessionId, turn_id: turnId, client_ingress_id: body.client_ingress_id, status: "delivered", created: true } });
       });
       const interruptsBefore = api.interrupts.length;
@@ -603,7 +604,13 @@ export const chatRecoveryScenario = {
         { label: "向 LoopX 发送消息", value: draft }, { timeout: 5_000 });
       const handoffReply = page.locator(".personal-message").filter({ has: page.getByRole("button", { name: "中断本轮", exact: true }) });
       await handoffReply.getByRole("button", { name: "调整本轮", exact: true }).click();
-      await composerInput.fill("交接期间先核对依赖。");
+      // Wait for React to commit the replacement draft, rather than pressing
+      // the shortcut against the retained draft's already-enabled button.
+      const adjustment = "交接期间先核对依赖。";
+      await composerInput.fill("");
+      await page.locator(".personal-composer-send:disabled").waitFor({ state: "visible", timeout: 5_000 });
+      await composerInput.fill(adjustment);
+      await page.locator(".personal-composer-send:enabled").waitFor({ state: "visible", timeout: 5_000 });
       const [steerReceipt] = await Promise.all([
         page.waitForResponse((response) => response.request().method() === "POST"
           && new URL(response.url()).pathname.endsWith("/steer"), { timeout: 5_000 }),
@@ -611,8 +618,9 @@ export const chatRecoveryScenario = {
       ]);
       if (!steerReceipt.ok()) throw new Error(`Steering failed with HTTP ${steerReceipt.status()}`);
       await page.locator(".personal-action-feedback").filter({hasText: "执行器已接收本轮追加指令。"}).waitFor({ timeout: 5_000 });
-      if (steers.length !== 1 || steers[0].sessionId !== busySessionId || steers[0].turnId !== controlledTurnId) {
-        throw new Error(`Adjust during the handoff did not reach the reported Turn: ${JSON.stringify(steers)}`);
+      if (steers.length !== 1 || steers[0].sessionId !== busySessionId
+        || steers[0].turnId !== controlledTurnId || steers[0].message !== adjustment) {
+        throw new Error(`Adjust during the handoff did not deliver the new draft to the reported Turn: ${JSON.stringify(steers)}`);
       }
       if (!(await sendButton.isDisabled())) throw new Error("Send reopened after adjusting the handed-off Turn");
       await handoffReply.getByRole("button", { name: "中断本轮", exact: true }).click();
