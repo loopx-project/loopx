@@ -32,14 +32,16 @@ def test_feature_off_and_failed_wakes_do_not_read_request_or_settlement(monkeypa
 
 
 @pytest.mark.skipif(os.name != "posix", reason="native benchmark uses the POSIX source launcher")
-@pytest.mark.parametrize("changed_reference", [False, True])
-def test_native_preflight_uses_the_committed_capture(tmp_path, monkeypatch, changed_reference):
+@pytest.mark.parametrize(("changed_reference", "replan"), [(False, False), (True, False), (False, True)])
+def test_native_preflight_uses_the_committed_capture(tmp_path, monkeypatch, changed_reference, replan):
     import shlex
     import subprocess
     import sys
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = cli._write_fixture(tmp_path)
+    if replan:
+        cli._configure_autonomous_replan_fixture(project, runtime, registry)
     cli._initialize_fixture_authority(project, runtime, provider="sqlite")
     cli_path = Path(__file__).resolve().parents[2] / "scripts/loopx"
     turn = "wake-prepared-native-context"
@@ -81,11 +83,29 @@ def test_native_preflight_uses_the_committed_capture(tmp_path, monkeypatch, chan
         body = capture_before_replan(env, receipt, "original work instructions")
         command = shlex.split(next(line for line in body.splitlines() if " quota context-project " in line))
         source = Path(command[command.index("--capture-file") + 1])
-        assert source.name == "decision.json"
-        assert command[command.index("--capture-sha256") + 1] == observed[0]["capture_sha256"]
-        assert hashlib.sha256(source.read_bytes()).hexdigest() == observed[0]["capture_sha256"]
+        digest = command[command.index("--capture-sha256") + 1]
+        assert hashlib.sha256(source.read_bytes()).hexdigest() == digest
         assert json.loads(source.read_bytes())["heartbeat_receipt"]["turn_instance_id"] == turn
-        assert not list(wake.glob("checkpoint-start-*/checkpoint-start-view.json"))
+        if replan:
+            assert source.name == "checkpoint-start-view.json"
+            original = source.parent / "decision-original/decision.json"
+            assert hashlib.sha256(original.read_bytes()).hexdigest() == observed[0]["capture_sha256"]
+            command.remove("--initial-read")
+            command.extend(["--select", "/replan_action_packet/review", "--select", "/replan_action_packet/writeback"])
+            selected = actual_run(command, cwd=project, env=env, capture_output=True, text=True, check=True)
+            page = json.loads(selected.stdout)
+            assert page["ok"] and page["eof"], page
+            actions = {row["pointer"]: row["value"] for row in json.loads(page["content"])["selections"]}
+            assert "--replan-stage writeback" in actions["/replan_action_packet/writeback"]
+            review = actual_run(shlex.split(actions["/replan_action_packet/review"]),
+                                cwd=project, env=env, capture_output=True, text=True, check=True)
+            review_packet = json.loads(review.stdout)
+            original_packet = json.loads(original.read_bytes())
+            assert review_packet["obligation_id"] == original_packet["replan_action_packet"]["obligation_id"]
+        else:
+            assert source.name == "decision.json"
+            assert digest == observed[0]["capture_sha256"]
+            assert not list(wake.glob("checkpoint-start-*/checkpoint-start-view.json"))
         assert body.endswith("original work instructions")
     assert len(observed) == 1 and "interaction_contract" not in observed[0]
     assert cli._heartbeat_receipt_count(runtime, turn) == 1
