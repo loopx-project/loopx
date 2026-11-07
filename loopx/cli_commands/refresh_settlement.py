@@ -90,6 +90,12 @@ def settle_refreshed_turn(
                 error = str(spent.get("error") or spent.get("reason") or "quota settlement CLI failed")
         except (OSError, RuntimeError, ValueError, TypeError, KeyError, subprocess.TimeoutExpired, SystemExit) as exc:
             error = str(exc)
+    # A refused or partially delivered child can carry recovery controls and
+    # its own bounded reader. Preserve that view before attempting readback.
+    payload["quota_spend"] = spent if error is not None else {key: spent[key] for key in (
+        "ok", "appended", "idempotent_replay", "json_path", "rollout_event",
+        "reward_memory_ingest", "error", "error_code",
+    ) if key in spent}
     try:
         readback = read_heartbeat_settlement(
             runtime_root, registry_path=registry_path, goal_ref=goal_ref,
@@ -107,10 +113,6 @@ def settle_refreshed_turn(
         return
     attach_settlement_progress(payload, readback, registry_path=registry_path,
         runtime_root=runtime_root, goal_ref=goal_ref)
-    payload["quota_spend"] = {key: spent[key] for key in (
-        "ok", "appended", "idempotent_replay", "json_path", "rollout_event",
-        "reward_memory_ingest", "error", "error_code",
-    ) if key in spent}
     payload["settlement_result"] = settlement_result_payload(readback.settlement)
     if payload["settlement_progress"]["state"] == "spend_required":
         payload.update(ok=False, error=error or "exact quota receipt is uncommitted; recover the returned original settlement_owed")
@@ -123,20 +125,33 @@ def settle_refreshed_turn(
 
 
 def present_settled_refresh(payload: dict[str, Any], *, runtime_root: Path) -> dict[str, Any]:
-    """Keep controls/receipts inline; retain successful diagnostic snapshots.
+    """Keep the receipt view bounded and retain complete recovery controls.
 
-    This opt-in output adapter runs after the original owners and exact receipt
-    readback. Errors, pending recovery and unknown fields remain fully visible.
-    It neither changes a result nor certifies model-context retention.
+    This opt-in output adapter follows the original owners and receipt readback.
+    A wide result requires reading the complete controls before acting.
     """
+    if payload.get("dry_run"):
+        return payload
     progress = payload.get("settlement_progress")
-    if (payload.get("ok") is not True or payload.get("dry_run")
+    failed_with_spend = payload.get("ok") is False and bool(payload.get("quota_spend"))
+    if not failed_with_spend and (payload.get("ok") is not True
             or not isinstance(progress, dict) or progress.get("state") != "settled"
             or payload.get("settlement_owed") is not None):
         return payload
     from .quota_capture import budgeted_settlement_result
     from ..command_invocation import current_loopx_cli_argv
     from ..control_plane.turn_driver.native_context_profile import NATIVE_CONTEXT_PAGE_OUTPUT_BYTES
+
+    reader_argv = current_loopx_cli_argv()
+    if failed_with_spend:
+        from ..control_plane.quota.error_codes import QuotaDecisionTransportError
+
+        try:
+            return budgeted_settlement_result(payload, runtime_root=runtime_root,
+                output_bytes=NATIVE_CONTEXT_PAGE_OUTPUT_BYTES, reader_argv=reader_argv)
+        except QuotaDecisionTransportError as exc:
+            # Retain the original refusal and retry controls if capture fails.
+            return {**payload, "result_delivery_error": {"error_code": exc.error_code, "reason": str(exc)}}
 
     supporting = ["registry", "runtime_root", "project", "json_path", "markdown_path", "index_path",
                   "health_check", "state", "registry_goal", "todo_source"]
@@ -216,4 +231,4 @@ def present_settled_refresh(payload: dict[str, Any], *, runtime_root: Path) -> d
             supporting.append(field)
     return budgeted_settlement_result(payload, runtime_root=runtime_root,
         output_bytes=NATIVE_CONTEXT_PAGE_OUTPUT_BYTES, supporting_fields=tuple(supporting),
-        reader_argv=current_loopx_cli_argv())
+        reader_argv=reader_argv)
