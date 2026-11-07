@@ -1,6 +1,7 @@
 """Failed native workers retain their last source, without granting recovery."""
 from __future__ import annotations
 
+import errno
 import json
 import os
 from types import SimpleNamespace
@@ -150,12 +151,29 @@ def test_unknown_stop_state_does_not_claim_released_compute(tmp_path, monkeypatc
     assert preservation.receipt["source_stopped"] is False
 
 
-def test_receipt_disk_failure_still_arms_source_retention(tmp_path, monkeypatch):
+def test_receipt_disk_failure_keeps_solver_and_stopped_source_outcomes(tmp_path, monkeypatch, caplog):
     preservation, calls = fixture_preservation(tmp_path, monkeypatch)
-    monkeypatch.setattr(preservation, "_write", lambda: (_ for _ in ()).throw(OSError("full")))
-    with pytest.raises(OSError):
+    monkeypatch.setattr(preservation, "_write", lambda: (_ for _ in ()).throw(OSError(errno.ENOSPC, "private path")))
+    execution = {"exit_code": 2, "execution_started": True}
+    preservation.finish(execution)
+    assert preservation.retain_source and calls == ["close", "capture"]
+    assert preservation.receipt["execution"] == execution
+    assert preservation.receipt["source_stopped"] and preservation.receipt["capture_succeeded"]
+    assert preservation.receipt["receipt_write_error_kind"] == "OSError"
+    assert "could not be saved" in caplog.text and "private path" not in caplog.text
+    assert not preservation.receipt_path.exists()
+    preservation.finish(execution)
+    assert calls == ["close", "capture"]
+
+
+def test_receipt_failure_never_masks_an_unconfirmed_stop(tmp_path, monkeypatch):
+    preservation, _ = fixture_preservation(tmp_path, monkeypatch)
+    preservation.supervisor.container.attrs["State"] = {}
+    monkeypatch.setattr(preservation, "_write", lambda: (_ for _ in ()).throw(OSError(errno.ENOSPC, "full")))
+    with pytest.raises(RuntimeError, match="not confirmed stopped"):
         preservation.finish({"exit_code": 2, "execution_started": True})
-    assert preservation.retain_source and calls == []
+    assert preservation.retain_source and preservation.receipt["source_stopped"] is False
+    assert preservation.receipt["stop_error_kind"] == "RuntimeError"
 
 
 @pytest.mark.parametrize("profile", ["official", "native-goal", "heartbeat-explore"])
@@ -173,7 +191,8 @@ def test_cli_preservation_requires_full_native_controller_before_trial(tmp_path,
 @pytest.mark.skipif(os.environ.get("LOOPX_EDGEBENCH_DOCKER_SMOKE") != "1",
                     reason="Requires isolated Docker and native HTTP checkpoint provider")
 @pytest.mark.parametrize("capture_failure", [False, True])
-def test_real_failed_solver_preserves_tail_and_native_opportunity(controllers, writer, tmp_path, monkeypatch, capture_failure):
+@pytest.mark.parametrize("receipt_failure", [False, True])
+def test_real_failed_solver_preserves_tail_and_native_opportunity(controllers, writer, tmp_path, monkeypatch, capture_failure, receipt_failure):
     from sforge.harness.backend.docker_backend import DockerContainerHandle
     from benchmark.runtime.sforge_backend import RecordingDockerBackend
     from benchmark.edgebench.checkpoint_supervisor import CheckpointSupervisor
@@ -211,6 +230,10 @@ Path('/data/candidate').write_text('newer than the last graded candidate')
     supervisor = CheckpointSupervisor(files[0], tmp_path / "terminal-points",
         retention_enabled=False, terminal_components=components,
         terminal_receipt=tmp_path / "terminal-preservation.json")
+    if receipt_failure:
+        def fail_receipt():
+            raise OSError(errno.ENOSPC, "synthetic receipt disk full")
+        monkeypatch.setattr(supervisor.preservation, "_write", fail_receipt)
     config = source.state.judge.config
     trial = config.log_dir / "runs/source/fixture"
     backend = RecordingDockerBackend(log_dir=trial / "collected", logger=None,
@@ -252,7 +275,12 @@ Path('/data/candidate').write_text('newer than the last graded candidate')
     assert json.loads((trial / "run_history.json").read_text())["best_score"] == 7
     container.reload()
     assert not container.attrs["State"]["Running"] and container.attrs["State"]["Pid"] == 0
-    receipt = json.loads((tmp_path / "terminal-preservation.json").read_text())
+    if receipt_failure:
+        assert not (tmp_path / "terminal-preservation.json").exists()
+        receipt = supervisor.preservation.receipt
+        assert receipt["receipt_write_error_kind"] == "OSError"
+    else:
+        receipt = json.loads((tmp_path / "terminal-preservation.json").read_text())
     assert receipt["source_retained"] and receipt["source_stopped"]
     assert not receipt["restore_qualified"]
     assert receipt["capture_succeeded"] is not capture_failure

@@ -745,6 +745,12 @@ requires a running container; latest files remain in the stopped source and, on
 successful export, the terminal point. Native graded history/results remain
 independent and are not discarded with that optional archive.
 
+If the optional preservation receipt cannot be written, a redacted warning reports
+that gap; observer shutdown, one capture attempt and verified source stopping
+still proceed. The known solver exit and native grading remain authoritative.
+An unconfirmed stop still fails explicitly, even if receipt storage also fails.
+Missing receipt files never establish successful export or recovery eligibility.
+
 Inspect this receipt, the exported manifest and the exact retained container before
 planning recovery. Do not restart it, treat a file digest as receiver adoption, or
 roll back to an older point to fill a tail gap. Retained containers still occupy
