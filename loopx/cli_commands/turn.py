@@ -25,6 +25,7 @@ from .turn_inspection import handle_turn_journal_inspection
 from .turn_registration import register_turn_commands as register_turn_commands
 from .turn_rendering import (
     build_turn_error_payload,
+    project_turn_plan_inspection,
     render_loopx_turn_execution_markdown as _render_loopx_turn_execution_markdown,
     render_loopx_turn_plan_markdown as _render_loopx_turn_plan_markdown,
 )
@@ -280,6 +281,8 @@ def handle_turn_command(
                 iteration_context_policy=args.iteration_context,
                 session_scope=session_scope,
                 goal_ref=goal_ref,
+                inspect_plan=(args.turn_command == "plan" and not args.include_transaction_detail
+                              and output_format(args) == "json"),
             )
             if delegated_context and delegated_context.get("request_subject") is not None:
                 import json
@@ -318,9 +321,7 @@ def handle_turn_command(
                 capability_action["command"] = shlex.join(capability_action["command_argv"])
         if args.turn_command == "plan":
             if not args.include_transaction_detail:
-                # The current plan has one source, so inspection retains it.
-                # Execution still requires its explicit surface, even if a
-                # caller restores omitted session/transaction metadata.
+                # Inspection cannot promote even if transport metadata is restored.
                 payload = dict(payload)
                 payload["boundary"] = {**payload.get("boundary", {}), "inspection_only": True}
                 payload.pop("session", None)
@@ -328,6 +329,7 @@ def handle_turn_command(
                 boundary = payload.get("boundary")
                 if isinstance(boundary, dict):
                     boundary.pop("opaque_session_handle_omitted", None)
+                project_turn_plan_inspection(payload, runtime_root)
             else:
                 # The typed settlement plan is used by validation and
                 # execution, but is not part of the agent-facing CLI contract.

@@ -486,7 +486,16 @@ Executing `turn run-once --execute` now saves the original full decision before
 Host invocation and binds the received envelope's detail route to that private
 observation. This is the native Turn execution default; ordinary quota capture
 remains opt-in. `turn plan`, `managed-step` inspection and `run-once` previews
-remain read-only. No new capability or configuration switch is introduced.
+remain read-only with respect to Goal state and execution.
+
+For a complete-contract replan, the default JSON `turn plan` keeps the current
+decision, scope, required reads and executable Vision authoring inline. On
+hosts with private capture support, `detail_ref.command` reads the exact work
+contract for that inspection. Append `--list` to discover fields or `--select`
+to read only the current Goal, acceptance or evidence needed for the decision.
+This snapshot lives in the private context transport directory. Explicit
+`--include-transaction-detail` and hosts without a usable capture directory
+retain the complete inline contract.
 
 The Turn journal owns the native Turn identity. Its capture reference includes
 Goal, Agent, Turn instance, Turn key and the existing source-decision hash; it
@@ -523,11 +532,17 @@ result recovery must preserve that task context; explicit Todo lifecycle
 operations retain their existing authority and validation.
 
 中文：原生 `turn run-once --execute` 在启动 Host 前保存完整原始决策，实际短包详情
-与失败重试均读取该快照，预览不写入。Turn 身份来自原 journal，不伪造 heartbeat
+与失败重试均读取该快照。预览不更新 Goal 或执行状态。Turn 身份来自原 journal，不伪造 heartbeat
 准入记录。旧观察不授予新权限；缺失、损坏或身份／哈希不符时拒绝重新启动 Host。
 无快照的旧 journal 保留终态回读和已缓存结果的结算恢复，但不能重新构造当时的完整
 上下文后继续调用 Host；先处置原效果，再按当前准入创建新 Turn。文件含私有上下文，
 保留在运行时目录，禁止放入公开产物。
+
+完整契约的重规划分支中，默认 JSON `turn plan` 直接交付当前决策、范围、必读项和可执行
+的 Vision 写回指导。宿主支持私有捕获时，`detail_ref.command` 从同一预览的完整工作
+契约读取。可加 `--list` 查找字段，或加 `--select` 读取本次决策所需的 Goal、验收及证据。
+快照保存在私有上下文目录。显式 `--include-transaction-detail` 和私有捕获不可用时保留
+完整内联契约。
 
 For repeated host-owned guards, `--decision-output-root ./private-decisions`
 allocates a unique child directory per invocation below an **existing** directory.

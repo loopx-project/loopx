@@ -93,12 +93,13 @@ and an independent validator:
 4. `loopx turn run-once --execute` performs writeback and quota spend only when
    the typed result and independent validation both pass.
 
-Default `turn plan` output is an inspection projection. Current plans retain
-their one complete `work_contract`, including selected work, portfolio, required
-reads and writeback rules, and omit session/transaction metadata. There is no
-second adapter body. Its `boundary.inspection_only=true` prevents execution even
-if a caller restores that metadata. `--include-transaction-detail` retains the
-session/transaction input; it does not select another decision format.
+Default `turn plan` output is an inspection projection. Complete-contract JSON
+replans show the current decision and executable guidance inline. Their
+`detail_ref.command` reads the same complete `work_contract` from private
+storage. When private capture is unavailable, the complete source stays inline.
+`boundary.inspection_only=true` prevents execution even if a caller restores
+session/transaction metadata. `--include-transaction-detail` retains that metadata
+and the complete inline contract.
 `turn run-once` retains and validates the original complete contract before
 dispatch; an inspection does not authorize that operation.
 

@@ -1774,7 +1774,9 @@ export function completePlanningFacts(request: JsonObject): JsonObject {
   }
   return {...lineage, work, source_decision_hash: decisionSourceHash(decision),
     action_source_hash: canonicalHash(turnEnvelopeActionSignatureDocument(work)),
-    scoped_settlement_identity: scopedIdentity, scoped_identity_error: identityError};
+    scoped_settlement_identity: scopedIdentity, scoped_identity_error: identityError,
+    ...(request.inspect_plan === true && lineage.route === "replan_required"
+      ? {inspection_paths: replanInspectionPaths(decision)} : {})};
 }
 
 function completeHostDecision(request: JsonObject): JsonObject {
@@ -2115,6 +2117,35 @@ const INITIAL_CONTEXT_DECISION_FIELDS = ["ok", "schema_version", "goal_id", "age
   "normal_delivery_allowed", "recovery_delivery_allowed", "self_repair_allowed", "capability_repair_allowed", "workspace_repair_allowed",
   "safe_bypass_allowed", "safe_bypass_kind", "blocked_action_scope", "reason",
   "execution_obligation", "goal_boundary", "heartbeat_receipt", "work_lane_contract", "selected_todo"];
+
+/** The read-only plan needs the current decision and executable authoring
+ * guidance. Evidence and diagnostics remain in its exact source capture. */
+function replanInspectionPaths(decision: JsonObject): string[][] {
+  const paths = INITIAL_CONTEXT_DECISION_FIELDS.filter(field => field !== "schema_version").map(field => [field]);
+  for (const field of ["agent_identity", "decision", "recommended_action", "execution_preparation", "requires_user_action",
+    "action_portfolio", "delivery_workspace_isolation", "replan_action_packet"])
+    paths.push([field]);
+  const userTodos = object(decision.user_todo_summary);
+  if (userTodos.open_count === 0 && userTodos.all_open_count === 0) {
+    paths.push(["user_todo_summary", "open_count"], ["user_todo_summary", "all_open_count"]);
+  } else {
+    paths.push(["user_todo_summary"]);
+  }
+  for (const field of Object.keys(object(decision.autonomous_replan_obligation)))
+    if (field !== "replan_context") paths.push(["autonomous_replan_obligation", field]);
+  for (const field of Object.keys(object(decision.vision_continuation_audit)))
+    if (field !== "vision_gap_judge") paths.push(["vision_continuation_audit", field]);
+  const interaction = object(decision.interaction_contract);
+  for (const field of ["schema_version", "mode", "user_channel"])
+    paths.push(["interaction_contract", field]);
+  for (const field of Object.keys(object(interaction.agent_channel)))
+    if (field !== "work_context" && field !== "vision_continuation_audit")
+      paths.push(["interaction_contract", "agent_channel", field]);
+  paths.push(["interaction_contract", "agent_channel", "work_context", "instruction"]);
+  for (const field of Object.keys(object(interaction.cli_channel)))
+    if (field !== "vision_continuation_audit") paths.push(["interaction_contract", "cli_channel", field]);
+  return paths;
+}
 
 /** Navigation over captured facts, never a summary or a source-read receipt. */
 function capturedDecisionSelection(request: JsonObject): JsonObject {

@@ -65,7 +65,7 @@ def register_turn_commands(
 
     plan = command_sub.add_parser(
         "plan",
-        help="Build one typed read-only host decision without launching or writing.",
+        help="Inspect a typed host decision without launching or changing Goal state.",
     )
     add_subcommand_format(plan)
     # The default host and the default execution mode are one decision: the

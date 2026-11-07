@@ -1236,7 +1236,19 @@ def test_quota_cli_keeps_complete_vision_rules_with_reachable_duplicate_refs(
 def test_crowded_turn_plan_budget_preserves_executable_vision_authoring(
     tmp_path: Path,
     include_agent_vision: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from loopx.cli_commands import turn
+
+    build = turn.build_loopx_turn_plan
+    originals = []
+
+    def record_source(*args, **kwargs):
+        plan = build(*args, **kwargs)
+        originals.append(plan["work_contract"])
+        return plan
+
+    monkeypatch.setattr(turn, "build_loopx_turn_plan", record_source)
     with _stable_budget_fixture_root(tmp_path / "turn-plan-vision") as stable_root:
         project, runtime, registry_path, state_file = _write_fixture(
             stable_root,
@@ -1251,10 +1263,45 @@ def test_crowded_turn_plan_budget_preserves_executable_vision_authoring(
             state_file=state_file,
             output_format="json",
         )["loopx_turn_plan"]
-        exit_code, text = _invoke_cli(command, read_context=True)
+        before = state_file.read_bytes()
+        exit_code, text = _invoke_cli(command)
+        assert exit_code == 0, text
+        payload = _json_payload(text)
+        assert payload["boundary"]["inspection_only"] is True
+        assert not any(payload["effects"].values()) and state_file.read_bytes() == before
+        [source] = originals
+        if os.name == "posix":
+            detail = payload["detail_ref"]
+            assert json.loads(Path(detail["path"]).read_bytes()) == source
+            assert payload["work_contract"]["replan_action_packet"] == source["replan_action_packet"]
+            assert payload["work_contract"]["goal_boundary"] == source["goal_boundary"]
+            # The later read must remain bound to this preview when live facts change.
+            state_file.write_text("# Different Goal after the inspection\n", encoding="utf-8")
+            selector = "/interaction_contract/agent_channel/work_context"
+            reader = shlex.split(detail["command"])
+            rc, page_text = _invoke_cli(["--format", "json", *reader[reader.index("quota"):], "--select", selector])
+            page = json.loads(page_text)
+            assert rc == 0 and page["eof"], page
+            [selected] = json.loads(page["content"])["selections"]
+            assert selected == {"pointer": selector,
+                "value": source["interaction_contract"]["agent_channel"]["work_context"]}
+            assert "sources" not in payload["work_contract"]["interaction_contract"]["agent_channel"]["work_context"]
+            assert "contract_binding" not in payload["work_contract"]
+            if not include_agent_vision:
+                state_file.write_bytes(before)
+                # An insecure existing transport must not receive private data.
+                transport = runtime / "context-delivery"
+                transport.chmod(0o755)
+                captures = list(transport.iterdir())
+                fallback_code, fallback_text = _invoke_cli(command)
+                assert fallback_code == 0, fallback_text
+                fallback = _json_payload(fallback_text)
+                assert "detail_ref" not in fallback and fallback["work_contract"] == originals[-1]
+                assert fallback["boundary"]["inspection_only"] is True
+                assert list(transport.iterdir()) == captures and state_file.read_bytes() == before
+        else:
+            assert payload["work_contract"] == source
 
-    assert exit_code == 0, text
-    payload = _json_payload(text)
     writeback = payload["work_contract"]["replan_action_packet"][
         "writeback_contract"
     ]
