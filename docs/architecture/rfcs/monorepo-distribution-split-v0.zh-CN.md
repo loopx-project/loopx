@@ -1251,6 +1251,17 @@ Todo 完成。归档回归在局部 validator 之外加入未通过的整体 Goa
 检查继续失败。这是作者阶段的集成覆盖，不能替代独立审阅或审阅修复后的
 wheel 资格验证。
 
+#8264 `12627eff8` 的独立审阅发现：只改 `--evidence` 就能替换已归档 Todo
+接受的产物，却仍返回旧 validation receipt。File/SQLite × 有无整体 Goal 检查
+的四个 fixture 均在该 head 复现失败。修订集成 target main `10f66ec5e`，在归档
+终结前拒绝不同的显式 evidence；新归档 closeout receipt 同时保存已接受证据，
+让变更后的重试不能通过 receipt recovery 绕过检查。带有效 completion note 时，
+省略或空 evidence 保留原值；CLI 原有的完成说明要求继续适用。
+历史 fingerprint 和旧 receipt 继续兼容，active completion 行为保持原样。
+回归在 terminal replay 前后检查 canonical evidence、原 validation 和完成时间，
+以及只执行一次的 validation/writeback/debit。此前被审阅的 head 仍未获验收，
+修订 head 仍需独立审阅。
+
 这是支持后续 R1/V4 journey 和大状态比较的生命周期修复提案。下一步仍需
 独立 exact-head review、审阅修复后的 wheel 回读，以及剩余 guard/parser
 刻画。它不会升级 installed host，也不验收中断/重启、split installation、

@@ -487,6 +487,15 @@ function terminalFailure(
   };
 }
 
+function completionEvidenceRejection(
+  input: CoordinationTodoTerminalLifecycleInput,
+  acceptedEvidence: unknown,
+): CoordinationTodoTerminalLifecycleResult | null {
+  if (input.evidence === null || input.evidence === (acceptedEvidence ?? null)) return null;
+  return terminalFailure("terminal_completion_receipt_mismatch",
+    "Archived closeout must retain the evidence accepted by ordinary completion.", {}, "decision_rejection");
+}
+
 function terminalRequestSha(input: CoordinationTodoTerminalLifecycleInput): string {
   const completionPolicyIdentity = input.completion_policy_request === null
     ? null
@@ -1292,6 +1301,12 @@ export async function executeCoordinationTodoTerminalLifecycle(
     const receipt = terminalReceipt(input, requestSha);
     const replay = await receipt.read(store);
     if (replay !== null) {
+      // New archived closeout receipts preserve accepted evidence separately
+      // from the historical request fingerprint. Older receipts still replay.
+      if (Object.hasOwn(replay, "evidence")) {
+        const rejection = completionEvidenceRejection(input, replay.evidence);
+        if (rejection !== null) return rejection;
+      }
       // Older accepted lifecycle receipts lack the original quota binding.
       // Add it to this response from verified history; never rewrite the receipt.
       if (replay.status === "replayed" && isLifecycleCloseout(input) &&
@@ -1320,7 +1335,9 @@ export async function executeCoordinationTodoTerminalLifecycle(
     if (!await authoritySourcesCurrent()) return terminalFailure(AUTHORITY_SOURCE_CHANGED.code,
       AUTHORITY_SOURCE_CHANGED.reason, {}, "decision_rejection");
     const observation = await receipt.observe(store);
-    if (observation.kind === "receipt") return observation.result;
+    if (observation.kind === "receipt") return Object.hasOwn(observation.result, "evidence")
+      ? completionEvidenceRejection(input, observation.result.evidence) ?? observation.result
+      : observation.result;
     if (observation.authority.status !== "loaded") {
       return {
         schema_version: COORDINATION_TODO_TERMINAL_LIFECYCLE_RESULT_SCHEMA,
@@ -1424,6 +1441,8 @@ export async function executeCoordinationTodoTerminalLifecycle(
         {}, "decision_rejection");
     }
     if (terminalUpgradeReceipt.status !== "replayed") return terminalUpgradeReceipt;
+    const rejection = completionEvidenceRejection(input, todo.evidence);
+    if (rejection !== null) return rejection;
   }
   const authorityTodo = todo;
   let edit: ReturnType<typeof prepareUpdatedTodo> | null = null;
@@ -2005,6 +2024,10 @@ export async function executeCoordinationTodoTerminalLifecycle(
     todo_id: input.todo_id,
     command: input.command,
     changed,
+    // Freeze this archived phase's evidence for receipt-only recovery without
+    // adding a fresh authority read or changing legacy operation fingerprints.
+    ...(authorityTodo.archive_state !== "active" && terminalUpgradeReceipt !== null
+      ? {evidence: authorityTodo.evidence ?? null} : {}),
     ...(input.decision_outcome === null ? {} : {decision_outcome: input.decision_outcome}),
     ...(followthrough?.unblock_resume ? {unblock_resume: followthrough.unblock_resume} : {}),
     ...(followthrough?.decision_scope_resolution ? {decision_scope_resolution: followthrough.decision_scope_resolution} : {}),

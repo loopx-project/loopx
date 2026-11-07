@@ -8170,7 +8170,25 @@ def test_original_turn_closes_automatically_archived_todo_once(
         rc, spent = _run_cli(registry_path, runtime, *spend_args)
         assert rc == 0, spent
     validation_runs = counter.read_text()
-    assert int(validation_runs) >= 1
+    assert validation_runs == "1"
+
+    # A reused validation receipt cannot authorize replacing the artifact that
+    # the archived Todo accepted. Changing only evidence must fail before the
+    # terminal receipt exists and after that receipt can be replayed.
+    replacement_args = tuple(
+        "artifact:unvalidated-replacement" if arg == "artifact:verified-sum" else arg
+        for arg in terminal_args
+    )
+    rc, replacement = _run_cli(registry_path, runtime, *replacement_args)
+    assert rc == 1, replacement
+    assert replacement["error_code"] == "terminal_completion_receipt_mismatch", replacement
+    rc, preserved = _run_cli(registry_path, runtime, "todo", "list",
+                             "--goal-id", GOAL_ID, "--todo-id", TODO_ID,
+                             "--include-archived")
+    assert rc == 0, preserved
+    assert preserved["todo"]["evidence"] == "artifact:verified-sum"
+    assert counter.read_text() == validation_runs
+    assert _spend_run_count(runtime) == 1
 
     # An unrelated archived task, another actor, and a different claim or Turn
     # cannot borrow the completed task's original receipt or settlement.
@@ -8198,15 +8216,27 @@ def test_original_turn_closes_automatically_archived_todo_once(
     assert [row["step_kind"] for row in terminal["settlement_result"]["receipts"]] == [
         "validation", "durable_writeback", "quota_spend", "terminal_closeout",
     ]
-    for args in (terminal_args, ordinary_args):
+    evidence_index = terminal_args.index("--evidence")
+    omitted_evidence = terminal_args[:evidence_index] + terminal_args[evidence_index + 2:]
+    empty_evidence = (*terminal_args[:evidence_index + 1], "", *terminal_args[evidence_index + 2:])
+    for args in (omitted_evidence, empty_evidence):
+        rc, refused = _run_cli(registry_path, runtime, *args)
+        assert rc == 1 and "requires --note or --evidence" in refused["error"], refused
+    completion_note = ("--note", "Close the original independently verified result.")
+    for args in (terminal_args, ordinary_args,
+                 (*omitted_evidence, *completion_note), (*empty_evidence, *completion_note)):
         rc, replay = _run_cli(registry_path, runtime, *args)
         assert rc == 0 and replay["idempotent_replay"], replay
+    rc, replacement = _run_cli(registry_path, runtime, *replacement_args)
+    assert rc == 1, replacement
+    assert replacement["error_code"] == "terminal_completion_receipt_mismatch", replacement
     rc, final = _run_cli(registry_path, runtime, "todo", "list",
                         "--goal-id", GOAL_ID, "--todo-id", TODO_ID,
                         "--include-archived")
     assert rc == 0, final
     assert final["todo"]["archive_state"] == "archive"
     assert final["todo"]["completed_at"] == completed_at
+    assert final["todo"]["evidence"] == "artifact:verified-sum"
     assert final["todo"]["completion_turn_key"] == identity["effect_id"]
     assert counter.read_text() == validation_runs
     assert _spend_run_count(runtime) == 1

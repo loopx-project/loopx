@@ -1653,6 +1653,20 @@ rerun the Goal checker, and leave the overall check failed. This is author-side
 integration coverage; it does not replace independent review or reviewed-repair
 wheel qualification.
 
+Independent review of #8264 at `12627eff8` found that changing only `--evidence`
+could replace the archived Todo's accepted artifact while returning the old
+validation receipt. All four File/SQLite × Goal-check fixtures reproduce this
+failure on that head. The revision integrates target main `10f66ec5e` and rejects
+different supplied evidence before archived closeout. Its new archived-closeout
+receipt also retains the accepted evidence, so a changed retry cannot bypass the
+check through receipt recovery. Omitted or empty evidence with a valid completion
+note keeps the original value; the CLI's completion-note requirement still applies.
+Historical fingerprints and older receipts remain compatible; active
+completion behavior is unchanged. The regression checks canonical evidence,
+original validation and completion time, and once-only validation/writeback/debit
+before and after terminal replay. The earlier reviewed head remains unaccepted;
+the revised head still needs independent review.
+
 This is a proposed lifecycle repair enabling the remaining R1/V4 journey and
 large-state comparison. Independent exact-head review, reviewed-repair wheel
 readback and remaining guard/parser characterization still govern the next
