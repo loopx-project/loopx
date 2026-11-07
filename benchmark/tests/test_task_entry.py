@@ -125,13 +125,33 @@ def test_raw_worker_rejects_invalid_observation_before_creating_a_wake(tmp_path,
     assert not wakes.exists()
 
 
-@pytest.mark.parametrize("settings", [{}, {"execution_observation": "local_probe"}])
-def test_install_records_and_exposes_only_the_selected_observation_producer(tmp_path, monkeypatch, settings):
+@pytest.mark.parametrize("entry", ["omitted", "ready", "symlink", "missing-interpreter"])
+def test_install_records_and_exposes_only_the_selected_observation_producer(tmp_path, monkeypatch, entry):
     pytest.importorskip("harbor")
-    from benchmark.runtime.harbor import BenchmarkCodex, CodexOffline
+    if not Path("/bin/sh").is_file():
+        pytest.skip("requires a POSIX shell for the actual worker entrypoint")
+    from benchmark.runtime import harbor
 
-    agent = BenchmarkCodex(logs_dir=tmp_path, model_name="fixture", **settings)
+    selected = entry != "omitted"
+    profile = tmp_path / "profile"
+    bin_dir = profile / "bin"
+    bin_dir.mkdir(parents=True)
+    interpreter_dir = tmp_path / "python" / "bin"
+    interpreter_dir.mkdir(parents=True)
+    if entry != "missing-interpreter":
+        (interpreter_dir / "python3").symlink_to(sys.executable)
+    wrapper = bin_dir / "loopx-research-probe"
+    sentinel = tmp_path / "untouched"
+    if entry == "symlink":
+        sentinel.write_text("unchanged")
+        wrapper.symlink_to(sentinel)
+    monkeypatch.setattr(harbor, "_PROFILE", str(profile))
+    monkeypatch.setattr(harbor, "_PYTHON", str(interpreter_dir.parent))
+    monkeypatch.setattr(harbor, "_SRC", str(Path(__file__).resolve().parents[2]))
+    agent = harbor.BenchmarkCodex(logs_dir=tmp_path, model_name="fixture",
+                                 execution_observation="local_probe" if selected else None)
     commands = []
+    wrapper_reads = []
 
     async def no_op(*args, **kwargs):
         pass
@@ -141,22 +161,47 @@ def test_install_records_and_exposes_only_the_selected_observation_producer(tmp_
         return "fixture"
 
     async def execute(*args, **kwargs):
-        commands.append(kwargs["command"])
+        command = kwargs["command"]
+        commands.append(command)
+        if "-m benchmark.runtime.research_probe" in command:
+            result = subprocess.run(["/bin/sh", "-c", command], cwd=tmp_path,
+                                    env={"PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1"},
+                                    text=True, capture_output=True, timeout=10)
+            wrapper_reads.append(result)
+            return SimpleNamespace(stdout=result.stdout, stderr=result.stderr, return_code=result.returncode)
         return SimpleNamespace(stdout='{"ok":true}', stderr="", return_code=0)
 
     async def task_exec(**kwargs):
         return SimpleNamespace(stdout="/usr/local/bin:/usr/bin:/bin", return_code=0)
 
+    async def execute_root(*args, **kwargs):
+        assert "-m benchmark.runtime.research_probe" not in kwargs["command"]
+        return await execute(*args, **kwargs)
+
     for key in ("LOOPX_SRC_DIR", "LOOPX_PORTABLE_PYTHON", "LOOPX_NODE_DIR"):
         monkeypatch.setenv(key, str(tmp_path))
-    monkeypatch.setattr(CodexOffline, "install", no_op)
+    monkeypatch.setattr(harbor.CodexOffline, "install", no_op)
     monkeypatch.setattr(agent, "_stage_source", stage)
-    monkeypatch.setattr(agent, "exec_as_root", execute)
+    monkeypatch.setattr(agent, "exec_as_root", execute_root)
     monkeypatch.setattr(agent, "exec_as_agent", execute)
     monkeypatch.setattr(agent, "_get_env", lambda key: None)
-    asyncio.run(agent.install(SimpleNamespace(default_user="fixture", upload_dir=no_op, exec=task_exec)))
-    selected = bool(settings)
+    environment = SimpleNamespace(default_user="fixture", upload_dir=no_op, exec=task_exec)
+    if entry in {"symlink", "missing-interpreter"}:
+        with pytest.raises(RuntimeError, match="Local execution probe is unavailable"):
+            asyncio.run(agent.install(environment))
+        assert len(wrapper_reads) == 1 and wrapper_reads[0].returncode != 0
+        assert not any("> /logs/agent/loopx-install.json" in command for command in commands)
+        if entry == "symlink":
+            assert wrapper.is_symlink() and sentinel.read_text() == "unchanged"
+        return
+
+    asyncio.run(agent.install(environment))
     assert any("-m benchmark.runtime.research_probe" in command for command in commands) is selected
+    assert len(wrapper_reads) == int(selected)
+    if selected:
+        assert os.access(wrapper, os.X_OK) and "--memory-limit-bytes" in wrapper_reads[0].stdout
+    else:
+        assert not wrapper.exists()
     command = next(command for command in commands if "> /logs/agent/loopx-install.json" in command)
     receipt = json.loads(shlex.split(command)[2])
     assert receipt.get("execution_observation") == ("local_probe" if selected else None)

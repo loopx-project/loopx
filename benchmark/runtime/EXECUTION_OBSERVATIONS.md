@@ -39,6 +39,13 @@ merely to produce an attachment. Configuration and readback invoke neither a
 probe nor a model. Runtime receipts record the selected producer, which does
 not attest execution, adoption or improvement.
 
+The native SForge runner accepts the same producer with
+`--execution-observation local_probe` on a heartbeat worker. It forwards the
+selection to the shared installer and records it in both runner and worker
+receipts. The installer runs the wrapper's `--help` once as the worker user
+before model entry. An unavailable wrapper fails setup for an explicitly
+selected producer. The observation runs only when a worker invokes it.
+
 Choose the settlement plan's ordinary `command_template` for in-flight progress
 without new decision evidence. Use `semantic_closeout_command_template` for new
 evidence from this admitted work, a route change or Todo completion; bind the
@@ -208,6 +215,11 @@ Stop、原预算和真实阻塞继续有效，不为填满时长制造任务。
 证据路径必须新建，原始输出留在本地；不提交原生评测，不读取隐藏评测。候选
 变化拒绝归因；文件清单哈希不是原生归档哈希，只覆盖明确选择的文件及探针
 边界，不覆盖传递依赖或独立写入者，结果仍须证明对应实际评测快照和输入版本。
+
+SForge heartbeat worker 可显式传入 `--execution-observation local_probe`，
+沿用共享安装路径，并在 runner 和 worker 回执中记录选择。安装时用 worker
+身份执行一次入口的 `--help`，该入口不可用时在模型进入前报告安装失败。
+测量只在 worker 自己调用探针时发生。
 
 当并行内存占用会影响候选选择时，用同一入口执行完整代表性工作集并传入
 `--memory-limit-bytes <参考上限>`。Linux 采样命令进程组内各进程的 PSS，

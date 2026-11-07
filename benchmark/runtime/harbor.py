@@ -371,10 +371,13 @@ class BenchmarkCodex(CodexOffline):
                 raise RuntimeError(f"LoopX doctor failed: {doctor_payload}")
             if self.execution_observation is not None:
                 wrapper = (f"#!/bin/sh\nexec env PYTHONPATH={shlex.quote(_SRC)} "
-                           f"{_PYTHON}/bin/python3 -m benchmark.runtime.research_probe \"$@\"\n")
-                await self.exec_as_agent(environment,
-                    command=f"printf %s {shlex.quote(wrapper)} > {_PROFILE}/bin/loopx-research-probe; "
-                            f"chmod 0755 {_PROFILE}/bin/loopx-research-probe", env=self._profile_env())
+                           f"{shlex.quote(f'{_PYTHON}/bin/python3')} -m benchmark.runtime.research_probe \"$@\"\n")
+                probe = shlex.quote(f"{_PROFILE}/bin/loopx-research-probe")
+                installed = await self.exec_as_agent(environment, env=self._profile_env(), timeout_sec=30,
+                    command=f"test ! -L {probe} && printf %s {shlex.quote(wrapper)} > {probe} && "
+                            f"chmod 0755 {probe} && {probe} --help")
+                if installed.return_code:
+                    raise RuntimeError("Local execution probe is unavailable to the benchmark worker")
 
         receipt = {
             "loopx_commit": actual_commit,

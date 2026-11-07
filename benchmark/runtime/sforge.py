@@ -25,6 +25,7 @@ from .codex_offline import CodexOffline, MODEL_CATALOG_REMOTE, stage_portable_py
 from .harbor import (
     BenchmarkCodex, _CONTROL, _CODEX_HOME, _PYTHON, _SCHEDULER_STATE, _SRC,
 )
+from .research_probe import resolve_execution_observation
 from .scheduler import worker_command
 
 
@@ -93,6 +94,7 @@ class SForgeWorker(CodexAgent):
                  task_entry: str | None = None,
                  turn_envelope: bool = False,
                  context_delivery: str | None = None,
+                 execution_observation: str | None = None,
                  native_child_limit: int | None = None,
                  provider_request_admission: bool = False,
                  native_goal_continue: bool = False,
@@ -122,6 +124,9 @@ class SForgeWorker(CodexAgent):
             mode="heartbeat" if profile.startswith("heartbeat-") else "plain",
             context_delivery=context_delivery,
         ).context_delivery
+        self.execution_observation = resolve_execution_observation(execution_observation)
+        if self.execution_observation is not None and not profile.startswith("heartbeat-"):
+            raise ValueError("execution_observation requires a heartbeat worker")
         if type(provider_request_admission) is not bool:
             raise ValueError("provider_request_admission must be a boolean opt-in")
         if provider_request_admission and not profile.startswith("heartbeat-"):
@@ -344,6 +349,8 @@ class SForgeWorker(CodexAgent):
                 task_entry=self.task_entry,
                 turn_envelope=self.turn_envelope,
                 context_delivery=self.context_delivery,
+                **({"execution_observation": self.execution_observation}
+                   if self.execution_observation is not None else {}),
                 native_child_limit=self.native_child_limit,
                 **({"provider_request_admission": True} if self.provider_request_admission else {}),
                 native_goal_continue=self.native_goal_continue,
@@ -446,6 +453,8 @@ class SForgeWorker(CodexAgent):
             "explore_graph": self.profile == "heartbeat-explore",
             "explore_harness": self.profile == "heartbeat-explore",
             "feedback": self.feedback,
+            **({"execution_observation": self.execution_observation}
+               if self.execution_observation is not None else {}),
             **({"feedback_delivery": "codex_hooks", "feedback_payload": FEEDBACK_PAYLOAD}
                if self.feedback == "best-only" else {}),
             **(self.runtime._replan_receipt() if self.runtime and
