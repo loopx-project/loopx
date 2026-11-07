@@ -1446,3 +1446,39 @@ def test_turn_counter_evidence_preserves_baseline_and_excludes_content(pack, inc
     capture.unlink()
     with pytest.raises(PackUnavailable, match="source_unavailable"):
         read_usage_turn(**operation, turn_id="b")
+
+
+def test_authored_case_survives_source_change_and_revises_without_model_job(pack, tmp_path):
+    scope, _, original, input_path, sources, _ = pack
+    citation = dict(source_id="source", first_line=2, last_line=2)
+    study = dict(title="Observed negative result", language="en", summary="No gain was measured.",
+                 citations=[citation], sections=[dict(id="background", title="What was measured",
+                 text="Utility remained unchanged. The mechanism is unresolved.", citations=[citation])],
+                 limitations=["Synthetic illustration, not a benchmark finding."])
+    document = tmp_path / "case-study.json"
+    document.write_text(json.dumps(study), encoding="utf-8")
+    registered = register_pack(**scope, input_path=input_path, source_root=sources,
+                               title="Case reading", case_study_json=document)
+    op = {**scope, "pack_id": registered["pack_id"], "analysis_key": registered["analysis_key"]}
+    assert registered["pack_id"] != original["pack_id"]
+    assert registered["analysis_key"] == original["analysis_key"]
+    view = inspect_pack(**scope, pack_id=registered["pack_id"])
+    assert view["case_study"] == study and view["result"] is None and view["job"] is None
+    assert read_citation(**op, **citation)["text"].startswith("The native measurement")
+    with pytest.raises(PackUnavailable, match="citation_not_in_result"):
+        read_citation(**op, source_id="source", first_line=1, last_line=2)
+    assert register_pack(**scope, input_path=input_path, source_root=sources,
+                         title="Case reading", case_study_json=document)["pack_id"] == registered["pack_id"]
+    study["summary"] = "The evidence does not establish a treatment effect."
+    document.write_text(json.dumps(study), encoding="utf-8")
+    revised = register_pack(**scope, input_path=input_path, source_root=sources,
+                            title="Revised reading", case_study_json=document)
+    assert revised["pack_id"] != registered["pack_id"]
+    assert inspect_pack(**scope, pack_id=registered["pack_id"])["case_study"]["summary"] == "No gain was measured."
+    (sources / "result.txt").write_text("source replaced", encoding="utf-8")
+    historical = inspect_pack(**scope, pack_id=registered["pack_id"])
+    assert historical["applicability"] == "historical"
+    assert historical["case_study"] == view["case_study"]
+    assert read_citation(**op, **citation)["text"].startswith("The native measurement")
+    assert not list(scope["runtime_root"].glob("benchmark/trajectory-assessments/*/jobs/*"))
+    assert "case_study" not in inspect_pack(**scope, pack_id=original["pack_id"])

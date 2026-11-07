@@ -883,8 +883,11 @@ python -m benchmark.edgebench.managed_run --trial "$ATTEMPT_DIR" --execute
 ```
 
 The replay reads retained evidence. Pending, unknown, or mismatched native
-evidence leaves the reservation active. Use the proof from the exact attempt on
-the controller and retain the command's JSON receipt with its binding.
+evidence leaves the reservation active. After a terminal receipt write fails,
+replay can use the runner's completed result when it agrees with the original
+launch pins, the exact native solver record, and the drained grading history.
+Use the proof from the exact attempt on the controller and retain the command's
+JSON receipt with its binding.
 
 ```sh
 loopx benchmark terminal-reconcile --goal-id "$GOAL_ID" --project "$PROJECT" \

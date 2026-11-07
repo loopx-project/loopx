@@ -194,6 +194,9 @@ def main(argv=None):
                         help="Host services run on Docker's default bridge (e.g. runner inside a VM); "
                              "pin host.docker.internal there instead of Docker's host-gateway alias")
     args = parser.parse_args(argv)
+    if args.native_child_limit is not None and (
+            args.native_child_limit < 1 or args.feedback != "native"):
+        parser.error("--native-child-limit requires a positive limit and native feedback")
     managed_binding = None
     if args.managed_run_json is not None:
         if args.feedback != "native":
@@ -207,9 +210,6 @@ def main(argv=None):
             parser.error("Could not read the private managed run binding")
         except ValueError as error:
             parser.error(str(error))
-    if args.native_child_limit is not None and (
-            args.native_child_limit < 1 or args.feedback != "native"):
-        parser.error("--native-child-limit requires a positive limit and native feedback")
     api_base_url = os.environ.get("OPENAI_BASE_URL") or None
     api_key = os.environ.get("OPENAI_API_KEY") if api_base_url else None
     if api_base_url and not api_key:
@@ -316,10 +316,10 @@ def main(argv=None):
                 archive_source(runner, pins[1], Path(directory) / "runner.tar", ("benchmark/runtime",))
     task_file = args.tasks_dir / f"{args.task}.json"
     task = make_task_spec(task_file, load_benchmark(args.tasks_dir))
-    if managed_binding is not None and task.task_id != args.task:
-        parser.error("Managed run task specification differs from the selected task")
     if args.native_child_limit is not None and task.game_mode:
         parser.error("--native-child-limit requires a non-game task with workspace instructions")
+    if managed_binding is not None and task.task_id != args.task:
+        parser.error("Managed run task specification differs from the selected task")
     research_sidecar = args.feedback == "native" and not task.game_mode
     if research_sidecar:
         from benchmark.runtime.research_artifacts import validate_research_scope, with_research_capture
@@ -586,7 +586,6 @@ def main(argv=None):
         try:
             solver_retained = retain_managed_solver(trial, managed_binding, managed_launch, receipt=receipt, result=result)
         except (OSError, TypeError, ValueError) as error:
-            receipt_path.write_text(json.dumps(receipt, indent=2))
             logger.warning("Managed solver evidence unavailable (%s)", type(error).__name__)
         else:
             try:

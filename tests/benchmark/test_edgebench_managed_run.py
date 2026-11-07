@@ -16,7 +16,7 @@ from types import SimpleNamespace
 import pytest
 
 from benchmark.edgebench import managed_run
-from benchmark.edgebench.managed_run import BINDING_FILENAME, TERMINAL_FILENAME
+from benchmark.edgebench.managed_run import BINDING_FILENAME, RUNTIME_FILENAME, TERMINAL_FILENAME
 from loopx.capabilities.benchmark_toolkit import (
     BENCHMARK_EXPERIMENT_BOARD_ROW_SCHEMA_VERSION,
     build_benchmark_concurrency_config,
@@ -140,7 +140,8 @@ def _replay(trial: Path, *, execute: bool = False) -> subprocess.CompletedProces
                           capture_output=True, text=True, timeout=30)
 
 
-@pytest.mark.parametrize("stage", ["drained", "pending", "write_failure"])
+@pytest.mark.parametrize("stage", ["drained", "pending", "write_failure",
+    "receipt_before_replace", "receipt_after_replace", "receipt_persistent"])
 def test_managed_terminal_flows_from_runner_to_controller(tmp_path, entry, capsys, monkeypatch, stage):
     trial, invoke, drain = entry
     project = tmp_path / "controller-project"
@@ -173,18 +174,73 @@ def test_managed_terminal_flows_from_runner_to_controller(tmp_path, entry, capsy
         "insight": {"status": "pending"},
     })["row"]
 
+    terminal_receipt_attempts = []
     with monkeypatch.context() as patch:
         if stage == "write_failure":
             def fail_write(*args, **kwargs):
                 raise OSError("fixture proof storage failure")
 
             patch.setattr(managed_run, "atomic_write_state_text", fail_write)
+        if stage.startswith("receipt_"):
+            write_json_atomic = managed_run.write_json_atomic
+
+            def fail_terminal_receipt_once(path, payload, **kwargs):
+                terminal_receipt = path.name == RUNTIME_FILENAME and "solver_execution_sha256" in payload.get("managed_run", {})
+                if terminal_receipt:
+                    terminal_receipt_attempts.append(payload)
+                    if len(terminal_receipt_attempts) == 1 or stage == "receipt_persistent":
+                        if stage == "receipt_after_replace":
+                            write_json_atomic(path, payload, **kwargs)
+                        raise OSError("fixture terminal receipt storage failure")
+                return write_json_atomic(path, payload, **kwargs)
+
+            patch.setattr(managed_run, "write_json_atomic", fail_terminal_receipt_once)
         assert invoke(_binding_file(tmp_path, admission), evidence=stage) == 0
     runtime = json.loads(capsys.readouterr().out)
     assert runtime["status"] == "terminal" and runtime["best_score"] == 4
     assert GOAL not in json.dumps(runtime) and str(project) not in json.dumps(runtime)
     proof = trial / TERMINAL_FILENAME
-    if stage != "drained":
+    if stage == "receipt_persistent":
+        runtime_path = trial / RUNTIME_FILENAME
+        original_runtime = runtime_path.read_bytes()
+        retained = json.loads(original_runtime)
+        assert retained["status"] == "starting" and retained["run_id"] == admission["run"]["run_id"]
+        assert "solver_execution_sha256" not in retained["managed_run"]
+        assert len(terminal_receipt_attempts) == 2 and not proof.exists()
+        final_path = trial / "final_result.json"
+        original_final = final_path.read_bytes()
+        final = json.loads(original_final)
+        assert final["solver_execution"] == json.loads((trial / "solver_execution.json").read_bytes())
+        final_path.unlink()
+        assert _replay(trial, execute=True).returncode == 2 and not proof.exists()
+        for change in (
+            {"task": "other-task"},
+            {"runtime_status": "cancelled"},
+            {"solver_execution": final["solver_execution"] | {"status": "nonzero_exit"}},
+        ):
+            final_path.write_text(json.dumps(final | change))
+            assert _replay(trial, execute=True).returncode == 2 and not proof.exists()
+        final_path.write_bytes(original_final)
+        history = trial / "run_history.json"
+        original_history = history.read_bytes()
+        history.write_text(json.dumps(json.loads(original_history) | {"run_id": "different-run"}))
+        assert _replay(trial, execute=True).returncode == 2 and not proof.exists()
+        history.write_bytes(original_history)
+        runtime_path.write_text(json.dumps(retained | {"runner_commit": "different-runner"}))
+        assert _replay(trial, execute=True).returncode == 2 and not proof.exists()
+        runtime_path.write_bytes(original_runtime)
+        preview = _replay(trial)
+        assert preview.returncode == 0 and json.loads(preview.stdout) == {"ready": True, "dry_run": True}
+        assert runtime_path.read_bytes() == original_runtime and not proof.exists()
+        assert _replay(trial, execute=True).returncode == 0
+        assert runtime_path.read_bytes() == original_runtime
+    elif stage.startswith("receipt_"):
+        retained = json.loads((trial / RUNTIME_FILENAME).read_bytes())
+        assert retained["managed_run"]["solver_execution_sha256"]
+        assert retained["run_id"] == admission["run"]["run_id"] and retained["status"] == "terminal"
+        assert len(terminal_receipt_attempts) == (2 if stage == "receipt_before_replace" else 1)
+        assert all(attempt == retained for attempt in terminal_receipt_attempts)
+    if stage in {"pending", "write_failure"}:
         assert not proof.exists()
         if stage == "pending":
             pending = _replay(trial, execute=True)
