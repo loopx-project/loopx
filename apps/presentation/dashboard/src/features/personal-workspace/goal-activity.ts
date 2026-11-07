@@ -48,6 +48,7 @@ export type GoalHostThread = {
   /** Host-owned read failure, distinct from the cadence window's reason. */
   reason?: string | null;
   lastEventAt: string | null;
+  turnStartedAt?: string | null;
   deliveryWindow?: {
     state: "fresh" | "stale" | "missing" | "unknown";
     reason?: string | null;
@@ -244,6 +245,21 @@ export function presentGoalActivity(goal: GoalActivityInput): GoalActivity {
 const identityHues = [212, 262, 330, 24, 150, 190, 44, 290] as const;
 
 /** Stable, readable identity for scanning; never a status signal. */
+/** The most recent live fact, with a start only if tied to that observed host turn. */
+export function observedLiveTurnClock(goal: GoalActivityInput, now = Date.now()) {
+  if (!presentGoalActivity(goal).live || goal.execution?.kind !== "running") return null;
+  const parseClock = (value: string | null | undefined) => value && /(?:Z|[+-]\d{2}:?\d{2})$/i.test(value)
+    ? Date.parse(value) : Number.NaN;
+  const lastActivityAt = goal.execution.lastActivityAt;
+  const last = parseClock(lastActivityAt);
+  if (!lastActivityAt || !Number.isFinite(last) || last > now || now - last > quietTurnMinutes * 60_000) return null;
+  const matchingThreads = openHostTurns(goal.hostThreadActivity?.threads ?? [], now)
+    .filter(thread => thread.lastEventAt === lastActivityAt);
+  const start = matchingThreads.length === 1 ? matchingThreads[0]?.turnStartedAt : null;
+  const startMs = parseClock(start);
+  return {lastActivityAt, startedAt: Number.isFinite(startMs) && startMs <= last ? start ?? null : null};
+}
+
 export function goalIdentity(goalId: string, title: string): { glyph: string; hue: number } {
   let hash = 2_166_136_261;
   for (const character of goalId) {
