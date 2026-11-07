@@ -141,9 +141,12 @@ the original full packet; no delta is required for checkpoint recovery. Native
 cursor verification also binds the context-directory/root option. The existing
 Darwin native-checkpoint refusal remains in force.
 
-The host-side checkpoint preflight still captures the complete original decision.
-With context delivery enabled, its prompt now supplies `quota context-project`
-with that original path/hash, Goal/Agent/Turn and private cache location. The
+The host-side checkpoint preflight captures the complete original decision.
+With context delivery enabled, its prompt supplies `quota context-project`
+with that original path/hash for ordinary work. An admitted replan with staged
+review and writeback commands uses the existing replan projection in a private
+presentation. Its readers retain the original guard's path and hash. The
+projection command also carries the Goal, Agent, Turn and private cache location. The
 native tool presents the saved decision using the same native lifecycle projector;
 no guard, checkpoint, admission or debit is repeated. Cold delivery supplies the
 full body and its target; qualified warm delivery supplies the exact delta.
