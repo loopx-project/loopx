@@ -160,6 +160,11 @@ def compact_execution_profile(value: Any) -> dict[str, Any]:
             raise ValueError("planning_horizon_goal must be a boolean")
         profile["planning_horizon_goal"] = value["planning_horizon_goal"]
 
+    if "yardstick_enabled" in value:
+        if not isinstance(value["yardstick_enabled"], bool):
+            raise ValueError("yardstick_enabled must be a boolean")
+        profile["yardstick_enabled"] = value["yardstick_enabled"]
+
     if "stride_strategy" in value:
         from .control_plane.work_items.stride_policy_codec import normalize_stride_strategy
         profile["stride_strategy"] = normalize_stride_strategy(value["stride_strategy"])
@@ -257,6 +262,8 @@ def apply_goal_execution_profile_change(
     clear_stride_strategy: bool = False,
     planning_horizon_goal: bool | None = None,
     clear_planning_horizon_goal: bool = False,
+    yardstick_enabled: bool | None = None,
+    clear_yardstick_enabled: bool = False,
 ) -> None:
     if (
         clear_replan_after_completed_todos
@@ -274,10 +281,14 @@ def apply_goal_execution_profile_change(
         raise ValueError("choose a stride strategy override or clear operation")
     if planning_horizon_goal is not None and clear_planning_horizon_goal:
         raise ValueError("choose a planning horizon Goal override or clear operation")
+    if yardstick_enabled is not None and clear_yardstick_enabled:
+        raise ValueError("choose a Yardstick override or clear operation")
     raw = goal.get("execution_profile")
     profile = dict(raw) if isinstance(raw, dict) else {}
     if (
-        planning_horizon_goal is None
+        yardstick_enabled is None
+        and not (clear_yardstick_enabled and "yardstick_enabled" in profile)
+        and planning_horizon_goal is None
         and not clear_planning_horizon_goal
         and stride_strategy is None
         and not clear_stride_strategy
@@ -288,6 +299,10 @@ def apply_goal_execution_profile_change(
         and not (clear_replan_after_completed_todos and "replan_after_completed_todos" in profile)
     ):
         return
+    if clear_yardstick_enabled:
+        profile.pop("yardstick_enabled", None)
+    if yardstick_enabled is not None:
+        profile["yardstick_enabled"] = yardstick_enabled
     if clear_planning_horizon_goal:
         profile.pop("planning_horizon_goal", None)
     if planning_horizon_goal is not None:

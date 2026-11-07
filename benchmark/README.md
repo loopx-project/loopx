@@ -1364,6 +1364,25 @@ accepted round counts, cooldown and scoring remain unchanged. Omit the option
 for the original-budget behavior; a changed budget requires a fresh destination,
 not a rewrite of a running study or its original results.
 
+When the audited remaining allowance is shorter than the captured allowance,
+use `--restore-phase-remaining-cap-seconds N` (controller-only:
+`--phase-remaining-cap-seconds N`). The receiving Host, native registration and
+worker all use one deadline derived from the smaller of the captured allowance
+plus any explicit extension, and this cap. A larger cap never grants time.
+The first activation binds the cap; recovery must use the identical value and
+does not refill elapsed time. Omission preserves existing receipts and behavior.
+Zero or an allowance within the existing work reserve cannot start work. This
+operator transport only limits time: it does not recover uncaptured work or
+qualify a stale checkpoint as a complete continuation. Keep that integrity check
+and the remaining-time audit separate, and use a fresh destination.
+
+补跑额度短于快照保留时间时，使用 `--restore-phase-remaining-cap-seconds N`；
+controller 独立入口对应 `--phase-remaining-cap-seconds N`。接收端、原生注册和
+worker 共用同一个截止：取“快照余量加显式扩展”与上限的较小值。上限不能增加额度，
+首次激活后重试必须保持原值和原截止；省略时保持既有行为与回执兼容。零额度或不足
+既有工作保留时间时拒绝启动。该参数只约束时间，不能补回未捕获的工作，也不能把旧
+checkpoint 认证成完整接续；仍须独立核验研究状态及剩余时间，并使用新接收目录。
+
 The earlier import-based worker passed a synthetic joined qualification:
 native session continuation, a new-Goal preparation/review, candidate work and
 released native feedback under the original remaining allowance. That fixture

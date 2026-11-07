@@ -1,3 +1,4 @@
+import {EXECUTION_HANDOFF_MODES} from "../coordination/handoff_mode_vocabulary.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {
@@ -13,7 +14,6 @@ export const EXECUTION_PREPARATION_FACTS_SCHEMA_VERSION =
 export const EXECUTION_PREPARATION_SCHEMA_VERSION =
   "execution_preparation_v0";
 
-const HANDOFF_MODES = ["soft_claim", "hard_lease"] as const;
 const LEASE_STATUSES = ["active", "released", "unknown"] as const;
 
 function leaseFact(value: unknown, label: string): JsonObject {
@@ -55,7 +55,7 @@ export function projectExecutionPreparation(value: unknown): JsonObject {
   }
   const goalId = requireNonEmptyString(request.goal_id, "goal_id");
   const agentId = requireNonEmptyString(request.agent_id, "agent_id");
-  const handoffMode = requireStringLiteral(request.handoff_mode, HANDOFF_MODES, "handoff_mode");
+  const handoffMode = requireStringLiteral(request.handoff_mode, EXECUTION_HANDOFF_MODES, "handoff_mode");
   const authorityAvailable = requireBoolean(request.authority_available, "authority_available");
   const selected = requireJsonObject(request.selected_todo, "selected_todo");
   const todoId = requireNonEmptyString(selected.todo_id, "selected_todo.todo_id");

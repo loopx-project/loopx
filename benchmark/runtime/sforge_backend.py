@@ -19,9 +19,12 @@ from .provider_failure import observe_terminal_provider_failure
 class RecordingDockerBackend(DockerBackend):
     def __init__(self, *, log_dir: Path, logger, oauth_proxy: bool = False,
                  blind_api_endpoint: tuple[str, int] | None = None, feedback=None, checkpoint=None, client=None,
-                 docker_host_bridge: bool = False):
+                 docker_host_bridge: bool = False, research_sidecar: bool = False):
         if not isinstance(docker_host_bridge, bool):
             raise ValueError("docker_host_bridge must be an explicit boolean")
+        if type(research_sidecar) is not bool:
+            raise ValueError("research_sidecar requires an explicit boolean")
+        self.research_sidecar = research_sidecar
         super().__init__(client)
         self.docker_host_bridge = docker_host_bridge
         self.log_dir, self.logger = log_dir, logger
@@ -147,11 +150,15 @@ class RecordingDockerBackend(DockerBackend):
                 observations = []
                 # Never copy the whole Codex home: auth.json must stay private in
                 # the source home and disposable trial, outside collected artifacts.
-                for remote, name in [("/logs/agent", "runtime"),
+                sources = [("/logs/agent", "runtime"),
                                      ("/home/agent/.codex/sessions", "native-sessions"),
                                      (f"{_CODEX_HOME}/sessions", "worker-sessions"),
                                      (_CONTROL, "worker-control"),
-                                     (_LOOPX_RUNTIME, "loopx-state")]:
+                                     (_LOOPX_RUNTIME, "loopx-state")]
+                if self.research_sidecar:
+                    from .research_artifacts import RESEARCH_DIRECTORY
+                    sources.append((RESEARCH_DIRECTORY, "research"))
+                for remote, name in sources:
                     try:
                         data = self.copy_from_container(handle, PurePosixPath(remote))
                         target = self.log_dir / name

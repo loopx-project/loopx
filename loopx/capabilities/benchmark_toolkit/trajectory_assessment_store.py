@@ -381,6 +381,7 @@ def register_pack(
     loopx_input_json: str | None = None,
     native_outcomes_json: str | None = None,
     base_pack_id: str | None = None,
+    select_default: bool = True,
 ) -> dict:
     """Trusted operator only; no HTTP/renderer path-registration endpoint."""
     if not title.strip():
@@ -454,7 +455,8 @@ def register_pack(
             path.chmod(0o600)
         if pack_id not in index["pack_ids"]:
             index["pack_ids"].append(pack_id)
-        index["default_pack_id"] = pack_id
+        if select_default or index["default_pack_id"] is None:
+            index["default_pack_id"] = pack_id
         _write(owner / "packs.json", index)
     return {"ok": True, **_summary(record, None)}
 

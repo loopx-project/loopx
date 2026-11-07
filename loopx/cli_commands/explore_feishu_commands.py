@@ -274,6 +274,7 @@ def handle_explore_feishu_command(
                     projection=visual_projection,
                     visual_sinks=visual_sinks,
                     config_path=config_path,
+                    sink_visibility=args.sink_visibility,
                     execute=bool(args.execute),
                 )
             else:
@@ -285,6 +286,7 @@ def handle_explore_feishu_command(
                     else None,
                     config_path=config_path,
                     semantic_digest=explore_visual_semantic_digest(projection),
+                    sink_visibility=args.sink_visibility,
                     execute=bool(args.execute),
                 )
             payload["ok"] = bool(payload.get("ok")) and bool(

@@ -662,6 +662,360 @@ I3 至少一个 minor release 的窗口继续有效，不作 D3／到期决策�
 R1/minimal、D2/D5/D6、hard-lease／context／model 及拆包安装验收仍开放。
 有界重构复用既有 parser/handler；更大 runtime/package 改动保留在其已接受 owner。
 
+### 2026-11-06 — 发现路径集成与下一条可执行边界
+
+- **已集成：** [#8012](https://github.com/loopx-project/loopx/pull/8012)
+  于 11 月 4 日将提案 head `58442be4d` 合并为 `83f569178`。在独立准备的
+  `main` 版本 `62e234c93` 上，全部 23 个发现与受保护分发用例通过。复验命令：
+  `uv run --extra test python -m pytest -q tests/test_cli_entrypoint.py -k 'capability_discovery or capability_non_discovery'`。
+  这验证当前源码集成；此前安装 wheel 与成对性能证据仍绑定原版本和环境。本次
+  复验不证明已安装宿主或新 wheel 的资格。
+- **已解决的前置问题：** [#8054](https://github.com/loopx-project/loopx/pull/8054)
+  （`886f2cdff`）将 capture I/O 移出 settlement plan 的冷 import。
+  `uv run --extra test python -m pytest -q tests/architecture/test_control_plane_import_boundaries.py::test_settlement_plan_import_does_not_load_native_capture_io`
+  在 `62e234c93` 上通过。11 月 4 日的失败仍是历史证据；后续修复移除了这一
+  特定 import 阻塞。本版本没有重跑更广的套件或配置的 mypy，不能将此前结果改写
+  为当前通过资格。
+- **下一源码切片：** 刻画既有 `generic-cli` managed Turn 路径，使用 SQLite
+  authority 并关闭可选任务 hook，作为所选 D2/D5 装配的候选。复用 Turn、host
+  selector 与类型化 authority owner。`tests/test_loopx_turn_driver.py` 中既有
+  CLI 中断与 successor 重放测试可定位集成接缝，但不证明 minimal preset。
+  下一片必须明确实际依赖闭包，并通过隔离、能产生任务产物的宿主进程验证中断、
+  重启和独立验收后的结果回读，保留原身份且不重复已确认效果。确定性的本地宿主
+  可以验证其合成 transport 边界，不证明模型宿主或完整 V4 旅程。
+- **剩余：** 完整 R0/V10、M1/I3/D3、独立 status 提案 #8011、拆包安装与 R1
+  均未关闭。D2/D5 仍由 owner 决策；本候选不改变 preset、默认值、执行权限或
+  发布承诺。继续移动目录不构成下一条执行证据。
+
+### 2026-11-06 — generic-cli/SQLite 装配候选与恢复证据
+
+这是 D2/D5 候选及源码刻画，不是已批准的 preset。复用既有 Turn、宿主选择、
+authority 与 settlement owner。
+
+| 维度 | 候选／观察到的边界 |
+| --- | --- |
+| 安装 | 当前单体 `loopx` 源码 checkout；macOS arm64 上 Python 3.13.5、Node 26.0.0。test extras 只准备实验，不是最小安装；不证明拆分发行物或已安装宿主资格 |
+| 宿主 | 既有 `generic-cli`、`isolated-headless`，经 `--host-adapter-command-json` 使用 JSON stdio；一个确定性的本地任务产物进程和独立、受信 argv 验收器。该夹具无须模型 session 或 workspace/IM 服务 |
+| Authority | 经既有 TypeScript effect runtime 及本地 RPC 传输使用规范 SQLite，并复用 Turn journal、验收与结算。测试脚手架以 `soft_claim` shadow 初始化；不能仅靠这些证据证明正常 hard-lease 的 V2 一致性 |
+| 必需的逻辑内核 | Bootstrap／所选 CLI、TurnEnvelope 与宿主准入、当前 authority／stop／budget／claim 规则、journal／恢复、进程监督、独立验收和结果／结算回读。owner 与 standard 共享 |
+| 可选激活 | 夹具不启用任务 memory 或其他可选 hook，不运行模型任务或外部操作。加载 settings／policy helper 不证明激活，也不授权删除它们 |
+| 身份与恢复 | 使用 `--resume-turn-key` 恢复原 journal；该路径有意拒绝新的 `--turn-instance-id`。复用缓存中已确认的宿主工作；未确认工作及其他中断点继续由各自契约治理 |
+
+- **真实任务与恢复：** 真实宿主进程写出零至七的平方数，独立进程检查预先给定的
+  字面数组。正常路径和 typed host result 持久化后对所持 CLI 注入 OS `SIGKILL`
+  的路径，在各自隔离 SQLite 夹具中最终都只有一次宿主调用、一次 writeback 和
+  一次扣额。中断路径在重启前没有扣额；重启验收缓存结果，不再次调用宿主。随后
+  committed 重放报告没有重复 host／writeback／扣额／scheduler 效果。两条路径的
+  产物字节一致；没有对活跃项目状态注入故障。
+- **实际加载：** 产品版本 `62e234c93` 上，正常 Python 路径加载 538 个 LoopX
+  模块，涉及 21 个 capability 命名空间，不加载 `loopx.cli` 或 `loopx.chat` 树。
+  第二轮使用隔离的既有 runtime broker 和透明 Node module-load observer；其
+  bootstrap、执行与恢复加载 `control_plane` 下 231 个 TypeScript 文件和八个
+  JSON 文件。这是观察到的闭包，不是已批准的 core 成员。已核验私有 broker 的
+  身份、停止 ACK 和进程退出；没有停止共享服务。
+- **成本与限制：** 父进程插桩区分必需本地 RPC 与外部网络连接，后者观察为零。
+  正常调用观察到 34 个 Git 子进程、一个 Node 版本探测、一个 Node 宿主监督器和
+  一个 Python 验收器；监督器另行启动任务宿主。child／broker CPU 与 RSS、完整
+  wire／context 字节及模型宿主成本尚未测量。这些小规模插桩演练不是重复的成对
+  性能采样，不建立 D6 预算或长程收益证据。
+- **独立回归证据：** `tests/test_loopx_turn_driver.py` 中
+  `test_managed_start_interruption_preserves_reservation_and_attempt` 的六个
+  SQLite 用例，以及 `test_turn_run_once_cli_rejects_unproven_host_claim_before_writeback`
+  和 `test_turn_run_once_cli_replays_declared_successor_after_interruption` 均通过。
+  探针设置拒绝与产品失败分别保留：过宽网络 observer、错误的 host-request schema
+  及冲突的恢复 flags 已修正，不改生产代码、不放松权限，失败观察仍保留。
+- **下一 owner 变更：** `loopx/cli_commands/turn_run_once.py` 在选宿主前导入
+  DSH host builder，但调用点只在 `args.host == "dsh"` 分支。generic 路径因此
+  加载未选择的 `turn_dsh_host` 和 `dsh_goal_mode.turn_host_adapter`。先刻画既有
+  export／patch 点，再在其 owner 接缝延迟加载，并复验 generic／DSH／Codex 行为
+  与默认关闭一致性。命名空间数量本身不支持删除共享 policy helper。
+- **剩余：** opt-in minimal 选择、完整 D2/D5 采纳、hard-lease 与上下文 V2/V5
+  一致性、尚未确认的宿主工作期间中断、模型宿主 V4、完整 V10 与拆包安装资格仍
+  未关闭。不引入新 engine、provider、默认值、权限字段或 runtime self-merge。
+
+### 2026-11-07 — Heartbeat pre-quota 按需加载
+
+- **基线与 owner：**`79665b97a`。heartbeat builder 已在 external evidence polling
+  可用时生成 `heartbeat-prequota`。选择性 parser 复用原 heartbeat registrar，dispatch
+  放在现有 heartbeat transport 模块；完整 facade 显式传入原 runner、renderer 和全局
+  registry resolver patch points。显式／隐式路由、别名、格式、timeout、异常、降级返回和
+  controller 语义均已刻画；reconciliation／hook 顺序及 typed owners 保持原路径。
+- **源码与包证据：**新增 50 个 transport／加载／真实后端用例；四个独立核对的源码／
+  wheel console 各运行 22 个场景；16 个配置／降级 File／SQLite console 场景覆盖重放、
+  opaque 原工作保留和零 quota 扣费。删除 `continue_to_quota` 的 mutation 经同一公开
+  console oracle 在两种真实 store 上被拒绝。原 acknowledgement smoke 同时覆盖两个
+  CLI facade。完整源码选择初轮得到 378 pass、两个路由测试失败，精确基线同样失败。
+  fixture 改为读取原 digest-bound progressive capture，不重新准入；受影响文件随后
+  17 个用例全部通过。失败未豁免。聚焦 lint、配置内 mypy 和代码 canary 通过。
+- **配对本地成本：**macOS 27.0 arm64、Python 3.13.5、Node 26.0.0；相同依赖和合成
+  store，预编译 bytecode、全新 Python 进程、热文件缓存及复用的隔离 Node 服务。
+  每个 workload／distribution 30 个交错 base／head 配对，共 360 个样本，采样 339 秒；
+  study 准备／验证另计 260 秒。测量使用共享开发机，并非空闲机器实验。下表是含解释器
+  启动的墙钟 median／p95（秒）和进程 RSS 中位数（MiB）。
+
+| Workload / distribution | 基线 median / p95 | 候选 median / p95 | 基线 → 候选 RSS |
+| --- | --- | --- | --- |
+| `source/prequota-help` | 1.433 / 1.889 | 0.172 / 0.226 | 91.5 → 24.7 |
+| `source/prequota-file-off` | 1.494 / 1.927 | 0.545 / 0.667 | 92.0 → 47.0 |
+| `source/prequota-sqlite-off` | 1.547 / 1.977 | 0.507 / 0.640 | 91.9 → 46.3 |
+| `wheel/prequota-help` | 1.555 / 1.967 | 0.170 / 0.210 | 91.7 → 24.5 |
+| `wheel/prequota-file-off` | 1.545 / 2.155 | 0.536 / 0.650 | 91.7 → 46.7 |
+| `wheel/prequota-sqlite-off` | 1.397 / 1.866 | 0.531 / 0.667 | 92.0 → 46.9 |
+
+- **加载边界与完整成本限制：**help 的 LoopX 模块为 29，基线 1,158；默认关闭的执行
+  为 277，基线 1,160。Python open 观察由 1,292–1,312 降至 81–395；打开文件尺寸之和
+  是 footprint，不是实际读取字节。候选 help 的 user／system 进程 CPU 中位数为
+  0.04／0.02 秒，执行为 0.13–0.14／0.065–0.08 秒；基线为
+  0.40–0.42／0.16–0.185 秒。help 输出仍为 737 字节，JSON 执行仍为 827 字节。
+  独立 SQLite loopback profile 在两版均观察到发送 1,362、接收 668 字节；冷服务启动
+  Node version／server 两个进程，复用服务启动数为零。单次带 instrumentation 的冷／
+  热观察不能拆出 Node readiness 或 service CPU，相关成本未通过资格。初轮 IPC probe
+  误以为使用 Unix socket 而失败，改为 loopback instrumentation 后通过，未修改产品。
+  help p95 为 0.226／0.210 秒，超过提议的 0.200 秒目标；未晋升或重标该 D6 提议。
+- **剩余：**这是一条 R0／V1／V3／V10 caller 的作者提案，I3 至少保留一个 minor release。
+  完整 R0／V10、M1／#8011、R1、context／model、split-install、installed-host 恢复、
+  采纳和完整任务成本仍开放。Python 仅适配 transport，没有新增 decision owner、preset、
+  provider 或权限规则。最终 exact-head review／CI 仍是独立交付门，与这些本地观察分开。
+### 2026-11-07 — Registry 检查的选择性加载
+
+- **基线与边界：** `ac6296225`。`registry` 和 `registry-boundary` 使用现有
+  selected CLI 路由。共享注册器与传输适配器留在 `cli_runtime`；显式完整 CLI
+  通过 `support_control` 复用它们，保留原有检查函数与 renderer patch point。
+  Registry 解析、分类及 Git 判定仍归现有 owner。Python 在此只适配 CLI，不新增
+  决策 owner、provider 或 dispatcher 框架。既有导入与 I3 至少一个 minor release
+  的兼容窗口保持不变。
+- **兼容证据：** 源码 CLI 与 support ownership 的 197 个用例通过，包含新增的
+  26 个检查结果、拒绝与 patch-point 用例及两个 help 用例。独立的完整 CLI 加载
+  排除断言经同一公开入口，在不可变基线上失败、候选版本上通过。20 个成功与
+  拒绝请求在源码及独立安装的单体 wheel 控制台上保持输出、状态与异常语义一致。
+  Help 与读取路径在缺少 Node 时仍可用，并排除未选择的 Chat、Dashboard 和
+  benchmark 执行模块。两版本在一次性临时目录中均通过真实 Git registry-boundary
+  smoke；先前放在 `.local` 下的运行失败，因为该祖先路径会按既有规则选择私有
+  registry 分类。这次失败作为 fixture 放置证据保留。
+- **成本资格：** 源码与 wheel 各四条 help/读取路径，每条运行 30 对交替 base/head
+  样本，共 480 个样本，采样耗时 416.7 秒；研究准备、兼容验证及 profiling 另耗时
+  278.1 秒，不含此前环境、wheel 准备及测试。macOS arm64/Python 3.13.5、相同依赖、
+  预编译字节码和暖文件缓存下，新进程控制台 help 中位数从 1.536–1.609 秒降至
+  0.100–0.103 秒；registry 读取从 1.584–1.631 秒降至 0.301–0.310 秒，边界读取从
+  1.542–1.612 秒降至 0.222–0.225 秒。RSS 中位数从约 91–92 MiB 降至 16–30 MiB。
+  两条 help 的 LoopX 模块闭包均从 1,158 降至 9；registry/边界读取降至 148/44。
+  PR 记录逐路径 median/p95、CPU、独立 audit 的文件打开次数及未改变的输出字节。
+  未观察到 Node 启动/IPC 或 Python audit socket 事件；边界读取保留三次 Git 查询。
+  暖缓存块 I/O 为零，准确读取字节数及 audit 之外的原生活动仍未知。这些结果只限定
+  本地 CLI 成本改善，不建立可移植 D6 限值、完整准备/model 成本或采纳结论。
+- **验证与剩余工作：** 改动文件 lint 通过。CI lint 范围仍失败于基线已有的 F841，
+  其修复已另行提案；这里不豁免该结果。源码与 wheel 证据不升级已安装 host。
+  M1/#8011、完整 R0/V10、R1 的真实受管 Turn、context/model 组合、拆包安装、采纳
+  与完整成本仍开放。D2/D5/D6/D3、默认行为及权限判定均不改变。相关有界重构
+  共享既有 grammar 与检查适配器；更大的 support/control 提取不纳入本切片。
+### 2026-11-06 — 所选 Turn 宿主的加载接缝
+
+承接 [#8180](https://github.com/loopx-project/loopx/pull/8180) 的
+generic-cli/SQLite 候选，源码提案 `9b80cf7d6` 在 `turn_run_once` 延迟加载 DSH
+builder，直到调用方选择 DSH 或显式请求既有 export。命名 import、原 builder
+身份、静态类型、`dir()`、star import 与 CLI builder patch 点均保留。复用既有
+宿主／authority owner；这不选择 minimal preset，也不代表 D2/D5 已采纳。
+
+- **观察到的变化：** 真实 generic-cli/SQLite 任务路径加载 533 个 LoopX 模块，
+  基线 `62e234c93` 为 538。移出的五个模块是 `turn_dsh_host`、
+  `turn_driver.host_candidate`、`dsh_goal_mode` 及其 `host_failure_map`／
+  `turn_host_adapter`，没有新增模块。冷 import oracle 在基线失败、提案通过；
+  既有 DSH CLI 夹具还证明公开 builder patch 点被使用。
+- **真实路径一致性：** 同一个私有 harness 在两个版本的隔离 SQLite 夹具上运行
+  正常完成、typed host result 持久化后中断、原 journal 恢复及 committed 重放。
+  每个夹具最终仅一次宿主调用／attempt、一次 writeback 和一次扣额，重放不重复
+  效果。独立 argv 验收器接受字节相同的产物。每个版本使用隔离 native broker，
+  已核验停止与 OS 退出。这仍是确定性 transport 证据，不是模型宿主 V4 或正常
+  hard-lease V2 的资格。
+- **观察成本：** 每个版本一次正常插桩调用记录耗时 2.962 → 3.169 秒，父进程
+  CPU 0.737 → 0.775 秒、峰值 RSS 65.6 → 64.6 MiB；输出均为 3,474 字节。
+  已 wait 子进程的 CPU 为 0.567 → 0.599 秒。缓存、执行顺序与竞争工作未受控，
+  这些观察不证明延迟改善，也不建立回归阈值。broker RSS 观察及 wait 子进程的
+  usage 不覆盖完整进程树峰值、完整 wire／context 字节或模型成本。加载变化较小，
+  长程收益和 D6 资格仍未证明。
+- **`bc59a9ed4` 的历史验证限制：** 更广的源码选择为 596 个通过、一个 preview 冷 import 测试失败；
+  基线独立出现同一失败，原因是 `host_bridge_transport` 提前导入
+  `extensions.process_runtime`。owner 范围的 mypy 使用 `--follow-imports=skip`，
+  两个版本在线号归一化后均报告相同 29 个诊断，不代表完整配置的 mypy 套件。
+  两项失败均不豁免、不改写为通过。下述 process helper 接缝在同一作者提案中
+  修复 preview 失败，并保留类型检查限制。
+- **剩余：** 采纳仍受独立评审、必需验证和精确 head 的 merge readiness 治理。
+  opt-in minimal 选择、D2/D5 决策、完整 R0/V10/R1、hard-lease／上下文／模型
+  一致性和拆包安装仍未关闭；独立 status 提案 #8011 保留原限制。不改变权限、
+  provider、默认值、已安装宿主或发布行为。
+
+### 2026-11-06 — Preview process helper 保留在执行路径
+
+后续 runtime 提案 `a44e27d96` 修复未改动的 preview import oracle。先延迟
+bridge helper 暴露了 `doctor_git` 的第二条 eager import；两个 adapter 现均在
+执行／清理或显式 import 时解析既有 `process_runtime` owner。命名／star import、
+原函数身份、静态 alias、`dir()` 和公开 patch 点均保留。TypeScript Host lifetime
+及进程／权限判定不迁移。
+
+- **可观察结果：** 导入 preview command 加载 337 个 LoopX 模块，`bc59a9ed4`
+  为 338，仅移出 `extensions.process_runtime`。真实 Git 成功读取同样不加载清理
+  helper。实际 generic-cli 执行仍需要这些 helper，两个版本均加载 533 个模块。
+  本片修复加载边界，不证明提速或长程收益。
+- **真实路径：** 同一个隔离 SQLite harness 在两个不可变 runtime 版本通过正常
+  完成、typed result 后中断、原 journal 恢复及 committed 重放。产物字节相同，
+  每个夹具仅一次宿主调用／attempt、writeback 和扣额，重放无重复效果。两个自有
+  broker 均停止并核验 OS 退出。真实 bridge send／cancel、背压、deadline 和清理
+  未确认分支保留行为；真实 Git 超时／终端取消退役查询自有 helper。清理错误通过
+  既有 patch 点保留 unknown 诊断。
+- **限制：** macOS 跳过七个 Windows Job Object 用例。一轮组合验证因 Git 夹具
+  hook 未在既有预算内启动而失败；随后隔离 Git 选择通过，未修改预算或 oracle。
+  owner 范围的 mypy 检查三个受影响加载 adapter，基线与提案仍有相同 29 个诊断。
+  完整配置 mypy、打包／拆包安装、minimal 选择、D2/D5、完整 R0/R1/V10、
+  hard-lease／上下文／模型一致性及完整成本收益仍未取得资格。采纳仍受独立精确
+  head 评审与必需验证治理；前述历史失败仍是历史失败。
+
+### 2026-11-06 — 成对成本实验仍未取得资格
+
+`a9485073f` 对比 `86d9c542d` 的有界实验产生了有用的负面证据，未证明可归因的
+提速。实验在冻结的 20 分钟采样墙钟上限结束，共有 499 个通过语义断言的观察：
+八个源码组各完成 30 对；wheel 的 JSON version 完成九对，另有一个未配对的候选
+观察，其余 wheel 组未采样。原标准和全部观察均保留；上限触发及未完成组不改写为
+资格通过。随后集成的目标 `cd677182c` 不在这组不可变版本的测量中。
+
+环境为 macOS arm64、CPython 3.13.5、Node 26.0.0，真实 backend 是 Node owner
+的 SQLite 3.53.1。源码和隔离的单体 `loopx` 2.2.0 wheel 环境具有相同的 57 个
+依赖版本，并核验实际 import 来源。公开入口依次运行 JSON version、所选
+`performance-diagnosis` help、status、quota admission 和确定性 generic-cli
+任务，复用既有 `_write_live_fixture(provider="sqlite")` owner。顺序冻结为源码
+先于 wheel、上述命令顺序、冷路径先于暖路径，每对交替基线／候选顺序。每个任务
+使用新的合成状态。冷路径为新 Python 进程加已退役的自有 broker；暖路径为新
+Python 进程加保留的 broker。文件系统缓存未受控、禁止写入字节码，不声明冷磁盘。
+
+**缓存限制：** 既有字节码未归一化。后续盘点发现源码组 LoopX `.pyc` 数为
+7 对 1,241，依赖 `.pyc` 数为 2 对 344。两个版本的 JSON version 均加载
+1,157 个 LoopX 模块，父进程 read-open census 为 2,402 对 1,253。因此不能把
+源码观察到的下降归因于五个模块的加载变化；下表仅描述这些缓存条件。
+
+| 源码操作 | Broker 条件 | 基线秒数，中位数 / p95 | 候选秒数，中位数 / p95 |
+| --- | --- | --- | --- |
+| JSON version | 无 | 3.092 / 3.394 | 1.707 / 2.110 |
+| 所选 help | 无 | 0.093 / 0.174 | 0.101 / 0.165 |
+| Status | 冷 | 2.104 / 2.437 | 1.832 / 2.074 |
+| Status | 暖 | 1.304 / 1.422 | 0.985 / 1.115 |
+| Quota admission | 冷 | 2.481 / 2.720 | 2.029 / 2.331 |
+| Quota admission | 暖 | 1.785 / 1.881 | 1.313 / 1.460 |
+| Generic-cli 任务 | 冷 | 3.910 / 4.158 | 3.446 / 3.803 |
+| Generic-cli 任务 | 暖 | 2.837 / 3.025 | 2.424 / 2.635 |
+
+- **覆盖的成本：** 冷任务 target 和已 wait 后代的 CPU 中位数／p95 为
+  1.769 / 1.832 对 1.283 / 1.388 秒，其最大 RSS 为 79.2 / 87.4 对
+  75.5 / 78.7 MiB。独立 broker CPU 为 0.720 / 0.780 对 0.735 / 0.800 秒，
+  结束时 RSS 为 126.6 / 129.7 对 128.3 / 133.5 MiB；不代表并发进程树峰值或
+  完整 CPU 账本。五个操作的输出分别保持 81、325、21,829、23,795、3,557 字节。
+  宿主一分钟 load 范围为 5.00–14.42；这是具名环境的观察。
+- **独立 instrumentation：** 源码和 wheel 的任务加载仍为 538 → 533。
+  冷任务父进程 read/write-open 为源码 2,179/284 → 1,643/284、wheel
+  2,184/284 → 2,173/284。四个 capture 各有 238 次本地 IPC 连接；覆盖的 socket
+  send/receive 字节为源码 895,335/391,794 与 895,339/391,794，两个 wheel 均为
+  894,790/391,543，仅覆盖已观察的 Python socket，不覆盖全部 context、transport
+  或后代 I/O。独立源码冷任务 audit 的父进程／已 wait 子进程 CPU 为
+  1.234/0.560 → 0.802/0.582 秒，最大 RSS 为 88.7/75.3 → 63.4/75.4 MiB；
+  这些 instrumentation 样本不作为计时证据。既有 performance-diagnosis recipe 分别检查 Pyinstrument 和实际
+  Node worker CPU profile。父进程等待、workspace capture 和读取，以及 worker
+  启动／退役仍是调查线索；profile elapsed／idle 权重不进入计时表。完整 JSON
+  version 走 full parser/export graph，`--version` 仅加载两个 LoopX 模块。
+- **语义回读：** 所有已采样任务通过独立断言，产物为相同的八个整数平方。源码和
+  wheel 在两个版本均通过正常 committed 重放、typed result 落盘后中断、原
+  journal 恢复及重放。每个被接受的夹具仅一次宿主 attempt／调用、writeback 和
+  扣额，重放不重复效果。移除最后一个平方值使四个独立 validator 均拒绝，只有
+  一次 dispatch、零 writeback／扣额。自有 broker 结束后核验 OS PID 退出。
+  一个 seed shutdown 起初选到不同 interpreter alias 的 fingerprint；保留该失败，
+  随后通过核验过的自有 locator 恢复，未触及宿主状态。
+- **完整成本限制及下一步：** setup／编排为 888 秒，包含 194 秒夹具准备和
+  98 秒成功 preflight；失败的 bundle build、调用及 preflight 尝试仍为失败。
+  20 分钟墙钟上限内，采样 target elapsed 总计 1,001 秒。独立语义验证耗时
+  39 秒；产物拒绝及诊断／清理恢复 184 秒；instrumented census 为 108 秒，
+  任务／version profiling 为 58/20 秒。后续撰写／工具／模型成本、完整
+  native／thread 工作及进程树峰值仍未完整覆盖。两个 wheel 均有
+  1,997 个文件、压缩体积约 8.9 MiB，不代表拆包安装资格。下一轮成本实验必须
+  对齐字节码条件，并在冻结前根据实际准备／调用成本选定可完成的代表性
+  source/wheel corpus；进一步加载修改等待该对照。R0/V10、R1/minimal、D2/D5/D6、
+  I3/D3、模型／上下文／hard-lease 和安装缺口保留既有 owner／gate，本 checkpoint
+  不关闭其中任何一项。
+
+### 2026-11-06 — 字节码匹配的代表性成本 checkpoint
+
+新冻结对照比较 `546c08c0d3f22358ef09b13e69f7edaa806121b8` 与
+`0df5ad7921faab3b9ab8ec809f2fd71060692cce`。所选 source/wheel 六组各完成
+30 对交错样本：360 个有效观察，采样耗时 948.573 秒，保持原定 1,200 秒上限。
+E7 仍是不完整且缓存混杂的实验；本轮数据单独保留。测量候选包含截至
+`546c08c0d` 的目标 main；后续目标分支集成不在本次不可变成本对照内。
+
+环境仍为 macOS arm64、CPython 3.13.5、Node 26.0.0 及真实 Node-owned
+SQLite 3.53.1。四个源码／单体 wheel 环境的来源已核验，57 个依赖版本相同。
+冻结前，各 arm 在独占 `PYTHONPYCACHEPREFIX` 编译标准库、依赖及全部
+1,421 个 LoopX Python 源文件；时间戳 header 清点没有缺失／无效的自身或依赖缓存。
+同一发行形态的相对源码集合一致。采样、恢复和 profile 后，缓存清点与冻结 harness
+哈希仍相同；目标进程禁止字节码写入。顺序固定为源码先于 wheel、help 先于 task、
+cold 先于 warm；偶数对先 baseline，奇数对先 candidate。每次调用都是新 Python
+进程；cold 退休独占 broker，warm 保留 broker。磁盘缓存不受控，不代表冷磁盘。
+一分钟宿主负载范围为 8.35–88.73；保留全部尾部观察，不将源码 cold p95 差异
+归因于代码。
+
+| 所选操作 | Broker | 基线秒数，中位数 / p95 | 候选秒数，中位数 / p95 | 每对候选减基线的中位数，秒 |
+| --- | --- | --- | --- | --- |
+| Source help | 无 | 0.136 / 0.193 | 0.138 / 0.168 | +0.0010 |
+| Source SQLite task | cold | 3.579 / 5.997 | 3.617 / 9.234 | -0.0195 |
+| Source SQLite task | warm | 2.673 / 3.019 | 2.657 / 2.979 | -0.0602 |
+| Wheel help | 无 | 0.087 / 0.107 | 0.083 / 0.116 | -0.0033 |
+| Wheel SQLite task | cold | 3.722 / 4.266 | 3.663 / 4.430 | -0.0847 |
+| Wheel SQLite task | warm | 2.707 / 3.111 | 2.797 / 3.156 | -0.0457 |
+
+p95 使用 nearest rank。配对差的中位数与两 arm 中位数之差是不同统计量。
+本轮未证明明显延迟或 CPU 收益：arm 中位数和尾部变化方向不一致，task CPU
+相近。数据证明代表性对照完整执行及语义一致，不证明速度阈值、完整 V10 或
+长程收益。
+
+| Task 路径 | Target 与等待子进程 CPU 秒数，中位数（基线 → 候选） | Target/等待子进程峰值 RSS MiB，中位数（基线 → 候选） | 独占 broker CPU 秒数，中位数（基线 → 候选） | Broker 结束 RSS MiB，中位数 / p95（基线 → 候选） |
+| --- | --- | --- | --- | --- |
+| Source cold | 1.311 → 1.325 | 75.75 → 75.58 | 0.770 → 0.775 | 127.9 / 134.8 → 128.6 / 133.5 |
+| Source warm | 1.235 → 1.226 | 76.15 → 76.16 | 0.180 → 0.185 | 146.5 / 148.4 → 129.8 / 148.7 |
+| Wheel cold | 1.353 → 1.369 | 75.94 → 76.56 | 0.805 → 0.810 | 129.5 / 134.4 → 130.1 / 134.1 |
+| Wheel warm | 1.273 → 1.260 | 76.05 → 76.69 | 0.190 → 0.180 | 100.4 / 136.3 → 101.4 / 140.2 |
+
+上述 RSS 不是并发进程树峰值；warm broker 结束 RSS 还反映其保留生命周期。
+Help 的 target/等待子进程 RSS 中位数为 17.56–17.85 MiB，CPU 中位数为
+0.046–0.056 秒。未插桩 stdout 在两 arm 均为 help 325 字节、source task
+3,557 字节、wheel task 3,550 字节，stderr 为空。Target/等待子进程块 I/O
+计数不覆盖全部 broker/native I/O。
+
+独立插桩确认两种发行形态的 task 加载均为 538 → 533，仅移除前述五个 DSH
+模块；help 保持 12 个模块。Parent read-open 为 source cold 1,680 → 1,675、
+source warm 1,269 → 1,264、wheel cold 1,683 → 1,677、wheel warm
+1,272 → 1,267。Task write-open 保持 cold 284、warm 279，观测到的 parent
+本地 socket 连接均为 238。覆盖的 task 发送／接收字节范围为
+893,698–894,864 / 392,608–392,859；source 候选少发送五字节，wheel 不变。
+Help 在 source 打开 31 个文件、wheel 32 个，无写入或 socket 流量。
+插桩 task parent CPU 为 0.635–0.774 秒、峰值 RSS 62.3–65.5 MiB；等待子进程
+CPU 0.528–0.573 秒、峰值 RSS 76.1–78.6 MiB。单次捕获只作清点，与重复计时分开。
+
+四个版本组合的同源隔离真实 SQLite 夹具均通过普通 committed replay、typed-result
+持久化后中断、原 journal 恢复及 committed replay。独立平方整数产物／转移 oracle
+确认产物字节相同，host invocation/attempt、writeback、扣额各一次。Resume
+不重复 dispatch，replay 不重复 effect。移除最后一个平方值时，四组均以 exit 1 /
+failed 拒绝，dispatch 一次而 writeback／扣额为零。所有独占 broker 均取得
+shutdown 与 OS 退出读回，实验 broker 已全部退出。
+
+准备／编排耗时 1,018.786 秒，包含有重叠的构建、安装、夹具及缓存工作，各阶段
+不能求和。独立拒绝阶段为 16.056 秒、插桩 39.116 秒、八个 parent／实际 Node
+profile 捕获 54.880 秒。恢复／重放 target 耗时单独记录，其完整编排成本尚未覆盖。
+既有 `performance-diagnosis` recipe 在 Python 观察中显示 workspace capture、
+journal checkpoint、Git probe 及 quota preparation；Node profile 包含启动、
+请求 dispatch、idle 与 retirement。采样栈权重不是 benchmark 延迟或根因证明；
+inclusive 权重、warmup 与 retirement 不能相加作为 task 节省。完整 context、
+进程树／native／thread／模型成本仍未知。单体 wheel 仍约 8.9 MiB，不证明拆包安装。
+
+**证据驱动的下一步：** 保留已验证的兼容／加载接缝，停止为未证明的提速扩展这些
+helper。优先有界刻画既有完整 parser/export 闭包或实测 workspace/journal/bridge
+owner；采纳性能变更前必须另做匹配的真实路径对照。本 checkpoint 不新增 owner、
+预算、preset 或默认行为。R0 完整清点、R1/minimal、D2/D5/D6、I3/D3、
+hard-lease／context／model 和拆包安装验收仍开放；采纳仍受独立 exact-head
+评审及必需验证约束。
 ## 附录 B：决策日志
 
 | 日期 | 决策 | 负责人 / 批准 | 备选 | 变更的规范章节 |
@@ -679,6 +1033,8 @@ R1/minimal、D2/D5/D6、hard-lease／context／model 及拆包安装验收仍开
 | E5 | DSH 装配范例 | 固定上游 commit | [`minimal.patch.yml`](https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/bundle/web-app/presets/minimal.patch.yml)、[`standard.patch.yml`](https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/bundle/web-app/presets/standard.patch.yml)、[`sdk-minimal`](https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/bundle/sdk-minimal/README.md) | 源码审计 | 共享预设装配与自包含 SDK bundle；不代表 LoopX 宿主资格或权限建议 |
 | E6 | Pi core/上下文范例 | 固定上游 commit | [`agent` core](https://github.com/badlogic/pi-mono/blob/f14813e96510a7cf7562a120e809c6a134af073d/packages/agent/README.md) | 源码审计 | Agent/tool/event core，以及 `transformContext`、`convertToLlm`、`prepareRequest`、`finishTurn` 接缝；无 LoopX authority 或性能声明 |
 | E9 | Version 按需加载及匹配成本 | `5a5863502` / `8a79d8602`；macOS arm64 / CPython 3.13.5 | 上述 version checkpoint；既有 console/version 及 performance-diagnosis owner | 修正后两组各 30 对，共 120 个观察；公开 facade／一致性／缓存读回通过；版本查询明显改善 | 首轮 120 个观察及 facade 失败保留；仅公开安全汇总；完整 Turn/minimal、拆包安装、宿主升级及完整成本未取得资格；E7/E8 保留在 #8185 |
+| E7 | 有界成对成本实验 | `a9485073f` / `86d9c542d`；上述具名环境 | 上述成对成本 checkpoint；既有入口／SQLite 夹具及 performance-diagnosis owner | 499 个观察；源码组完整，wheel 不完整；缓存归因未取得资格 | 仅公开安全汇总；不证明提速、完整 V10、拆包安装或模型成本 |
+| E8 | 字节码匹配的代表性对照 | `546c08c0d` / `0df5ad792`；上述具名环境 | 上述匹配字节码 checkpoint；相同 CLI/SQLite 及 performance-diagnosis owner | 六组各 30 对，共 360 个观察；语义／拒绝及缓存读回通过；未证明明显收益 | 仅公开安全汇总；后续集成、完整 V10、minimal、拆包安装及模型成本未取得资格 |
 
 ## 附录 D：被拒绝或被取代的备选
 

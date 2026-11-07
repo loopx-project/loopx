@@ -195,7 +195,7 @@ class LarkGoalTopicRuntimeService:
                     if attention_ready and len(pending) + int(feedback is not None) + int(reports is not None) + int(ingress is not None or ingress_ready) < 4 and not self._closed.is_set():
                         attention = pool.submit(owner_attention.reconcile)
                     if ingress_ready and len(pending) + int(feedback is not None) + int(reports is not None) + int(attention is not None) < 4 and not self._closed.is_set():
-                        ingress = pool.submit(observer.observe, cancelled=self._closed.is_set)
+                        ingress = pool.submit(getattr(transport, "observe_ingress", observer.observe), cancelled=self._closed.is_set)
                     app_feedback = getattr(transport, "reconcile_app_feedback", None)
                     # Optional feedback uses one slot in this same bounded
                     # pool and leaves capacity for canonical body deliveries.

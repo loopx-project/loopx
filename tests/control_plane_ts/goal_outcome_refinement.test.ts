@@ -112,8 +112,15 @@ for (const provider of ["file", "sqlite"] as const) test(`${provider}: one canon
   assert.equal(empty.metadata.goal_acceptance_contract, undefined);
   assert.equal(empty.metadata.goal_acceptance_oracle_observation_basis, undefined);
   const basis = await inspectGoalAcceptance(store, goal);
+  const planning = () => inspectGoalAcceptance(store, goal, undefined, undefined, false, "author");
+  assert.deepEqual((await planning()).planning_requirements, {agent_id: "author", declaration_current: false,
+    outcome_ids: [], linked_todo_ids: []});
   assert.equal((await refineGoalAcceptanceOutcome(store, {goal_id: goal, actor_agent_id: "author", operation_id: "outcome",
     expected_provider_revision: basis.provider_revision, refinement: patch()})).status, "applied");
+  assert.deepEqual((await planning()).planning_requirements, {agent_id: "author", declaration_current: true,
+    outcome_ids: ["tour"], linked_todo_ids: ["todo_tour"]});
+  assert.deepEqual((await inspectGoalAcceptance(store, goal, undefined, undefined, false, "peer")).planning_requirements,
+    {agent_id: "peer", declaration_current: false, outcome_ids: [], linked_todo_ids: []});
   assert.equal((await snapshot()).metadata.goal_acceptance_oracle_observation_basis, undefined,
     "ordinary outcome declarations do not authorize host artifact reads");
   const current = await inspectGoalAcceptance(store, goal);

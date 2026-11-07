@@ -818,7 +818,10 @@ class ChatRuntimeController:
                 and ("-recovery-" not in str(active.get("client_turn_id")) or metadata_fallback or quota_fallback or answer_fallback)
                 and session.get("upstream_mode") in {"default", "chat"}):
             quota_route = manager_session_quota_route(self, session)
-            if (metadata_fallback or quota_fallback or answer_fallback) and (not quota_route or quota_route["allocation"]["executor_endpoint"] != "codex"):
+            history_on_current_codex = recovery.get("history_review") is True and session.get("agent_id") == "codex"
+            if history_on_current_codex:
+                quota_route = None  # This answer cannot change executor or account policy.
+            if (metadata_fallback or quota_fallback or answer_fallback) and not history_on_current_codex and (not quota_route or quota_route["allocation"]["executor_endpoint"] != "codex"):
                 raise CodexChatAgentError("The reserved recovery no longer has verified Codex capacity.", error_code="manager_authorization_unavailable", gate=None)
             if quota_route and quota_route["allocation"]["executor_endpoint"] == session.get("agent_id"):
                 quota_route = None
@@ -852,21 +855,12 @@ class ChatRuntimeController:
             and isinstance((active.get("loopx_request") or {}).get("report_quota_recovery"), dict))
         with self.lock:
             current = self.adapters.get(session_id)
-            manager_profile_changed = bool(
-                manager_runtime is not None
-                and (
-                    session.get("manager_runtime_profile") is not None
-                    or manager_runtime.get("runtime_profile") != "restricted"
-                )
-                and any(
-                    session.get(key) != value
-                    for key, value in manager_runtime_session_fields(manager_runtime).items()
-                )
-            )
+            manager_profile_changed = NativeHistoryRestoration.manager_profile_changed(session, manager_runtime)
             if (
                 current is not None
                 and current.healthcheck()
                 and not manager_profile_changed
+                and not recovery.get("history_review")
                 and not recovery.get("quota_attempt")
                 and not native_quota_refresh
                 and (native_account_epoch is None or getattr(current, "_native_account_epoch", None) == native_account_epoch)
@@ -880,6 +874,12 @@ class ChatRuntimeController:
                 # transport cannot prove that its original Chat worker exited.
                 raise ValueError("the original Chat worker is still active; read its current Turn")
             elif current is not None:
+                if (recovery.get("history_review") is True or recovery.get("read_only_review")
+                        and recovery.get("unfinished_work")) and current.healthcheck():
+                    if (not isinstance(current, CodexAppServerAdapter)
+                            or not current.answer_review_replaceable()):
+                        raise CodexChatAgentError("The original adapter still owns background work; answer review held.",
+                            error_code="host_gate", gate=None)
                 current.close_session()
                 self.adapters.pop(session_id, None)
         if reusable is not None:
