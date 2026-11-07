@@ -6,6 +6,7 @@ import queue
 import subprocess
 import threading
 import time
+from contextlib import contextmanager
 from collections import deque
 from collections.abc import Mapping, Sequence
 from typing import Any, Self, TextIO
@@ -160,3 +161,17 @@ class StdioNativeGoalTransport:
             except subprocess.TimeoutExpired:
                 self.process.kill()
                 self.process.wait(timeout=2)
+
+
+@contextmanager
+def native_checkpoint_reader(env: dict[str, str], *, timeout: float):
+    """Keep one native inspection process open across a sealed capture window."""
+    with StdioNativeGoalTransport.spawn(
+        [env["CODEX_BIN"], "-c", "features.goals=false", "app-server", "--listen", "stdio://"],
+        cwd=env["LOOPX_PROJECT"], env=env, stderr=subprocess.DEVNULL,
+        response_timeout_sec=timeout,
+    ) as transport:
+        transport.request("initialize", {"clientInfo": {"name": "loopx_checkpoint", "version": "0.1.0"},
+                                          "capabilities": {"experimentalApi": True}})
+        transport.notify("initialized", {})
+        yield transport

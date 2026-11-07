@@ -20,6 +20,158 @@ from loopx.extensions.lark.private_delivery_discovery import PrivateDeliveryDisc
 from loopx.extensions.lark.goal_topic_runtime import poll_lark_goal_topic_profile_once
 
 
+def test_historical_context_is_explicitly_bounded_and_never_decodes_unread_attachments():
+    rows = [{"message_id": f"m-{i}", "created_at": f"2026-01-01T00:00:{i:02}+00:00",
+        "role": "agent", "text": f"Complete original answer {i}"} for i in range(14)]
+    rows[-1]["attachments"] = [{"data_url": "unread-image-bytes"}]
+    def messages(sid):
+        assert sid == "original-session"
+        return rows
+    reader = SimpleNamespace(controller=SimpleNamespace(store=SimpleNamespace(messages=messages)),
+        read_request=lambda _: {"source_created_at": "2026-01-01T00:00:30+00:00"})
+    view = ChatExternalConversations.history_answer_context(reader, {"session_id": "original-session"}, {"request_ref": "original"})
+    assert view["earlier_messages_omitted"] and view["available_core_messages"] == 14
+    assert len(view["messages"]) == 12 and view["messages"][-1]["text"] == rows[-1]["text"]
+    assert view["messages"][-1]["attachments_unread"] and "unread-image-bytes" not in json.dumps(view)
+    rows[-1]["text"] = "界" * 25_000
+    view = ChatExternalConversations.history_answer_context(reader, {"session_id": "original-session"}, {"request_ref": "original"})
+    assert view["messages"] == [] and "unavailable_reason" in view
+    rows[-1]["created_at"] = "2026-01-01T00:00:13"
+    with pytest.raises(ValueError, match="history time"):
+        ChatExternalConversations.history_answer_context(reader, {"session_id": "original-session"}, {"request_ref": "original"})
+
+
+@pytest.mark.parametrize("crash", [None, "before-queue", "after-queue", "stop", "revoked"])
+def test_history_answer_uses_original_context_and_original_worker_corrects_legacy_review(tmp_path, monkeypatch, crash):
+    """A later answer must not redefine an older 'those four' request."""
+    from datetime import timedelta, timezone
+    from pathlib import Path
+    from test_native_steward_private import steward, finish
+    from loopx import chat_store
+    from loopx.capabilities.native_chat import external_conversations
+
+    fixture = steward.__wrapped__(tmp_path)
+    store, runtime, provider, transport, binding, capture, _ = next(fixture)
+    peer = Path(runtime.codex_bin)
+    peer.write_text(peer.read_text().replace('result = {"thread": {"id": "durable-thread"}}',
+        'result = {"thread": {"id": "durable-thread"}, '
+        '"activePermissionProfile": {"id": request["params"].get("permissions")}, '
+        '"runtimeWorkspaceRoots": [request["params"]["cwd"]]}').replace(
+        '    elif method == "turn/start":',
+        '    elif method == "thread/turns/list":\n'
+        '        result = {"data": [{"id": "original-native", "status": "completed"}], "nextCursor": None}\n'
+        '    elif method == "thread/backgroundTerminals/list":\n        result = {"data": [], "nextCursor": None}\n'
+        '    elif method == "turn/start":'))
+    try:
+        transport.admit("steward-app", provider.event("steward-app", "context-seed", "Explain the current work"))
+        seed = transport.core.pending()[0]
+        assert finish(runtime, seed)["status"] == "completed"
+        transport.reconcile()
+        stamp = datetime.now(timezone.utc)
+        with monkeypatch.context() as clock:
+            clock.setattr(chat_store, "utc_now", lambda: (stamp - timedelta(seconds=1)).isoformat())
+            original = store.append_message(seed["session_id"], role="agent",
+                text="The four pending mechanisms are lifecycle, receiver returns, delivery reconciliation, and native context.")
+            clock.setattr(chat_store, "utc_now", lambda: (stamp + timedelta(seconds=1)).isoformat())
+            store.append_message(seed["session_id"], role="agent", text="UNRELATED LATER FOUR: colors, fonts, spacing, icons")
+        event = provider.event("steward-app", "original-context-followup", "Please implement those four.")
+        event["create_time"] = str(int(stamp.timestamp() * 1000))
+        provider.messages[event["message_id"]]["create_time"] = event["create_time"]
+        class ReviewClock(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return stamp + timedelta(seconds=61)
+        monkeypatch.setattr(external_conversations, "datetime", ReviewClock)
+        before = len(capture.read_text().splitlines())
+        assert transport.admit("steward-app", event, history_review=True)["status"] == "durably_accepted"
+        ref = identity_ref(binding["provider_ref"], event["message_id"])
+        first = transport.core.read_request(ref)
+        result = finish(runtime, first)
+        assert result["status"] == "completed", result
+        wire = [json.loads(line) for line in capture.read_text().splitlines()[before:]]
+        prompt = json.dumps([x for x in wire if x["method"] == "turn/start"])
+        assert original["text"] in prompt, "The answer needs the original antecedent, not a later native review"
+        assert "UNRELATED LATER FOUR" not in prompt
+        assert transport.reconcile() == 1
+        if crash is None:
+            # A newer, fully answered legacy review must not starve the older
+            # partial request. Neither delivery nor age makes it a candidate.
+            complete_event = provider.event("steward-app", "complete-later-review", "A self-contained question")
+            complete_event["create_time"] = str(int((stamp + timedelta(seconds=2)).timestamp() * 1000))
+            provider.messages[complete_event["message_id"]]["create_time"] = complete_event["create_time"]
+            assert transport.admit("steward-app", complete_event, history_review=True)["status"] == "durably_accepted"
+            complete_ref = identity_ref(binding["provider_ref"], complete_event["message_id"])
+            complete = transport.core.read_request(complete_ref)
+            assert finish(runtime, complete)["status"] == "completed"
+            assert transport.reconcile() == 1
+            for path in [transport.core.root / f"{complete_ref}.json", transport.root / f"{complete_ref}.json"]:
+                row = json.loads(path.read_text())
+                row["context_recovery"].pop("context_version", None)
+                path.write_text(json.dumps(row))
+        # Seed the actual released legacy shape: a terminal, delivered,
+        # action-free read-only review without original-context qualification.
+        result["response"]["gate"] = {"kind": "evidence_gap", "summary": "Implementation unverified", "next_action": ""}
+        store.update_turn(first["session_id"], first["turn_id"], response=result["response"])
+        for path in [transport.core.root / f"{ref}.json", transport.root / f"{ref}.json"]:
+            row = json.loads(path.read_text())
+            row["context_recovery"].pop("context_version", None)
+            path.write_text(json.dumps(row))
+        old_turn = store._turn_path(first["session_id"], first["turn_id"]).read_bytes()
+        before = len(capture.read_text().splitlines())
+        if crash in {"stop", "revoked"}:
+            if crash == "stop":
+                transport.admit("steward-app", provider.event("steward-app", "stop-before-context-correction", "/stop"))
+            else:
+                transport.bindings.disconnect(binding["binding_id"], expected_revision=transport.bindings.read()["revision"])
+            transport.observe_ingress()
+            assert transport.core.read_request(ref)["turn_id"] == first["turn_id"]
+            assert store._turn_path(first["session_id"], first["turn_id"]).read_bytes() == old_turn
+            assert not any(json.loads(line)["method"] == "turn/start" for line in capture.read_text().splitlines()[before:])
+            return
+        if crash:
+            enqueue = runtime.enqueue_turn
+            def interrupted(**kwargs):
+                if crash == "after-queue":
+                    enqueue(**kwargs)
+                monkeypatch.setattr(runtime, "enqueue_turn", enqueue)
+                raise OSError("synthetic correction acknowledgement lost")
+            monkeypatch.setattr(runtime, "enqueue_turn", interrupted)
+            transport.observe_ingress()
+            if crash == "after-queue":
+                # Completion may race a lost queue acknowledgement. The
+                # reserved child remains the same read-only work, even before
+                # the source journal adopts its new Turn id.
+                reserved = transport.core.read_request(ref)["context_recovery"]
+                queued = store.turn_for_client(first["session_id"], reserved["client_turn_id"])
+                assert finish(runtime, {"session_id": first["session_id"], "turn_id": queued["turn_id"]})["status"] == "completed"
+        transport.observe_ingress()
+        corrected = transport.core.read_request(ref)
+        assert corrected["turn_id"] != first["turn_id"]
+        assert corrected["context_recovery"]["previous_answer_turn_id"] == first["turn_id"]
+        assert corrected["context_recovery"]["failed_turn_id"] is None
+        assert corrected["context_recovery"]["version"] == first["context_recovery"]["version"] + 1
+        assert re.fullmatch(r"external-[a-f0-9]{24}-recovery-[1-9][0-9]*-review-1", corrected["context_recovery"]["client_turn_id"])
+        corrected_result = finish(runtime, corrected)
+        assert corrected_result["status"] == "completed"
+        assert corrected_result["response"]["gate"] is not None
+        assert transport.reconcile() == 1
+        record = json.loads((transport.root / f"{ref}.json").read_text())
+        assert record["deliveries"]["terminal.recovery.history.answer.1"]["verified"]
+        returned = record["deliveries"]["terminal.recovery.history.answer.2"]
+        assert returned["verified"] and returned["text"].startswith("更正之前的补答：")
+        wire = [json.loads(line) for line in capture.read_text().splitlines()[before:]]
+        assert sum(x["method"] == "thread/start" for x in wire) == 1
+        prompt = json.dumps([x for x in wire if x["method"] == "turn/start"])
+        assert original["text"] in prompt and "UNRELATED LATER FOUR" not in prompt
+        assert store._turn_path(first["session_id"], first["turn_id"]).read_bytes() == old_turn
+        count = len(capture.read_text().splitlines())
+        transport.observe_ingress()
+        transport.reconcile()
+        assert len(capture.read_text().splitlines()) == count
+    finally:
+        fixture.close()
+
+
 @pytest.mark.parametrize("fault", [None, "original-worker", "formatted-time", "uncaptured-stop", "project-source", "busy", "stop", "before-session", "source-change", "queue-crash", "reservation-crash", "ordinary-capture", "background", "background-unavailable", "native-active", "revoked"])
 def test_uncaptured_history_has_one_answer_only_review_not_a_business_replay(tmp_path, monkeypatch, fault):
     from datetime import timedelta, timezone
@@ -1897,9 +2049,14 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
     source = fake.read_text()
     # Persisted history is readable from a cold client. Background terminals
     # belong to the process that loaded the thread, as in native app-server.
-    source = source.replace("turn_count = 0", "loaded = False\nturn_count = 0")
+    source = source.replace("turn_count = 0", "loaded = False\nreview_only = False\nturn_count = 0")
     source = source.replace('    elif method in {"thread/start", "thread/resume"}:',
-        '    elif method in {"thread/start", "thread/resume"}:\n        loaded = True')
+        '    elif method in {"thread/start", "thread/resume"}:\n        loaded = True\n'
+        '        review_only = request["params"].get("permissions") == "loopx_workspace_only_read"')
+    source = source.replace('        result = {"thread": {"id": "durable-thread"},',
+        '        result = {"thread": {"id": "durable-thread"},\n'
+        '                  "activePermissionProfile": {"id": request["params"].get("permissions")},\n'
+        '                  "runtimeWorkspaceRoots": request["params"].get("runtimeWorkspaceRoots"),')
     source = source.replace("turn_count = 0", f"turn_count = len(json.load(open({str(inventory)!r}))[\"turns\"]) if __import__(\"os\").path.exists({str(inventory)!r}) else 0")
     start = source.index("        response = 'Visible runtime response.")
     end = source.index('        print(json.dumps({"method": "item/agentMessage/delta"', start)
@@ -1909,14 +2066,18 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
         previous = json.loads(path.read_text()) if path.exists() else {{"turns": []}}
         response = {partial!r} if first or {fault == "still-incomplete"!r} else "Verified remaining work completed."
         artifact = Path({str(artifact)!r})
-        if "Newer follow-up" in json.dumps(request["params"]):
+        if review_only:
+            response = "Verified partial result. The remaining work is still pending."
+        elif "Newer follow-up" in json.dumps(request["params"]):
             response = "Newer input processed."
         else:
             artifact.write_text((artifact.read_text() if artifact.exists() else "") + ("first\\n" if first else "remaining\\n"))
         path.write_text(json.dumps({{"turns": [{{"id": active_turn, "status": "completed"}}, *previous["turns"]], "items": [
             {{"turnId": active_turn, "item": {{"id": "user", "type": "userMessage"}}}},
-            {{"turnId": active_turn, "item": {{"id": "effect", "type": "fileChange", "status": "completed"}}}},
-            {{"turnId": active_turn, "item": {{"id": "view", "type": "imageView", "path": str(artifact)}}}},
+            *([] if review_only else [
+                {{"turnId": active_turn, "item": {{"id": "effect", "type": "fileChange", "status": "completed"}}}},
+                {{"turnId": active_turn, "item": {{"id": "view", "type": "imageView", "path": str(artifact)}}}},
+            ]),
             {{"turnId": active_turn, "item": {{"id": "answer", "type": "agentMessage", "phase": "final_answer", "text": response}}}},
             *previous.get("items", [])]}}))
 ''' + source[end:]
@@ -2034,11 +2195,43 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
         if fault in {"queued-newer", "queued-items", "queued-input"}:
             monkeypatch.setattr(runtime, "resume_session_queue", resume)
         selected = worker()
+    artifact_before_recovery = artifact.read_bytes()
     selected.reconcile()
     continued = selected.core.read_request(ref)
-    if fault in {"changed-source", "revoked", "stop", "unknown-native", "background", "later-user", "cold-native", "dead-native", "foreign-native", "failed-effect", "equivalent-later", "later-failed-effect", "unsettled-command"}:
+    reviewed = fault in {"cold-native", "failed-effect", "equivalent-later", "later-failed-effect", "unsettled-command"}
+    if fault in {"changed-source", "revoked", "stop", "unknown-native", "background", "later-user", "dead-native", "foreign-native"}:
         assert continued["turn_id"] == original["turn_id"] and not continued.get("context_recovery")
-        assert artifact.read_text() == ("first\nremaining\n" if fault == "equivalent-later" else "first\n")
+        assert artifact.read_bytes() == artifact_before_recovery
+    elif reviewed:
+        assert continued["turn_id"] != original["turn_id"]
+        assert continued["session_id"] == original["session_id"]
+        recovery = continued["context_recovery"]
+        assert recovery["read_only_review"] is True and "work_attempt" not in recovery
+        assert recovery["native_observation"]["completed_result_review"] is True
+        assert recovery["native_observation"].get("all_effects_settled") is not True
+        review = runtime.wait_for_turn(session_id=continued["session_id"], turn_id=continued["turn_id"], timeout_sec=10)
+        assert review["status"] == "completed", review
+        assert not review["response"].get("unfinished_work")
+        assert artifact.read_bytes() == artifact_before_recovery
+        selected.reconcile_request(path)
+        deliveries = json.loads(path.read_text())["deliveries"]
+        assert deliveries["terminal"] == original_delivery
+        returned = deliveries[presentation_phase(continued, "terminal")]
+        assert returned["verified"] and "The remaining work is still pending." in returned["text"]
+        writes = list(provider.writes)
+        assert not worker().core.context_recovery_candidate(ref)
+        worker().reconcile()
+        assert provider.writes == writes
+
+        recovery_calls = [json.loads(line) for line in capture.read_text().splitlines()][len(before_recovery_calls):]
+        resume, = [row["params"] for row in recovery_calls if row.get("method") == "thread/resume"]
+        assert resume["threadId"] == session_before["upstream_thread_id"]
+        profile = "loopx_workspace_only_read"
+        assert resume["permissions"] == profile and resume["runtimeWorkspaceRoots"] == [str(workspace.resolve())]
+        permissions = resume["config"]["permissions"][profile]
+        assert permissions["filesystem"][":workspace_roots"] == {".": "read"}
+        assert permissions["network"]["enabled"] is False
+        assert sum(row.get("method") == "turn/start" for row in recovery_calls) == 1
     else:
         assert continued["turn_id"] != original["turn_id"]
         assert continued["session_id"] == original["session_id"]
@@ -2076,9 +2269,10 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
             assert "Verified remaining work completed." in bodies
     assert store._turn_path(original["session_id"], original["turn_id"]).read_bytes() == original_turn_bytes
     after_recovery_calls = [json.loads(line) for line in capture.read_text().splitlines()]
-    for method in ("initialize", "thread/start", "thread/resume"):
-        assert sum(row.get("method") == method for row in after_recovery_calls) == sum(
-            row.get("method") == method for row in before_recovery_calls)
+    expected_new = {"initialize": int(reviewed) + int(fault == "cold-native"),
+        "thread/start": 0, "thread/resume": int(reviewed)}
+    for method, count in expected_new.items():
+        assert sum(row.get("method") == method for row in after_recovery_calls[len(before_recovery_calls):]) == count
 
 
 def _app_projection_journey(fixture):
@@ -2393,7 +2587,7 @@ def test_app_long_input_feedback_uses_its_last_verified_post(ordinary):  # noqa:
         runtime.close()
 
 
-def test_enabling_app_feedback_does_not_backfill_old_finished_mirrors(ordinary):  # noqa: F811
+def test_enabling_app_feedback_does_not_backfill_old_finished_mirrors(ordinary, monkeypatch):  # noqa: F811
     store, runtime, provider, transport, original, turns, before = _app_projection_journey(ordinary)
     transport.reaction_feedback = False
     baseline = list(provider.reaction_creates)
@@ -2405,6 +2599,21 @@ def test_enabling_app_feedback_does_not_backfill_old_finished_mirrors(ordinary):
             runner=provider, cli_bin="lark-cli", reaction_feedback=True)
         for _ in range(3):
             restarted.reconcile()
+        assert provider.writes == sent and provider.reaction_creates == baseline
+        # An idle worker must not decode or authorize the full App history on
+        # every feedback tick just to find the same finished inputs again.
+        transcript = store.sessions_root / original["session_id"] / "messages.jsonl"
+        path_type = type(transcript)
+        original_read = path_type.read_bytes
+
+        def read(path):
+            assert path != transcript, "idle feedback reread the complete Chat transcript"
+            return original_read(path)
+
+        with monkeypatch.context() as idle:
+            idle.setattr(path_type, "read_bytes", read)
+            for _ in range(3):
+                restarted.reconcile_app_feedback()
         assert provider.writes == sent and provider.reaction_creates == baseline
     finally:
         runtime.close()

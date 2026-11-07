@@ -315,6 +315,44 @@ def test_continuation_does_not_cross_owner_run_or_revoked_source(pack, tmp_path)
     assert result["status"] == "succeeded" and not result["reused"]
 
 
+def test_display_usage_captures_bind_registered_successor_versions():
+    from pathlib import Path
+
+    from loopx.capabilities.benchmark_toolkit.trajectory_assessment_store import _pack_id
+
+    fixture = Path(__file__).resolve().parents[2] / "apps/presentation/dashboard/src/data/fixtures/research-usage-real-captures.json"
+    data = json.loads(fixture.read_text())
+    lineage = {row["registered_pack_id"]: row for row in data["lineage"]}
+    for captured in data["packs"]:
+        source = lineage[captured["pack_id"]]
+        assert captured["continuation"]["base_pack_id"] == source["original_pack_id"]
+        usage = {key: value for key, value in captured["solver_usage"].items()
+                 if key not in {"applicability", "reason_code"}}
+        assert usage["artifact_sha256"] == source["source_sha256"]
+        record = {"owner_goal_id": data["owner_goal_id"], "title": captured["title"],
+                  "analysis_key": captured["analysis_key"], "solver_usage": usage,
+                  "base_pack_id": source["original_pack_id"]}
+        assert _pack_id(data["owner_goal_id"], record) == captured["pack_id"]
+
+
+def test_registration_can_preserve_the_current_selection(pack):
+    scope, _, original, input_path, sources, _ = pack
+    args = dict(**scope, input_path=input_path, source_root=sources,
+                title="Another captured version", base_pack_id=original["pack_id"])
+    alternate = register_pack(**args, select_default=False)
+    catalog = discover(**scope)
+    assert catalog["default_pack_id"] == original["pack_id"]
+    assert {p["pack_id"] for p in catalog["packs"]} == {original["pack_id"], alternate["pack_id"]}
+    assert inspect_pack(**scope, pack_id=alternate["pack_id"])["job"] is None
+    # Selection is not part of frozen evidence identity; legacy callers still
+    # select their registration without mutating either captured version.
+    assert register_pack(**args)["pack_id"] == alternate["pack_id"]
+    assert discover(**scope)["default_pack_id"] == alternate["pack_id"]
+    empty = {**scope, "runtime_root": scope["runtime_root"] / "empty"}
+    first = register_pack(**{**args, **empty, "base_pack_id": None}, select_default=False)
+    assert discover(**empty)["default_pack_id"] == first["pack_id"]
+
+
 def test_native_results_register_through_real_cli_and_read_without_analysis(pack, tmp_path):
     scope, _, original, input_path, sources, _ = pack
     native = {
@@ -335,9 +373,10 @@ def test_native_results_register_through_real_cli_and_read_without_analysis(pack
         "--runtime-root", str(scope["runtime_root"]), "--format", "json", "benchmark", "trajectory-pack-register",
         "--goal-id", scope["owner_goal_id"], "--input-json", str(input_path), "--source-root", str(sources),
         "--title", "Native outcome window", "--native-outcomes-json", native_path.name,
-        "--base-pack-id", original["pack_id"]],
+        "--base-pack-id", original["pack_id"], "--preserve-default"],
         capture_output=True, text=True, check=True)
     registered = json.loads(result.stdout)
+    assert discover(**scope)["default_pack_id"] == original["pack_id"]
     assert registered["analysis_key"] == original["analysis_key"]
     assert "native_outcomes" not in original
     assert registered["native_outcomes"]["projection"]["initial"]["value"] == 2

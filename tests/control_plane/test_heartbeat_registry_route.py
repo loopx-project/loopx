@@ -124,7 +124,21 @@ def _execute(argv: list[str], cwd: Path):
     result = subprocess.run([sys.executable, "-m", "loopx.entrypoint", "--format", "json", *argv],
                             cwd=cwd, env=env, text=True, capture_output=True, check=False)
     assert result.stdout, result.stderr
-    return result.returncode, json.loads(result.stdout)
+    payload = json.loads(result.stdout)
+    # Progressive presentation retains the original decision behind a private,
+    # digest-bound capture. Read it without repeating admission or changing the
+    # generated command whose authority route this journey verifies.
+    from loopx.control_plane.turn_driver.decision_capture import (
+        read_context_capture_file, read_context_read_reference,
+    )
+    if payload.get("schema_version") == "context_capture_navigation_v1":
+        _, reference = read_context_read_reference(payload["recovery"]["reference_file"])
+        assert "selection" not in reference
+        payload = read_context_capture_file(reference["path"], reference["sha256"], private=True)[2]
+    elif isinstance(payload.get("captured_decision"), dict):
+        reference = payload["captured_decision"]
+        payload = read_context_capture_file(reference["path"], reference["sha256"], private=True)[2]
+    return result.returncode, payload
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

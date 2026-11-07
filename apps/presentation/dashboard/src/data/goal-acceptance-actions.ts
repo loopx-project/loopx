@@ -17,7 +17,7 @@ export async function acceptanceRequest(goalId: string, operation?: Record<strin
 // Read model only. The existing typed acceptance owner validates the complete
 // document and its command/file bindings again at apply time.
 const preparedDocument = z.object({objective: z.string().min(1),
-  scope: z.discriminatedUnion("kind", [z.object({kind: z.literal("all_advancement")}),
+  scope: z.discriminatedUnion("kind", [z.object({kind: z.literal("goal")}),z.object({kind: z.literal("all_advancement")}),
     z.object({kind: z.literal("selected_work"), todo_ids: z.array(z.string()).min(1)})]),
   criteria: z.array(z.object({id: z.string(), description: z.string(),
     validation_argv: z.array(z.string()).min(1),

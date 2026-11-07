@@ -13,10 +13,12 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -62,7 +64,10 @@ def run_cli(registry_path: Path, *args: str) -> dict[str, Any]:
         *args,
     ]
     buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
+    # This smoke reads machine JSON and asserts the inline decision fields; the
+    # model-facing capture transport replaces that body with a reader reference,
+    # so opt out in-process the way the canary harness does in argv.
+    with patch.dict(os.environ, {"LOOPX_CONTEXT_DELIVERY": "off"}), contextlib.redirect_stdout(buf):
         code = loopx_cli_main(argv)
     raw = buf.getvalue().strip()
     payload: dict[str, Any] = json.loads(raw) if raw else {}

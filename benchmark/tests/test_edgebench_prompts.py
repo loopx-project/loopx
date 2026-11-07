@@ -472,18 +472,16 @@ def test_native_prompt_upload_is_readable_regardless_of_launcher_umask(tmp_path,
     assert remote.read_text() == prompt
 
 
-@pytest.mark.parametrize("source,covered", [
-    ("/task", True), ("/home/workspace", True),
-    ("/home/workspace/task/solver.py", False), ("/home/workspace/task-other", False),
-])
-def test_checkpoint_guidance_distinguishes_directory_from_file_coverage(source, covered):
-    from benchmark.edgebench.prompts import checkpoint_research_instructions
-    workspace = "/task" if source == "/task" else "/home/workspace/task"
-    text = checkpoint_research_instructions(
-        {"components": [{"id": "code", "source_path": source}]}, workspace)
-    assert ("includes this task workspace" in text) is covered
-    assert ("does not cover the whole task workspace" in text) is not covered
-    assert "negative results" in text and "workspace-relative references" in text
+@pytest.mark.parametrize("checkpoint", [False, True])
+def test_research_guidance_separates_candidate_inputs_and_capture(checkpoint):
+    from benchmark.edgebench.prompts import research_artifact_instructions
+    from benchmark.runtime.research_artifacts import RESEARCH_DIRECTORY
+    text = research_artifact_instructions(checkpoint=checkpoint)
+    assert RESEARCH_DIRECTORY in text
+    assert "outside the task workspace and submitted paths" in text
+    assert "negative results" in text and "runtime/build data" in text
     assert "external file does not preserve its bytes" in text
     assert "does not change submitted files" in text
-    assert source not in text  # Do not echo arbitrary private capture roots.
+    assert ("verified continuation restores" in text) is checkpoint
+    assert ("does not provide a resumable checkpoint" in text) is not checkpoint
+    assert "does not relocate or discard historical evidence" in text

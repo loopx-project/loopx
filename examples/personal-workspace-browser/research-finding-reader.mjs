@@ -15,6 +15,11 @@ import json, sys
 from pathlib import Path
 from loopx.capabilities.explore.result_log import build_explore_node_event, build_explore_finding_event
 goal='synthetic-finding-reading'
+profile=dict(metric='quality',unit='points',higher_is_better=True,comparison_scope='validation:fixed',input_revision='inputs-v1',evaluation_ref='evaluator:outcome-v1')
+capture=dict(binding=dict(goal_id=goal,agent_id='synthetic-researcher',todo_id='todo_comparison',turn_instance_id='turn-comparison'),
+    decision=dict(schema_version='work_yardstick_decision_v0',target=dict(summary='在相同成本下提高可验证质量',scope='固定输入与原有正确性约束',acceptance_ref='acceptance:quality-v1'),
+    authoritative=profile,proxy={**profile,'metric':'screening','evaluation_ref':'evaluator:local-v1'},counterevidence_refs=['result:synthetic-19'],prior_finding_id=None,
+    next_action=dict(method_id='method:direct-check',reason='代理顺序与实际结果相反；下一次直接核对成果指标',cost_bound='一次独立检查，不绕过正确性要求')))
 events=[build_explore_node_event(goal_id=goal,node_id='question',title='合成研究：质量、延迟和未知成本应如何一起判断？',recorded_at='2026-01-01T00:00:00Z')]
 for index in range(20):
     status='refuted' if index%7==0 else 'tentative' if index%4==0 else 'confirmed'
@@ -25,7 +30,8 @@ for index in range(20):
     summary=f'Input revision: input:{"a"*64} Applicability: 固定合成样本；不是生产评测。 Observation: {observation} Interpretation: Outcome: {outcome} changed: - {change} stopped: - 不把局部改善当整体收益 retained: - 保留负结果与原始版本'
     events.append(build_explore_finding_event(goal_id=goal,node_id='question',finding_id=f'finding-{index}',
         title=f'比较 {index+1}：质量、延迟与采用版本的核对 · quality, latency and retained candidate',
-        status=status,summary=summary,evidence_refs=['result:synthetic-'+str(index)],recorded_at=f'2026-01-01T{index+1:02}:00:00Z'))
+        status=status,summary=summary,evidence_refs=['result:synthetic-'+str(index)],recorded_at=f'2026-01-01T{index+1:02}:00:00Z',
+        **(dict(agent_id='synthetic-researcher',work_yardstick=capture) if index==19 else {})))
 events.append(build_explore_node_event(goal_id=goal,node_id='blocked',title='来源暂不可用的研究问题',status='blocked',blocked_reason='无法读取评测来源，当前结果未知。',recorded_at='2026-01-02T00:00:00Z'))
 events.append(build_explore_node_event(goal_id=goal,node_id='single',title='仅有一条结论的问题',recorded_at='2026-01-02T01:00:00Z'))
 events.append(build_explore_finding_event(goal_id=goal,node_id='single',finding_id='single-finding',title='原始观测',summary='一条完整的原始结论。',status='tentative',recorded_at='2026-01-02T01:00:00Z'))
@@ -66,6 +72,22 @@ export const researchFindingReaderScenario = {
       await page.screenshot({path: resolve(outputDir, "research-finding-reader-desktop.png"), animations: "disabled"});
       await page.locator(".personal-channel-scroll").evaluate(element => element.scrollTop = 0);
       await page.screenshot({path: resolve(outputDir, "research-finding-reader-first-viewport.png"), animations: "disabled"});
+
+      const yardstick = article.locator(".work-yardstick-readback");
+      assert.equal(await yardstick.count(), 1, "The production SQLite history retains the optional decision");
+      assert.equal(await yardstick.evaluate(element => element.open), false, "Detailed scope does not crowd the first viewport");
+      await yardstick.locator(":scope > summary").click();
+      assert.match(await yardstick.innerText(), /代理顺序与实际结果相反.*下一次直接核对成果指标/s);
+      assert.match(await yardstick.innerText(), /evaluator:outcome-v1.*evaluator:local-v1/s);
+      assert.match(await yardstick.innerText(), /result:synthetic-19.*todo_comparison/s);
+      for (const width of [1440, 390]) {
+        await page.setViewportSize({width, height: 900});
+        await yardstick.scrollIntoViewIfNeeded();
+        assert((await reader.evaluate(element => element.scrollWidth - element.clientWidth)) <= 1, "Scoped decision fits the reading width");
+        await page.screenshot({path: resolve(outputDir, `work-yardstick-readback-${width}.png`), animations: "disabled"});
+      }
+      await yardstick.locator(":scope > summary").click();
+      await page.setViewportSize({width: 1440, height: 900});
 
       await picker.selectOption("finding-0");
       assert.match(await article.innerText(), /已反驳/);
