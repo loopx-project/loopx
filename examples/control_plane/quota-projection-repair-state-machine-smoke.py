@@ -16,7 +16,6 @@ from loopx.control_plane.quota.projection_repair import (  # noqa: E402
     build_boundary_projection_repair_hint,
     build_state_projection_gap,
     build_state_projection_gap_repair_hint,
-    write_scope_allowed,
 )
 
 
@@ -166,20 +165,37 @@ def assert_boundary_repair_reports_missing_scope_and_authority_lineage() -> None
 
 def assert_boundary_repair_respects_scope_patterns_and_capability_gate() -> None:
     todo = agent_todo(required_write_scopes=["src/runtime/**"])
-    assert write_scope_allowed("src/runtime/**", ["src/**"])
-    assert not write_scope_allowed("src/runtime/**", ["docs/**"])
     assert build_boundary_projection_repair_hint(
         {"write_scope": ["src/**"]},
         agent_summary([todo]),
         candidate_should_run=True,
         capability_gate={"action": "run"},
     ) is None
+    repair = build_boundary_projection_repair_hint(
+        {"write_scope": ["docs/**"]},
+        agent_summary([todo]),
+        candidate_should_run=True,
+        capability_gate={"action": "run"},
+    )
+    assert repair is not None, todo
+    assert repair["missing_write_scopes"] == ["src/runtime/**"], repair
     assert build_boundary_projection_repair_hint(
         {"write_scope": ["docs/**"]},
         agent_summary([todo]),
         candidate_should_run=True,
         capability_gate={"action": "ask_owner"},
     ) is None
+
+    for required, covered in [("src/b.ts", False), ("src/c.ts", True),
+                              ("src/[b].ts", False), ("src/[ac].ts", True)]:
+        todo = agent_todo(required_write_scopes=[required])
+        repair = build_boundary_projection_repair_hint(
+            {"write_scope": ["src/[z-a!b].ts"]}, agent_summary([todo]),
+            candidate_should_run=True, capability_gate={"action": "run"},
+        )
+        assert (repair is None) is covered, (required, repair)
+        if repair is not None:
+            assert repair["missing_write_scopes"] == [required], repair
 
 
 def assert_boundary_repair_prefers_capability_runnable_candidate() -> None:
