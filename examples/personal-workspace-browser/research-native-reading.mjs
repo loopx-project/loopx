@@ -142,6 +142,12 @@ export const researchNativeReadingScenario = {
         assert.match(await native.locator(".research-native-best .research-native-unit").textContent(), new RegExp(c.unit ?? "points"), "The raw unit remains visible even when no valid measurement exists");
         assert.match(await native.locator(".research-native-scope").innerText(), new RegExp(`${c.values.filter(v => v !== null).length} / ${c.values.length}.*有效结果`));
         if (c.partial) assert.match(await native.innerText(), /部分窗口 · 起点未知/);
+        if (c.id === "partial") {
+          const sources = native.locator(".research-native-basis");
+          await sources.locator("summary").click();
+          assert.match(await sources.innerText(), /提交时间: 未知\s+观测时间: 2026-01-01T00:03:00Z/);
+          await sources.locator("summary").click();
+        }
         if (c.id === "invalid-first") {
           const measureUnknownRetention = () => native.evaluate(section => {
             const retained = section.querySelector('[data-native-point="retained"]');
@@ -267,6 +273,10 @@ export const researchNativeReadingScenario = {
       await selector.selectOption({label: "decimal"});
       await page.waitForFunction(() => document.querySelector('[data-native-point="best_valid"] strong')?.textContent === "0.8765");
       assert.equal(await page.locator("[data-retained-improvement]").textContent(), "+0.0642");
+      const sources = page.locator(".research-native-basis");
+      await sources.locator("summary").click();
+      assert.match(await sources.innerText(), /Submitted at: Unknown\s+Observed at: 2026-01-01T00:02:00Z/);
+      await sources.locator("summary").click();
       await page.getByRole("button", {name: "About native measurements", exact: true}).focus();
       await page.getByRole("tooltip").waitFor({state: "visible"});
       await page.keyboard.press("Escape");
