@@ -135,6 +135,10 @@ identity on aliased views. A workspace id cannot replace a local Goal or another
 source; the same physical source cannot be linked twice. Removing an aliased
 link uses its workspace id and current physical namespace. Linked-source research
 opens native history by default; an authored case reading remains optional.
+When a complete linked history read has no Explore records, show that limit
+alongside any retained strategy and a route to the original Tasks. A failed
+read still offers recovery, and a linked reader never offers to enable research
+mode on the original Goal.
 
 Each linked Goal carries `source_access` in the workspace projection. Its
 original Goal id, tasks, explicit graph edges and native measurements remain
