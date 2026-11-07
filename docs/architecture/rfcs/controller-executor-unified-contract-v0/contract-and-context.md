@@ -549,12 +549,30 @@ are reconciled. Rollback likewise separates outstanding work from new admission.
 A version transition does not rewrite saved prompts, journals or source hashes
 as if they had always used the new contract.
 
-The first C1 PR must include the two production composition callsites above and
+The first cross-entrypoint C1 cutover must include the two production composition callsites above and
 at least one complete producer-to-final-input journey, with an explicit list of
 remaining readers. Qualifying that bounded slice does not enable the new writer
 for an unqualified host or close C1. The final cutover removes active format
 choice only after all supported readers qualify. Temporary decoders have named
 callers and removal conditions; they are not user-facing compatibility views.
+
+A Turn lifecycle extraction may be reviewed separately under the parent C1
+proposal when it includes planning, final Host input, capture publication,
+journal inspection, original-session recovery and settlement consumers together.
+The migrated Turn uses one complete source and its checked readers; the ordinary
+quota writer and thin-heartbeat presentation retain their existing contract in
+this staged boundary. Shared projection changes must preserve those unmigrated
+callers. The historical v0 decoder serves recorded plans, requests and journals;
+it cannot rescue an invalid supplied v1 source. Its removal still depends on
+reconciling outstanding work and the supported recovery window.
+
+This extraction is partial C1 delivery, not qualification of the cross-entrypoint
+cutover or a context/cost improvement. The parent retains ordinary quota and
+heartbeat migration, final-input/material-read coverage, all-host configuration,
+and the original single-session outcome and complete-cost comparison. Review
+must include matched baseline/head real-provider outcomes, rejection sensitivity
+and packaged recovery. Adoption reduces the parent's diff only after the slice
+lands on main and main is integrated into the parent; opening a PR does not.
 
 For each normal, selection, replan, wait, recovery and capability-off fixture,
 check independently authored obligations at **three boundaries**: composed
@@ -590,6 +608,35 @@ pending receipts. Before field/decoder removal, demonstrate export, old-version
 readback and downgrade behavior; retain the old reader until the supported
 retention/upgrade boundary is satisfied. No destructive migration is authorized
 by this document alone.
+
+#### Turn consumer preparation and instruction parity
+
+The separate Turn proposal keeps the ordinary quota producer on its recorded
+contract; the parent retains the broader quota/heartbeat cutover. Tests of an
+unmigrated producer must preserve that boundary. Current Turn planning consumes
+its complete source directly and publishes its own immutable capture; pairing a
+newly composed source with an older executor envelope is rejected.
+
+Native selected-task execution prepares its ordinary managed lease before the
+kernel delivery guard and reuses that proof during post-model validation. A
+claim label alone is insufficient, and another execution's lease remains
+unavailable. Source checks precede the independent task argv; rejection and
+original-result recovery retain the original session and once-only effects.
+
+Modern Codex and structured Host instructions share the existing audit read
+rule: read a declared audit before judging Goal acceptance or proposing
+closeout, including when the Goal stays open. Notification policy does not grant
+or cancel execution authority; supplied delivery, attempt, quiet-noop, execution
+and orchestration constraints still apply. Core retains state, quota and
+scheduler effects. A complete contract can declare a pending original material
+read: publication does not fulfill it, and tests must execute its reader and
+preserve the original body and stops.
+
+The disposable research-team launcher and initializer locate the actually loaded
+Core together, including an isolated wheel, while retaining exclusive runtime
+creation. Source and packaged consumer checks are distinct from installed App
+adoption, live optional-provider/model behavior and original-quota complete-cost
+benefit. These repairs do not close C1 or authorize rollout or merge.
 
 ### C1 baseline boundary and reuse inventory
 

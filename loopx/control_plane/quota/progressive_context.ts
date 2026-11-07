@@ -349,6 +349,14 @@ function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSour
         + "Uncertain or missing necessary facts must be recovered before dependent action; Agent review is not independent acceptance."};
     }
   }
+  // A signed source and its presentation have different content hashes even
+  // when the only edit is a same-view Todo reference. Keep an address for the
+  // original and include its cost when deciding whether the projection wins.
+  const signedSource = request.surface === "complete_turn";
+  const sourceNavigation = typeof details.command_template === "string"
+    ? {command_template: details.command_template} : {path: details.path, sha256: details.sha256};
+  if (signedSource && required !== context && required.context_details === undefined)
+    required.context_details = sourceNavigation;
   const remaining = tokens.filter(([path]) => !removed.some(start => pathStartsWith(path, start)));
   // Unchanged source spellings cancel. Removed registered records contain only
   // safe integral numbers; sparse tokens retain their original float spelling.
@@ -363,7 +371,11 @@ function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSour
   const transport = details.selection_command_args_template;
   const bindTransport = typeof transport === "string" && typeof at(context, selectionPath) === "string"
     && transport !== at(context, selectionPath);
-  if (bindTransport) parent(selectionPath)[selectionPath.at(-1)!] = transport;
+  if (bindTransport) {
+    parent(selectionPath)[selectionPath.at(-1)!] = transport;
+    if (signedSource && required.context_details === undefined)
+      required.context_details = sourceNavigation;
+  }
   if (staged) {
     if (required.context_details === undefined) {
       required = {...required, context_details: {path: details.path, sha256: details.sha256}};
@@ -479,6 +491,27 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
       replan.settlement_only !== true && typeof replan.review === "string" && replan.review) {
     include("replan_action_packet", "review");
     include("replan_action_packet", "guidance");
+  } else if (context.schema_version === "loopx_turn_envelope_v1" &&
+      context.effective_action === EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED && replan?.schema_version === "replan_action_packet_v0" &&
+      replan.decision === "replan_required" &&
+      replan.settlement_only !== true) {
+    // The complete contract already carries the review facts: use its own
+    // obligations and the indexed outcome paths below, without another writer.
+    for (const field of ["planning_guidance", "required_outcome", "allowed_terminal"])
+      include("replan_action_packet", field);
+    // An invalidated successor can reopen review under the same receipt. Show
+    // the current cause and basis before the agent chooses a writeback route.
+    const obligation = object(context.autonomous_replan_obligation);
+    const review = object(obligation?.replan_context);
+    if (obligation?.schema_version === "autonomous_replan_obligation_v0" &&
+        typeof replan.obligation_id === "string" && obligation.obligation_id === replan.obligation_id &&
+        review?.schema_version === "replan_context_v0" && review.obligation_id === replan.obligation_id) {
+      include("autonomous_replan_obligation", "obligation_id");
+      include("autonomous_replan_obligation", "stop_condition");
+      include("autonomous_replan_obligation", "replan_context", "context_id");
+      if (Array.isArray(obligation.triggers)) obligation.triggers.forEach((_trigger, index) =>
+        include("autonomous_replan_obligation", "triggers", index, "kind"));
+    }
   }
   include("agent_lane_next_action", "next_step");
   include("agent_lane_next_action", "next_action_basis");
@@ -565,7 +598,8 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
   const cli = object(interaction.cli_channel);
   const planPath = ["interaction_contract", "cli_channel", "settlement_plan"];
   const plan = object(cli?.settlement_plan);
-  const steps = plan?.schema_version === "quota_settlement_plan_v1" && Array.isArray(plan.ordered_steps)
+  const steps = (plan?.schema_version === "quota_settlement_plan_v1" || plan?.schema_version === "quota_settlement_plan_v2")
+    && Array.isArray(plan.ordered_steps)
     ? plan.ordered_steps : undefined;
   const prepared = object(cli?.execution_preparation);
   const identity = object(plan?.identity);
@@ -639,6 +673,8 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
       include("context_details", "unread_context_index", field);
     include("context_details", "instruction");
     include("context_details", "command_template");
+  } else if (details && known(details, ["command_template", "path", "sha256"])) {
+    include("context_details");
   } else include("context_details", "unread_context_index");
   return {opening, remaining: pointers};
 }
