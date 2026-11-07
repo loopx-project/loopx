@@ -302,13 +302,15 @@ Count the complete task: with an Agent-prepared plan already delivered, the owne
 has one required decision. If the original request still lacks acceptance intent
 or authority, that missing decision is an additional round; preparing a proposal
 alone does not establish a one-round cold-start or live-model experience.
-No-plan/default-off behavior remains unchanged, and no Lark action is introduced.
+The default outcome feedback loop continues while executable verification awaits
+an owner-authorized check.
 
 中文：普通路径由 Agent 根据目标与既有上下文准备方案，负责人在交付处核对要求、覆盖范围和
 执行影响，一次“采用并检查”；已有配置直接“检查交付”。JSON 导入仅保留为高级迁移入口。
 `prepare --execute` 只保存可审阅方案，不修改 Goal 规则、不执行检查。丢失回执先对账，
 不能自动重跑；历史通过不能认证变化后的版本。交互次数从原始意图算起，前置缺失的意图或
-授权不能从计数中省略。此入口沿用可信本机所有者边界，不证明远程身份、独立复核或实际采用。
+授权不能从计数中省略。成果反馈默认运行，可执行检查等待所有者授权。此入口沿用可信本机
+所有者边界，不证明远程身份、独立复核或实际采用。
 显式启用的 Goal LoopX 会话在原生工具声明 `prepare_check` 时，可直接准备相同方案；
 Goal、Agent 与运行目录由宿主固定，暂停、过期 Turn 或撤销配置后不能继续准备。
 旧原生线程的工具声明不会自动升级，也不会为新增工具替换未完成线程；未声明时保留 CLI
@@ -356,11 +358,28 @@ and binding are separate: selected work with no confirmed binding remains held.
 Bindings outside the selected set are rejected. Agents cannot change coverage;
 owner configuration still uses preview, provider CAS and exact operation replay.
 
+`goal` checks the Goal as a whole without gating local Todo execution or
+completion. It requires empty `bindings`; it does not mean every new task needs
+an acceptance association. Use it for an independently checked cross-task
+commitment. With a retained outcome, `{"outcome_id":"...","scope":{"kind":"goal"},"criteria":[...]}`
+uses the original requirement descriptions and needs no placeholder Todo.
+The outcome ID binds the receipt to that outcome. A standalone Goal check
+reports on the Goal as a whole. An unmet configured check cannot be satisfied
+by an Agent's self-review or local Todo completion. The outcome remains available to ordinary replanning when its
+linked work ends; permission, Stop, real blockers and the host's finite budget
+still govern execution. A scope declaration itself never runs a checker.
+
+`goal` 只验收整个 Goal，不给局部 Todo 加执行或完成门禁，`bindings` 必须为空。
+它适用于跨任务的独立验收承诺，可直接引用既有成果要求，无需占位 Todo。
+`outcome_id` 将检查回执绑定到对应成果。独立的 Goal 检查报告整个 Goal 的验证结果。
+局部任务完成或 Agent 自评不能替代已配置检查；未满足的成果在工作结束后仍进入
+原有重规划流程。权限、Stop、真实阻塞及宿主有限预算继续生效。
+
 Legacy persisted documents without `scope` retain their Goal-wide behavior and
 original digest. Reading or upgrading does not narrow them. A fresh configuration
 without scope is rejected with an actionable error; original committed retries
-still recover their receipts. An older runtime that does not understand selected
-coverage rejects it rather than silently ignoring it; update readers before an
+still recover their receipts. An older runtime that does not understand the selected
+coverage kind rejects it rather than silently ignoring it; update readers before an
 owner-approved scope change.
 
 Unselected work retains its ordinary validation, claims, leases, permissions and
