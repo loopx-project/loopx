@@ -332,6 +332,90 @@ def test_native_cli_is_read_only_and_does_not_claim_native_receipts(tmp_path, ph
     assert json.loads(rejected.stdout)["ok"] is False
 
 
+@pytest.mark.parametrize(
+    ("binding_length", "model"),
+    [(94, "gpt-6.1-terra"), (95, "gpt-6.1-terra"), (95, "m" * 160)],
+)
+def test_native_cli_keeps_complete_context_with_large_bound_routes(
+    tmp_path, binding_length, model,
+):
+    config_ref = ".loopx/config/delegations.json"
+    config = tmp_path / config_ref
+    config.parent.mkdir(parents=True)
+    bindings = []
+    for index in range(3):
+        prefix = f"binding-{index}-"
+        bindings.append({
+            "id": prefix + "a" * (binding_length - len(prefix)),
+            "agent_id": f"worker-{index}-" + "a" * (40 if index else 41),
+            "todo_id": f"todo_review000{index}",
+            "requesters": [SCOPE["agent_id"]],
+            "workspace": str(tmp_path / f"worker-{index}"),
+            "host_args": ["--host", "codex-cli"],
+            "timeout_seconds": 60,
+            "output_refs": ["result.json"],
+        })
+    config.write_text(json.dumps({
+        "schema_version": "loopx_local_delegation_v0", "bindings": bindings,
+    }))
+    model_config = {"model": model, "reasoning_effort": "max"}
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({
+        "schema_version": 1,
+        "goals": [{
+            "id": SCOPE["goal_id"], "repo": str(tmp_path), "status": "active",
+            "registered_agents": [SCOPE["agent_id"], *(b["agent_id"] for b in bindings)],
+            "spawn_policy": {
+                **POLICY, "max_children": 3, "model_config": model_config,
+                "execution_config": config_ref,
+            },
+        }],
+    }))
+    command = [
+        sys.executable, "-m", "loopx.cli",
+        "--registry", str(registry), "--runtime-root", str(tmp_path / "runtime"),
+        "agent-context", "--goal-id", SCOPE["goal_id"], "--agent-id", SCOPE["agent_id"],
+        "--format", "json",
+    ]
+    for phase in ("before_plan", "before_delegate", "after_delegate_result"):
+        args = [*command, "--phase", phase]
+        if phase == "after_delegate_result":
+            args += [
+                "--native-child-operation", "followup",
+                "--native-child-outcome", "agent_thread_limit_reached",
+            ]
+        result = subprocess.run(args, capture_output=True, text=True, check=True)
+        payload = json.loads(result.stdout)
+        assert payload["ok"] is True
+        context = payload["agent_context"]
+        assert context["phase"] == phase
+        assert context["authority"] == "guidance_only"
+        assert context["failures"] == []
+        [contribution] = context["contributions"]
+        assert contribution["guidance"]
+        facts = contribution["facts"]
+        assert facts["model_preference"] == model_config
+        assert len(json.dumps(contribution, separators=(",", ":")).encode()) <= 2048
+        assert len(json.dumps(context, separators=(",", ":")).encode()) <= 3072
+        if phase == "after_delegate_result":
+            assert "delegation_context" not in facts
+            assert facts["delegation_receipts"]["operation_receipts"] == {"observed": 0}
+            assert facts["native_host_capacity"]["retry_same_turn"] is False
+            assert facts["receipt_observation"] == "not_supplied"
+        else:
+            routes = facts["delegation_context"]
+            assert routes["execution_scope"] == "bound_delegation"
+            assert routes["preflight"] == "required"
+            assert routes["authorized_count"] == 3
+            assert routes["projected_count"] == 2
+            assert routes["routes_truncated"] is True
+            assert [route["binding_id"] for route in routes["routes"]] == [
+                b["id"] for b in bindings[:2]
+            ]
+            assert all(route["readiness"] == "unknown" for route in routes["routes"])
+        assert str(tmp_path) not in result.stdout
+
+
 def test_native_cli_projects_typed_capacity_exhaustion_without_raw_error(tmp_path):
     registry = tmp_path / "registry.json"
     registry.write_text(
