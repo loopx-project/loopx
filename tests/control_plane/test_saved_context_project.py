@@ -1155,6 +1155,9 @@ def test_saved_initial_page_is_primary_and_its_recovery_replays_the_same_selecti
     assert "without reading an older baseline" in navigation["instruction"]
     assert "Start with first_read_command" not in navigation["instruction"]
     assert ("remaining_read_command" in navigation) == staged
+    assert ("navigation.remaining_read_command" in first["read_instruction"]) == staged
+    if staged:
+        assert "Before work" in first["read_instruction"]
     assert ("next_command" in first) is paged
     if page_bytes is not None:
         for command in (navigation["first_read_command"], navigation.get("remaining_read_command"),
