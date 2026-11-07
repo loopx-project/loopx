@@ -4,6 +4,7 @@ import json
 import os
 import re
 import subprocess
+import sys as _sys
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,7 +37,6 @@ from .control_plane.projects.registry_codec import load_registry
 from .control_plane.todos.active_state_editing import COMPLETED_WORK_ARCHIVE_HEADING
 from .control_plane.todos.active_state_todo_parser import active_state_incomplete_warning
 from .control_plane.todos.authoring_scope import todo_contract_diagnostics
-from .extensions.process_runtime import terminate_process_tree
 from .history import (
     RunHistoryAudit,
     build_run_history_audit,
@@ -65,6 +65,36 @@ from .control_plane.todos.contract import (
     require_todo_excluded_agents,
     todo_status_from_marker,
 )
+
+
+# Keep the historical exports and caller patch points, but select the OS
+# transport only when used. Decisions and deadlines remain with the caller.
+_PROCESS_RUNTIME_EXPORTS = ("terminate_process_tree",)
+
+
+def __getattr__(name: str) -> Any:
+    if name not in _PROCESS_RUNTIME_EXPORTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    from .extensions import process_runtime
+
+    for export in _PROCESS_RUNTIME_EXPORTS:
+        globals().setdefault(export, getattr(process_runtime, export))
+    return globals()[name]
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(_PROCESS_RUNTIME_EXPORTS))
+
+
+def _export(name: str) -> Any:
+    return getattr(_sys.modules[__name__], name)
+
+
+# An already selected owner retains the former import-time binding, including
+# owner replacements installed before this module was imported.
+if "loopx.extensions.process_runtime" in _sys.modules:
+    for _name in _PROCESS_RUNTIME_EXPORTS:
+        globals()[_name] = getattr(_sys.modules["loopx.extensions.process_runtime"], _name)
 
 
 @dataclass(frozen=True)
@@ -350,7 +380,7 @@ def _retire_owned_probe(process: subprocess.Popen[str]) -> None:
     """
 
     try:
-        terminate_process_tree(process, grace_seconds=0.2)
+        _export("terminate_process_tree")(process, grace_seconds=0.2)
     except (OSError, RuntimeError):
         pass
     finally:
@@ -1694,3 +1724,9 @@ def render_contract_markdown(payload: dict[str, Any]) -> str:
             lines.extend(["", f"## {title}"])
             lines.extend(f"- {item}" for item in items)
     return "\n".join(lines)
+
+
+# Star imports retain every former public name, including the lazy reexports.
+__all__ = sorted(
+    {name for name in globals() if not name.startswith("_")} | set(_PROCESS_RUNTIME_EXPORTS)
+)

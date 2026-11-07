@@ -599,6 +599,36 @@ R0 可以先于目录移动交付，但不代表内核合格。R3/R4 可选，�
   不关闭完整 R0/V10、M1、拆包安装、R1 managed minimal 或 D1–D7。不改变 preset、
   前端操作、权限或持久化状态；受保护执行仍由既有 owner 所有。
 
+### 2026-11-07 — 调用方进程传输按需加载提案
+
+- **基线与边界：**`7f521ff4505fa916a98a7401032922189eef414a` 的纯
+  Turn-decision import 会加载 `extensions.process_runtime`。Doctor Git、
+  contract 扫描、调用方 validation 和 Host bridge transport 改为使用时解析既有
+  reexport。保留原函数对象、签名、direct/from/star import、名称发现、调用方补丁点、
+  预加载 owner 的绑定和 reload 行为。复用现有 lazy-export 模式；导出名集合是本地
+  兼容元数据，不是共享状态词汇。Python 保留平台传输，TypeScript 保留决策、deadline、
+  authority 与 receipt；不新增 provider、capability、default 或进程算法。
+- **可执行证据：**四个冷加载调用方 oracle 在不可变基线上失败。提案通过聚焦兼容
+  检查和既有架构 oracle，保留 Turn-preview 的未选模块隔离门。真实隔离的 Git、
+  validation 和 bridge 测试覆盖 timeout、cancellation、leader 退出后的后代、stdin
+  策略、framing 和未确认 cleanup。重新构建的单体 wheel 在源码目录外重复兼容与真实
+  进程检查；完整公开 discovery/star 名称集合及 transport 签名与基线一致。这是
+  source/wheel 提案证据，不代表现有 host 升级或实际采用。
+- **实测范围：**纯 Turn-decision import 的 LoopX 模块数从 338 降至 337。
+  纯 import 和 help 没有进程启动或连接，支持的 help、unknown-command 输出与退出码
+  保持一致。共享合成 SQLite fixture 覆盖接受与拒绝的已注册 Turn plan：两个版本都
+  启动两个 Node 进程和十三个 Git probe，连接观察分别为 62/61 次。完整返回 envelope
+  仅 fresh observation 的 source-decision digest 不同。已注册 plan 仍会选择进程
+  transport，完整 preview 依赖闭包尚未通过冷加载资格。减少一个 import 不能证明
+  latency、RSS、完整成本、managed-Turn 或长程收益。
+- **剩余与回滚：**I3 至少保留一个 minor release。D2、D5、D6、I3、D3，以及完整
+  R0/V10/M1/R1/context/model/install 验收仍开放。Canary 六个 direct check 通过，
+  18 个 selected check 中 17 个通过；`first-connect-contract-smoke.py` 在基线与
+  提案都报 `KeyError: should_run`，其 inline-field 假设需要独立修复。该失败与既有
+  全库 lint/browser 失败仍开放。完成的作者提案可披露 hold 后进入正常 review；受保护 runtime
+  合入仍需 maintainer 授权。回退本调用方加载改动即可恢复 eager binding，无需状态
+  迁移或无关语言重写。
+
 ### 2026-11-06 — History 读取路径的所选加载
 
 - **基线与边界：** `22b0f6c25`。普通 `history` 读取与帮助通过共享 CLI grammar
