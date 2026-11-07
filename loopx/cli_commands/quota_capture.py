@@ -793,26 +793,14 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
         # Carry the now-active transport into its selection presentation, not
         # into the immutable source or a second admission. Native lifecycle
         # still owns when the following full/delta view can be published.
-        if (args.initial_read and isinstance(payload.get("replan_read_path"), str)
-                and Path(payload["replan_read_path"]).resolve() == path.resolve()):
-            # Older Hosts pass the original preflight capture here. Reuse the
-            # staged presentation without another guard. Already-derived views
-            # point to a different original file; projecting them again would
-            # bind reads to the wrong source hash.
-            from ..control_plane.quota.turn_envelope import _turn_envelope_result
-
-            try:
-                payload = _turn_envelope_result("replan_cli_view", payload=payload)
-            except (EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
-                raise QuotaDecisionTransportError(
-                    "Saved replan presentation could not be prepared; read the original capture."
-                ) from exc
-        bind_capture_selection_transport(payload, args, capture_root=root)
+        transport = _capture_selection_transport_template(payload, args, capture_root=root)
         prepared = prepare_codex_context(payload, directory=directory, capture_directory=cache,
             goal_id=args.goal_id, agent_id=args.agent_id, surface="quota_packet",
             capture_id=hashlib.sha256(raw).hexdigest(),
             continuity_generation=getattr(args, "_context_delivery_generation", None),
-            progressive_enabled=activation["progressive_enabled"], hook_session=hook_session)
+            progressive_enabled=activation["progressive_enabled"], selection_command_args_template=transport,
+            captured_decision_path=str(path) if args.initial_read and activation["progressive_enabled"] else None,
+            hook_session=hook_session)
         projected = prepared.delivery
         native_prepared = True
         if projected.get("schema_version") == "context_delivery_v1":
@@ -1045,6 +1033,20 @@ def budgeted_settlement_result(
             "Recover the original operation/receipt; do not repeat admission or assume it did not commit. "
             f"{exc}"
         ) from exc
+
+
+def _capture_selection_transport_template(payload: dict[str, Any], args: argparse.Namespace, *,
+                                          capture_root: Path) -> str | None:
+    """Derive display argv without editing the captured decision."""
+    interaction = payload.get("interaction_contract")
+    cli = interaction.get("cli_channel") if isinstance(interaction, dict) else None
+    selection = cli.get("selection_command") if isinstance(cli, dict) else None
+    if not isinstance(selection, dict):
+        return None
+    presentation = {**payload, "interaction_contract": {**interaction,
+        "cli_channel": {**cli, "selection_command": dict(selection)}}}
+    bind_capture_selection_transport(presentation, args, capture_root=capture_root)
+    return presentation["interaction_contract"]["cli_channel"]["selection_command"].get("command_args_template")
 
 
 def bind_capture_selection_transport(payload: dict[str, Any], args: argparse.Namespace, *,

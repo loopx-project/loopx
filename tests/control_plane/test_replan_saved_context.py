@@ -23,7 +23,9 @@ from test_replan_progress_native_cli import (
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("entry", ["original", "staged", "selected", "off", "projection_failure"])
+@pytest.mark.parametrize("entry", [
+    "original", "copied", "staged", "numeric", "selected", "off", "delta_only", "projection_failure",
+])
 def test_saved_replan_reads_keep_original_authority(tmp_path, monkeypatch, provider, entry):
     tmp_path = tmp_path.resolve()
     isolate_sqlite_runtime(tmp_path, monkeypatch)
@@ -39,6 +41,8 @@ def test_saved_replan_reads_keep_original_authority(tmp_path, monkeypatch, provi
             "--prepared-capture-reference", "--context-delivery", "on",
             "--codex-context-dir", str(native), "--defer-context-presentation")
         capture = tmp_path / "capture" / "decision.json"
+        original_path = capture
+        reader_path = capture
         original = capture.read_bytes()
         source = json.loads(original)
         assert prepared["capture_sha256"] == hashlib.sha256(original).hexdigest()
@@ -49,6 +53,29 @@ def test_saved_replan_reads_keep_original_authority(tmp_path, monkeypatch, provi
         # nor its stage readers may replay admission or mutate durable work.
         codex_context_hook(str(native), dict(session_id="saved-replan-session",
             cwd=str(fixture["project"]), hook_event_name="SessionStart", source="startup"))
+        if entry == "copied":
+            capture = tmp_path / "copied.json"
+            capture.write_bytes(original)
+            reader_path = capture
+            original_path.unlink()
+        if entry == "numeric":
+            # These two acceptance carriers compare equal after JSON.parse.
+            # Both exact values must survive this synthetic source and view.
+            core = source["autonomous_replan_obligation"]["replan_context"]["core_goal"]
+            acceptance = {**(core.get("acceptance_contract") or {}), "precision_probe": 2**53,
+                "outcome_requirements": {"schema_version": "loopx_goal_outcomes_v0",
+                    "outcomes": [{"id": "precision", "objective": "Keep distinct source values",
+                        "revision": 1, "requirements": [], "sources": []}]}}
+            core["acceptance_contract"] = acceptance
+            distinct = {**acceptance, "precision_probe": 2**53 + 1}
+            source["agent_todo_summary"]["goal_acceptance_contract"] = distinct
+            source["interaction_contract"]["agent_channel"]["work_context"]["sources"].append({
+                "source": "goal_acceptance", "content": {"status": "loaded", "goal_acceptance_contract": distinct},
+            })
+            source["precision_fixture"] = {"exact_integer": 2**53 + 1, "exact_float": 1.0}
+            capture = tmp_path / "precision-source.json"
+            reader_path = capture
+            write_decision_capture(capture, source)
         if entry == "staged":
             capture = tmp_path / "already-staged.json"
             write_decision_capture(capture, _turn_envelope_result("replan_cli_view", payload=source))
@@ -62,6 +89,9 @@ def test_saved_replan_reads_keep_original_authority(tmp_path, monkeypatch, provi
         options = ["--context-delivery", "off", "--delta-delivery", "off"] if entry == "off" else [
             "--context-delivery", "on", "--codex-app", "--codex-context-dir", str(native),
             *(["--select", "/replan_action_packet"] if entry == "selected" else ["--initial-read"])]
+        if entry == "delta_only":
+            options = ["--context-delivery", "off", "--delta-delivery", "auto", "--codex-app",
+                "--codex-context-dir", str(native), "--initial-read"]
         command = ["quota", "context-project", "--capture-file", str(capture),
             "--capture-sha256", hashlib.sha256(selected_raw).hexdigest(),
             "--goal-id", GOAL, "--agent-id", AGENT, "--turn-instance-id", TURN, *options]
@@ -75,9 +105,9 @@ from loopx.control_plane.effect_runtime import EffectRuntimeStartupError
 from loopx.entrypoint import main
 original = turn_envelope._turn_envelope_result
 def fail(operation, **kwargs):
-    if operation == 'replan_cli_view':
-        marker.write_text('replan_cli_view')
-        raise EffectRuntimeStartupError('synthetic presentation outage')
+    if operation == 'context_delivery' and (kwargs.get('native_projection') or {}).get('captured_decision_path'):
+        marker.write_text('context_delivery')
+        raise EffectRuntimeStartupError('synthetic presentation outage', diagnostic_code='synthetic_fixture')
     return original(operation, **kwargs)
 with patch.object(turn_envelope, '_turn_envelope_result', fail):
     raise SystemExit(main())
@@ -92,7 +122,7 @@ with patch.object(turn_envelope, '_turn_envelope_result', fail):
             assert response["heartbeat_receipt"] == source["heartbeat_receipt"]
             assert response["recovery"]["path"] == str(capture)
             assert response["recovery"]["sha256"] == hashlib.sha256(original).hexdigest()
-            assert marker.read_text() == "replan_cli_view"
+            assert marker.read_text() == "context_delivery"
             assert "do not rerun admission" in response["reason"]
             assert snapshot() == before and capture.read_bytes() == original
             return
@@ -100,6 +130,11 @@ with patch.object(turn_envelope, '_turn_envelope_result', fail):
         assert result.returncode == 0, result.stdout + result.stderr
         response = json.loads(result.stdout)
         assert response["ok"], response
+        first_review = None
+        staged = entry in {"original", "copied", "staged", "numeric"}
+        if staged:
+            first_review = next(row["value"] for row in json.loads(response["content"])["selections"]
+                                if row["pointer"] == "/replan_action_packet/review")
         navigation = response.get("navigation", response)
         command, observed = navigation["recovery"]["command"], bytearray()
         while True:
@@ -116,9 +151,14 @@ with patch.object(turn_envelope, '_turn_envelope_result', fail):
         recovered = json.loads(observed)
         assert recovered["heartbeat_receipt"]["settlement_identity"] == identity
         assert recovered["autonomous_replan_obligation"]["obligation_id"] == obligation
-        if entry in {"original", "staged"}:
+        if staged:
             packet = recovered["replan_action_packet"]
             assert "review" in packet and "writeback" in packet
+            assert packet["review"] == first_review
+            if entry == "staged":
+                assert packet == json.loads(selected_raw)["replan_action_packet"]
+            argv = shlex.split(packet["review"])
+            assert argv[argv.index("--decision-file") + 1] == str(reader_path)
             assert "replan_context" not in recovered["autonomous_replan_obligation"]
 
             def read(command):
@@ -132,14 +172,27 @@ with patch.object(turn_envelope, '_turn_envelope_result', fail):
             review = read(packet["review"])
             writeback = read(packet["writeback"])
             assert review["source_hash"] == writeback["source_hash"]
+            if entry == "copied":
+                pinned = _turn_envelope_result("replan_cli_view", payload=source)["replan_action_packet"]["review"]
+                pinned = shlex.split(pinned)
+                assert review["source_hash"] == pinned[pinned.index("--source-hash") + 1]
             assert writeback["writeback"]["settlement_plan"]["identity"] == identity
             assert review["context_id"] == source["autonomous_replan_obligation"]["replan_context"]["context_id"]
+            if entry == "numeric":
+                assert recovered["precision_fixture"] == {"exact_integer": 2**53 + 1, "exact_float": 1.0}
+                assert type(recovered["precision_fixture"]["exact_float"]) is float
+                assert recovered["agent_todo_summary"]["goal_acceptance_contract"]["precision_probe"] == 2**53 + 1
+                sources = recovered["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+                assert sources[-1]["content"]["goal_acceptance_contract"]["precision_probe"] == 2**53 + 1
         else:
             # Explicit raw selectors and disabled transport keep their existing
             # content. They are not implicitly converted to a different view.
             assert recovered["replan_action_packet"] == source["replan_action_packet"]
         assert snapshot() == before
         assert capture.read_bytes() == selected_raw
-        assert (tmp_path / "capture" / "decision.json").read_bytes() == original
+        if entry == "copied":
+            assert not original_path.exists()
+        else:
+            assert original_path.read_bytes() == original
     finally:
         restart_effect_runtime(wait_for_exit=True)
