@@ -6,8 +6,6 @@ SForge owns submission, grading and selection; these wrappers describe the actua
 
 from __future__ import annotations
 
-from pathlib import PurePosixPath
-
 
 def native_research_guidance() -> str:
     """Keep the task's optimization objective explicit."""
@@ -19,38 +17,31 @@ def native_research_guidance() -> str:
     )
 
 
-def checkpoint_research_instructions(request: dict, workspace: str) -> str:
-    """Describe declared coverage without inferring or expanding capture authority.
+def research_artifact_instructions(*, checkpoint: bool) -> str:
+    """Separate reproducibility data from candidate inputs for every native arm."""
+    from benchmark.runtime.research_artifacts import RESEARCH_DIRECTORY
 
-    Directory membership remains the artifact owner's responsibility at capture.
-    This provider guidance keeps newly generated scientific outputs in that scope;
-    it neither proves dependency closure nor changes the evaluator's file set.
-    """
-    root = PurePosixPath(workspace)
-    covered = any(
-        isinstance(entry, dict) and isinstance(entry.get("source_path"), str)
-        and root.is_relative_to(PurePosixPath(entry["source_path"]))
-        for entry in request["components"]
-    )
-    coverage = (
-        "The checkpoint declaration includes this task workspace. New files saved "
-        "inside that directory are included when it is captured. "
-        if covered else
-        "The checkpoint declaration does not cover the whole task workspace. "
-        "Do not assume new research files are captured; report the missing directory "
-        "coverage before relying on continuation. "
+    capture = (
+        "Checkpoint capture includes this directory as a separate component; "
+        "verified continuation restores its files at the same path. "
+        if checkpoint else
+        "Terminal artifact collection retains this directory for analysis; "
+        "that alone does not provide a resumable checkpoint. "
     )
     return (
-        "### Durable Research Artifacts\n\n"
-        "Checkpoint capture is enabled. " + coverage +
-        "Keep reusable research artifacts in a dedicated subdirectory of the task "
-        "workspace: candidate snapshots, fitted parameters, local test inputs, "
+        "### Research Artifacts\n\n"
+        f"Use `{RESEARCH_DIRECTORY}` for reusable research artifacts that are not "
+        "candidate inputs: candidate snapshots, fitted parameters, local test inputs, "
         "experiment reports and negative results needed to reproduce or reconsider "
-        "a decision. Use workspace-relative references where possible. Reserve "
-        "temporary directories for disposable scratch; a report that only names an "
+        "a decision. This directory is outside the task workspace and submitted paths. "
+        "Keep required candidate code and runtime/build data in the task's declared "
+        "submitted paths; the judge cannot use this research directory as an extra input. "
+        "Do not link it into the submission tree. " + capture +
+        "Use explicit references to retained artifacts. A report that only names an "
         "external file does not preserve its bytes. Keep existing external dependencies "
-        "explicit until they have been copied and their references updated and checked; "
-        "do not delete or silently substitute historical evidence.\n\n"
+        "explicit until they have been copied and their references updated and checked. "
+        "Older checkpoints preserve their original workspace files; this policy does "
+        "not relocate or discard historical evidence.\n\n"
         "This storage guidance does not change submitted files, task acceptance, "
         "feedback access or execution authority. Capture and receiver verification "
         "still determine which artifacts are actually available.\n\n"

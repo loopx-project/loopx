@@ -201,7 +201,7 @@ def _goal_capability_options(
         if capability_id == "periodic_report":
             return {"clear_periodic_report_configuration": True}
         if capability_id == "todo_replan_cadence":
-            return {"clear_execution_replan_after_todos": True, "clear_execution_replan_after_turns": True, "clear_execution_stride_strategy": True, "clear_execution_planning_horizon_goal": True}
+            return {"clear_execution_replan_after_todos": True, "clear_execution_replan_after_turns": True, "clear_execution_stride_strategy": True, "clear_execution_planning_horizon_goal": True, "clear_execution_yardstick_enabled": True}
         if capability_id == "pull_request_review":
             return {"clear_pull_request_review_configuration": True}
         if capability_id == "change_quality_qualification":
@@ -214,7 +214,7 @@ def _goal_capability_options(
     config = dict(configuration)
     allowed: dict[str, set[str]] = {
         "goal_capability_organization": {"mode", "discovery_budget_minutes", "max_trials"},
-        "todo_replan_cadence": {"completed_todos", "count_unit", "count", "stride_strategy", "planning_horizon_goal"},
+        "todo_replan_cadence": {"completed_todos", "count_unit", "count", "stride_strategy", "planning_horizon_goal", "yardstick_enabled"},
         "multi_subagent": {
             "enabled",
             "max_children",
@@ -232,7 +232,7 @@ def _goal_capability_options(
         "local_authority_shadow": {"enabled"},
         "coordination_runtime_shadow": {"enabled"},
         "lark_kanban_heartbeat_sync": {"enabled"},
-        "periodic_report": {"enabled", "profile_preset", "route_ref", "timezone", "schedule", "task"},
+        "periodic_report": {"enabled", "profile_preset", "route_ref", "timezone", "schedule", "task", "review_required"},
         "reward_memory": {"config_path", "enabled_agents", "agent_id", "enabled"},
     }
     if capability_id not in allowed:
@@ -255,12 +255,17 @@ def _goal_capability_options(
             if not isinstance(config["planning_horizon_goal"], bool):
                 raise ValueError("planning_horizon_goal must be a boolean")
             horizon = {"execution_planning_horizon_goal": config["planning_horizon_goal"]}
-        if config and set(config) <= {"stride_strategy", "planning_horizon_goal"}:
+        yardstick = {"clear_execution_yardstick_enabled": True}
+        if "yardstick_enabled" in config:
+            if not isinstance(config["yardstick_enabled"], bool):
+                raise ValueError("yardstick_enabled must be a boolean")
+            yardstick = {"execution_yardstick_enabled": config["yardstick_enabled"]}
+        if config and set(config) <= {"stride_strategy", "planning_horizon_goal", "yardstick_enabled"}:
             # The capability editor submits the complete sparse value. Unlike
             # the CLI's single-field strategy patch, omission restores live
             # interval inheritance even when this Goal was previously pinned.
             return {
-                **horizon,
+                **horizon, **yardstick,
                 **({"execution_stride_strategy": normalize_stride_strategy(config["stride_strategy"])}
                    if "stride_strategy" in config else {}),
                 "clear_execution_replan_after_turns": True,
@@ -269,7 +274,7 @@ def _goal_capability_options(
         cadence = normalize_replan_cadence_configuration(config)
         option = ("execution_replan_after_turns" if cadence["count_unit"] == "effective_turns"
                   else "execution_replan_after_todos")
-        return {option: cadence["count"], **horizon, **({"execution_stride_strategy": cadence["stride_strategy"]}
+        return {option: cadence["count"], **horizon, **yardstick, **({"execution_stride_strategy": cadence["stride_strategy"]}
             if "stride_strategy" in cadence else {})}
     if capability_id == "periodic_report":
         from ..capabilities.periodic_report.goal_configuration import normalize_configuration

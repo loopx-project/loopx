@@ -23,9 +23,6 @@ QUOTA_CLI_VISION_COMPACTION_SCHEMA_VERSION = (
     "quota_cli_vision_continuation_compaction_v0"
 )
 QUOTA_CLI_VISION_DETAIL_COMMAND = "quota should-run --include-detail vision"
-QUOTA_CLI_REPLAN_ACTION_COMPACTION_SCHEMA_VERSION = (
-    "quota_cli_replan_action_compaction_v0"
-)
 QUOTA_CLI_MONITOR_POLL_DECISION_COMPACTION_SCHEMA_VERSION = (
     "quota_cli_monitor_poll_decision_compaction_v0"
 )
@@ -92,16 +89,6 @@ _RETAINED_MONITOR_POLL_FOLLOW_UP_SUMMARY_FIELDS = (
     "effective_action",
     "state",
 )
-
-
-def _json_content_key(value: Any) -> str:
-    """Compare original JSON values for sharing, including types and signed zero.
-
-    This is local serialization IO, not another quota or context-selection rule.
-    Python equality merges booleans with integers and integral floats; those
-    distinct source facts must not borrow each other's in-response owner.
-    """
-    return json.dumps(value, sort_keys=True, ensure_ascii=False, allow_nan=False)
 
 
 def _compact_monitor_poll_interaction_contract(
@@ -244,49 +231,6 @@ def _compact_vision_continuation_audit(
         "mode": "compact_hot_path",
         "omitted_fields": [],
         "full_detail_cold_path": QUOTA_CLI_VISION_DETAIL_COMMAND,
-    }
-    return compact
-
-
-def _reference_inline_replan_authoring(
-    packet: dict[str, Any], *, payload: dict[str, Any]
-) -> dict[str, Any]:
-    """Reference an identical executable input already present in this response."""
-
-    writeback = packet.get("writeback_contract")
-    if not isinstance(writeback, dict) or not isinstance(
-        writeback.get("vision_authoring"), dict
-    ):
-        return packet
-    interaction = payload.get("interaction_contract")
-    cli = interaction.get("cli_channel") if isinstance(interaction, dict) else None
-    plan = cli.get("settlement_plan") if isinstance(cli, dict) else None
-    steps = plan.get("ordered_steps") if isinstance(plan, dict) else None
-    if not isinstance(steps, list):
-        return packet
-    authoring_key = _json_content_key(writeback["vision_authoring"])
-    index = next(
-        (index for index, step in enumerate(steps)
-         if isinstance(step, dict) and step.get("kind") == "durable_writeback"
-         and _json_content_key(step.get("vision_authoring")) == authoring_key),
-        None,
-    )
-    if index is None:
-        return packet
-    reference = (
-        "$.interaction_contract.cli_channel.settlement_plan.ordered_steps"
-        f"[{index}].vision_authoring"
-    )
-    compact_writeback = dict(writeback)
-    compact_writeback.pop("vision_authoring")
-    compact_writeback["vision_authoring_ref"] = reference
-    compact = dict(packet)
-    compact["writeback_contract"] = compact_writeback
-    compact["payload_compaction"] = {
-        "schema_version": QUOTA_CLI_REPLAN_ACTION_COMPACTION_SCHEMA_VERSION,
-        "mode": "compact_hot_path",
-        "compacted_fields": ["writeback_contract.vision_authoring"],
-        "projection_ref": reference,
     }
     return compact
 
@@ -441,6 +385,7 @@ def _promote_interaction_contract(payload: dict[str, Any]) -> dict[str, Any]:
 def _reference_context(
     payload: dict[str, Any], *, task_title: bool = True, explore_guidance: bool = True,
     goal_acceptance: bool = False, vision_audit: bool = False,
+    replan_authoring: bool = False,
     diagnostics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """One coarse transport call for the existing typed context owner."""
@@ -452,7 +397,7 @@ def _reference_context(
     if not needs_context and (diagnostics is None or (
         diagnostics.get("agent_detail") is True and diagnostics.get("user_detail") is True
     )):
-        if not goal_acceptance and not vision_audit:
+        if not goal_acceptance and not vision_audit and not replan_authoring:
             return payload
         if goal_acceptance:
             # A reference can only be created or relocated when two literal
@@ -469,7 +414,7 @@ def _reference_context(
                 contains_contract(payload, "autonomous_replan_obligation", "replan_context", "core_goal", "acceptance_contract"),
                 contains_contract(payload, "agent_todo_summary", "goal_acceptance_contract"),
             )
-            if sum(carriers) < 2 and not vision_audit:
+            if sum(carriers) < 2 and not vision_audit and not replan_authoring:
                 return payload
     from .turn_envelope import _turn_envelope_result
 
@@ -480,6 +425,8 @@ def _reference_context(
         "todo_summary_projection", "planning_horizon", "autonomous_replan_obligation",
         "interaction_contract", "agent_lane_next_action", "selected_todo",
     ) if key in payload}
+    if replan_authoring and "replan_action_packet" in payload:
+        source["replan_action_packet"] = payload["replan_action_packet"]
     if (
         isinstance(contract, dict)
         and isinstance(agent, dict)
@@ -512,6 +459,7 @@ def _reference_context(
         task_title=task_title, explore_guidance=explore_guidance,
         goal_acceptance=goal_acceptance,
         **({"vision_audit": True} if vision_audit else {}),
+        **({"replan_authoring": True} if replan_authoring else {}),
         **({"diagnostics": diagnostics} if diagnostics is not None else {}))
     return _apply_context_projection_changes(payload, result)
 
@@ -591,13 +539,9 @@ def compact_quota_should_run_cli_payload(
     vision_audit = payload.get("vision_continuation_audit")
     share_audit = not include_vision_detail and isinstance(vision_audit, dict)
     replan_action = payload.get("replan_action_packet")
-    if not include_vision_detail and isinstance(replan_action, dict):
-        compact_replan_action = _reference_inline_replan_authoring(
-            replan_action, payload=compact
-        )
-        if compact_replan_action is not replan_action:
-            compact = dict(compact)
-            compact["replan_action_packet"] = compact_replan_action
+    writeback = replan_action.get("writeback_contract") if isinstance(replan_action, dict) else None
+    share_authoring = (not include_vision_detail and isinstance(writeback, dict)
+        and bool({"vision_authoring", "vision_authoring_ref"}.intersection(writeback)))
     if not include_todo_summary_detail:
         warning = payload.get("next_action_projection_warning")
         if isinstance(warning, dict):
@@ -629,7 +573,7 @@ def compact_quota_should_run_cli_payload(
         diagnostics = {"agent_detail": include_todo_summary_detail,
             "user_detail": include_user_todo_summary_detail}
     compact = _reference_context(compact, task_title=not include_todo_summary_detail,
-        goal_acceptance=True, vision_audit=share_audit,
+        goal_acceptance=True, vision_audit=share_audit, replan_authoring=share_authoring,
         explore_guidance=not include_vision_detail, diagnostics=diagnostics)
     if share_audit and isinstance(vision_audit, dict):
         compact = {**compact, "vision_continuation_audit": _compact_vision_continuation_audit(vision_audit)}

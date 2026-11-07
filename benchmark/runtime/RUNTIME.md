@@ -359,13 +359,66 @@ state or force the agent active. An unresolved Turn must be recovered before
 another phase can replace its task input. These wait/recovery rules apply to
 both entry policies; they correct the earlier unconditional phase reset.
 Every scheduler wake caps its host timeout against the remaining phase budget
-before opening an execution. If only startup and settlement reserve remains,
-it records a budget-exhausted no-op without creating a pending Turn. In the
+before opening an execution. Heartbeat workers may use the entire positive
+remainder, including a continuation shorter than 160 seconds. Their bounded
+process cleanup is not a solver-time deduction. The adapters do not derive an
+independent wake limit from the initial trial budget; an explicitly supplied
+Harbor wake limit remains an independent limit and retains its failure semantics.
+Native Goal and managed-turn transports retain their existing reserve.
+When the applicable work allowance is exhausted, the worker records a
+budget-exhausted no-op without creating a pending Turn. In the
 heartbeat/turn scheduler path, that receipt exits the wake with code 75 and the
 configured shell worker stops normally. It does not re-admit empty wakes, mark
 the task complete or spend quota. Direct plain/native-Goal calls retain exit 0
 for normal budget exhaustion.
+
+An explicitly continued Harbor phase or SForge warm restore may select a new
+shell transport record after that budget stop. The retained worker receipt must
+prove the stop happened before native dispatch. The original stop record and IO
+witness remain intact; the finite phase deadline names the successor record, so
+retries in that same phase retain its failures. Missing proof, interrupted native
+work, provider failures and other stops keep the original recovery path. This
+does not reopen a terminal LoopX decision or change Goal/Agent, Todos, native
+conversation, scoring history or checkpoint frequency.
 The deadline uses the task environment's clock, including remote Harbor backends.
+Budget exhaustion is distinct from task completion: this clock does not override
+provider failures, Stop, blocked planning, or a valid terminal LoopX decision.
+Campaign duration coverage must still classify an early exit as missing time.
+
+### Optional native execution evidence
+
+A benchmark host can expose finalized and live solver intervals through the
+existing campaign duration owner. This read-only provider does not declare
+Goal requirements, configure acceptance checks or decide whether to continue.
+The Agent owns semantic requirements in the shared first-planning checkpoint;
+independent executable checks remain optional. A maximum timeout alone never
+creates a minimum execution commitment.
+
+```python
+from benchmark.edgebench.execution_commitment import (
+    NativeExecutionEvidence, install_execution_commitment,
+)
+
+evidence = NativeExecutionEvidence(
+    run_id=run_id, task_id=task_id, trial=trial,
+    target_seconds=explicit_caller_target_seconds,
+    runner_active=lambda: worker is not None and worker.poll() is None,
+)
+install_execution_commitment(
+    app, run_id=run_id, task_id=task_id, observe=evidence.fulfilled,
+)
+```
+
+Use the native trial directory containing `solver_execution.json` and the exact
+worker process. For continuation, supply finalized earlier receipts as explicit
+`(Path, sha256)` pairs in `previous`. Setup, grading and downtime contribute no
+execution credit; missing, altered or unfinished previous evidence stays unknown.
+The scoped feedback route resolves the exact `(run_id, task_id)` pair. Reinstalling
+the same observer is idempotent; replacing it is rejected. The command adapter
+`python -m benchmark.runtime.execution_commitment probe|check --task-id TASK`
+reads the explicitly selected native relay and rejects stale or malformed data.
+Apps without this extension and ordinary worker entry/restore behavior remain
+unchanged. No default semantic requirement or automatic check is installed.
 
 To compare entry policies, hold the execution mode, session policy, model,
 effort, tools, feedback and total budget fixed, and use separate trials:

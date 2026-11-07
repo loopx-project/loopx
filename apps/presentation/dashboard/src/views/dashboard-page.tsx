@@ -1,7 +1,7 @@
 import {useManagedConversation} from "../data/use-managed-conversation";
 import { normalizeGoalDraft, type GoalDraft } from "../../../../../loopx/control_plane/collaboration/goal_draft.js";
 import { withTurnActivity, type TurnStep } from "../data/turn-steps";
-import { conversationReturnSessions, conversationPendingReturnSessions, reconcileConversationHistory, reconcileConversationReturns } from "../data/conversation-returns";
+import { conversationReturnSessions, conversationPendingReturnSessions, reconcileConversationHistory } from "../data/conversation-returns";
 import { readConversationReturns, readTaskSessions } from "../data/conversation-return-observation";
 import { currentChannelSession, useConversationHistory } from "../data/use-conversation-history";
 import { useChatProjects } from "../data/use-chat-projects";
@@ -82,6 +82,7 @@ import {
   type ChatSessionSummary,
   type ChatImageAttachment,
   type ChatVisibleMessage,
+  mergeChatSessionMessages,
   type ManagerChannelBinding,
   type ManagerRuntimeSessionReadback,
   type AgentResponse,
@@ -127,6 +128,7 @@ import {
   type WorkspaceGoalArchiveLoadState,
   type WorkspaceActionPreviewRequest,
   type WorkspaceAgentTodo,
+  type WorkspaceAttention,
 } from "../features/personal-workspace/personal-workspace-model";
 import { monitorTodoReadback } from "../features/personal-workspace/monitor-readback";
 import { goalExecution, taskSessionStatus } from "../features/personal-workspace/goal-activity";
@@ -476,6 +478,8 @@ type PersonalGoalItem = {
   needsYou?: string | null;
   needsYouActionKind?: string | null;
   needsYouBlocking?: boolean;
+  reportReviewAttention?: WorkspaceAttention[];
+  reportReviewCount?: number;
   attentionSummary?: DigestAttentionSummary;
   needsYouTaskClass?: string | null;
   needsYouTodoId?: string | null;
@@ -688,6 +692,13 @@ function personalAgentCapability(agentId: string, adapterKind?: string | null) {
 
 function personalTodosForQueueItem(item: QueueItem, role: "user" | "agent") {
   const projectAsset = item.project_asset;
+  const queueGroup = role === "user" ? item.user_todos : item.agent_todos;
+  if (role === "user" && queueGroup?.items?.length) {
+    // The owner view needs the canonical bounded queue, not the 3-row project
+    // asset teaser. Both remain display projections; the full-source
+    // capability_actions summary carries counts beyond this list.
+    return queueGroup;
+  }
   return role === "user"
     ? todosFromProjectAssetSummary(projectAsset?.user_todos, item.user_todos, role)
     : todosFromProjectAssetSummary(projectAsset?.agent_todos, item.agent_todos, role);
@@ -1070,6 +1081,21 @@ function buildPersonalHomeModel(
     ];
     const agentRow = sortedGoalAgentRows[0];
     const goalAgentTodos = mergePersonalAgentTodos(personalAgentTodos(row), sortedGoalAgentRows, row);
+    const capabilityActions = row.queueItem?.user_todos?.capability_actions
+      ?? row.queueItem?.project_asset?.user_todos?.capability_actions;
+    const reportReviewGroup = capabilityActions?.groups.find(group => group.action_kind === "review_periodic_report");
+    const reportReviewAttention: WorkspaceAttention[] = (reportReviewGroup?.items ?? []).flatMap(todo => {
+      const todoId = todo.todo_id?.trim();
+      if (!todoId) return [];
+      return [{
+        blocking: false,
+        goalId: goal.id,
+        text: todo.text,
+        todoId,
+        updatedAt: todo.updated_at ?? null,
+        details: attentionDetails(todo),
+      }];
+    });
     const nextSentence = [
       agentTodoFacts.nextTodoText,
       row.queueItem?.recommended_action,
@@ -1118,6 +1144,8 @@ function buildPersonalHomeModel(
       needsYou,
       needsYouActionKind: needsYouTodo?.actionKind ?? null,
       needsYouBlocking: needsYouTodo?.blocking ?? false,
+      reportReviewAttention,
+      reportReviewCount: reportReviewGroup?.count ?? reportReviewAttention.length,
       attentionSummary: goal.activation_state === "stopped"
         ? { blocking: 0, optional: 0, coverage: "complete" } satisfies DigestAttentionSummary
         : attentionSummaries.get(goal.id),
@@ -1283,7 +1311,7 @@ function PersonalGoalHome({
   workBrowseSearch?: Record<string, unknown>;
   onWorkBrowseChange?: (patch: Partial<GoalWorkBrowseState>, source: string, replace?: boolean) => void;
   onSelectWorkSession: (sessionId: string, replace?: boolean) => void;
-  onSelectWorkAgent: (agentId: string | null) => void;
+  onSelectWorkAgent: (agentId: string | null, sessionId?: string) => void;
   onSelectTodo: (todoId: string | null) => void;
   onSelectView: (view: WorkspaceGoalTab) => void;
   onGoalActivationStateChange: (goalId: string, activationState: "active" | "stopped") => void;
@@ -1558,6 +1586,23 @@ function PersonalGoalHome({
     return target.kind === "managed" ? target.agentId : target.kind === "manager" ? t("header.manager") : goalFallback;
   };
 
+  function conversationHistoryMessage(targetContextId: string, message: ChatVisibleMessage, sessionLabel: string): PersonalManagerMessage {
+    return {
+      sourceMessageId: message.message_id, sourceSessionId: message.session_id,
+      sourceTurnId: message.turn_id ?? undefined, sourceCreatedAt: message.created_at,
+      goalDraft: normalizeGoalDraft(message.goal_draft),
+      agentLabel: message.role === "user" ? message.origin === "peer" ? (locale === "zh-CN" ? "协作者" : "Collaborator") : undefined
+        : message.origin === "manager_followup" ? "协作回执" : answerIdentityLabel(targetContextId, sessionLabel),
+      attachments: workspaceImageAttachments(message.attachments),
+      id: managerMessageId.current++, lines: [], role: message.role === "user" ? "user" : "assistant",
+      returnDelivery: message.return_delivery, collaboration: message.collaboration, collaborations: message.collaborations,
+      replyContext: message.reply_context, queueInputRevision: message.queue_input_revision, queueInputCancelled: message.queue_input_cancelled,
+      sourceLabel: message.role === "user" ? undefined : message.role === "error" ? "本地会话记录"
+        : targetContextId === "manager" ? `恢复的${t("header.manager")}会话` : `恢复的 ${sessionLabel} 会话`,
+      text: message.role === "user" ? message.reply_context?.source_text ?? message.text : visibleAgentMessage(message.text),
+    };
+  }
+
   useEffect(() => {
     const resolved = resolveLocalStatusUrl(
       statusSourceControl.activeSource.statusUrl,
@@ -1631,13 +1676,14 @@ function PersonalGoalHome({
               for (const [targetContextId, ids] of Object.entries(contexts)) {
                 if (!ids.includes(sessionId)) continue;
                 const previous = current[targetContextId] ?? [];
-                const updated = reconcileConversationReturns(previous, sessionId, snapshot.messages, (row) => ({
-                  id: managerMessageId.current++, sourceMessageId: row.message_id,
-                  sourceSessionId: sessionId, sourceCreatedAt: row.created_at,
-                  role: "assistant" as const,
-                  agentLabel: "协作回执", sourceLabel: "协作回执", text: visibleAgentMessage(row.text), lines: [],
-                  returnDelivery: row.return_delivery, collaboration: row.collaboration, collaborations: row.collaborations,
-                }));
+                // A terminal queue read can precede the final transcript write.
+                // The existing revision observer must also adopt later native
+                // rows after reload has retired their optimistic placeholders.
+                const messages = mergeChatSessionMessages([snapshot]);
+                const sessionLabel = runtimeAgents.find(agent => agent.agent_id === snapshot.session.agent_id)?.display_name
+                  ?? snapshot.session.agent_id;
+                const updated = reconcileConversationHistory(previous, messages,
+                  row => conversationHistoryMessage(targetContextId, row, sessionLabel));
                 if (updated !== previous) next = { ...next, [targetContextId]: updated };
               }
               return next;
@@ -1753,24 +1799,8 @@ function PersonalGoalHome({
       : conversationHistory.history.messages;
     const sessionLabels = new Map(conversationHistory.history.sessions.map(session => [session.session_id,
       runtimeAgents.find(agent => agent.agent_id === session.agent_id)?.display_name ?? session.agent_id]));
-    return reconcileConversationHistory(previous, messages, (message): PersonalManagerMessage => ({
-      sourceMessageId: message.message_id,
-      sourceSessionId: message.session_id,
-      sourceTurnId: message.turn_id ?? undefined,
-      sourceCreatedAt: message.created_at,
-      goalDraft: normalizeGoalDraft(message.goal_draft),
-      agentLabel: message.role === "user" ? message.origin === "peer" ? (locale === "zh-CN" ? "协作者" : "Collaborator") : undefined : message.origin === "manager_followup"
-        ? "协作回执" : answerIdentityLabel(contextId, sessionLabels.get(message.session_id ?? "") ?? selectedAgent.label),
-      attachments: workspaceImageAttachments(message.attachments),
-      id: managerMessageId.current++, lines: [],
-      role: message.role === "user" ? "user" : "assistant",
-      returnDelivery: message.return_delivery, collaboration: message.collaboration, collaborations: message.collaborations,
-      replyContext: message.reply_context,
-      queueInputRevision: message.queue_input_revision, queueInputCancelled: message.queue_input_cancelled,
-      sourceLabel: message.role === "user" ? undefined : message.role === "error" ? "本地会话记录"
-        : contextId === "manager" ? `恢复的${t("header.manager")}会话` : `恢复的 ${sessionLabels.get(message.session_id ?? "") ?? selectedAgent.label} 会话`,
-      text: message.role === "user" ? message.reply_context?.source_text ?? message.text : visibleAgentMessage(message.text),
-    }));
+    return reconcileConversationHistory(previous, messages,
+      message => conversationHistoryMessage(targetContextId, message, sessionLabels.get(message.session_id ?? "") ?? selectedAgent.label));
   };
   useEffect(() => {
     if (!conversationHistory.history) return;
@@ -3040,6 +3070,10 @@ function PersonalGoalHome({
     goals: normalizedModel.goals.map((goal) => ({
       ...goal,
       execution: goalExecution(goalSessionFacts, goal.goalId, goal.hostThreadActivity),
+      reportReviewAttention: goal.reportReviewAttention?.map(item => sourceAttention(
+        item, statusSourceControl.activeSource.statusUrl,
+        sourceIsReady && !progress?.errors[goal.goalId], goal.title,
+      )),
     })),
     userTodos: model.userTodos.map(attentionForWorkspace),
     attentionHistory: (model.attentionHistory ?? model.userTodos).map(attentionForWorkspace),
@@ -3316,17 +3350,17 @@ function PersonalGoalHome({
             void sendManagerQuestion(message, { agentId: runtimeBindings[targetContextId]?.agentId,
               contextId: targetContextId, attachments, queue: { sessionId, ingressId, onAccepted: resolve } }).catch(reject);
           }),
-          onObserveConversationTurn: async (targetContextId, sessionId, turnId) => {
+          onObserveConversationQueue: async (targetContextId, sessionId) => {
             const key = `${targetContextId}:${selectedAgent.agentId}`;
-            if (activeConversationContext.current !== targetContextId || sessionIds.current.get(key) !== sessionId
-                || (activeTurnIds.current.get(targetContextId) === turnId
-                  && streamControllers.current.get(targetContextId)?.signal.aborted === false)) return;
+            if (activeConversationContext.current !== targetContextId || sessionIds.current.get(key) !== sessionId) return;
             // Queue advancement is a read observation. The existing history
             // recovery owner adopts the exact current Session/Turn and stream.
             const history = await conversationHistory.refresh();
             const current = currentChannelSession(history, selectedAgent.agentId);
             if (activeConversationContext.current === targetContextId && sessionIds.current.get(key) === sessionId
-                && current?.session_id === sessionId && current.active_turn_id === turnId) {
+                && current?.session_id === sessionId && current.active_turn_id
+                && (activeTurnIds.current.get(targetContextId) !== current.active_turn_id
+                  || streamControllers.current.get(targetContextId)?.signal.aborted !== false)) {
               setTurnRecoveryRequest(value => value + 1);
             }
           },
@@ -3941,10 +3975,10 @@ export function DashboardPage() {
             message: current.workSession === sessionId ? current.message : undefined} : current});
       }}
       selectedWorkAgentId={search.workAgent ?? null}
-      onSelectWorkAgent={(agentId) => {
+      onSelectWorkAgent={(agentId, sessionId) => {
         const goalId = search.goalId, statusUrl = search.statusUrl;
         void navigate({search: current => "goalId" in current && current.goalId === goalId && current.statusUrl === statusUrl
-          ? {...current, todo: undefined, workAgent: agentId ?? undefined, workSession: undefined, messageSession: undefined, message: undefined, view: agentId === null ? "overview" : "conversation"} : current});
+          ? {...current, todo: undefined, workAgent: agentId ?? undefined, workSession: sessionId, messageSession: undefined, message: undefined, view: agentId === null ? "overview" : "conversation"} : current});
       }}
       onSelectTodo={(todoId) => {
         const goalId = search.goalId, statusUrl = search.statusUrl;

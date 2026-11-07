@@ -94,7 +94,8 @@ const LOCAL_PATH_SURFACES = [
  */
 const SECRET_LIKE_SURFACES = [
   /\bbearer\s+[a-z0-9._~+/=-]{16,}/iu,
-  /\b(?:access|api|secret)[_-]?key["']?\s*[=:]\s*["']?[^\s`'"<>]+/iu,
+  /\b[a-z][a-z0-9+.-]*:\/\/[^\/\s:@`'"<>]+:[^\/\s@`'"<>]+@[^\s`'"<>]*/iu,
+  /\b(?:(?:aws[_-]?)?secret[_-]?access[_-]?key|(?:access|api|secret)[_-]?key)["']?\s*[=:]\s*["']?[^\s`'"<>]+/iu,
   /\b(?:ak|sk)["']?\s*[=:]\s*["']?[^\s`'"<>]+/iu,
   /(?<![a-z0-9_])(?:ak|sk)[-_=:][a-z0-9_=-]{10,}/iu,
   /\bgh[pousr]_[a-z0-9]{16,}\b/iu,
@@ -110,7 +111,7 @@ const SECRET_LIKE_SURFACES = [
   /\beyj[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}\b/iu,
   /\b(?:access|refresh)[_-]?token["']?\s*[=:]\s*["']?[^\s`'"<>]{12,}/iu,
   /\b(?:password|secret)["']?\s*[=:]\s*["']?[^\s`'"<>]{12,}/iu,
-  /-{3,}\s*BEGIN (?:[A-Z]+ )?PRIVATE KEY/iu,
+  /-{3,}\s*BEGIN (?:[A-Z]+ )?PRIVATE KEY[\s\S]*?(?:-{3,}\s*END (?:[A-Z]+ )?PRIVATE KEY-{3,}|$)/iu,
   /\btoken["']?\s*[=:]\s*["']?[^\s`'"<>]{12,}/iu,
 ] as const
 const CREDENTIAL_FIELD_FAMILIES = new Set([

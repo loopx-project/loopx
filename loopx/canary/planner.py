@@ -1051,51 +1051,6 @@ CURRENT_REPO_PROFILES: tuple[dict[str, Any], ...] = (
         ],
     },
     {
-        "id": "auto-research-demo",
-        "title": "Auto-research demo and frontier route",
-        "purpose": (
-            "Check the minimal auto-research kernel and shared frontier projection; "
-            "keep legacy visible/demo wrappers out of the default canary path."
-        ),
-        "catalog_families": ["Work Routing", "Evidence Lifecycle", "State And Boundary", "Human Decision"],
-        "trigger_hints": (
-            "auto-research",
-            "auto research",
-            "demo-supervisor",
-            "demo e2e",
-            "frontier",
-            "visible launcher",
-            "demo/auto_research",
-        ),
-        "checks": [
-            {
-                "command": "python3 examples/auto-research-minimal-kernel-smoke.py",
-                "tier": "default",
-                "reason": "checks the minimal evaluator-agnostic kernel and rejects public shortcut replay paths",
-            },
-            {
-                "command": "python3 examples/decentralized-auto-research-frontier-smoke.py",
-                "tier": "default",
-                "reason": "checks shared frontier, evidence graph, and public boundary fixtures",
-            },
-            {
-                "command": "python3 examples/auto-research-demo-supervisor-smoke.py",
-                "tier": "deep",
-                "reason": "samples the full dry-run supervisor packet and lane bootstrap contract",
-            },
-            {
-                "command": "python3 examples/auto-research-rollout-readpath-smoke.py",
-                "tier": "deep",
-                "reason": "checks rollout event read-path projection into live evidence graphs",
-            },
-            {
-                "command": "python3 examples/auto-research-live-evidence-capture-smoke.py",
-                "tier": "deep",
-                "reason": "checks compact live evidence capture fixtures for visible lanes",
-            },
-        ],
-    },
-    {
         "id": "explore-harness",
         "title": "Explore Harness configuration and runtime",
         "purpose": (

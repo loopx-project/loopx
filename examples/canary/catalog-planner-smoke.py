@@ -64,7 +64,6 @@ def assert_profiles_come_from_catalog_matrix() -> None:
         "first-connect-contract",
         "runtime-connector-catalog",
         "frontstage-rollout",
-        "auto-research-demo",
         "catalog-canary-contract",
         "benchmark-toolkit-boundary",
     } <= domain_profile_ids, payload
@@ -717,26 +716,6 @@ def assert_pr_release_and_refactor_profiles_select() -> None:
     assert all(check["tier"] == "default" for check in runtime_connector_profile["checks"])
     assert runtime_connector_profile["deep_checks_available"] is True, runtime_connector_profile
     assert runtime_connector_profile["deep_checks_included"] is False, runtime_connector_profile
-
-    auto_research_payload = build_catalog_canary_plan(
-        changed_files=["demo/auto_research/core.py"],
-        surfaces=["auto-research demo frontier visible launcher"],
-    )
-    auto_research_profiles = {
-        profile["id"]: profile for profile in auto_research_payload["domain_profiles"]
-    }
-    assert "auto-research-demo" in auto_research_profiles, auto_research_payload
-    auto_research_profile = auto_research_profiles["auto-research-demo"]
-    auto_research_commands = [check["command"] for check in auto_research_profile["checks"]]
-    assert (
-        "python3 examples/auto-research-minimal-kernel-smoke.py"
-        in auto_research_commands
-    ), auto_research_profile
-    assert (
-        "python3 examples/decentralized-auto-research-frontier-smoke.py" in auto_research_commands
-    ), auto_research_profile
-    assert all(check["tier"] == "default" for check in auto_research_profile["checks"]), auto_research_profile
-    assert auto_research_profile["deep_checks_available"] is True, auto_research_profile
 
     explore_payload = build_catalog_canary_plan(
         changed_files=[

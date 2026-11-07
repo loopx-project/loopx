@@ -52,7 +52,9 @@ function unique(values: string[], label: string): void {requireValue(new Set(val
 function requirements(value: unknown): Requirement[] {
   const result = list(value, "requirements", 32).map(value => {
     const row = canonicalAuthorityObject(value, "requirement"); keys(row, ["id", "description"]);
-    return {id: id(row.id, "requirement id"), description: text(row.description, "requirement description")};
+    // Goal creation accepts 1,000 Unicode code points (up to 2,000 UTF-16
+    // units). Keep that reviewed text intact; aggregate byte limits still hold.
+    return {id: id(row.id, "requirement id"), description: text(row.description, "requirement description", 2000)};
   });
   unique(result.map(row => row.id), "requirements"); return result;
 }
@@ -234,6 +236,19 @@ export function projectGoalOutcomes(head: JsonObject, goalId: string, acceptance
             .filter(field => work.get(key)?.[field] !== undefined).map(field => [field, work.get(key)![field]]))}))}),
       work: o.todo_ids.map(key => ({todo_id: key, status: work.get(key)?.status ?? "missing"}))})),
     execution_authority_granted: false, goal_completion_assessed: false}, acceptance);
+}
+
+/** Structural first-plan readback, not evidence of comprehension or acceptance.
+ * This projection shares the exact canonical declaration/lifetime observation.
+ * Hosts check returned Todo ids against it without inventing semantic criteria. */
+export function outcomePlanningReadback(acceptance: JsonObject, agentId: string): JsonObject {
+  const declaration = acceptance.outcome_requirements as JsonObject | undefined;
+  const current = declaration?.current_lifetime === true;
+  const outcomes = current ? (declaration!.outcomes as JsonObject[])
+    .filter(outcome => outcome.owner_agent_id === agentId) : [];
+  return {agent_id: agentId, declaration_current: current && outcomes.length > 0,
+    outcome_ids: outcomes.map(outcome => outcome.id),
+    linked_todo_ids: [...new Set(outcomes.flatMap(outcome => outcome.todo_ids as string[]))]};
 }
 
 /** Suggest reading order from registered relationships, never reading obligations.

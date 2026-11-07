@@ -200,6 +200,17 @@ COMPOUND_CREDENTIAL_FIELD_ASSIGNMENT_PATTERN = re.compile(
     r"[A-Za-z0-9_]*(?:" + _COMPOUND_LABEL_SOURCE + r")[A-Za-z0-9_]*[\"']?\s*[:=]",
     re.IGNORECASE,
 )
+# Sink redaction needs the value in the same match so a label and its value are
+# replaced together. Keep this value-inclusive form in the canonical owner rather
+# than rebuilding it from the base label pattern in each presentation module.
+SINK_COMPOUND_CREDENTIAL_ASSIGNMENT_PATTERN = re.compile(
+    r"(?:"
+    + COMPOUND_CREDENTIAL_FIELD_ASSIGNMENT_PATTERN.pattern
+    + r"|\b[A-Za-z0-9_]*(?:token|access[_-]?key|private[_-]?key)"
+    r"[A-Za-z0-9_]*[\"']?\s*[:=])"
+    r"\s*(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^\s`'\"<>]+)",
+    re.IGNORECASE,
+)
 # The credential half of the rule, on its own, named so the two capability faces
 # that ask it share one definition instead of each restating a category pair. Both
 # categories are listed rather than subtracted from `ALL_CATEGORIES`:
@@ -348,14 +359,16 @@ PRESENTATION_PUBLIC_BOUNDARY_PATTERNS: tuple[
 REMOTE_LOCATION_SURFACE_PATTERN = re.compile(r"(?i)\b(?:https?|file|s3|gs|tos|hdfs)://")
 SECRET_LIKE_SURFACE_PATTERN = re.compile(
     r"(?i)(?:\bbearer\s+[a-z0-9._~+/=-]{16,}|"
-    r"\b(?:access|api|secret)[_-]?key[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]+|"
+    r"\b[a-z][a-z0-9+.-]*://[^/\s:@`'\"<>]+:[^/\s@`'\"<>]+@[^\s`'\"<>]*|"
+    r"\b(?:(?:aws[_-]?)?secret[_-]?access[_-]?key|(?:access|api|secret)[_-]?key)[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]+|"
     r"\b(?:ak|sk)[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]+|"
     r"(?<![a-z0-9_])(?:ak|sk)[-_=:][a-z0-9_=-]{10,}|"
     + PROVIDER_TOKEN_SHAPE_PATTERN_SOURCE
     + r"|"
     r"\b(?:access|refresh)[_-]?token[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]{12,}|"
     r"\b(?:password|secret)[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]{12,}|"
-    r"-{3,}\s*BEGIN (?:[A-Z]+ )?PRIVATE KEY|"
+    r"-{3,}\s*BEGIN (?:[A-Z]+ )?PRIVATE KEY[\s\S]*?"
+    r"(?:-{3,}\s*END (?:[A-Z]+ )?PRIVATE KEY-{3,}|$)|"
     r"\btoken[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]{12,})"
 )
 

@@ -3,10 +3,10 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
-from ...chat_store import _read_json
-from ...capabilities.native_chat.file_discovery import file_change_fingerprint
+from ...chat_store import ChatSessionStore, _read_json
+from ...capabilities.native_chat.file_discovery import FileChatDiscovery, file_change_fingerprint
 from .private_progress import legacy_recovery_repairs
 
 
@@ -14,6 +14,24 @@ class PrivateDeliveryDiscovery:
     def __init__(self, root: Path) -> None:
         self.root = root
         self._completed: dict[Path, tuple[tuple[int, ...], dict[str, Any], bool]] = {}
+        self._web_inputs = FileChatDiscovery()
+
+    def web_input_turn_refs(self, store: ChatSessionStore, session_id: str) -> list[tuple[str, str]]:
+        """Observe App user message/Turn references, never bodies or effect authority."""
+        path = store._session_dir(session_id) / "messages.jsonl"
+
+        def read(_: Path) -> dict[str, Any]:
+            refs = []
+            for message in store.messages(session_id, strict=True):
+                if message.get("role") == "user" and message.get("origin") == "web":
+                    message_id, turn_id = message["message_id"], message["turn_id"]
+                    if not isinstance(message_id, str) or not isinstance(turn_id, str):
+                        raise ValueError("invalid App input reference")
+                    refs.append((message_id, turn_id))
+            return {"refs": refs}
+
+        [(_, view)] = self._web_inputs.rows(path.parent, (path,), read=read, project=lambda _, value: value)
+        return cast(list[tuple[str, str]], view["refs"])
 
     def rows(self) -> Iterator[tuple[Path, dict[str, Any], bool]]:
         """Reuse only unchanged delivered-file hints, never bodies or authority.
