@@ -176,19 +176,28 @@ def test_stateless_progressive_replan_uses_the_saved_decision(tmp_path, monkeypa
     scope = ("--codex-app", "--goal-id", GOAL, "--agent-id", AGENT, "--turn-instance-id", TURN)
     delivery = ("--context-delivery", "on", "--delta-delivery", "off")
 
-    def first_review(view):
-        page = read_stage(shlex.split(view["first_read_command"]))
-        assert page["ok"] and page["offset"] == 0 and page["eof"]
-        assert len(page["content"].encode()) == page["total_bytes"]
-        fields = {row["pointer"]: row["value"] for row in json.loads(page["content"])["selections"]}
-        assert fields["/heartbeat_receipt"] == source["heartbeat_receipt"]
-        assert "/replan_action_packet/planning_guidance" not in fields
-        return shlex.split(fields["/replan_action_packet/review"])
-
     def read_stage(command, status=0):
         result = subprocess.run(command, capture_output=True, text=True, timeout=30)
         assert result.returncode == status, result.stdout + result.stderr
         return json.loads(result.stdout)
+
+    def read_pages(page, limit=64_000):
+        body = bytearray()
+        while True:
+            assert page["ok"] and page["offset"] == len(body)
+            assert len(json.dumps(page, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= limit
+            body.extend(page["content"].encode())
+            if page["eof"]:
+                assert len(body) == page["total_bytes"]
+                return bytes(body)
+            assert page["next_offset"] == len(body)
+            page = read_stage(shlex.split(page["next_command"]))
+
+    def review_for(body):
+        fields = {row["pointer"]: row["value"] for row in json.loads(body)["selections"]}
+        assert fields["/heartbeat_receipt"] == source["heartbeat_receipt"]
+        assert "/replan_action_packet/planning_guidance" not in fields
+        return shlex.split(fields["/replan_action_packet/review"])
 
     try:
         initial = call_progress_cli(fixture, "quota", "should-run", *scope, "--todo-id", TODO,
@@ -198,7 +207,7 @@ def test_stateless_progressive_replan_uses_the_saved_decision(tmp_path, monkeypa
         source = json.loads(raw)
         receipt = source["heartbeat_receipt"]
         authority = _authority(fixture)
-        review_command = first_review(initial)
+        review_command = review_for(read_pages(read_stage(shlex.split(initial["first_read_command"]))))
         assert review_command[review_command.index("--decision-file") + 1] == str(original)
         review = read_stage(review_command)
         assert review["planning_guidance"] == source["replan_action_packet"]["planning_guidance"]
@@ -208,14 +217,26 @@ def test_stateless_progressive_replan_uses_the_saved_decision(tmp_path, monkeypa
 
         recovered_path = original.with_name("recovered.json")
         original.rename(recovered_path)
-        projected = call_progress_cli(fixture, "quota", "context-project", *scope, *delivery,
-            "--capture-file", str(recovered_path), "--capture-sha256", hashlib.sha256(raw).hexdigest())
-        recovered_review = first_review(projected)
+        saved = ("quota", "context-project", *scope, "--capture-file", str(recovered_path), "--initial-read")
+        digest = hashlib.sha256(raw).hexdigest()
+        first = call_progress_cli(fixture, *saved, *delivery, "--capture-sha256", digest,
+            "--max-page-output-bytes", "8192")
+        assert not first["eof"] and list(first).index("content") < list(first).index("navigation")
+        nav = first["navigation"]
+        assert nav["mode"] == "full" and "top-level content" in nav["instruction"]
+        body = read_pages(first, 8192)
+        assert read_pages(read_stage(shlex.split(nav["first_read_command"])), 8192) == body
+        recovered_review = review_for(body)
         assert recovered_review[recovered_review.index("--decision-file") + 1] == str(recovered_path)
         assert read_stage(recovered_review)["source_hash"] == review["source_hash"]
         recovered_review[recovered_review.index("--source-hash") + 1] = "sha256:" + "0" * 64
         refused = read_stage(recovered_review, status=1)
         assert refused["ok"] is False and "matching source hash" in refused["reason"]
+        wrong_capture = call_progress_cli(fixture, *saved, *delivery, "--capture-sha256", "0" * 64, expected_code=1)
+        assert not wrong_capture["ok"] and "content" not in wrong_capture
+        disabled = call_progress_cli(fixture, *saved, "--context-delivery", "off", "--delta-delivery", "off",
+            "--capture-sha256", digest, expected_code=1)
+        assert not disabled["ok"] and "content" not in disabled
         assert recovered_path.read_bytes() == raw
         assert _authority(fixture) == authority
     finally:
