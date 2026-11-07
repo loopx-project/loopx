@@ -2208,6 +2208,27 @@ acceptance. Preserve I3 for a minor release, M1/#8011, R0/V10/R1, D2/D5/D6/D3,
 context/split-install and every prior failure; neither connection counts nor
 passing validation establishes the complete minimal-kernel outcome.
 
+Latest-main integration qualification at `ce0e41a26` over `df67371c3` retains
+the same 23 PR production-source hashes. Fresh source/wheel File/SQLite four
+complete lifecycles, 49 TypeScript cases, types and isolated PostgreSQL391/11
+pass. The saved-context/legacy Python checks report 107 passed and 14 skipped;
+those explicit native Codex cases remain unqualified. The inherited missing
+return annotation is repaired on main and fresh kernel mypy passes; retain its
+historical failure. Standard premerge still passes six direct and 18/19
+selected checks, with the existing peer scanner failure.
+
+Five fresh unprofiled default-SQLite pairs at this integration preserve the same
+101-Todo outcome. Main/candidate lifecycle wall medians are 14.631/14.633 s
+(ranges14.260–16.869/14.122–14.941); observed CLI plus daemon CPU after setup is
+7.038/7.080 s; daemon disk-counter bytes are 8,880,128/8,290,304 and logical-write
+counter bytes14,966,784/14,282,752. Fixture setup medians2.362/2.346 s and final
+teardown0.062/0.058 s remain separate. Two candidates are slower and ranges
+overlap. The same sampling exclusions above apply; reduced write counters do
+not qualify a complete speedup or marginal-cost/adoption benefit. Complete the
+remaining cost coverage and establish any repeatable CPU regression before
+choosing further implementation; do not assume that another read/import
+optimization is justified.
+
 ## Appendix B: Decision log
 
 | Date | Decision | Owner / approval | Alternatives | Normative sections changed |
