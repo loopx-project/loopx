@@ -1525,11 +1525,19 @@ setup 与最终 teardown 单独报告，两边同样继承正常 bytecode 条件
 | --- | ---: | ---: |
 | 生命周期墙钟（范围） | 14.093 秒（13.765–14.933） | 14.145 秒（13.461–15.190） |
 | Fixture setup／最终 teardown | 2.403／0.062 秒 | 2.338／0.062 秒 |
-| CLI child CPU＋已观测 daemon CPU | 5.511 秒 | 5.757 秒 |
+| CLI child CPU＋已观测 daemon CPU（历史记录，单位换算无效） | 5.511 秒 | 5.757 秒 |
 | Daemon 边界 physical footprint | 140,787,912 B | 146,456,920 B |
 | CLI 最大 resident size | 70,746,112 B | 70,221,824 B |
 | 已观测 daemon disk／logical writes | 9,048,064／14,090,240 B | 10,227,712／15,646,720 B |
 | CLI output／必需 context 字节 | 177,595／21,168 B | 179,482／21,257 B |
+
+上表 CPU 使用了错误的 Mach 时钟换算，不能作为 CPU 证据。三个独立 CPU busy
+子进程校准确认，该 macOS arm64 runtime 的 daemon usage 单位为 Mach tick，
+须先乘实测 timebase `125/3`，再把纳秒换成秒。原始观察保持不变。修正五组历史
+对照后，包含 setup daemon 工作的 combined observed CPU 为 7.071→7.469 秒；
+再减各自初始 daemon baseline，CLI episode 为 6.706→7.107 秒，相应 daemon
+disk／logical writes 为 8,892,416／13,783,040→10,072,064／15,355,904 字节。
+修正后的观察仍未证明完整路径收益。
 
 Daemon CPU／写入是 CLI 边界处累计 process 观察，不含最终退出工作。CLI CPU
 不含未采样的 provenance process 和 harness 工作。CLI RSS 与 daemon footprint
@@ -1560,6 +1568,54 @@ review、验证／readiness 与 maintainer merge 授权保持独立；没有合�
 升级。原 Task 为收益及剩余验收继续开放。I3 至少保留一个 minor release；M1/#8011、
 完整 R0/V10/R1、D2/D5/D6/D3、context/model/split-install、adoption/full-cost
 缺口及所有冻结失败继续保留。
+
+### 2026-11-08 — 完整 quota 响应传输与校准成本
+
+独立评审在 `e7db1711f` 复现剩余回归：8,000-row quota 组合结果序列化为
+13,080,176 字节，产生 13,080,177 字节同步 response-snapshot 写入；main 的独立
+视图低于该响应阈值。既有 Todo read adapter 现在对超过共享 8 MiB inline budget、
+且处于原 complete-frame budget 内的 quota 结果使用无损 gzip，经既有 result-piece
+envelope 返回 encoding 与 decoded extent，base64 分片保留 socket 预算余量。
+更大的 read 保留原分页。Python adapter 验证完整 digest／identity、有界 decoded
+size、精确 extent 与单一完整 gzip member；未知 encoding、截断或 trailing data
+均拒绝。原响应预算值与 server 共用，不重复定义；没有 provider cache、持久状态、
+rule owner 或 authority 变更。
+
+相同 8,000-row 诊断现在为 561,291 wire 字节，response snapshot 字节为零。
+完整结果与原独立 summary、planning、terminal 视图一致，未知字段和 Unicode
+保真。单次诊断耗时不证明提速。12 个 transport 用例及既有 24 个 parity 用例通过；
+两个 native File／SQLite 8,000-row quota 用例保留双 role 来源、完整视图及 provider
+数据／revision，且不产生 response snapshot。22 个 TypeScript context／quota
+用例与 8 个真实 receipt／replan／reentry 用例通过。此前过强的测试 oracle 失败，
+因为 display owner 有意展示不同字段；最终比较各自完整独立输出，不修改展示行为。
+
+生产代码 `2c9d6360e` 基于 `main@8a4d4f9da`，通过四条新 101-Todo 源码／隔离
+wheel × File／默认 SQLite CLI 生命周期，含 sum=45、原完成时间、四份 receipt、
+一次 debit、重启、反例与 replay。最终 wheel 与受影响源文件一致。真实 disposable
+PostgreSQL 16.15 再次通过 391 个 store 和 11 个 service 用例，零 skip。
+TypeScript typecheck、Ruff 与 maintainability ratchet 通过；这些检查不验收
+PostgreSQL 源码／wheel host journey 或 installed-host adoption。
+
+五组新的交错、无 profiler 默认 SQLite 对照使用不变的 101-Todo fixture、完整
+反例／replay 生命周期及同样继承的 bytecode 条件，无并发重型测试。CPU 按校准
+Mach timebase `125/3` 换算；daemon CPU／写入减初始 setup baseline：
+
+| 观察，未说明时为中位数 | Main | 提案 |
+| --- | ---: | ---: |
+| 生命周期墙钟（范围） | 13.894 秒（12.686–16.481） | 14.974 秒（14.131–15.344） |
+| Fixture setup／最终 teardown | 2.347／0.062 秒 | 2.299／0.062 秒 |
+| CLI child＋setup 后已观测 daemon CPU | 7.086 秒 | 7.403 秒 |
+| Setup 后已观测 daemon disk／logical writes | 8,884,224／13,795,328 B | 10,076,160／15,130,624 B |
+| Daemon 边界 physical footprint | 141,032,832 B | 150,520,728 B |
+| CLI 最大 resident size | 71,467,008 B | 71,696,384 B |
+
+四组候选更慢，墙钟范围重叠。大响应写入回归已修复，但完整生命周期收益仍
+**未取得资格**。最终 daemon 退出、未采样 provenance／restart helper、harness CPU、
+连续系统峰值、模型成本与人工注意力仍不在上述观察中。原事务 Task 为独立 exact-head
+评审及剩余 CPU／写入归因保持开放。此前 premerge peer-boundary 与 mypy 失败保留
+为验证 hold，直到 exact-final 检查证明其已消除。I3 至少保留一个 minor release；
+M1/#8011、完整 R0/V10/R1、D2/D5/D6/D3、context/model/split-install、
+adoption/full-cost 缺口及全部冻结失败继续保留。
 
 ## 附录 B：决策日志
 

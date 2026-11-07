@@ -1984,11 +1984,22 @@ candidate is slower in three pairs and wall-time ranges overlap:
 | --- | ---: | ---: |
 | Lifecycle wall time (range) | 14.093 s (13.765–14.933) | 14.145 s (13.461–15.190) |
 | Fixture setup / final teardown | 2.403 / 0.062 s | 2.338 / 0.062 s |
-| CLI child CPU + observed daemon CPU | 5.511 s | 5.757 s |
+| CLI child CPU + observed daemon CPU (historical, invalid unit conversion) | 5.511 s | 5.757 s |
 | Daemon boundary physical footprint | 140,787,912 B | 146,456,920 B |
 | CLI maximum resident size | 70,746,112 B | 70,221,824 B |
 | Observed daemon disk / logical writes | 9,048,064 / 14,090,240 B | 10,227,712 / 15,646,720 B |
 | CLI output / required context bytes | 177,595 / 21,168 B | 179,482 / 21,257 B |
+
+The CPU row above used an invalid Mach-clock conversion and must not be used
+as CPU evidence. Three independent CPU-bound child calibrations show that this
+macOS arm64 runtime reports daemon usage in Mach ticks: multiply by the measured
+timebase `125/3` before converting nanoseconds to seconds. The original raw
+observations remain unchanged. Correcting the five historical pairs gives
+7.071→7.469 seconds of combined observed CPU including setup daemon work.
+Subtracting each initial daemon baseline gives 6.706→7.107 seconds for the CLI
+episode; corresponding daemon disk/logical writes are
+8,892,416/13,783,040→10,072,064/15,355,904 bytes. These corrected observations
+still do not demonstrate a whole-path benefit.
 
 Daemon CPU/writes are cumulative process observations at CLI boundaries,
 excluding final exit work. CLI CPU excludes the unsampled provenance process
@@ -2027,6 +2038,65 @@ authorization remain separate; there is no merge or installed-host upgrade.
 The original task stays open for benefit and remaining acceptance. Retain I3
 for at least one minor release, M1/#8011, full R0/V10/R1, D2/D5/D6/D3,
 context/model/split-install, adoption/full-cost gaps and every frozen failure.
+
+### 2026-11-08 — Complete quota response transport and calibrated cost
+
+Independent review reproduced a remaining regression at `e7db1711f`: an
+8,000-row composed quota result serialized 13,080,176 bytes and caused
+13,080,177 bytes of synchronous response-snapshot writes. Main's separate
+views stayed below that response threshold. The existing Todo read adapter now
+uses lossless gzip for quota results above the shared 8 MiB inline budget and
+within the existing complete-frame budget. It returns the existing result-piece
+envelope with encoding and decoded extent, keeping base64 pieces within the
+socket budget. Larger reads retain their existing paging. The Python adapter
+checks complete digest/identity, bounded decoded size, exact extent and one
+complete gzip member; unknown encoding, truncation and trailing data fail.
+The original response-budget value is shared with the server rather than
+duplicated. No provider cache, persisted state, rule owner or authority changes.
+
+The same 8,000-row diagnostic now emits 561,291 wire bytes with zero response
+snapshot bytes. Complete results match the previous independent summary,
+planning and terminal views; unknown fields and Unicode remain intact. A
+single diagnostic elapsed time is not acceleration evidence. Twelve transport
+cases plus the existing 24 parity cases pass; two native File/SQLite 8,000-row
+quota cases preserve both role sources, complete views and provider data/revision
+with no response snapshots. Twenty-two TypeScript context/quota cases and eight
+real receipt/replan/reentry cases pass. The earlier over-specific test oracle
+failed because display owners intentionally expose different fields; the final
+oracle compares their complete independent outputs rather than changing them.
+
+Production `2c9d6360e`, based on `main@8a4d4f9da`, passes four fresh 101-Todo
+source/isolated-wheel × File/default-SQLite CLI lifecycles, including sum=45,
+original completion time, four receipts, one debit, restart and negative/replay
+cases. The final wheel matches the affected source files. Real disposable
+PostgreSQL 16.15 again passes 391 store and 11 service cases, zero skips.
+TypeScript typecheck, Ruff and the maintainability ratchet pass. These checks
+do not qualify a PostgreSQL source/wheel host journey or installed-host adoption.
+
+Five new interleaved unprofiled default-SQLite pairs use the unchanged 101-Todo
+fixture, full negative/replay lifecycle and inherited bytecode conditions. No
+heavy tests run concurrently. CPU uses the calibrated Mach timebase `125/3`;
+daemon CPU/writes subtract the initial setup baseline:
+
+| Observation, median unless stated | Main | Proposal |
+| --- | ---: | ---: |
+| Lifecycle wall time (range) | 13.894 s (12.686–16.481) | 14.974 s (14.131–15.344) |
+| Fixture setup / final teardown | 2.347 / 0.062 s | 2.299 / 0.062 s |
+| CLI child + observed daemon CPU after setup | 7.086 s | 7.403 s |
+| Observed daemon disk / logical writes after setup | 8,884,224 / 13,795,328 B | 10,076,160 / 15,130,624 B |
+| Daemon boundary physical footprint | 141,032,832 B | 150,520,728 B |
+| CLI maximum resident size | 71,467,008 B | 71,696,384 B |
+
+Four candidate runs are slower and wall ranges overlap. The large-response
+write regression is repaired, but complete lifecycle benefit remains
+**unqualified**. Final daemon exit, unsampled provenance/restart helpers,
+harness CPU, continuous system peak, model cost and human attention remain
+outside these observations. The original transaction task stays open for
+independent exact-head review and attribution of the remaining CPU/write cost.
+Earlier premerge peer-boundary and mypy failures remain validation holds until
+an exact final check proves otherwise. Retain I3 for at least one minor release,
+M1/#8011, full R0/V10/R1, D2/D5/D6/D3, context/model/split-install,
+adoption/full-cost gaps and all frozen failures.
 
 ## Appendix B: Decision log
 
