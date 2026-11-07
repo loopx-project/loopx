@@ -29,6 +29,51 @@ def linked_goal_source(server, goal_id):
 
 
 class GoalSourceRequestMixin:
+    def _completed_todos(self):
+        import subprocess
+        from urllib.parse import parse_qs, urlparse
+        from ..chat.completed_todos import completed_todo_rows
+
+        query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
+        values = query.get("goal_id", [])
+        resolved = linked_goal_source(self.server, values[0]) if len(values) == 1 else None
+        if resolved is None:
+            if "source_namespace" in query:
+                self._send_error("Source identity changed; refresh the Goal.", status=409)
+                return
+            return super()._completed_todos()
+        if not self._require_loopback_origin():
+            return
+        row, reader = resolved
+        if (query.keys() - {"goal_id", "source_namespace", "agent_id", "q", "cursor"}
+                or any(len(items) != 1 for items in query.values())
+                or query.get("source_namespace") != [reader.source.namespace]):
+            self._send_error("Source identity changed; refresh the Goal.", status=409)
+            return
+        goal_id = values[0]
+        agent = query.get("agent_id", [""])[0]
+        search = query.get("q", [""])[0].strip().casefold()
+        try:
+            if len(search) > 256:
+                raise ValueError("history_search_too_long")
+            reader.registered_status(reader.source.goal_id)
+            def load():
+                payload = reader.source.read_completed_todos(reader.source.goal_id)
+                if payload.get("ok") is not True:
+                    raise ValueError("Source history unavailable")
+                return completed_todo_rows(payload, agent_id=agent, search=search)
+            page = self.server.completed_todo_pages.page(
+                scope=(reader.source.namespace, goal_id, agent, search),
+                cursor=query.get("cursor", [""])[0], load=load)
+            latest = linked_goal_source(self.server, goal_id)
+            if latest is None or latest[1].source.namespace != reader.source.namespace:
+                raise ValueError("Source identity changed")
+            self._send_json(page)
+        except (ValueError, TypeError, KeyError):
+            self._send_error("Source history changed; refresh the Goal.", status=409)
+        except (OSError, RuntimeError, subprocess.SubprocessError):
+            self._send_error("The original history is unavailable; retry after reconnecting.", status=503)
+
     def _todo_detail(self):
         import subprocess
         from urllib.parse import parse_qs, urlparse
@@ -52,7 +97,7 @@ class GoalSourceRequestMixin:
             return
         try:
             goal_id, todo_id = values[0], query["todo_id"][0]
-            item = reader.source.read_todo(goal_id, todo_id).get("todo")
+            item = reader.source.read_todo(reader.source.goal_id, todo_id).get("todo")
             if item is None or item.get("todo_id") != todo_id:
                 self._send_error("The Task is no longer available in this Goal.", status=404)
                 return
@@ -88,8 +133,13 @@ class GoalSourceRequestMixin:
                 ):
                     catalog.remove(parent_goal_id=body["parent_goal_id"], goal_id=body["goal_id"],
                                    namespace=body["source_namespace"])
-                elif set(body) == {"parent_goal_id", "source"} and isinstance(body["parent_goal_id"], str):
-                    catalog.update(parent_goal_id=body["parent_goal_id"], raw_source=body["source"])
+                elif ({"parent_goal_id", "source"} <= body.keys()
+                      and not body.keys() - {"parent_goal_id", "source", "workspace_goal_id"}
+                      and isinstance(body["parent_goal_id"], str)):
+                    if "workspace_goal_id" in body and not isinstance(body["workspace_goal_id"], str):
+                        raise ValueError("Use a workspace source Goal identity")
+                    catalog.update(parent_goal_id=body["parent_goal_id"], raw_source=body["source"],
+                                   workspace_goal_id=body.get("workspace_goal_id"))
                 else:
                     raise ValueError("Choose an existing parent and one source Goal")
             directory = workspace_goal_directory(load_registry(self.server.registry_path))

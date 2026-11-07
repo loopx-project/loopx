@@ -77,6 +77,36 @@ def _verify_goal_result_page(*, page, registry_path, runtime_root, goal_id):
             "unavailable_todo_ids": unavailable_todo_ids}
 
 
+def completed_todo_rows(payload, *, agent_id="", search=""):
+    """Existing display projection shared by local and linked native reads."""
+    ordered = sorted(enumerate(payload["todos"]), key=lambda pair: (str(pair[1].get("completed_at") or ""), pair[0]), reverse=True)
+    return [
+        {
+            "todo_id": item["todo_id"],
+            "text": str(item.get("text") or item.get("title") or ""),
+            "claimed_by": item.get("claimed_by"),
+            "evidence": item.get("evidence") or item.get("note") or None,
+            "priority": item.get("priority"),
+            "task_class": item.get("task_class"),
+            "done": item["done"],
+            "status": item["status"],
+            "task_domain": item.get("task_domain"),
+            "completed_at": item.get("completed_at"),
+            "resume_when": item.get("resume_when"),
+            "resume_ready": item.get("resume_ready"),
+            "resume_condition": item.get("resume_condition"),
+            "completion_validation_sha256": item.get("completion_validation_sha256"),
+            "completion_validation_revision": item.get("completion_validation_revision"),
+            "completion_validation_revision_history": item.get("completion_validation_revision_history") or [],
+        }
+        for _, item in ordered
+        if item.get("todo_id") and item.get("task_class") != "continuous_monitor"
+        and (not agent_id or item.get("claimed_by") == agent_id)
+        and (not search or search in str(item["todo_id"]).casefold()
+             or search in str(item.get("text") or item.get("title") or "").casefold())
+    ]
+
+
 class CompletedTodoPages:
     page_size = 40
     max_snapshots = 8
@@ -227,32 +257,7 @@ class CompletedTodoRequestMixin(ReportReviewsRequestMixin):
                     role="agent", status="done", read_scope="completed_history",
                     runtime_root_arg=runtime_root_arg,
                 )
-                ordered = sorted(enumerate(payload["todos"]), key=lambda pair: (str(pair[1].get("completed_at") or ""), pair[0]), reverse=True)
-                return [
-                    {
-                        "todo_id": item["todo_id"],
-                        "text": str(item.get("text") or item.get("title") or ""),
-                        "claimed_by": item.get("claimed_by"),
-                        "evidence": item.get("evidence") or item.get("note") or None,
-                        "priority": item.get("priority"),
-                        "task_class": item.get("task_class"),
-                        "done": item["done"],
-                        "status": item["status"],
-                        "task_domain": item.get("task_domain"),
-                        "completed_at": item.get("completed_at"),
-                        "resume_when": item.get("resume_when"),
-                        "resume_ready": item.get("resume_ready"),
-                        "resume_condition": item.get("resume_condition"),
-                        "completion_validation_sha256": item.get("completion_validation_sha256"),
-                        "completion_validation_revision": item.get("completion_validation_revision"),
-                        "completion_validation_revision_history": item.get("completion_validation_revision_history") or [],
-                    }
-                    for _, item in ordered
-                    if item.get("todo_id") and item.get("task_class") != "continuous_monitor"
-                    and (not agent_id or item.get("claimed_by") == agent_id)
-                    and (not search or search in str(item["todo_id"]).casefold()
-                         or search in str(item.get("text") or item.get("title") or "").casefold())
-                ]
+                return completed_todo_rows(payload, agent_id=agent_id, search=search)
 
             self._send_json(self.server.completed_todo_pages.page(
                 scope=(goal_id, agent_id, search), cursor=cursor, load=load,
