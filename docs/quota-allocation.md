@@ -872,11 +872,14 @@ When a visible Goal guard finds work that needs a Turn but has no Turn
 identity, `cli_channel.turn_binding_required` makes its guard the next action.
 Run that command before working on the selected Todo or replan obligation.
 Only the resulting admission can allow work or supply settlement commands.
+If the guard requires explicit Todo selection, its selection command includes
+the Turn binding so both can be qualified together.
 
 可见 Goal 的 guard 找到需要绑定 Turn 的工作时，若还没有 Turn 身份，
 `cli_channel.turn_binding_required` 表示下一步是执行它给出的 guard 命令。
 先完成这一步，再处理选中的 Todo 或重规划义务。后续准入结果才决定能否执行工作，
-并提供对应的结算命令。
+并提供对应的结算命令。若需要显式选择 Todo，选择命令会携带 Turn 参数，
+在一次调用中校验选择并绑定 Turn。
 
 Hosts that already support `--begin-turn` may combine it with `--todo-id` to
 qualify a known choice on the initial guard. Reuse the returned Turn identity

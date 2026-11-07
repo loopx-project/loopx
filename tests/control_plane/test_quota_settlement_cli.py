@@ -4828,6 +4828,37 @@ def test_begin_turn_rejects_a_non_receipt_runtime_profile(tmp_path: Path) -> Non
     )
 
 
+@pytest.mark.parametrize("profile", ["codex_app_ssh_goal", "codex_cli", "ark_managed_agent_goal"])
+def test_unbound_visible_goal_selection_binds_the_chosen_todo(tmp_path: Path, profile: str) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    _initialize_fixture_authority(project, runtime)
+    rc, preview = _run_cli(
+        registry_path, runtime, "quota", "should-run", "--runtime-profile", profile,
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+    )
+    assert rc == 0, preview
+    contract = preview["interaction_contract"]
+    assert contract["agent_channel"]["delivery_allowed"] is False
+    cli = contract["cli_channel"]
+    assert cli["selection_required"] is True
+    assert cli["spend_after_validation"] is False
+    assert not preview.get("heartbeat_receipt")
+
+    selection = cli["selection_command"]
+    command = (selection["route_prefix"] + " " + selection["command_args_template"]).replace(
+        "{todo_id}", ALTERNATIVE_TODO_ID,
+    ).replace("<unique-work-iteration-id-reuse-on-retry>", TURN_ID)
+    bound_rc, bound = _run_generated_cli(command, registry_path=registry_path)
+    assert bound_rc == 0, bound
+    assert bound["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
+    identity = bound["heartbeat_receipt"]["settlement_identity"]
+    assert identity["todo_id"] == ALTERNATIVE_TODO_ID
+    assert bound["interaction_contract"]["cli_channel"]["settlement_plan"]["identity"] == identity
+    assert _heartbeat_receipt_count(runtime, identity["turn_instance_id"]) == 1
+    assert _spend_run_count(runtime) == 0
+
+
 @pytest.mark.parametrize("profile", ["generic_cli", "outer_controller", "codex_cli"])
 def test_host_owned_turn_executes_projected_selection_and_replays_identity(
     tmp_path: Path, profile: str,
