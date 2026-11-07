@@ -102,8 +102,9 @@ def test_doctor_finishes_when_git_blocks(
 
 
 @pytest.mark.skipif(os.name != "posix", reason="core.fsmonitor needs a POSIX hook")
+@pytest.mark.parametrize("cleanup_error", [False, True])
 def test_a_blocked_query_takes_the_helpers_it_started(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cleanup_error: bool,
 ) -> None:
     """Git's own helpers are in its group, and the budget has to retire them.
 
@@ -127,9 +128,20 @@ def test_a_blocked_query_takes_the_helpers_it_started(
     )
 
     monkeypatch.setattr(doctor_git, "GIT_PROBE_TIMEOUT_SECONDS", 0.8)
+    cleanup_calls: list[float] = []
+    original_terminate = doctor_git.terminate_process_tree
+
+    def terminate(process, *, grace_seconds):
+        cleanup_calls.append(grace_seconds)
+        original_terminate(process, grace_seconds=grace_seconds)
+        if cleanup_error:
+            raise RuntimeError("fixture cleanup could not confirm retirement")
+
+    monkeypatch.setattr(doctor_git, "terminate_process_tree", terminate)
     started = time.monotonic()
     assert doctor_git._run_git(repo, "status", "--porcelain") is None
     assert time.monotonic() - started < 6
+    assert cleanup_calls == [0.2]
 
     retired = heartbeats.stat().st_size
     assert retired > 0, "the fixture hook never ran, so this proves nothing"

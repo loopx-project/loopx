@@ -35,6 +35,7 @@ const goalAcceptanceChecksSchema = z.object({
     outcome_id: z.string().optional(),
     revision: z.number().int().positive(), digest: z.string().min(1), objective: z.string(),
     scope: z.discriminatedUnion("kind", [
+      z.object({ kind: z.literal("goal") }).strict(),
       z.object({ kind: z.literal("all_advancement") }).strict(),
       z.object({ kind: z.literal("selected_work"), todo_ids: z.array(z.string().min(1)).min(1) }).strict(),
     ]).optional(),

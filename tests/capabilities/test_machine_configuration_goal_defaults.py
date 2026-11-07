@@ -423,6 +423,7 @@ def test_goal_stride_only_uses_live_review_interval(tmp_path: Path) -> None:
     })
     assert options == {
         "clear_execution_planning_horizon_goal": True,
+        "clear_execution_yardstick_enabled": True,
         "execution_stride_strategy": "evidence_conditioned_v1",
         "clear_execution_replan_after_turns": True,
         "clear_execution_replan_after_todos": True,
@@ -453,6 +454,7 @@ def test_goal_stride_only_uses_live_review_interval(tmp_path: Path) -> None:
         "count_unit": "completed_todos", "count": 2,
         "stride_strategy": "evidence_conditioned_v1",
         "planning_horizon_goal": True,
+        "yardstick_enabled": False,
     }
 
     machine_registry = build_builtin_machine_configuration_registry()
@@ -595,3 +597,83 @@ def test_stride_default_preserves_explicit_off_and_saved_legacy_configuration(tm
         assert projected["execution_profile"].get("stride_strategy", "off") == "off"
     legacy_goal = {"execution_profile": {"replan_after_effective_turns": 3}}
     assert apply_todo_replan_cadence_machine_default(legacy_goal, None) == legacy_goal
+
+
+def test_yardstick_inherits_independently_of_a_pinned_goal_cadence(tmp_path):
+    from loopx.capabilities.goal_inspection import inspect_goal_capabilities
+    from loopx.chat.goal_configuration_api import _goal_capability_options
+
+    _repo, registry_path, runtime_root = _fixture(tmp_path)
+    configure_goal(registry_path=registry_path, goal_id=GOAL_ID,
+                   execution_replan_after_turns=3, execute=True)
+    original = registry_path.read_bytes()
+    assert "yardstick_enabled" not in _history_goal(registry_path, runtime_root)["execution_profile"]
+    machine = _machine_configuration()
+    machine["namespaces"]["todo_replan_cadence"] = {
+        "schema_version": "todo_replan_cadence_machine_defaults_v2",
+        "count_unit": "effective_turns", "count": 5,
+        "stride_strategy": "evidence_conditioned_v1", "yardstick_enabled": True,
+    }
+    owner = build_builtin_machine_configuration_registry()
+    plan = configure_machine_configuration(runtime_root=runtime_root, registry=owner, configuration=machine)
+    configure_machine_configuration(runtime_root=runtime_root, registry=owner, configuration=machine,
+        execute=True, expected_plan_revision=plan["plan_revision"])
+    raw = json.loads(registry_path.read_text())["goals"][0]
+    effective = resolve_todo_replan_cadence_goal(raw, runtime_root)["execution_profile"]
+    assert effective["replan_after_effective_turns"] == 3
+    assert effective["yardstick_enabled"] is True
+    assert "stride_strategy" not in effective, "legacy cadence-only strategy semantics remain off"
+    assert registry_path.read_bytes() == original, "inheritance must not migrate stored Goal state"
+    projected = _history_goal(registry_path, runtime_root)
+    assert projected["execution_profile"]["yardstick_enabled"] is True
+    assert not (projected.get("explore_graph") or {}).get("enabled"), "preference never enables Explore"
+
+    def readback():
+        inspection = inspect_goal_capabilities(registry_path=registry_path, runtime_root=runtime_root,
+            goal_id=GOAL_ID)["configuration"]["capability_catalog"]["capabilities"]
+        return next(x for x in inspection if x["capability_id"] == "todo_replan_cadence")
+    assert readback()["effective_configuration"]["configuration"]["yardstick_enabled"] is True
+    for enabled in (False, True):
+        options = _goal_capability_options("todo_replan_cadence", {
+            "count_unit": "effective_turns", "count": 3, "yardstick_enabled": enabled})
+        configure_goal(registry_path=registry_path, goal_id=GOAL_ID, execute=True, **options)
+        assert _history_goal(registry_path, runtime_root)["execution_profile"]["yardstick_enabled"] is enabled
+        entry = readback()
+        assert entry["current"]["yardstick_enabled"] is enabled
+        assert entry["effective_configuration"]["configuration"]["yardstick_enabled"] is enabled
+    configure_goal(registry_path=registry_path, goal_id=GOAL_ID,
+                   clear_execution_yardstick_enabled=True, execute=True)
+    assert readback()["effective_configuration"]["configuration"]["yardstick_enabled"] is True
+    assert "yardstick_enabled" not in readback()["current"]
+
+
+@pytest.mark.parametrize("invalid", [None, 0, 1, "false", "true", [], {}])
+def test_yardstick_rejects_non_boolean_at_machine_goal_and_profile_boundaries(invalid, tmp_path):
+    from loopx.execution_profile import compact_execution_profile
+    from loopx.chat.goal_configuration_api import _goal_capability_options
+
+    with pytest.raises(ValueError, match="yardstick_enabled"):
+        compact_execution_profile({"yardstick_enabled": invalid})
+    with pytest.raises(ValueError, match="yardstick_enabled"):
+        _goal_capability_options("todo_replan_cadence", {"yardstick_enabled": invalid})
+    with pytest.raises(ValueError, match="yardstick_enabled"):
+        normalize_todo_replan_cadence_machine_defaults({
+            "schema_version": "todo_replan_cadence_machine_defaults_v2",
+            "count_unit": "effective_turns", "count": 6,
+            "stride_strategy": "off", "yardstick_enabled": invalid})
+
+
+@pytest.mark.parametrize("version", [0, 1, 2])
+def test_legacy_cadence_keeps_yardstick_absent_and_default_off(version):
+    from loopx.capabilities.todo_replan_cadence.machine_defaults import apply_todo_replan_cadence_machine_default
+
+    legacy = {"schema_version": f"todo_replan_cadence_machine_defaults_v{version}"}
+    legacy.update({"completed_todos": 2} if version == 0 else {"count_unit": "effective_turns", "count": 6})
+    if version == 2:
+        legacy["stride_strategy"] = "off"
+    assert normalize_todo_replan_cadence_machine_defaults(legacy) == legacy
+    machine = {"schema_version": "loopx_machine_configuration_v0", "namespaces": {"todo_replan_cadence": legacy}}
+    assert "yardstick_enabled" not in apply_todo_replan_cadence_machine_default({}, machine)["execution_profile"]
+    if version < 2:
+        with pytest.raises(ValueError):
+            normalize_todo_replan_cadence_machine_defaults({**legacy, "yardstick_enabled": True})

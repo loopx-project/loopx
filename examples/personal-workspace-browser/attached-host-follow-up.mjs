@@ -231,6 +231,50 @@ export const attachedHostFollowUpScenario = {
       await recovery.getByRole("button", {name: "清除草稿", exact: true}).click();
       await recovery.waitFor({state: "hidden"});
       if (posts.length !== 2) throw new Error("Reading or clearing retained edits sent another Turn");
+      // Reconnect can miss the entire execution of a fast queued follow-up.
+      // Queue consumption must read its original answer even without a new
+      // observed active Turn or any live completion event.
+      await page.getByRole("navigation", {name: "Goal 视图"}).getByRole("button", {name: /^(Chat|对话)$/}).click();
+      await composer.fill("继续处理下一条，完成后在这里返回结果");
+      await sendButton.click();
+      await page.locator(".personal-conversation-queue li").filter({hasText: "继续处理下一条"}).waitFor();
+      await composer.fill("尚未发送的独立草稿");
+      const runtime = page.__loopxRuntime;
+      const reply = "快速完成的排队回复，无需重新打开会话。";
+      runtime.messages.get(attachedSessionId).push({message_id: "fast-queued-answer", turn_id: "turn-queued-3",
+        role: "agent", text: reply, created_at: "2026-08-13T01:00:04Z"});
+      runtime.sessions.set(attachedSessionId, {...runtime.sessions.get(attachedSessionId), active_turn_id: null, status: "ready"});
+      runtime.queuedTurns.set(attachedSessionId, []);
+      await page.getByText(reply, {exact: true}).waitFor({timeout: 15_000});
+      if (await page.getByText(reply, {exact: true}).count() !== 1 || posts.length !== 3
+          || await composer.inputValue() !== "尚未发送的独立草稿") {
+        throw new Error("Reading a consumed queue duplicated execution/replies or replaced unsent input");
+      }
+      // Reload retires optimistic placeholders and their SSE subscriptions.
+      // The queue still owns observation when its entire execution is missed.
+      await page.reload();
+      await page.getByText(reply, {exact: true}).waitFor();
+      await composer.fill("刷新后仍在原会话接收这条队列的结果");
+      await sendButton.click();
+      await page.locator(".personal-conversation-queue li").filter({hasText: "刷新后仍在原会话"}).waitFor();
+      await composer.fill("刷新后仍保留的未发送草稿");
+      await page.reload();
+      await page.locator(".personal-conversation-queue li").filter({hasText: "刷新后仍在原会话"}).waitFor();
+      const recoveredReply = "刷新后快速完成的原队列回复。";
+      // The queue can become idle before the native transcript write is
+      // visible. Its later revision must recover an answer with no remaining
+      // queue transition, optimistic row, SSE or user navigation.
+      runtime.queuedTurns.set(attachedSessionId, []);
+      await page.reload();
+      await page.getByText(reply, {exact: true}).waitFor();
+      await page.locator(".personal-conversation-queue").waitFor({state: "hidden"});
+      runtime.messages.get(attachedSessionId).push({message_id: "recovered-queued-answer", turn_id: "turn-queued-4",
+        role: "agent", text: recoveredReply, created_at: "2026-08-13T01:00:05Z"});
+      await page.getByText(recoveredReply, {exact: true}).waitFor({timeout: 15_000});
+      if (await page.getByText(recoveredReply, {exact: true}).count() !== 1 || posts.length !== 4
+          || await composer.inputValue() !== "刷新后仍保留的未发送草稿") {
+        throw new Error("Queue recovery requires a result readback without replay or draft loss");
+      }
     } finally {
       for (const route of heldStreams.splice(0)) await route.abort().catch(() => {});
       await context.close();

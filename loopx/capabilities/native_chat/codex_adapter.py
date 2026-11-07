@@ -67,6 +67,14 @@ class NativeHistoryRestoration:
         return bool(is_manager_channel(self.session.get("channel_id")) and self.session.get("upstream_mode") != UPSTREAM_MODE
             and (self.session.get("manager_context_version") != MANAGER_CONTEXT_VERSION or refresh or self.session.get("answer_review") is True))
 
+    @staticmethod
+    def manager_profile_changed(session: Mapping[str, Any], manager_runtime: Mapping[str, Any] | None) -> bool:
+        """Use the same runtime fields when deciding native context restoration."""
+        from ..manager_runtime import manager_runtime_session_fields
+        return bool(manager_runtime is not None
+            and (session.get("manager_runtime_profile") is not None or manager_runtime.get("runtime_profile") != "restricted")
+            and any(session.get(key) != value for key, value in manager_runtime_session_fields(manager_runtime).items()))
+
     def provider_migration(self, stored: list[dict[str, Any]]) -> bool:
         from ...chat_codex_goal import UPSTREAM_MODE
         return bool(self.session.get("agent_id") == "codex" and self.session.get("upstream_mode") not in {"chat", UPSTREAM_MODE}
@@ -378,6 +386,67 @@ def completed_work_readback(session: CodexChatAgentSession, turn_id: str, *,
         return None
 
 
+def completed_result_review_readback(session: CodexChatAgentSession, turn_id: str, *,
+                                     known_turn_ids: set[str]) -> dict[str, Any] | None:
+    """Read a closed partial result, never certify its effects for execution.
+
+    A failed command (including a signal exit) is evidence to inspect, not
+    permission to retry. Only the existing restricted result-review route may
+    consume this observation. Later inputs must still belong to Core.
+    """
+    from ...chat import parse_agent_response
+
+    deadline = time.monotonic() + min(session.response_timeout_sec, 5.0)
+    try:
+        def turns() -> list[dict[str, Any]]:
+            return list(session._control_items("thread/turns/list", {
+                "sortDirection": "desc", "itemsView": "summary",
+            }, deadline))
+
+        inventory = turns()
+        ids = [row.get("id") for row in inventory]
+        target = next((row for row in inventory if row.get("id") == turn_id), None)
+        if (target is None or target.get("status") != "completed"
+                or any(not isinstance(ref, str) or not ref for ref in ids) or len(set(ids)) != len(ids)
+                or any(row.get("status") not in {"completed", "failed", "interrupted"} for row in inventory)
+                or any(ref not in known_turn_ids for ref in ids[:ids.index(turn_id)])):
+            return None
+        items = list(session._control_items("thread/items/list", {"turnId": turn_id}, deadline))
+        seen, finals, users = set(), [], 0
+        for row in items:
+            item = row.get("item")
+            if (row.get("turnId") != turn_id or not isinstance(item, dict)
+                    or not isinstance(item.get("id"), str) or not item["id"] or item["id"] in seen):
+                return None
+            seen.add(item["id"])
+            kind = item.get("type")
+            if kind == "userMessage":
+                users += 1
+            elif kind == "agentMessage":
+                if item.get("phase") == "final_answer" and isinstance(item.get("text"), str):
+                    finals.append(item["text"])
+                elif item.get("phase") != "commentary":
+                    return None
+            elif kind in {"commandExecution", "fileChange", "mcpToolCall"}:
+                if item.get("status") not in {"completed", "failed", "declined"}:
+                    return None
+            elif kind not in _READ_ONLY_ITEM_TYPES:
+                return None
+        if users != 1 or len(finals) != 1:
+            return None
+        work = parse_agent_response(finals[0], protected_paths=[session.work_dir]).get("unfinished_work")
+        if (work is None or turns() != inventory
+                or list(session._control_items("thread/items/list", {"turnId": turn_id}, deadline)) != items):
+            return None
+        return {"thread_id": session.thread_id, "turn_id": turn_id,
+            "read_only_review": True, "completed_result_review": True,
+            "unfinished_work": work, "visible_response": finals[0],
+            "native_inventory_sha256": hashlib.sha256(json.dumps([target, items],
+                sort_keys=True, separators=(",", ":")).encode()).hexdigest()}
+    except (CodexChatAgentError, OSError, TypeError, ValueError):
+        return None
+
+
 def interrupted_result_readback(session: CodexChatAgentSession, turn_id: str) -> dict[str, Any] | None:
     """Prove a stable interrupted inventory, not that its effects are safe to retry.
 
@@ -449,10 +518,34 @@ class CodexAppServerAdapter:
             return None
         return completed_work_readback(self.session, turn_id, known_turn_ids=known_turn_ids)
 
+    def answer_review_replaceable(self) -> bool:
+        """Observe whether replacing this live transport would abandon work.
+
+        This is not proof of settled business effects and never resumes a
+        thread. Both observations use the original owning process.
+        """
+        if not self.healthcheck():
+            return False
+        deadline = time.monotonic() + 5
+        try:
+            def inventory():
+                return list(self.session._control_items("thread/turns/list",
+                    {"sortDirection": "desc", "itemsView": "summary"}, deadline))
+            turns = inventory()
+            ids = [row.get("id") for row in turns]
+            return (bool(turns) and all(isinstance(ref, str) and ref for ref in ids)
+                and len(ids) == len(set(ids))
+                and all(row.get("status") in {"completed", "failed", "interrupted"} for row in turns)
+                and not self.session._background_terminals(deadline) and inventory() == turns)
+        except (RuntimeError, ValueError, OSError):
+            return False
+
     @staticmethod
     def failed_request_observation(*, codex_bin: str, codex_home: Path,
                                    thread_ids: list[str], turn_id: str,
                                    read_only_review: bool = False,
+                                   completed_result_review: bool = False,
+                                   known_turn_ids: set[str] | None = None,
                                    work_dir: Path | None = None,
                                    model_auth_home: Path | None = None) -> dict[str, Any] | None:
         """Read persisted native metadata/items; create no native conversation.
@@ -463,6 +556,8 @@ class CodexAppServerAdapter:
         """
         from ...chat_agent import _reader
 
+        if completed_result_review and not read_only_review:
+            raise ValueError("a completed result observation permits only read-only review")
         process = subprocess.Popen([codex_bin, "app-server", "--listen", "stdio://"],
             cwd=str(codex_home), env={**os.environ, "CODEX_HOME": str(codex_home)},
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
@@ -478,8 +573,11 @@ class CodexAppServerAdapter:
             for thread_id in dict.fromkeys(thread_ids):
                 native.thread_id = thread_id
                 native.response_timeout_sec = max(.01, deadline - time.monotonic())
-                reader = interrupted_result_readback if read_only_review else failed_request_readback
-                proof = reader(native, turn_id)
+                if completed_result_review:
+                    proof = completed_result_review_readback(native, turn_id, known_turn_ids=known_turn_ids or set())
+                else:
+                    reader = interrupted_result_readback if read_only_review else failed_request_readback
+                    proof = reader(native, turn_id)
                 if proof is not None:
                     if proof.get("codex_error_info") == "usageLimitExceeded":
                         # Reuse the optional provider's TS availability owner;
