@@ -53,7 +53,7 @@ def run_cli(
     )
 
 
-def load_bootstrap(packet: dict, cli_bin: str, home: Path) -> dict:
+def load_bootstrap(packet: dict, cli_bin: str, home: Path, *, env: dict[str, str] | None = None) -> dict:
     assert packet["ok"] and packet["bootstrap"]
     assert packet["interface_budget"]["within_budget"]
     loader = shlex.split(packet["task_body"].split("```sh\n", 1)[1].split("\n```", 1)[0])
@@ -61,7 +61,7 @@ def load_bootstrap(packet: dict, cli_bin: str, home: Path) -> dict:
     loader[0] = cli_bin
     result = subprocess.run(
         loader,
-        env={**os.environ, "HOME": str(home), "LOOPX_PYTHON": sys.executable},
+        env=env if env is not None else {**os.environ, "HOME": str(home), "LOOPX_PYTHON": sys.executable},
         check=False,
         text=True,
         capture_output=True,
@@ -69,6 +69,27 @@ def load_bootstrap(packet: dict, cli_bin: str, home: Path) -> dict:
     )
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout)
+
+
+def read_native_quota(packet: dict, cli_bin: str, *, cwd: Path, env: dict[str, str]) -> dict:
+    """Read back the returned current capture; this is not model-retention proof."""
+    command = packet["recovery"]["command"]
+    raw = bytearray()
+    while True:
+        argv = shlex.split(command)
+        if Path(argv[0]).name == "loopx":
+            argv[0] = cli_bin
+        result = subprocess.run(argv, cwd=cwd, env=env, check=True,
+            text=True, capture_output=True, timeout=120)
+        page = json.loads(result.stdout)
+        assert page["ok"] and page["offset"] == len(raw), page
+        previous = len(raw)
+        raw.extend(page["content"].encode())
+        if page["eof"]:
+            break
+        assert len(raw) > previous and page["next_offset"] == len(raw), page
+        command = page["next_command"]
+    return json.loads(raw)
 
 
 def main() -> int:
@@ -459,10 +480,14 @@ def main() -> int:
         )
         assert "/goal <task_body>" in app_ssh_activation["host_mutation"]["host_command"]
 
+        app_ssh_env = {**os.environ, "HOME": str(home), "LOOPX_PYTHON": sys.executable}
+        # This fresh synthetic host tests the absent-preference default, rather
+        # than an enclosing benchmark worker's explicitly disabled treatment.
+        app_ssh_env.pop("LOOPX_CONTEXT_DELIVERY", None)
         app_ssh_prompt_run = subprocess.run(
             shlex.split(app_ssh_activation["activation_input_command"]),
             cwd=REPO_ROOT,
-            env={**os.environ, "HOME": str(home), "LOOPX_PYTHON": sys.executable},
+            env=app_ssh_env,
             check=True,
             text=True,
             capture_output=True,
@@ -470,7 +495,8 @@ def main() -> int:
         )
         app_ssh_prompt = json.loads(app_ssh_prompt_run.stdout)
         assert app_ssh_prompt["ok"] is True, app_ssh_prompt
-        app_ssh_prompt = load_bootstrap(app_ssh_prompt, cli_bin, home)
+        app_ssh_prompt = load_bootstrap(app_ssh_prompt, cli_bin, home, env=app_ssh_env)
+        assert app_ssh_prompt["context_delivery"]["enabled"] is True, app_ssh_prompt
         assert app_ssh_prompt["interface_budget"]["mode"] == "visible_goal", app_ssh_prompt
         assert app_ssh_prompt["interface_budget"]["max_chars"] == 4_000, app_ssh_prompt
         assert app_ssh_prompt["interface_budget"]["within_budget"] is True, app_ssh_prompt
@@ -494,13 +520,13 @@ def main() -> int:
         ) is False
         assert "host_action=" not in app_ssh_prompt["task_body"], app_ssh_prompt
         assert "automation_update stop" not in app_ssh_prompt["task_body"], app_ssh_prompt
-        assert "call `update_goal` with `status=blocked`" in (
+        assert "Third identical blocked turn without progress: update_goal(status=blocked)" in (
             app_ssh_prompt["task_body"]
         ), app_ssh_prompt
-        assert "Only user `/goal resume`" in (
+        assert "no spend/LoopX completion" in (
             app_ssh_prompt["task_body"]
         ), app_ssh_prompt
-        assert "reactivates it; rerun quota after resume" in (
+        assert "Only user `/goal resume` reactivates; then rerun quota" in (
             app_ssh_prompt["task_body"]
         ), app_ssh_prompt
         app_ssh_quota_argv = shlex.split(app_ssh_prompt["quota_guard_command"])
@@ -512,13 +538,15 @@ def main() -> int:
         app_ssh_quota_run = subprocess.run(
             app_ssh_quota_argv,
             cwd=project,
-            env={**os.environ, "HOME": str(home), "LOOPX_PYTHON": sys.executable},
+            env=app_ssh_env,
             check=True,
             text=True,
             capture_output=True,
             timeout=120,
         )
-        app_ssh_quota = json.loads(app_ssh_quota_run.stdout)
+        app_ssh_navigation = json.loads(app_ssh_quota_run.stdout)
+        assert app_ssh_navigation["mode"] == "full", app_ssh_navigation
+        app_ssh_quota = read_native_quota(app_ssh_navigation, cli_bin, cwd=project, env=app_ssh_env)
         execution_context = app_ssh_quota["scheduler_hint"]["execution_context"]
         assert execution_context["source"] == (
             "runtime_profile:codex_app_ssh_goal"

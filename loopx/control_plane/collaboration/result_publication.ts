@@ -17,6 +17,41 @@ function decisionKey(revision: number): string {
 }
 const UPDATE_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,119}$/;
 
+/** Receiver-authored scope on an immutable result, not a completion verdict or scheduler. */
+export function resultRemainingWork(value: unknown): JsonObject | null {
+  if (value === undefined || value === null) return null;
+  const work = requireJsonObject(value, "remaining work");
+  if (Object.keys(work).sort().join(",") !== "resume_when,summary") {
+    throw new EffectRuntimeRequestError("remaining work needs a summary and resume_when only");
+  }
+  const result: JsonObject = {};
+  for (const key of ["summary", "resume_when"]) {
+    const text = work[key];
+    if (typeof text !== "string" || !text.trim() || [...text].length > 600
+        || /[\uD800-\uDFFF]/u.test(text)) {
+      throw new EffectRuntimeRequestError("remaining work fields must contain 1-600 Unicode characters");
+    }
+    result[key] = text.trim();
+  }
+  return result;
+}
+
+/** Persisted formatting only; it never changes result lifecycle or authority. */
+export function usesReaderReturnFormat(reply: JsonObject): boolean {
+  if (reply.return_format_version !== undefined && reply.return_format_version !== 2) {
+    throw new EffectRuntimeRequestError("unsupported collaboration return format");
+  }
+  return reply.return_format_version === 2;
+}
+
+/** Keep published legacy text stable, including verification after response loss. */
+export function collaborationResultText(reply: JsonObject): string {
+  const readerFormat = usesReaderReturnFormat(reply);
+  const work = resultRemainingWork(reply.remaining_work);
+  return String(reply.text) + (work ? readerFormat ? `\n\n${work.summary}\n\n${work.resume_when}`
+    : `\n\n仍需完成 / Remaining work: ${work.summary}\n继续条件 / Continue when: ${work.resume_when}` : "");
+}
+
 export function resultAttachmentRefs(params: JsonObject): JsonObject {
   if (params.workspace_current === false) {
     throw new EffectRuntimeRequestError("result file workspace Goal instance changed");
@@ -63,6 +98,11 @@ export function collaborationResultObservations(request: JsonObject, observation
   const results = observations.map((item) => {
     const record = requireJsonObject(item, "result observation");
     const value = requireJsonObject(record.value, "result receipt");
+    usesReaderReturnFormat(value);
+    const remainingWork = resultRemainingWork(value.remaining_work);
+    if (remainingWork && value.phase !== "conclusion") {
+      throw new EffectRuntimeRequestError("remaining work requires a conclusion");
+    }
     const historical = (request.request_control !== undefined || value.request_revision !== undefined) ? requestRevisionReceiptContext(request, value.request_revision, legacyAssessment) : null;
     if (typeof record.key !== "string" || !sameRequest(value, request, true)
         || value.decision !== (historical === null ? decision : (historical.assessment as JsonObject | null)?.decision)
@@ -73,13 +113,16 @@ export function collaborationResultObservations(request: JsonObject, observation
       throw new EffectRuntimeRequestError("result receipt identity or content conflict");
     }
     return { key: record.key, value, textSha256: record.text_sha256,
-      attachments: resultAttachments(value.attachments) };
+      attachments: resultAttachments(value.attachments), remainingWork };
   });
   if (new Set(results.map((r) => r.key)).size !== results.length) {
     throw new EffectRuntimeRequestError("duplicate result observation");
   }
   let previous = "conclusion";
   const updates = results.filter((r) => UPDATE_KEY.test(r.key)).sort((a, b) => a.key.localeCompare(b.key));
+  if (updates.length && !results.some(result => result.key === "conclusion")) {
+    throw new EffectRuntimeRequestError("initial conclusion is required");
+  }
   const ids = new Set<string>();
   for (const [index, receipt] of updates.entries()) {
     if (receipt.key !== `conclusion-${String(index + 1).padStart(8, "0")}`
@@ -112,6 +155,10 @@ export function collaborationResultObservations(request: JsonObject, observation
 export function planCollaborationResult(params: JsonObject): JsonObject {
   const request = requireJsonObject(params.request, "result request");
   const phase = requireStringLiteral(params.phase, ["decision", "conclusion"], "result phase");
+  const remainingWork = resultRemainingWork(params.remaining_work);
+  if (remainingWork && phase !== "conclusion") {
+    throw new EffectRuntimeRequestError("remaining work requires a conclusion");
+  }
   const legacyOriginal = request.schema_version === "loopx_manager_context_entry_v1"
     && request.request_control === undefined;
   if (legacyOriginal && params.request_revision != null && params.request_revision !== 1) {
@@ -131,7 +178,6 @@ export function planCollaborationResult(params: JsonObject): JsonObject {
   const updates = results.filter((r) => UPDATE_KEY.test(r.key)).sort((a, b) => a.key.localeCompare(b.key));
   const previous = updates.at(-1)?.key ?? "conclusion";
   const conclusion = results.find((r) => r.key === "conclusion");
-  if (updates.length && !conclusion) throw new EffectRuntimeRequestError("initial conclusion is required");
   const revision = context?.revision ?? 1;
   const primaryUpdate = `request-revision-${revision}`;
   const initialForRevision = conclusion && (conclusion.value.request_revision ?? 1) === revision;
@@ -148,14 +194,23 @@ export function planCollaborationResult(params: JsonObject): JsonObject {
   const value: JsonObject = Object.fromEntries(["request_id", "goal_id", "agent_id", "source_id", "goal_ref", "recipient", "requester"]
     .filter((key) => request[key] !== undefined).map((key) => [key, request[key]]));
   Object.assign(value, { phase, decision, text: params.text.trim() });
+  // An old publication keeps its exact renderer on replay; only a new result
+  // or explicit later update adopts the current format. No historical rewrite.
+  const returnFormatVersion = old ? old.value.return_format_version : 2;
+  if (returnFormatVersion !== undefined) value.return_format_version = returnFormatVersion;
   if (context !== null) Object.assign(value, {request_revision: context.revision, request_revision_digest: context.revision_digest});
   if (attachments.length) value.attachments = attachments;
+  if (remainingWork) value.remaining_work = remainingWork;
+  if ([...collaborationResultText(value)].length > 20000) {
+    throw new EffectRuntimeRequestError("reply and remaining work must fit the existing 20000-character result budget");
+  }
   const key = old?.key ?? (isUpdate ? `conclusion-${String(updates.length + 1).padStart(8, "0")}` : initialKey);
   if (phase === "decision" && key !== phase) value.result_key = key;
   if (isUpdate) Object.assign(value, { result_key: key, update_id: updateId, previous_result_key: old?.value.previous_result_key ?? previous });
   if (old && (old.textSha256 !== createHash("sha256").update(String(value.text)).digest("hex") || old.value.phase !== phase
       || (old.value.request_revision ?? 1) !== revision
-      || JSON.stringify(old.attachments) !== JSON.stringify(attachments))) {
+      || JSON.stringify(old.attachments) !== JSON.stringify(attachments)
+      || JSON.stringify(old.remainingWork) !== JSON.stringify(remainingWork))) {
     throw new EffectRuntimeRequestError("reply already committed; conflicting replacement rejected; use a stable update_id for a later conclusion");
   }
   const interimSuperseded = phase === "decision" && results.some(r =>

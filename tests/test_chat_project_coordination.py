@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from loopx.chat_coordination import PROJECT_CONTEXT_VERSION
+from loopx.chat.coordination import PROJECT_CONTEXT_VERSION
 from loopx.chat_agent import CodexChatAgentSession, CodexChatAgentError
 from loopx.chat_manager_context import collect_manager_turn_context
 from loopx.chat_runtime import ChatRuntimeController, CodexAppServerAdapter

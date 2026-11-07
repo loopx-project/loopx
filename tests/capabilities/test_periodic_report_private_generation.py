@@ -163,10 +163,12 @@ def _prepared_report(tmp_path: Path):
     return root, window, response
 
 
-def _source_prepared_report(tmp_path: Path, *, local: bool):
+def _source_prepared_report(tmp_path: Path, *, local: bool, evidence=None):
     _, window, response = _prepared_report(tmp_path / "template")
     root = tmp_path / "bound-runtime"
     source = {"rows": [{"todo_id": "todo_source", "text": "保留原始证据与未完成工作", "status": "open"}]}
+    if evidence is not None:
+        source["rows"][0]["evidence"] = evidence
     source["source_revision"] = _canonical_digest(source)
 
     def read(arguments):
@@ -193,6 +195,55 @@ def _source_prepared_report(tmp_path: Path, *, local: bool):
     return root, window, response, prepare
 
 
+@pytest.mark.parametrize("legacy", [False, True])
+def test_local_task_citation_reaches_frozen_artifacts_without_rewriting_legacy(tmp_path, legacy):
+    reference = "https://example.org/results/42"
+    root, window, response, prepare = _source_prepared_report(tmp_path, local=True, evidence=reference)
+    folder = attempt_directory(root, window)
+    request = json.loads((folder / "editorial-request.json").read_text())
+    if legacy:
+        source = json.loads((folder / "source.json").read_text())
+        source["source_fact_binding"] = request["source_fact_binding"] = "frozen_source_v1"
+        request["facts"] = [fact for fact in request["facts"] if fact["source_ref"] != reference]
+        request["source_artifact_sha256"] = _canonical_digest(source)
+        request["request_digest"] = _canonical_digest({k: v for k, v in request.items() if k != "request_digest"})
+        atomic_write_json(folder / "source.json", source)
+        atomic_write_json(folder / "editorial-request.json", request)
+    citations = [fact for fact in request["facts"] if fact["source_ref"] == reference]
+    assert len(citations) == (0 if legacy else 1)
+    if not legacy:
+        assert citations[0]["status"] == "unverified"
+        assert "todo:todo_source" in citations[0]["summary"]
+        assert "可达性和公开许可均未核验" in citations[0]["summary"]
+    response["request_digest"] = request["request_digest"]
+    for section in response["sections"]:
+        for item in section["items"]:
+            item["source_ref"] = request["facts"][0]["source_ref"] if legacy else reference
+    receipt = freeze_private_report(root=root, window=window, response=response)
+    before = {path.name: path.read_bytes() for path in folder.iterdir() if path.suffix in {".json", ".md"}}
+    assert validate_private_generation(folder) == receipt
+    assert prepare() == request
+    assert {name: (folder / name).read_bytes() for name in before} == before
+    bundle = json.loads((folder / "generation-bundle.json").read_text())
+    assert all((reference in artifact["content"]) != legacy for artifact in bundle["artifacts"])
+
+
+@pytest.mark.parametrize("reference", [
+    "/Users/fixture/private.txt", "file:///tmp/private", "../.local/private.json",
+    "https://user:pass@example.org/file", "https://example.org/file?key=hidden",
+    "https://docs" + ".internal/design", "javascript:alert", "https://example.org/\nprivate",
+    "https://example.org:invalid/file", "https://#missing-host",
+    "See https://example.org/results/42", "https://example.org/one | https://example.org/two",
+])
+def test_local_task_citation_does_not_guess_or_promote_unsafe_evidence(tmp_path, reference):
+    root, window, response, prepare = _source_prepared_report(tmp_path, local=True, evidence=reference)
+    request = prepare()
+    assert {fact["source_ref"] for fact in request["facts"]} == {
+        request["source_revision"], "todo:todo_source"}
+    receipt = freeze_private_report(root=root, window=window, response=response)
+    assert validate_private_generation(attempt_directory(root, window)) == receipt
+
+
 @pytest.mark.parametrize("local", [False, True])
 def test_source_bound_report_keeps_complete_facts_and_original_artifacts(tmp_path, local):
     root, window, response, prepare = _source_prepared_report(tmp_path, local=local)
@@ -212,7 +263,7 @@ def test_source_bound_report_keeps_complete_facts_and_original_artifacts(tmp_pat
 def test_recorded_citation_reaches_frozen_facts_and_both_artifacts_without_public_access_claim(
         tmp_path, legacy):
     from loopx.capabilities.manager_context.report_source import collect_manager_report_source
-    from loopx.chat_manager_history import _recorded_details
+    from loopx.chat.manager_history import _recorded_details
 
     root, window, response = _prepared_report(tmp_path / "template")
     root = tmp_path / "citation-runtime"
@@ -366,8 +417,10 @@ def test_private_report_artifacts_use_canonical_utf8_on_windows_text_mode(
 
 
 @pytest.mark.parametrize("tamper", [None, "report", "html", "source", "response"])
-@pytest.mark.parametrize("legacy_links", [False, True, None])
-def test_frozen_report_keeps_prior_presentations_across_renderer_upgrade(tmp_path, monkeypatch, tamper, legacy_links):
+@pytest.mark.parametrize("legacy_links,bounded_masthead", [(False, False), (True, False), (None, False), (None, True)])
+def test_frozen_report_keeps_prior_presentations_across_renderer_upgrade(
+    tmp_path, monkeypatch, tamper, legacy_links, bounded_masthead
+):
     from loopx.presentation.renderers import periodic_report_html as html
     from loopx.presentation.renderers import periodic_report_markdown as markdown
 
@@ -381,15 +434,18 @@ def test_frozen_report_keeps_prior_presentations_across_renderer_upgrade(tmp_pat
 
     prior_markdown = markdown.render_periodic_report_markdown
     prior_html = html.render_periodic_report_html
-    # Seed through the real freezer, retaining all three shipped layouts.
+    # Seed through the real freezer, retaining all four shipped layouts.
     # The old source rules remain independently specified, not inferred from
     # the new link-eligibility helper or the validator's selected fallback.
     with monkeypatch.context() as previous:
-        # Independently reproduce the shipped CSS. Its automatic side column
-        # predates bounded prose highlights in all three presentations.
-        previous.setattr(html, "_CSS", html._CSS.replace(
-            "grid-template-columns: minmax(0, 1fr) minmax(240px, 360px)",
-            "grid-template-columns: minmax(0, 1fr) auto", 1))
+        # The shipped styles lacked highlight wrapping. The three earlier
+        # presentations also used an automatic side column.
+        css = html._CSS.replace("\n  overflow-wrap: anywhere;", "", 1)
+        if not bounded_masthead:
+            css = css.replace(
+                "grid-template-columns: minmax(0, 1fr) minmax(240px, 360px)",
+                "grid-template-columns: minmax(0, 1fr) auto", 1)
+        previous.setattr(html, "_CSS", css)
         if legacy_links is not None:
             previous.setattr(markdown, "render_periodic_report_markdown", lambda document, **kwargs:
                 prior_markdown(document, **{**kwargs, "_legacy_layout": True}))

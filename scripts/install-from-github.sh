@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+repo_explicit="${LOOPX_REPO:+1}"
 repo="${LOOPX_REPO:-loopx-project/loopx}"
+ref_explicit="${LOOPX_REF:+1}"
 ref="${LOOPX_REF:-stable}"
 archive_url_override="${LOOPX_ARCHIVE_URL:-}"
 archive_url="$archive_url_override"
@@ -37,6 +39,19 @@ cleanup() {
   rm -rf "$tmp_dir"
 }
 trap cleanup EXIT
+
+# Default snapshots use a verified, prebuilt runtime. Developer source builds
+# remain explicit; a missing release never silently starts npm or a whole-repo
+# download. The bootstrap is published beside this script over the same TLS
+# origin. Its stdlib transport preserves the operator's proxy environment.
+if [[ "${LOOPX_BUILD_FROM_SOURCE:-0}" != "1" && -z "$archive_url_override" ]]; then
+  export LOOPX_UPDATE_REF_EXPLICIT="${ref_explicit:-0}"
+  export LOOPX_UPDATE_REPO_EXPLICIT="${repo_explicit:-0}"
+  curl -fsSL --connect-timeout 10 --max-time 45 --retry 2 --retry-max-time 60 \
+    https://loopx-project.github.io/loopx/update-artifact.py -o "$tmp_dir/update-artifact.py"
+  "$python_bin" "$tmp_dir/update-artifact.py"
+  exit $?
+fi
 
 if [[ -z "$archive_url" ]]; then
   if [[ ! "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
@@ -125,6 +140,29 @@ archive_attempts_completed=0
 archive_downloaded=0
 last_curl_code=28
 last_http_status=0
+download_source_archive() {
+  local curl_pid curl_result
+  local -a arguments=(--silent --show-error --fail --location
+    --connect-timeout 10 --max-time "$attempt_timeout"
+    --continue-at - --write-out '%{http_code}' "$archive_url" -o "$archive_path")
+  if [[ "${LOOPX_UPDATE_EVENTS:-0}" != "1" ]]; then
+    curl "${arguments[@]}"
+    return $?
+  fi
+  curl "${arguments[@]}" >"$tmp_dir/http-status" &
+  curl_pid=$!
+  while kill -0 "$curl_pid" 2>/dev/null; do
+    if [[ -f "$archive_path" ]]; then
+      local received
+      received="$(wc -c <"$archive_path" | tr -d ' ')"
+      printf 'LOOPX_UPDATE_EVENT {"stage":"download","received":%s,"total":null}\n' "$received" >&2
+    fi
+    sleep 2
+  done
+  if wait "$curl_pid"; then curl_result=0; else curl_result=$?; fi
+  cat "$tmp_dir/http-status"
+  return "$curl_result"
+}
 while [[ "$archive_attempt" -le "$archive_max_attempts" ]]; do
   remaining=$((archive_deadline - SECONDS))
   if [[ "$remaining" -le 0 ]]; then
@@ -145,10 +183,7 @@ while [[ "$archive_attempt" -le "$archive_max_attempts" ]]; do
   if [[ -s "$archive_path" ]]; then
     resuming_archive=1
   fi
-  if http_status="$(curl --silent --show-error --fail --location \
-    --connect-timeout 10 --max-time "$attempt_timeout" \
-    --continue-at - --write-out '%{http_code}' \
-    "$archive_url" -o "$archive_path")"; then
+  if http_status="$(download_source_archive)"; then
     # curl can treat 416 as an already-complete resumed transfer. The local
     # partial file is not proof of that; recover by downloading it afresh.
     if [[ "$resuming_archive" -eq 1 && "$http_status" == 416 ]]; then

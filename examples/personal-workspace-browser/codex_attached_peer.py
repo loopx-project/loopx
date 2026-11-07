@@ -124,6 +124,7 @@ def fixture(tmp_path, *, uncertain=False, goal_id="sample-goal"):
             registry.write_text(
                 json.dumps(
                     {
+                        "common_runtime_root": str(tmp_path / "runtime"),
                         "goals": [
                             {
                                 "id": goal_id,

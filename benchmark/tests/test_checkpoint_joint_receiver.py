@@ -40,6 +40,7 @@ def test_captured_point_continues_with_fresh_authority(
     from benchmark.runtime.sessions import BenchmarkSessionWake
     from benchmark.runtime.worker import native_command
     from loopx.cli import main
+    from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
     from loopx.control_plane.effect_runtime import (
         effect_runtime_result,
         EffectRuntimeRemoteError,
@@ -123,7 +124,12 @@ def test_captured_point_continues_with_fresh_authority(
         code = main([*prefix, *args])
         output = capsys.readouterr().out
         assert code == 0, output
-        return json.loads(output)
+        return read_cli_policy_payload(output, returncode=code)
+
+    def receiver_guard(*args):
+        # The receiver checks machine fields. run_native_work presents this
+        # same decision through the configured model transport afterwards.
+        return cli("quota", "should-run", "--context-delivery", "off", *args)
 
     cli(
         "bootstrap",
@@ -186,7 +192,7 @@ def test_captured_point_continues_with_fresh_authority(
         "--text",
         "Use retained code and evidence for one synthetic candidate, then verify its native result.",
     )["todo_id"]
-    execution = Execution(context="resume")
+    execution = Execution(context="resume", context_delivery=os.environ.get("LOOPX_CONTEXT_DELIVERY", "off"))
     env = {
         **os.environ,
         "CODEX_BIN": os.environ["LOOPX_NATIVE_CHECKPOINT_BIN"],
@@ -203,6 +209,13 @@ def test_captured_point_continues_with_fresh_authority(
         "OPENAI_API_KEY": "synthetic-local-only",
         "LOOPX_USAGE_PING": "0",
     }
+    if execution.context_delivery == "on":
+        from benchmark.runtime.context_delivery import prepare_context_delivery
+        executable = tmp_path / "loopx-cli"
+        executable.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + ' -m loopx.cli "$@"\n')
+        executable.chmod(0o700)
+        env.update(LOOPX_CLI=str(executable), LOOPX_EXECUTION_MODE=execution.mode,
+                   LOOPX_CONTEXT_DELIVERY=execution.context_delivery)
     with pytest.raises(ValueError, match="distinct destination"):
         admit_native_checkpoint_session(
             {**env, "LOOPX_GOAL_ID": metadata["loopx_state"]["goal_id"]},
@@ -240,6 +253,8 @@ def test_captured_point_continues_with_fresh_authority(
         env, unit, digest, config, sandbox=(execution).sandbox, timeout=30
     )
     assert replay["session_id"] == admitted["session_id"] and replay["history_verified"]
+    if execution.context_delivery == "on":
+        prepare_context_delivery(env, home)
     lease = cli(
         "task-lease",
         "acquire",
@@ -295,7 +310,7 @@ def test_captured_point_continues_with_fresh_authority(
         "--turn-instance-id",
         turn,
     ]
-    guard = cli("quota", "should-run", "--runtime-profile", "generic_cli", *binding)
+    guard = receiver_guard("--runtime-profile", "generic_cli", *binding)
     assert guard["interaction_contract"]["agent_channel"]["delivery_allowed"]
     external_path = os.environ.get("LOOPX_JOINT_RECEIVER_NATIVE")
     external = json.loads(Path(external_path).read_bytes()) if external_path else None
@@ -404,6 +419,8 @@ else:
             )
         )
     requests = []
+    from tests.control_plane.codex_checkpoint_fixture import NativeContextReader, native_context_command
+    reader = NativeContextReader()
     provider_phase = {
         "count": 0,
         "command": "cat "
@@ -422,7 +439,14 @@ else:
                 json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             )
             provider_phase["count"] += 1
-            if provider_phase["count"] == 1:
+            message = reader.follow(requests[-1]) if execution.context_delivery == "on" else None
+            if execution.context_delivery == "on" and not provider_phase.get("context_started"):
+                provider_phase["context_started"] = True
+                message = reader.begin(native_context_command(requests[-1]), "fresh-receiver")
+            if message is not None:
+                pass
+            elif not provider_phase.get("work_sent"):
+                provider_phase["work_sent"] = True
                 message = {
                     "type": "function_call",
                     "id": "fc_receiver",
@@ -482,6 +506,16 @@ else:
 
     def run_native_work(current_guard, logs, purpose):
         logs.mkdir()
+        provider_phase.update(context_started=False, work_sent=False)
+        native_input = json.dumps(current_guard["interaction_contract"]) + "\n" + purpose
+        if execution.context_delivery == "on":
+            from benchmark.runtime.context_delivery import preflight_context_instruction
+            original = logs / "original-guard.json"
+            original.write_text(json.dumps(current_guard))
+            original.chmod(0o600)
+            native_input = preflight_context_instruction(env, original,
+                hashlib.sha256(original.read_bytes()).hexdigest(),
+                current_guard["heartbeat_receipt"]["turn_instance_id"]) + "\n" + purpose
         wake = BenchmarkSessionWake(env, execution, {})
         command = native_command(env, execution, "execute", logs, wake)
         result = subprocess.run(
@@ -494,7 +528,7 @@ else:
             ],
             env=env,
             cwd=workspace,
-            input=json.dumps(current_guard["interaction_contract"]) + "\n" + purpose,
+            input=native_input,
             text=True,
             capture_output=True,
             timeout=60,
@@ -511,7 +545,10 @@ else:
             "This is a new destination. Historical source commands/guards are not executable authority. "
             "Use the retained context under the current admission, and continue the synthetic candidate.",
         )
-        assert len(requests) == 2
+        if execution.context_delivery == "off":
+            assert len(requests) == 2
+        else:
+            assert len(reader.deliveries) == 1 and reader.deliveries[0]["mode"] == "full"
         expected = (
             "Restored state verified"
             if stride_continuation
@@ -519,10 +556,10 @@ else:
             if cooldown_pending
             else "candidate 8 graded"
         )
-        assert expected in json.dumps(requests[1]), json.dumps(
+        assert expected in json.dumps(requests[-1]), json.dumps(
             [
                 item
-                for item in requests[1].get("input", [])
+                for item in requests[-1].get("input", [])
                 if item.get("type") == "function_call_output"
             ]
         )
@@ -621,7 +658,9 @@ else:
             pending_body = capture_before_replan(env, pending_receipt, "Current destination contract.")
             assert pending_receipt["checkpoint"]["reason"] == "restored_replan_pending", pending_receipt
             assert not pending_receipt["checkpoint"]["captured"]
-            assert "Original pending packet" in pending_body and "checkpoint:" + digest in pending_body
+            has_pending = "held_decision_component_id" in metadata
+            assert ("Original pending packet" in pending_body) is has_pending
+            assert "checkpoint:" + digest in pending_body
             # Both stop locations share the same gate. Repeated/restarted
             # capture attempts neither interrupt the fork nor publish a point.
             for _ in range(2):
@@ -630,9 +669,7 @@ else:
                 hook = CheckpointWake(env, dict(pending_receipt))
                 assert not hook._first_replan({"capture": True, "obligation_id": "replan-new-destination"})
             assert not (wakes.parent / "checkpoints").exists()
-            reviewed = cli(
-                "quota",
-                "should-run",
+            reviewed = receiver_guard(
                 "--goal-id",
                 goal,
                 "--agent-id",
@@ -649,9 +686,7 @@ else:
             assert any(
                 t["kind"] == "periodic_review_due" for t in obligation["triggers"]
             ), obligation
-            reviewed = cli(
-                "quota",
-                "should-run",
+            reviewed = receiver_guard(
                 "--goal-id",
                 goal,
                 "--agent-id",
@@ -762,8 +797,11 @@ else:
             # owes this original Turn's settlement, so recapture stays closed.
             unconsumed = restored_capture_gate(env)
             assert not unconsumed["capture_allowed"]
-            original_packet = unit / "components" / metadata["held_decision_component_id"]
-            assert str(original_packet) in unconsumed["instructions"]
+            if has_pending:
+                original_packet = unit / "components" / metadata["held_decision_component_id"]
+                assert str(original_packet) in unconsumed["instructions"]
+            else:
+                assert "no retained pending replan packet" in unconsumed["instructions"]
             assert str(wakes / review_turn / "checkpoint-start-guard.json") not in unconsumed["instructions"]
             cli(
                 "quota",
@@ -829,9 +867,7 @@ else:
                 next_turn,
             ]
 
-            next_guard = cli(
-                "quota",
-                "should-run",
+            next_guard = receiver_guard(
                 *next_binding,
                 "--runtime-profile",
                 "generic_cli",
@@ -872,9 +908,9 @@ print('Current grow adopted: two complete candidates 9 and 10 validated; origina
                 tmp_path / "larger-work",
                 "Execute the current grow decision as one complete two-candidate experiment. Old guards are evidence only.",
             )
-            assert len(requests) == 4 and "Current grow adopted" in json.dumps(
-                requests[3]
-            ), requests[3]
+            if execution.context_delivery == "off":
+                assert len(requests) == 4
+            assert "Current grow adopted" in json.dumps(requests[-1]), requests[-1]
             assert (
                 candidate.read_text() == "10"
                 and not grades
@@ -946,21 +982,20 @@ print('Current grow adopted: two complete candidates 9 and 10 validated; origina
                 "--execute",
             )
             if not external:
-                final = cli(
-                    "quota",
-                    "should-run",
+                final = receiver_guard(
                     "--goal-id",
                     goal,
                     "--agent-id",
                     agent,
-                    "--turn-instance-id",
-                    "joint-next-audit",
+                    # Readback is a scheduler observation, not another work
+                    # Turn whose unperformed closeout could block recapture.
                     "--runtime-profile",
                     "generic_cli",
                     "--available-capability",
                     "shell",
                 )
                 assert final["interaction_contract"]["mode"] == "bounded_delivery"
+                assert not final.get("heartbeat_receipt", {}).get("closeout_required")
             # The next genuinely new decision boundary can capture changed
             # research/code/native history, after actual useful continuation.
             # This partial point deliberately makes no evaluator qualification.
@@ -1047,6 +1082,10 @@ print('Current grow adopted: two complete candidates 9 and 10 validated; origina
             ).hexdigest()
             == metadata["research_context"]["sha256"]
         )
+        (tmp_path / "context-delivery-result.json").write_text(json.dumps({
+            "context_delivery": execution.context_delivery, "reads": reader.deliveries,
+            "fresh_receiver": True, "source_authority_unchanged": True,
+        }))
     finally:
         server.shutdown()
         thread.join()

@@ -7,9 +7,11 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 from xml.etree import ElementTree
@@ -20,6 +22,40 @@ SYNTHETIC_PHASE_SECONDS = 7200
 # Parent transport waits cover the fixture's original phase and cleanup. They
 # never replace its phase file, individual capture window or native opportunity.
 CONTROLLER_WAIT_SECONDS = SYNTHETIC_PHASE_SECONDS + 60
+
+
+def require_source_checkout(source: Path, expected_revision: str):
+    """Bind qualification to the caller's pin and the Python code actually used.
+
+    PYTHONPATH does not take precedence over Python's current working directory,
+    and already imported submodules can survive a later path correction.
+    """
+    if not re.fullmatch(r"[0-9a-f]{40}", expected_revision):
+        raise ValueError("Source revision must be an explicit full commit SHA")
+    source = source.resolve(strict=True)
+    revision = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
+    if revision != expected_revision:
+        raise ValueError("Source checkout does not match its declared immutable revision")
+    if subprocess.check_output(["git", "-C", str(source), "status", "--porcelain"], text=True).strip():
+        raise ValueError("Use a clean dedicated source checkout and keep it frozen during qualification")
+    packages = ("loopx", "benchmark", "tests")
+    for name in packages:
+        importlib.import_module(name)
+    for name, module in tuple(sys.modules.items()):
+        package = name.split(".", 1)[0]
+        if package not in packages:
+            continue
+        filename = getattr(module, "__file__", None)
+        if filename:
+            matches = Path(filename).resolve(strict=True).is_relative_to(source / package)
+        else:
+            # Namespace search paths may include the native provider's unused
+            # test tree. Verify executable members separately, not unused paths.
+            matches = any(Path(path).resolve(strict=True).is_relative_to(source / package)
+                          for path in getattr(module, "__path__", ()))
+        if not matches:
+            raise ValueError(f"Imported {name} does not match the declared source checkout")
+    return revision
 
 
 def require_one_pass(report):
@@ -45,6 +81,8 @@ def _stage_source_configuration(container, native, destination):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--source-revision", required=True,
+                        help="Exact immutable LoopX commit expected by the caller, not inferred from imports")
     parser.add_argument("--provider-source", type=Path, required=True)
     parser.add_argument("--provider-revision", default=PROVIDER_REVISION,
                         help="Exact caller-selected native provider pin; default is the documented compatibility revision")
@@ -53,17 +91,19 @@ def main():
     parser.add_argument("--guest-dependencies", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--image", default="python:3.12-slim")
+    parser.add_argument("--context-delivery", choices=("off", "on"), default="off",
+                        help="Qualify the existing opt-in context transport through source and fresh receivers")
+    parser.add_argument("--capture-boundary", choices=("fresh_replan", "settled_work", "settled_once"), default="fresh_replan",
+                        help="Qualify the existing automatic pre-replan or explicit settled-wake full capture")
     parser.add_argument("--reuse-point", type=Path, help="Reuse an already sealed synthetic source; never count its source test as passed")
     parser.add_argument("--captured-config", type=Path, help="The reused point's matching native fixture configuration")
     args = parser.parse_args()
     if bool(args.reuse_point) != bool(args.captured_config):
         parser.error("--reuse-point and --captured-config must be supplied together")
+    source = Path(__file__).resolve().parents[2]
+    source_revision = require_source_checkout(source, args.source_revision)
     if sys.platform != "linux" or os.getuid() == 0:
         parser.error("Run on Linux as the ordinary owner of a disposable Docker daemon")
-    source = Path(__file__).resolve().parents[2]
-    source_revision = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
-    if subprocess.check_output(["git", "-C", str(source), "status", "--porcelain"], text=True).strip():
-        parser.error("Use a clean dedicated source checkout and keep it frozen during qualification")
     provider = args.provider_source.resolve(strict=True)
     if subprocess.check_output(["git", "-C", str(provider), "rev-parse", "HEAD"], text=True).strip() != args.provider_revision:
         parser.error("Provider must match its exact declared immutable revision")
@@ -76,7 +116,6 @@ def main():
     output.parent.resolve(strict=True)
     if output.resolve() != output or output.exists():
         parser.error("Output must be a fresh physical directory; prior evidence is never overwritten")
-    output.mkdir(mode=0o700)
     sys.path.insert(0, str(provider))
     import docker
     import pytest
@@ -88,6 +127,8 @@ def main():
 
     if Path(sforge.__file__).resolve().parent != provider / "sforge":
         parser.error("Imported provider does not match the declared source")
+    require_source_checkout(source, source_revision)
+    output.mkdir(mode=0o700)
     base = {str(source): {"bind": "/source", "mode": "ro"},
             str(provider): {"bind": "/provider", "mode": "ro"},
             str(dependencies): {"bind": "/deps", "mode": "ro"},
@@ -103,6 +144,7 @@ def main():
                    "LOOPX_NATIVE_CHECKPOINT_BIN": "/native/codex"}
     client = docker.from_env(timeout=30)
     image = client.images.get(args.image).id  # Caller-prepared image, no implicit pull.
+    context_results = {}
 
     def guest(command, volumes, env, log, *, capture_supervisor=None):
         container = client.containers.create(image, command, platform="linux/amd64",
@@ -117,6 +159,12 @@ def main():
             log.write_bytes(container.logs())
             assert status["StatusCode"] == 0, f"Qualification failed; inspect {log}"
             require_one_pass(log.parent / log.stem / "junit.xml")
+            if env.get("LOOPX_CONTEXT_DELIVERY") == "on":
+                reports = list((log.parent / log.stem).rglob("context-delivery-result.json"))
+                assert len(reports) == 1
+                context_results[log.stem] = json.loads(reports[0].read_bytes())
+                assert context_results[log.stem]["context_delivery"] == "on"
+                assert context_results[log.stem]["reads"][0]["mode"] == "full"
         finally:
             if capture_supervisor:
                 capture_supervisor.close()
@@ -142,7 +190,8 @@ def main():
                 "action": "verify", "root": str(point), "expected_sha256": packet["sha256"]}, large_local_snapshot=True)
             assert verified["integrity_verified"]
             metadata = packet["point_metadata"]
-            assert metadata["held_decision_component_id"] and metadata["worker_file_snapshot"]["prepared_source_verified"]
+            assert metadata["worker_file_snapshot"]["prepared_source_verified"]
+            assert bool(metadata.get("held_decision_component_id")) == (args.capture_boundary == "fresh_replan")
             config = output / "native-config"
             config.write_bytes(config_source.read_bytes())
             config.chmod(0o600)
@@ -153,11 +202,19 @@ def main():
             script = ("from pathlib import Path; import time,pytest; "
                       "p=Path('/opt/loopx-benchmark/control'); p.mkdir(parents=True); "
                       f"(p/'phase-deadline').write_text(str(int(time.time())+{SYNTHETIC_PHASE_SECONDS})); "
-                      "raise SystemExit(pytest.main(["
+                      "code=pytest.main(["
                       "'/source/benchmark/tests/test_native_checkpoint_handoff.py::"
-                      "test_actual_worker_captures_pending_replan_before_native_model[planning]',"
+                      f"test_actual_worker_captures_pending_replan_before_native_model[{args.context_delivery}-planning-{args.capture_boundary}]',"
                       "'-q','-rs','-p','no:cacheprovider','--basetemp=/qualification/source-tmp',"
-                      "'--junitxml=/qualification/source.xml']))")
+                      "'--junitxml=/qualification/source.xml']); ")
+            if args.context_delivery == "on":
+                # Copy the declared report while the source writer is alive;
+                # its root-owned pytest directory stays private to that guest.
+                script += ("\nif code == 0:\n"
+                           " reports=list(Path('/qualification/source-tmp').rglob('controller-result.json'))\n"
+                           " assert len(reports) == 1\n"
+                           " Path('/qualification/context-delivery-source.json').write_bytes(reports[0].read_bytes())\n")
+            script += "\nraise SystemExit(code)"
             container = client.containers.create(image, ["python", "-c", script],
                 platform="linux/amd64", network_disabled=True,
                 volumes={**base, str(source_files): {"bind": "/qualification", "mode": "rw"}},
@@ -172,12 +229,29 @@ def main():
             supervisor.close()
             assert status["StatusCode"] == 0, f"Inspect {output / 'source.log'}"
             require_one_pass(source_files / "source.xml")
+            if args.context_delivery == "on":
+                # The real source writer may be root. Its private pytest
+                # directory is intentionally unreadable to this controller;
+                # stage only the declared result through the daemon seam.
+                from benchmark.edgebench.checkpoint_worker import _archive
+                report = _archive(container, "/qualification/context-delivery-source.json",
+                                  output / "source-context-result.json")
+                report.chmod(0o600)
+                context_results["source"] = json.loads(report.read_bytes())
+                assert context_results["source"]["context_delivery"] == "on"
+                reads = context_results["source"]["context_reads"]
+                assert reads[0]["mode"] == "full" and any(row["mode"] == "delta" for row in reads[1:])
             points = [p for p in (output / "points").iterdir() if p.is_dir() and not p.name.startswith(".")]
             assert len(points) == 1 and len(grades) == 1
             point = points[0]
             packet = json.loads((point / "checkpoint.json").read_bytes())
             metadata = packet["point_metadata"]
-            assert metadata["held_decision_component_id"] and metadata["decision_sha256"]
+            if args.capture_boundary == "fresh_replan":
+                assert metadata["held_decision_component_id"] and metadata["decision_sha256"]
+            else:
+                assert "held_decision_component_id" not in metadata and "replan" not in metadata
+                assert metadata["settlement_effect_id"] and metadata["wake_turn_id"]
+                assert metadata["native_session"]["completed_turn_id"] == metadata["native_session"]["turn_ids"][-1]
             git_object = point / "components/task_workspace/.git/objects/ab/retained-object"
             assert git_object.read_text() == "Readonly source evidence" and git_object.stat().st_mode & 0o777 == 0o444
             config = _stage_source_configuration(container, metadata["native_session"], output / "native-config")
@@ -222,6 +296,7 @@ def main():
                    str(results): {"bind": "/results", "mode": "rw"}, **extra_volumes},
                   {"LOOPX_JOINT_RECEIVER_POINT": "/point", "LOOPX_JOINT_RECEIVER_CONFIG": "/captured-config.toml",
                    "LOOPX_RUNTIME_ROOT": "/results/transport-runtime",
+                   "LOOPX_CONTEXT_DELIVERY": args.context_delivery,
                    **({"LOOPX_JOINT_RECEIVER_STRIDE": "1"} if stride else {}),
                    **extra_env},
                   output / f"{name}.log", capture_supervisor=capture_supervisor)
@@ -245,7 +320,8 @@ def main():
                      str(third): {"bind": "/results", "mode": "rw"}},
                     {"LOOPX_JOINT_RECEIVER_POINT": "/point", "LOOPX_JOINT_RECEIVER_CONFIG": "/captured-config.toml",
                      "LOOPX_JOINT_RECEIVER_GOAL": "joint-grandreceiver", "LOOPX_JOINT_RECEIVER_AGENT": "joint-grandresearcher",
-                     "LOOPX_RUNTIME_ROOT": "/results/transport-runtime"},
+                     "LOOPX_RUNTIME_ROOT": "/results/transport-runtime",
+                     "LOOPX_CONTEXT_DELIVERY": args.context_delivery},
                     output / "grandreceiver.log")
                 assert not grades if args.reuse_point else len(grades) == 1
         # The same native provider must also complete the public Core journey
@@ -258,10 +334,11 @@ def main():
                "--junitxml=/results/junit.xml"],
               {str(results): {"bind": "/results", "mode": "rw"}},
               {"LOOPX_RUNTIME_ROOT": "/results/transport-runtime"}, output / "core.log")
-        assert subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip() == source_revision, "Source changed during qualification"
-        assert not subprocess.check_output(["git", "-C", str(source), "status", "--porcelain"], text=True).strip(), "Source changed during qualification"
+        require_source_checkout(source, source_revision)
         receipt = {"passed": True, "controller_uid": os.getuid(), "provider_revision": args.provider_revision,
-                   "source_revision": source_revision, "source_tree_dirty": False,
+                   "source_revision": source_revision, "source_tree_dirty": False, "source_imports_verified": True,
+                   "context_delivery": args.context_delivery, "capture_boundary": args.capture_boundary,
+                   "native_context_reads": context_results,
                    "qualification_sha256": {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in
                        [Path(__file__), source / "benchmark/tests/test_native_checkpoint_handoff.py",
                         source / "benchmark/tests/test_checkpoint_joint_receiver.py",

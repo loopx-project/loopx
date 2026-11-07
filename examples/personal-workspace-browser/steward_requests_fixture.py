@@ -1,43 +1,68 @@
-"""Disposable SQLite/Chat/Inbox journey; no model or external message execution.
+"""Disposable File/SQLite Chat/Inbox journey; no model or external message execution.
 
 Pass a public synthetic status file for whole-workspace visual review. Runtime
 availability is display-only fixture metadata; POSTs cannot execute it. Requests,
 decisions and return delivery below use the production owners in a temp runtime.
-Commands on stdin: inspect, fault, recover, deliver, stop.
+Commands on stdin: inspect, fault, fault-window, deliver-window, report-window, recover,
+deliver, source-unavailable, source-recover, local-source-unavailable,
+local-source-recover, history-corrupt/history-recover (--long-history only),
+report-partial, complete-partial, report-readable, hold, hold-window, continue, release, stop. Window faults/returns apply
+after the first page to challenge multi-window refresh readback.
 """
 from __future__ import annotations
 
 import argparse
 import copy
-from contextlib import redirect_stdout
+from contextlib import ExitStack, redirect_stdout
 import hashlib
 from io import StringIO
 import json
+import os
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
+import tempfile
 import threading
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
-
-from loopx.capabilities.manager_context import acknowledge, deliver
-from loopx.capabilities.manager_context.roundtrip import drain, report
-from loopx.chat_runtime import ChatRuntimeController
-from loopx.chat_action_store import ChatActionStore
-from loopx.chat_server import ChatHTTPServer, ChatRequestHandler, default_chat_assets_dir
-from loopx.chat_store import ChatSessionStore
-from loopx.cli import main as cli
-from loopx.control_plane.collaboration.inbox import _root
-from loopx.extensions.lark.cli_resolution import LarkCliResolution
-
 
 def main():
     args = argparse.ArgumentParser()
     args.add_argument("--status-file", type=Path, required=True)
-    args.add_argument("--assets-dir", type=Path, default=default_chat_assets_dir())
+    args.add_argument("--assets-dir", type=Path)
+    args.add_argument("--long-history", action="store_true")
+    args.add_argument("--earlier-messages", type=int, default=199,
+        help="Unrelated message prefix when --long-history is selected")
+    args.add_argument("--multi-recipient", action="store_true")
+    args.add_argument("--canonical-storage", choices=("sqlite", "file"), default="sqlite")
+    args.add_argument("--requests", type=int, default=13)
     selected = args.parse_args()
+    if not 1 <= selected.requests <= 120:
+        args.error("--requests must be between 1 and 120")
+    if not 0 <= selected.earlier_messages <= 5000:
+        args.error("--earlier-messages must be between 0 and 5000")
     status = json.loads(selected.status_file.read_text())
-    with TemporaryDirectory(prefix="loopx-steward-requests-") as directory:
+    with TemporaryDirectory(prefix="loopx-steward-requests-") as directory, ExitStack() as cleanup:
         root = Path(directory).resolve()
+        temporary = root / "process-temporary"
+        temporary.mkdir()
+        cleanup.enter_context(patch.dict(os.environ, {key: str(temporary) for key in ("TMPDIR", "TEMP", "TMP")}))
+        cleanup.enter_context(patch.object(tempfile, "tempdir", str(temporary)))
+        # Resolve owners only after isolating the process namespace. Retire its
+        # authenticated children before the directory or patches disappear.
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tests"))
+        from managed_effect_runtime_fixture import stop_disposable_effect_runtimes
+        from loopx.capabilities.manager_context import acknowledge, deliver
+        from loopx.capabilities.manager_context.roundtrip import drain, report
+        from loopx.capabilities.native_chat.transports import install_conversation_transports
+        from loopx.chat_runtime import ChatRuntimeController
+        from loopx.chat_action_store import ChatActionStore
+        from loopx.chat_server import ChatHTTPServer, ChatRequestHandler, default_chat_assets_dir
+        from loopx.chat_store import ChatSessionStore
+        from loopx.cli import main as cli
+        from loopx.control_plane.collaboration.inbox import _root
+        from loopx.extensions.lark.cli_resolution import LarkCliResolution
+        cleanup.callback(stop_disposable_effect_runtimes, root)
         runtime, registry = root / "runtime", root / "project/.loopx/registry.json"
         with redirect_stdout(StringIO()):
             code = cli(["--format", "json", "--registry", str(registry), "--runtime-root", str(runtime),
@@ -47,27 +72,37 @@ def main():
                 "--acceptance", "Reviewed artifacts retain the correct versions", "--next-effect", "Inspect the artifact",
                 "--stop-condition", "Stop before external execution", "--goal-instance-profile", "source_session_v1",
                 "--operation-id", "synthetic-request-inventory", "--registered-agent", "builder",
-                "--registered-agent", "reviewer", "--canonical-storage", "sqlite"])
+                "--registered-agent", "reviewer", "--canonical-storage", selected.canonical_storage])
         if code:
             raise RuntimeError("Could not create isolated fixture")
         store = ChatSessionStore(runtime)
         session = store.create_session(goal_id="loopx-manager", agent_id="codex", adapter_kind="codex_app_server",
             upstream_thread_id="synthetic-steward", channel_id="manager",
             agent_model_id="gpt-6.1-sol", agent_reasoning_effort="xhigh")
+        if selected.long_history:
+            # The first delegated question and its answer straddle a real page.
+            for index in range(selected.earlier_messages):
+                store.append_message(session["session_id"], role="user", text=f"Earlier original message {index}")
         titles = ["核对账单导出的字段映射", "检查重复导出是否会生成重复记录", "复核历史账单的金额差异",
             "整理迁移后的回滚步骤", "补齐取消导出时的错误提示", "核对欧洲地区的税额精度",
             "检查超时后的安全重试", "复核下载文件中的版本信息", "检查月底跨时区的账期边界",
             "整理旧接口的调用方清单", "核对缺失凭证时的处理方式", "检查手机上的导出入口", "复核迁移说明中的示例"]
-        last_receipt = None
-        for index, title in enumerate(titles):
+        first_receipt = last_receipt = None
+        for index in range(selected.requests):
+            title = titles[index % len(titles)]
+            if index >= len(titles):
+                title += f" · 记录 {index + 1}"
             target = {"goal_id": "billing-exports", "agent_id": "reviewer" if index % 3 == 2 else "builder"}
-            turn, _ = store.create_turn(session["session_id"], client_turn_id=f"synthetic-{index}", message=title, origin="web")
+            body = (title + "\n\n" + "完整原始要求。Original evidence. " * 600 + "完整正文结束。"
+                    if selected.long_history and index == 0 else title)
+            turn, _ = store.create_turn(session["session_id"], client_turn_id=f"synthetic-{index}", message=body, origin="web")
             brief = {"schema_version": "collaboration_brief_v0", "purpose": title,
                 "context": "账单导出正在迁移到统一接口，请沿现有工作核对这项要求，并保留失败与未知。",
                 "constraints": ["只检查本次产物；不发布、不联系外部人员。"], "inputs": [],
                 "acceptance": ["给出可回看的核验结论与下一步。"], "return_requirement": "将实际结论返回原管家会话。"}
             receipt = deliver(runtime, registry, session=session, turn=turn, request={**target, "brief": brief}, source_store=store)
-            store.append_message(session["session_id"], role="user", text=title, turn_id=turn["turn_id"], origin="web")
+            if first_receipt is None:
+                first_receipt = receipt
             store.append_message(session["session_id"], role="assistant", text="已交给负责的 Agent，等待它返回实际结论。",
                 turn_id=turn["turn_id"], origin="web")
             store.update_turn(session["session_id"], turn["turn_id"], status="completed", response={"context_handoff_receipt": receipt})
@@ -76,23 +111,61 @@ def main():
                 acknowledge(runtime, "billing-exports", target["agent_id"], receipt["request_id"], "adopt",
                     "已接到原工作，正在核对实际产物；尚未形成完成结论。", registry=registry, caller_goal_ref=receipt["goal_ref"])
             last_receipt = receipt
-        report(runtime, "billing-exports", "builder", last_receipt["request_id"], "conclusion",
+        if (selected.requests - 1) % 3 == 2:
+            acknowledge(runtime, "billing-exports", "reviewer", last_receipt["request_id"], "adopt",
+                "已接到原工作，正在核对实际产物；尚未形成完成结论。", registry=registry, caller_goal_ref=last_receipt["goal_ref"])
+        report(runtime, "billing-exports", target["agent_id"], last_receipt["request_id"], "conclusion",
             "已核对本次迁移说明与示例，版本一致，原始检查结果已保留。", registry=registry,
             caller_goal_ref=last_receipt["goal_ref"])
+
+        if selected.multi_recipient:
+            from loopx.capabilities.manager_context.execution import handoff_response
+            turn, _ = store.create_turn(session["session_id"], client_turn_id="multi-recipient",
+                message="请 builder 和 reviewer 分别核对迁移方案，独立返回结论。", origin="web")
+            response = handoff_response(runtime, registry, session=session, turn=turn,
+                response={"message": "分别交给两位负责的 Agent，结果返回本次对话。", "context_handoff": [
+                    {"goal_id": "billing-exports", "agent_id": agent, "brief": {**brief,
+                        "purpose": "核对迁移方案 · " + agent}} for agent in ("builder", "reviewer")]},
+                source_store=store, source_authorized=lambda: True, execution_allowed=lambda: True)
+            if len(response["context_handoff_receipts"]) != 2:
+                raise RuntimeError("Both synthetic recipients must receive independently")
+            store.append_message(session["session_id"], role="assistant", text=response["message"],
+                turn_id=turn["turn_id"], origin="web")
+            store.update_turn(session["session_id"], turn["turn_id"], status="completed", response=response)
+            store.finalize_managed_turn_completion(session["session_id"], turn["turn_id"])
+            last_receipt = response["context_handoff_receipts"][1]
+            acknowledge(runtime, "billing-exports", "reviewer", last_receipt["request_id"], "adopt",
+                "独立核查迁移方案。", registry=registry, caller_goal_ref=last_receipt["goal_ref"])
 
         class Handler(ChatRequestHandler):
             def do_POST(self):
                 self.server.posts += 1
                 self._send_error("Read-only visual fixture", status=405)
-            def _status(self):
+            def _status(self, **_options):
                 self._send_json(status)
             def _goal_contexts(self):
                 self._send_json({"ok": True, "schema_version": "loopx_chat_goal_contexts_v0", "goals": []})
             def _request_inventory_read(self):
                 self.server.inventory_reads += 1
-                if self.server.fault:
+                later_window = parse_qs(urlparse(self.path).query).get("offset", ["0"])[0] != "0"
+                held = self.server.inventory_hold and (not self.server.hold_window or later_window)
+                if held:
+                    print(json.dumps({"event": "inventory-held", "later_window": later_window}), flush=True)
+                    if not self.server.inventory_gate.wait(60):
+                        return self._send_error("Synthetic read gate was not released", status=503)
+                if self.server.fault or (later_window and self.server.fault_window):
                     return self._send_error("Synthetic inventory read failure", status=503)
-                return super()._request_inventory_read()
+                if later_window and self.server.deliver_window:
+                    self.server.deliver_window = False
+                    drain(runtime, registry, store, lambda *_: None)
+                try:
+                    return super()._request_inventory_read()
+                except (BrokenPipeError, ConnectionResetError):
+                    if not held:
+                        raise
+                finally:
+                    if held:
+                        print(json.dumps({"event": "inventory-finished"}), flush=True)
             def do_GET(self):
                 if urlparse(self.path).path == "/status.json":
                     query = parse_qs(urlparse(self.path).query)
@@ -115,37 +188,147 @@ def main():
                 return super().do_GET()
 
         server = ChatHTTPServer(("127.0.0.1", 0), Handler)
+        server.daemon_threads = False
         server.chat_store, server.registry_path, server.runtime_root = store, registry, runtime
         server.action_store = ChatActionStore(runtime / "chat/actions")
         server.lark_cli_resolution = LarkCliResolution(None, False, "synthetic", None, "lark_cli_not_installed")
         server.runtime_root_override, server.selected_goal_id, server.verbose = str(runtime), None, False
-        server.assets_dir, server.fault, server.posts, server.inventory_reads = selected.assets_dir, False, 0, 0
+        server.assets_dir = selected.assets_dir or default_chat_assets_dir()
+        server.fault, server.posts, server.inventory_reads = False, 0, 0
+        server.inventory_hold, server.hold_window = False, False
+        server.inventory_gate = threading.Event()
+        server.inventory_gate.set()
+        server.fault_window, server.deliver_window = False, False
         server.runtime_controller = ChatRuntimeController(store=store, registry_path=registry, codex_bin="unused-fixture-codex")
         server.runtime_controller.capabilities = lambda: [{"agent_id": "codex", "display_name": "Codex",
             "adapter_kind": "codex_app_server", "available": True, "streaming": True, "resume": True, "interrupt": True}]
+        def reject_provider(_profile):
+            raise AssertionError("An unselected steward must not read an external provider")
+        install_conversation_transports(server, factories=(), observe_default=reject_provider)
+        bindings = server.runtime_controller.project_contexts.conversation_bindings
+        local_session_path = store._session_path(session["session_id"])
+        local_session_bytes = local_session_path.read_bytes()
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         def source_hashes():
             return {str(path.relative_to(_root(runtime))): hashlib.sha256(path.read_bytes()).hexdigest()
                 for path in _root(runtime).rglob("*.json")}
         initial = source_hashes()
+        journal = store.sessions_root / session["session_id"] / "messages.jsonl"
+        original_journal = journal.read_bytes()
         print(json.dumps({"event": "ready", "origin": f"http://127.0.0.1:{server.server_port}", "session_id": session["session_id"]}), flush=True)
         try:
             for line in sys.stdin:
                 command = line.strip()
                 if command == "stop":
                     break
-                if command == "fault":
+                if command in {"hold", "hold-window"}:
+                    server.inventory_gate.clear()
+                    server.inventory_hold, server.hold_window = True, command == "hold-window"
+                elif command == "continue":
+                    # Admit new reads while the cancelled HTTP read remains
+                    # held, so its real late response can challenge a retry.
+                    server.inventory_hold = False
+                elif command == "release":
+                    server.inventory_hold = False
+                    server.inventory_gate.set()
+                elif command == "fault":
                     server.fault = True
+                elif command == "fault-window":
+                    server.fault_window = True
+                elif command == "deliver-window":
+                    server.deliver_window = True
+                elif command == "report-window":
+                    report(runtime, "billing-exports", "builder", first_receipt["request_id"], "conclusion",
+                        "已核对字段映射，原请求和检查依据保留。", registry=registry,
+                        caller_goal_ref=first_receipt["goal_ref"])
+                    server.deliver_window = True
                 elif command == "recover":
-                    server.fault = False
+                    server.fault = server.fault_window = server.deliver_window = False
+                elif command == "report-multi" and selected.multi_recipient:
+                    report(runtime, "billing-exports", "reviewer", last_receipt["request_id"], "conclusion",
+                        "reviewer 已完成独立核查；builder 的结论仍待返回。", registry=registry,
+                        caller_goal_ref=last_receipt["goal_ref"])
+                    drain(runtime, registry, store, lambda *_: None)
                 elif command == "deliver":
                     drain(runtime, registry, store, lambda *_: None)
+                elif command == "report-partial":
+                    prior = _root(runtime) / "replies" / first_receipt["request_id"] / "conclusion.json"
+                    report(runtime, "billing-exports", "builder", first_receipt["request_id"], "conclusion",
+                        "字段映射的修改已完成，安装后的核验仍需继续。", registry=registry,
+                        caller_goal_ref=first_receipt["goal_ref"],
+                        update_id="remaining-installed-check" if prior.exists() else None,
+                        remaining_work={"summary": "在隔离安装包中验证账单字段映射与失败恢复。",
+                            "resume_when": "隔离安装包就绪后，由原负责人继续核验并返回实际结果。"})
+                    drain(runtime, registry, store, lambda *_: None)
+                elif command == "complete-partial":
+                    report(runtime, "billing-exports", "builder", first_receipt["request_id"], "conclusion",
+                        "隔离包的字段映射与失败恢复已核验，原检查记录保留。", registry=registry,
+                        caller_goal_ref=first_receipt["goal_ref"], update_id="qualified-installed-check")
+                    drain(runtime, registry, store, lambda *_: None)
+                elif command == "report-readable":
+                    # Settle earlier fixture results before publishing this new
+                    # observation; request-file ordering is not arrival order.
+                    drain(runtime, registry, store, lambda *_: None)
+                    body = ("迁移方案还不能直接上线，原导出路径继续保留。\n\n"
+                        "本地校验是预先检查，正式验收才决定能否替换。以下是完整检查结果：\n\n"
+                        "- **已通过**：14个字段的映射和重复读取检查。\n"
+                        "- **发现反例**：本地耗时从120毫秒降到105毫秒，隔离验收却从160毫秒增加到190毫秒；耗时越少越好，不能据此认定改进。\n"
+                        "- **仍未知**：完整运行费用、生产环境表现和实际采用版本，缺测不能按零计算。\n\n"
+                        "**实际处理**：保留旧路径，修正迁移说明；当前无需用户批准上线。\n\n"
+                        "证据详情保留完整，不替代上述结果：\n\n"
+                        '```json\n{"checked_fields":14,"installed":false,"cost":null}\n```\n\n'
+                        "[公开示例依据](https://example.org/reference/complete-migration-evidence-with-version-and-long-path)\n\n"
+                        + "\n\n".join([
+                            "金额精度：负数冲销记录保持原符号；小数按原币种精度核对，没有用格式化后的字符串替换原金额。",
+                            "字段顺序：导出列与调用方读取顺序一致。字段缺失仍报告为缺失，不以空字符串冒充已校验。",
+                            "重复请求：同一导出请求只得到原来的产物；超时后仍需验证原请求，不能为了取得回复另起一次执行。",
+                            "账期边界：保留来源时区与原始账期。跨日记录可以追溯，当前没有把时区变更解释为金额差异。",
+                            "回滚步骤：原导出入口仍可使用。新的迁移说明已保存，但保存文件不代表安装完成或已经上线。",
+                            "权限负例：没有获准读取的记录继续拒绝，不因结果展示改善而扩大调用方权限或消息受众。",
+                            "失败恢复：断线后沿原请求核验已有结果；重连读到结论不代表源任务已经通过全部验收。",
+                            "费用口径：现有记录没有完整费用，因此只保留未知；没有追加模型改写，也没有为补齐数字重复评测。",
+                        ]))
+                    remaining = {"summary": "还需核验安装包中的字段映射和失败恢复。",
+                        "resume_when": "隔离安装包就绪后由原负责人继续，不触碰生产会话。"}
+                    suffix = f"\n\n{remaining['summary']}\n\n{remaining['resume_when']}"
+                    ending = "\n\n完整预算边界答复结束。"
+                    # A public synthetic payload at the existing Unicode limit,
+                    # including its actual v2 paragraph separators and remainder.
+                    padding = 20000 - len(body + suffix + ending)
+                    evidence = "\n\n补充原始记录：失败、未知和原始证据均保留，不增加模型调用。😀"
+                    body += (evidence * (padding // len(evidence) + 1))[:padding] + ending
+                    assert len(body + suffix) == 20000
+                    prior = _root(runtime) / "replies" / first_receipt["request_id"] / "conclusion.json"
+                    report(runtime, "billing-exports", "builder", first_receipt["request_id"], "conclusion", body,
+                        registry=registry, caller_goal_ref=first_receipt["goal_ref"],
+                        update_id="readable-return" if prior.exists() else None,
+                        remaining_work=remaining)
+                    drain(runtime, registry, store, lambda *_: None)
+                elif command == "conversation-arrival":
+                    store.append_message(session["session_id"], role="assistant", text="新的委派阅读测试消息。", origin="manager_followup")
+                elif command == "source-unavailable":
+                    bindings.path.write_text("{", encoding="utf-8")
+                elif command == "source-recover":
+                    bindings.path.unlink()
+                elif command == "history-corrupt" and selected.long_history:
+                    lines = original_journal.splitlines(keepends=True)
+                    lines[200] = b'{"synthetic":\n'
+                    journal.write_bytes(b"".join(lines))
+                elif command == "history-recover" and selected.long_history:
+                    journal.write_bytes(original_journal)
+                elif command == "local-source-unavailable":
+                    local_session_path.write_text("{invalid synthetic session", encoding="utf-8")
+                elif command == "local-source-recover":
+                    local_session_path.write_bytes(local_session_bytes)
                 elif command != "inspect":
                     raise ValueError("Unknown fixture command")
                 print(json.dumps({"event": command, "posts": server.posts, "inventory_reads": server.inventory_reads,
-                    "source_unchanged": source_hashes() == initial}), flush=True)
+                    "source_unchanged": source_hashes() == initial,
+                    "chat_unchanged": journal.read_bytes() == original_journal,
+                    "turn_count": len(list(store.sessions_root.glob("*/turns/*.json")))}), flush=True)
         finally:
+            server.inventory_gate.set()
             server.shutdown()
             server.server_close()
             thread.join(5)

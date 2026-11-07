@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import shlex
+import re
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,51 @@ from test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, TODO_ID, _initialize_fixture_authority,
     _run_cli, _run_generated_cli, _write_fixture,
 )
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("profile", ["codex_app", "generic_cli"])
+@pytest.mark.parametrize("handoff_mode", ["soft_claim", "hard_lease"])
+def test_returned_completion_prepares_and_preserves_original_execution(
+    tmp_path: Path, provider: str, profile: str, handoff_mode: str,
+) -> None:
+    project, runtime, registry = _write_fixture(tmp_path)
+    _initialize_fixture_authority(project, runtime, provider=provider, handoff_mode=handoff_mode)
+    host = ["--codex-app"] if profile == "codex_app" else ["--runtime-profile", profile]
+    rc, guard = _run_cli(registry, runtime, "quota", "should-run", *host,
+                        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+                        "--todo-id", TODO_ID, "--turn-instance-id", "claim-guidance")
+    assert rc == 0, guard
+    assert guard["goal_boundary"]["handoff_mode"] == handoff_mode
+    plan = guard["interaction_contract"]["cli_channel"]["settlement_plan"]
+    assert build_turn_envelope(guard)["writeback"]["settlement_plan"] == plan
+    step = next(s for s in plan["ordered_steps"] if s["kind"] == "validation")
+    preparation = re.search(r"ordinary Todo claim: `([^`]+)`", step["precondition"])
+    command = step["command_template"].replace("<validated evidence>", "evidence:accepted-deliverable")
+    if handoff_mode == "hard_lease":
+        assert preparation is not None
+        # Follow only the returned plan, without a failed completion or global help.
+        rc, claim = _run_generated_cli(preparation[1], registry_path=registry)
+        assert rc == 0 and claim["execution_managed"] is True, claim
+        command = command.replace("<original claim_operation_id>", claim["claim_operation_id"])
+        # A guessed reference must not adopt the active execution or complete work.
+        rc, refused = _run_generated_cli(
+            command.replace(claim["claim_operation_id"], "claim-not-issued"), registry_path=registry,
+        )
+        assert rc != 0 and refused["ok"] is False, refused
+        rc, todo = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID,
+                            "--todo-id", TODO_ID)
+        assert rc == 0 and todo["todo"]["status"] == "open", todo
+    else:
+        assert preparation is None
+        assert "--claim-operation-id" not in command
+    rc, completed = _run_generated_cli(command, registry_path=registry)
+    assert rc == 0, completed
+    rc, todo = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID,
+                        "--todo-id", TODO_ID)
+    assert rc == 0 and todo["todo"]["status"] == "done", todo
+    rc, replay = _run_generated_cli(command, registry_path=registry)
+    assert rc == 0 and replay["changed"] is False, replay
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

@@ -9,14 +9,34 @@ import type { JsonObject } from "../../loopx/control_plane/effect_program.ts";
 import { interpretQuotaShouldRunPacket } from "../../loopx/control_plane/effect_program.ts";
 import {
   decodeInteractionContract,
+  selectedWorkTodo,
+  selectedWorkTodoId,
   projectInteractionExecution,
   INTERACTION_EXECUTION_FACTS_SCHEMA_VERSION,
   projectInteractionRequiredReads,
   projectInteractionWorkContext,
+  assertGoalContextDelivered,
   projectBlockedSuccessorWaitObservation,
   type AgentInteractionChannel,
 } from "../../loopx/control_plane/work_items/interaction_contract.ts";
 import { evaluateTodoResumeConditions } from "../../loopx/control_plane/todos/resume_condition.ts";
+
+test("shared selection keeps current typed identity separate from historical decoding", () => {
+  const selected = {todo_id: "fallback", future: {keep: true}};
+  const packet = {selected_todo: selected, task_orchestration_contract: {
+    schema_version: "task_orchestration_contract_v2", mode: "adaptive", primary_todo_id: " primary "}};
+  assert.deepEqual(selectedWorkTodo(packet),
+    {todo_id: "primary", source: "task_orchestration_contract.primary_todo_id"});
+  assert.equal(selectedWorkTodoId(packet), "primary");
+  assert.deepEqual(selectedWorkTodo(packet, "\uFEFFprimary\uFEFF"),
+    {todo_id: "\uFEFFprimary\uFEFF", source: "task_orchestration_contract.primary_todo_id"});
+  assert.strictEqual(selectedWorkTodo(packet, ""), selected);
+  const numeric = {...packet, task_orchestration_contract: {...packet.task_orchestration_contract, primary_todo_id: 7}};
+  assert.strictEqual(selectedWorkTodo(numeric), selected);
+  assert.equal(selectedWorkTodoId(numeric), "fallback");
+  assert.deepEqual(selectedWorkTodo(numeric, "7"),
+    {todo_id: "7", source: "task_orchestration_contract.primary_todo_id"});
+});
 
 test("only a positively qualified unbound scheduled wait can omit observation", () => {
   const todo = {todo_id: "todo_scheduled", status: "deferred", role: "agent",
@@ -41,6 +61,7 @@ test("only a positively qualified unbound scheduled wait can omit observation", 
     {heartbeat_receipt: {status: "unknown"}},
     {heartbeat_receipt: "invalid"},
     {agent_id: "agent-foreign"},
+    ...[0, 2, "1"].map(pending_resume_count => ({vision_wait_state: {...wait, pending_resume_count}})),
     {vision_wait_state: {...wait, waiting_todo_count: 2}},
     {vision_wait_state: {...wait, selected_todo_status: "done"}},
     {vision_wait_state: {...wait, resume_condition: {...condition, satisfied: true}}},
@@ -641,6 +662,31 @@ test("declared outcomes remain required reads without enabled checks after a wor
   assert.ok(!off.some(read => read.source === "goal_acceptance"));
 });
 
+
+test("full original Goal delivery fulfills its read without excluding legacy text", () => {
+  const text = "Original intent\nUnknown section\n停止条件：不得发布。\n";
+  const read = {source: "goal_state", command: "cat -- goal.md", ordering: "before_work"};
+  const content = {state_file: "goal.md", text, full_source: true,
+    revision: `sha256:${createHash("sha256").update(text, "utf8").digest("hex")}`};
+  const project = (value: JsonObject | null) => projectInteractionWorkContext({
+    required_reads: [read], require_full_goal_source: true,
+    source_results: value ? [{command: read.command, content: value}] : [],
+  });
+  const fulfilled = project(content);
+  assert.equal(fulfilled.source_delivery_profile, "complete_goal_v1");
+  assert.deepEqual(fulfilled.required_reads, []);
+  assert.equal((fulfilled.work_context as JsonObject).complete, true);
+  const [source] = (fulfilled.work_context as JsonObject).sources as JsonObject[];
+  assert.deepEqual(source.content, content);
+  for (const invalid of [null, {state_file: "goal.md", revision: content.revision},
+    {...content, text: "Original intent\n"}, {...content, full_source: false},
+    {...content, excluded_todo_regions: []}, {...content, read_complete: false}]) {
+    assert.throws(() => project(invalid), /Goal source/);
+  }
+  assert.throws(() => assertGoalContextDelivered({required_reads: [read]}), /Goal source/);
+  assert.throws(() => assertGoalContextDelivered({required_reads: [],
+    work_context: {sources: [{source: "goal_state", content: {...content, read_complete: false}}]}}), /Goal source/);
+});
 
 test("Goal narrative fulfillment needs complete source and ordered region lineage", () => {
   const read = {source: "goal_state", command: "cat -- goal.md"};

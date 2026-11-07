@@ -12,10 +12,9 @@ from pathlib import Path
 import pytest
 
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
-from loopx.control_plane.coordination.local_authority import CanonicalAuthorityRequired
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.testing.canary_harness import run_json_cli_result, write_fixture_registry
-from loopx.control_plane.work_items.context_readback import _source_content
+from loopx.control_plane.effect_runtime import effect_runtime_result
 from loopx.control_plane.todos.active_state_todo_parser import parse_todo_source
 from loopx.control_plane.todos.goal_todo_projection import retained_todo_summary_fields
 from loopx.control_plane.turn_driver.codex_cli import _prompt
@@ -35,15 +34,14 @@ def test_selected_todo_refuses_unmigrated_source(tmp_path: Path) -> None:
     )
 
     original = state.read_bytes()
-    with pytest.raises(CanonicalAuthorityRequired) as refused:
-        _source_content(
-            {"source": "selected_todo"},
-            registry_path=tmp_path / "registry.json",
-            runtime_root=tmp_path / "runtime",
-            goal_id="goal-current",
-            todo_id="todo_current",
-        )
-    assert refused.value.code == "canonical_authority_required"
+    result = effect_runtime_result("work_item.context.project", {
+        "required_reads": [{"source": "selected_todo", "command": "read-selected"}],
+        "source_results": [], "selected_todo": {"todo_id": "todo_current"},
+        "source_context": {"runtime_root": str(tmp_path / "runtime"), "goal_id": "goal-current"},
+    })
+    context = result["work_context"]
+    assert context["complete"] is False
+    assert context["failures"][0]["error_code"] == "context_source_unavailable"
     assert state.read_bytes() == original
 
 
@@ -99,6 +97,44 @@ def test_inline_user_context_preserves_full_scoped_gates_without_granting_delive
         assert refused["should_run"] is False
         assert state.read_text() == state_text
         return
+
+    # The old implementation performs inventory plus one whole-source read per
+    # scoped User Todo. The optimized path must return identical exact bodies
+    # from one read, without changing scope or canonical authority.
+    from loopx.control_plane.work_items import context_readback
+    original_read = context_readback.list_goal_todos
+    expected_users = [original_read(registry_path=registry, runtime_root_arg=str(runtime),
+        goal_id="requirements-goal", role="user", status="open", agent_id="agent-a",
+        todo_id=todo)["todo"] for todo in ("todo_gate", "todo_user_action", "todo_global_action")]
+    bounded = original_read(registry_path=registry, runtime_root_arg=str(runtime),
+        goal_id="requirements-goal", role="user", status="open", agent_id="agent-a")
+    assert bounded["todos"][0]["text"] != gate_text, "ordinary inventories remain bounded"
+    reads = []
+
+    def counted_read(**options):
+        reads.append(options)
+        return original_read(**options)
+
+    monkeypatch.setattr(context_readback, "list_goal_todos", counted_read)
+    direct = context_readback._user_context(registry_path=registry, runtime_root=runtime,
+        goal_id="requirements-goal", agent_id="agent-a")
+    assert direct["todos"] == expected_users
+    assert len(reads) == 1, "scoped full User bodies need one canonical query, not N+1"
+    assert direct["authority_read"]["decision_read_from_provider"] is True
+    from loopx.control_plane.todos import goal_todo_projection
+    typed_read = goal_todo_projection.project_todo_read
+
+    def old_delivery(options):
+        result = typed_read(options)
+        if "payload" in result:
+            result["payload"].pop("full_text", None)
+        return result
+
+    with monkeypatch.context() as patch:
+        patch.setattr(goal_todo_projection, "project_todo_read", old_delivery)
+        with pytest.raises(ValueError, match="unsupported by this runtime"):
+            context_readback._user_context(registry_path=registry, runtime_root=runtime,
+                goal_id="requirements-goal", agent_id="agent-a")
 
     packet = guard()
     channel = packet["interaction_contract"]["agent_channel"]
@@ -330,14 +366,13 @@ def test_selected_todo_body_change_between_selection_and_readback_blocks_deliver
     )
     from loopx.control_plane.work_items import context_readback
 
-    read_source = context_readback._source_content
     run_effect = context_readback.effect_runtime_result
     projected_request = {}
     changed = False
 
-    def mutate_after_selection(read, **kwargs):
+    def capture_projection(effect, request, **kwargs):
         nonlocal changed
-        if read.get("source") == "selected_todo" and not changed:
+        if effect == "work_item.context.project" and not changed:
             update_code, update = run_json_cli_result(
                 "todo", "update", "--goal-id", "selected-race-goal",
                 "--todo-id", "todo_selected_work", "--agent-id", "agent-a",
@@ -345,14 +380,10 @@ def test_selected_todo_body_change_between_selection_and_readback_blocks_deliver
             )
             assert update_code == 0, update
             changed = True
-        return read_source(read, **kwargs)
-
-    def capture_projection(effect, request, **kwargs):
         if effect == "work_item.context.project":
             projected_request.update(request)
         return run_effect(effect, request, **kwargs)
 
-    monkeypatch.setattr(context_readback, "_source_content", mutate_after_selection)
     monkeypatch.setattr(context_readback, "effect_runtime_result", capture_projection)
     from loopx.cli import build_parser
     from loopx.cli_commands.quota import handle_quota_command
@@ -375,12 +406,12 @@ def test_selected_todo_body_change_between_selection_and_readback_blocks_deliver
     assert changed
     assert packet["selected_todo"]["todo_id"] == "todo_selected_work"
     selected_revision = projected_request["selected_todo"]["content_revision"]
-    readback = next(
-        result for result in projected_request["source_results"]
-        if result.get("content", {}).get("todo", {}).get("todo_id") == "todo_selected_work"
-    )
     assert selected_revision
-    assert readback["content"]["todo"]["content_revision"] != selected_revision
+    current_code, current = run_json_cli_result(
+        "todo", "list", "--goal-id", "selected-race-goal", "--todo-id", "todo_selected_work",
+        registry_path=registry, runtime_root=runtime,
+    )
+    assert current_code == 0 and current["todo"]["text"] == changed_text, current
     channel = packet["interaction_contract"]["agent_channel"]
     assert channel["work_context"]["complete"] is False
     assert channel["delivery_allowed"] is False

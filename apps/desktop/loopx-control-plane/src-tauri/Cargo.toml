@@ -52,4 +52,4 @@ libc = "0.2"
 blake2 = "0.10"
 ring = "0.17"
 tauri = { version = "2.11.1", features = ["test"] }
-zip = { version = "4", default-features = false }
+zip = { version = "9", default-features = false }

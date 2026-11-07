@@ -27,7 +27,10 @@ try {
   const state = { done: 23, cost: 24.8, deliveryFails: false };
   const session = await openWorkspacePage({ newPage: options => browser.newPage({ locale: 'zh-CN', ...options }) }, url, {
     viewport: { width: 1440, height: 1000 },
+    gotoWaitUntil: 'domcontentloaded',
     beforeGoto: async (api, page) => {
+      page.setDefaultTimeout(10000);
+      page.setDefaultNavigationTimeout(15000);
       await installShowcaseWorkspace(api, page, state);
       const transform = api.transformStatus;
       api.transformStatus = fixture => {
@@ -82,8 +85,17 @@ try {
     await inlineRail.locator('[data-testid="completed-task-lane"] > header button').click();
     await historyResponse;
     const overview = page.locator('.goal-overview');
+    await decision.focus();
     await overview.evaluate(element => element.style.maxWidth = '800px');
     await page.waitForFunction(() => !document.querySelector('.goal-workspace-rail .goal-all-work'));
+    await page.waitForFunction(() => document.querySelector('.goal-workspace-composition')?.classList.contains('is-attention-first'));
+    assert.equal(await decision.count(), 1, 'A narrow blocking decision remains one interactive instance');
+    assert.equal(await decision.evaluate(element => element === document.activeElement), true, 'Container reflow preserves the focused decision');
+    assert.ok(await decision.evaluate(element => {
+      const direction = document.querySelector('.goal-overview-direction');
+      return Boolean(element.compareDocumentPosition(direction) & Node.DOCUMENT_POSITION_FOLLOWING)
+        && element.getBoundingClientRect().top < direction.getBoundingClientRect().top;
+    }), 'The blocking decision precedes the long Goal in DOM and visual order');
     assert.equal(await inventory.isVisible(), false, 'Container reflow hides the inline inventory');
     const readsBeforeHiddenRefresh = historyReads;
     state.done++;

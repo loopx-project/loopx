@@ -186,7 +186,8 @@ export async function findTurnJournalBySettlement(params: JsonObject): Promise<{
   const identity = decodeIdentity(settlementIdentityPayload({
     goal_id: requireNonEmptyString(params.goal_id, "goal_id"),
     agent_id: requireNonEmptyString(params.agent_id, "agent_id"),
-    todo_id: requireNonEmptyString(params.todo_id, "todo_id"),
+    todo_id: params.todo_id == null ? null : requireNonEmptyString(params.todo_id, "todo_id"),
+    request_subject: params.request_subject as import("../effect_program.ts").ExecutionRequestSubject | undefined,
     turn_instance_id: requireNonEmptyString(params.turn_instance_id, "turn_instance_id"),
   }));
   const evidence = await querySettlementJournal(params.runtime_root, identity, null);

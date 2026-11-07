@@ -56,6 +56,15 @@ def _heartbeat_receipt_events(
     ]
 
 
+def heartbeat_receipt_request_subject(event: Mapping[str, object] | None) -> dict | None:
+    """Transport the original request's path-free identity from scalar event details."""
+    details = (event or {}).get("details")
+    if not isinstance(details, Mapping) or "request_id" not in details:
+        return None
+    return {key: details.get(key) for key in (
+        "request_id", "request_revision", "request_digest", "execution_scope_sha256")}
+
+
 def _receipt_settlement_identity(
     event: Mapping[str, object],
 ) -> tuple[SettlementBindingKind, str, str] | None:
@@ -68,16 +77,17 @@ def _receipt_settlement_identity(
         details.get("replan_obligation_id")
     )
     effect_id = str(details.get("settlement_effect_id") or "").strip()
-    if todo_id and replan_obligation_id:
+    request_subject = heartbeat_receipt_request_subject(event)
+    if sum(bool(value) for value in (todo_id, replan_obligation_id, request_subject)) > 1:
         raise HeartbeatReceiptIdentityConflictError(
             "heartbeat receipt has conflicting Todo and autonomous replan bindings"
         )
-    if effect_id and not todo_id and not replan_obligation_id:
+    if effect_id and not todo_id and not replan_obligation_id and not request_subject:
         raise HeartbeatReceiptIdentityConflictError(
             "heartbeat receipt has an effect identity without a Todo or "
             "autonomous replan binding; refuse to infer or upgrade it"
         )
-    if not todo_id and not replan_obligation_id:
+    if not todo_id and not replan_obligation_id and not request_subject:
         return None
     identity = SettlementIdentity(
         goal_id=str(event.get("goal_id") or "").strip(),
@@ -85,6 +95,7 @@ def _receipt_settlement_identity(
         todo_id=todo_id or None,
         turn_instance_id=str(event.get("run_id") or "").strip(),
         replan_obligation_id=replan_obligation_id,
+        request_subject=request_subject,
     )
     if not effect_id:
         effect_id = identity.effect_id
@@ -281,6 +292,7 @@ def ensure_turn_heartbeat_settlement_receipt(
             "turn_instance_id": identity.turn_instance_id,
             "todo_id": str(identity.todo_id or ""),
             "replan_obligation_id": str(identity.replan_obligation_id or ""),
+            **(dict(identity.request_subject) if identity.request_subject is not None else {}),
             "settlement_effect_id": identity.effect_id,
             "stall_observation": "not_applicable",
             "source": "loopx_turn_run_once",
@@ -606,13 +618,15 @@ def heartbeat_receipt_view(
         details.get("replan_obligation_id")
     )
     effect_id = str(details.get("settlement_effect_id") or "").strip()
-    if (todo_id or replan_obligation_id) and effect_id:
+    request_subject = heartbeat_receipt_request_subject(event)
+    if (todo_id or replan_obligation_id or request_subject) and effect_id:
         identity = SettlementIdentity(
             goal_id=str(event.get("goal_id") or ""),
             agent_id=str(event.get("agent_id") or ""),
             todo_id=todo_id or None,
             turn_instance_id=turn_instance_id,
             replan_obligation_id=replan_obligation_id,
+            request_subject=request_subject,
         )
         receipt["settlement_identity"] = identity.as_dict()
         workspace_causality = delivery_workspace_causality_from_event_details(

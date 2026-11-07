@@ -151,10 +151,15 @@ export const goalWorkspaceM2Scenario = {
       await page.screenshot({path:resolve(outputDir,'overview-populated-mobile.png'),animations:'disabled'});
       await page.setViewportSize({width:1440,height:1000});
       const expandStart = performance.now();
-      for (const summary of await now.locator('.goal-work-more > summary').all()) {await summary.focus();await page.keyboard.press('Enter');}
-      // Each toggle renders asynchronously; the budget below covers all of them.
+      // Open each still-closed disclosure by keyboard. Owner groups can re-render
+      // while this runs, so a positional list could re-toggle an open group shut
+      // and skip another; the budget below covers every toggle.
+      const closedWork = now.locator('.goal-work-more:not([open]) > summary');
       const visibleWork = () => now.locator('.goal-owner-group [data-todo-id]:visible').count();
-      for (const deadline = Date.now() + 5000; await visibleWork() !== 200 && Date.now() < deadline;) await page.waitForTimeout(50);
+      for (const deadline = Date.now() + 5000; await visibleWork() !== 200 && Date.now() < deadline;) {
+        if (await closedWork.count()) {await closedWork.first().focus();await page.keyboard.press('Enter');}
+        else await page.waitForTimeout(50);
+      }
       assert.equal(await visibleWork(),200,"All work remains reachable in the original owner order");
       const expandMs = performance.now() - expandStart;
       assert.ok(expandMs < 2000, `Full 200-item expansion exceeded 2s budget: ${expandMs}ms`);

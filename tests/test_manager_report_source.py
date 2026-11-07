@@ -236,7 +236,7 @@ def test_actual_canonical_sources_join_a_completed_task_and_fixed_boundaries(tmp
     "https://example.org:invalid/file", "https://#missing-host",
 ])
 def test_exact_delivery_reference_disclosure_does_not_promote_private_or_unsafe_values(reference):
-    from loopx.chat_manager_history import _recorded_details
+    from loopx.chat.manager_history import _recorded_details
 
     run = {"agent_vision": {"path_delta": {"evidence_refs": [reference]}},
         "progress_observation": {"evidence_ids": ["evidence:original"]}}

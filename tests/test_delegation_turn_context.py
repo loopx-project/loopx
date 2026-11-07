@@ -1,5 +1,11 @@
 """Real receipt/store journeys: a Turn agenda does not complete or replay work."""
 import json
+import os
+from pathlib import Path
+import shlex
+import subprocess
+import sys
+import sysconfig
 
 import pytest
 
@@ -92,15 +98,39 @@ def test_separate_agent_has_no_access_to_another_receivers_agenda(flow):
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(tmp_path, monkeypatch, provider):
+@pytest.mark.parametrize("delivery", ["host_envelope", pytest.param("native_files",
+    marks=pytest.mark.skipif(os.name != "posix", reason="native context delivery requires POSIX"))])
+@pytest.mark.parametrize("partial", [False, True], ids=["unanswered", "partial"])
+@pytest.mark.parametrize("parent_context", ["off", "on"])
+def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(
+    tmp_path, monkeypatch, provider, delivery, partial, parent_context,
+):
     from control_plane.canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
-    from loopx.control_plane.testing.canary_harness import run_json_cli_result, write_fixture_registry
+    from loopx.control_plane.testing.canary_harness import write_fixture_registry
     from loopx.control_plane.todos.active_state_todo_parser import parse_todo_source
     from loopx.control_plane.todos.goal_todo_projection import retained_todo_summary_fields
     if provider == "sqlite":
         isolate_sqlite_runtime(tmp_path, monkeypatch)
+    # A module launched from the checkout can mask a stale inherited package.
+    # Exercise the installed console from the fixture project instead.
+    stale_package = tmp_path / "stale-release" / "loopx"
+    stale_package.mkdir(parents=True)
+    (stale_package / "__init__.py").write_text('raise RuntimeError("wrong source checkout")\n')
+    monkeypatch.setenv("PYTHONPATH", str(stale_package.parent))
+    console = Path(sysconfig.get_path("scripts")) / ("loopx.exe" if os.name == "nt" else "loopx")
+    assert console.is_file(), "Install this checkout's console with uv sync --extra test."
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", parent_context)
+    environment = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1])}
+
+    def run(*arguments):
+        result = subprocess.run(arguments, cwd=tmp_path, env=environment,
+            capture_output=True, text=True, encoding="utf-8", timeout=90)
+        assert result.stdout.strip(), result.stderr
+        return result.returncode, json.loads(result.stdout)
+
     root, registry, state = tmp_path / "runtime", tmp_path / "registry.json", tmp_path / "state.md"
+    prefix = [str(console), "--registry", str(registry), "--runtime-root", str(root), "--format", "json"]
     text = ("---\nstatus: active\n---\n# Goal\n## Objective\nQualify the report.\n## Agent Todo\n"
         "- [ ] [P1] Inspect the current report and return findings.\n"
         "  <!-- loopx:todo todo_id=todo_inspect status=open task_class=advancement_task claimed_by=worker action_kind=inspect_report -->\n"
@@ -121,17 +151,96 @@ def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(tmp_path, monk
     acknowledge(root, "research", "worker", receipt["request_id"], "adopt", "Continue the linked work", registry=registry)
     from loopx.control_plane.collaboration.links import link
     link(root, registry, "research", "worker", receipt["request_id"], ["todo_artifact"], [])
+    remaining_work = {"summary": "Validate the packaged repair", "resume_when": "The isolated package is available"}
+    if partial:
+        report(root, "research", "worker", receipt["request_id"], "conclusion", "The implementation is ready.",
+            remaining_work=remaining_work, registry=registry)
+    queued = deliver(root, registry, session={"session_id": "source", "channel_id": "manager"},
+        turn={"client_turn_id": "queued", "origin": "web", "message": "Return the checked result to this conversation."},
+        request={"goal_id": "research", "agent_id": "worker"})
+    acknowledge(root, "research", "worker", queued["request_id"], "adopt", "Return the result", registry=registry)
+    report(root, "research", "worker", queued["request_id"], "conclusion", "The isolated artifact passed.", registry=registry)
+    peer = request(root, registry, "research", "worker", "reviewer", "review-artifact", {
+        "schema_version": "collaboration_brief_v0", "purpose": "Independently verify the artifact",
+        "context": "A returned review still requires requester consumption", "constraints": [], "inputs": [],
+        "acceptance": ["Return checked findings"], "return_requirement": "Return to the original requester",
+    })
+    acknowledge(root, "research", "reviewer", peer["request_id"], "adopt", "Review the artifact", registry=registry)
+    report(root, "research", "reviewer", peer["request_id"], "conclusion", "The artifact retains an explicit limit.", registry=registry)
+    code, inbox = run(*prefix, "manager-inbox", "read", "--goal-id", "research", "--agent-id", "worker")
+    assert code == 0 and inbox["ok"]
+    assert inbox["peer_returns"]["items"][0]["request_id"] == peer["request_id"]
+    code, tracking = run(*prefix, "manager-inbox", "status", "--goal-id", "research", "--agent-id", "worker",
+        "--request-id", receipt["request_id"])
+    assert code == 0 and tracking["rows"][0]["read"]["at"]
+    before = {p.relative_to(root): p.read_bytes() for p in _root(root).rglob("*.json")}
+    if delivery == "native_files":
+        from loopx.control_plane.turn_driver.codex_context import codex_context_directory, codex_context_hook
+        (tmp_path / "captures").mkdir()
+        (tmp_path / "context").mkdir(mode=0o700)
+        monkeypatch.setenv("CODEX_THREAD_ID", "agenda-session")
+        directory = codex_context_directory(root=str(tmp_path / "context"), create=True)
+        codex_context_hook(directory, {"session_id": "agenda-session", "cwd": str(tmp_path),
+            "hook_event_name": "SessionStart", "source": "startup"})
     for turn_id in ("agenda-turn-one", "agenda-turn-two"):
-        code, packet = run_json_cli_result("quota", "should-run", "--goal-id", "research",
+        # This branch consumes machine JSON; the model-facing branch below must
+        # exercise the real capture transport even under an inline parent.
+        presentation = ["--turn-envelope", "--context-delivery", "off"] if delivery == "host_envelope" else [
+            "--codex-app", "--context-delivery", "on", "--decision-output-root", str(tmp_path / "captures"),
+            "--codex-context-root", str(tmp_path / "context")]
+        code, packet = run(*prefix, "quota", "should-run", "--goal-id", "research",
             "--agent-id", "worker",  "--turn-instance-id", turn_id,
-            "--turn-envelope", registry_path=registry, runtime_root=root)
-        assert code == 0, packet
-        source = next(row for row in packet["work_context"]["sources"] if row.get("hook_id") == "manager.context_inbox")
-        assert source["content"]["unfinished_delegations"]["items"][0]["request_id"] == receipt["request_id"]
-        assert any("manager-inbox read" in row["command"] for row in packet["required_reads"])
-        assert packet["work_context"]["complete"] is True
-        assert "Continue the linked work" not in json.dumps(source)
-        assert source["content"]["unfinished_delegations"]["items"][0]["todo_ids"] == ["todo_artifact"]
+            *presentation)
+        assert code == 0, (packet.get("error_code"), packet.get("reason"), packet.get("recovery"))
+        if delivery == "native_files":
+            if turn_id == "agenda-turn-one":
+                assert packet["mode"] == "full" and "first_read_command" in packet
+                command = packet["first_read_command"]
+            else:
+                # The native owner decides whether continuity permits a delta.
+                # Read this Turn's current capture without seeding an old baseline.
+                assert packet["mode"] in ("full", "delta")
+                command = packet["recovery"]["command"] + " --initial-read"
+            command += " --page-bytes 3000 --max-page-output-bytes 6000"
+            content = bytearray()
+            pages = 0
+            while True:
+                words = shlex.split(command)
+                assert words[:3] == [sys.executable, "-m", "loopx.entrypoint"]
+                code, page = run(*words)  # Preserve the producer's interpreter and argv.
+                assert code == 0 and page["ok"] and page["offset"] == len(content), page
+                content.extend(page["content"].encode("utf-8"))
+                pages += 1
+                if page["eof"]:
+                    assert page["next_offset"] is None and page["total_bytes"] == len(content)
+                    break
+                assert page["next_offset"] == len(content) > page["offset"]
+                command = page["next_command"]
+            assert pages > 1, "Exercise complete selected-context pagination."
+            from tests.control_plane.codex_checkpoint_fixture import selected_context_values
+
+            values = selected_context_values(content.decode("utf-8"))
+            pointer = next(key for key in values if key.endswith("/content/unfinished_delegations"))
+            content = {"unfinished_delegations": values[pointer],
+                "read_complete": values[pointer.removesuffix("unfinished_delegations") + "read_complete"]}
+            required_reads = values["/interaction_contract/agent_channel/required_reads"]
+        else:
+            source = next(row for row in packet["work_context"]["sources"] if row.get("hook_id") == "manager.context_inbox")
+            content, required_reads = source["content"], packet["required_reads"]
+            assert packet["work_context"]["complete"] is True
+        assert content["read_complete"] is False
+        rows = {row["request_id"]: row for row in content["unfinished_delegations"]["items"]}
+        assert set(rows) == {receipt["request_id"], queued["request_id"], peer["request_id"]}
+        row = rows[receipt["request_id"]]
+        assert row["todo_ids"] == ["todo_artifact"] and row["step"] == "review_request_work"
+        assert row.get("remaining_work") == (remaining_work if partial else None)
+        assert rows[queued["request_id"]]["step"] == "await_return_delivery"
+        assert rows[queued["request_id"]]["pending_return_count"] == 1
+        assert rows[peer["request_id"]]["step"] == "consume_peer_result"
+        assert any("manager-inbox read" in item["command"] for item in required_reads)
+        assert "Continue the linked work" not in json.dumps(content)
+        assert os.environ["LOOPX_CONTEXT_DELIVERY"] == parent_context
+    assert {p.relative_to(root): p.read_bytes() for p in _root(root).rglob("*.json")} == before
 
 
 def test_real_overflow_keeps_total_and_full_read_route(flow):

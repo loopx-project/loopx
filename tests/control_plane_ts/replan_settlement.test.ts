@@ -72,57 +72,35 @@ test("typed projection rejects a missing semantic obligation", () => {
   );
 });
 
-test("Todo lifecycle reentry preserves exact completion identities", () => {
-  assert.deepEqual(
-    projectTodoLifecycleSettlementReentry({
-      schema_version: TODO_LIFECYCLE_REENTRY_REQUEST_SCHEMA,
-      goal_id: "goal-example",
-      runtime_root: "/tmp/loopx runtime",
-      triggers: [
-        {
-          kind: "completed_advancement_without_successor",
-          todo_id: "todo_111111111111",
-          completion_turn_key: "turn-implement",
-        },
-        {
-          kind: "completed_advancement_without_successor",
-          todo_id: "todo_222222222222",
-        },
-      ],
-      lifecycle_actor_args: ["--agent-id", "current-agent"],
-      quota_scoped_args: [
-        "--agent-id",
-        "current-agent",
-        "--available-capability",
-        "shell",
-      ],
-    }),
-    {
-      schema_version: "todo_lifecycle_settlement_reentry_v0",
-      resolution_mode: "todo_lifecycle_settlement",
-      triggers: [
-        {
-          kind: "completed_advancement_without_successor",
-          todo_id: "todo_111111111111",
-          completion_turn_key: "turn-implement",
-          completion_identity_source: "turn_settlement",
-        },
-        {
-          kind: "completed_advancement_without_successor",
-          todo_id: "todo_222222222222",
-          completion_turn_key:
-            "local_completion_2fdda7fd139a77f97e72ca43d6e6a72a",
-          completion_identity_source: "unscoped_completion",
-        },
-      ],
-      next_cli_actions: [
-        "when no real successor remains for completed Todo todo_111111111111: loopx --runtime-root '/tmp/loopx runtime' todo complete --goal-id goal-example --todo-id todo_111111111111 --completion-identity-key turn-implement --agent-id current-agent --no-follow-up",
-        "when no real successor remains for completed Todo todo_222222222222: loopx --runtime-root '/tmp/loopx runtime' todo complete --goal-id goal-example --todo-id todo_222222222222 --completion-identity-key local_completion_2fdda7fd139a77f97e72ca43d6e6a72a --agent-id current-agent --no-follow-up",
-        "otherwise link or create one real runnable successor for the exact completed Todo; do not create lifecycle-only filler",
-        "loopx --runtime-root '/tmp/loopx runtime' --format json quota should-run --goal-id goal-example --agent-id current-agent --available-capability shell",
-      ],
-    },
-  );
+test("Todo lifecycle reentry preserves identities and separates scope closeout from independent work", () => {
+  const result = projectTodoLifecycleSettlementReentry({
+    schema_version: TODO_LIFECYCLE_REENTRY_REQUEST_SCHEMA,
+    goal_id: "goal-example", runtime_root: "/tmp/loopx runtime",
+    triggers: [
+      {kind: "completed_advancement_without_successor", todo_id: "todo_111111111111", completion_turn_key: "turn-implement"},
+      {kind: "completed_advancement_without_successor", todo_id: "todo_222222222222"},
+    ],
+    lifecycle_actor_args: ["--agent-id", "current-agent"],
+    quota_scoped_args: ["--agent-id", "current-agent", "--available-capability", "shell"],
+  });
+  assert.equal(result.resolution_mode, "todo_lifecycle_settlement");
+  assert.deepEqual(result.triggers, [
+    {kind: "completed_advancement_without_successor", todo_id: "todo_111111111111",
+      completion_turn_key: "turn-implement", completion_identity_source: "turn_settlement"},
+    {kind: "completed_advancement_without_successor", todo_id: "todo_222222222222",
+      completion_turn_key: "local_completion_2fdda7fd139a77f97e72ca43d6e6a72a", completion_identity_source: "unscoped_completion"},
+  ]);
+  const actions = result.next_cli_actions as string[];
+  assert.deepEqual(actions.slice(0, 2), [
+    "when no real successor remains for completed Todo todo_111111111111: loopx --runtime-root '/tmp/loopx runtime' todo complete --goal-id goal-example --todo-id todo_111111111111 --completion-identity-key turn-implement --agent-id current-agent --no-follow-up",
+    "when no real successor remains for completed Todo todo_222222222222: loopx --runtime-root '/tmp/loopx runtime' todo complete --goal-id goal-example --todo-id todo_222222222222 --completion-identity-key local_completion_2fdda7fd139a77f97e72ca43d6e6a72a --agent-id current-agent --no-follow-up",
+  ]);
+  assert.match(actions[2], /terminal Todo cannot accept new successor links/);
+  assert.match(actions[2], /mutable successor/);
+  assert.match(actions[2], /only when that is its real readiness condition/);
+  assert.match(actions[2], /preserve existing deferral, claims and gates/);
+  assert.match(actions[2], /not the Goal or other Todos/);
+  assert.equal(actions[3], "loopx --runtime-root '/tmp/loopx runtime' --format json quota should-run --goal-id goal-example --agent-id current-agent --available-capability shell");
 });
 
 test("Todo lifecycle reentry rejects untyped succession triggers", () => {
@@ -137,6 +115,41 @@ test("Todo lifecycle reentry rejects untyped succession triggers", () => {
     }),
     /kind is unsupported/,
   );
+});
+
+test("lifecycle closeout returns to the active Turn's complete guard route", () => {
+  const guard = ["loopx", "--registry", "/tmp/registry with spaces.json",
+    "--runtime-root", "/tmp/current runtime", "--format", "json", "quota", "should-run",
+    "--goal-id", "goal-example", "--agent-id", "current-agent",
+    "--runtime-profile", "generic_cli", "--available-capability", "shell",
+    "--turn-instance-id", "current-turn"];
+  const result = projectTodoLifecycleSettlementReentry({
+    schema_version: TODO_LIFECYCLE_REENTRY_REQUEST_SCHEMA,
+    goal_id: "goal-example",
+    triggers: [{kind: "completed_advancement_without_successor", todo_id: "todo_old",
+      completion_turn_key: "old-completion-turn"}],
+    lifecycle_actor_args: ["--agent-id", "current-agent"],
+    quota_guard_argv: guard,
+  });
+  const actions = result.next_cli_actions as string[];
+  assert.match(actions[0], /--completion-identity-key old-completion-turn/);
+  assert.doesNotMatch(actions[0], /current-turn/);
+  assert.equal(actions.at(-1), "loopx --registry '/tmp/registry with spaces.json' " +
+    "--runtime-root '/tmp/current runtime' --format json quota should-run --goal-id goal-example " +
+    "--agent-id current-agent --runtime-profile generic_cli --available-capability shell " +
+    "--turn-instance-id current-turn");
+  assert.deepEqual(guard.slice(-2), ["--turn-instance-id", "current-turn"]);
+});
+
+test("lifecycle reentry rejects malformed supplied guard arguments", () => {
+  for (const guard of [null, "loopx quota should-run", [], ["loopx", 1], [""]]) {
+    assert.throws(() => projectTodoLifecycleSettlementReentry({
+      schema_version: TODO_LIFECYCLE_REENTRY_REQUEST_SCHEMA,
+      goal_id: "goal-example",
+      triggers: [{kind: "completed_advancement_without_successor", todo_id: "todo_old"}],
+      quota_guard_argv: guard,
+    }), /quota_guard_argv/);
+  }
 });
 
 test("Todo lifecycle reentry rejects a non-string runtime root", () => {

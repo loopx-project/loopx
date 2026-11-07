@@ -22,7 +22,7 @@ from loopx.capabilities.periodic_report.incremental import read_periodic_report_
 steward = steward_fixture
 
 
-def configured_local_report(steward, tmp_path, monkeypatch, provider="sqlite", start_date="2001-01-01"):
+def configured_local_report(steward, tmp_path, monkeypatch, provider="sqlite", start_date="2001-01-01", *, review_required=False):
     """An ordinary local Goal/Agent Session, with no report-enabled private binding."""
     from loopx.agent_registry import load_goal_from_registry
     from loopx.configure_goal import configure_goal
@@ -46,9 +46,60 @@ def configured_local_report(steward, tmp_path, monkeypatch, provider="sqlite", s
         "timezone": "UTC", "rrule": "FREQ=DAILY;BYHOUR=9;BYMINUTE=0", "start_date": start_date}
     config = {"enabled": True, "profile_preset": "weekly-progress", "route_ref": "managed-session:" + session["session_id"],
         "timezone": "UTC", "schedule": schedule}
+    if review_required:
+        config["review_required"] = True
     assert configure_goal(registry_path=runtime.registry_path, goal_id=actor["goal_id"],
         periodic_report_configuration=config, execute=True)["ok"]
     return session, ManagedSessionReports(runtime), config, task["todo_id"]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("lost_after_commit", [False, True])
+def test_review_ready_recovers_after_queue_failure_without_repeating_original_model(steward, tmp_path, monkeypatch, provider, lost_after_commit):
+    from loopx.capabilities.periodic_report import review
+    from loopx.chat_store import ChatSessionStore
+    from loopx.chat_runtime import ChatRuntimeController
+    from loopx.configure_goal import configure_goal
+    session, reports, config, _ = configured_local_report(steward, tmp_path, monkeypatch, provider, review_required=True)
+    store, runtime, bot, *_ = steward
+    # The existing calendar can start preparation before the user's review time.
+    # A synthetic clock/run proves dispatch mechanics, not a natural deadline SLA.
+    config["timezone"] = config["schedule"]["timezone"] = "Asia/Shanghai"
+    config["schedule"]["rrule"] = "FREQ=DAILY;BYHOUR=8;BYMINUTE=30"
+    assert configure_goal(registry_path=runtime.registry_path, goal_id=session["goal_id"],
+        periodic_report_configuration=config, execute=True)["ok"]
+    sid = session["session_id"]
+    install_model(steward, tmp_path, sid)
+    runtime.project_contexts.conversation_bindings = None
+    original_request = review.request_report_review
+    def interrupted_request(**kwargs):
+        if lost_after_commit:
+            original_request(**kwargs)
+        raise OSError("Synthetic review queue response lost")
+    with monkeypatch.context() as failure:
+        failure.setattr(review, "request_report_review", interrupted_request)
+        first = finish(runtime, pump_steward_monitors(runtime)[0])
+    assert first["status"] == "failed"
+    window = read_cadence_journal(runtime_root=reports.root, goal_id=session["goal_id"])["window"]
+    folder = attempt_directory(reports.root, window)
+    body = (folder / "report.md").read_text()
+    assert not any(row["text"] == body for row in store.messages(sid))
+    calls, writes = steward[5].read_bytes(), list(bot.writes)
+    runtime.close()
+    restarted = ChatRuntimeController(store=ChatSessionStore(store.root.parent), codex_bin=runtime.codex_bin,
+        registry_path=runtime.registry_path, project_contexts=runtime.project_contexts)
+    try:
+        assert not pump_steward_monitors(restarted)
+        scope = dict(registry_path=runtime.registry_path, runtime_root=reports.root, goal_id=session["goal_id"])
+        rows = review.report_review_inventory(**scope)
+        assert len(rows) == 1 and rows[0]["status"] == "open"
+        readback = review.read_report_review(**scope, todo_id=rows[0]["todo_id"])
+        assert readback["generation_id"] == validate_private_generation(folder)["generation_id"]
+        assert readback["source_session_id"] == sid
+        assert len([row for row in store.messages(sid) if row["text"] == body]) == 1
+        assert steward[5].read_bytes() == calls and bot.writes == writes
+    finally:
+        restarted.close()
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -78,15 +129,24 @@ def test_local_report_rejects_source_substitution_before_original_model(steward,
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_local_agent_calendar_report_uses_original_worker_and_verified_core_return(steward, tmp_path, monkeypatch, provider):
+@pytest.mark.parametrize("recorded_reference", [None, "https://example.org/review/42"])
+def test_local_agent_calendar_report_uses_original_worker_and_verified_core_return(steward, tmp_path, monkeypatch, provider, recorded_reference):
     from loopx.capabilities.native_chat.steward_monitor import StewardMonitor
     from loopx.capabilities.native_chat.steward_managed_mode import ManagedSessionTurn
     session, reports, _, task_id = configured_local_report(steward, tmp_path, monkeypatch, provider)
     store, runtime, bot, _, _, capture, _ = steward
     sid = session["session_id"]
+    if recorded_reference:
+        from test_native_steward_turn_host import cli
+        cli(runtime, "todo", "update", "--goal-id", session["goal_id"], "--todo-id", task_id,
+            "--agent-id", session["managed_agent_id"], "--evidence", recorded_reference)
     with monkeypatch.context() as changed_source:
         changed_source.setattr(inspect, "getsource", lambda *_: "not the imported model callable")
         install_model(steward, tmp_path, sid)
+    if recorded_reference:
+        helper = tmp_path / "report_model.py"
+        helper.write_text(helper.read_text().replace('ref = request["facts"][0]["source_ref"]',
+            "ref = " + repr(recorded_reference)))
     # A host's default codec must not decide how frozen Chinese artifacts read.
     real_read_text = Path.read_text
     def host_codec_read_text(path, *args, **kwargs):
@@ -111,9 +171,16 @@ def test_local_agent_calendar_report_uses_original_worker_and_verified_core_retu
     assert frozen["destination"] == "original_managed_session_full_body"
     assert source["goal_id"] == session["goal_id"] and source["complete_native_task_read"]
     assert task_id in {row["todo_id"] for row in source["rows"]}
+    if recorded_reference:
+        citation = next(fact for fact in frozen["facts"] if fact["source_ref"] == recorded_reference)
+        assert citation["status"] == "unverified" and "todo:" + task_id in citation["summary"]
     assert frozen["actual_work_window"]["end_at"] == window["due_at"]
     assert datetime.fromisoformat(window["due_at"]) - datetime.fromisoformat(window["start_at"]) == timedelta(days=1)
     body = (folder / "report.md").read_text(encoding="utf-8")
+    if recorded_reference:
+        assert f"]({recorded_reference})" in body
+        bundle = json.loads((folder / "generation-bundle.json").read_text(encoding="utf-8"))
+        assert all(recorded_reference in artifact["content"] for artifact in bundle["artifacts"])
     messages = store.messages(sid)
     assert messages[:len(before)] == before
     returned = [row for row in messages if row["role"] == "agent" and row["text"] == body]
@@ -491,8 +558,9 @@ def install_model(steward, tmp_path, sid, *, result_kind="validated_completion")
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("local_session", [False, True])
 @pytest.mark.parametrize("recovery_succeeds", [False, True])
+@pytest.mark.parametrize("prior_context", [False, True], ids=["current_context", "prior_context"])
 def test_report_quota_failure_continues_once_after_native_no_effects_and_available_allowance(
-        steward, tmp_path, monkeypatch, provider, local_session, recovery_succeeds):
+        steward, tmp_path, monkeypatch, provider, local_session, recovery_succeeds, prior_context):
     import time
     from datetime import timezone
     from loopx.chat_agent import CodexChatAgentError
@@ -535,15 +603,47 @@ def test_report_quota_failure_continues_once_after_native_no_effects_and_availab
     journal_path = turn_journal_path(reports.root, goal_id=actor["goal_id"], turn_key=native["resume_turn_key"])
     frozen = original_path.read_bytes(), journal_path.read_bytes()
     _, window = reports.current_window(owner)
+    failed_health = reports.health(owner)
+    assert failed_health["execution_failed"] and not failed_health["publication_verified"]
+    assert reports._known_generation_failure(actor, window) is None
+    if not local_session:
+        assert failed_health["delivery_status"] == "not_generated"
+    # Failure visibility must stay bound to this exact actor/window, including
+    # when the original Chat envelope itself says completed.
+    import copy
+    from loopx.capabilities.native_chat import steward_turn
+    for field, value in [("actor", {**actor, "agent_id": "another-agent"}),
+            ("work_kind", "monitor"), ("report_window_id", "another-window"),
+            ("report_subscription_revision", "another-revision")]:
+        foreign = copy.deepcopy(original)
+        foreign["loopx_request"][field] = value
+        with monkeypatch.context() as changed:
+            changed.setattr(steward_turn, "report_turn", lambda *_: foreign)
+            assert not reports.health(owner)["execution_failed"]
+    assert frozen == (original_path.read_bytes(), journal_path.read_bytes())
     observations = []
-    proof = {"thread_id": store.load_session(sid)["upstream_thread_id"],
+    session = store.load_session(sid)
+    refused_thread = session["upstream_thread_id"]
+    if prior_context:
+        # The native host resumes the requested thread, rather than the base
+        # fixture's fixed id. Keep context identity checks enabled.
+        fake = Path(runtime.codex_bin)
+        fake.write_text(fake.read_text().replace('"durable-thread"',
+            'request.get("params", {}).get("threadId", "durable-thread")'))
+        store.update_session(sid, upstream_context_history=[*(session.get("upstream_context_history") or []),
+            {"thread_id": refused_thread, "manager_context_version": session.get("manager_context_version")}],
+            upstream_thread_id="native-context-after-quota-refusal")
+    expected_threads = [store.load_session(sid)["upstream_thread_id"]]
+    if prior_context:
+        expected_threads.append(refused_thread)
+    proof = {"thread_id": refused_thread,
         "turn_id": original["upstream_turn_id"], "only_original_user_item": True,
         "codex_error_info": "usageLimitExceeded", "quota_available": False,
         "quota_observed_at": time.time()}
 
     def observe(**kwargs):
         observations.append(kwargs)
-        return dict(proof)
+        return dict(proof) if refused_thread in kwargs["thread_ids"] else None
 
     monkeypatch.setattr(CodexAppServerAdapter, "failed_request_observation", staticmethod(observe))
     runtime._steward_monitor_next_check.clear()
@@ -556,7 +656,8 @@ def test_report_quota_failure_continues_once_after_native_no_effects_and_availab
     old_adapter = runtime.adapters[sid]
     old_thread = store.load_session(sid)["upstream_thread_id"]
     continued = pump_steward_monitors(runtime)
-    assert len(continued) == 1, "the original report must not remain stranded after proven quota recovery"
+    assert len(continued) == 1, ("the original report must not remain stranded after proven quota recovery; "
+        f"native contexts observed: {[row['thread_ids'] for row in observations]}")
     result = finish(runtime, continued[0])
     assert runtime.adapters[sid] is not old_adapter
     assert old_adapter.session.process.poll() is not None
@@ -568,9 +669,10 @@ def test_report_quota_failure_continues_once_after_native_no_effects_and_availab
     assert request["actor"] == original["loopx_request"]["actor"]
     assert request["turn_instance_id"] == original["loopx_request"]["turn_instance_id"] + ".quota-recovery"
     assert result["response"]["native_loopx"]["status"] == ("committed" if recovery_succeeds else "failed"), result
+    assert reports.health(owner)["execution_failed"] is not recovery_succeeds
     assert frozen == (original_path.read_bytes(), journal_path.read_bytes())
     assert observations and all(x["turn_id"] == original["upstream_turn_id"] for x in observations)
-    assert all(x["thread_ids"] == [proof["thread_id"]] for x in observations)
+    assert all(x["thread_ids"] == expected_threads for x in observations)
     if not recovery_succeeds:
         assert not reports.health(owner)["publication_verified"]
         assert len(calls) == 2
@@ -597,6 +699,169 @@ def test_report_quota_failure_continues_once_after_native_no_effects_and_availab
             assert transport.steward_reports.reconcile() == 1
         assert reports.health(owner)["publication_verified"]
         assert frozen == (original_path.read_bytes(), journal_path.read_bytes())
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("unsafe_proof", ["foreign_thread", "observed_effects"])
+def test_report_quota_context_history_does_not_admit_foreign_or_effectful_failure(
+        steward, tmp_path, monkeypatch, provider, unsafe_proof):
+    import time
+    from loopx.chat_agent import CodexChatAgentError
+    from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter
+    from loopx.control_plane.turn_driver.journal_store import turn_journal_path
+
+    sid, actor, reports, _ = configured(steward, tmp_path, monkeypatch, provider)
+    store, runtime, _, _, binding, capture, _ = steward
+    calls = []
+
+    def exhausted(adapter, _prompt, event_sink):
+        calls.append(adapter.upstream_thread_id)
+        event_sink("turn.started", {"upstream_turn_id": "quota-refused-native-turn"})
+        raise CodexChatAgentError("The provider allowance was exhausted.")
+
+    monkeypatch.setattr(CodexAppServerAdapter, "start_turn", exhausted)
+    original = finish(runtime, pump_steward_monitors(runtime)[0])
+    native = original["response"]["native_loopx"]
+    assert native["status"] == "failed" and native["result_kind"] == "host_failure"
+    session = store.load_session(sid)
+    refused_thread = session["upstream_thread_id"]
+    fake = Path(runtime.codex_bin)
+    fake.write_text(fake.read_text().replace('"durable-thread"',
+        'request.get("params", {}).get("threadId", "durable-thread")'))
+    store.update_session(sid, upstream_context_history=[*(session.get("upstream_context_history") or []),
+        {"thread_id": refused_thread, "manager_context_version": session.get("manager_context_version")}],
+        upstream_thread_id="native-context-after-quota-refusal")
+    journal = turn_journal_path(reports.root, goal_id=actor["goal_id"], turn_key=native["resume_turn_key"])
+    turn_folder = store._turn_path(sid, original["turn_id"]).parent
+    before = {path.name: path.read_bytes() for path in turn_folder.glob("*.json")}
+    frozen, messages, model_calls = journal.read_bytes(), store.messages(sid), capture.read_bytes()
+    observed = []
+
+    def observe(**kwargs):
+        observed.append(kwargs)
+        return {"thread_id": "unrecorded-foreign-thread" if unsafe_proof == "foreign_thread" else refused_thread,
+            "turn_id": original["upstream_turn_id"], "only_original_user_item": unsafe_proof != "observed_effects",
+            "codex_error_info": "usageLimitExceeded", "quota_available": True, "quota_observed_at": time.time()}
+
+    monkeypatch.setattr(CodexAppServerAdapter, "failed_request_observation", staticmethod(observe))
+    runtime._steward_monitor_next_check.clear()
+    assert pump_steward_monitors(runtime) == []
+    assert len(calls) == 1 and observed
+    assert {path.name: path.read_bytes() for path in turn_folder.glob("*.json")} == before
+    assert (journal.read_bytes(), store.messages(sid), capture.read_bytes()) == (frozen, messages, model_calls)
+    assert reports.health(binding["binding_id"])["execution_failed"]
+    assert not reports.health(binding["binding_id"])["publication_verified"]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("change", ["unrelated_input", "read_counter", "queued_input", "binding_scope",
+    "original_changed", "original_changed_after_identity"])
+def test_report_quota_observation_keeps_publication_available_and_rechecks_original(
+        steward, tmp_path, monkeypatch, provider, change):
+    import copy
+    import threading
+    import time
+    from loopx.chat_agent import CodexChatAgentError
+    from loopx.file_lock import exclusive_file_lock
+    from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter
+    from loopx.capabilities.native_chat.steward_turn import StewardTurnHost, native_steward_client_id
+    from loopx.control_plane.turn_driver.journal_store import turn_journal_path
+
+    sid, actor, reports, _ = configured(steward, tmp_path, monkeypatch, provider)
+    store, runtime, _, transport, binding, capture, _ = steward
+    install_model(steward, tmp_path, sid)
+
+    def exhausted(_adapter, _prompt, event_sink):
+        event_sink("turn.started", {"upstream_turn_id": "quota-refused-native-turn"})
+        raise CodexChatAgentError("The provider allowance was exhausted.")
+
+    monkeypatch.setattr(CodexAppServerAdapter, "start_turn", exhausted)
+    original = finish(runtime, pump_steward_monitors(runtime)[0])
+    native = original["response"]["native_loopx"]
+    assert native["status"] == "failed" and native["host_failure"]["kind"] == "unknown"
+    _, window = reports.current_window(binding["binding_id"])
+    journal = turn_journal_path(reports.root, goal_id=actor["goal_id"], turn_key=native["resume_turn_key"])
+    original_journal, calls = journal.read_bytes(), capture.read_bytes()
+    other = store.create_session(goal_id=actor["goal_id"], agent_id="codex", adapter_kind="codex_app_server",
+        upstream_thread_id="unrelated-user-thread")
+    entered, released = threading.Event(), threading.Event()
+    results, errors, observations = [], [], []
+    proof = {"thread_id": store.load_session(sid)["upstream_thread_id"],
+        "turn_id": original["upstream_turn_id"], "only_original_user_item": True,
+        "codex_error_info": "usageLimitExceeded", "quota_available": change not in {"unrelated_input", "read_counter"},
+        "quota_observed_at": time.time()}
+
+    def observe(**_kwargs):
+        observations.append(_kwargs)
+        entered.set()
+        assert released.wait(10), "quota observation fixture was not released"
+        return dict(proof)
+
+    def change_original():
+        changed = copy.deepcopy(original["response"])
+        changed["native_loopx"]["reason"] = "Retained source changed during observation"
+        store.update_turn(sid, original["turn_id"], response=changed)
+
+    observe_identity = StewardTurnHost._observe
+
+    def identity(host, actor):
+        observed = observe_identity(host, actor)
+        if change == "original_changed_after_identity":
+            with runtime.lock:
+                change_original()
+        return observed
+
+    def submit():
+        try:
+            request = original["loopx_request"]
+            results.append(StewardTurnHost(runtime).submit(binding["binding_id"], report_window=window,
+                **{key: request[key] for key in ("turn_instance_id", "todo_id", "work_kind", "validation_command")}))
+        except Exception as exc:
+            errors.append(exc)
+
+    monkeypatch.setattr(CodexAppServerAdapter, "failed_request_observation", staticmethod(observe))
+    monkeypatch.setattr(StewardTurnHost, "_observe", identity)
+    worker = threading.Thread(target=submit)
+    worker.start()
+    available = False
+    queued = None
+    try:
+        assert entered.wait(5)
+        available = runtime.lock.acquire(timeout=.5)
+        if available:
+            with exclusive_file_lock(transport.bindings.path, timeout_seconds=.5):
+                if change in {"unrelated_input", "queued_input"}:
+                    queued, created = store.create_queued_turn(other["session_id"] if change == "unrelated_input" else sid,
+                        client_turn_id="human-during-quota", message="Keep this ordinary input available", origin="web")
+                    assert created
+                elif change == "original_changed":
+                    change_original()
+                elif change == "read_counter":
+                    store.update_turn(sid, original["turn_id"],
+                        sse_reconnect_count=original["sse_reconnect_count"] + 1)
+            if change == "binding_scope":
+                transport.bindings.configure(transport_ref="steward-app", project_ref=binding["project_ref"],
+                    executor_endpoint_id="codex", context_kind="steward", goal_scope="selected")
+    finally:
+        if available:
+            runtime.lock.release()
+        else:
+            proof["quota_available"] = False  # A failing baseline must not start model work.
+        released.set()
+        worker.join(10)
+    assert not worker.is_alive()
+    assert available, "quota metadata IO prevented ordinary input and binding publication"
+    assert len(observations) == 1
+    assert journal.read_bytes() == original_journal and capture.read_bytes() == calls
+    continued = native_steward_client_id(actor, original["loopx_request"]["turn_instance_id"] + ".quota-recovery")
+    assert store.turn_for_client(sid, continued) is None
+    if change in {"unrelated_input", "read_counter"}:
+        assert not errors and results == [(store.load_turn(sid, original["turn_id"]), False)]
+        if queued:
+            assert store.load_turn(other["session_id"], queued["turn_id"])["status"] == "queued"
+    else:
+        assert len(errors) == 1 and isinstance(errors[0], ValueError), errors
+        assert results == []
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -776,10 +1041,13 @@ def embedded_report_python(tmp_path, monkeypatch):
     import os
     from types import SimpleNamespace
     from loopx.capabilities.native_chat import steward_reports
+    # A checkout-wide source bootstrap would make this empty child import
+    # LoopX even though the real embedding host has not installed it.
+    monkeypatch.delenv("PYTHONPATH", raising=False)
     folder = tmp_path / "embedded-python"
     subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(folder)], check=True)
     python = folder / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-    missing = subprocess.run([str(python), "-I", "-c", "import loopx"],
+    missing = subprocess.run([str(python), "-c", "import loopx"],
         cwd=tmp_path, capture_output=True, text=True)
     assert missing.returncode != 0 and "ModuleNotFoundError" in missing.stderr
     monkeypatch.setattr(steward_reports, "sys", SimpleNamespace(executable=str(python)))
@@ -988,6 +1256,9 @@ def test_original_due_report_freezes_once_and_returns_full_body_after_native_set
     sid, actor, reports, _ = configured(steward, tmp_path, monkeypatch, provider)
     install_model(steward, tmp_path, sid, result_kind=result_kind)
     calls, writes, history = capture.read_bytes(), list(bot.writes), store.messages(sid)
+    assert transport.ingress.observe() == []
+    assert transport.ingress.health(binding["binding_id"])["status"] == "verified"
+    assert (capture.read_bytes(), bot.writes) == (calls, writes)
     thread = store.load_session(sid)["upstream_thread_id"]
     turns = pump_steward_monitors(runtime)
     assert len(turns) == 1 and turns[0]["session_id"] == sid
@@ -1023,10 +1294,34 @@ def test_original_due_report_freezes_once_and_returns_full_body_after_native_set
     assert proof["verified"] and proof["text"] == body.strip()
     assert len(body.encode()) > 40000  # Exercise the original multipart full-body sender.
     after = capture.read_bytes(), list(bot.writes)
+    assert transport.ingress.observe() == []
+    assert transport.ingress.health(binding["binding_id"])["status"] == "verified"
     runtime._steward_monitor_next_check.clear()
     assert not pump_steward_monitors(runtime)
     assert transport.steward_reports.reconcile() == 0
     assert after == (capture.read_bytes(), bot.writes)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_report_fixture_ingress_reads_all_pages_without_admitting_missed_business(
+        steward, tmp_path, monkeypatch, provider):
+    import time
+
+    store, runtime, bot, transport, binding, capture, _ = steward
+    sid, _, _, _ = configured(steward, tmp_path, monkeypatch, provider)
+    for index in range(55):
+        event = bot.event("steward-app", f"missed-{index}", f"Uncaptured private source {index}")
+        bot.messages[event["message_id"]]["create_time"] = str(int((time.time() - 30) * 1000))
+    before = store.messages(sid), capture.read_bytes(), list(bot.writes)
+    assert transport.ingress.observe() == ["steward-app"]
+    health = transport.ingress.health(binding["binding_id"])
+    assert health["status"] == "gap" and health["source_gap_count"] == health["without_reply_count"] == 55
+    assert transport.ingress.observe() == []  # Observation does not replay an effect or reconnect twice.
+    assert before == (store.messages(sid), capture.read_bytes(), bot.writes)
+    pages = [args for args in bot.calls if "+chat-messages-list" in args]
+    assert any("--page-token" in args for args in pages)
+    receipt = transport.ingress._path(binding["binding_id"]).read_text()
+    assert "Uncaptured private source" not in receipt
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -1079,7 +1374,10 @@ def test_original_pump_resumes_exact_prelaunch_rejection_once_without_replaying_
         first = pump_steward_monitors(runtime)[0]
         rejected = finish(runtime, first)
     failure = rejected["response"]["native_loopx"]
-    assert failure["error_code"] == "stale_goal_authority", rejected
+    assert failure["status"] == "failed" and failure["result_kind"] == "host_failure", rejected
+    assert failure["host_failure"] == {"schema_version": "loopx_turn_host_failure_v0",
+        "kind": "contract_rejected", "attempt": 1, "retryable": False}
+    assert failure["reason"] == "first-party Host runtime rejected: stale_goal_authority"
     assert rejected["delta_count"] == 0 and rejected["upstream_turn_id"] is None
     native = turn_journal_path(reports.root, goal_id=actor["goal_id"], turn_key=failure["resume_turn_key"])
     assert json.loads(native.read_text())["host_attempt_count"] == 1
@@ -1100,7 +1398,8 @@ def test_original_pump_resumes_exact_prelaunch_rejection_once_without_replaying_
         completed = finish(runtime, retry)
     assert completed["status"] == "completed", {key: completed.get(key) for key in ("status", "error", "error_code", "response")}
     if reject_recovery:
-        assert completed["response"]["native_loopx"]["error_code"] == "stale_goal_authority"
+        assert completed["response"]["native_loopx"]["host_failure"]["kind"] == "contract_rejected"
+        assert completed["response"]["native_loopx"]["host_failure"]["attempt"] == 2
         before = capture.read_bytes(), list(bot.writes), native.read_bytes()
         for _ in range(2):
             runtime._steward_monitor_next_check.clear()
@@ -1128,6 +1427,51 @@ def test_original_pump_resumes_exact_prelaunch_rejection_once_without_replaying_
         assert not pump_steward_monitors(runtime)
         assert transport.steward_reports.reconcile() == 0
     assert bot.writes == sent and capture.read_bytes() == calls
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("stage", ["unknown_before_publication", "after_publication"])
+def test_report_launch_recovery_never_reclassifies_unknown_or_published_work(steward, tmp_path, monkeypatch, provider, stage):
+    from loopx.chat_agent import CodexChatAgentSession
+    from loopx.control_plane.goals.first_party_host_admission import FirstPartyHostRuntimeRejected
+    from loopx.control_plane.turn_driver.journal_store import turn_journal_path
+
+    store, runtime, bot, transport, _, capture, _ = steward
+    sid, actor, reports, _ = configured(steward, tmp_path, monkeypatch, provider)
+    install_model(steward, tmp_path, sid)
+    calls = capture.read_bytes()
+    write = CodexChatAgentSession._write
+
+    def uncertain_write(self, payload, **kwargs):
+        if payload.get("method") != "turn/start":
+            return write(self, payload, **kwargs)
+        if stage == "unknown_before_publication":
+            raise OSError("publication outcome unavailable")
+        write(self, payload, **kwargs)
+        # The same exception after the guarded publication is deliberately not
+        # evidence that this host invocation did nothing.
+        raise FirstPartyHostRuntimeRejected("stale_goal_authority")
+
+    with monkeypatch.context() as fault:
+        fault.setattr(CodexChatAgentSession, "_write", uncertain_write)
+        first = pump_steward_monitors(runtime)[0]
+        done = finish(runtime, first)
+    result = done["response"]["native_loopx"]
+    if stage == "unknown_before_publication":
+        assert result["host_failure"]["kind"] == "unknown"
+    else:
+        assert result["error_code"] == "stale_goal_authority"
+        assert "host_failure" not in result
+    native = turn_journal_path(reports.root, goal_id=actor["goal_id"], turn_key=result["resume_turn_key"])
+    starts = [json.loads(line) for line in capture.read_bytes()[len(calls):].splitlines()
+        if json.loads(line).get("method") == "turn/start"]
+    assert len(starts) == (1 if stage == "after_publication" else 0)
+    before = native.read_bytes(), store.load_turn(sid, first["turn_id"]), capture.read_bytes(), list(bot.writes)
+    for _ in range(2):
+        runtime._steward_monitor_next_check.clear()
+        assert not pump_steward_monitors(runtime)
+        assert transport.steward_reports.reconcile() == 0
+    assert (native.read_bytes(), store.load_turn(sid, first["turn_id"]), capture.read_bytes(), bot.writes) == before
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

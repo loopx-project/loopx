@@ -2,6 +2,20 @@ import assert from "node:assert/strict";
 import { conversationReturnSessions, conversationPendingReturnSessions, reconcileConversationHistory, reconcileConversationReturns } from "./conversation-returns.ts";
 
 const collaboration = { returns: [] };
+const queuedInput = [{sourceSessionId: "queued-session", sourceMessageId: "input", sourceTurnId: "queued-turn",
+  role: "user", text: "Original input"}];
+const editedInput = {message_id: "input", turn_id: "queued-turn", role: "user", text: "Corrected input", queue_input_revision: 1};
+const corrected = reconcileConversationReturns(queuedInput, "queued-session", [editedInput], () => assert.fail("no duplicate input"));
+assert.equal(corrected[0].text, "Corrected input");
+assert.equal(reconcileConversationReturns(queuedInput, "queued-session", [{...editedInput, role: "agent"}], () => assert.fail()), queuedInput);
+assert.equal(reconcileConversationReturns(queuedInput, "queued-session", [{...editedInput, turn_id: "other-turn"}], () => assert.fail()), queuedInput);
+const cancelledInput = {...editedInput, queue_input_revision: 2, queue_input_cancelled: true};
+const cancelled = reconcileConversationReturns(corrected, "queued-session", [cancelledInput], () => assert.fail("no duplicate input"));
+assert.equal(cancelled[0].queueInputCancelled, true);
+assert.equal(reconcileConversationReturns(cancelled, "queued-session", [editedInput], () => assert.fail()), cancelled, "stale reads cannot revert cancellation");
+assert.equal(reconcileConversationReturns(queuedInput, "other-session", [cancelledInput], () => assert.fail()), queuedInput);
+const liveAnswer = [{...queuedInput[0], role: "assistant", pending: true, text: "Live answer"}];
+assert.equal(reconcileConversationReturns(liveAnswer, "queued-session", [{...cancelledInput, role: "agent"}], () => assert.fail())[0].text, "Live answer");
 const original = [
   { sourceSessionId: "old", sourceMessageId: "brief", collaboration, text: "Original brief" },
   { sourceSessionId: "current", sourceMessageId: "brief", text: "New conversation" },
@@ -86,7 +100,21 @@ assert.equal(recoveredInstructions.find(row => row.text === "My request").source
 assert.equal(recoveredInstructions.find(row => row.text === "Chinese first").sourceMessageId, "instruction-1");
 assert.equal(recoveredInstructions.find(row => row.text === "Do not publish").sourceMessageId, "instruction-2");
 assert.equal(reconcileConversationHistory(recoveredInstructions, withInstructions, createHistory), recoveredInstructions);
-console.log("conversation-returns: passed (session isolation, late return, deduplication, transport uncertainty, stream preservation and continued revision observation)");
+// A source-backed view updates only the matching user's canonical input.
+const replyContext = {source_text: "Compare this change", parent: {message_id: "original-parent", content: "Earlier constraint", complete: true}};
+const rawReply = {message_id: "reply-user", turn_id: "reply-turn", role: "user", text: "Frozen model input", reply_context: replyContext};
+const replyRows = [
+  {sourceSessionId: "original", sourceMessageId: "reply-user", role: "user", text: "Frozen model input"},
+  {sourceSessionId: "foreign", sourceMessageId: "reply-user", role: "user", text: "Keep foreign text"},
+  {sourceSessionId: "original", sourceMessageId: "answer", role: "assistant", text: "Live streamed answer"},
+];
+const projectedReply = reconcileConversationReturns(replyRows, "original", [rawReply, {message_id: "answer", role: "agent", text: "Stored answer"}], createReply);
+assert.equal(projectedReply[0].text, "Compare this change");
+assert.deepEqual(projectedReply[0].replyContext, replyContext);
+assert.equal(projectedReply[1], replyRows[1]);
+assert.equal(projectedReply[2].text, "Live streamed answer");
+assert.equal(reconcileConversationReturns(projectedReply, "original", [rawReply], createReply), projectedReply);
+console.log("conversation-returns: passed (session isolation, late return, deduplication, transport uncertainty, stream preservation, reply context and continued revision observation)");
 // A fast history read may add the stored queue row before its HTTP receipt
 // hydrates the original bubble. Both now carry the same canonical identity.
 const queueRace = [
@@ -98,3 +126,57 @@ assert.equal(queueReadback.length, 1, "Queue admission/history races retain exac
 assert.equal(queueReadback[0].sourceMessageId, "user-message");
 const crossSession = [...queueReadback, {...queueReadback[0], sourceSessionId: "different"}];
 assert.equal(reconcileConversationHistory(crossSession, [storedRoles[0]], createHistory).length, 2, "Message ids are scoped to their original Session");
+
+// One recipient's delivered result must not hide another outstanding answer.
+const multiple = [{sourceSessionId: "original", text: "Ask both", collaborations: [
+  {request_id: "a", returns: [{phase: "conclusion", status: "delivered"}]},
+  {request_id: "b", returns: []},
+]}];
+assert.deepEqual(conversationPendingReturnSessions(multiple), ["original"]);
+const both = multiple[0].collaborations.map(row => ({...row, returns: [{phase: "conclusion", status: "delivered"}]}));
+const identified = [{...multiple[0], sourceMessageId: "multi"}];
+const observedBoth = reconcileConversationReturns(identified, "original", [
+  {message_id: "multi", collaborations: both},
+], createReply);
+assert.equal(observedBoth[0].text, "Ask both");
+assert.deepEqual(conversationPendingReturnSessions(observedBoth), []);
+assert.equal(reconcileConversationReturns(observedBoth, "original", [{message_id: "multi"}], createReply), observedBoth);
+
+// History can be displayed before the original admission ACK supplies the
+// live row's identity. Its stream callback target must survive that handoff.
+const historyFirst = {sourceSessionId: "current", sourceMessageId: "agent-message", sourceTurnId: "same-turn",
+  role: "assistant", text: "Stored answer", marker: "history"};
+const lateBoundStream = {sourceSessionId: "current", sourceTurnId: "same-turn", role: "assistant",
+  text: "Live fragment", pending: true, marker: "stream", activity: ["Running"]};
+const admittedAfterRead = reconcileConversationHistory([historyFirst, lateBoundStream], [storedRoles[1]], createHistory);
+assert.equal(admittedAfterRead.length, 1, "One canonical reply remains when history arrived first");
+assert.equal(admittedAfterRead[0].marker, "stream", "The original stream callback target and controls survive");
+assert.equal(admittedAfterRead[0].sourceMessageId, "agent-message");
+assert.equal(admittedAfterRead[0].pending, true);
+assert.equal(admittedAfterRead[0].text, "Live fragment", "Readback does not overwrite streaming text");
+assert.deepEqual(admittedAfterRead[0].activity, ["Running"]);
+assert.equal(reconcileConversationHistory(admittedAfterRead, [storedRoles[1]], createHistory), admittedAfterRead);
+const separateReplies = [historyFirst, lateBoundStream,
+  {...historyFirst, sourceSessionId: "foreign", marker: "foreign"},
+  {...historyFirst, sourceMessageId: "another-answer", sourceTurnId: "another-turn", marker: "another-turn"},
+  {...historyFirst, sourceMessageId: "followup", marker: "followup"}];
+const separateSources = [storedRoles[1], {...storedRoles[1], message_id: "followup", origin: "manager_followup"},
+  {...storedRoles[1], message_id: "another-answer", turn_id: "another-turn"}];
+const distinct = reconcileConversationHistory(separateReplies, separateSources, createHistory);
+assert.deepEqual(distinct.map(row => row.marker), ["stream", "foreign", "another-turn", "followup"],
+  "Equal text, other Sessions/Turns and separate follow-up identities remain distinct");
+console.log("conversation-returns: history-before-admission preserves the live identity and distinct replies");
+
+// A revised brief keeps its return obligation despite a delivered old conclusion.
+const revised = [{sourceSessionId: "original", collaborations: [
+  {request_id: "a", request_revision: 2, returns: [{phase: "conclusion", status: "delivered", request_revision: 1}]},
+  {request_id: "b", returns: [{phase: "conclusion", status: "delivered"}]},
+]}];
+assert.deepEqual(conversationPendingReturnSessions(revised), ["original"]);
+revised[0].collaborations[0].returns.push({phase: "conclusion", status: "queued", request_revision: 2});
+assert.deepEqual(conversationPendingReturnSessions(revised), ["original"]);
+revised[0].collaborations[0].returns[1].status = "delivered";
+assert.deepEqual(conversationPendingReturnSessions(revised), []);
+
+revised[0].collaborations[0].returns.unshift({phase: "conclusion", status: "superseded", request_revision: 2});
+assert.deepEqual(conversationPendingReturnSessions(revised), [], "A superseded result cannot hide the delivered current conclusion");

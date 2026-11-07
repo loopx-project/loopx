@@ -22,10 +22,10 @@ from .capabilities.steward_executor.allocation import (
     normalize_manager_executor_allocation,
 )
 from .capabilities.native_chat.model_settings import (
-    MODEL_SELECTION_UNSET as _MODEL_SELECTION_UNSET, normalize_agent_model_id, normalize_session_model_settings,
-    session_model_settings_supported,
+    MODEL_SELECTION_UNSET as _MODEL_SELECTION_UNSET, normalize_agent_model_id as normalize_agent_model_id,
+    normalize_session_model_settings, session_model_settings_supported, normalize_session_model_changes,
 )
-from .chat_event_cache import ChatEventCache
+from .chat.event_cache import ChatEventCache
 from .chat_ingress import (
     ChatIngressStore,
     SESSION_QUEUE_MAX_PENDING as SESSION_QUEUE_MAX_PENDING,
@@ -208,7 +208,7 @@ def _replace_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
 class ChatSessionStore(ChatIngressStore):
     """Filesystem store kept outside project and public LoopX run history."""
 
-    def __init__(self, runtime_root: Path) -> None:
+    def __init__(self, runtime_root: Path, *, startup_maintenance: bool = True) -> None:
         self.root = runtime_root.expanduser().resolve() / "chat"
         self.sessions_root = self.root / "sessions"
         self._session_lock_guard = threading.Lock()
@@ -220,8 +220,11 @@ class ChatSessionStore(ChatIngressStore):
         self.sessions_root.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(self.root, 0o700)
         os.chmod(self.sessions_root, 0o700)
-        self.compact_completed_events()
-        self._recover_turn_completions()
+        # A scoped lifecycle repair must not compact unrelated history or finish
+        # other pending completions merely by opening their data owner.
+        if startup_maintenance:
+            self.compact_completed_events()
+            self._recover_turn_completions()
 
     def _session_dir(self, session_id: str) -> Path:
         token = _opaque_id(session_id, field="session_id")
@@ -435,7 +438,11 @@ class ChatSessionStore(ChatIngressStore):
             _atomic_write_json(path, payload)
             return payload
 
-    def update_session(self, session_id: str, *, expected_statuses: set[str] | None = None, **changes: Any) -> dict[str, Any]:
+    def update_session(self, session_id: str, *, expected_statuses: set[str] | None = None,
+                       expected_upstream_thread_id: str | None = None, metadata_review: bool = False,
+                       quota_recovery: bool = False,
+                       answer_review_admission: bool = False,
+                       **changes: Any) -> dict[str, Any]:
         path = self._session_path(session_id)
         with self._session_lock(session_id):
             with exclusive_file_lock(
@@ -448,6 +455,8 @@ class ChatSessionStore(ChatIngressStore):
                     raise KeyError("chat session was not found")
                 if expected_statuses is not None and payload.get("status") not in expected_statuses:
                     raise KeyError("chat session is no longer open")
+                if expected_upstream_thread_id is not None and payload.get("upstream_thread_id") != expected_upstream_thread_id:
+                    raise ValueError("native executor binding changed")
                 if payload.get("managed_agent_id") is not None and "goal_id" in changes and changes["goal_id"] != payload["goal_id"]:
                     raise ValueError("a registered Agent Session cannot change its original Goal")
                 allowed = {
@@ -478,21 +487,60 @@ class ChatSessionStore(ChatIngressStore):
                     "agent_reasoning_effort", "agent_service_tier",
                     "requested_agent_model_id", "requested_agent_reasoning_effort",
                     "goal_id",
+                    "agent_id", "executor_endpoint_id", "adapter_kind", "manager_quota_block",
+                    "answer_review",
                 }
                 unknown = set(changes) - allowed
                 if unknown:
                     raise ValueError(f"unsupported chat session fields: {sorted(unknown)}")
+                if "answer_review" in changes and (type(changes["answer_review"]) is not bool
+                        or changes["answer_review"] and payload.get("steward_context") is None):
+                    raise ValueError("answer review requires a bound steward and a boolean adapter marker")
+                if "manager_quota_block" in changes and "agent_id" not in changes:
+                    raise ValueError("quota observation belongs to an executor transition")
+                if any(key in changes for key in ("agent_id", "executor_endpoint_id", "adapter_kind")):
+                    allocation = normalize_manager_executor_allocation(changes.get("manager_executor_allocation", {}))
+                    active = self.load_turn(session_id, payload["active_turn_id"]) if payload.get("active_turn_id") else None
+                    endpoint = changes.get("agent_id")
+                    history = changes.get("upstream_context_history") or []
+                    if (expected_upstream_thread_id is None or not _session_channel(payload).startswith("manager")
+                            or payload.get("session_mode") != CHAT_SESSION_MODE_MANAGED or payload.get("managed_agent_id")
+                            or payload.get("upstream_mode") not in {"default", "chat"}
+                            or not active or active.get("status") != "queued" or active.get("upstream_turn_id")
+                            or active.get("origin") == "native_loopx"
+                            or answer_review_admission and changes.get("answer_review") is not True
+                            or ("-recovery-" in str(active.get("client_turn_id")) and not ((metadata_review or quota_recovery or answer_review_admission)
+                                and payload.get("steward_context") is not None and endpoint == "codex"
+                                and str(active.get("client_turn_id")).endswith(
+                                    "-metadata-1" if metadata_review else "-review-1" if answer_review_admission else "-quota-1")))
+                            or allocation["selection_policy"] != "flexible"
+                            or allocation["configured_endpoint"] != "antigravity"
+                            or set(allocation["eligible_endpoints"]) != {"antigravity", "codex"}
+                            or endpoint not in {"antigravity", "codex"} or endpoint == payload.get("agent_id")
+                            or changes.get("executor_endpoint_id") != endpoint or allocation["executor_endpoint"] != endpoint
+                            or changes.get("adapter_kind") != ("codex_app_server" if endpoint == "codex" else "antigravity_ls")
+                            or changes.get("upstream_mode") != ("chat" if endpoint == "codex" else "default")
+                            or not history or history[-1] != {"thread_id": payload["upstream_thread_id"],
+                                "manager_context_version": payload.get("manager_context_version"),
+                                "agent_id": payload["agent_id"], "agent_model_id": payload.get("agent_model_id")}
+                            or changes.get("upstream_thread_id") in {None, payload["upstream_thread_id"]}):
+                        raise ValueError("executor transition requires one unstarted steward Turn and preserved native provenance")
                 if "upstream_context_history" in changes:
                     history = changes["upstream_context_history"]
                     previous = payload.get("upstream_context_history") or []
                     if not isinstance(history, list) or history[:len(previous)] != previous:
                         raise ValueError("native context provenance must preserve its prior prefix")
                     for item in history:
-                        if (not isinstance(item, dict) or set(item) != {"thread_id", "manager_context_version"}
+                        if (not isinstance(item, dict) or set(item) not in (
+                                {"thread_id", "manager_context_version"},
+                                {"thread_id", "manager_context_version", "agent_id", "agent_model_id"})
                                 or item["manager_context_version"] is not None and (
                                     type(item["manager_context_version"]) is not int or item["manager_context_version"] < 0)):
                             raise ValueError("invalid native context provenance")
                         _opaque_id(item["thread_id"], field="upstream_thread_id")
+                        if "agent_id" in item and (item["agent_id"] not in {"codex", "antigravity"}
+                                or not isinstance(item["agent_model_id"], str)):
+                            raise ValueError("invalid historical executor provenance")
                 if "external_conversation_binding_id" in changes:
                     identity = _opaque_id(changes["external_conversation_binding_id"], field="external_conversation_binding_id")
                     if payload.get("session_mode") != CHAT_SESSION_MODE_ATTACHED or payload.get("external_conversation_binding_id") not in {None, identity}:
@@ -508,14 +556,7 @@ class ChatSessionStore(ChatIngressStore):
                         raise ValueError("only the owner manager may migrate to global identity")
                 if "upstream_thread_id" in changes:
                     changes["upstream_thread_id"] = _upstream_id(changes["upstream_thread_id"])
-                if "agent_model_id" in changes:
-                    changes["agent_model_id"] = normalize_agent_model_id(changes["agent_model_id"]) if changes["agent_model_id"] else None
-                for field in ("requested_agent_model_id", "requested_agent_reasoning_effort"):
-                    if field in changes:
-                        changes[field] = normalize_agent_model_id(changes[field]) if changes[field] is not None else None
-                for key in ("agent_reasoning_effort", "agent_service_tier"):
-                    if key in changes:
-                        changes[key] = normalize_agent_model_id(changes[key]) if changes[key] else None
+                normalize_session_model_changes(changes)
                 if "upstream_mode" in changes:
                     changes["upstream_mode"] = _opaque_id(changes["upstream_mode"], field="upstream_mode")
                 if "manager_authorization_scope_id" in changes:
@@ -560,7 +601,7 @@ class ChatSessionStore(ChatIngressStore):
                 if "codex_home" in changes:
                     home = changes["codex_home"]
                     if (not isinstance(home, str) or not Path(home).is_absolute()
-                            or payload.get("agent_id") != "codex"
+                            or changes.get("agent_id", payload.get("agent_id")) != "codex"
                             or payload.get("session_mode") != CHAT_SESSION_MODE_MANAGED):
                         raise ValueError("codex_home must be an absolute managed Codex home")
                     if payload.get("codex_home") not in (None, home):
@@ -1199,31 +1240,6 @@ class ChatSessionStore(ChatIngressStore):
                     dispatch_reason=plan.dispatch_reason,
                 )
 
-    def queued_turns(self, session_id: str) -> list[dict[str, Any]]:
-        session = self.load_session(session_id)
-        if session is None:
-            raise KeyError("chat session was not found")
-        active_turn_id = str(session.get("active_turn_id") or "")
-        turns_dir = self._session_dir(session_id) / "turns"
-        rows: list[dict[str, Any]] = []
-        for path in turns_dir.glob("*.json") if turns_dir.is_dir() else []:
-            if path.name.endswith(".events.json"):
-                continue
-            payload = _read_json(path)
-            if (
-                payload.get("schema_version") == CHAT_TURN_SCHEMA_VERSION
-                and payload.get("status") == "queued"
-                and str(payload.get("turn_id") or "") != active_turn_id
-            ):
-                rows.append(payload)
-        return sorted(
-            rows,
-            key=lambda item: (
-                str(item.get("created_at") or ""),
-                str(item.get("turn_id") or ""),
-            ),
-        )
-
     def _settle_expired_queued_turns(
         self,
         session_id: str,
@@ -1411,6 +1427,36 @@ class ChatSessionStore(ChatIngressStore):
     def load_turn(self, session_id: str, turn_id: str) -> dict[str, Any] | None:
         payload = _read_json(self._turn_path(session_id, turn_id))
         return payload if payload.get("schema_version") == CHAT_TURN_SCHEMA_VERSION else None
+
+    def native_result(self, session_id: str, turn_id: str) -> dict[str, Any]:
+        """Private provider facts, outside public Turn/event projections."""
+        token = _opaque_id(turn_id, field="turn_id")
+        return _read_json(self._session_dir(session_id) / "native-results" / f"{token}.json")
+
+    def retain_native_result(self, session_id: str, turn_id: str, result: dict[str, Any], *,
+                             completed_turn: dict[str, Any] | None = None) -> None:
+        """Freeze once; a completed backfill requires the exact unchanged Turn.
+
+        The automatic recovery owner first verifies the original native proof
+        and current source. This fence changes neither its Turn nor its events.
+        """
+        with exclusive_file_lock(self._turn_path(session_id, turn_id), agent_id="loopx-chat", operation="retain_native_result"):
+            turn = self.load_turn(session_id, turn_id)
+            if completed_turn is not None:
+                if turn != completed_turn or turn is None or turn.get("status") != "completed":
+                    raise ValueError("the original completed Turn changed")
+            elif turn is None or turn.get("status") != "running":
+                return
+            if not result.get("upstream_turn_id") or result["upstream_turn_id"] != turn.get("upstream_turn_id"):
+                raise ValueError("native result belongs to another invocation")
+            token = _opaque_id(turn_id, field="turn_id")
+            path = self._session_dir(session_id) / "native-results" / f"{token}.json"
+            if path.exists():
+                if _read_json(path) != result:
+                    raise ValueError("the original native result is immutable")
+                return
+            path.parent.mkdir(mode=0o700, exist_ok=True)
+            _atomic_write_json(path, result)
 
     def update_turn(
         self,

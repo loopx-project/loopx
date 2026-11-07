@@ -11,7 +11,7 @@ import {
   effectIdsMatch,
   settlementBindReduce,
   settlementFailed,
-  settlementIdentity,
+  executionRequestSubject, settlementIdentity,
   settlementIdentityPayload,
   settlementPure,
   settlementReceipt,
@@ -34,6 +34,7 @@ import {
 import {
   isBoundedBlockedRetry,
   isAcceptedBlockedReplanWriteback,
+  isUnqualifiedBlockedReplanWriteback,
   qualifySettlementHistory,
   isCommittedMonitorPollEffect,
   isAcceptedProgressWriteback,
@@ -108,6 +109,7 @@ interface ReadbackRequest {
   allow_unbound_binding: boolean;
   resolve_original_binding: boolean;
   borrow_source_admission: boolean;
+  include_record_bodies: boolean;
   refresh_retry: RefreshRetryRequest | null;
   heartbeat_reentry_guard: JsonObject | null;
   owner: QuotaAccountingOwner;
@@ -219,6 +221,9 @@ function decodeRequest(
       typeof request.resolve_original_binding !== "boolean") {
     throw new EffectRuntimeRequestError("resolve_original_binding must be a boolean");
   }
+  if (request.include_record_bodies !== undefined && typeof request.include_record_bodies !== "boolean") {
+    throw new EffectRuntimeRequestError("include_record_bodies must be a boolean");
+  }
   if (request.resolve_original_binding === true && request.infer_turn_instance_id) {
     throw new EffectRuntimeRequestError("original binding requires an explicit Turn identity");
   }
@@ -277,6 +282,7 @@ function decodeRequest(
     allow_unbound_binding: request.allow_unbound_binding,
     resolve_original_binding: request.resolve_original_binding === true,
     borrow_source_admission: request.borrow_source_admission === true,
+    include_record_bodies: request.include_record_bodies !== false,
     refresh_retry: decodeRefreshRetry(request.refresh_retry),
     heartbeat_reentry_guard: request.heartbeat_reentry_guard == null ? null
       : requireJsonObject(request.heartbeat_reentry_guard, "heartbeat_reentry_guard"),
@@ -575,7 +581,7 @@ function findWriteback(
     isTurnScopedSettlementOutcome(
       run.delivery_outcome,
       run.progress_observation,
-      identity.todo_id ?? identity.replan_obligation_id,
+      identity.todo_id ?? identity.replan_obligation_id ?? (identity.request_subject ? identity.binding_id : null),
     )
   ) ?? null;
 }
@@ -852,6 +858,15 @@ function resolveIdentity(
     request.replan_obligation_id,
   );
   let turnInstanceId = request.turn_instance_id;
+  let requestSubject = null;
+  if (!todoId && !replanObligationId && agentId && turnInstanceId) {
+    try {
+      const original = effectiveHeartbeatReceipt(events, {goal_id: request.goal_id, agent_id: agentId, turn_instance_id: turnInstanceId});
+      requestSubject = executionRequestSubject(original ? heartbeatReceiptFactFromEvent(original).request_subject : null);
+    } catch (error) {
+      return failedIdentity((error as Error).message, "identity_mismatch");
+    }
+  }
   if (request.infer_turn_instance_id) {
     if (
       !agentId ||
@@ -894,7 +909,7 @@ function resolveIdentity(
     const fact = heartbeatReceiptFactFromEvent(guard);
     const originalTodoId = normalizeTodoId(fact.todo_id);
     const originalReplanId = normalizeReplanObligationId(fact.replan_obligation_id);
-    if (!originalTodoId && !originalReplanId) {
+    if (!originalTodoId && !originalReplanId && !requestSubject) {
       return failedIdentity("the original Turn guard has no settlement binding", "receipt_unbound");
     }
     if ((request.todo_id !== null && (todoId === null || todoId !== originalTodoId)) ||
@@ -905,7 +920,7 @@ function resolveIdentity(
     todoId = originalTodoId;
     replanObligationId = originalReplanId;
   }
-  if (!agentId || !turnInstanceId || Boolean(todoId) === Boolean(replanObligationId)) {
+  if (!agentId || !turnInstanceId || [todoId, replanObligationId, requestSubject].filter(Boolean).length !== 1) {
     return failedIdentity(
       "turn-scoped settlement requires agent_id, turn_instance_id, and exactly one todo_id or replan_obligation_id",
       "invalid_identity",
@@ -916,7 +931,7 @@ function resolveIdentity(
     agent_id: agentId,
     todo_id: todoId,
     turn_instance_id: turnInstanceId,
-    replan_obligation_id: replanObligationId,
+    replan_obligation_id: replanObligationId, request_subject: requestSubject,
   });
   let receiptEvent: JsonObject | null;
   try {
@@ -935,7 +950,7 @@ function resolveIdentity(
   const receiptReplanObligationId = normalizeReplanObligationId(
     receiptDetails.replan_obligation_id,
   );
-  if (receiptTodoId === null && receiptReplanObligationId === null) {
+  if (receiptTodoId === null && receiptReplanObligationId === null && heartbeatReceiptFactFromEvent(receiptEvent).request_subject == null) {
     // A same-turn guard that ran before any work item was chosen commits a
     // receipt with no settlement binding, and the documented wake order (guard,
     // then select) produces exactly that state. This read model never binds --
@@ -1023,8 +1038,9 @@ function resolveIdentity(
   );
 }
 
-function bundle(result: SettlementResult): ResultBundle {
-  return { result, payload: settlementResultPayload(result) };
+function bundle(result: SettlementResult, includeRecordBody = true): ResultBundle {
+  return {result: includeRecordBody ? result : {...result, value: null},
+    payload: settlementResultPayload(result)};
 }
 
 function failedAfterIdentity(
@@ -1187,6 +1203,7 @@ function readQuotaSettlementFromRequest(
     todo_id: optionalString(identityResult.value.todo_id),
     turn_instance_id: String(identityResult.value.turn_instance_id),
     replan_obligation_id: optionalString(identityResult.value.replan_obligation_id),
+    request_subject: executionRequestSubject(identityResult.value.request_subject),
   });
   const events = indexedEvents(
     snapshot,
@@ -1311,6 +1328,9 @@ function readQuotaSettlementFromRequest(
       run.goal_id === identity.goal_id && run.agent_id === identity.agent_id &&
       (jsonObject(run.agent_vision) !== null || jsonObject(run.vision_checkpoint)?.required === true)
     ),
+    writeback.failure === null && spendRun === null && spendEvent === null &&
+      semanticReplanGuard.selected_obligation_id === identity.replan_obligation_id &&
+      isUnqualifiedBlockedReplanWriteback(writebackRun, identity),
   );
   // A non-material poll need not appear as findWriteback's advancement run.
   // Its exact committed observation still fences an incompatible unavailable
@@ -1321,31 +1341,37 @@ function readQuotaSettlementFromRequest(
     ? {...refreshDecision, decision: "reject", reason: "committed_writeback_payload_conflict"}
     : refreshDecision;
 
+  const progress = settlementProgress(identityResult, writeback, spend, writebackRun, spendRun,
+    receiptDetails.quota_spend_source ?? spendRun?.source, noSpendKind);
+  // The combined caller consumes controls and receipts after verification.
+  // Keep original bodies by default and throughout any pending recovery,
+  // including the same Runs carried by the four result bundles. Identity,
+  // controls and receipts remain complete; projection cannot settle a Turn.
+  const includeRecords = request.include_record_bodies || progress.state !== "settled";
   return {
     schema_version: QUOTA_SETTLEMENT_READBACK_RESULT_SCHEMA,
     found: true,
     identity: bundle(identityResult),
-    writeback: bundle(writeback),
-    spend: bundle(spend),
-    delivery: bundle(withWriteback),
-    settlement: bundle(settled),
+    writeback: bundle(writeback, includeRecords),
+    spend: bundle(spend, includeRecords),
+    delivery: bundle(withWriteback, includeRecords),
+    settlement: bundle(settled, includeRecords),
     terminal_closeout: bundle(terminalCloseout),
     terminal_settlement: bundle(terminalSettlement),
-    progress: settlementProgress(identityResult, writeback, spend, writebackRun, spendRun,
-      receiptDetails.quota_spend_source ?? spendRun?.source, noSpendKind),
+    progress,
     workspace_causality: workspaceCausality,
     semantic_replan_guard: semanticReplanGuard,
-    writeback_run: writebackRun,
+    writeback_run: includeRecords ? writebackRun : null,
     refresh_recovery: recovery,
     external_delivery: request.refresh_retry === null ? null : refreshExternalDelivery(
       request.refresh_retry.external_delivery ?? null, identity, events,
       recovery?.decision !== "reject" && recovery?.decision !== "repair_receipt",
     ),
-    spend_run: spendRun,
-    heartbeat_receipt: heartbeatReceipt,
-    writeback_event: writebackEvent,
-    spend_event: spendEvent,
-    completion_event: completionEvent,
+    spend_run: includeRecords ? spendRun : null,
+    heartbeat_receipt: includeRecords ? heartbeatReceipt : null,
+    writeback_event: includeRecords ? writebackEvent : null,
+    spend_event: includeRecords ? spendEvent : null,
+    completion_event: includeRecords ? completionEvent : null,
     monitor_phase: monitorPhase,
     replay_phase: replayPhase,
     successor_replan_pending: replayPhase === "open" &&

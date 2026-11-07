@@ -59,7 +59,7 @@ def managed_fixture(steward, tmp_path, monkeypatch, provider="file", *, validato
 def test_registered_agents_have_distinct_durable_sessions_without_adopting_legacy_history(steward, tmp_path, monkeypatch, provider):
     service, first, actor, _, _, capture = managed_fixture(steward, tmp_path, monkeypatch, provider)
     store, runtime, *_ = steward
-    from loopx.chat_session_open import open_chat_session
+    from loopx.chat.session_open import open_chat_session
     from loopx.agent_registry import load_goal_from_registry
     cli(runtime, "configure-goal", "--goal-id", actor["goal_id"], "--registered-agent", actor["agent_id"],
         "--registered-agent", "peer", "--execute")
@@ -362,6 +362,60 @@ def prepare(steward, provider, tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("change", ["queued_input", "binding_scope", "closed_session"])
+def test_native_identity_io_leaves_input_and_binding_publication_available(steward, tmp_path, monkeypatch, provider, change):
+    import threading
+    from loopx.file_lock import exclusive_file_lock
+    from loopx.capabilities.native_chat.steward_turn import native_steward_client_id
+
+    sid, actor, _ = prepare(steward, provider, tmp_path, monkeypatch)
+    store, runtime, identity, transport, binding, capture, _ = steward
+    entered, released = threading.Event(), threading.Event()
+    observe, errors = transport.bindings.observe, []
+    before = capture.read_bytes()
+
+    def blocked_observation(*args, **kwargs):
+        if threading.current_thread() is worker:
+            entered.set()
+            assert released.wait(10), "identity fixture was not released"
+        return observe(*args, **kwargs)
+
+    def submit():
+        try:
+            StewardTurnHost(runtime).submit(binding["binding_id"], turn_instance_id="waiting-identity")
+        except Exception as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=submit)
+    monkeypatch.setattr(transport.bindings, "observe", blocked_observation)
+    worker.start()
+    available = False
+    try:
+        assert entered.wait(5)
+        available = runtime.lock.acquire(timeout=.5)
+        assert available, "remote identity IO prevented ordinary input admission"
+        with exclusive_file_lock(transport.bindings.path, timeout_seconds=.5):
+            if change == "queued_input":
+                store.create_queued_turn(sid, client_turn_id="human-first", message="Keep this input first", origin="web")
+            elif change == "closed_session":
+                store.update_session(sid, status="closed")
+        if change == "binding_scope":
+            transport.bindings.configure(transport_ref="steward-app", project_ref=binding["project_ref"],
+                executor_endpoint_id="codex", context_kind="steward", goal_scope="selected")
+    finally:
+        if available:
+            runtime.lock.release()
+        else:
+            identity.owner_ready = False  # The failing baseline must not start synthetic model work.
+        released.set()
+        worker.join(10)
+    assert not worker.is_alive()
+    assert len(errors) == 1 and isinstance(errors[0], ValueError), errors
+    assert store.turn_for_client(sid, native_steward_client_id(actor, "waiting-identity")) is None
+    assert capture.read_bytes() == before
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("material", [False, True])
 def test_native_turn_uses_original_app_server_and_kernel_without_a_new_session(steward, tmp_path, monkeypatch, provider, material):
     sid, actor, added = prepare(steward, provider, tmp_path, monkeypatch)
@@ -531,7 +585,7 @@ def test_new_native_user_gate_wins_immediately_before_app_server_dispatch(stewar
 def test_inventory_replacement_during_context_read_never_forks_the_original_native_thread(steward, tmp_path, monkeypatch):
     sid, actor, _ = prepare(steward, "file", tmp_path, monkeypatch)
     store, runtime, _, _, binding, capture, _ = steward
-    import loopx.chat_coordination as coordination
+    import loopx.chat.coordination as coordination
     prepare_context = coordination.prepare_turn_context
 
     def changed(*args, **kwargs):

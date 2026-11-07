@@ -23,6 +23,7 @@ from ...control_plane.runtime.public_safety import (
     normalize_public_safe_field_name,
     validate_public_safe_value,
 )
+from ...public_safe_text import IDENTITY_TOKEN_PATTERN
 from ...session_runtime import SOURCE_ID_KEYS
 
 CAPABILITY_ID = "reliability-diagnostics"
@@ -30,7 +31,6 @@ DSH_PROVIDER_ID = "dsh-session-events"
 OBSERVER_ENVELOPE_SCHEMA_VERSION = "reliability_observer_envelope_v0"
 OBSERVER_STATS_SCHEMA_VERSION = "reliability_observer_stats_v0"
 
-IDENTITY_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,120}$")
 SUMMARY_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_./:-]{0,79}$")
 MAX_SEQUENCE = 2**53
 

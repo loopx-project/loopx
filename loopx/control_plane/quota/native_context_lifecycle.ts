@@ -36,14 +36,20 @@ export function updateNativeContextLifecycle(request: JsonObject): JsonObject {
     if (name !== "SessionStart") return state;
     state = {session_id: session, cwd};
   }
+  const recoveryFile = jsonObject(state.recovery);
+  const fileEpochCurrent = recoveryFile?.continuity_basis === "captured_file"
+    && jsonObject(recoveryFile.target)?.context_epoch === state.context_epoch;
   const invalidate = () => {
     // Reset is idempotent while already invalid. Pre/PostCompact and the
     // subsequent SessionStart(compact) therefore do not rotate three epochs.
-    if (!state.context_epoch || state.candidate || state.pending)
+    if (!state.context_epoch || state.candidate || state.pending || fileEpochCurrent)
       state.context_epoch = requireNonEmptyString(request.new_epoch, "new native context epoch");
     delete state.candidate;
     delete state.pending;
     delete state.active_call; // retire legacy diagnostic-call binding
+    delete state.consumed_pointers;
+    delete state.confirmed_read_sections;
+    delete state.section_reads;
   };
   if (name === "SessionStart") {
     // The provider may qualify the native-selected replay source against the
@@ -53,6 +59,20 @@ export function updateNativeContextLifecycle(request: JsonObject): JsonObject {
     if (same && event.source === "resume" && request.resume_verified === true
         && !state.pending && candidate?.basis === NATIVE_CONTEXT_BASIS
         && candidate.capture_bytes_verified === true) return state;
+    if (same && event.source === "resume" && fileEpochCurrent
+        && !(candidate?.native_resume || (state.candidate && !candidate))) {
+      // Resuming a session is not compaction. File comparison does not depend
+      // on model retention; retire that separate assumption when unverified.
+      // A previously qualified history checkpoint that now fails can include
+      // an unreported compaction/rollback, so conservatively rotate below.
+      delete state.candidate;
+      delete state.pending;
+      delete state.active_call;
+      delete state.consumed_pointers;
+      delete state.confirmed_read_sections;
+      delete state.section_reads;
+      return state;
+    }
     invalidate();
     return state;
   }
@@ -78,6 +98,32 @@ export function updateNativeContextLifecycle(request: JsonObject): JsonObject {
   for (const value of pages) {
     const page = jsonObject(value);
     if (!page || page.schema_version !== "context_capture_page_v1") continue;
+    const selected = jsonObject(page.read_sections);
+    if (selected) {
+      // IO has checked exact selected bytes against this journal's current full
+      // source. This is observed tool delivery, never a full-input baseline.
+      if (request.pages_verified !== true || page.ok !== true
+          || page.source_sha256 !== jsonObject(state.source_recovery)?.sha256) continue;
+      const offset = page.offset, total = page.total_bytes, end = page.eof === true ? total : page.next_offset;
+      if (!Number.isSafeInteger(total) || Number(total) <= 0 || !Number.isSafeInteger(offset)
+          || !Number.isSafeInteger(end) || Number(offset) < 0 || Number(end) <= Number(offset)
+          || Number(end) > Number(total) || typeof page.content !== "string"
+          || Buffer.byteLength(page.content) !== Number(end) - Number(offset)
+          || (page.eof === true && page.next_offset !== null)
+          || (page.eof === false && Number(end) >= Number(total)) || typeof page.sha256 !== "string") continue;
+      const reads = jsonObject(state.section_reads) ?? {};
+      const previous = jsonObject(reads[page.sha256]);
+      const ranges = mergedRanges(previous?.ranges, Number(offset), Number(end));
+      reads[page.sha256] = {ranges};
+      if (ranges.length === 1 && ranges[0][0] === 0 && ranges[0][1] === total) {
+        state.consumed_pointers = {...jsonObject(state.consumed_pointers), ...selected};
+        state.confirmed_read_sections = Object.keys(state.consumed_pointers as JsonObject);
+        delete reads[page.sha256];
+      }
+      state.section_reads = reads;
+      continue;
+    }
+    if ("selection_sha256" in page || "selected_pointers" in page || "list_fields" in page) continue;
     const candidate = jsonObject(state.candidate);
     if (!state.pending && candidate?.capture_sha256 === recovery.sha256
         && candidate?.capture_bytes_verified === true
@@ -114,6 +160,11 @@ export function updateNativeContextLifecycle(request: JsonObject): JsonObject {
     state.candidate = {basis: NATIVE_CONTEXT_BASIS, capture_bytes_verified: true, target,
       capture_file: recovery.path, capture_sha256: recovery.sha256,
       ancestry: original ? 0 : pending?.ancestry ?? 0};
+    const sections = jsonObject(reads.read_sections);
+    if (sections) {
+      state.consumed_pointers = {...jsonObject(state.consumed_pointers), ...sections};
+      state.confirmed_read_sections = Object.keys(state.consumed_pointers as JsonObject);
+    }
     delete state.pending;
   }
   return state;

@@ -27,6 +27,22 @@ class UsageSettingsInputError(ValueError):
     """Typed input rejection from the existing TypeScript settings owner."""
 
 
+class UsageSettingsUnavailable(RuntimeError):
+    """Public-safe host failure; never carry child output or exception text."""
+
+    def __init__(self, code: object = None, *, message: str | None = None) -> None:
+        self.code = ("mutation_lock_timeout" if code == "mutation_lock_timeout"
+                     else "usage_statistics_unavailable")
+        super().__init__(message or (
+            "Usage settings are busy. Wait for the current settings operation to finish, then retry."
+            if self.code == "mutation_lock_timeout" else
+            "Usage settings unavailable. Run loopx usage-ping status before retrying a change."
+        ))
+
+    def as_payload(self) -> dict[str, object]:
+        return {"ok": False, "error": self.code, "message": str(self)}
+
+
 def select_operation(args: Any) -> None:
     """Parser-owned operation names only; never scan argument values."""
     state = _observation.get()
@@ -100,20 +116,26 @@ def _request(action: str, path: Path, **fields: Any) -> dict[str, Any]:
 def _command() -> list[str]:
     node = shutil.which("node")
     if node is None:
-        raise RuntimeError("Usage settings require the supported Node.js runtime.")
+        raise UsageSettingsUnavailable(message="Usage settings require the supported Node.js runtime.")
     # Keep the Python sender's proxy behavior when moving I/O to Node. This
     # native flag is available in the repository's supported Node versions.
     return [node, "--no-warnings", "--use-env-proxy", "--experimental-strip-types", str(_ENTRY)]
 
 
 def control(action: str, path: Path | None = None, **fields: Any) -> dict[str, Any]:
-    result = subprocess.run(_command(), input=json.dumps(_request(action, path or state_path(), **fields)),
-                            capture_output=True, text=True, encoding="utf-8", timeout=4, check=False)
-    payload = json.loads(result.stdout)
+    try:
+        result = subprocess.run(_command(), input=json.dumps(_request(action, path or state_path(), **fields)),
+                                capture_output=True, text=True, encoding="utf-8", timeout=4, check=False)
+    except (OSError, subprocess.TimeoutExpired, UnicodeError):
+        raise UsageSettingsUnavailable() from None
+    try:
+        payload = json.loads(result.stdout)
+    except (json.JSONDecodeError, TypeError):
+        raise UsageSettingsUnavailable() from None
     if isinstance(payload, dict) and payload.get("error") == "usage_context_invalid":
         raise UsageSettingsInputError("Invalid device deployment context; see the usage-ping reference.")
     if result.returncode or not isinstance(payload, dict) or "error" in payload:
-        raise RuntimeError("Usage settings unavailable. Inspect the local usage-ping.json; disable can repair invalid state.")
+        raise UsageSettingsUnavailable(payload.get("error") if isinstance(payload, dict) else None)
     return payload
 
 

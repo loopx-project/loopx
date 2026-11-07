@@ -470,7 +470,8 @@ h1 { max-width: 900px; margin: 0; font-size: clamp(39px, 6vw, 72px); line-height
 .report-facts { display: grid; grid-template-columns: repeat(2, minmax(112px, 1fr)); gap: 1px;
   border: 1px solid var(--line); background: var(--line); }
 .report-facts.fallback { grid-template-columns: repeat(3, minmax(78px, 1fr)); }
-.fact { min-width: 112px; padding: 13px 14px; background: var(--paper); }
+.fact { min-width: 112px; padding: 13px 14px; background: var(--paper);
+  overflow-wrap: anywhere; }
 .fact[data-tone="attention"] { box-shadow: inset 3px 0 0 var(--clay); }
 .fact strong { display: block; font: 500 28px/1 var(--serif); }
 .fact span { display: block; margin-top: 5px; color: var(--muted); font-size: 10px;
@@ -664,7 +665,8 @@ _SCRIPT = """
 
 def render_periodic_report_html(document: Mapping[str, Any], *, _legacy_source_links: bool = False,
                                 _legacy_layout: bool = False,
-                                _legacy_masthead: bool = False) -> dict[str, Any]:
+                                _legacy_masthead: bool = False,
+                                _legacy_highlight_wrap: bool = False) -> dict[str, Any]:
     """Render one dense, self-contained report without changing its semantics."""
 
     if document.get("schema_version") != DOCUMENT_SCHEMA:
@@ -672,6 +674,8 @@ def render_periodic_report_html(document: Mapping[str, Any], *, _legacy_source_l
     validate_periodic_report_editorial(document)
     _legacy_layout = _legacy_layout or _legacy_source_links
     css = _CSS
+    if _legacy_highlight_wrap or _legacy_masthead or _legacy_layout:
+        css = css.replace("\n  overflow-wrap: anywhere;", "", 1)
     if _legacy_masthead or _legacy_layout:
         # Exact read-only reconstruction of already frozen presentations.
         css = css.replace(

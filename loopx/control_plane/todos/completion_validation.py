@@ -4,7 +4,7 @@ import subprocess
 from collections.abc import Mapping
 from json import loads as json_loads
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from ...history import load_registry
 from ...materials import find_registry_goal, goal_repo
@@ -34,7 +34,6 @@ from .completion_validation_store import (
     persist_completion_validation_declaration,
     read_completion_validation_declaration,
 )
-from .contract import TODO_STATUS_DONE, normalize_todo_status
 from ..content_digest import BARE_SHA256_PATTERN
 
 # Kept safely under the 30s outer CLI/MCP subprocess budget so a timed-out
@@ -71,7 +70,7 @@ def _resolve_goal_repo_workspace(registry_path: Path, goal_id: str) -> Path | No
     repo = goal_repo(goal)
     if repo is None or not repo.is_dir():
         return None
-    return cast(Path, repo)
+    return repo
 
 
 def _workspace_failure(label: str, *, status: str, summary: str) -> dict[str, Any]:
@@ -292,23 +291,17 @@ def _run_declared_completion_validation(
     assert workspace is not None
     try:
         if validation_argv is not None:
-            return cast(
-                dict[str, Any],
-                run_caller_validation(
-                    workspace,
-                    validation_argv=validation_argv,
-                    validation_label=label,
-                    timeout_seconds=timeout_seconds,
-                ),
-            )
-        return cast(
-            dict[str, Any],
-            run_caller_validation(
+            return run_caller_validation(
                 workspace,
-                validation_command=str(validation_command),
+                validation_argv=validation_argv,
                 validation_label=label,
                 timeout_seconds=timeout_seconds,
-            ),
+            )
+        return run_caller_validation(
+            workspace,
+            validation_command=str(validation_command),
+            validation_label=label,
+            timeout_seconds=timeout_seconds,
         )
     except subprocess.TimeoutExpired:
         return {
@@ -618,81 +611,22 @@ def completion_policy_source_from_state(
 ) -> dict[str, Any]:
     """Project lock-comparable facts for the TS completion policy."""
 
-    return cast(
-        dict[str, Any],
-        build_completion_policy_request(
-            registry_path=registry_path,
-            goal_id=goal_id,
-            claimed_by=facts.get("claimed_by"),
-            next_claimed_by=facts.get("next_claimed_by"),
-            next_agent_todo=facts.get("next_agent_todo"),
-            next_action_kind=facts.get("next_action_kind"),
-            next_continuation_policy=facts.get("next_continuation_policy"),
-            next_excluded_agents=facts.get("next_excluded_agents") or [],
-            self_merged=bool(facts.get("self_merged")),
-            evidence=facts.get("evidence"),
-            linked_successors=linked_successors_from_state(
-                lines=lines,
-                successor_todo_ids=successor_todo_ids,
-            ),
-        ),
-    )
-
-
-def prepare_user_todo_update_completion(
-    *,
-    status: str | None,
-    state_file: Path,
-    todo_id: str,
-    role: str | None,
-    registry_path: Path,
-    goal_id: str,
-    dry_run: bool,
-    no_followup: bool,
-    requested_has_successor: bool,
-) -> dict[str, Any] | None:
-    """Prepare the coarse transaction for a direct user-Todo completion."""
-
-    if normalize_todo_status(status) != TODO_STATUS_DONE:
-        return None
-    match = find_todo_block(
-        state_file.read_text(encoding="utf-8").splitlines(),
-        todo_id=todo_id,
-        role=role,
-    )
-    if match is None or (role or match[0]) == "agent":
-        return None
-    return run_completion_validation_gate_with_source(
-        state_file=state_file,
-        todo_id=todo_id,
-        role=role,
+    return build_completion_policy_request(
         registry_path=registry_path,
         goal_id=goal_id,
-        dry_run=dry_run,
-        no_followup=no_followup,
-        requested_has_successor=requested_has_successor,
+        claimed_by=facts.get("claimed_by"),
+        next_claimed_by=facts.get("next_claimed_by"),
+        next_agent_todo=facts.get("next_agent_todo"),
+        next_action_kind=facts.get("next_action_kind"),
+        next_continuation_policy=facts.get("next_continuation_policy"),
+        next_excluded_agents=facts.get("next_excluded_agents") or [],
+        self_merged=bool(facts.get("self_merged")),
+        evidence=facts.get("evidence"),
+        linked_successors=linked_successors_from_state(
+            lines=lines,
+            successor_todo_ids=successor_todo_ids,
+        ),
     )
-
-
-def locked_todo_completion_source(
-    *,
-    lines: list[str],
-    state_file: Path,
-    project: Path | None,
-    registry_path: Path,
-    goal_id: str,
-    todo_id: str,
-    role: str | None,
-) -> tuple[Any, dict[str, Any] | None]:
-    """Resolve the materialized Todo under the write lock."""
-
-    match = find_todo_block(lines, todo_id=todo_id, role=role)
-    if match:
-        item_role, _section, _start, _end, block = match
-        todo = dict(block)
-        todo["role"] = item_role
-        return match, todo
-    return None, None
 
 
 def execute_completion_validation_effects(

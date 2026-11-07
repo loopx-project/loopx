@@ -12,7 +12,6 @@ PROTOCOL_INDEX = ROOT / "docs" / "reference" / "protocols" / "README.md"
 DOCS_INDEX = ROOT / "docs" / "README.md"
 STATE_MACHINE = ROOT / "docs" / "product" / "core-control-plane" / "state-machine.md"
 RULE_SEAM = ROOT / "docs" / "product" / "core-control-plane" / "rule-seam-map.md"
-THREE_LAYER = ROOT / "docs" / "reference" / "protocols" / "multi-agent-three-layer-minimality-v0.md"
 SELF_REPAIR_SKILL = ROOT / "skills" / "loopx-self-repair" / "SKILL.md"
 REPAIR_PATTERNS = ROOT / "skills" / "loopx-self-repair" / "references" / "repair-patterns.md"
 
@@ -56,7 +55,6 @@ def main() -> int:
     docs_index = read(DOCS_INDEX)
     state_machine = read(STATE_MACHINE)
     rule_seam = read(RULE_SEAM)
-    three_layer = read(THREE_LAYER)
     self_repair_skill = read(SELF_REPAIR_SKILL)
     repair_patterns = read(REPAIR_PATTERNS)
 
@@ -68,7 +66,6 @@ def main() -> int:
                 docs_index,
                 state_machine,
                 rule_seam,
-                three_layer,
                 self_repair_skill,
                 repair_patterns,
             ]
@@ -176,16 +173,6 @@ def main() -> int:
             "Per-agent vision is a bounded goal-routing contract",
         ],
         source=RULE_SEAM,
-    )
-    require(
-        three_layer,
-        [
-            "per-agent vision/replan state",
-            "per-agent vision budgets",
-            "vision/replan state transitions",
-            "product-specific fork of per-agent vision/replan mechanics",
-        ],
-        source=THREE_LAYER,
     )
     require(
         self_repair_skill,

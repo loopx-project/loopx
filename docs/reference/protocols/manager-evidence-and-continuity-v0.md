@@ -27,8 +27,14 @@ Long-running work is assigned to an exact worker with a durable return route.
 The initial receipt does not end the exchange: the worker evaluates or executes
 within its current authority and returns an audience-ready decision/result to
 the original conversation automatically. Acknowledgement or adoption does not
-remove the request from the receiver's hook; a committed conclusion does. The
-Chat runtime then owns transport recovery, separately from work completion.
+remove the request from the receiver's hook. An explicit remainder on the
+latest conclusion retains the original request; a queued return retains its
+delivery obligation. The scoped manager handoff reader reuses the native Inbox
+agenda and exposes `inbox_state` and `remaining_work` alongside transport
+receipts. An older delivered conclusion cannot resolve a newer remainder or
+pending reply. Unavailable receipts remain unknown. These are receipt facts,
+not independent acceptance that the original question was answered. The Chat
+runtime owns transport recovery, separately from work completion.
 
 An ordinary private project request interrupted by a host restart after tool
 work is not safe to replay. The original worker can reserve one separately
@@ -449,6 +455,18 @@ readback remain in force, preserving the failed Turn and its original notice.
 失败可包含原生压缩记录；任何回答、工具、纠正、未知项、本地回答增量或中断的工作
 仍保留待核对，不能走此路径重放。退避、三次上限、稳定接续身份、失败历史和逐次
 原受众送达读回均保持原约束。
+
+The existing pending count retains delivered quota failures while work remains
+outstanding. A later same-source `/stop` or `/new`, or closure of the original
+Session, retires that backlog from the read-only count without deleting the
+failed Turn or notice. Temporary binding/provider unavailability, backoff and
+retry exhaustion are not retirement evidence. Health reads neither admit
+recovery nor contact a provider.
+
+既有待处理数量保留已送达失败通知、仍未结束的额度失败工作。后续同来源 `/stop`、
+`/new` 或原 Session 关闭后，只读计数不再包含该积压；失败 Turn 和通知仍保留。
+临时绑定／provider 不可用、退避和重试耗尽不代表退休。健康读取不准入恢复，
+也不访问 provider。
 
 Default manager duties allow authorized reads and summaries; reminders use an
 existing authorized destination/subscription. Goal changes, steering,

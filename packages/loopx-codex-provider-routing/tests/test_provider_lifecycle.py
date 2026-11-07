@@ -1,0 +1,222 @@
+"""Real loopback admission/drain and real detached provider replacement."""
+import importlib
+import io
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import threading
+import time
+import urllib.error
+import urllib.request
+
+import pytest
+
+SRC = Path(__file__).resolve().parents[1] / "src"
+
+
+@pytest.fixture
+def owner(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(SRC))
+    native = importlib.import_module("loopx_codex_provider_routing.native")
+    owner = native.NativeAccounts(tmp_path)
+    with owner._lock():
+        state = owner._load()
+        state["policy"].update(enabled=True, api_fallback=True)
+        state["native"] = {"active_slot": "openai-api"}
+        native.atomic(owner.path, state)
+    owner.api_keys().add(expected_revision=0, label="Test", api_key="sk-" + "synthetic-key-" * 4)
+    return owner
+
+
+def request(server, path, token, *, body=None, instance=None):
+    headers = {"Authorization": "Bearer " + token}
+    if instance:
+        headers["X-LoopX-Instance"] = instance
+    call = urllib.request.Request(f"http://127.0.0.1:{server.server_port}{path}", data=body, headers=headers)
+    try:
+        with urllib.request.urlopen(call, timeout=10) as response:
+            return response.status, response.read()
+    except urllib.error.HTTPError as error:
+        return error.code, error.read()
+
+
+def test_authenticated_drain_preserves_admitted_stream_and_fences_new_work(owner):
+    module = importlib.import_module("loopx_codex_provider_routing.openai_relay")
+    admitted, release = threading.Event(), threading.Event()
+    stream = b'data: {"type":"response.completed"}\n\n'
+    calls = []
+    class Response(io.BytesIO):
+        status, headers = 200, {"Content-Type": "text/event-stream"}
+        def read1(self, size):
+            admitted.set()
+            assert release.wait(5)
+            return self.read(size)
+    class Upstream:
+        def open(self, call, timeout):
+            calls.append(call)
+            return Response(stream)
+    server = module.RelayServer(owner, {"port": 0, "token": "worker", "control_token": "control"}, opener=Upstream())
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    body = json.dumps({"model": "selected-model", "stream": True}).encode()
+    result = []
+    client = threading.Thread(target=lambda: result.append(request(server, "/v1/responses", "worker", body=body)))
+    try:
+        assert request(server, "/health", "worker") == (200, b'{"ok":true}')
+        assert request(server, "/runtime", "wrong")[0] == 401
+        client.start()
+        assert admitted.wait(5)
+        live = json.loads(request(server, "/runtime", "worker")[1])
+        assert live["active_requests"] == 1 and live["accepting"] is True
+        assert request(server, "/control/drain", "worker", body=b"", instance=live["instance_id"])[0] == 401
+        assert request(server, "/control/drain", "control", body=b"", instance="wrong")[0] == 409
+        # Use a slow shutdown hook to independently observe the admission fence.
+        shutdown, let_shutdown = server.shutdown, threading.Event()
+        server.shutdown = lambda: (let_shutdown.wait(5), shutdown())
+        assert request(server, "/control/drain", "control", body=b"", instance=live["instance_id"])[0] == 202
+        assert request(server, "/v1/responses", "worker", body=body)[0] == 503
+        release.set()
+        client.join(5)
+        assert result == [(200, stream)] and len(calls) == 1
+        let_shutdown.set()
+    finally:
+        release.set()
+        if 'let_shutdown' in locals():
+            let_shutdown.set()
+        server.shutdown()
+        server.server_close()
+        thread.join(5)
+        client.join(5)
+
+
+def test_real_detached_old_build_replaced_once_with_same_routes_and_private_state(owner, monkeypatch):
+    relay = importlib.import_module("loopx_codex_provider_routing.openai_relay")
+    life = importlib.import_module("loopx_codex_provider_routing.relay_lifecycle")
+    native = importlib.import_module("loopx_codex_provider_routing.native")
+    import socket
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    value = {"schema_version": relay.SCHEMA, "port": port,
+             "token": "worker-" + "x" * 32, "steward_token": "steward-" + "y" * 32,
+             "control_token": "control-" + "z" * 32}
+    native.atomic(owner.root / "api-relay.json", value)
+    monkeypatch.setenv("PYTHONPATH", str(SRC))
+    old = subprocess.Popen([sys.executable, "-c",
+        "import loopx_codex_provider_routing.openai_relay as r; r.BUILD='0'*64; raise SystemExit(r.main())",
+        "--runtime-root", str(owner.root.parents[1])], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and life.runtime(value) is None:
+            time.sleep(.05)
+        assert life.status(owner)["state"] == "upgrade_required"
+        before = (owner.root / "api-relay.json").read_bytes(), owner.api_keys().path.read_bytes(), owner.path.read_bytes()
+        with owner._lock(name="api-relay-state.lock"):
+            life.reconcile(owner, value, consumer="steward")
+        current = life.status(owner)
+        assert current["ready"] and current["runtime"]["pid"] != old.pid
+        old.wait(5)
+        with owner._lock(name="api-relay-state.lock"):
+            life.reconcile(owner, value)
+        assert life.status(owner)["runtime"]["pid"] == current["runtime"]["pid"]
+        assert before == ((owner.root / "api-relay.json").read_bytes(), owner.api_keys().path.read_bytes(), owner.path.read_bytes())
+        assert life.status(owner, consumer="steward")["ready"]
+        # The same build must also adopt a newly issued consumer credential;
+        # a worker health response cannot certify the steward route.
+        value["steward_token"] = "replacement-steward-" + "q" * 32
+        native.atomic(owner.root / "api-relay.json", value)
+        assert not life.status(owner, consumer="steward")["ready"]
+        with owner._lock(name="api-relay-state.lock"):
+            life.reconcile(owner, value, consumer="steward")
+        assert life.status(owner, consumer="steward")["ready"]
+        assert life.status(owner)["runtime"]["pid"] != current["runtime"]["pid"]
+    finally:
+        live = life.runtime(value)
+        if live:
+            life._drain(value, live)
+        if old.poll() is None:
+            old.terminate()  # only this synthetic fixture child, never a real consumer
+            old.wait(5)
+        deadline = time.monotonic() + 7
+        while time.monotonic() < deadline and not life._owner_released(owner):
+            time.sleep(.05)
+        assert life._owner_released(owner)
+
+
+@pytest.mark.parametrize("identity", [None, (1, "/other/python", 1, 1)])
+def test_legacy_unknown_owner_never_signalled(owner, monkeypatch, identity):
+    life = importlib.import_module("loopx_codex_provider_routing.relay_lifecycle")
+    relay = importlib.import_module("loopx_codex_provider_routing.openai_relay")
+    monkeypatch.setattr(life, "runtime", lambda *a, **k: None)
+    monkeypatch.setattr(relay, "healthy", lambda *a, **k: True)
+    monkeypatch.setattr(life, "process_identity", lambda *_: identity)
+    monkeypatch.setattr(life.os, "kill", lambda *_: pytest.fail("Unknown PID cannot be signalled"))
+    monkeypatch.setattr(life.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0, "/other -m wrong", ""))
+    with pytest.raises(Exception, match="api_relay_owner_unverified"):
+        life.reconcile(owner, {"port": 5000}, legacy_pid=12345)
+
+
+def test_legacy_requires_explicit_migration_and_pending_drain_never_spawns(owner, monkeypatch):
+    life = importlib.import_module("loopx_codex_provider_routing.relay_lifecycle")
+    relay = importlib.import_module("loopx_codex_provider_routing.openai_relay")
+    monkeypatch.setattr(life, "runtime", lambda *a, **k: None)
+    monkeypatch.setattr(relay, "healthy", lambda *a, **k: True)
+    monkeypatch.setattr(life.subprocess, "Popen", lambda *a, **k: pytest.fail("No parallel daemon"))
+    with pytest.raises(Exception, match="api_relay_legacy_migration_required"):
+        life.reconcile(owner, {"port": 5000})
+    monkeypatch.setattr(life, "runtime", lambda *a, **k: {"build": "old", "accepting": False})
+    monkeypatch.setattr(life, "_drain", lambda *_: None)
+    monkeypatch.setattr(life, "_owner_released", lambda *_: False)
+    with pytest.raises(Exception, match="api_relay_drain_pending"):
+        life.reconcile(owner, {"port": 5000}, timeout=0)
+
+
+def test_provider_doctor_checks_real_dependencies_and_does_not_start_unconfigured_relay(owner, monkeypatch):
+    provider = importlib.import_module("loopx_codex_provider_routing.provider")
+    before = list(owner.root.iterdir())
+    result = provider.doctor(owner)
+    assert result["installation_ready"] and result["relay"]["state"] == "not_started"
+    assert result["message_delivery_verified"] is False and list(owner.root.iterdir()) == before
+    monkeypatch.setenv("PATH", "")
+    with pytest.raises(Exception, match="node_unavailable"):
+        provider.doctor(owner)
+
+
+def test_existing_healthy_legacy_is_not_silently_adopted(owner):
+    relay = importlib.import_module("loopx_codex_provider_routing.openai_relay")
+    native = importlib.import_module("loopx_codex_provider_routing.native")
+    class Legacy(relay.RelayHandler):
+        def do_GET(self):
+            if self.path.endswith("/runtime"):
+                self._json(404, "unsupported_route")
+            else:
+                super().do_GET()
+    server = relay.RelayServer(owner, {"port": 0, "token": "legacy-" + "x" * 32})
+    server.RequestHandlerClass = Legacy
+    value = {"schema_version": relay.SCHEMA, "port": server.server_port,
+             "token": server.value["token"]}
+    native.atomic(owner.root / "api-relay.json", value)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    try:
+        assert relay.healthy(value)
+        with pytest.raises(Exception, match="api_relay_legacy_migration_required"):
+            relay.ensure(owner)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(5)
+
+
+def test_legacy_changed_kernel_identity_is_not_signalled(owner, monkeypatch):
+    life = importlib.import_module("loopx_codex_provider_routing.relay_lifecycle")
+    relay = importlib.import_module("loopx_codex_provider_routing.openai_relay")
+    monkeypatch.setattr(life, "runtime", lambda *a, **k: None)
+    monkeypatch.setattr(relay, "healthy", lambda *a, **k: True)
+    identities = iter([(1, "/python", 1, 0), (1, "/python", 2, 0)])
+    monkeypatch.setattr(life, "_legacy_identity", lambda *_: next(identities))
+    monkeypatch.setattr(life.os, "kill", lambda *_: pytest.fail("Reused PID cannot be signalled"))
+    with pytest.raises(Exception, match="api_relay_owner_changed"):
+        life.reconcile(owner, {"port": 5000}, legacy_pid=12345)

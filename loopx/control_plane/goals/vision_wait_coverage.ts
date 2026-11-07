@@ -1,7 +1,8 @@
 import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
-import { optionalNonEmptyString, requireInteger, requireJsonObject, requireStringArray } from "../runtime_decode.ts";
+import { jsonObject, optionalNonEmptyString, requireInteger, requireJsonObject, requireStringArray } from "../runtime_decode.ts";
 import { projectTodoResumePlanning } from "../todos/resume_planning.ts";
+import { automaticResumeFields, normalizedTodoId, selectPendingResume } from "../todos/automatic_resume.ts";
 
 const WAIT_STATE_SCHEMA = "goal_vision_wait_state_v0";
 const VISION_GAP = "vision_acceptance_gap";
@@ -40,12 +41,6 @@ export function projectVisionWaitCoverage(requestPayload: unknown): JsonObject {
   }
   return {schema_version: "vision_wait_coverage_v0", covered: roots.length > 0 && uncovered.size === 0,
     witness_todo_ids: [...witnesses].sort(), uncovered_todo_ids: [...uncovered].sort()};
-}
-
-function normalizedTodoId(candidate: unknown): string | null {
-  if (typeof candidate !== "string") return null;
-  const id = candidate.trim().toLowerCase();
-  return /^todo_[a-z0-9_-]{3,64}$/.test(id) ? id : null;
 }
 
 function visionGapRows(value: unknown): JsonObject[] {
@@ -131,28 +126,6 @@ function selectedWaitItems(blockers: JsonObject[], candidates: JsonObject[], wit
   return {waitItems: selectedCandidates.length ? selectedCandidates : selectedBlockers, automatic: selectedCandidates.length > 0};
 }
 
-function compactResumeCondition(resumeCondition: unknown): JsonObject {
-  const condition = typeof resumeCondition === "object" && resumeCondition !== null && !Array.isArray(resumeCondition)
-    ? resumeCondition as JsonObject : {};
-  const keys = ["schema_version", "resume_when", "satisfied", "kind", "target", "target_todo_id", "target_status",
-    "target_archive_state", "target_source_section", "target_task_class", "target_claimed_by", "target_next_due_at",
-    "capability", "provider", "scheduled_for", "evaluated_at", "clock_provider", "material_change",
-    "material_change_generation", "baseline_generation", "invalid_state", "target_expires_at"];
-  const compact: JsonObject = Object.fromEntries(keys.filter(key => key in condition).map(key => [key, condition[key]]));
-  if (condition.kind === "resume_at") compact.resume_receipt = condition.resume_receipt ?? null;
-  compact.satisfied = false;
-  return compact;
-}
-
-function automaticResumeFields(selected: JsonObject): JsonObject {
-  const fields: JsonObject = {};
-  for (const key of ["resume_when", "resume_monitor_generation"] as const) {
-    if (selected[key] !== undefined && selected[key] !== null) fields[key] = selected[key];
-  }
-  fields.resume_condition = compactResumeCondition(selected.resume_condition);
-  return fields;
-}
-
 function blockerReasonField(selectedTodo: JsonObject): JsonObject {
   return typeof selectedTodo.reason === "string" && selectedTodo.reason.trim()
     ? {blocker_reason: selectedTodo.reason.trim()} : {};
@@ -161,14 +134,16 @@ function blockerReasonField(selectedTodo: JsonObject): JsonObject {
 function waitStatePayload(input: {causalIds: string[]; gapCount: number; selectedTodo: JsonObject; waitItems: JsonObject[];
   agentId: string | null; automatic: boolean}): JsonObject {
   const {causalIds, gapCount, selectedTodo, waitItems, agentId, automatic} = input;
+  const pending = selectPendingResume(waitItems, automatic ? agentId : null);
+  const selected = pending.todo ?? selectedTodo;
   const payload: JsonObject = {
     schema_version: WAIT_STATE_SCHEMA, state: "waiting",
     reason_code: automatic ? "exact_blocked_successor" : "current_agent_blocker",
     agent_id: agentId, waiting_todo_count: waitItems.length,
     waiting_todo_ids: waitItems.slice(0, 5).map(candidate => normalizedTodoId(candidate.todo_id)).filter((id): id is string => id !== null),
-    selected_todo_id: normalizedTodoId(selectedTodo.todo_id), selected_todo_status: selectedTodo.status ?? null,
-    selected_todo_priority: selectedTodo.priority ?? null, selected_todo_claimed_by: selectedTodo.claimed_by ?? null,
-    ...(automatic ? automaticResumeFields(selectedTodo) : blockerReasonField(selectedTodo)),
+    selected_todo_id: normalizedTodoId(selected.todo_id), selected_todo_status: selected.status ?? null,
+    selected_todo_priority: selected.priority ?? null, selected_todo_claimed_by: selected.claimed_by ?? null,
+    ...(automatic ? {...automaticResumeFields(selected), pending_resume_count: pending.count} : blockerReasonField(selected)),
     causal_todo_ids: causalIds, deferred_acceptance_gap_count: gapCount,
     deferred_acceptance_gap_kinds: [VISION_GAP], automatic_resume: automatic,
     resume_behavior: automatic

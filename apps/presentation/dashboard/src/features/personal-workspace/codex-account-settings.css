@@ -31,6 +31,13 @@
 .codex-account-holders li > span { color: var(--pw-text); }
 .codex-account-holders .codex-account-actions { margin-top: 12px; }
 .personal-codex-accounts [role="alert"] { display: flex; gap: 8px; align-items: flex-start; color: var(--pw-red); }
+.openai-key-settings { border-top: 1px solid var(--pw-line); padding-top: 24px; }
+.openai-key-settings header > span { margin-left: auto; }
+.openai-key-settings .codex-account-name { overflow-wrap: anywhere; }
+.openai-key-settings form { display: grid; gap: 16px; max-width: 480px; }
+.openai-key-settings form label { display: grid; gap: 8px; }
+.openai-key-settings input { min-width: 0; min-height: 44px; padding: 8px 12px; border: 1px solid var(--pw-line-strong); border-radius: 6px; background: var(--pw-card); color: var(--pw-text); font: inherit; }
+.openai-add-key, .openai-key-settings form > button { justify-self: start; }
 @media (max-width: 640px) {
   .codex-account-list { grid-template-columns: 1fr; gap: 20px; }
   .codex-account-list dl { grid-template-columns: 1fr 1fr; width: 100%; }

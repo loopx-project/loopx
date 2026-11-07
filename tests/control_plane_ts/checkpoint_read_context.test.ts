@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {evaluateCheckpointReadContext as evaluate} from "../../loopx/control_plane/goals/checkpoint_read_context.ts";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
+import {settlementIdentity} from "../../loopx/control_plane/effect_program.ts";
 
 const identity = {goal_id: "goal", agent_id: "agent", todo_id: "task", turn_instance_id: "turn", effect_id: "effect"};
 const facts = {
@@ -28,6 +29,37 @@ test("read captures the exact task, transitive upstream results and goal accepta
   assert.equal(result.ok, true);
   assert.deepEqual((basis.dependencies as JsonObject[]).map(row => row.todo_id), ["ancestor", "upstream"]);
   assert.equal(check(result.receipt).ok, true);
+});
+
+test("an inapplicable recovery does not direct the caller to repeat the same read", () => {
+  const result = read({prior: {vision_checkpoint: {
+    decision: "unchanged_with_reason", satisfied: true, delivery_boundary: "in_flight_continuation",
+  }}, writeback_committed: true, quota_spend_committed: true});
+  assert.equal(result.ok, false);
+  assert.equal(result.error_code, "checkpoint_context_not_missing");
+  assert.equal(result.reread_required, false);
+  assert.doesNotMatch(String(result.error), /run checkpoint-context/);
+  assert.match(String(result.error), /normal guard/);
+  const missing = check(undefined);
+  assert.equal(missing.reread_required, true, "a genuinely missing receipt still requires reread");
+});
+
+test("an unqualified blocked replan needs the exact committed source and no debit before reread", () => {
+  const bound = settlementIdentity({goal_id: "goal", agent_id: "agent", turn_instance_id: "turn",
+    replan_obligation_id: "replan-1111111111111111"});
+  const prior = {goal_id: "goal", agent_id: "agent", turn_instance_id: "turn",
+    replan_obligation_id: bound.replan_obligation_id, delivery_outcome: "outcome_gap",
+    progress_observation: {schema_version: "typed_progress_observation_v0", result_class: "blocked",
+      work_item_id: bound.replan_obligation_id, blocker_id: "blocker:source", evidence_ids: ["evidence:read"]},
+    vision_checkpoint: {decision: "unchanged_with_reason", satisfied: true}};
+  const pending = {identity: bound, prior, writeback_committed: true, quota_spend_committed: false,
+    semantic_replan_guard: {selected_obligation_id: bound.replan_obligation_id}};
+  assert.equal(read(pending).ok, true);
+  for (const changed of [{...pending, writeback_committed: false}, {...pending, quota_spend_committed: true},
+    {...pending, semantic_replan_guard: {}}, {...pending, prior: {...prior, agent_id: "other-agent"}},
+    {...pending, prior: {...prior, autonomous_replan_ack: {recorded: true}}}]) {
+    assert.equal(read(changed).error_code, "checkpoint_context_not_missing");
+  }
 });
 
 test("old receipts and identical content from a different provider lineage require reread", () => {

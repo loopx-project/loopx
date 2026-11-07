@@ -5,6 +5,9 @@ import {reviewedPromotionPlan, promotionPlanDigest, decodeReviewedPromotionOpera
 import {registryAuthoritySourceCheck} from "./authority_source.ts";
 import {ResearchTerminalEvidenceHost} from "../capabilities/explore_research_terminal.ts";
 import {decodeTaskLeaseProof} from "./task_lease_proof.ts";
+import type {ClaimWorkspaceObserver} from "./claim_execution.ts";
+import {LeaseWorktreeObservationError, observeLeaseWorktree} from "../work_items/task_lease_workspace.ts";
+import {evaluateTaskLeaseWriteScopesOverlap} from "../work_items/task_lease_acquire_decision.ts";
 import {COORDINATION_TODO_ARCHIVE_RESULT_SCHEMA} from "./todo_archive.ts";
 import {readCoordinationOwnership} from "./ownership_observation.ts";
 import {executeTodoContinuation} from "./todo_continuation.ts";
@@ -527,6 +530,23 @@ function claimObservedAt(value: unknown): Date {
   return observedAt;
 }
 
+/** The same scope-aware observation serves ordinary claims and recovery previews. */
+function claimWorkspaceObserver(worktree: unknown): ClaimWorkspaceObserver | undefined {
+  if (worktree === undefined) return undefined;
+  if (typeof worktree !== "string" || !isAbsolute(worktree)) {
+    throw new TypeError("Worktree observation requires an absolute caller path");
+  }
+  return async writeScopes => {
+    try {
+      return await observeLeaseWorktree(worktree, path =>
+        evaluateTaskLeaseWriteScopesOverlap({left: [...writeScopes], right: [path]}).overlap === true);
+    } catch (error) {
+      throw new Error(error instanceof LeaseWorktreeObservationError ? error.message
+        : "Cannot verify independent Git worktree and origin for task claim");
+    }
+  };
+}
+
 function authorityDirectory(root: string): string {
   return join(root, "authority", "file-v0");
 }
@@ -1035,6 +1055,11 @@ export async function claimLocalCoordinationTodo(
     }
     if (Object.hasOwn(input, "manage_execution") && input.schema_version !== LOCAL_COORDINATION_TODO_MANAGED_CLAIM_REQUEST_SCHEMA)
       throw new TypeError("Managed execution requires claim request v2");
+    const worktree = input.write_worktree;
+    if (worktree !== undefined && (input.schema_version !== LOCAL_COORDINATION_TODO_MANAGED_CLAIM_REQUEST_SCHEMA ||
+        input.manage_execution !== true || typeof worktree !== "string" || !isAbsolute(worktree))) {
+      throw new TypeError("Worktree observation requires a managed claim and an absolute caller path");
+    }
     const authoritySourcesCurrent = registryAuthoritySourceCheck(input,
       input.schema_version !== LOCAL_COORDINATION_TODO_CLAIM_REQUEST_SCHEMA);
     if (typeof input.dry_run !== "boolean") {
@@ -1085,7 +1110,7 @@ export async function claimLocalCoordinationTodo(
         ...(input.manage_execution === undefined ? {} : {manage_execution: input.manage_execution as boolean}),
         dry_run: input.dry_run === true,
         now: claimObservedAt(input.observed_at),
-      }, authoritySourcesCurrent);
+      }, authoritySourcesCurrent, claimWorkspaceObserver(worktree));
       return {
         ...result,
         source_authority: sourceAuthority,
@@ -1199,6 +1224,9 @@ export async function updateLocalCoordinationTodo(
     }
     if (Object.hasOwn(input, "claim_operation_id") && input.schema_version !== LOCAL_COORDINATION_TODO_EXECUTION_UPDATE_REQUEST_SCHEMA)
       throw new TypeError("Claim execution reference requires update request v6");
+    if (Object.hasOwn(input, "write_worktree") && (input.schema_version !== LOCAL_COORDINATION_TODO_EXECUTION_UPDATE_REQUEST_SCHEMA ||
+        input.claim_operation_id == null)) throw new TypeError("Worktree recovery observation requires an original claim execution reference");
+    const observeWorkspace = claimWorkspaceObserver(input.write_worktree);
     const planningIntent = input.planning_intent == null ? undefined :
       requireJsonObject(input.planning_intent, "Todo planning intent");
     if (planningIntent && Object.keys(planningIntent).length &&
@@ -1207,7 +1235,9 @@ export async function updateLocalCoordinationTodo(
     }
     const completionUpdate = input.schema_version === COORDINATION_TODO_COMPLETION_UPDATE_REQUEST_SCHEMA;
     const observationUpdate = input.schema_version === COORDINATION_TODO_OBSERVATION_UPDATE_REQUEST_SCHEMA;
-    const validationRevisionUpdate = input.schema_version === COORDINATION_TODO_VALIDATION_REVISION_REQUEST_SCHEMA;
+    const validationRevisionUpdate = input.schema_version === COORDINATION_TODO_VALIDATION_REVISION_REQUEST_SCHEMA ||
+      (input.schema_version === LOCAL_COORDINATION_TODO_EXECUTION_UPDATE_REQUEST_SCHEMA &&
+        Object.hasOwn(input, "completion_validation_revision"));
     if (!observationUpdate && Object.hasOwn(input, "monitor_observation")) {
       throw new TypeError("Monitor observation payload requires request v4");
     }
@@ -1217,7 +1247,7 @@ export async function updateLocalCoordinationTodo(
     }
     if (completionUpdate && input.completion == null) throw new TypeError("Todo completion update requires its completion payload");
     if (!validationRevisionUpdate && Object.hasOwn(input, "completion_validation_revision")) {
-      throw new TypeError("Completion validation revision payload requires request v5");
+      throw new TypeError("Completion validation revision payload requires request v5 or v6");
     }
     if (validationRevisionUpdate && input.completion_validation_revision == null) {
       throw new TypeError("Completion validation revision update requires its revision payload");
@@ -1276,7 +1306,7 @@ export async function updateLocalCoordinationTodo(
         clear_fields: input.clear_fields.map((field) => claimAgentValue(field, "clear field")),
         dry_run: input.dry_run as boolean,
         now: claimObservedAt(input.observed_at),
-      }, authoritySourcesCurrent), ...providerEvidence};
+      }, authoritySourcesCurrent, observeWorkspace), ...providerEvidence};
     }, {businessWrite: "todo_update"});
   } catch (error) {
     return {schema_version: COORDINATION_TODO_UPDATE_RESULT_SCHEMA, status: "failed",
@@ -1305,6 +1335,9 @@ export async function terminalLifecycleLocalCoordinationTodo(
     }
     if (Object.hasOwn(input, "claim_operation_id") && input.schema_version !== LOCAL_COORDINATION_TODO_EXECUTION_TERMINAL_REQUEST_SCHEMA)
       throw new TypeError("Claim execution reference requires terminal request v4");
+    if (Object.hasOwn(input, "write_worktree") && (input.schema_version !== LOCAL_COORDINATION_TODO_EXECUTION_TERMINAL_REQUEST_SCHEMA ||
+        input.claim_operation_id == null)) throw new TypeError("Worktree recovery observation requires an original claim execution reference");
+    const observeWorkspace = claimWorkspaceObserver(input.write_worktree);
     const operationIntent = decodeTerminalOperationIntent(input);
     const reviewBasis = input.review_basis == null ? undefined : requireJsonObject(input.review_basis, "terminal review basis");
     const authoritySourcesCurrent = registryAuthoritySourceCheck(input, true, reviewBasis?.registry_sha256);
@@ -1397,10 +1430,12 @@ export async function terminalLifecycleLocalCoordinationTodo(
         completion_policy_request:
           input.completion_policy_request === null || input.completion_policy_request === undefined
             ? null : requireJsonObject(input.completion_policy_request, "completion_policy_request"),
+        auto_archive_completed: input.auto_archive_completed === undefined
+          ? true : Boolean(input.auto_archive_completed),
         dry_run: input.dry_run as boolean,
         now: claimObservedAt(input.observed_at),
       }, async () => await authoritySourcesCurrent() && researchEvidence.current(),
-        researchEvidence.qualify, request => verifyReentrySettlement(root, request)), ...providerEvidence};
+        researchEvidence.qualify, request => verifyReentrySettlement(root, request), observeWorkspace), ...providerEvidence};
       } finally {await researchEvidence.close();}
     }, {businessWrite: "todo_terminal"});
   } catch (error) {

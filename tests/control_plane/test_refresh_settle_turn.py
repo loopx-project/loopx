@@ -16,6 +16,146 @@ from test_quota_settlement_cli import (
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_receipt_capture_failure_keeps_committed_receipts_and_exact_retry(tmp_path, monkeypatch, provider):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+               "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID]
+    rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding, cwd=project)
+    assert rc == 0, guard
+    private = runtime / "context-delivery"
+    private.mkdir(mode=0o700, exist_ok=True)
+    private.chmod(0o755)
+    command = ["refresh-state", *binding, "--classification", "verified_receipt_recovery",
+        "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+        "--delivery-boundary", "in_flight_continuation", "--no-global-sync", "--suppress-external-sinks",
+        "--settle-turn", "--settlement-receipt"]
+    rc, failed = _run_cli(registry, runtime, *command, cwd=project)
+    assert rc != 0 and failed["ok"] is False
+    assert failed["settlement_progress"]["state"] == "settled"
+    assert len(failed["settlement_result"]["receipts"]) == 3
+    assert _spend_run_count(runtime) == 1
+    private.chmod(0o700)
+    rc, replay = _run_cli(registry, runtime, *command, cwd=project)
+    assert rc == 0, replay
+    assert replay["settlement_identity"] == failed["settlement_identity"]
+    assert len(replay["settlement_result"]["receipts"]) == 3
+    assert _spend_run_count(runtime) == 1
+
+
+def test_receipt_keeps_unknown_controls_and_never_hides_partial_failure(tmp_path):
+    from loopx.cli_commands.refresh_settlement import present_settled_refresh
+
+    payload = {"ok": True, "settlement_progress": {"state": "settled"},
+        "state": {"large_supporting_snapshot": "x" * 3000},
+        "future_control": {"required_resolution": "preserve exactly"},
+        "projection_outbox": {"status": "pending", "next_action": "retry"}}
+    receipt = present_settled_refresh(payload, runtime_root=tmp_path)
+    assert receipt["future_control"] == payload["future_control"]
+    assert receipt["projection_outbox"] == payload["projection_outbox"]
+    for update in ({"ok": False}, {"dry_run": True}, {"settlement_owed": {"command": "original"}},
+                   {"settlement_progress": {"state": "spend_required"}}):
+        original = {**payload, **update}
+        assert present_settled_refresh(original, runtime_root=tmp_path) is original
+    large = {**payload, "future_control": {"required_resolution": "x" * 100000}}
+    bounded = present_settled_refresh(large, runtime_root=tmp_path)
+    assert "Read the complete selected result controls before acting" in bounded["instruction"]
+    assert "Supporting snapshots" in bounded["instruction"]
+    command, bodies = bounded["command"], []
+    while command:
+        result = subprocess.run(shlex.split(command), capture_output=True, text=True, check=False)
+        page = json.loads(result.stdout)
+        assert result.returncode == 0 and len(result.stdout.encode()) <= 64000
+        bodies.append(page["content"])
+        command = page.get("next_command")
+    selected = {row["pointer"]: row["value"] for row in json.loads("".join(bodies))["selections"]}
+    assert selected["/future_control"] == large["future_control"]
+
+
+def _repository_delivery(tmp_path, provider):
+    project, runtime, registry = _write_fixture(tmp_path)
+    state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state.write_text(state.read_text().replace(
+        "action_kind=validate", "action_kind=validate task_repository=git:github.com/example/delivery"))
+    subprocess.run(["git", "init", "-q", str(project)], check=True)
+    subprocess.run(["git", "-C", str(project), "remote", "add", "origin",
+                    "https://github.com/example/delivery.git"], check=True)
+    subprocess.run(["git", "-C", str(project), "-c", "user.name=Fixture", "-c",
+                    "user.email=fixture@example.test", "commit", "--allow-empty", "-qm", "fixture"], check=True)
+    delivery = tmp_path / "producing workspace"
+    subprocess.run(["git", "-C", str(project), "worktree", "add", "--detach", str(delivery)],
+                   check=True, capture_output=True)
+    # The delivered project may itself contain a different LoopX implementation.
+    # Changing the accounting cwd must not execute that implementation.
+    trap = delivery / "loopx"
+    trap.mkdir()
+    (trap / "__init__.py").write_text("raise RuntimeError('wrong implementation selected')\n")
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    return project, runtime, registry, delivery
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_combined_settlement_uses_producing_worktree_and_originating_cli(
+    tmp_path, monkeypatch, provider,
+):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry, _delivery = _repository_delivery(tmp_path, provider)
+    binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+               "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID]
+    rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding, cwd=project)
+    assert rc == 0, guard
+    identity = guard["interaction_contract"]["cli_channel"]["settlement_plan"]["identity"]
+    refresh = ["refresh-state", *binding, "--classification", "verified_worktree",
+               "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+               "--delivery-boundary", "in_flight_continuation", "--no-global-sync", "--suppress-external-sinks",
+               "--delivery-workspace-path", "../producing workspace", "--settle-turn"]
+    for replay in (False, True):
+        rc, result = _run_cli(registry, runtime, *refresh, cwd=project)
+        assert rc == 0, result
+        assert result["settlement_progress"]["state"] == "settled"
+        assert result["settlement_identity"] == identity
+        assert result["delivery_workspace"]["workspace_kind"] == "independent_git_worktree"
+        assert _spend_run_count(runtime) == 1
+        assert result.get("idempotent_replay", False) is replay
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_wrong_or_missing_child_workspace_retains_owed_command_for_exact_recovery(
+    tmp_path, monkeypatch, provider,
+):
+    from loopx.cli_commands.refresh_settlement import settle_refreshed_turn
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry, delivery = _repository_delivery(tmp_path, provider)
+    binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+               "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID]
+    rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding, cwd=project)
+    assert rc == 0, guard
+    refresh = ["refresh-state", *binding, "--classification", "verified_worktree",
+               "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+               "--delivery-boundary", "in_flight_continuation", "--no-global-sync", "--suppress-external-sinks",
+               "--delivery-workspace-path", str(delivery)]
+    rc, original = _run_cli(registry, runtime, *refresh, cwd=project)
+    assert rc == 0 and _spend_run_count(runtime) == 0, original
+    for workspace in (project, tmp_path / "missing"):
+        failed = copy.deepcopy(original)
+        settle_refreshed_turn(failed, registry_path=registry, runtime_root=runtime,
+            goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID,
+            replan_obligation_id=None, turn_instance_id=TURN_ID, goal_ref=None,
+            delivery_workspace_path=workspace)
+        assert failed["ok"] is False, failed
+        assert failed["settlement_progress"]["state"] == "spend_required"
+        assert failed["settlement_owed"]["command"] == original["settlement_owed"]["command"]
+        assert _spend_run_count(runtime) == 0
+    rc, recovered = _run_cli(registry, runtime, *refresh, "--settle-turn", cwd=project)
+    assert rc == 0, recovered
+    assert recovered["settlement_progress"]["state"] == "settled"
+    assert recovered["settlement_identity"] == original["settlement_identity"]
+    assert _spend_run_count(runtime) == 1
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("finish_todo", [False, True])
 def test_same_turn_progress_or_completion_and_replay_without_extra_guard(
     tmp_path, monkeypatch, provider, finish_todo,
@@ -30,27 +170,32 @@ def test_same_turn_progress_or_completion_and_replay_without_extra_guard(
     plan = guard["interaction_contract"]["cli_channel"]["settlement_plan"]
     validation, writeback = plan["ordered_steps"][:2]
     assert validation["command_condition"] == "todo_deliverable_complete"
-    assert "semantic_closeout" in validation["precondition"]
-    vision_args = []
+    assert " --delivery-boundary semantic_closeout " in writeback["semantic_closeout_command_template"]
     if finish_todo:
         rc, complete = _run_generated_cli(validation["command_template"].replace(
             "<validated evidence>", "Independent validation of the original deliverable."), registry_path=registry)
         assert rc == 0, complete
-        vision = tmp_path / "vision.json"
-        vision.write_text(json.dumps({
-            "goal_id": GOAL_ID, "agent_id": AGENT_ID, "state": "vision_patch_proposed",
-            "vision_patch": {"acceptance_summary": "Original scoped validation completed; wider Goal remains open."},
-            "path_delta": {"outcome": "continue", "prior_assumption": "The scoped deliverable needed validation.",
-                           "observed_reality": "The original deliverable passed independent validation.",
-                           "retained": ["Original requirements"], "evidence_refs": ["evidence:validation"]},
-        }))
-        vision_args = ["--agent-vision-json", str(vision)]
-    command = writeback["command_template"]
+    vision = tmp_path / "vision.json"
+    vision.write_text(json.dumps({
+        "schema_version": "goal_vision_replan_contract_v0",
+        "goal_id": GOAL_ID, "agent_id": AGENT_ID, "state": "vision_patch_proposed",
+        "vision_patch": {"acceptance_summary": (
+            "Original scoped validation completed; wider Goal remains open." if finish_todo else
+            "Verified progress advances the original task; its remaining acceptance stays open.")},
+        "path_delta": {"outcome": "continue", "prior_assumption": "The scoped deliverable needed validation.",
+                       "observed_reality": (
+                           "The original deliverable passed independent validation." if finish_todo else
+                           "A bounded verified outcome advances work without completing the deliverable."),
+                       "retained": ["Original requirements"], "evidence_refs": ["evidence:validation"]},
+    }))
+    command = writeback["semantic_closeout_command_template"]
     for key, value in {"<validated_progress>": "verified_slice", "<scale>": "implementation",
-                       "<outcome>": "outcome_progress", "<boundary>": "semantic_closeout" if finish_todo else "in_flight_continuation"}.items():
+                       "<outcome>": "outcome_progress", "<file>": shlex.quote(str(vision))}.items():
         command = command.replace(key, value)
+    words = shlex.split(command)
+    assert words[words.index("--delivery-boundary") + 1] == "semantic_closeout"
     command += " " + shlex.join(["--settle-turn", "--no-global-sync", "--suppress-external-sinks",
-        "--delivery-workspace-path", str(project), *vision_args])
+        "--delivery-workspace-path", str(project)])
     # A hostile ambient executable must not select another checkout/accounting owner.
     trap = tmp_path / "bin"
     trap.mkdir()
@@ -62,8 +207,19 @@ def test_same_turn_progress_or_completion_and_replay_without_extra_guard(
         assert rc == 0, json.dumps(result, ensure_ascii=False)
         assert result["settlement_progress"]["state"] == "settled"
         assert result["settlement_identity"] == plan["identity"]
+        receipts = result["settlement_result"]["receipts"]
+        assert [row["step_kind"] for row in receipts] == ["validation", "durable_writeback", "quota_spend"], replay
+        assert all(row["status"] == "committed" and row["effect_id"] == plan["identity"]["effect_id"]
+                   for row in receipts)
         assert _spend_run_count(runtime) == 1
         assert result.get("idempotent_replay", False) is replay
+    ordinary_args = shlex.split(command)
+    ordinary_args.remove("--settle-turn")
+    rc, ordinary = _run_generated_cli(shlex.join(ordinary_args), registry_path=registry)
+    assert rc == 0 and ordinary["settlement_progress"]["state"] == "settled", ordinary
+    assert [row["step_kind"] for row in ordinary["settlement_result"]["receipts"]] == [
+        "validation", "durable_writeback"]
+    assert _spend_run_count(runtime) == 1
     rc, todo = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID, "--todo-id", TODO_ID)
     assert rc == 0 and todo["todo"]["status"] == ("done" if finish_todo else "open")
     events = runtime / "goals" / GOAL_ID / "rollout-events.jsonl"
@@ -88,6 +244,9 @@ def test_failed_writeback_dry_run_and_missing_binding_cannot_spend(tmp_path, mon
             "--no-global-sync", "--suppress-external-sinks", "--settle-turn"]
     rc, rejected = _run_cli(registry, runtime, *base, "--delivery-outcome", "surface_only")
     assert rc != 0 and _spend_run_count(runtime) == 0, rejected
+    rc, bad_path = _run_cli(registry, runtime, *base,
+        "--delivery-workspace-path", "~loopx-missing-fixture-user")
+    assert rc != 0 and bad_path["ok"] is False and _spend_run_count(runtime) == 0, bad_path
     rc, preview = _run_cli(registry, runtime, *base, "--delivery-boundary", "in_flight_continuation", "--dry-run")
     assert rc == 0 and preview["dry_run"] and _spend_run_count(runtime) == 0, preview
     # Invalid vision fails before writeback; no direct-debit bypass is allowed.

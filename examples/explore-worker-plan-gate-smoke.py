@@ -165,10 +165,10 @@ def check_commands_and_width_cap() -> None:
     assert plan["selected_worker_branch_count"] <= 3, plan
     first = plan["selected_worker_branches"][0]
     assert any("loopx todo claim" in command for command in first["suggested_commands"]), first
-    assert any("task-lease acquire" in command for command in first["suggested_commands"]), first
+    assert not any("task-lease" in command for command in first["suggested_commands"]), first
     # Suggested is still only suggested: the packet remains dry-run.
     assert plan["dry_run"] is True, plan
-    assert plan["harness_compatibility"]["claim_and_lease_are_suggested_only"] is True, plan
+    assert plan["harness_compatibility"]["claim_is_suggested_only"] is True, plan
     _assert_read_only_boundary(plan)
 
     wide = _plan(

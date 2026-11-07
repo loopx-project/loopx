@@ -282,6 +282,29 @@ a started write without a provider locator stays unconfirmed after restart.
 Revocation or changed identity prevents further delivery. Disable the existing
 connection to revoke it; rollback must preserve its private delivery journals.
 
+Newly verified App user mirrors also reuse the existing reaction journals:
+`Get` acknowledges receipt; only an observed starting/running Core Turn adds
+`OnIt`. Terminal completion, failure or interruption removes processing feedback
+while retaining receipt feedback. A queued input never claims to be processing,
+and assistant mirrors receive neither reaction. Long inputs use their last
+verified concrete post, not the composite parts locator. Turn-only changes are
+discovered within the existing five-second scan even without a transcript append.
+Before each effect, the worker rechecks the canonical input/Turn, current source
+and grants, and frozen provider message. Feedback failures retain recoverable
+receipts without blocking message delivery or starting work. Unknown provider
+writes are not retried. Optional App feedback runs on at most one slot of the
+existing reply pool, outside the body outbox lock. Its final write merges only
+feedback fields, preserving concurrently delivered current and later answers.
+The idle scan reuses only App message and Turn references while the local journal
+is unchanged. It reads current Turn status each pass and uses the original
+canonical input, source and provider verification before any reaction.
+No synthetic incoming event or original-request
+settlement is used. Existing finished mirrors are not backfilled; current active
+mirrors can adopt the feedback path. `loopx chat --no-private-reactions` keeps
+feedback disabled without changing the message path. The isolated HTTP/Core and
+synthetic-provider checks qualify source behavior; installed Lark reactions and
+actual provider presentation remain separate acceptance work.
+
 Use **Continue original conversation** or the explicitly selected App steward
 entry above to reach this path. Old ordinary history is retained separately.
 This checkpoint covers text and bounded App image projection, not reply/thread
@@ -858,6 +881,20 @@ receipt → observed work or actionable failure → readable answer in the same 
   upstream observations; never simulate phases, expose hidden reasoning, or
   infer progress from elapsed time. A period without new events has an explicit
   waiting caption, not an invented failure or continually changing animation.
+- The original private Lark owner sees the same bounded recent reasoning-summary
+  model as Codex (up to four summaries, rendered within the 1,200-character
+  projection) alongside the existing answer stream. Tool and command titles are
+  not repeated in the Lark tree view. Group and unqualified projections retain
+  coarse labels. Antigravity maps its redacted `plannerResponse.thinking`
+  summary through the shared activity contract; `rawThinking`, planner
+  completion and tool completion remain separate, and final answers still
+  replace the draft on the original source-bound post.
+- Ordinary Codex Chat explicitly requests a concise native reasoning summary
+  on each Turn, including resumed and restricted answer-review threads whose
+  inherited summary setting may be `none`. Execution hosts retain their own
+  summary configuration. Only actual upstream summaries enter the existing
+  activity projection; a model that emits none keeps coarse activity labels.
+  This requests no extra Turn and never exposes raw reasoning content.
 - Generate the visible answer once, then append a complete hidden review envelope
   with `message: ""`. The production parser reuses the preceding Markdown and
   applies the same redaction and typed metadata normalization. Legacy nonempty
@@ -1626,6 +1663,21 @@ acceptance. GQ06's material entry and GQ07–09's continuity remain subject to t
 full delivery and recovery acceptance.
 
 
+### Local text document attachments
+
+Local managed Codex conversations also accept UTF-8 `.md` and `.txt` source
+attachments. The existing four-attachment limit and 64,000-byte serialized
+message/metadata budget apply; text data does not use the image allowance.
+The original bytes remain in the accepted Session request and queue, reach the
+native input as labelled source text, and can be previewed/downloaded from the
+original conversation. Busy-session FIFO, replay identity and restart recovery
+remain owned by the existing queue. Invalid encoding, mismatched type/name,
+binary NUL data and excess size reject the entire request without truncation.
+Attached hosts, other executors and linked/Lark conversations reject this new
+input before admission; this is not a file-sync or arbitrary-path grant. Images
+retain their existing routes. Source delivery does not prove comprehension,
+automatic material adoption, full GQ06 qualification or lower model cost.
+
 ### Default Lark private images reuse native Turn attachments
 
 Ordinary project and steward private conversations accept images and image/text
@@ -1650,14 +1702,54 @@ Session authority, queue, worker or feature toggle is introduced.
 A delivered failure notice is not a completed business request. The existing
 private reply scanner now discovers eligible unfinished ordinary Codex steward
 requests after the legacy manager-context migration. Context version 21 restores
-the complete visible user/assistant history once in native persisted history;
-the old upstream identity remains recorded, and native Goal/attached executions
-are not replaced by this migration.
+the complete visible user/assistant history in native persisted history. Large
+restores use bounded UTF-8 prefixes, with native compaction between them before
+the next prefix or user request. A scheduling acknowledgement is insufficient:
+the matching compaction item and successful terminal native Turn must finish.
+Small restores and resumed threads retain their existing path. Core's visible
+transcript is unchanged; the native compactor owns its condensed model context.
+An unknown, failed or interrupted compaction closes the new adapter before its
+binding is published, without replaying injection or starting business work.
+The old upstream identity remains recorded, and native Goal/attached executions
+are not replaced by this migration. Prefix compaction incurs model work; source
+and protocol tests alone do not certify live summary quality or its cost. This
+changes neither the context-version token nor existing recovery budgets.
+Restoration rechecks the original source binding, configuration and Goal guard
+while waiting. Queued Stop and idle managed Close publish their existing store
+transitions before waiting for adapter cleanup, so silent compaction cannot
+hide cancellation or reopen a closed Session.
+All prefixes share the configured hard Turn time budget; it is not renewed for
+each compaction.
 
 Discovery uses the local enabled binding and the same typed candidate planner,
 without provider identity IO for every historical failure. This is a queue hint;
 admission still re-resolves current App/owner/grant and exact source/native proof
 under the existing fences before reserving or enqueueing any continuation.
+
+A steward request that fails locally with `manager_authorization_unavailable`
+can also qualify on Codex or Antigravity. Core must record exactly the queued,
+manager-context phase, context snapshot and failed events, with distinct IDs,
+no upstream Turn, response, deltas, steering or attachments. Missing events alone
+do not prove safety. Current source and binding verification remain mandatory.
+The original worker reserves at most three deterministic continuations, after
+one, two and four minutes from each failure, through the existing Session queue.
+A stop, pending newer input, an equivalent later human resubmission, another
+recovery kind or contradictory native evidence blocks new work. Repairing the
+correlation of an already admitted continuation does not dispatch it again.
+The original failure and its delivery remain recorded; a qualified private
+steward notice describes conditional recovery rather than promising a replay.
+Unknown failures after native dispatch remain holds.
+
+Account transport preparation failures can also qualify for an original private
+project or Codex steward request. Core must retain exactly the Session-queue and
+failed events, with null durable `started_at` and `first_event_at` checkpoints,
+no native Turn/result, response, deltas or attachments, and unchanged input/origin.
+This includes the older exact `resume_failed` diagnostic emitted before the
+queue's first durable start checkpoint. Fresh source/grant and account transport
+checks precede admission; they start no model request. Preparation continues the
+existing quota/routing/preparation counter up to three, without resetting its
+backoff or history. A later dispatched failure cannot open another business
+retry family. The original failure and its delivered notice remain unchanged.
 
 Source verification accepts both ordinary text and text-only rich posts. A post
 must retain its original provider rendering, an explicit empty attachment
@@ -1733,6 +1825,80 @@ native inventory reads and crashes before admission, after enqueue and before
 transport synchronization. Synthetic model/provider journeys and read-only native
 observations do not certify live model completion or the wider conversation SLA.
 
+### A steward answer interrupted by service restart
+
+A Codex steward using the configured flexible allowance route can reserve one
+restricted answer review after `server_restarted`, even when tools already ran.
+The original reply worker must independently read a stable, complete interrupted
+native inventory with no final answer or live items. Native dynamic-tool calls
+are effect items too; a stable terminal inventory permits only this read-only
+review, never business replay. Its digest is rechecked before review execution.
+
+The provider recognizes the same passive native item types in this review and
+completed-work readback, including `imageView`. Reading an image neither makes
+the inventory unknown nor counts as a settled business effect. Image metadata
+remains bound to its original Turn and the stable full-inventory digest; changed,
+duplicate, foreign or unknown image item types still fail the existing checks.
+The original terminal-effect, no-final-answer and no-live-work requirements remain.
+
+The same source, owner, grant, stop checks and `review-1` queue reservation apply.
+Fresh configured Codex capacity must verify before admission and again before
+dispatch. The new restricted thread retains only authorized manager reads; writes,
+network effects, handoffs and business continuation are disabled. It answers from
+existing evidence or gives a concrete partial answer. The original failed Turn
+and failure notice remain unchanged; restart or an uncertain enqueue response
+adopts the reserved review instead of granting another attempt. Missing native
+evidence or capacity remains pending. The failure notice describes this qualified
+recovery instead of giving every restart the same blanket no-replay message.
+
+This isolated answer review receives its complete original question and verified
+visible results at dispatch. It does not import or serially compact the unrelated
+conversation before it can answer. Core retains the full transcript, and ordinary
+conversation restoration continues to preserve that history.
+
+An original private steward may also have a verified history gap with no Core
+request at all. The existing service can reserve one **answer-only review** for
+that source on its already-bound Codex Session. Complete history observation,
+fresh original-owner/message readback, an idle queue, unchanged binding and no
+later source Stop/New are required; a source predating the Session is held.
+The provider records `provider_history` provenance, never a received WS event or
+a fabricated failed Turn. The review uses the same restricted adapter and normal
+account policy, cannot change executor, write, send, delegate or rerun business,
+and returns through the original reply worker with independent readback. A lost
+queue acknowledgement adopts the same reservation. Captured ordinary requests,
+project/attached/group sources, commands, media and unsuccessful reviews retain
+their existing boundaries; history cannot turn into ordinary admission or a
+business retry. Existing evidence may answer a question directly; unknown past
+effects and missing business work remain explicit gaps.
+
+Each historical answer uses an isolated restricted native context rather than
+the preceding review's model history. Dispatch includes at most twelve complete
+messages from the same Core Session strictly before the original source time,
+explicitly labeled as an available Core prefix, not complete provider history.
+An input above 64 KiB retains an unavailable reason instead of cutting text.
+Later questions, reviews and current work records cannot supply an antecedent
+such as “above”. Only a completed, delivery-verified, action-free legacy
+read-only history review with an explicit remaining gate qualifies for one
+original-service context correction. The old Turn and reply receipts remain
+unchanged; the correction returns along the same source, adopting its reserved
+identity after a lost queue acknowledgement. Failed or unknown execution,
+ordinary business, complete answers, unverified delivery and already-qualified
+reviews do not qualify. Stop, revocation, busy queues and native background
+work retain their gates; correcting context does not complete the business.
+The correction advances only this request's reserved version and retains the
+existing read-only client suffix, so earlier answer-capable readers still
+recognize its restricted role. Correct original-context delivery requires the
+updated runtime; compatibility does not certify answer quality after downgrade.
+
+The provider inspects at most 64 unresolved originals as one complete source
+control inventory. Larger, incomplete or unreadable inventories remain pending;
+live captures take priority. Downgrading a store with these reservations to a
+reader that lacks the answer-only protocol is outside this recovery contract.
+If restart happens after the queue claim but before native dispatch, the worker
+adopts that same unstarted Turn through ordinary preparation and execution
+fences. It does not wait forever for a queued Turn to become running by itself;
+unfinished managed acceptance and already-started work retain their own owners.
+
 ### Explicit unfinished work after a completed Turn
 
 A terminal model Turn is distinct from completed business work. A private
@@ -1746,10 +1912,22 @@ steward, group, attached-host and attachment-bearing requests remain outside it.
 The existing original-source reply worker may reserve one continuation after
 60 seconds. Core revalidates the original owner/App/source, unchanged message,
 workspace grant and stop/correction state. Native readback must independently
-show that the exact latest Turn completed, its full item inventory is stable,
-every effect item completed, no background work remains, and the same final
-answer explicitly contains that report. A later native Turn, unknown item,
-failed/declined/live effect, edited source or revoked grant remains a hold.
+show that the exact original Turn completed, its full item inventory is stable,
+every effect item is settled, no background work remains, and the same final
+answer explicitly contains that report. Historical work may continue only when
+every later native Turn correlates to a settled canonical Core Turn and its full
+item inventory is independently stable with no unknown or unfinished effects.
+The proof pins a digest of these inventories; a later equivalent source submission,
+foreign native input, unknown item, unsettled/declined/live effect, edited source or
+revoked grant remains a hold. Native loss remains a hold: a cold client cannot
+certify another process's background effects by resuming the thread.
+
+A failed native command can be settled without having succeeded: the provider
+must retain its ordinary nonzero process exit, ordered start/end timestamps and
+output. Missing exits, timeout/signal exits and failed file-change or MCP effects
+remain holds. This distinction does not certify a business outcome or authorize
+repeating the failed command; the worker still verifies existing artifacts and
+performs only the remaining work under the original settled report and grant.
 
 The original Session queue and deterministic `work-1` reservation own execution;
 restart adopts an already committed Turn instead of dispatching it again. The
@@ -1787,3 +1965,114 @@ explicit quota refusal, unknown failure, lost post-write receipt, unavailable
 readback, recovery of older failed journals and two-App isolation. Live provider
 delivery remains separate. Model completion, material intake and an intermediate
 card cannot substitute for final-message readback.
+
+### Recovering a native result after Core failure
+
+A quota-failure notice remains pending work. For Antigravity, the original worker
+may reserve one new quota-continuation Turn only after two independent reads of
+the same idle native trajectory prove its latest invocation contains exactly the
+original input and a structured `QUOTA_EXHAUSTED` error, without model output or
+tool steps. Admission binds the prompt hash, source, execution time, native index,
+current authorization and fresh capacity. Later source input, steering, stop,
+queued input, unknown or cleared steps veto continuation. An unconfirmed cancel
+alone confers no replay eligibility. An enabled flexible endpoint pool may select
+Codex through the existing quota owner; dispatch rechecks current configuration
+and capacity. Keep the failed Turn and its original notice, and adopt the same
+reservation after a crash. The original Bot still delivers and independently
+reads back its normal result in the original audience.
+
+Historical native-result discovery waits while the same Core Session is busy
+or has an active Turn, leaving shared reply workers available for current
+progress. Already verified result metadata keeps its existing correlation owner.
+
+An Antigravity owner request can finish natively while Core retains a transport
+failure. The original reply worker may adopt that existing answer, without
+admitting another Turn, sending native input or cancelling an invocation. The
+typed conversation owner requires the original private steward binding, source,
+failed Turn and current grant, with no attachments, steering, stop/new command
+or attached-host routing. The provider read must cover a stable, idle trajectory,
+its latest input and one fully settled native execution ending in a normal final
+response. Correlation requires the exact Core source context, original message
+and input time inside the failed Turn. New inputs additionally persist the
+pre-send prompt hash and native start index in the existing `turn.started` event.
+Missing, conflicting or stream-error evidence keeps the request pending.
+
+The existing request journal freezes the adopted result and rendered message before appending one
+deterministic canonical Chat message. The original failed Turn, events and
+delivered failure notice remain unchanged. Lark uses a distinct phase in the
+same Inbox intent/readback path; a crash resumes the same message and receipt.
+An unknown post-write acknowledgement remains owed and cannot cause a blind
+resend. Invalid action metadata preserves the answer with an explicit gate and
+submits none of its actions. Recovery itself does not execute even valid action
+metadata. Such work remains pending after the recovered prose is delivered;
+answer restoration does not certify the requested business or handoff complete.
+Cancellation failure retains the primary provider error and unconfirmed cleanup.
+
+After the recovered answer is independently delivered, a malformed batch whose
+only actions are string-brief handoffs can reserve one **format review** through
+the original Session queue. Fresh original native input/answer hashes, current
+binding, source readback and an idle queue are required. The review sends no
+business request again: that invocation disables native tools and user hooks,
+requires exact normal text-only completion, and withholds model prose until
+validation. Each normalized brief must retain its original context text and the
+same ordered recipients. Other actions, changed targets, unknown completion,
+new input, steering, stop or revoked authority admit no handoff.
+
+The existing ingress preserves the original source id, so ordinary publication
+uses the same recipient-specific request identity and fresh grants. The normal
+handoff owner supplies actual receipts; receiver conclusions remain separate.
+The original reply worker returns those receipts in a distinct presentation
+phase alongside the immutable failed Turn, failure notice and recovered answer.
+Reservation/enqueue crashes adopt the same queued Turn. A failed, partial or
+unknown review stays pending and cannot become another review or business retry.
+Other malformed actions and completed Turns without a recovered native result
+remain explicit holds; this path is not a generic action or execution replayer.
+
+### Completed private project result reviews
+
+A completed original project Turn with typed `unfinished_work` can fall back to
+one restricted result review when its effects cannot qualify writable
+continuation. The provider must read the same stable, closed native final and
+unfinished declaration; later native inputs must be correlated to Core. This
+observation does **not** certify settled effects. A failed or signal-terminated
+command cannot acquire replay authority through this route.
+
+The original worker uses its existing Session, queue and project binding. Fresh
+source and grant checks, an idle queue, the backoff, and stop/steering/attachment
+guards still apply. With a live adapter, the readback uses that same adapter
+only when it owns the exact thread and has no active or background work. The
+cold reader is used only when no adapter owns the Session. The review
+uses the existing workspace-only read permission profile without network
+access; it may inspect current local artifacts and receipts but cannot write,
+send, delegate or replace the original work declaration. References in the old
+question use its original-time Core context. The original partial Turn and
+delivery remain immutable, and the same Lark worker returns the new answer in a
+separate, idempotent phase. Reservation crashes adopt that exact queued review.
+If writable continuation was already admitted before the request journal was
+updated, the worker first recovers that same queued Turn. Dispatch still
+requires the original source, queue and native effect checks.
+The retained business obligation stays pending independently of the review's
+prose or failure; a review never starts a writable retry or another review.
+
+### File-backed idle recovery observations
+
+Repeated recovery checks must not reparse every historical Turn and source body
+for each old request. The File Chat provider retains only validated terminal-Turn
+identity/status and the source-control fields used by the existing stop/new and
+later-input checks. Reuse requires an unchanged device, inode, nanosecond mtime,
+ctime and size, checked before and after the original read. Changed or unreadable
+files use the original reader; nonterminal Turns are always read in full. Deleted
+entries are pruned, concurrent callers receive independent metadata, and a read
+racing a replacement cannot seed a reusable observation.
+Windows keeps the original fresh-read path because its Python stat ctime can
+represent creation time rather than a usable change stamp; see the
+[Python stat time fields](https://docs.python.org/3.12/library/os.html#os.stat_result.st_ctime_ns).
+The private-reply journal observer shares the same change-token primitive while
+retaining its own legacy-repair projection and original effect checks.
+
+These observations are neither recovery decisions nor grants. Exact requests,
+selected Turns, current bindings, native effects and typed admission remain fresh.
+Source qualification compares the same File history and complete recovery plans,
+including newly queued input, strict read failures, stop/new changes and replaced
+files with preserved mtime. Installed responsiveness, provider/model availability
+and actual original-audience replies remain separate acceptance obligations.

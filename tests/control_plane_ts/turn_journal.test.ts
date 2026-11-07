@@ -198,9 +198,45 @@ test("recorded effects distinguish checkpoint, prepared uncertainty and no attem
 
   input.journal.completed_phases = [];
   delete input.journal.effect_attempts;
+  input.journal.host_attempt_count = 0;
   assert.equal(interpretTurnJournal(input).recorded_effects.host_invoked, false);
   input.journal.host_attempt_count = 1;
   assert.equal(interpretTurnJournal(input).recorded_effects.host_invoked, null);
+});
+
+test("an interrupted Host intent is unknown and cannot authorize another Host", () => {
+  for (const attempt of [1, 2, "1", null, -1, undefined]) {
+    for (const retry of [false, true]) {
+      const input = request("in_progress");
+      input.journal.completed_phases = [];
+      delete input.journal.host_result;
+      delete input.journal.receipt;
+      if (attempt !== undefined) input.journal.host_attempt_count = attempt;
+      input.retry_failed = retry;
+      const before = structuredClone(input);
+      const decision = interpretTurnJournal(input).recovery_decision;
+      assert.equal(decision.action, "blocked", `attempt=${attempt}, retry=${retry}`);
+      assert.equal(decision.reason, "host_outcome_unknown");
+      assert.equal(decision.reinvoke_host, false);
+      assert.deepEqual(input, before);
+    }
+  }
+});
+
+test("durable non-dispatch and a saved result have distinct recovery paths", () => {
+  const input = request("in_progress");
+  input.journal.completed_phases = [];
+  delete input.journal.host_result;
+  delete input.journal.receipt;
+  input.journal.host_attempt_count = 0;
+  assert.equal(interpretTurnJournal(input).recovery_decision.reinvoke_host, true);
+  input.journal.host_attempt_count = 1;
+  input.journal.completed_phases = ["host_execute", "typed_result"];
+  input.journal.host_result = {turn_key: turnKey};
+  const decision = interpretTurnJournal(input).recovery_decision;
+  assert.equal(decision.action, "continue");
+  assert.equal(decision.resume_from, "validation");
+  assert.equal(decision.reinvoke_host, false);
 });
 
 test("pending spend and foreign lineage cannot certify a quota charge", () => {

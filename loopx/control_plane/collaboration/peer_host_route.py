@@ -12,7 +12,10 @@ from pathlib import Path
 from typing import Any
 
 from ...agent_registry import registered_agent_ids_for_goal
-from ...codex_app_thread_activity import codex_thread_observers
+from ...codex_app_thread_activity import (
+    codex_thread_observers,
+    observe_codex_thread_execution_identity,
+)
 from ...control_plane.agents.host_thread_activity import (
     HostThreadActivity,
     HostThreadObserver,
@@ -196,6 +199,11 @@ def resolve_peer_host_route(
         return result
     index = selection["selected_index"]
     selected = matching[index]
+    execution_identity = (
+        observe_codex_thread_execution_identity(selected["thread_id"])
+        if observers is None and selected["host_surface"] in CODEX_THREAD_HOST_SURFACES
+        else None
+    )
     # Host I/O must not hide a newly bound alternative or a revoked registration.
     try:
         latest_registry = _read_route_registry(registry_path)
@@ -230,5 +238,7 @@ def resolve_peer_host_route(
     selected_activity = activity[index]
     assert selected_activity is not None  # The typed selector requires a readable observation.
     result["host_observation"] = selected_activity.to_payload()
+    if execution_identity is not None:
+        result["execution_identity"] = execution_identity
     result.update(status="resolved", reason=None, selected_route=selected)
     return result

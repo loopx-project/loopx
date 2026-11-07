@@ -240,6 +240,59 @@ def promote_issue_fix_feasibility_ledger_jsonl(
     }
 
 
+def issue_fix_maintainer_correction_entries(row: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Return the row's maintainer-correction entries; legacy rows read as empty."""
+
+    entries = row.get("maintainer_corrections") if isinstance(row, dict) else None
+    if not isinstance(entries, list):
+        return []
+    return [dict(entry) for entry in entries if isinstance(entry, dict)]
+
+
+def merge_issue_fix_maintainer_correction_entries(
+    existing: list[dict[str, Any]], incoming: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Union entries by operation_id; incoming entries replace same-id existing ones."""
+
+    merged: dict[str, dict[str, Any]] = {}
+    for entry in [*existing, *incoming]:
+        operation_id = str(entry.get("operation_id") or "")
+        if not operation_id:
+            continue
+        merged[operation_id] = {**merged.get(operation_id, {}), **entry}
+    return list(merged.values())
+
+
+def read_issue_fix_pr_lifecycle_ledger_row(
+    ledger_path: str | Path, *, repo: str, pr_ref: str
+) -> dict[str, Any] | None:
+    """Return the current ledger row for one PR, or None when absent."""
+
+    path = Path(ledger_path).expanduser()
+    if not path.exists():
+        return None
+    key = {"repo": repo, "pr_ref": pr_ref}
+    found: dict[str, Any] | None = None
+    for line in path.read_text(encoding="utf-8").split("\n"):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, dict):
+            continue
+        row_key = row.get("domain_state_key")
+        if row_key is None:
+            try:
+                row_key = issue_fix_pr_lifecycle_ledger_key(row)
+            except ValueError:
+                continue
+        if row_key == key:
+            found = row
+    return found
+
+
 def issue_fix_pr_lifecycle_ledger_key(payload: dict[str, Any]) -> dict[str, Any]:
     observation = payload.get("observation")
     if not isinstance(observation, dict):
@@ -292,11 +345,14 @@ def upsert_issue_fix_pr_lifecycle_ledger_jsonl(
         existing_queue = existing.get("reviewer_notification_queue")
         incoming_queue = incoming.get("reviewer_notification_queue")
         return bool(
-            existing_fingerprint
+            existing.get("origin_request") == incoming.get("origin_request")
+            and existing_fingerprint
             and existing_fingerprint == incoming_fingerprint
             and existing_correction_fingerprint == incoming_correction_fingerprint
             and existing_receipts == incoming_receipts
             and existing_queue == incoming_queue
+            and issue_fix_maintainer_correction_entries(existing)
+            == issue_fix_maintainer_correction_entries(incoming)
         )
 
     def preserve_compact_lifecycle_evidence(
@@ -304,6 +360,8 @@ def upsert_issue_fix_pr_lifecycle_ledger_jsonl(
         incoming: dict[str, Any],
     ) -> dict[str, Any]:
         merged = incoming
+        if existing.get("origin_request"):
+            merged = {**merged, "origin_request": existing["origin_request"]}
         receipts = existing.get("reviewer_notification_receipts")
         if (
             "reviewer_notification_receipts" not in merged
@@ -321,8 +379,31 @@ def upsert_issue_fix_pr_lifecycle_ledger_jsonl(
         first_push_ci = existing.get("first_push_ci")
         if "first_push_ci" not in merged and isinstance(first_push_ci, dict):
             merged = {**merged, "first_push_ci": dict(first_push_ci)}
+        existing_entries = issue_fix_maintainer_correction_entries(existing)
+        if existing_entries or "maintainer_corrections" in merged:
+            merged = {
+                **merged,
+                "maintainer_corrections": merge_issue_fix_maintainer_correction_entries(
+                    existing_entries, issue_fix_maintainer_correction_entries(merged)
+                ),
+            }
+        # Older readers take `maintainer_correction` as the latest accepted
+        # correction; a rejected or absent correction must not blank it.
+        admission = merged.get("maintainer_correction_admission")
+        incoming_accepted = (
+            isinstance(admission, dict) and admission.get("disposition") == "accepted"
+        )
+        if not incoming_accepted and isinstance(
+            existing.get("maintainer_correction"), dict
+        ):
+            merged = {
+                **merged,
+                "maintainer_correction": dict(existing["maintainer_correction"]),
+                "maintainer_correction_fingerprint": existing.get(
+                    "maintainer_correction_fingerprint"
+                ),
+            }
         return merged
-
     return _upsert_issue_fix_payload(
         ledger_path,
         payload,

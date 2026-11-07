@@ -191,6 +191,25 @@ def test_codec_keeps_prose_out_of_the_history_decision_request(monkeypatch) -> N
     assert requests[0][1]["todos"]["resume"] is None
 
 
+def test_cadence_codec_transports_strategy_without_reclassifying_or_scaling(monkeypatch, tmp_path) -> None:
+    from loopx.control_plane.work_items import replan_history_codec as codec
+
+    requests = []
+    def project(params, context):
+        requests.append(params)
+        return {"schema_version": "replan_history_result_v0", "trigger": None}
+    monkeypatch.setattr(codec, "_project_admitted_replan_request", project)
+    goal = {"id": "fixture", "execution_profile": {"replan_after_effective_turns": 6,
+                                                   "stride_strategy": "evidence_conditioned_v1"}}
+    context = codec.effective_turn_cadence_context(goal, tmp_path)
+    codec.project_replan_history(effective_turn_cadence=context)
+    assert requests[-1]["periodic_threshold"] == 6
+    assert requests[-1]["stride_strategy"] == "evidence_conditioned_v1"
+    del goal["execution_profile"]["stride_strategy"]
+    codec.project_replan_history(effective_turn_cadence=codec.effective_turn_cadence_context(goal, tmp_path))
+    assert requests[-1]["stride_strategy"] == "off"
+
+
 def test_long_history_keeps_evidence_beyond_rpc_limit() -> None:
     # A retry flood is not twenty turns. The second distinct observation is
     # deliberately older than the entire flood; tail/window truncation loses it.

@@ -264,6 +264,98 @@ def test_admission_serializes_overlapping_write_scopes() -> None:
     ]
 
 
+def _scope_contract(
+    items: list[dict[str, Any]],
+    *,
+    goal_write_scope: list[str],
+) -> dict[str, Any] | None:
+    summary = {"items": items}
+    contract, _work_lane = apply_task_orchestration_contract(
+        fallback_work_lane_contract={"lane": "advancement_task"},
+        goal_boundary={
+            "write_scope": goal_write_scope,
+            "orchestration": {
+                "mode": "multi_subagent",
+                "spawn_allowed": True,
+                "max_children": 2,
+            },
+        },
+        agent_identity={
+            "agent_id": AGENT_ID,
+            "registered_agents": [AGENT_ID],
+        },
+        agent_todo_summary=summary,
+        raw_agent_todo_summary=summary,
+        raw_user_todo_summary={"items": []},
+        available_capabilities=["subagent_spawn"],
+    )
+    return contract
+
+
+def test_admission_serializes_case_alias_write_scopes() -> None:
+    contract = _scope_contract(
+        [
+            _todo("todo_primary", action_kind="implement", required_write_scopes=["src/Main.ts"]),
+            _todo("todo_case_alias", action_kind="implement", required_write_scopes=["src/main.ts"]),
+            _todo("todo_independent", action_kind="implement", required_write_scopes=["src/other.ts"]),
+        ],
+        goal_write_scope=["src/**"],
+    )
+
+    assert contract is not None
+    assert [lane["todo_id"] for lane in contract["eligible_child_lanes"]] == [
+        "todo_independent"
+    ]
+    assert contract["blocked_lanes"] == [
+        {
+            "todo_id": "todo_case_alias",
+            "task_domain": "code",
+            "reason_codes": ["write_scope_conflict"],
+            "conflicts_with_todo_id": "todo_primary",
+        }
+    ]
+
+
+def test_admission_keeps_scheduling_subtree_containment_without_a_trailing_slash() -> None:
+    contract = _scope_contract(
+        [
+            _todo("todo_primary", action_kind="implement", required_write_scopes=["src"]),
+            _todo("todo_below", action_kind="implement", required_write_scopes=["src/a.ts"]),
+            _todo("todo_independent", action_kind="implement", required_write_scopes=["tests/a.py"]),
+        ],
+        goal_write_scope=["src", "src/**", "tests/**"],
+    )
+
+    assert contract is not None
+    assert [lane["todo_id"] for lane in contract["eligible_child_lanes"]] == [
+        "todo_independent"
+    ]
+    assert contract["blocked_lanes"] == [
+        {
+            "todo_id": "todo_below",
+            "task_domain": "code",
+            "reason_codes": ["write_scope_conflict"],
+            "conflicts_with_todo_id": "todo_primary",
+        }
+    ]
+
+
+def test_admission_leaves_sibling_files_independent() -> None:
+    contract = _scope_contract(
+        [
+            _todo("todo_primary", action_kind="implement", required_write_scopes=["src/a.ts"]),
+            _todo("todo_sibling", action_kind="implement", required_write_scopes=["src/b.ts"]),
+        ],
+        goal_write_scope=["src/**"],
+    )
+
+    assert contract is not None
+    assert [lane["todo_id"] for lane in contract["eligible_child_lanes"]] == [
+        "todo_sibling"
+    ]
+    assert contract["blocked_lanes"] == []
+
+
 def test_admission_serializes_implicit_and_explicit_goal_repository_scopes() -> None:
     summary = {
         "items": [

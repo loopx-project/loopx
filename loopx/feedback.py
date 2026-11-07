@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 from contextlib import nullcontext
 
 from .file_lock import exclusive_cross_runtime_file_lock
@@ -9,7 +11,6 @@ from .control_plane.runtime.document_io import atomic_write_state_text
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 from .control_plane.runtime.time import chronology_key
 from .history import append_run_index_record, load_index, load_registry
@@ -165,7 +166,7 @@ def compact_reward(
     validate_public_safe_text("decision", decision)
     validate_public_safe_text("reason_summary", reason_summary)
     validate_public_safe_text("follow_up", follow_up)
-    payload = {
+    payload: dict[str, Any] = {
         "recorded_at": recorded_at or now_utc(),
         "decision": decision,
         "reward": reward,
@@ -273,7 +274,7 @@ def build_reward_coordination(
     follow_up = reward.get("follow_up")
     if follow_up:
         summary = f"{summary} follow_up：{follow_up}"
-    lesson = reward.get("lesson") if isinstance(reward.get("lesson"), dict) else {}
+    lesson = cast(dict[str, Any], reward.get("lesson")) if isinstance(reward.get("lesson"), dict) else {}
     if lesson:
         summary = (
             f"{summary} lesson[{lesson.get('kind')}]: "
@@ -456,7 +457,7 @@ def append_human_reward(
         dry_run=dry_run,
     )
     project_agent_visibility = (
-        coordination.get("project_agent_visibility")
+        cast(dict[str, Any], coordination.get("project_agent_visibility"))
         if isinstance(coordination.get("project_agent_visibility"), dict)
         else {}
     )
@@ -554,10 +555,10 @@ def render_reward_markdown(payload: dict[str, Any]) -> str:
         lines.append(f"- error: {payload.get('error')}")
         return "\n".join(lines)
 
-    selected = payload.get("selected_run") if isinstance(payload.get("selected_run"), dict) else {}
-    reward = payload.get("human_reward") if isinstance(payload.get("human_reward"), dict) else {}
-    state_update = payload.get("active_state_update") if isinstance(payload.get("active_state_update"), dict) else {}
-    visibility = payload.get("project_agent_visibility") if isinstance(payload.get("project_agent_visibility"), dict) else {}
+    selected = cast(dict[str, Any], payload.get("selected_run")) if isinstance(payload.get("selected_run"), dict) else {}
+    reward = cast(dict[str, Any], payload.get("human_reward")) if isinstance(payload.get("human_reward"), dict) else {}
+    state_update = cast(dict[str, Any], payload.get("active_state_update")) if isinstance(payload.get("active_state_update"), dict) else {}
+    visibility = cast(dict[str, Any], payload.get("project_agent_visibility")) if isinstance(payload.get("project_agent_visibility"), dict) else {}
     lines.extend(
         [
             "",
@@ -587,12 +588,12 @@ def render_reward_markdown(payload: dict[str, Any]) -> str:
     )
     if reward.get("follow_up"):
         lines.append(f"- follow_up: {reward.get('follow_up')}")
-    lesson = reward.get("lesson") if isinstance(reward.get("lesson"), dict) else {}
+    lesson = cast(dict[str, Any], reward.get("lesson")) if isinstance(reward.get("lesson"), dict) else {}
     if lesson:
         lines.append(f"- lesson_kind: `{lesson.get('kind')}`")
         lines.append(f"- lesson_summary: {lesson.get('summary')}")
         for field in ("avoid", "prefer"):
-            values = lesson.get(field) if isinstance(lesson.get(field), list) else []
+            values = cast(list[Any], lesson.get(field)) if isinstance(lesson.get(field), list) else []
             if values:
                 lines.append(f"- lesson_{field}: {', '.join(str(value) for value in values[:5])}")
     if payload.get("active_state_summary"):

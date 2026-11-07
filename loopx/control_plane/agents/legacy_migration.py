@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from typing import Any, Mapping, cast
+
 import hashlib
 import json
-from typing import Any, Mapping
 
 from ..todos.contract import normalize_todo_claimed_by
 from .runtime_model import (
@@ -156,7 +157,7 @@ def migrate_coordination_to_peer_v1(
     else:
         migrated.pop("agent_profiles", None)
     completed_migrations = (
-        dict(migrated.get("completed_migrations"))
+        dict(cast(Mapping[str, Any], migrated.get("completed_migrations")))
         if isinstance(migrated.get("completed_migrations"), Mapping)
         else {}
     )

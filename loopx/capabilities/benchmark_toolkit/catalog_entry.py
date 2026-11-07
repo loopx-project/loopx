@@ -207,6 +207,68 @@ BENCHMARK_TOOLKIT_CATALOG_ENTRY: dict[str, Any] = {
         },
         {
             "command": (
+                "loopx benchmark token-capacity-configure --goal-id <goal-id> "
+                "--quota-tokens-per-minute <tpm> "
+                "--target-utilization-basis-points <bps> "
+                "--cold-start-reserve-tokens-per-minute <tpm> "
+                "--evaluator-reserve-tokens-per-minute <tpm> "
+                "--execute --format json"
+            ),
+            "purpose": (
+                "Configure a durable rolling token-capacity envelope with explicit "
+                "burst and evaluator reserves."
+            ),
+            "write_boundary": (
+                "project-local aggregate policy and reservations only; provider "
+                "routes, credentials, request text, and launch authority remain "
+                "runner-owned"
+            ),
+        },
+        {
+            "command": (
+                "loopx benchmark token-capacity-observe --goal-id <goal-id> "
+                "--sample-json <token-usage-sample.json> --execute --format json"
+            ),
+            "purpose": (
+                "Record disjoint cached, uncached, and output token counts or an "
+                "explicit unmetered request in the exact trailing minute."
+            ),
+            "write_boundary": (
+                "typed aggregate usage only; no provider payload, prompt, response, "
+                "credential, endpoint, or raw log is accepted"
+            ),
+        },
+        {
+            "command": (
+                "loopx benchmark token-capacity-admit --goal-id <goal-id> "
+                "--run-id <run-id> --workload-class <solver|evaluator> "
+                "--tokens-per-minute <forecast-tpm> --execute --format json"
+            ),
+            "purpose": (
+                "Atomically reserve forecast throughput and emit a fresh provider-"
+                "capacity headroom receipt for case-slot admission."
+            ),
+            "write_boundary": (
+                "compact run reservation only; callers own usage collection, "
+                "case-slot rollback, launch, liveness reconciliation, and release"
+            ),
+        },
+        {
+            "command": (
+                "loopx benchmark token-capacity-reject --goal-id <goal-id> "
+                "[--retry-after-seconds <seconds>] --execute --format json"
+            ),
+            "purpose": (
+                "Persist a bounded provider-capacity cooldown after an HTTP 429 or "
+                "equivalent typed rejection."
+            ),
+            "write_boundary": (
+                "timestamp and bounded cooldown only; no error body, provider "
+                "identity, route, or credential is persisted"
+            ),
+        },
+        {
+            "command": (
                 "loopx benchmark concurrency-tune --goal-id <goal-id> "
                 "--feedback-json <feedback.json> "
                 "--resource-headroom-json <receipt.json> "
@@ -394,11 +456,14 @@ BENCHMARK_TOOLKIT_CATALOG_ENTRY: dict[str, Any] = {
             "read_experiment_board_before_launch_or_case_selection",
             "qualify_four_arm_contract_when_domain_guidance_is_a_factor",
             "configure_or_read_concurrency_envelope_before_launch",
+            "configure_or_read_token_capacity_when_provider_throughput_is_shared",
             "reconcile_admission_ledger_with_real_runner_liveness",
             "backfill_when_concurrency_status_reports_underfilled",
             "qualify_source_revision_before_each_new_run_admission",
             "qualify_resource_headroom_when_the_envelope_requires_a_receipt",
+            "record_complete_or_explicitly_unmetered_token_usage_when_token_capacity_is_configured",
             "tune_target_occupancy_from_fresh_runner_feedback_when_opted_in",
+            "atomically_reserve_token_capacity_before_case_slot_admission_when_token_capacity_is_configured",
             "atomically_admit_case_slot_before_runner_launch",
             "upsert_preregistered_or_running_row_when_a_run_starts",
             "classify_exact_runtime_observation_during_active_monitor_cycles",
@@ -406,6 +471,7 @@ BENCHMARK_TOOLKIT_CATALOG_ENTRY: dict[str, Any] = {
             "adjudicate_restricted_access_suspicion_after_solver_and_score_terminal",
             "upsert_terminal_score_countability_effort_and_insight_status",
             "release_case_slot_after_terminal_or_runner_invalid_transition",
+            "release_token_capacity_after_terminal_or_runner_invalid_transition_when_token_capacity_is_configured",
             "read_matched_comparisons_before_selecting_the_next_arm",
         ],
         "board_commands": {
@@ -459,6 +525,45 @@ BENCHMARK_TOOLKIT_CATALOG_ENTRY: dict[str, Any] = {
             "responsible for resource observation, launch, liveness, termination, "
             "and score transitions. When configured, admission requires a fresh "
             "public-safe resource-headroom receipt but never persists raw metrics."
+        ),
+        "token_capacity_commands": {
+            "status": (
+                "loopx benchmark token-capacity-status --goal-id <goal-id> "
+                "--format json"
+            ),
+            "configure": (
+                "loopx benchmark token-capacity-configure --goal-id <goal-id> "
+                "--quota-tokens-per-minute <tpm> "
+                "--target-utilization-basis-points <bps> "
+                "--cold-start-reserve-tokens-per-minute <tpm> "
+                "--evaluator-reserve-tokens-per-minute <tpm> "
+                "--execute --format json"
+            ),
+            "observe": (
+                "loopx benchmark token-capacity-observe --goal-id <goal-id> "
+                "--sample-json <token-usage-sample.json> --execute --format json"
+            ),
+            "admit": (
+                "loopx benchmark token-capacity-admit --goal-id <goal-id> "
+                "--run-id <run-id> --workload-class <solver|evaluator> "
+                "--tokens-per-minute <forecast-tpm> --execute --format json"
+            ),
+            "reject": (
+                "loopx benchmark token-capacity-reject --goal-id <goal-id> "
+                "[--retry-after-seconds <seconds>] --execute --format json"
+            ),
+            "release": (
+                "loopx benchmark token-capacity-release --goal-id <goal-id> "
+                "--run-id <run-id> --execute --format json"
+            ),
+        },
+        "token_capacity_boundary": (
+            "Only campaigns with a configured token envelope require token usage "
+            "observation, reservation, cooldown reporting, and release; other "
+            "campaigns retain case-slot admission without token configuration. "
+            "The token envelope owns aggregate metering, forecast reservations, and "
+            "provider cooldown only. The runner owns provider adaptation, complete "
+            "coverage, job discovery, launch, rollback, liveness, and termination."
         ),
         "selection_rule": (
             "Keep diagnostic-only explore rows separate and make paired claims "
@@ -849,6 +954,27 @@ BENCHMARK_TOOLKIT_CATALOG_ENTRY: dict[str, Any] = {
                 "digest only; raw names and values stay private"
             ),
         },
+        "task_service_access": {
+            "policy_schema": "benchmark_task_service_access_v0",
+            "receipt_schema": "benchmark_task_service_access_receipt_v0",
+            "authority": "runner",
+            "purpose": "benchmark_task_service",
+            "hint": (
+                "Declare exact container-host HTTP origins only when the runner "
+                "proves that each origin is the isolated benchmark task service."
+            ),
+            "fail_closed_on": [
+                "undeclared_origin",
+                "wrong_port",
+                "lookalike_host",
+                "userinfo",
+                "mixed_external_request",
+            ],
+            "public_receipt_boundary": (
+                "authorization id and digest, request and origin counts, and an "
+                "origin-set digest only; raw origins stay private"
+            ),
+        },
         "declared_feedback_protocol": {
             "default": "official_feedback_blinded",
             "opt_in": {
@@ -988,6 +1114,26 @@ BENCHMARK_TOOLKIT_CATALOG_ENTRY: dict[str, Any] = {
             "doc": "loopx/capabilities/benchmark_toolkit/README.md",
         },
         {
+            "schema_version": "benchmark_token_capacity_policy_v0",
+            "module": "loopx.capabilities.benchmark_toolkit.token_capacity",
+            "doc": "loopx/capabilities/benchmark_toolkit/README.md",
+        },
+        {
+            "schema_version": "benchmark_token_usage_sample_v0",
+            "module": "loopx.capabilities.benchmark_toolkit.token_capacity",
+            "doc": "loopx/capabilities/benchmark_toolkit/README.md",
+        },
+        {
+            "schema_version": "benchmark_token_capacity_state_v0",
+            "module": "loopx.capabilities.benchmark_toolkit.token_capacity",
+            "doc": "loopx/capabilities/benchmark_toolkit/README.md",
+        },
+        {
+            "schema_version": "benchmark_token_capacity_decision_v0",
+            "module": "loopx.capabilities.benchmark_toolkit.token_capacity",
+            "doc": "loopx/capabilities/benchmark_toolkit/README.md",
+        },
+        {
             "schema_version": "benchmark_adaptive_concurrency_policy_v0",
             "module": "loopx.capabilities.benchmark_toolkit.adaptive_concurrency",
             "doc": "loopx/capabilities/benchmark_toolkit/README.md",
@@ -1024,6 +1170,16 @@ BENCHMARK_TOOLKIT_CATALOG_ENTRY: dict[str, Any] = {
         },
         {
             "schema_version": "benchmark_task_environment_access_receipt_v0",
+            "module": "loopx.capabilities.benchmark_toolkit.integrity",
+            "doc": "loopx/capabilities/benchmark_toolkit/README.md",
+        },
+        {
+            "schema_version": "benchmark_task_service_access_v0",
+            "module": "loopx.capabilities.benchmark_toolkit.integrity",
+            "doc": "loopx/capabilities/benchmark_toolkit/README.md",
+        },
+        {
+            "schema_version": "benchmark_task_service_access_receipt_v0",
             "module": "loopx.capabilities.benchmark_toolkit.integrity",
             "doc": "loopx/capabilities/benchmark_toolkit/README.md",
         },
@@ -1077,6 +1233,7 @@ BENCHMARK_TOOLKIT_CATALOG_ENTRY: dict[str, Any] = {
         (
             "python -m pytest tests/capabilities/test_benchmark_toolkit.py "
             "tests/capabilities/test_benchmark_concurrency_envelope.py "
+            "tests/capabilities/test_benchmark_token_capacity.py "
             "tests/capabilities/test_benchmark_experiment_board.py "
             "tests/capabilities/test_benchmark_source_revision_fence.py -q"
         )
@@ -1094,6 +1251,7 @@ BENCHMARK_TOOLKIT_CATALOG_ENTRY: dict[str, Any] = {
         "Integrity qualification establishes countability eligibility only; an independent official result and matched experiment contract are still required.",
         "Post-run analyst access never widens the solving agent's evidence boundary or grants feedback reuse in another scored run.",
         "Concurrency reservations are not runtime liveness: runners must reconcile exact processes before release or backfill.",
+        "Token reservations are not runtime liveness or provider attribution: runners must report complete metering coverage, roll back a token reservation after case-slot denial, and reconcile exact processes before release.",
         "The experiment board is a compact projection, not a score authority: benchmark-family runners and scoring adapters remain outside the active capability.",
     ],
     "next_real_step": (

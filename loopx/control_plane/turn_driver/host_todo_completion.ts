@@ -29,7 +29,7 @@ export const HOST_ADAPTER_SETTLEMENT_SCHEMA_VERSION =
   "host_adapter_todo_settlement_v0";
 
 const PHASES = ["prepare", "finalize", "classify_guard", "vision_refresh", "vision_context", "project_guard"] as const;
-const STEP_KINDS = [
+export const HOST_ADAPTER_SETTLEMENT_STEP_KINDS = [
   "guard",
   "lifecycle_completion",
   "durable_writeback",
@@ -39,7 +39,7 @@ const STEP_KINDS = [
 const TODO_ID_PATTERN = /^todo_[a-z0-9_-]{3,64}$/;
 
 type HostTodoCompletionPhase = (typeof PHASES)[number];
-type HostTodoCompletionStepKind = (typeof STEP_KINDS)[number];
+type HostTodoCompletionStepKind = (typeof HOST_ADAPTER_SETTLEMENT_STEP_KINDS)[number];
 type HostGuardState = "selected" | "terminal_no_selection" | "invalid";
 
 interface HostTodoCompletionRequest {
@@ -111,7 +111,7 @@ function decodeProviderOutcomes(value: unknown): ProviderOutcome[] {
     const outcome = requireJsonObject(item, `provider_outcomes[${index}]`);
     const stepKind = requireStringLiteral(
       outcome.step_kind,
-      STEP_KINDS,
+      HOST_ADAPTER_SETTLEMENT_STEP_KINDS,
       `provider_outcomes[${index}].step_kind`,
       `provider_outcomes[${index}].step_kind is unsupported`,
     );

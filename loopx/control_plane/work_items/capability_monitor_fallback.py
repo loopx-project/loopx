@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
+
 
 from ..agents.capability_gate import build_capability_gate
 from ..todos.contract import TODO_TASK_CLASS_ADVANCEMENT, TODO_TASK_CLASS_MONITOR
@@ -48,7 +49,7 @@ def build_capability_skip_monitor_fallback_contract(
     if not isinstance(agent_todo_summary, dict):
         return None, None
     monitor_items = (
-        agent_todo_summary.get("monitor_open_items")
+        cast(list[Any], agent_todo_summary.get("monitor_open_items"))
         if isinstance(agent_todo_summary.get("monitor_open_items"), list)
         else []
     )
@@ -57,7 +58,7 @@ def build_capability_skip_monitor_fallback_contract(
         return None, None
 
     blocked_candidates = (
-        capability_gate.get("blocked_candidates")
+        cast(list[Any], capability_gate.get("blocked_candidates"))
         if isinstance(capability_gate.get("blocked_candidates"), list)
         else []
     )
@@ -103,7 +104,7 @@ def build_capability_skip_monitor_fallback_contract(
     }
 
     due_items = (
-        agent_todo_summary.get("monitor_due_items")
+        cast(list[Any], agent_todo_summary.get("monitor_due_items"))
         if isinstance(agent_todo_summary.get("monitor_due_items"), list)
         else []
     )
@@ -136,7 +137,7 @@ def build_capability_skip_monitor_fallback_contract(
         )
 
     schedule_gap_items = (
-        agent_todo_summary.get("monitor_schedule_gap_items")
+        cast(list[Any], agent_todo_summary.get("monitor_schedule_gap_items"))
         if isinstance(agent_todo_summary.get("monitor_schedule_gap_items"), list)
         else []
     )

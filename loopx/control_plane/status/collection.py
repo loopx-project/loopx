@@ -88,7 +88,14 @@ def collect_status(
     activation_state_filter: GoalActivationState | str | None = None,
     agent_lane_id: str | None = None,
     allow_missing_registry: bool = False,
+    include_presentation_projections: bool = True,
 ) -> dict[str, Any]:
+    """Collect the status read model.
+
+    ``include_presentation_projections=False`` omits the runtime-wide
+    ``promotion_gate`` and per-item ``goal_channel_projection``, which only the
+    status/dashboard presentations read; decision callers such as quota use it.
+    """
     display_limit = max(0, limit)
     control_plane_limit = max(
         display_limit,
@@ -179,6 +186,7 @@ def collect_status(
         events_for_goal=rollout_events.events_for_goal,
         current_registry=registry,
         registry_path=registry_path,
+        include_goal_channel_projection=include_presentation_projections,
     )
     # No later projection consumes canonical rows; release retained archive
     # data before assembling the rest of the display.
@@ -197,10 +205,14 @@ def collect_status(
         ),
         events_for_goal=rollout_events.events_for_goal,
     )
-    promotion_gate = context.build_promotion_gate(
-        registry_path=registry_path,
-        runtime_root_override=str(runtime_root),
-        registry=registry,
+    promotion_gate = (
+        context.build_promotion_gate(
+            registry_path=registry_path,
+            runtime_root_override=str(runtime_root),
+            registry=registry,
+        )
+        if include_presentation_projections
+        else None
     )
     zcode_eligibility: dict[str, list[str]] = {}
     source_goal_observer: Callable[[str, dict[str, Any] | None], None] | None = None
@@ -264,8 +276,9 @@ def collect_status(
         "global_registry": global_registry,
         "attention_queue": queue,
         **runtime_summaries,
-        "promotion_gate": promotion_gate,
     }
+    if include_presentation_projections:
+        payload["promotion_gate"] = promotion_gate
     if activation_filter is not None:
         payload["goal_projection"] = {
             "schema_version": "loopx_goal_projection_scope_v0",

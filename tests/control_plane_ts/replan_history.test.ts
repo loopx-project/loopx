@@ -35,6 +35,27 @@ function trigger(runs: JsonObject[], patch: JsonObject = {}): JsonObject | null 
 }
 const many = (count: number, build = run): JsonObject[] => Array.from({ length: count }, (_, i) => build(count - i));
 
+test("work-shape decisions never silently change the configured review count", () => {
+  for (const strategy of ["off", "evidence_conditioned_v1"]) {
+    for (const action of ["grow", "verify", "switch"]) {
+      for (const threshold of [1, 3, 6]) {
+        const ack = run(0, {accepted_ack: true, agent_vision: {stride_decision: {
+          action, basis: "supported_progress", previous_review: {goal_gain: "improved"},
+        }}});
+        const project = (count: number) => {
+          const rows = [...many(count), ack];
+          return projectReplanHistory(request(rows, {operation: "periodic",
+            periodic_threshold: threshold, stride_strategy: strategy}),
+          new Set(rows.map(row => JSON.stringify([row.agent_id, row.turn_id])))).trigger as JsonObject | null;
+        };
+        assert.equal(project(threshold - 1), null);
+        assert.equal(project(threshold)?.threshold, threshold);
+        assert.equal(project(threshold + 2)?.threshold, threshold);
+      }
+    }
+  }
+});
+
 test("effective cadence uses qualified lane identities, independent of Todo completion", () => {
   const qualified = new Set([1, 2].map(n => JSON.stringify(["worker-a", `turn-${n}`])));
   const project = (runs: JsonObject[]) => projectReplanHistory(request(runs, {

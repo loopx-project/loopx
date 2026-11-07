@@ -12,6 +12,7 @@ from canonical_authority_fixture import (
     isolate_sqlite_runtime,
 )
 from loopx.cli import main as cli_main
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 from loopx.control_plane.coordination.runtime_shadow import (
     build_todo_runtime_shadow_projection,
 )
@@ -67,7 +68,7 @@ def test_interrupted_binding_survives_new_due_successor(
                     *args,
                 ]
             )
-            return rc, json.loads(capsys.readouterr().out)
+            return rc, read_cli_policy_payload(capsys.readouterr().out, returncode=rc)
 
     initialize_canonical_source_fixture(runtime, GOAL_ID, state_path=state, provider=provider)
     rc, vision = cli(
@@ -133,6 +134,9 @@ def test_interrupted_binding_survives_new_due_successor(
         "--turn-instance-id",
         old_turn,
     )
+    rc, claimed = cli("todo", "claim", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--claimed-by", AGENT_ID, "--todo-id", TODO_ID)
+    assert rc == 0 and claimed["execution_managed"] is True, claimed
     rc, admitted = cli(
         "quota",
         "should-run",
@@ -295,8 +299,13 @@ def test_interrupted_binding_survives_new_due_successor(
         "--status",
         "open",
         "--clear-resume-when",
+        "--reason",
+        "Resume the verified due successor.",
     )
     assert rc == 0, json.dumps(resumed, indent=2)
+    rc, claimed = cli("todo", "claim", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--claimed-by", AGENT_ID, "--todo-id", due_id)
+    assert rc == 0 and claimed["execution_managed"] is True, claimed
     rc, selected = cli(
         "quota",
         "should-run",

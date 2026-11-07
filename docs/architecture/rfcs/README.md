@@ -150,14 +150,15 @@ Paired diffs do not certify translation accuracy.
     transfer, stale-owner races, PostgreSQL authority, successor scheduling and
     App/Lark delivery need separate qualification; no new runtime or state writer.
 
-- [Monorepo Distribution Split v0](monorepo-distribution-split-v0.md)
+- [Monorepo Distribution and Small-Kernel Runtime Composition v0](monorepo-distribution-split-v0.md)
   ([中文版](monorepo-distribution-split-v0.zh-CN.md))
   - **Delivery on `main`:** Proposal only; tracking [#5072](https://github.com/loopx-project/loopx/issues/5072).
-  - **Current boundary:** Keeps one repository; splits the installed wheel into
-    `loopx-core`, `loopx-workspace` and `packages/` capability distributions,
-    regroups `loopx/` top-level modules with compatibility shims, and pins the
-    top-level module count with an architecture test. No kernel semantics,
-    licence or schema change; multi-repository split remains a non-goal.
+  - **Current boundary:** One design for directory ownership, `loopx-core` /
+    `loopx-workspace` / optional distributions, and minimal/standard runtime
+    composition over one governance implementation. Preserves import
+    compatibility and adds demand-loading, activation, context, managed-task
+    recovery and matched product/benchmark qualification. Original packaging
+    milestones and decisions remain; no runtime, default, licence or schema change.
 
 - [Automatic Execution Admission v0](automatic-execution-admission-v0.md)
   ([中文版](automatic-execution-admission-v0.zh-CN.md))
@@ -191,12 +192,13 @@ Paired diffs do not certify translation accuracy.
     settlement, and typed Effect Program foundations are shipped. Replan
     planning/ACK stays domain-local until a second real lifecycle justifies
     extraction.
-- [Controller / Executor Sessions and One Governed Work Contract v0](controller-executor-unified-contract-v0.md)
+- [Router–Controller–Worker Architecture and One Governed Work Contract v0](controller-executor-unified-contract-v0.md)
   ([中文版](controller-executor-unified-contract-v0.zh-CN.md))
   - **Delivery on `main`:** Design only; no unified schema or dual-session profile is implemented.
   - **Current boundary:** Replaces permanent quota/Turn packet views with one
-    contract including differential context; controller-only model access to
-    Core, natural-language executor work and runtime-owned identity/recovery.
+    contract including differential context; a steward router coordinates Agent
+    units, each binding a controller and worker with asynchronous interaction.
+    Existing Core/request/session owners retain authority, identity and recovery.
     C1–C9 connect concrete refactors, real host adoption and complete-cost
     qualification without changing defaults or launching experiments.
 - [TypeScript Control-Plane Migration v0](typescript-control-plane-migration-v0.md)
@@ -333,6 +335,13 @@ Paired diffs do not certify translation accuracy.
     §11 targets one provider-result/adopted-work/next-review episode. Matched
     research continuation and adaptive promotion retain separate gates; see the
     [implementation comparison](../long-running-execution-exploration-and-correction.md).
+- [Joint Target, Yardstick and Stride Decisions v0](target-yardstick-stride-decisions-v0.md)
+  ([中文版](target-yardstick-stride-decisions-v0.zh-CN.md))
+  - **Delivery on `main`:** Design only; no new runtime behavior or default.
+  - **Current boundary:** Extends the Stride owner with joint direction/measurement
+    selection, a minimal ordinary-Turn cue and full replan composition. Scoped
+    fidelity, actual adoption, compatibility and matched outcome/cost qualification
+    remain implementation acceptance, not measured benefits.
 - [Post-Outcome Memory Utility Attribution v0](post-outcome-memory-utility-attribution-v0.md)
   ([中文版](post-outcome-memory-utility-attribution-v0.zh-CN.md))
   - **Delivery on `main`:** Stage 1 implemented.

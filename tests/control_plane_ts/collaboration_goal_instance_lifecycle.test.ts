@@ -226,6 +226,26 @@ test("lost-answer recovery cannot substitute a source, request, instance or conf
   });
 });
 
+test("original request diagnostics retain the receipt refusal without exposing mismatched sources", () => {
+  for (const profile_id of [null, "source_session_v1"]) {
+    const base = committedDelivery("completed", profile_id !== null);
+    const initial_delivery = {...base, turn: {...base.turn,
+      context_handoff_receipt: {...base.request, request_id: "b".repeat(64)}}};
+    assert.deepEqual(decideCollaborationLifecycle(facts("original_request_inspect", {profile_id, initial_delivery})), {
+      kind: "reject", code: "initial_delivery_unproved", delivery_proof_reason: "handoff_receipt_conflict",
+    });
+    for (const operation of ["original_return_admit", "original_return_settle"]) {
+      assert.deepEqual(decideCollaborationLifecycle(facts(operation, {profile_id, initial_delivery})), {
+        kind: "reject", code: "initial_delivery_unproved",
+      });
+    }
+    assert.deepEqual(decideCollaborationLifecycle(facts("original_request_inspect", {profile_id,
+      initial_delivery: {...initial_delivery, authorized_source_id: "web:another-source"}})), {
+      kind: "reject", code: "initial_delivery_unproved",
+    });
+  }
+});
+
 
 test("readback observes a committed active request without permitting its result return", () => {
   for (const profile_id of [null, "source_session_v1"]) {

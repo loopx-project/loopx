@@ -6,6 +6,7 @@ from collections.abc import Callable, Sequence
 from operator import itemgetter
 from pathlib import Path
 
+from ..command_invocation import loopx_cli_argv
 from ..capabilities.todo_replan_cadence.machine_defaults import resolve_todo_replan_cadence_goal
 from ..control_plane.work_items.replan_history_codec import effective_turn_cadence_context
 from ..control_plane.coordination.local_authority import (
@@ -21,9 +22,12 @@ from ..control_plane.capability_hooks import PostWritebackHookRegistration
 from ..control_plane.quota.settlement import (
     QuotaSettlementReadback,
     SettlementIdentity,
+    SettlementStepKind,
     build_turn_scoped_cli_settlement_plan,
+    attach_settlement_progress,
     read_heartbeat_settlement,
     settlement_result_payload,
+    settlement_step_command,
 )
 from ..control_plane.runtime.time import chronology_key
 from ..control_plane.todos.markdown import render_todo_markdown
@@ -134,12 +138,14 @@ def _todo_settlement_plan(
     identity: SettlementIdentity, *, args: argparse.Namespace,
     registry_path: Path, runtime_root: Path,
     goal_ref: dict[str, str] | None,
+    quota_spend_source: str = "heartbeat",
 ) -> dict[str, object]:
     """Render the native plan with the original route and supplied lease facts."""
     actor_args = ""
     path_args = ""
     for name, option in (
         ("project", "--project"), ("state_file", "--state-file"),
+        ("claim_operation_id", "--claim-operation-id"),
         ("task_lease_idempotency_key", "--task-lease-idempotency-key"),
         ("task_lease_expected_version", "--task-lease-expected-version"),
     ):
@@ -156,7 +162,7 @@ def _todo_settlement_plan(
         replan_obligation_id=identity.replan_obligation_id,
         turn_instance_id=identity.turn_instance_id, command_prefix=prefix,
         scoped_cli_args="", lifecycle_actor_args=actor_args, writeback_path_args=path_args,
-        goal_ref=goal_ref,
+        goal_ref=goal_ref, quota_spend_source=quota_spend_source,
     ).as_dict()
 
     from ..capabilities.explore.turn_context import project_settlement_attachment
@@ -503,7 +509,7 @@ def handle_todo_command(
                 dry_run=bool(args.dry_run),
             )
             if payload.get("ok") and payload.get("execution_managed") and not args.dry_run:
-                route = ["loopx", "--registry", str(registry_path), "--runtime-root",
+                route = [*loopx_cli_argv(), "--registry", str(registry_path), "--runtime-root",
                     str(resolve_runtime_root(load_registry(registry_path), runtime_root_arg)), "--format", "json"]
                 selected = ["--goal-id", args.goal_id, "--todo-id", args.todo_id,
                     "--agent-id", args.agent_id, "--claim-operation-id", payload["claim_operation_id"]]
@@ -633,6 +639,8 @@ def handle_todo_command(
                     no_follow_up=bool(args.no_follow_up),
                 )
                 if completion_error is not None:
+                    progress = settlement_readback.progress
+                    assert progress is not None
                     settlement_result = settlement_readback.settlement
                     payload = {
                         "ok": False,
@@ -652,6 +660,7 @@ def handle_todo_command(
                             registry_path=registry_path,
                             runtime_root=runtime_root,
                             goal_ref=goal_ref,
+                            quota_spend_source=progress["quota_spend_source"],
                         ),
                         "error": completion_error,
                     }
@@ -784,6 +793,13 @@ def handle_todo_command(
         payload = todo_error_payload(
             args, exc, registry_path=registry_path, runtime_root_arg=runtime_root_arg,
         )
+    if (
+        args.todo_command == "complete"
+        and payload.get("ok")
+        and settlement_identity is None
+        and isinstance(payload.get("settlement_identity"), dict)
+    ):
+        settlement_identity = SettlementIdentity.from_runtime_payload(payload["settlement_identity"])
     append_todo_rollout_event(
         payload,
         args=args,
@@ -794,8 +810,8 @@ def handle_todo_command(
 
     if (
         args.todo_command == "complete"
-        and getattr(args, "turn_instance_id", None)
         and payload.get("ok")
+        and settlement_identity is not None
         and not payload.get("dry_run")
     ):
         runtime_root = resolve_runtime_root(
@@ -807,7 +823,7 @@ def handle_todo_command(
             goal_id=args.goal_id,
             agent_id=args.agent_id,
             todo_id=args.todo_id,
-            turn_instance_id=getattr(args, "turn_instance_id", None),
+            turn_instance_id=settlement_identity.turn_instance_id,
             registry_path=registry_path,
             goal_ref=goal_ref,
         )
@@ -825,6 +841,25 @@ def handle_todo_command(
             payload["ok"] = False
             payload["receipt_repair_required"] = True
             payload["error"] = settlement_result.failure.reason
+        elif not args.no_follow_up:
+            attach_settlement_progress(
+                payload, settlement_readback, registry_path=registry_path,
+                runtime_root=runtime_root, goal_ref=goal_ref,
+            )
+            progress = settlement_readback.progress
+            assert progress is not None
+            if progress.get("next_step") == "durable_writeback":
+                identity = settlement_readback.identity.value
+                assert identity is not None
+                plan = _todo_settlement_plan(
+                    identity, args=args, registry_path=registry_path,
+                    runtime_root=runtime_root, goal_ref=goal_ref,
+                    quota_spend_source=progress["quota_spend_source"],
+                )
+                payload["settlement_plan"] = plan
+                payload["next_cli_actions"] = [settlement_step_command(
+                    plan, SettlementStepKind.DURABLE_WRITEBACK,
+                )]
     if (
         args.todo_command == "complete"
         and payload.get("ok")
@@ -832,6 +867,7 @@ def handle_todo_command(
         and not payload.get("dry_run")
         and post_writeback_hooks
         and settlement_identity is not None
+        and not getattr(args, "completion_identity_key", None)
     ):
         identity = settlement_identity.as_dict()
         committed_at = str(payload.get("updated_at") or "").strip()

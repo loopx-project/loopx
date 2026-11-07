@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 import re
-from typing import Any
 
 from .control_plane.goals.goal_vision_policy import (
     completed_todo_replan_threshold,
@@ -185,7 +186,7 @@ def compact_execution_profile(value: Any) -> dict[str, Any]:
     profile["must_include"] = _label_list(value.get("must_include"), list(profile["must_include"]))
     profile["spend_rule"] = _label(value.get("spend_rule"), str(profile["spend_rule"]))
 
-    raw_policy = value.get("degradation_policy") if isinstance(value.get("degradation_policy"), dict) else {}
+    raw_policy = cast(dict[str, Any], value.get("degradation_policy")) if isinstance(value.get("degradation_policy"), dict) else {}
     policy = dict(profile["degradation_policy"])
     policy["small_scale_streak_threshold"] = _positive_int(
         raw_policy.get("small_scale_streak_threshold"),
@@ -194,7 +195,7 @@ def compact_execution_profile(value: Any) -> dict[str, Any]:
     policy["on_degradation"] = _label(raw_policy.get("on_degradation"), str(policy["on_degradation"]))
     profile["degradation_policy"] = policy
 
-    raw_floor = value.get("outcome_floor") if isinstance(value.get("outcome_floor"), dict) else {}
+    raw_floor = cast(dict[str, Any], value.get("outcome_floor")) if isinstance(value.get("outcome_floor"), dict) else {}
     floor = dict(profile["outcome_floor"])
     floor["required_when"] = _label(raw_floor.get("required_when"), str(floor["required_when"]))
     floor["surface_streak_threshold"] = _positive_int(
@@ -355,7 +356,7 @@ def execution_profile_with_turn_granularity(
 
 def execution_profile_threshold(profile: dict[str, Any] | None) -> int:
     normalized = compact_execution_profile(profile)
-    policy = normalized.get("degradation_policy") if isinstance(normalized.get("degradation_policy"), dict) else {}
+    policy = cast(dict[str, Any], normalized.get("degradation_policy")) if isinstance(normalized.get("degradation_policy"), dict) else {}
     return _positive_int(
         policy.get("small_scale_streak_threshold"),
         int(DEFAULT_EXECUTION_PROFILE["degradation_policy"]["small_scale_streak_threshold"]),
@@ -364,7 +365,7 @@ def execution_profile_threshold(profile: dict[str, Any] | None) -> int:
 
 def execution_profile_outcome_floor(profile: dict[str, Any] | None) -> dict[str, Any]:
     normalized = compact_execution_profile(profile)
-    floor = normalized.get("outcome_floor") if isinstance(normalized.get("outcome_floor"), dict) else {}
+    floor = cast(dict[str, Any], normalized.get("outcome_floor")) if isinstance(normalized.get("outcome_floor"), dict) else {}
     return dict(floor)
 
 
@@ -378,11 +379,11 @@ def outcome_floor_threshold(profile: dict[str, Any] | None) -> int:
 
 def execution_profile_summary(profile: dict[str, Any] | None) -> str:
     normalized = compact_execution_profile(profile)
-    policy = normalized.get("degradation_policy") if isinstance(normalized.get("degradation_policy"), dict) else {}
-    floor = normalized.get("outcome_floor") if isinstance(normalized.get("outcome_floor"), dict) else {}
+    policy = cast(dict[str, Any], normalized.get("degradation_policy")) if isinstance(normalized.get("degradation_policy"), dict) else {}
+    floor = cast(dict[str, Any], normalized.get("outcome_floor")) if isinstance(normalized.get("outcome_floor"), dict) else {}
     floor_suffix = ""
-    outcome_markers = floor.get("outcome_markers") if isinstance(floor.get("outcome_markers"), list) else []
-    surface_hints = floor.get("surface_only_hints") if isinstance(floor.get("surface_only_hints"), list) else []
+    outcome_markers = cast(list[Any], floor.get("outcome_markers")) if isinstance(floor.get("outcome_markers"), list) else []
+    surface_hints = cast(list[Any], floor.get("surface_only_hints")) if isinstance(floor.get("surface_only_hints"), list) else []
     if outcome_markers or surface_hints:
         floor_suffix = (
             " "

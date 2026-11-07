@@ -48,8 +48,15 @@ export const teamEvidenceScenario = {
         "A stopped operation row alone must not claim its Host group is drained");
       await executionDetails.getByRole("button", {name: "关闭", exact: true}).click();
       const goalNav = page.getByRole("navigation", {name: "Goal 视图"});
+      const readsBeforeFiles = api.loopxModeRequests.filter(row => row.operation === "read").length;
       await goalNav.getByRole("button", {name: "成果", exact: true}).click();
       const fileResults = page.getByRole("region", {name: "团队成果", exact: true});
+      const fileRow = fileResults.getByRole("button", {name: "local-analyst · report.md", exact: true});
+      await fileRow.waitFor();
+      assert.equal(api.loopxModeRequests.filter(row => row.operation === "read").length, readsBeforeFiles,
+        "Files lists accepted artifacts without an automatic body read; chat keeps its existing read behavior");
+      assert.equal(await fileResults.getByRole("table").count(), 0);
+      await fileRow.click();
       await fileResults.getByRole("table").waitFor();
       assert.match(await fileResults.getByRole("table").textContent(), /Free cash75/, "Files reads the accepted artifact from the original Goal session");
       assert(!(await page.locator(".personal-files-list > button").allTextContents()).some(text => /最近运行|Latest run/.test(text)),
@@ -58,6 +65,28 @@ export const teamEvidenceScenario = {
       await page.setViewportSize({width: 390, height: 844});
       assert(await fileResults.evaluate(el => el.scrollWidth <= el.clientWidth), "Files report remains readable on mobile");
       await page.screenshot({path: resolve(outputDir, "team-files-mobile.png"), animations: "disabled"});
+      await fileResults.getByRole("button", {name: "返回成果目录", exact: true}).click();
+      assert(await fileRow.evaluate(el => new Promise(done => requestAnimationFrame(() => done(el === document.activeElement)))), "Closing Files restores its native operation/artifact row");
+      let releaseArtifact;
+      const artifactGate = new Promise(resolveRead => {releaseArtifact = resolveRead;});
+      const delayedArtifact = async route => {
+        const body = route.request().method() === "POST" ? route.request().postDataJSON() : {};
+        if (body.operation !== "read") return route.fallback();
+        await artifactGate;
+        return route.fallback();
+      };
+      await page.route("**/api/chat/sessions/*/loopx", delayedArtifact);
+      const pendingArtifact = page.waitForRequest(request => request.method() === "POST" && request.url().endsWith("/loopx") && request.postDataJSON()?.operation === "read");
+      await fileRow.click();
+      await pendingArtifact;
+      await fileResults.getByRole("button", {name: "返回成果目录", exact: true}).click();
+      assert(await fileRow.evaluate(el => new Promise(done => requestAnimationFrame(() => done(el === document.activeElement)))));
+      const lateArtifact = page.waitForResponse(response => response.request().method() === "POST" && response.url().endsWith("/loopx") && response.request().postDataJSON()?.operation === "read");
+      releaseArtifact();
+      await lateArtifact;
+      await page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
+      assert.equal(await fileResults.getByRole("table").count(), 0, "A canceled artifact read must not reopen Files");
+      await page.unroute("**/api/chat/sessions/*/loopx", delayedArtifact);
       await page.setViewportSize({width: 1512, height: 982});
       await goalNav.getByRole("button", {name: "对话", exact: true}).click();
       const failedTeamMode = async route => route.request().method() === "GET"
@@ -69,6 +98,7 @@ export const teamEvidenceScenario = {
         "A failed team read must not retain the previously accepted report");
       await page.unroute("**/api/chat/sessions/*/loopx", failedTeamMode);
       await page.getByRole("button", {name: "重试", exact: true}).click();
+      await page.getByRole("region", {name: "团队成果", exact: true}).getByRole("button", {name: "local-analyst · report.md", exact: true}).click();
       await page.getByRole("region", {name: "团队成果", exact: true}).getByRole("table").waitFor();
       await goalNav.getByRole("button", {name: "对话", exact: true}).click();
       await results.getByRole("table").waitFor();

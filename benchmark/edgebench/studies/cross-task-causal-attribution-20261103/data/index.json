@@ -1,0 +1,10 @@
+{
+  "schema_version": "edgebench_study_index_v0",
+  "study_id": "cross-task-causal-attribution-20261103",
+  "bindings": {
+    "summary.json": "5acabc57e764f2e82169c6f8e5b678871c481d70cb3d0de15a8abaaa3d0bb672",
+    "five_arms_matrix.json": "4d1a23fc0ba6580b233cdf6279b953cf1c0497cf06ca5480db5b4c9c3aa47435",
+    "inflection_points.json": "7a9cdc9cd9b6d90575283c19a13b60d2c17f1bb60780be54c728acbc4b0f7813",
+    "replan_overhead.json": "ddf92a143c09c86a1479736aee9033fa43c958c794216f02453ad22156e07b86"
+  }
+}

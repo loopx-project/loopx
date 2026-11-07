@@ -19,6 +19,7 @@ def usage_transport(tmp_path, monkeypatch):
     monkeypatch.setattr(usage_ping, "select_default_runtime_root", lambda: tmp_path)
     for name in ("CI", "DO_NOT_TRACK", "LOOPX_USAGE_PING", "LOOPX_USAGE_POLICY"):
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("LOOPX_USAGE_PING", "1")
     monkeypatch.setenv("LOOPX_USAGE_PING_ENDPOINT", "http://127.0.0.1:1/v1/ping")
     popen = subprocess.Popen
     children = []

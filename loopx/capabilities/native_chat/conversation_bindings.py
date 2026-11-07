@@ -14,7 +14,9 @@ import uuid
 import hashlib
 
 from ...chat_store import TERMINAL_TURN_STATES, _atomic_write_json, _read_json
-from ...control_plane.effect_runtime import EffectRuntimeRejected, effect_runtime_result
+from ...control_plane.effect_runtime import (
+    EffectRuntimeRejected, effect_runtime_request_scope, effect_runtime_result,
+)
 from ...file_lock import exclusive_file_lock
 
 if TYPE_CHECKING:
@@ -180,10 +182,9 @@ class ChatConversationBindings:
         if not sessions:
             raise ValueError("the original steward Session is unavailable")
         session = max(sessions, key=lambda item: (item.get("last_activity_at") or "", item["session_id"]))
-        with exclusive_file_lock(self.path, operation="read_app_steward_target"):
-            if self.read().get("app_steward_binding_id") != selected:
-                raise ValueError("App steward selection changed during discovery")
-            return {"binding_id": selected, "session_id": session["session_id"]}
+        if self.read().get("app_steward_binding_id") != selected:
+            raise ValueError("App steward selection changed during discovery")
+        return {"binding_id": selected, "session_id": session["session_id"]}
 
     def _revoke_delivery_sources(self, binding_id: str) -> None:
         if self.controller is not None:
@@ -301,7 +302,8 @@ class ChatConversationBindings:
     def _session_observation(session: dict[str, Any]) -> dict[str, Any]:
         return {key: session.get(key) for key in (
             "session_id", "goal_id", "agent_id", "executor_endpoint_id", "channel_id",
-            "session_mode", "status", "project_context", "steward_context")}
+            "session_mode", "status", "project_context", "steward_context",
+            "manager_executor_allocation", "upstream_context_history")}
 
     def local_sessions(self, binding_id: str, *, app_steward_entry: bool = False) -> list[dict[str, Any]]:
         return self.local_session_snapshot(binding_id, app_steward_entry=app_steward_entry)["sessions"]
@@ -309,8 +311,10 @@ class ChatConversationBindings:
     def local_session_snapshot(self, binding_id: str, *, app_steward_entry: bool = False) -> dict[str, Any]:
         """Read original targets; metadata hints never replace Core's grant.
 
-        Provider IO and store inventory stay outside the publication fence.
-        Discovery neither restores a thread nor creates a Session or Turn.
+        This read-only snapshot does not wait for a mutation fence. Core checks
+        the observed grant, and a final canonical read rejects concurrent grant
+        changes. Discovery neither restores a thread nor creates work; actual
+        submissions retain their fresh identity and effect-time grant fences.
         """
         if self.controller is None:
             raise ValueError("the bound conversation store is unavailable")
@@ -328,30 +332,31 @@ class ChatConversationBindings:
                     and session[key].get("binding_id") == binding_id
                     for key in ("project_context", "steward_context")):
                 sessions.append(session)
-        with exclusive_file_lock(self.path, operation="read_local_bound_sessions"):
-            current = self.read()
-            if next((item for item in current["bindings"] if item["binding_id"] == binding_id), None) != row:
-                raise ValueError("conversation binding changed during identity verification")
-            projects = self.projects.available()
-            result = self._core("collaboration.conversation.local_sessions", {
-                "current": current, "binding_id": binding_id, "observation": observation,
-                "available_projects": projects,
-                "sessions": [self._session_observation(session) for session in sessions],
-                **({"app_steward_entry": True} if app_steward_entry else {}),
-                **({"available_goal_ids": self.goal_scope_ids(row)} if row.get("goal_scope") == "all_registered" else {}),
-            })
-            # Build the lookup only after Core has rejected duplicate identity;
-            # an IO dictionary must not silently turn ambiguity into one target.
-            by_id = {session["session_id"]: session for session in sessions}
-            project = next(project for project in projects if project["project_ref"] == row["project_ref"])
-            # Project this exact Core-verified source under the same fence.
-            # Opening a conversation must not enumerate settings, unrelated
-            # Agent candidates, listener health or stop-recovery inventories.
-            return {"sessions": [store.public_session(by_id[sid]) for sid in result["session_ids"]],
-                    "conversation_source": {"binding_id": binding_id, "app_ref": row["transport_ref"],
-                        "context_kind": row["context_kind"], "audience": row.get("audience", "owner"),
-                        "project_title": Path(project["workspace_path"]).name, "context_available": True,
-                        "executor_endpoint_id": row["executor_endpoint_id"]}}
+        current = self.read()
+        if next((item for item in current["bindings"] if item["binding_id"] == binding_id), None) != row:
+            raise ValueError("conversation binding changed during identity verification")
+        projects = self.projects.available()
+        result = self._core("collaboration.conversation.local_sessions", {
+            "current": current, "binding_id": binding_id, "observation": observation,
+            "available_projects": projects,
+            "sessions": [self._session_observation(session) for session in sessions],
+            **({"app_steward_entry": True} if app_steward_entry else {}),
+            **({"available_goal_ids": self.goal_scope_ids(row)} if row.get("goal_scope") == "all_registered" else {}),
+        })
+        # Build the lookup only after Core has rejected duplicate identity;
+        # an IO dictionary must not silently turn ambiguity into one target.
+        by_id = {session["session_id"]: session for session in sessions}
+        project = next(project for project in projects if project["project_ref"] == row["project_ref"])
+        payload = {"sessions": [store.public_session(by_id[sid]) for sid in result["session_ids"]],
+                   "conversation_source": {"binding_id": binding_id, "app_ref": row["transport_ref"],
+                       "context_kind": row["context_kind"], "audience": row.get("audience", "owner"),
+                       "project_title": Path(project["workspace_path"]).name, "context_available": True,
+                       "executor_endpoint_id": row["executor_endpoint_id"]}}
+        # Bind the projection to the exact atomic configuration Core checked.
+        # This is not an execution grant or a cached provider observation.
+        if self.read() != current:
+            raise ValueError("conversation binding changed during discovery")
+        return payload
 
     def goal_scope_ids(self, binding: dict[str, Any]) -> list[str]:
         if binding.get("goal_scope") != "all_registered":
@@ -527,12 +532,14 @@ class ChatConversationBindings:
             "target_observation": self.agent_observation(target["session_id"])})
 
 
+    @effect_runtime_request_scope()
     def stop_recoveries(self, current: dict[str, Any]) -> list[dict[str, Any]]:
         """Project revoked execution from canonical Turns, never recreate a grant.
 
         Session and external-target context retain the exact binding identity
         across restart. No second stop ledger or provider diagnostics are needed.
         A recovery disappears only when the existing Turn owner settles it.
+        Share the runtime source observation, while reading each queue afresh.
         """
         if self.controller is None:
             return []

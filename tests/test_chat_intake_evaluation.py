@@ -272,8 +272,9 @@ def test_review_evidence_retains_brief_without_provider_payload():
 
 @pytest.mark.parametrize("profile", ["restricted", "trusted_owner"])
 @pytest.mark.parametrize("custom_owner_instructions", [False, True])
+@pytest.mark.parametrize("previous_marker", ["v3", "v4"])
 def test_followthrough_refresh_reaches_existing_workspaces_without_replacing_owner_text(
-    tmp_path, profile, custom_owner_instructions
+    tmp_path, profile, custom_owner_instructions, previous_marker
 ):
     from loopx.chat_agent import _turn_prompt
     from loopx.chat_manager import manager_workspace, MANAGED_SKILL_CURRENT_MARKER
@@ -283,7 +284,7 @@ def test_followthrough_refresh_reaches_existing_workspaces_without_replacing_own
     skill = workspace / ".agents/skills/loopx-manager/SKILL.md"
     previous = "Custom owner instructions" if custom_owner_instructions else "# LoopX managed manager instructions\nOlder guidance"
     instructions.write_text(previous)
-    skill.write_text("<!-- loopx-managed-manager-skill:v3 -->\nOlder managed skill")
+    skill.write_text(f"<!-- loopx-managed-manager-skill:{previous_marker} -->\nOlder managed skill")
     manager_workspace(tmp_path, runtime_profile=profile)
     current = instructions.read_text()
     if custom_owner_instructions:
@@ -293,9 +294,79 @@ def test_followthrough_refresh_reaches_existing_workspaces_without_replacing_own
     assert MANAGED_SKILL_CURRENT_MARKER in skill.read_text()
     assert "standalone explanation or opinion request" in skill.read_text()
     assert "finish that response before separate repair" in skill.read_text()
+    assert "A previous handoff proves where a request was sent, not who owns its subject" in skill.read_text()
+    assert "A corrected handoff does not retract a delivered misroute" in skill.read_text()
     turn = _turn_prompt("A follow-up about existing work.", runtime_profile=profile)
     assert "do not end at agreement or design advice" in turn
     assert "never resend merely because reading or adoption is unrecorded" in turn
+    assert "A role alias or matching Agent id is a discovery lead" in turn
+    assert "no new delivery audience" in skill.read_text()
+
+
+def test_manager_refresh_preserves_an_unmanaged_owner_skill(tmp_path):
+    from loopx.chat_manager import manager_workspace
+
+    workspace = manager_workspace(tmp_path)
+    skill = workspace / ".agents/skills/loopx-manager/SKILL.md"
+    skill.write_text("# Owner-managed skill\nKeep this local instruction.")
+    manager_workspace(tmp_path)
+    assert skill.read_text() == "# Owner-managed skill\nKeep this local instruction."
+
+
+ROUTING_SUITE = json.loads((ROOT / "examples/evaluations/chat-routing.public.json").read_text())
+
+
+@pytest.mark.parametrize("case", ROUTING_SUITE["cases"], ids=lambda case: case["id"])
+def test_routing_oracles_reject_alias_misroutes_duplicate_sends_and_added_authority(case):
+    """Frozen decisions exercise the production parser and release scorer, not inference."""
+    response = {"message": "Evidence: " + " ".join(case.get("required_evidence_refs", []))}
+    if case["expected"] == "handoff":
+        response["context_handoff"] = {**case["target"], "brief": {
+            "schema_version": "collaboration_brief_v0", "purpose": "Assess the scoped request",
+            "context": " ".join(case["required_handoff_refs"]), "constraints": ["No new authority."],
+            "inputs": [], "acceptance": ["Return the actual disposition."],
+            "return_requirement": "Return a scoped result.",
+        }}
+    wire = evaluation.CHAT_REVIEW_OPEN_TAG + json.dumps(response) + evaluation.CHAT_REVIEW_CLOSE_TAG
+    parsed = evaluation.parse_agent_response(wire)
+    assert evaluation.score(case, parsed)["passed"]
+    context = ROUTING_SUITE["contexts"][case["context_ref"]]
+    for recipient in context["agent_directory"]:
+        wrong = {**parsed, "context_handoff": {
+            "goal_id": recipient["goal_id"], "agent_id": recipient["agent_id"],
+            "brief": (response.get("context_handoff") or {}).get("brief"),
+        }}
+        if case.get("target") != {k: recipient[k] for k in ("goal_id", "agent_id")}:
+            assert not evaluation.score(case, wrong)["passed"]
+    for effect in ({"proposals": [{"kind": "todo"}]}, {"goal_draft": {"objective": "Duplicate work"}},
+                   {"protected_action": {"operation": "deploy", "target": "unrequested"}}):
+        assert not evaluation.score(case, {**parsed, **effect})["passed"]
+    if case["expected"] == "handoff":
+        assert not evaluation.score(case, {**parsed, "gate": {"kind": "confirmation"}})["passed"]
+        for omitted in case["required_handoff_refs"]:
+            brief = {**response["context_handoff"]["brief"], "context": " ".join(
+                ref for ref in case["required_handoff_refs"] if ref != omitted)}
+            assert not evaluation.score(case, {**parsed, "context_handoff": {
+                **case["target"], "brief": brief}})["passed"]
+
+
+def test_routing_fixture_separates_topic_identity_delivery_and_permission():
+    contexts = ROUTING_SUITE["contexts"]
+    topic = contexts["topic"]
+    assert topic["agent_directory"][0]["agent_id"] == "generalist-2"
+    assert topic["agent_directory"][1]["agent_id"] == "topic-investigator"
+    assert len({row["profile_role"] for row in topic["agent_directory"]}) == 1
+    assert topic["handoff_receipts"][0]["agent_id"] == "generalist-2"
+    assert topic["recent_deliveries"][0]["agent_id"] == "topic-investigator"
+    for receipt in contexts["settled"]["handoff_receipts"]:
+        assert receipt["delivery"]["status"] == "delivered"
+        assert receipt["read"]["status"] == receipt["decision"]["status"] == "not_recorded"
+    assert not contexts["new-work"]["goals"][0]["current_todos"]
+    assert not contexts["ambiguous"]["recent_deliveries"]
+    assert len({row["scope_summary"] for row in contexts["ambiguous"]["agent_directory"]}) == 1
+    denied = contexts["ungranted"]
+    assert denied["agent_directory"][1]["context_delivery"] == "not_granted"
+    assert denied["context_delegation"]["targets"] == [topic["context_delegation"]["targets"][0]]
 
 
 def test_followthrough_oracles_distinguish_context_not_question_wording():

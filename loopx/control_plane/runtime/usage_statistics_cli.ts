@@ -9,6 +9,7 @@ import type { GoalObservation } from "./usage_statistics_goal_contract.ts";
 import { validGoalObservation, hostCategory } from "./usage_statistics_goal_contract.ts";
 
 import { validCycle } from "./usage_statistics_cycles.ts";
+import { EffectRuntimeLockTimeoutError } from "../effect_runtime_errors.ts";
 
 try {
   let input = "";
@@ -50,6 +51,7 @@ try {
 } catch (error) {
   // No environment, source paths or exception text in the diagnostic contract.
   process.stdout.write(JSON.stringify({ error: error instanceof UsageContextInputError
-    ? "usage_context_invalid" : "usage_statistics_unavailable" }) + "\n");
+    ? "usage_context_invalid" : error instanceof EffectRuntimeLockTimeoutError
+      ? error.code : "usage_statistics_unavailable" }) + "\n");
   process.exitCode = 1;
 }

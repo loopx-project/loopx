@@ -150,6 +150,13 @@ expected public tag is `vX.Y.Z` for that version.
 
 Before moving `stable`, maintainers should:
 
+- before freezing the candidate, fetch `stable` from the verified target
+  repository and check that its released commit is an ancestor of the candidate
+  with `git merge-base --is-ancestor STABLE_COMMIT CANDIDATE_COMMIT`.
+  Inspect its exit status directly: only zero permits the fast-forward path;
+  a later successful command does not make an earlier ancestry check pass.
+  Resolve divergent history through a reviewed merge PR, retain current behavior,
+  then qualify the new exact source. Never force-update the released ref;
 - run the complete packaged Personal Workspace journey against the exact
   candidate before publishing a release, including every catalog scenario and
   the companion flows in `npm run smoke:personal-workspace-packaged`;
@@ -231,6 +238,20 @@ policy, use an explicitly labelled release-tooling tag pinned to the reviewed
 workflow commit, separately from the immutable product tag passed as `tag`.
 Retain the tooling ref for provenance verification; do not move the product tag,
 relax the environment policy, or replace Trusted Publishing with a token.
+
+When a tagged build passed but publication stopped after a partial upload,
+dispatch the reviewed release workflow with the original product `tag` and its
+`validated_run_id`. This path reuses the successful release-event build without
+rebuilding packages or repeating qualification. It checks the repository,
+workflow, tag, source and successful build job, then verifies every recovered
+file's attestation against that tagged source. Existing Release assets must
+match downloaded bytes exactly before any missing file is uploaded; a mismatch
+or case-insensitive name collision stops publication without replacement.
+Trusted Publishing and the existing environment policy still apply.
+
+Reserve `qualification.json` for the workflow's attested runtime qualification.
+Use `RELEASE-QUALIFICATION.json` for a separately maintained release overview;
+GitHub Release asset names must also be unique when compared ignoring case.
 
 For a browser-fixture error discovered after an immutable tag was published,
 maintainers may dispatch the release workflow from reviewed tooling with
@@ -953,6 +974,16 @@ path, and canary route rather than as a user-facing release baseline.
   `v2.1.0` preview, keeps its failed evidence and does not roll up later `main`
   snapshots. Read the [versioned upgrade guide](https://github.com/loopx-project/loopx/blob/v2.1.1/docs/product/releases/v2.1.1.md)
   before replacing an existing installation.
+
+- `v2.2.0` release at commit
+  `2c3524857e8a3dd553335b79444333786f492c43`:
+  the [published release](https://github.com/loopx-project/loopx/releases/tag/v2.2.0)
+  (2026-11-01) and the public `stable` ref point at the same commit. The
+  [versioned release note](https://github.com/loopx-project/loopx/blob/v2.2.0/docs/product/releases/v2.2.0.md)
+  records the canonical-authority upgrade boundary, the context-delivery
+  default and the readback path. Read it before replacing an existing
+  installation; artifact and native-host claims remain those stated by that
+  release note.
 
 When a new public release is promoted, add it here only after the matching tag,
 release note, stable ref, update path, and focused release canary agree.

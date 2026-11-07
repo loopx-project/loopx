@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import subprocess
 import sys
@@ -18,65 +19,17 @@ import pytest
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.quota.turn_envelope import prepare_context_delivery, restore_context_delivery
+from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
 from test_quota_settlement_cli import AGENT_ID, GOAL_ID, TODO_ID, _spend_run_count, _write_fixture
-from tests.control_plane.codex_checkpoint_fixture import local_inference_provider
+from tests.control_plane.codex_checkpoint_fixture import (
+    local_inference_provider, delivered_context as _delivered, last_context_page as _last_page,
+    reference_metadata_oracle,
+)
 from tests.control_plane.test_heartbeat_envelope_transport import private_handoff  # noqa: F401 -- shared private socket fixture
 from tests.control_plane.test_codex_context_boundary import _app_server, _configure_provider, _input_text, _native_fixture
 
 pytestmark = pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"),
     reason="Explicit native Codex binary required; inference uses loopback only")
-
-
-def _delivered(request, digest):
-    # Independent byte-map oracle: recover every model-visible byte, including
-    # separate code-mode emissions and overlapping reads at smaller page sizes.
-    delivered = {}
-    for item in request["input"]:
-        output = item.get("output")
-        texts = ([part["text"] for part in output if part.get("type") == "input_text"]
-                 if item.get("type") == "custom_tool_call_output" and isinstance(output, list)
-                 else [output])
-        for output in texts:
-            if not isinstance(output, str):
-                continue
-            try:
-                page = json.loads(output.split("\nOutput:\n", 1)[-1])
-                if isinstance(page, dict) and page.get("exit_code") == 0 and isinstance(page.get("output"), str):
-                    page = json.loads(page["output"])
-            except (ValueError, TypeError):
-                continue
-            if not isinstance(page, dict) or page.get("schema_version") != "context_capture_page_v1" or page.get("sha256") != digest:
-                continue
-            assert page["ok"]
-            data = page["content"].encode()
-            assert len(data) == (page["total_bytes"] if page["eof"] else page["next_offset"]) - page["offset"]
-            for offset, value in enumerate(data, page["offset"]):
-                assert offset not in delivered or delivered[offset] == value
-                delivered[offset] = value
-    if not delivered:
-        return ""
-    assert set(delivered) == set(range(len(delivered)))
-    raw = bytes(delivered[i] for i in range(len(delivered)))
-    assert hashlib.sha256(raw).hexdigest() == digest
-    return raw.decode().rstrip("\n")
-
-
-def _last_page(request):
-    for item in reversed(request["input"]):
-        output = item.get("output")
-        parts = [p.get("text", "") for p in output] if isinstance(output, list) else [output]
-        for part in reversed(parts):
-            if not isinstance(part, str):
-                continue
-            try:
-                value = json.loads(part.split("\nOutput:\n", 1)[-1])
-                if isinstance(value, dict) and value.get("exit_code") == 0:
-                    value = json.loads(value["output"])
-                if isinstance(value, dict) and value.get("schema_version") == "context_capture_page_v1":
-                    return value
-            except (ValueError, KeyError):
-                continue
-    return None
 
 
 @pytest.mark.parametrize("host,surface,failed_primary,resumed,adaptive", [
@@ -87,7 +40,7 @@ def _last_page(request):
   + [(host, surface, False, True, False) for host in ("benchmark", "code_mode")
      for surface in ("quota_packet", "turn_envelope")]
   + [("code_mode", surface, False, True, True) for surface in ("quota_packet", "turn_envelope")])
-def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, host, surface, failed_primary, resumed, adaptive, hook_loss=None, shared_root=False, checkpoint_handoff=False, handoff_socket=None, native_pragma=False, native_read_batch=2, native_history_tokens=None, resume_loss=None, bounded_pages=False, ssh_goal=False, reader_output_bytes=None, recovery_resume=False):
+def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, host, surface, failed_primary, resumed, adaptive, hook_loss=None, shared_root=False, checkpoint_handoff=False, handoff_socket=None, native_pragma=False, native_read_batch=2, native_history_tokens=None, resume_loss=None, bounded_pages=False, ssh_goal=False, reader_output_bytes=None, recovery_resume=False, working_brief=False):
     # Real worker qualification follows returned cursors; output budgets can
     # shrink a page, so precomputed fixed offsets are not its production path.
     bounded_pages = bounded_pages or host == "benchmark"
@@ -256,28 +209,27 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
                 offsets.append(start)
                 count = 0
             count += size
-        if host == "benchmark" and name in {"cold", "recovery"}:
-            # Execute the shipped original recovery route, including its pinned
-            # executable; no fixture substitute for installed command routing.
-            recovery = wires["cold" if name == "cold" else "warm"]["recovery"]
-            routed = shlex.split(recovery["command"])
-            assert routed[:3] == [env["LOOPX_CLI"], "--cli-bin", env["LOOPX_CLI"]]
+        # Execute the model-visible route, preserving its executable, reference
+        # and output budget. Private metadata only verifies the expected bytes.
+        routed = shlex.split(read_commands[name] if name != "recovery"
+                             else wires["warm"]["recovery"]["command"])
+        if "--reference-file" in routed:
+            _, reference = read_context_read_reference(routed[routed.index("--reference-file") + 1])
+            assert reference["path"] == str(path) and reference["sha256"] == digest
+        else:
             assert routed[routed.index("--capture-file") + 1] == str(path)
-            routed[routed.index("--page-bytes") + 1] = "5000"
-            commands = []
-            for offset in offsets:
-                routed[routed.index("--offset") + 1] = str(offset)
-                commands.append(shlex.join(routed))
-            return commands
-        commands = [shlex.join(cli + ["--format", "json", "quota", "context-read",
-            "--capture-file", str(path), "--capture-sha256", digest,
-            "--offset", str(offset), "--page-bytes", str(page_size)]) for offset in offsets]
+            assert routed[routed.index("--capture-sha256") + 1] == digest
+        routed[routed.index("--page-bytes") + 1] = str(page_size)
+        commands = []
+        for offset in offsets:
+            routed[routed.index("--offset") + 1] = str(offset)
+            commands.append(shlex.join(routed))
         if adaptive and name == "cold":
             # An intact initial short read remains in current native input when
             # subsequent reads choose different boundaries. Production must
             # accept exact complete coverage without clearing that history.
             initial = shlex.split(commands[0])
-            initial[-1] = "256"
+            initial[initial.index("--page-bytes") + 1] = "256"
             commands.insert(0, shlex.join(initial))
         return commands
 
@@ -325,11 +277,11 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
                 if qualified_resume:
                     # Actual worker process exit/resume, qualified by the shared
                     # native-selected replay checkpoint. No old full prefetch.
-                    assert ("LoopX context baseline invalidated." in _input_text(request)) == bool(resume_loss)
+                    assert ("LoopX model-context baseline invalidated." in _input_text(request)) == bool(resume_loss)
                     stages["phase"] = "warm_ready"
                     cmd = invoke("warm")
                 else:
-                    assert "LoopX context baseline invalidated." in _input_text(request)
+                    assert "LoopX model-context baseline invalidated." in _input_text(request)
                     assert wires["cold"]["recovery"]["command"] in _input_text(request)
                     # Unqualified native histories still recover the exact
                     # original before continuing its dependent decision.
@@ -347,24 +299,43 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
             # The native consumer must discover the next command from its
             # actual retained input. Disk reads below are independent expected
             # byte/state oracles, never a substitute for a truncated guard.
-            descriptor = _last_page(request)
+            descriptor = _last_page(request, allow_reference=True)
             assert descriptor and descriptor["ok"], "native guard is not complete model-visible JSON"
             assert descriptor == json.loads(wire_paths[name].read_bytes())
             assert len(json.dumps(descriptor, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= (native_guard_output_bytes or 64000)
             read_commands[name] = descriptor["command"]
             # The public native CLI now shares context-project's paged reader.
             # Keep the independent full-wire oracle separate from its page view.
-            wire_file = Path(descriptor["path"]).parent / "delivery.json"
-            wires[name] = json.loads(wire_file.read_text())
+            wire_descriptor = reference_metadata_oracle(descriptor)
+            wire_file = Path(wire_descriptor["path"])
+            wire_bytes = wire_file.read_bytes()
+            assert hashlib.sha256(wire_bytes).hexdigest() == wire_descriptor["sha256"]
+            if descriptor["mode"] == "full":
+                # Full native delivery reads the advertised original directly;
+                # the retired duplicate delivery.json is not a public oracle.
+                assert str(wire_file) == wire_descriptor["recovery"]["path"]
+                assert wire_descriptor["sha256"] == wire_descriptor["recovery"]["sha256"]
+                wires[name] = {"schema_version": "context_delivery_v1", "mode": "full",
+                    "context": json.loads(wire_bytes), "target": wire_descriptor["target"],
+                    "recovery": wire_descriptor["recovery"], "ancestry": 0}
+            else:
+                wires[name] = json.loads(wire_bytes)
             assert descriptor["mode"] == wires[name]["mode"] == ("full" if name == "cold" or resume_loss else "delta")
             assert "Native input observation independently verifies" not in descriptor["instruction"]
-            if name == "warm" and not resume_loss:
+            if name == "warm" and not resume_loss and "content" in descriptor:
                 assert json.dumps(wires[name]["instruction"]).encode() in descriptor["content"].encode()
             capture = Path(wires[name]["recovery"]["path"]).parent / "decision.json"
             snapshots.append((capture, capture.read_bytes()))
             read_paths[name] = Path(wires[name]["recovery"]["path"]) if wires[name]["mode"] == "full" else wire_file
-            stages["pages"] = ([descriptor["next_command"]] if not descriptor["eof"] else []) if bounded_pages else pages(name, read_paths[name])
-            page_digests[name] = descriptor["sha256"]
+            if "content" not in descriptor:
+                # File-first delivery is a reference, not an already-read page.
+                # Discover the read from model-visible output, never from the
+                # independent disk oracle. Recovery after compaction remains
+                # governed by the same admitted Turn's working brief below.
+                stages["pages"] = [descriptor["command"]] if bounded_pages else pages(name, read_paths[name])
+            else:
+                stages["pages"] = ([descriptor["next_command"]] if not descriptor["eof"] else []) if bounded_pages else pages(name, read_paths[name])
+            page_digests[name] = wire_descriptor["sha256"]
             stages["phase"] = name + "_read"
             if not stages["pages"]:
                 return response(request, number, message)
@@ -388,23 +359,60 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
             cmd = "printf synthetic-work"
         elif phase == "compact":
             stages["phase"] = "recovery_ready"
-            message["content"][0]["text"] = "Summary deliberately omitting all packet source bodies."
+            message["content"][0]["text"] = ("Continue the same admitted work. "
+                + f"Goal {GOAL_ID}, task {TODO_ID}. Stop before publication. "
+                + "All initial required reads completed; remaining action is synthetic-work. "
+                + json.dumps({"capture": wires["warm"]["recovery"],
+                    "receipt": json.loads(snapshots[-1][1])["heartbeat_receipt"]})
+                if working_brief else "Summary deliberately omitting all packet source bodies.")
             return message
         elif phase == "recovery_ready":
+            if working_brief:
+                text = _input_text(request)
+                assert "Do not replay read context or rerun admission solely" in text
+                assert "Stop before publication." in text and GOAL_ID in text and TODO_ID in text
+                assert wires["warm"]["recovery"]["sha256"] in text
+                assert delivered(request, "cold") == "" and delivered(request, "warm") == ""
+                assert "candidate" not in native_state()
+                stages["brief_continuations"] = stages.get("brief_continuations", 0) + 1
+                if stages["brief_continuations"] < 2:
+                    stages.update(phase="compact", compact_response=number)
+                    return tool("printf synthetic-work", number)
+                stages["phase"] = "done"
+                return message
             if hook_loss:
                 text = _input_text(request)
-                assert "LoopX context baseline invalidated." not in text
+                assert "LoopX model-context baseline invalidated." not in text
                 # The recovery entry must really be present after compaction;
                 # the fixture may not supply a hidden saved capture path.
-                prefix = "If continuing a captured LoopX decision"
-                permanent = text[text.index(prefix):]
-                # Read only the advertised command sentence. Subsequent
-                # recovery guidance is not part of the shell invocation.
-                cmd = permanent.split("with: ", 1)[1].split(". ", 1)[0]
+                commands = set()
+                for advertised in re.findall(r"with: ([^\n]+?)(?:\. |$)", text):
+                    try:
+                        argv = shlex.split(advertised)
+                        quota = argv.index("quota")
+                        if argv[quota:quota + 2] != ["quota", "context-read"]:
+                            continue
+                        # The worker advertises its own trial-local directory
+                        # in the actual guard; it need not use this fixture's.
+                        if (argv[argv.index(context_option) + 1] != command[command.index(context_option) + 1]
+                                or argv[argv.index("--goal-id") + 1] != GOAL_ID
+                                or argv[argv.index("--agent-id") + 1] != AGENT_ID):
+                            continue
+                    except (ValueError, IndexError):
+                        continue
+                    # Voluntary full traversal serves this byte oracle. Index
+                    # and selected reads do not themselves establish a baseline.
+                    for option, width in (("--select", 2), ("--list", 1)):
+                        while option in argv:
+                            index = argv.index(option)
+                            del argv[index:index + width]
+                    commands.add(shlex.join(argv))
+                assert len(commands) == 1, "One scoped permanent reader must be visible in model input"
+                cmd = commands.pop()
                 stages["phase"] = "lookup_read"
                 assert delivered(request, "cold") == "" and delivered(request, "warm") == ""
                 return tool(cmd, number)
-            assert "LoopX context baseline invalidated." in _input_text(request)
+            assert "LoopX model-context baseline invalidated." in _input_text(request)
             assert wires["warm"]["recovery"]["command"] in _input_text(request)
             assert delivered(request, "cold") == "" and delivered(request, "warm") == ""
             stages["phase"] = "recovered"
@@ -840,3 +848,9 @@ def test_native_large_page_recovery(tmp_path, monkeypatch, surface):
         "code_mode", surface, False, True, True, "missing", shared_root=True,
         native_pragma=True, native_read_batch=1, native_history_tokens=10000,
         bounded_pages=True, reader_output_bytes=32000, ssh_goal=True)
+
+
+@pytest.mark.parametrize("host", ["exec", "code_mode"])
+def test_native_same_turn_working_brief_survives_two_compactions_without_packet_replay(tmp_path, monkeypatch, host):
+    test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch,
+        host, "quota_packet", False, False, True, bounded_pages=True, working_brief=True)

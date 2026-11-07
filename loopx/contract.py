@@ -36,12 +36,14 @@ from .control_plane.projects.registry_codec import load_registry
 from .control_plane.todos.active_state_editing import COMPLETED_WORK_ARCHIVE_HEADING
 from .control_plane.todos.active_state_todo_parser import active_state_incomplete_warning
 from .control_plane.todos.authoring_scope import todo_contract_diagnostics
+from .extensions.process_runtime import terminate_process_tree
 from .history import (
     RunHistoryAudit,
     build_run_history_audit,
     collect_history,
 )
 from .paths import DEFAULT_RUNTIME_ROOT, LEGACY_RUNTIME_ROOT, rel_or_abs, resolve_runtime_root
+from .public_safe_text import PROVIDER_TOKEN_SHAPE_PATTERN_SOURCE
 from .registry import inspect_registry, inspect_registry_boundary, registry_goals, resolve_state_file
 from .state_projection import state_projection_gap_warning
 from .control_plane.todos.contract import (
@@ -111,6 +113,13 @@ LEAK_RULES = {
                     r"(?<![A-Za-z0-9_])" + "tok" + "en=",
                     r"(?<![A-Za-z0-9_])" + "pass" + "word=",
                     "Author" + "ization:",
+                    # A provider token carries its issuer in the prefix, so it
+                    # needs no label. The shapes come from the canonical
+                    # public-safety owner rather than a second copy here: this
+                    # scan gates repository publication, and a credential list
+                    # that recognized only some issuers certified the rest as
+                    # public-safe (Refs #5136, #7635).
+                    PROVIDER_TOKEN_SHAPE_PATTERN_SOURCE,
                 ]
             ),
             re.I,
@@ -121,6 +130,27 @@ LEAK_RULES = {
             "tok" + "en=",
             "pass" + "word=",
             "author" + "ization:",
+            "ghp_",
+            "gho_",
+            "ghu_",
+            "ghs_",
+            "ghr_",
+            "github_pat_",
+            "akia",
+            "asia",
+            "xox",
+            "aiza",
+            "sk_live_",
+            "sk_test_",
+            "rk_live_",
+            "rk_test_",
+            "sk-proj-",
+            "sk-svcacct-",
+            "sk-admin-",
+            "sk-ant-",
+            "npm_",
+            "pypi-",
+            "eyj",
         ),
     ),
     # The private roots take the host's own separator, so a Windows host
@@ -204,6 +234,11 @@ CREDENTIAL_PLACEHOLDER_PATTERN = re.compile(
     r"<[^>]{1,64}>|\{\{|example|dummy|placeholder|changeme|redacted|your[-_]",
     re.I,
 )
+# A provider token has no keyword that separates its value from surrounding
+# text, so only the exact access-key id published in the AWS documentation may
+# be treated as an example. A placeholder word inside an opaque token body is
+# part of the value, not an external reference (Refs #7713 review).
+CREDENTIAL_DOCUMENTED_EXAMPLE_PATTERN = re.compile(r"AKIAIOSFODNN7EXAMPLE")
 CREDENTIAL_HIGH_ENTROPY_VALUE_PATTERN = re.compile(r"[A-Za-z0-9._-]{20,}")
 CREDENTIAL_VARIABLE_REFERENCE_PATTERN = re.compile(
     r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*\s*[,)\]}]"
@@ -225,7 +260,15 @@ def _credential_match_is_reference(line: str, match: re.Match[str]) -> bool:
         last_keyword = keyword.group(0)
         value = value[keyword.end() :].lstrip(" \t\"'`")
     if last_keyword is None:
-        return bool(CREDENTIAL_PLACEHOLDER_PATTERN.search(match.group(0)))
+        return bool(CREDENTIAL_DOCUMENTED_EXAMPLE_PATTERN.fullmatch(match.group(0)))
+    return _credential_value_is_reference(
+        value, bearer=CREDENTIAL_BEARER_KEYWORD_PATTERN.fullmatch(last_keyword) is not None,
+    )
+
+
+def _credential_value_is_reference(value: str, *, bearer: bool = False) -> bool:
+    """Classify a credential field value for source and distribution scanners."""
+    value = value.lstrip(" \t\"'`")
     if not value:
         return True
     if CREDENTIAL_ENVIRONMENT_REFERENCE_PATTERN.match(value):
@@ -238,7 +281,7 @@ def _credential_match_is_reference(line: str, match: re.Match[str]) -> bool:
         return True
     if CREDENTIAL_HIGH_ENTROPY_VALUE_PATTERN.match(value):
         return False
-    if CREDENTIAL_BEARER_KEYWORD_PATTERN.fullmatch(last_keyword):
+    if bearer:
         return True
     return bool(CREDENTIAL_VARIABLE_REFERENCE_PATTERN.match(value))
 
@@ -277,54 +320,135 @@ LOCAL_PRIVATE_STATE_FILE_NAMES = {"ACTIVE_GOAL_STATE.md", "ACTIVE_GOAL_STATE.md.
 TERMINAL_TODO_STATUSES = {TODO_STATUS_DONE, TODO_STATUS_DEFERRED, "completed", "closed", "archived"}
 
 
-def _git_worktree_root(path: Path) -> Path | None:
-    path = path.resolve()
-    target = path if path.is_dir() else path.parent
+# A scan reads a checkout the operator may not control, so a Git that blocks on
+# a stale index lock, a network mount or an oversized index must not hold the
+# scan open. Git runs helpers of its own -- an fsmonitor hook is the common one
+# on `ls-files` -- so a budget that stops the caller has to stop that work too.
+GIT_PROBE_TIMEOUT_SECONDS = 5.0
+
+
+class GitProbeUnavailable(RuntimeError):
+    """Git did not answer an ownership question inside the scan budget.
+
+    A missing answer is not a negative one. Callers of this module decide
+    whether an unanswered question lets them pass; they cannot read it as
+    "not tracked", because a tracked private file would then be published.
+    """
+
+
+@dataclass(frozen=True)
+class _GitAnswer:
+    returncode: int
+    stdout: str
+
+
+def _retire_owned_probe(process: subprocess.Popen[str]) -> None:
+    """Stop this probe's own process group, then drop its pipes unread.
+
+    A descendant that inherited the pipes keeps them open after the leader
+    dies, so draining them would wait on work this call no longer owns.
+    """
+
     try:
-        root = subprocess.run(
-            ["git", "-C", str(target), "rev-parse", "--show-toplevel"],
+        terminate_process_tree(process, grace_seconds=0.2)
+    except (OSError, RuntimeError):
+        pass
+    finally:
+        for stream in (process.stdout, process.stderr):
+            if stream is not None:
+                stream.close()
+        try:
+            process.wait(timeout=1.0)
+        except subprocess.TimeoutExpired:
+            pass
+
+
+def _git_query(*arguments: str) -> _GitAnswer | None:
+    """One bounded local Git read, or None when it cannot answer in budget.
+
+    Git is started in a session of its own so an exhausted budget retires the
+    helpers that read would have started along with it. That session also keeps
+    a terminal Ctrl-C away from Git, so an interrupted wait retires the same
+    helpers before the cancellation keeps travelling.
+    """
+
+    argv = ["git", *arguments]
+    try:
+        process = subprocess.Popen(
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
             errors="replace",
-            capture_output=True,
-            check=True,
-        ).stdout.strip()
-    except (subprocess.CalledProcessError, FileNotFoundError):
+            start_new_session=os.name == "posix",
+        )
+    except OSError:
+        return None
+    try:
+        stdout, _stderr = process.communicate(timeout=GIT_PROBE_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        _retire_owned_probe(process)
+        return None
+    except BaseException:
+        # The operator cancelled the scan. An exhausted budget keeps answering
+        # "unavailable", while Ctrl-C retires this read's helpers and stays the
+        # cancellation the caller raised.
+        _retire_owned_probe(process)
+        raise
+    return _GitAnswer(returncode=process.returncode, stdout=stdout)
+
+
+def _git_worktree_root(path: Path) -> Path | None:
+    """Return the worktree root, or None when Git says this is not one.
+
+    Raises :class:`GitProbeUnavailable` when Git could not answer at all, so
+    callers cannot mistake silence for "no repository here".
+    """
+
+    path = path.resolve()
+    target = path if path.is_dir() else path.parent
+    answer = _git_query("-C", str(target), "rev-parse", "--show-toplevel")
+    if answer is None:
+        raise GitProbeUnavailable("git did not answer the worktree probe")
+    if answer.returncode != 0:
+        return None
+    root = answer.stdout.strip()
+    if not root:
         return None
     return Path(root).resolve()
 
 
 def _git_probe(path: Path) -> dict[str, Any]:
+    """Report Git ownership of one path; ``None`` marks a question Git did not answer."""
+
     path = path.resolve()
-    repo_root = _git_worktree_root(path)
+    try:
+        repo_root = _git_worktree_root(path)
+    except GitProbeUnavailable:
+        return {"inside_worktree": None, "tracked": None, "ignored": None}
     if repo_root is None:
         return {"inside_worktree": False, "tracked": False, "ignored": False}
     try:
         rel_path = str(path.relative_to(repo_root))
     except ValueError:
         rel_path = str(path)
-    tracked = (
-        subprocess.run(
-            ["git", "-C", str(repo_root), "ls-files", "--error-unmatch", "--", rel_path],
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            capture_output=True,
-            check=False,
-        ).returncode
-        == 0
-    )
-    ignored = (
-        subprocess.run(
-            ["git", "-C", str(repo_root), "check-ignore", "-q", "--", rel_path],
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            capture_output=True,
-            check=False,
-        ).returncode
-        == 0
-    )
+
+    def _ask(*arguments: str) -> bool | None:
+        answer = _git_query(*arguments)
+        return None if answer is None else answer.returncode == 0
+
+    tracked = _ask("-C", str(repo_root), "ls-files", "--error-unmatch", "--", rel_path)
+    if tracked is None:
+        # Ownership is already unproven, and no caller can act on the ignore
+        # flag of a file whose ownership is unknown; the second read is wasted.
+        return {
+            "inside_worktree": True,
+            "root": str(repo_root),
+            "tracked": None,
+            "ignored": None,
+        }
+    ignored = _ask("-C", str(repo_root), "check-ignore", "-q", "--", rel_path)
     return {
         "inside_worktree": True,
         "root": str(repo_root),
@@ -899,6 +1023,13 @@ def _authority_source_diagnostics(
 
 
 def _tracked_scan_files(scan_root: Path) -> list[Path]:
+    """Enumerate the Git-owned files under one scan root.
+
+    Raises :class:`GitProbeUnavailable` when Git did not answer: an incomplete
+    enumeration would silently drop the files a pruned directory hides, which
+    is exactly what the caller cannot afford to miss.
+    """
+
     scan_root = scan_root.resolve()
     repo_root = _git_worktree_root(scan_root)
     if repo_root is None:
@@ -910,14 +1041,9 @@ def _tracked_scan_files(scan_root: Path) -> list[Path]:
     if not rel_root:
         rel_root = "."
 
-    tracked = subprocess.run(
-        ["git", "-C", str(repo_root), "ls-files", "-z", "--", rel_root],
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        capture_output=True,
-        check=False,
-    )
+    tracked = _git_query("-C", str(repo_root), "ls-files", "-z", "--", rel_root)
+    if tracked is None:
+        raise GitProbeUnavailable("git did not answer the tracked-file enumeration")
     if tracked.returncode != 0:
         return []
 
@@ -1021,14 +1147,24 @@ def _probe_directory_listing(
 
 
 def iter_scan_files(
-    scan_root: Path, *, unreadable_directories: list[tuple[Path, str]] | None = None
+    scan_root: Path,
+    *,
+    unreadable_directories: list[tuple[Path, str]] | None = None,
+    unavailable_git_probes: list[str] | None = None,
 ) -> list[Path]:
     scan_root = scan_root.resolve()
     if scan_root.is_file():
         return [scan_root]
     files: list[Path] = []
     unreadable = unreadable_directories if unreadable_directories is not None else []
-    tracked_files = _tracked_scan_files(scan_root)
+    try:
+        tracked_files = _tracked_scan_files(scan_root)
+    except GitProbeUnavailable:
+        # Walk what is reachable, but remember that the Git side of the
+        # enumeration is missing so the scan cannot be called clean.
+        if unavailable_git_probes is not None:
+            unavailable_git_probes.append(str(scan_root))
+        tracked_files = []
     # The root is probed even when dependency pruning skips the walk, so an
     # unreadable scan target cannot pass because of how it was named.
     _probe_directory_listing(scan_root, unreadable)
@@ -1084,6 +1220,7 @@ def scan_public_boundary(
     credential_reference_hits: list[str] = []
     unreadable_files: list[str] = []
     unreadable_directories: list[tuple[Path, str]] = []
+    unavailable_git_probes: list[str] = []
     missing_scan_roots: list[str] = []
     files: list[Path] = []
     file_roots: dict[Path, Path] = {}
@@ -1111,16 +1248,25 @@ def scan_public_boundary(
             # A narrow explicit input cannot erase private ancestry. A real
             # worktree is its own namespace, even beneath a private parent;
             # outside Git, retain the complete canonical ancestry.
-            classification_root = (
-                _git_worktree_root(resolved_scan_root) or Path(resolved_scan_root.anchor)
-            )
+            try:
+                classification_root = (
+                    _git_worktree_root(resolved_scan_root)
+                    or Path(resolved_scan_root.anchor)
+                )
+            except GitProbeUnavailable:
+                # The canonical ancestry is the wider answer: it can only add
+                # private state, never hide it.
+                classification_root = Path(resolved_scan_root.anchor)
+                unavailable_git_probes.append(str(resolved_scan_root))
         if _is_local_private_state_path(resolved_scan_root, classification_root):
             # Explicit outgoing selection cannot turn an ignored private file
             # or a pruned private directory into a successful empty scan.
             record_hit(f"{rel_or_abs(resolved_scan_root, classification_root)}: local_private_state")
             continue
         for file_path in iter_scan_files(
-            resolved_scan_root, unreadable_directories=unreadable_directories
+            resolved_scan_root,
+            unreadable_directories=unreadable_directories,
+            unavailable_git_probes=unavailable_git_probes,
         ):
             files.append(file_path)
             if _is_local_private_state_path(file_path, classification_root):
@@ -1138,10 +1284,25 @@ def scan_public_boundary(
         # Filtering precedes submission: a worker must never open untracked
         # local-private state. Policy, Git ownership and content classification
         # stay here, in the existing scan owner, not in the I/O adapter.
+        ownership_unavailable = False
         for path in files:
             root = file_roots.get(path, path)
             if path in private_files:
+                if ownership_unavailable:
+                    # One unanswered question already decides the scan; asking
+                    # again would only spend another budget on the same hang.
+                    unavailable_git_probes.append(rel_or_abs(path, root))
+                    skipped_private_state_files.append(rel_or_abs(path, root))
+                    continue
                 git = _git_probe(path)
+                if git.get("tracked") is None:
+                    ownership_unavailable = True
+                    # Git did not answer, so ownership is unproven. Private
+                    # state is still never opened, and the scan stops asking
+                    # once one answer is missing.
+                    unavailable_git_probes.append(rel_or_abs(path, root))
+                    skipped_private_state_files.append(rel_or_abs(path, root))
+                    continue
                 if not git.get("tracked"):
                     skipped_private_state_files.append(rel_or_abs(path, root))
                     if git.get("inside_worktree") and not git.get("ignored"):
@@ -1220,7 +1381,13 @@ def scan_public_boundary(
                     else:
                         record_hit(hit, blocking=rule.blocking)
     return {
-        "ok": not (blocking_hits or missing_scan_roots or unreadable_files or unreadable_directories),
+        "ok": not (
+            blocking_hits
+            or missing_scan_roots
+            or unreadable_files
+            or unreadable_directories
+            or unavailable_git_probes
+        ),
         "scan_roots": [str(path) for path in scan_roots],
         "files": len(files),
         "scanned_files": len(files) - len(skipped_private_state_files),
@@ -1233,6 +1400,9 @@ def scan_public_boundary(
             _unreadable_directory_labels(unreadable_directories, directory_roots)
         ),
         "missing_scan_roots": missing_scan_roots,
+        # A Git question that was not answered leaves the boundary unknown:
+        # this list keeps a partial answer from being reported as clean.
+        "unavailable_git_probes": sorted(set(unavailable_git_probes)),
         "allowed_hits": allowed_hits,
         "private_state_git_warnings": private_state_git_warnings,
         "policy": policy,
@@ -1414,16 +1584,23 @@ def check_contract(
             str(item) for item in boundary.get("unreadable_directories") or []
         ]
         unreadable_files = [str(item) for item in boundary.get("unreadable_files") or []]
+        unavailable_git_probes = [
+            str(item) for item in boundary.get("unavailable_git_probes") or []
+        ]
         boundary_warnings = [str(item) for item in boundary.get("warnings") or []]
         public_boundary_scan = {
             "state": "completed",
             "ok": bool(boundary.get("ok")) and not (
-                missing_scan_roots or unreadable_directories or unreadable_files
+                missing_scan_roots
+                or unreadable_directories
+                or unreadable_files
+                or unavailable_git_probes
             ),
             "scanned_files": int(boundary.get("scanned_files") or 0),
             "missing_scan_roots": missing_scan_roots,
             "unreadable_directories": unreadable_directories,
             "unreadable_files": unreadable_files,
+            "unavailable_git_probes": unavailable_git_probes,
             "warnings": boundary_warnings,
         }
         for missing_root in missing_scan_roots:
@@ -1440,6 +1617,12 @@ def check_contract(
             add_global_error(
                 "public_boundary_scan_file_unreadable",
                 f"scan file could not be read: {unreadable_file}",
+            )
+        for unavailable_probe in unavailable_git_probes:
+            add_global_error(
+                "public_boundary_scan_git_unavailable",
+                "Git could not answer ownership for: "
+                f"{unavailable_probe}",
             )
         if public_boundary_scan["ok"]:
             label = "completed with warnings" if boundary_warnings else "clean"

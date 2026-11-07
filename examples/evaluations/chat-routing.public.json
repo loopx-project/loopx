@@ -1,0 +1,88 @@
+{
+  "schema_version": "chat_intake_evaluation_v1",
+  "contexts": {
+    "topic": {
+      "scope": "manager",
+      "coverage": {"complete": true},
+      "fixture_boundary": "Synthetic directory, work, conversation and receipts; no live lookup, dispatch, adoption or cancellation.",
+      "goals": [{"goal_id": "cache-design", "activation_state": "active", "description": "Research cache-coherence and revise cache-rfc.md; return the revision to the original conversation.", "current_todos": [{"todo_id": "work-checks", "text": "Independently verify an unrelated transport patch.", "status": "open", "claimed_by": "generalist-2"}, {"todo_id": "work-cache", "text": "Research cache-coherence and revise cache-rfc.md.", "status": "open", "claimed_by": "topic-investigator"}]}],
+      "agent_directory": [{"goal_id": "cache-design", "agent_id": "generalist-2", "profile_role": "generalist", "scope_summary": "Independent patch verification and version checks.", "context_delivery": "allowed"}, {"goal_id": "cache-design", "agent_id": "topic-investigator", "profile_role": "generalist", "scope_summary": "Cache architecture research and RFC design.", "context_delivery": "allowed"}],
+      "recent_deliveries": [{"goal_id": "cache-design", "agent_id": "topic-investigator", "ref": "cache-study-v2", "recorded_at": "2026-01-02T09:00:00Z", "result": "Compared cache-coherence designs; cache-rfc.md revision remains unfinished."}, {"goal_id": "cache-design", "agent_id": "generalist-2", "ref": "transport-check-v1", "recorded_at": "2026-01-02T10:00:00Z", "result": "Verified unrelated transport patch."}],
+      "context_delegation": {"mode": "context_only", "targets": [{"goal_id": "cache-design", "agent_id": "generalist-2"}, {"goal_id": "cache-design", "agent_id": "topic-investigator"}]},
+      "conversation": [{"role": "user", "content": "Refine cache-rfc.md with the cache-coherence insight. Keep sources owner-only; return the result to the original conversation."}, {"role": "assistant", "content": "I sent that to generalist-2 because the role name matched. Receipt misroute-a proves delivery only; no recipient adoption or artifact revision was verified."}],
+      "handoff_receipts": [{"ref": "misroute-a", "goal_id": "cache-design", "agent_id": "generalist-2", "delivery": {"status": "delivered"}, "read": {"status": "not_recorded"}, "decision": {"status": "not_recorded"}}],
+      "current_constraints": ["Do not publish sources, change Todo/priority or interrupt unrelated work.", "Use the existing context-only path; no new execution or cancellation authority."]
+    },
+    "corrected": {
+      "scope": "manager",
+      "coverage": {"complete": true},
+      "fixture_boundary": "Synthetic directory, work, conversation and receipts; no live lookup, dispatch, adoption or cancellation.",
+      "goals": [{"goal_id": "cache-design", "activation_state": "active", "description": "Research cache-coherence and revise cache-rfc.md; return the revision to the original conversation.", "current_todos": [{"todo_id": "work-checks", "text": "Independently verify an unrelated transport patch.", "status": "open", "claimed_by": "generalist-2"}, {"todo_id": "work-cache", "text": "Research cache-coherence and revise cache-rfc.md.", "status": "open", "claimed_by": "topic-investigator"}]}],
+      "agent_directory": [{"goal_id": "cache-design", "agent_id": "generalist-2", "profile_role": "generalist", "scope_summary": "Independent patch verification and version checks.", "context_delivery": "allowed"}, {"goal_id": "cache-design", "agent_id": "topic-investigator", "profile_role": "generalist", "scope_summary": "Cache architecture research and RFC design.", "context_delivery": "allowed"}],
+      "recent_deliveries": [{"goal_id": "cache-design", "agent_id": "topic-investigator", "ref": "cache-study-v2", "recorded_at": "2026-01-02T09:00:00Z", "result": "Compared cache-coherence designs; cache-rfc.md revision remains unfinished."}, {"goal_id": "cache-design", "agent_id": "generalist-2", "ref": "transport-check-v1", "recorded_at": "2026-01-02T10:00:00Z", "result": "Verified unrelated transport patch."}],
+      "context_delegation": {"mode": "context_only", "targets": [{"goal_id": "cache-design", "agent_id": "generalist-2"}, {"goal_id": "cache-design", "agent_id": "topic-investigator"}]},
+      "conversation": [{"role": "user", "content": "Refine cache-rfc.md with the cache-coherence insight. Keep sources owner-only; return the result to the original conversation."}, {"role": "assistant", "content": "I sent that to generalist-2 because the role name matched. Receipt misroute-a proves delivery only; no recipient adoption or artifact revision was verified."}, {"role": "assistant", "content": "Corrected topic context was delivered in topic-correction-b. The old recipient has not received an ownership correction; actual effects remain unknown."}],
+      "handoff_receipts": [{"ref": "misroute-a", "goal_id": "cache-design", "agent_id": "generalist-2", "delivery": {"status": "delivered"}, "read": {"status": "not_recorded"}, "decision": {"status": "not_recorded"}}, {"ref": "topic-correction-b", "goal_id": "cache-design", "agent_id": "topic-investigator", "delivery": {"status": "delivered"}, "read": {"status": "not_recorded"}, "decision": {"status": "not_recorded"}}],
+      "current_constraints": ["Do not publish sources, change Todo/priority or interrupt unrelated work.", "Use the existing context-only path; no new execution or cancellation authority."]
+    },
+    "settled": {
+      "scope": "manager",
+      "coverage": {"complete": true},
+      "fixture_boundary": "Synthetic directory, work, conversation and receipts; no live lookup, dispatch, adoption or cancellation.",
+      "goals": [{"goal_id": "cache-design", "activation_state": "active", "description": "Research cache-coherence and revise cache-rfc.md; return the revision to the original conversation.", "current_todos": [{"todo_id": "work-checks", "text": "Independently verify an unrelated transport patch.", "status": "open", "claimed_by": "generalist-2"}, {"todo_id": "work-cache", "text": "Research cache-coherence and revise cache-rfc.md.", "status": "open", "claimed_by": "topic-investigator"}]}],
+      "agent_directory": [{"goal_id": "cache-design", "agent_id": "generalist-2", "profile_role": "generalist", "scope_summary": "Independent patch verification and version checks.", "context_delivery": "allowed"}, {"goal_id": "cache-design", "agent_id": "topic-investigator", "profile_role": "generalist", "scope_summary": "Cache architecture research and RFC design.", "context_delivery": "allowed"}],
+      "recent_deliveries": [{"goal_id": "cache-design", "agent_id": "topic-investigator", "ref": "cache-study-v2", "recorded_at": "2026-01-02T09:00:00Z", "result": "Compared cache-coherence designs; cache-rfc.md revision remains unfinished."}, {"goal_id": "cache-design", "agent_id": "generalist-2", "ref": "transport-check-v1", "recorded_at": "2026-01-02T10:00:00Z", "result": "Verified unrelated transport patch."}],
+      "context_delegation": {"mode": "context_only", "targets": [{"goal_id": "cache-design", "agent_id": "generalist-2"}, {"goal_id": "cache-design", "agent_id": "topic-investigator"}]},
+      "conversation": [{"role": "user", "content": "Refine cache-rfc.md with the cache-coherence insight. Keep sources owner-only; return the result to the original conversation."}, {"role": "assistant", "content": "I sent that to generalist-2 because the role name matched. Receipt misroute-a proves delivery only; no recipient adoption or artifact revision was verified."}, {"role": "assistant", "content": "Corrected topic context was delivered in topic-correction-b. The old recipient has not received an ownership correction; actual effects remain unknown."}, {"role": "assistant", "content": "ownership-correction-c tells the original recipient that topic-investigator owns this RFC, without claiming cancellation. Both corrections are delivered; adoption and RFC revision remain unverified."}],
+      "handoff_receipts": [{"ref": "misroute-a", "goal_id": "cache-design", "agent_id": "generalist-2", "delivery": {"status": "delivered"}, "read": {"status": "not_recorded"}, "decision": {"status": "not_recorded"}}, {"ref": "topic-correction-b", "goal_id": "cache-design", "agent_id": "topic-investigator", "delivery": {"status": "delivered"}, "read": {"status": "not_recorded"}, "decision": {"status": "not_recorded"}}, {"ref": "ownership-correction-c", "goal_id": "cache-design", "agent_id": "generalist-2", "delivery": {"status": "delivered"}, "read": {"status": "not_recorded"}, "decision": {"status": "not_recorded"}}],
+      "current_constraints": ["Do not publish sources, change Todo/priority or interrupt unrelated work.", "Use the existing context-only path; no new execution or cancellation authority."]
+    },
+    "ambiguous": {
+      "scope": "manager",
+      "coverage": {"complete": true},
+      "fixture_boundary": "Synthetic directory, work, conversation and receipts; no live lookup, dispatch, adoption or cancellation.",
+      "goals": [{"goal_id": "cache-design", "activation_state": "active", "description": "Research cache-coherence and revise cache-rfc.md; return the revision to the original conversation.", "current_todos": []}],
+      "agent_directory": [{"goal_id": "cache-design", "agent_id": "generalist-2", "profile_role": "generalist", "scope_summary": "Cache architecture research and RFC design.", "context_delivery": "allowed"}, {"goal_id": "cache-design", "agent_id": "topic-investigator", "profile_role": "generalist", "scope_summary": "Cache architecture research and RFC design.", "context_delivery": "allowed"}],
+      "recent_deliveries": [],
+      "context_delegation": {"mode": "context_only", "targets": [{"goal_id": "cache-design", "agent_id": "generalist-2"}, {"goal_id": "cache-design", "agent_id": "topic-investigator"}]},
+      "conversation": [],
+      "handoff_receipts": [],
+      "current_constraints": ["Do not publish sources, change Todo/priority or interrupt unrelated work.", "Use the existing context-only path; no new execution or cancellation authority."]
+    },
+    "ungranted": {
+      "scope": "manager",
+      "coverage": {"complete": true},
+      "fixture_boundary": "Synthetic directory, work, conversation and receipts; no live lookup, dispatch, adoption or cancellation.",
+      "goals": [{"goal_id": "cache-design", "activation_state": "active", "description": "Research cache-coherence and revise cache-rfc.md; return the revision to the original conversation.", "current_todos": [{"todo_id": "work-checks", "text": "Independently verify an unrelated transport patch.", "status": "open", "claimed_by": "generalist-2"}, {"todo_id": "work-cache", "text": "Research cache-coherence and revise cache-rfc.md.", "status": "open", "claimed_by": "topic-investigator"}]}],
+      "agent_directory": [{"goal_id": "cache-design", "agent_id": "generalist-2", "profile_role": "generalist", "scope_summary": "Independent patch verification and version checks.", "context_delivery": "allowed"}, {"goal_id": "cache-design", "agent_id": "topic-investigator", "profile_role": "generalist", "scope_summary": "Cache architecture research and RFC design.", "context_delivery": "not_granted"}],
+      "recent_deliveries": [{"goal_id": "cache-design", "agent_id": "topic-investigator", "ref": "cache-study-v2", "recorded_at": "2026-01-02T09:00:00Z", "result": "Compared cache-coherence designs; cache-rfc.md revision remains unfinished."}, {"goal_id": "cache-design", "agent_id": "generalist-2", "ref": "transport-check-v1", "recorded_at": "2026-01-02T10:00:00Z", "result": "Verified unrelated transport patch."}],
+      "context_delegation": {"mode": "context_only", "targets": [{"goal_id": "cache-design", "agent_id": "generalist-2"}]},
+      "conversation": [{"role": "user", "content": "Refine cache-rfc.md with the cache-coherence insight. Keep sources owner-only; return the result to the original conversation."}, {"role": "assistant", "content": "I sent that to generalist-2 because the role name matched. Receipt misroute-a proves delivery only; no recipient adoption or artifact revision was verified."}],
+      "handoff_receipts": [{"ref": "misroute-a", "goal_id": "cache-design", "agent_id": "generalist-2", "delivery": {"status": "delivered"}, "read": {"status": "not_recorded"}, "decision": {"status": "not_recorded"}}],
+      "current_constraints": ["Do not publish sources, change Todo/priority or interrupt unrelated work.", "Use the existing context-only path; no new execution or cancellation authority."]
+    },
+    "new-work": {
+      "scope": "manager",
+      "coverage": {"complete": true},
+      "fixture_boundary": "Synthetic directory, work, conversation and receipts; no live lookup, dispatch, adoption or cancellation.",
+      "goals": [{"goal_id": "cache-design", "activation_state": "active", "description": "Research cache-coherence and revise cache-rfc.md; return the revision to the original conversation.", "current_todos": []}],
+      "agent_directory": [{"goal_id": "cache-design", "agent_id": "generalist-2", "profile_role": "generalist", "scope_summary": "Independent patch verification and version checks.", "context_delivery": "allowed"}, {"goal_id": "cache-design", "agent_id": "topic-investigator", "profile_role": "generalist", "scope_summary": "Cache architecture research and RFC design.", "context_delivery": "allowed"}],
+      "recent_deliveries": [],
+      "context_delegation": {"mode": "context_only", "targets": [{"goal_id": "cache-design", "agent_id": "generalist-2"}, {"goal_id": "cache-design", "agent_id": "topic-investigator"}]},
+      "conversation": [],
+      "handoff_receipts": [],
+      "current_constraints": ["Do not publish sources, change Todo/priority or interrupt unrelated work.", "Use the existing context-only path; no new execution or cancellation authority."]
+    }
+  },
+  "cases": [
+    {"id": "recent-topic-owner", "context_ref": "topic", "request": "把这个理解交给最近研究这个主题的自由人，继续修订现有 RFC。", "expected": "handoff", "target": {"goal_id": "cache-design", "agent_id": "topic-investigator"}, "required_handoff_refs": ["cache-rfc.md", "cache-coherence", "owner-only", "original conversation"]},
+    {"id": "challenge-old-route", "context_ref": "topic", "request": "先前的接收人选对了吗？核对当前主题研究归属后，把这项修订交给正确负责人。", "expected": "handoff", "target": {"goal_id": "cache-design", "agent_id": "topic-investigator"}, "required_handoff_refs": ["cache-rfc.md", "misroute-a", "owner-only", "original conversation"]},
+    {"id": "explicit-pair-overrides-alias", "context_ref": "topic", "request": "This is a separate independent verification request. Send it specifically to cache-design/generalist-2; retain topic-investigator as the RFC revision owner.", "expected": "handoff", "target": {"goal_id": "cache-design", "agent_id": "generalist-2"}, "required_handoff_refs": ["cache-rfc.md", "topic-investigator", "independent verification"]},
+    {"id": "standalone-topic-explanation", "context_ref": "topic", "request": "只解释 cache-coherence 的含义；这次不修改 RFC，也不交接。", "expected": "answer"},
+    {"id": "correct-old-recipient-only", "context_ref": "corrected", "request": "正确交接已经送达，不用重发；把误投的归属更正告诉原接收人，别影响其无关工作。", "expected": "handoff", "target": {"goal_id": "cache-design", "agent_id": "generalist-2"}, "required_handoff_refs": ["misroute-a", "topic-correction-b", "topic-investigator", "unrelated work"]},
+    {"id": "reuse-both-delivered-corrections", "context_ref": "settled", "request": "这次误派和纠正现在到哪一步了？先核回执，已送达的不要重复发。", "expected": "answer", "required_evidence_refs": ["topic-correction-b", "ownership-correction-c"]},
+    {"id": "genuinely-ambiguous-topic", "context_ref": "ambiguous", "request": "让那个自由人研究 cache-coherence 并修订 RFC。", "expected": "answer"},
+    {"id": "resolved-owner-without-grant", "context_ref": "ungranted", "request": "把 RFC 修订交给最近研究这条线的自由人。", "expected": "answer", "required_evidence_refs": ["topic-investigator"]},
+    {"id": "qualified-new-work-without-todo", "context_ref": "new-work", "request": "Choose a qualified cache architecture researcher for a new cache-coherence study and cache-rfc.md revision. No existing assignment is being claimed.", "expected": "handoff", "target": {"goal_id": "cache-design", "agent_id": "topic-investigator"}, "required_handoff_refs": ["cache-rfc.md", "new study", "original conversation"]}
+  ]
+}

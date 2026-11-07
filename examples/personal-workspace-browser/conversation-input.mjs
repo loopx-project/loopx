@@ -75,9 +75,14 @@ export const conversationInputScenario = {
       await goal.getByLabel("完成标准", { exact: true }).fill("给出数据来源和可读报告");
       await goal.getByLabel("执行边界（可选）", { exact: true }).fill("每天研究不代表要创建监控");
       await goal.getByLabel("完成标准", { exact: true }).fill("数".repeat(400));
-      await goal.getByRole("status").waitFor();
+      const firstTaskLimit = goal.getByRole("status").filter({hasText: /首个任务 \d+\/400/});
+      await firstTaskLimit.waitFor();
+      const savedCount = await goal.getByRole("status", {name: "合计保存字数", exact: true}).innerText();
+      assert.match(savedCount, /^\d+ \/ 1000$/);
+      assert.ok(Number.parseInt(savedCount, 10) < 1000, "The first-task limit applies even when the combined Goal fits");
       assert.equal(await goal.getByRole("button", { name: "检查配置" }).isDisabled(), true, "Over-limit Goal fields reached preview");
       await goal.getByLabel("完成标准", { exact: true }).fill("给出数据来源和可读报告");
+      await firstTaskLimit.waitFor({state: "hidden"});
       api.failNextActionPreview = true;
       await goal.getByRole("button", { name: "检查配置" }).click();
       await goal.getByRole("alert").waitFor();

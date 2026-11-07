@@ -13,6 +13,7 @@ import {
 import {
   requireBoolean,
   requireInteger,
+  jsonObject,
   requireJsonObject as requiredObject,
   requireNonEmptyString as requiredString,
   requireStringArray,
@@ -22,13 +23,33 @@ import { projectPendingCapabilityIntent } from "./work_items/pending_capability_
 
 import {exploreResultWritebackAffordance} from "./capabilities/explore_result_writeback.ts";
 import {exploreReusableContextPaths} from "./capabilities/explore_turn_context.ts";
+import {agentPreferenceReusableContextPaths} from "./capabilities/agent_preferences.ts";
 
 /** The registered owner selects reusable read-model subtrees. Unknown hooks
  * remain complete; payloads cannot nominate their own execution fields. */
-export function reusableTurnContextPaths(source: JsonObject): (string | number)[][] {
-  return source.source === "turn_start_capability_hook" && source.hook_id === "explore.turn_context"
-    && source.capability_id === "explore" && source.kind === "explore_turn_context"
-    ? exploreReusableContextPaths(source.content as JsonObject | undefined) : [];
+export function reusableTurnContext(source: JsonObject, binding: JsonObject): {
+  identity: unknown[]; paths: (string | number)[][];
+} | null {
+  const content = jsonObject(source.content);
+  if (source.source !== "turn_start_capability_hook" || content?.ok !== true) return null;
+  let paths: (string | number)[][], goal: unknown, agent: unknown;
+  if (source.hook_id === "explore.turn_context" && source.capability_id === "explore"
+      && source.kind === "explore_turn_context") {
+    paths = exploreReusableContextPaths(content);
+    goal = content.goal_id; agent = content.agent_id;
+  } else if (source.hook_id === "semantic_preference.agent_context" && source.capability_id === "semantic-preference"
+      && source.kind === "agent_preferences") {
+    // This existing hook reads the guard's exact Goal/Agent but has no scope
+    // fields in its body. The validated capture already owns that binding;
+    // keep ordinary/default-off producer output unchanged. Never infer scope
+    // from prose, commands or an unregistered hook.
+    goal = binding.goal_id; agent = binding.agent_id;
+    if ((content.goal_id !== undefined && content.goal_id !== goal)
+        || (content.agent_id !== undefined && content.agent_id !== agent)) return null;
+    paths = agentPreferenceReusableContextPaths(content);
+  } else return null;
+  return paths.length && typeof goal === "string" && typeof agent === "string"
+    ? {identity: [source.source, source.hook_id, source.capability_id, goal, agent, content.todo_id ?? null], paths} : null;
 }
 
 export const CAPABILITY_HOOK_REGISTRATION_SCHEMA_VERSION =

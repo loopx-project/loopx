@@ -37,6 +37,7 @@ from loopx.slash_command_install import materialize_loopx_entry_skill
 from tests.control_plane.canonical_authority_fixture import (
     initialize_canonical_authority,
 )
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -458,7 +459,7 @@ def _fresh_host_quota_read(
     runtime: Path,
     registry: Path,
 ) -> dict:
-    return run_json_cli(
+    payload = run_json_cli(
         "quota",
         "should-run",
         "--goal-id",
@@ -470,6 +471,7 @@ def _fresh_host_quota_read(
         registry_path=registry,
         runtime_root=runtime,
     )
+    return read_cli_policy_payload(json.dumps(payload), returncode=payload["_returncode"])
 
 
 def test_fresh_host_reconstructs_frontier_from_durable_loopx_state(

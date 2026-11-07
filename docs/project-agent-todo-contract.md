@@ -591,6 +591,27 @@ Todo, in either personal or Goal report scope; it does not replace shared prose.
 `--next-action-basis` optionally rejects an edit planned from an older source
 read. If the basis is stale, read the current task/step and retry; if no eligible
 task is available, resolve its existing lifecycle or routing boundary first.
+A later explicit `--recommended-action` from that same Agent retires reuse of
+its older bound step. The selected Todo and its authority remain unchanged;
+another Agent's guidance does not retire the step, and ordinary derived progress
+observations preserve it. Write a fresh `--next-action` if a new task-bound step
+is needed after the explicit guidance.
+
+The same Agent's explicit retirement also remains part of the Next Action read
+fence. The typed owner hashes its existing journal source identity, so a delayed
+initial basis cannot become valid again, and repeated wording still names distinct
+committed decisions. This is an ephemeral source-facts fence, not a new persisted
+step or an execution grant; a fresh read can establish the next valid step.
+Full and retained history preserve that same decision and source identity beyond
+the recent display window. Status and quota reads therefore provide the same
+current basis for the next step write.
+
+同一 Agent 的显式步骤退休也参与 Next Action 读取依据。typed owner 对已有 journal
+来源身份计算摘要，旧的初始依据不能再次有效；即使指导文字重复，独立提交的决策也不
+混为同一依据。这不是新增持久化步骤或执行权限，新读取仍可合法写入下一步。
+完整历史与保留历史在最近展示窗口之外也保留同一决策及其来源身份，status 与 quota
+读取因而为下一步写入提供一致的当前依据。
+
 Native Turn host `next_action` remains follow-up guidance in its durable result,
 not this explicit task-step edit: completion or repair may leave no runnable
 current task. See [Next Action writeback](quota-allocation.md) for attribution,
@@ -930,6 +951,37 @@ loopx todo update \
   --resume-when todo_done:<blocking_todo_id> \
   --reason "<public-safe deferred rationale>"
 ```
+
+For a known future eligibility time, continue useful independent work first.
+When only the timed wait remains, save recoverable progress and defer the Todo
+using the timestamp supplied by the current contract or observed service:
+
+```bash
+loopx todo update \
+  --goal-id <goal-id> \
+  --todo-id <todo_id> \
+  --agent-id <registered-agent> \
+  --status deferred \
+  --resume-when resume_at:<timezone-aware-rfc3339-timestamp> \
+  --reason "Await the observed eligibility time"
+```
+
+The ordinary lifecycle update retires the applicable execution; no separate
+lease operation is needed. Settle any validated work already performed under
+the original Turn identity, then return control to the host scheduler. Waiting
+alone is not progress or a reason to spend a slot. Do not keep a model invocation
+alive with repeated sleeps, clock reads, or unchanged progress messages. The
+scheduler can recheck current state without waking the model while the wait is
+pending. At the due time, follow the projected resume/replan and fresh admission;
+the timestamp does not itself authorize execution, reset a service cooldown,
+extend a budget, or override an explicit stop. Unknown-time observations retain
+their projected monitor contract; do not invent a retry time or successor.
+
+已知恢复时间且没有可推进的独立工作时，保存进展，通过普通 Todo 更新设置
+`deferred` 和 `resume_at`，按原 Turn 身份完成已有工作的结算，再交还宿主调度器。
+不需要单独管理租约，也不应让模型反复睡眠、读时钟或播报无变化的进度。等待本身不
+算成果、不扣额；到期只触发生命周期恢复判断，仍须按当前准入、预算和停止条件执行。
+未知时间的外部反馈沿用已有 monitor 合同，不臆造时钟或后继任务。
 
 When an open advancement slice is waiting for a monitor observation, keep it
 visible and atomically bind both the wait and an independent runnable
@@ -1362,3 +1414,16 @@ inventory，不依赖摘要条数或 Markdown。补 evidence 不会重新设置�
 显式执行 proof 仍严格校验。Monitor 规划/观察、ownership、routing、capability 与终态
 操作不在此 intent 内。缺失 display 不阻止 canonical 更新；提交后的正常投影恢复
 托管 Todo 展示。不支持的操作不会回退 Markdown，也不自动切换 provider 或 promotion。
+
+### Scoped User context source reads
+
+Inline work context obtains its scoped open User Todos in one canonical query.
+The existing typed reader filters scope and status before restoring complete
+selected bodies from that same snapshot. Its internal `full_text` read option
+changes presentation only; ordinary CLI inventories remain bounded, and exact
+reads, authority failures and execution admission retain their existing rules.
+It does not cache an earlier revision or grant permission from a read.
+
+内联工作上下文从同一份 canonical 快照筛选当前 Agent 的开放 User Todo，并恢复完整
+正文，避免清单之后再逐条重读。内部 `full_text` 仅影响正文展示；普通 CLI 清单仍有界，
+不缓存旧版本，也不改变精确读取、权限拒绝或执行准入规则。

@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import type { GoalDraft } from "../../../../../../loopx/control_plane/collaboration/goal_draft.js";
+import {goalDraftReady} from "./goal-create-request";
 import { useWorkspaceI18n } from "./i18n";
 import "./goal-draft-card.css";
 
@@ -14,7 +15,7 @@ export function GoalDraftCard({ draft, draftId, onReview, onSuggest }: {
   const pending = useRef(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const ready = !draft.question && Boolean(draft.completion_criteria.trim());
+  const ready = goalDraftReady(draft);
   async function review(edit = false) {
     if (!onReview || pending.current) return;
     pending.current = true;

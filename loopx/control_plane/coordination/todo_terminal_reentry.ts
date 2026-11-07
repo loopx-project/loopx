@@ -1,4 +1,4 @@
-import {settlementIdentity, type JsonObject} from "../effect_program.ts";
+import {settlementIdentity, settlementIdentityPayload, type JsonObject} from "../effect_program.ts";
 import {jsonObject} from "../runtime_decode.ts";
 import {AuthorityStoreProtocolError, canonicalAuthoritySha256} from "./authority_store_codec.ts";
 import type {CoordinationTodoTerminalLifecycleInput} from "./todo_terminal_lifecycle.ts";
@@ -19,7 +19,7 @@ export function requiresReentrySettlement(input: CoordinationTodoTerminalLifecyc
 /** Resolve historical quota identity from its durable receipt, never by parsing
  * an opaque completion key or treating missing history as unscoped work. */
 export async function verifyReentrySettlement(runtimeRoot: string,
-  input: CoordinationTodoTerminalLifecycleInput): Promise<void> {
+  input: CoordinationTodoTerminalLifecycleInput): Promise<JsonObject> {
   const {readQuotaSettlementSnapshot, readQuotaSettlementFromSnapshot,
     QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA} = await import("../quota/settlement_readback.ts");
   const snapshot = await readQuotaSettlementSnapshot(runtimeRoot, input.goal_id);
@@ -43,6 +43,8 @@ export async function verifyReentrySettlement(runtimeRoot: string,
   if (jsonObject(jsonObject(readback.settlement)?.payload)?.ok !== true) {
     throw new AuthorityStoreProtocolError("Lifecycle closeout requires matching writeback and quota spend receipts");
   }
+  return settlementIdentityPayload({goal_id: input.goal_id, agent_id: input.actor_agent_id,
+    todo_id: input.todo_id, turn_instance_id: turn});
 }
 
 /** A migrated completion is already authoritative. Close only its continuation;

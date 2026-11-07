@@ -58,6 +58,15 @@ helper delivery neither launches trials nor changes frozen historical arms.
 
 ## Current work
 
+- [Compare a local proxy with released scores](../docs/reference/benchmark-behavior-findings.md#compare-a-local-proxy-with-released-scores) covers source matching, missing feedback and the later-submission control for an offline study.
+
+- [FrontierCS-2 compatibility repair v2](frontiercs2/README.md) provides an opt-in
+  patch and synthetic HTTP/client/Docker checks for the frozen single-host v1
+  sources. It preserves historical attribution and does not launch a model or
+  native-grader trial.
+- [Native Claude Code](runtime/NATIVE_CLAUDE.md) provides an independent,
+  explicitly pinned SForge worker with native Stop hooks and session recovery.
+  Model, tool, Goal/Plan and submission qualification precedes long trials.
 - [Execution observations through ordinary Goal planning](runtime/EXECUTION_OBSERVATIONS.md)
   covers independent local measurements with ordinary Goal/Todo planning and
   stride selection, complete initial Goal retention, and migration from the
@@ -133,6 +142,11 @@ preserved for inspection; the companion notice governs their current evidence
 status. Neither archive category is the architecture for new work or grants
 runner, verifier, submission, or publication authority.
 
+The [FrontierCS-2 single-host v1 archive note](frontiercs2-single-host-versions.md)
+registers the frozen native-client, HTTP bridge, Docker transport and verifier
+wrapper used by a one-task four-arm pilot. The companion note links the separate
+data release, dependencies, read-only identity check and qualification limits.
+
 ## Matched model provider routing
 
 For a custom Responses-compatible model endpoint, set `OPENAI_BASE_URL` and
@@ -146,11 +160,32 @@ still owns endpoint access, actual model/tool qualification and private evidence
 
 With `OPENAI_BASE_URL` unset, login-file behavior is unchanged, including the
 required `CODEX_AUTH_JSON_PATH`; an ambient API key alone does not select the
-custom route. Change routes only between fresh attempts. Checkpoint continuation
-must retain the captured endpoint/configuration and supply fresh credentials
-externally. This routing repair enables matched experiments under the
+custom route. Change providers only between separately admitted attempts.
+Checkpoint continuation retains the sealed source configuration and supplies
+fresh credentials externally. For a fresh SForge receiver, the Host binds its
+current credential-gateway URL before native session admission; an ephemeral
+gateway port is transport, not a reason to reuse a dead source route. The runner
+renders the destination with the ordinary worker's settings owner and verifies
+that only this route and any explicitly selected model/effort differ. Both full
+configuration digests and session profiles remain bound to the new receiver.
+Ordinary within-trial configuration changes still reject. Endpoint access and
+the same upstream provider remain the operator's separately verified contract;
+a URL or configuration digest does not prove provider identity or quality.
+This routing repair enables matched experiments under the
 [long-horizon research contract](../docs/architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.md);
 it establishes neither sustained operation nor a solver-quality improvement.
+
+When the runner, native judge and credential gateway run **inside the Docker
+VM**, pass `--docker-host-bridge` to every matched arm. Some VM runtimes map
+Docker's `host-gateway` alias to the desktop host, where that gateway is not
+listening. This explicit option pins `host.docker.internal` to the default
+bridge's inspected IPv4 gateway, matching the native firewall's host-service
+endpoints. A missing or ambiguous IPv4 gateway fails before container creation;
+it never guesses a fixed subnet. All services using that alias must be reachable
+on the bridge. Omit the option when services run on the desktop host or another
+topology; omitted behavior is unchanged. Select it only for new attempts and
+retain the setting in each arm's runtime receipt. It changes routing, not
+credentials, allowed ports, task input or feedback policy.
 
 ## Inert checkpoint capture
 
@@ -185,7 +220,8 @@ name is already declared; source-path deduplication and byte witnesses still app
 The destination must be a new direct child of the trial log owner's
 `checkpoints` directory. Capture runs after a successful execute wake's original
 settlement, before the next wake. It uses the remaining phase budget with a
-30-second capture ceiling, preserves SQLite's committed WAL through the existing
+30-second capture ceiling (90 seconds for the complete controller handoff below),
+preserves SQLite's committed WAL through the existing
 backup owner, rejects observed source changes/symlinks and never overwrites a
 destination. Capture failures are recorded separately in the wake receipt;
 they do not replay work or change its settled outcome. The ceiling bounds
@@ -213,6 +249,56 @@ retain any existing crash diagnostic outside the declared participants before
 requesting a new point. Omit the checkpoint declaration on a new worker to
 retain ordinary launch behavior. This is file/session reconstruction, not
 process-memory recovery or permission to inspect crash memory.
+
+For an explicitly requested **complete capture after settled work**, omit
+`trigger`, use a fresh direct-child `destination` as above, and include all four
+flags: `"native_session": true`, `"loopx_state": true`,
+`"evaluation_opportunity": true`, and `"controller_handoff": true`. Pair the
+request with the existing controller file and native feedback. The native tool
+must finish its original Turn settlement before returning; the worker then
+captures the completed native cursor, canonical research context and declared
+workspace, and the external controller freezes their writers while capturing
+native opportunity, incumbent and the original phase clock. This does not admit
+a replan, interrupt the source or spend another work slot. An unsettled wake
+refuses capture. The preparation and writer barrier share the original
+90-second window, capped by the original phase; post-release sealing uses the
+existing bounded completion allowance within that phase. Failure keeps the
+source's settled outcome and records a missed point. Each destination is attempted
+once, including failures or uncertain replies: a later wake cannot replace that
+point. Its original wake retains an immutable declaration witness before the
+artifact-side attempt index is written, so index permission recovery cannot
+erase the missed point. A separately declared new point needs a fresh destination. An exhausted
+original phase rejects before reading the declaration or any source. Omitting the declaration
+keeps ordinary execution unchanged; no new operator trigger is accepted.
+
+The joint qualification command below accepts `--capture-boundary settled_work`
+to exercise this source through the actual worker and controller, fresh ordinary
+and stride receivers, and another full capture/receiver. Its default remains
+`fresh_replan`. Both use deterministic local inference and synthetic native
+feedback: they qualify mechanical reconstruction and adoption, not scientific
+benefit or authorization to stop a live campaign.
+
+To request **one explicit settled-work handoff alongside normal replan capture**,
+keep `trigger: "fresh_replan"` and the checkpoint-root `destination`, and add:
+
+```json
+"settled_work_capture_once": {
+  "destination": "/logs/agent/checkpoints/upgrade-handoff",
+  "purpose": "Explicit upgrade handoff"
+}
+```
+
+The handoff inherits the declared components and participant flags. It waits for
+a successful execute wake with its original settled Turn and unchanged request;
+restored-history gates still apply. It records its own `checkpoint_handoff`
+result without replacing the pre-replan result. A missed or uncertain attempt
+is consumed, including when its artifact index is unavailable. Later work cannot
+backfill it. Normal distinct replan captures continue at the configured cadence.
+Omit this field to retain the existing behavior. Use it only for a necessary
+operator-declared handoff, account for its one additional capture within the
+original phase, and do not turn it into per-wake captures or a preparation Todo.
+The joint qualifier's `--capture-boundary settled_once` exercises this path with
+the same real native session, SQLite state, controller and fresh receivers.
 
 For pre-decision capture at a **fresh replan projected at the start of a heartbeat
 wake**, add `"trigger": "fresh_replan"` and set `destination` to the trial's
@@ -396,30 +482,61 @@ python -m benchmark.edgebench.checkpoint_judge --checkpoint-capture \
   --tasks-dir /path/to/tasks --log-dir /path/to/private-run-logs
 ```
 
-The supported public checkpoint provider is the compatibility fork at
-[`071a884012754127f28f5b84be10f533a42db527`](https://github.com/loopx-agent/EdgeBench/commit/071a884012754127f28f5b84be10f533a42db527).
-It contains `sforge.harness.checkpoint` and the native
-`create_app(..., checkpoints=True)` seam used by the controller below. The earlier
-`0e20fb499ee248f012d6467c00b3dec00a29fe85` compatibility pin and upstream
-`sforge==1.1.0` do not contain that API and cannot qualify joint continuation.
-Enabling capture against an unsupported provider fails before adding routes.
-This is pinned proposed source, not an upstream release. From this LoopX checkout,
-prepare an isolated Python 3.12 environment and verify the imported API:
+Select the checkpoint provider through the same
+[shared EdgeBench source protocol](edgebench/README.md#select-and-freeze-the-native-provider)
+as the workers and judge. A new default qualification cohort fetches the reviewed
+integration commit paired with the native compatibility patch under
+that protocol; its `.edgebench-source/receipt.json` records the effective provider
+commit, upstream revision and patch digest. Existing cohorts remain frozen.
+Patch representation changes receive a new digest and effective commit even
+when the provider tree is unchanged; the original frozen bytes and provenance
+remain independently verifiable for an older cohort.
+An explicit source selection uses unmodified provider code and may not include
+the fix; follow the linked protocol when qualifying or replaying a known source.
+
+The provider must expose `sforge.harness.checkpoint` and native
+`create_app(..., checkpoints=True)`. API presence alone does not qualify
+continuation: a released result with a non-finite score or nested metric must
+remain capturable without changing native ranking, history or consumed rounds.
+The controller transports native v1 and v2 manifests and verifies their bound
+bytes; the provider owns non-finite encoding and restoration. New default cohorts
+receive this fix through the bundled compatibility patch. Updating the LoopX
+runner alone does not change an older cohort's frozen provider.
+Run the HTTP continuity regression below against the selected source before
+using it for a new cohort; an older provider can expose the API and still fail
+this regression. From this LoopX checkout:
 
 ```sh
 CKPT_PROVIDER_ROOT=$(mktemp -d)
-git clone https://github.com/loopx-agent/EdgeBench.git "$CKPT_PROVIDER_ROOT/provider"
-git -C "$CKPT_PROVIDER_ROOT/provider" checkout --detach 071a884012754127f28f5b84be10f533a42db527
+python -m benchmark.edgebench.source --log-dir "$CKPT_PROVIDER_ROOT/cohort"
 uv venv --python 3.12 "$CKPT_PROVIDER_ROOT/venv"
 uv pip install --python "$CKPT_PROVIDER_ROOT/venv/bin/python" \
-  -e '.[test]' -e "$CKPT_PROVIDER_ROOT/provider" 'httpx>=0.28,<1'
-"$CKPT_PROVIDER_ROOT/venv/bin/python" -c 'import inspect,sforge,loopx,sforge.harness.checkpoint; from sforge.harness.judge_server import create_app; assert "checkpoints" in inspect.signature(create_app).parameters; print(sforge.__file__); print(loopx.__file__)'
-"$CKPT_PROVIDER_ROOT/venv/bin/python" -m pytest -q benchmark/tests/test_checkpoint_judge.py
+  -e '.[test]' -e "$CKPT_PROVIDER_ROOT/cohort/.edgebench-source/checkout" 'httpx>=0.28,<1'
+LOOPX_EDGEBENCH_SOURCE_RECEIPT="$CKPT_PROVIDER_ROOT/cohort/.edgebench-source/receipt.json" \
+  "$CKPT_PROVIDER_ROOT/venv/bin/python" - <<'PY'
+import inspect
+import json
+import sforge.harness.checkpoint
+from benchmark.edgebench.source import active_source_receipt
+from sforge.harness.judge_server import create_app
+assert "checkpoints" in inspect.signature(create_app).parameters
+print(json.dumps(active_source_receipt(), indent=2))
+PY
+LOOPX_EDGEBENCH_SOURCE_RECEIPT="$CKPT_PROVIDER_ROOT/cohort/.edgebench-source/receipt.json" \
+  "$CKPT_PROVIDER_ROOT/venv/bin/python" -m pytest -q \
+  benchmark/tests/test_checkpoint_judge.py \
+  benchmark/tests/test_checkpoint_controller.py::test_native_controller_transport_preserves_original_point_and_fresh_authority \
+  benchmark/tests/test_checkpoint_controller.py::test_native_controller_transport_retains_nonfinite_released_results
 # Linux with an owned disposable Docker daemon; grades only synthetic fixtures.
 LOOPX_EDGEBENCH_DOCKER_SMOKE=1 "$CKPT_PROVIDER_ROOT/venv/bin/python" -m pytest -q \
   benchmark/tests/test_edgebench_feedback_docker.py::test_checkpoint_opportunity_uses_native_admission_and_real_grade
 ```
 
+The HTTP regression uses synthetic grading and a synthetic backend, with the real
+native HTTP service and LoopX capture/export/restore transport. It retains a
+finite incumbent beside a partial non-finite result, preserves nested native
+values and consumed opportunities, and accepts the next eligible submission
+without mutating the source. It does not run a model, Docker or benchmark task.
 The Docker journey checks a real grade, remaining rounds/cooldown, incumbent bytes,
 and the cold-registration counterexample; it does not restore evaluator authority.
 Native session qualification is separate: the tested Host is `codex-cli 0.160.0`.
@@ -467,6 +584,18 @@ and a matching capture digest; source movement requires a new owned boundary.
 The local `sforge_checkpoint_opportunity_v0`
 artifact records these facts; it grants no restored admission. Disabling capture
 means omitting both the judge flag and worker declaration option on a new run.
+
+Finite opportunity responses and saved participants keep that existing JSON
+shape. Released history/results containing non-finite numbers use the explicit
+[`sforge_nonfinite_json: 1` envelope](edgebench/README.md#feedback-protocol-new-run-default-native)
+over the same logical artifact. The client decodes it before checking the
+incumbent; checkpoint capture saves it through the same lossless codec.
+Only released result fields may contain encoded numbers: opportunity clocks,
+round counters and authority fields retain their original strict representation.
+The archive binding covers the canonical encoded state, including numeric kinds,
+so repeated NaN reads retain a binding and changed released data invalidates it.
+Use `benchmark.runtime.sforge_json.loads` for saved participant readback. This
+transport neither changes native selection nor qualifies continued execution.
 
 For an isolated single-Goal trial, `"loopx_state": true` adds the existing
 state-backup owner's inventory: registered active state, project research state,
@@ -686,6 +815,13 @@ later files with an older native point. Missing paths, archive links, traversal 
 Declare only the intended private code/state stores: a whole home can contain
 credentials, and neither archive filtering nor a freeze is privacy certification.
 
+Supervisor failure receipts retain the exception-class `error_kind`. Failures
+from the managed Effect runtime additionally expose `runtime_failure.error_kind`
+and `runtime_failure.diagnostic_code`, without copying the error message or raw
+provider response into the worker reply. An expired artifact capture window is
+`request_rejected` / `checkpoint_capture_window_closed`. These diagnostics do not
+retry the capture, extend its deadline or grant execution authority.
+
 This explicit command produces an **inert joint file snapshot**, still
 `research_point_qualified=false`. It does not snapshot process memory, freeze
 external writers or activate canonical research state. Ordinary native restore
@@ -782,12 +918,36 @@ docker run --rm --platform linux/amd64 --user "$(id -u):$(id -g)" \
 # Set these to the explicitly prepared Linux amd64 binaries.
 CKPT_GUEST_CODEX=/absolute/path/to/codex
 CKPT_GUEST_NODE=/absolute/path/to/node
+# Freeze this explicit pin in the qualification plan before invocation.
+CKPT_LOOPX_REVISION=$(git rev-parse HEAD)
 "$CKPT_PROVIDER_ROOT/venv/bin/python" -m benchmark.tests.qualify_checkpoint_joint \
+  --source-revision "$CKPT_LOOPX_REVISION" \
   --provider-source "$CKPT_PROVIDER_ROOT/provider" \
   --native-binary "$CKPT_GUEST_CODEX" --guest-node "$CKPT_GUEST_NODE" \
   --guest-dependencies "$CKPT_PROVIDER_ROOT/guest-deps" \
   --output "$CKPT_PROVIDER_ROOT/joint-result"
 ```
+
+The command requires the caller's full LoopX commit SHA and verifies the actual
+import origins of LoopX, benchmark and test modules before creating output or
+contacting Docker, and again before writing a passing result. Run from the
+intended checkout: setting `PYTHONPATH` alone cannot override Python's current
+working directory or replace modules already loaded from another worktree.
+A rejected pin, dirty tree or mixed import is an unqualified attempt; it must
+not be attributed to the intended revision. These checks do not qualify the
+native provider, receiver behavior or scientific outcomes by themselves.
+
+Pass `--context-delivery on` with a supported native hook host (Codex CLI
+`0.162.1`) to qualify the opt-in transport in the same joint path. The source
+must actually deliver a complete full packet and later deltas across worker
+wakes; every fresh receiver must begin with a complete current full packet.
+The static inference follows model-visible page cursors, and a separate byte-map
+oracle checks complete delivery and retained delta bases before candidate work.
+This joint qualifier deliberately retains its explicit `off` control by default;
+new benchmark heartbeat workers default on and can select `--context-delivery off`.
+Do not mutate a frozen trial to adopt that changed default.
+Neither qualifier mode measures paid inference, task quality or
+fees; reusing a point still does not count its source test as passed in this run.
 
 The public fixture runs six actual native work wakes, captures the pending
 pre-decision guard and continues the source; the ordinary and stride receivers
@@ -1020,35 +1180,42 @@ controller 文件及 handoff 开关即可关闭；移除 checkpoint 请求关闭
 
 The native heartbeat launcher accepts a complete point through
 `--restore-checkpoint POINT --restore-sha256 SHA --restore-config CONFIG
---restore-goal NEW_GOAL --restore-agent NEW_AGENT --restore-source-todo SOURCE_TODO`.
+--restore-goal SOURCE_GOAL --restore-agent SOURCE_AGENT --restore-source-todo SOURCE_TODO`.
 All six inputs are required together. Keep the existing native
 `--eval-interval 0`, full `--capture-before-replan` handoff and
 `--checkpoint-controller-file` configuration. The native provider must expose
 `RestoredRegistration`; an older provider fails instead of cold-registering.
 
-This adapter composes existing artifact, Codex session, Todo-continuation and
+This adapter composes existing artifact, canonical state, Codex session and
 native-judge owners. A captured parent directory may contain the native task
 workspace: the receiver resolves exactly one physical task subtree from the
 verified component and restores only that subtree. Captured siblings remain
 inert unless separately selected as research data; absent, ambiguous or
 noncanonical roots reject before the receiver workspace changes.
 
-It preserves the captured workspace and effective Codex configuration, admits
-a distinct native session and fresh Goal/Agent, and adopts
-retained research as evidence on a current preparation Todo. Historical registry,
-claims, leases and settlement records are not installed as current authority.
-If the sealed context contains Explore events, adoption also seeds the fresh
-Goal's ordinary Explore log. Nodes, findings, scoped counterexamples, topology,
-original attribution and timestamps survive, with each event bound to the
-checkpoint digest and source event through its opaque run reference. Operational
-research-observation lineage stays in the archive; it is not destination
-execution proof. Recovery accepts only the same immutable initial prefix, may
-finish a partial prefix, and never reapplies old statuses after newer evidence.
-Malformed, foreign or interleaved destination history rejects before model work.
-Legacy context-only points keep their original continuation behavior.
-Fresh credentials come from the ordinary runner credential source. The native
-activation's absolute deadline includes receiver installation and preparation;
-restarting the entry cannot grant another full budget or submission allowance.
+Warm replacement preserves the captured workspace, single-Goal registry and
+complete LoopX runtime, including canonical SQLite/File state, Todo identities,
+dependencies, receipts, quota counters, Vision and Explore history. The original
+Goal/Agent identities are required. It forks the retained native conversation
+and replaces only the exact captured session binding through current Goal
+admission and compare-and-swap. A changed binding, occupied runtime or existing
+registry rejects; preserve a failed attempt and use a new isolated receiver.
+Stop the source worker before replacement. No active user runtime is overwritten.
+
+There is no preparation-Todo fallback or temporary replan-cadence override.
+The restored configuration is read back against the declared treatment without
+bootstrapping a new Goal, reseeding the task queue or rewriting its receipts.
+Current guards, leases, recovery, user gates and stops decide execution. Closed
+Turns remain settled; restoration grants no extra budget, opportunity or capture.
+The absolute native deadline still includes receiver installation. Fresh
+credentials come from the ordinary runner credential source.
+
+热恢复接续原 Goal/Agent、完整 SQLite/File 状态、任务依赖、结算、额度和
+Vision/Explore 历史；不另建 preparation Todo，不临时调整重规划频率。
+必须使用已停止源的全新隔离接收端；占用、分歧或部分恢复均拒绝覆盖。
+已有结算不能重放，当前 guard/lease、用户 gate 和原始预算仍然生效。
+需要跨 Goal 复制研究证据时，另用 Core 的 `research-checkpoint adopt-context`；
+资料导入不构成热恢复。
 
 To continue with a different model or reasoning effort, retain the exact sealed
 source settings in `--restore-config` and explicitly pass
@@ -1059,7 +1226,14 @@ also match `--model`/`--effort`. The native session participant records both
 configuration digests, verifies the original session profile and full retained
 history, then binds the new profile to a distinct destination session. Retry
 uses that same source/destination intent; it cannot switch an already running
-receiver. Without the option, exact-configuration admission is unchanged.
+receiver. Direct Host admission without the option still requires exact configuration.
+The SForge Host may additionally rebind its existing custom provider's
+credential-gateway URL from the current launch environment. This applies only
+to a fresh checkpoint receiver: the provider name, wire API, credential source,
+tools and permission settings must stay fixed. It adds no operator option or
+permission to edit an active receiver. The original source configuration stays
+sealed; admission records the full source/destination configuration and profile
+digests through the existing transition provenance.
 The host controller exposes the same explicit transition as
 `--destination-model-config`; this remains a CLI/Host journey, with frontend
 restore support still open. Changing the model changes the experiment treatment:
@@ -1075,6 +1249,12 @@ It grants no extra native submissions, cooldown relief, permission or time.
 `--destination-model-config`；frontend restore 旅程仍未交付。模型变化是新的实验因素，
 共享 checkpoint 本身不能证明机制收益。
 
+SForge 宿主可在全新 checkpoint 接收端准入前，将既有自定义 provider 的凭据网关
+URL 绑定到当前启动环境；临时端口变化不应迫使接收端继续使用已失效的源网关。
+Provider 名称、wire API、凭据来源、工具和权限保持一致，完整源配置仍封存，
+既有 transition 记录保留源与目标配置和 session profile 摘要。此处没有新增操作选项，
+也不允许修改活动接收端；同一上游 provider 的资格仍需独立核验。
+
 Warm verification hashes the complete checkpoint with a read window of up to
 60 seconds, capped by the original execution deadline. It rejects a read that
 finishes after that deadline. The launcher reuses this verified metadata before
@@ -1084,10 +1264,9 @@ Native conversation admission and fresh-replan revalidation allow up to 90 secon
 per read, capped by the original phase deadline, while preserving full-history,
 cursor and identity checks. Core research-context adoption also gives complete
 artifact and native-history reads up to 90 seconds each (previously the generic
-10-second artifact RPC and 30-second native read defaults). Warm preparation
-passes its original phase deadline through adoption; expiration rejects the next
-write, and uncertain prior writes must replay their original operation. Ordinary
-Core callers remain lease-governed and may supply an absolute adoption deadline.
+10-second artifact RPC and 30-second native read defaults). Ordinary Core import
+callers remain lease-governed and may supply an absolute adoption deadline; this
+separate import path does not configure a benchmark warm replacement.
 These allowances grant no extra execution time and
 do not establish sustained performance for growing checkpoints.
 
@@ -1097,72 +1276,31 @@ credentials; an existing bank member must match the sealed bytes. Conflicting or
 partial members fail closed. A lock timeout leaves the attempt for inspection;
 it does not authorize reusing a failed trial directory.
 
-Both comparison arms first settle actual preparation at cadence one and consume
-the retained decision through a current semantic replan. The existing joint
-continuation gate must accept that replan before the declared normal cadence
-returns. Preparation and context-reading cost belong in the comparison. Omit all
-restore flags for the unchanged cold entry; never reuse an ambiguous trial
-folder as a new attempt.
+Both comparison arms retain the original task graph and replan cadence. The
+existing joint continuation gate still requires a current checkpoint-linked
+semantic review before recapture; it does not create a preparation Todo or
+force a review every work Turn. State verification and context-reading cost
+belong in the comparison. Omit restore flags for the cold entry; never reuse an
+ambiguous receiver as a new attempt. A complete point must contain canonical
+LoopX state; a context-only archive is not a warm-replacement fallback.
 
-Warm preparation retains the original evidence-reading task on its existing Todo;
-it does not add a prompt paragraph interpreting historical deadlines. Current
-Goal/guard authority, task time constraints, native cooldowns and user stops
-remain binding. Preparation reads the current claimed Todo and actual quota
-result before reporting `preparation_actionable=true` in the existing `checkpoint-context.json`
-receipt. Closed or unavailable work and a deadline that expires during readback
-fail before model execution; an old ready plan is not current admission. This
-readback neither grants execution nor qualifies subsequent research or recapture.
-It applies only to the existing explicitly admitted complete-checkpoint path;
-ordinary terminal archives are not converted into complete checkpoints.
-
-The receiver brackets the guard with the exact preparation Todo's canonical
-authority revision. Completion, transfer or another canonical edit during that
-observation rejects readiness; a later required review cannot revive an earlier
-open snapshot. The existing context receipt includes `preparation_readback` with
-that revision, the selected Todo and current replan identity, so an operator can
-inspect what was actually observed instead of relying on a readiness boolean.
-This is a bounded observation, not an execution lease; the worker must still use
-fresh ordinary admission. Readiness is validated before changing cadence, so a
-rejected preparation does not change the Goal's cadence. An ambiguous cadence
-write must be inspected, not blindly rolled back across an owed current review.
-Creation retries read the original `checkpoint-preparation` receipt and replay
-its exact accepted task through the canonical create owner, including receivers
-created with the earlier longer task. They never mint a second operation or Todo.
-This covers partial creation, not arbitrary retries after context adoption or
-worker execution. Such uncertain operations retain their original receipt,
-revision and lease recovery boundary; actual model/research adoption is separate.
-
-Warm 准备保留既有 Todo 中原本的证据读取任务，不再增加解释历史截止时间的提示段落。
-当前 Goal、guard、题目时限、原生冷却、用户门槛及停止权限仍有效。
-准备步骤须读回当前 claimed Todo 和实际 quota 结果，才在既有
-`checkpoint-context.json` 回执中报告 `preparation_actionable=true`；工作已闭合、不可用或读回
-期间期限耗尽时，在模型执行前失败。旧 ready 计划不等于当前准入；此读回不授予
-执行权，也不认证后续研究或再次捕获，仅作用于显式准入的完整检查点路径。
-普通终态资料归档不会因此被升级为完整检查点。
-
-接收端用准确准备 Todo 的规范权威修订号夹住 guard 读取；期间完成、转交或其他规范
-修改都会拒绝 ready，后来的 required review 不能复活较早的 open 快照。既有上下文
-回执的 `preparation_readback` 返回该修订、当前选中 Todo 与 replan 身份，便于检查
-实际观察依据；它不是执行租约，worker 仍须重新走普通准入。先验证准备资格，再改
-cadence，因此拒绝准备不会改变 Goal 的 cadence；不确定的配置写入须检查，不能盲目
-回滚而抹掉欠下的当前复盘。创建重试读回原 `checkpoint-preparation` 回执，通过规范
-创建 owner 重放当时接受的准确任务（兼容此前较长任务），不创建第二个操作或 Todo。
-此兼容范围是部分创建，不是上下文采用或 worker 执行后的任意重试；不确定的操作仍须
-保留原回执、修订与租约的恢复边界，真实模型/研究采用也需单独验证。
+两组接续原任务队列与重规划频率；再次捕获仍须通过已有的当前复盘与结算校验，
+不新增 preparation Todo，不强制每轮复盘。状态验证和上下文读取计入完整成本。
+仅有资料的归档不能冒充完整热恢复点，失败接收端须保留现场并使用新隔离实例。
 
 To test a new decision from the same pre-replan state, use
 `--restore-fresh-replan`. The point must contain a verified pending replan packet.
-The first destination model call starts a fresh native conversation, before
-preparation and the first current-Goal replan. It reads the original task,
+The first destination model call starts a fresh native conversation before
+the retained pending replan, preserving the complete Goal and Todo state. It reads the original task,
 retained research evidence, code and incumbent; no post-checkpoint decision or
-old native message prefix is supplied. Preparation remains charged work, and
+old native message prefix is supplied. Context-reading remains charged work, and
 capture remains closed until the ordinary current review/settlement gate passes.
 Omit the flag for retained-history continuation. Change treatments only in a new attempt; the
 same checkpoint budget, opportunities and cooldown remain binding.
 
 同一个决策前 checkpoint 的重新决策实验使用 `--restore-fresh-replan`：首次模型调用
-就在 fresh 原生会话中准备并完成当前目标的 replan，读取原任务、研究证据、代码和最佳
-候选，不预置 checkpoint 之后的决定或旧原生消息前缀。准备成本仍计入原预算，后续捕获
+就在 fresh 原生会话中接续已有任务状态并处理待完成的 replan，读取原任务、研究证据、代码和最佳
+候选，不预置 checkpoint 之后的决定或旧原生消息前缀。上下文读取成本仍计入原预算，后续捕获
 仍须通过当前复盘和结算校验。省略该选项保持历史接续。
 必须用新 attempt 改变处理方式，不能重置预算、机会或冷却。
 
@@ -1226,10 +1364,13 @@ accepted round counts, cooldown and scoring remain unchanged. Omit the option
 for the original-budget behavior; a changed budget requires a fresh destination,
 not a rewrite of a running study or its original results.
 
-The ordinary installed worker has passed a synthetic joined qualification:
-native session continuation, current preparation and accepted replan, restored
-normal cadence, candidate work and released native feedback under the original
-remaining allowance. It reused one immutable captured prefix and preserved its
+The earlier import-based worker passed a synthetic joined qualification:
+native session continuation, a new-Goal preparation/review, candidate work and
+released native feedback under the original remaining allowance. That fixture
+does not qualify the current full-state replacement. The full-state tests use
+real File/SQLite owners and an actual Codex Host with local deterministic
+inference to check retained work selection, unchanged settlement history,
+current user gates and binding compare-and-swap. It reused one immutable captured prefix and preserved its
 source. Native app-server-generated skills are preserved outside discovery before
 linking the current installed skills; ordinary skill identity checks still apply.
 This used real Codex processes and native HTTP with deterministic local inference

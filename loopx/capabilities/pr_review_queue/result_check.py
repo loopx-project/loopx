@@ -132,12 +132,17 @@ def _check_validation_failures(
             blockers.append(f"{key}:required_not_boolean")
         if not isinstance(status, str):
             continue
+        attribution = item.get("failure_attribution")
+        # Optional CI observations can stay unknown; a declared PR regression
+        # cannot be hidden by making its validation row diagnostic.
+        if isinstance(attribution, Mapping) and attribution.get("disposition") == "pr_regression":
+            blockers.append(f"{key}:attributable_or_unresolved_failure")
+            continue
         if item.get("required") is not True or status == "passed":
             continue
         if status in {"pending", "unverified", "not_applicable"}:
             blockers.append(f"{key}:required_validation_not_proven")
             continue
-        attribution = item.get("failure_attribution")
         if not isinstance(attribution, Mapping):
             blockers.append(f"{key}:failure_attribution_missing")
             continue

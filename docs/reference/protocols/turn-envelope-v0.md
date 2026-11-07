@@ -134,12 +134,19 @@ interpreter's `-m loopx.entrypoint` route rather than an unrelated PATH executab
 Native reads propagate that route through review, acceptance and writeback; the
 complete original observation is not rewritten to carry a new command.
 The review stage provides structured facts without a prescribed diagnostic
-method. Writeback omits filled-in Vision/stride examples while retaining field
-limits, legal options, source bindings and settlement rules. Stride exposes its
-required field names and basis options independently of examples. The unchanged
-full capture remains available for optional examples and source inspection.
-This intentionally reduces advisory prompting; it does not remove acceptance,
-authority or stop obligations, nor demonstrate better autonomous decisions.
+method. Writeback omits the generic filled-in Vision example while retaining
+field limits, legal options, source bindings and settlement rules. Enabled
+Stride retains its owner's current `minimal_example`, including the nested
+previous-decision and Explore review fields when applicable. Top-level required
+field names alone do not describe that authoring shape. The example supplies
+syntax, not a recommended decision or evidence of adoption; replace its claims
+with the reviewed facts. Decision evidence remains in review/Explore and the
+unchanged full capture. This changes no acceptance, authority, stop rule or
+validation budget, and does not establish fewer model retries or better results.
+
+中文：写回保留 Stride owner 的当前格式示例，包含适用的上次决策与 Explore 复盘
+嵌套字段。示例只说明语法，判断与证据仍来自本次复盘；验收、权限、停止条件和校验
+预算不变。字段完整性不代表模型已采用，也不证明重试减少或结果改善。
 
 Cumulative outcome requirements are indexed by exact content hash. Every
 objective, revision and requirement count remains visible; the acceptance read
@@ -258,6 +265,16 @@ guard, changes no binding and performs no Todo completion. Failed validation,
 unsatisfied checkpoints, dry runs and no-spend closeout cannot debit quota.
 An ambiguous response is reconciled through the original receipts; exact retry
 cannot debit twice. Ordinary refresh without the option retains its behavior.
+When `--delivery-workspace-path` names the producing worktree, the combined
+operation also runs the owed command there, using the originating CLI's
+implementation. The normal workspace and settlement guards still apply; a
+missing or incompatible workspace leaves the original owed command recoverable.
+
+Callers that need a compact result can add `--settlement-receipt` to
+`refresh-state --settle-turn`. A successful settled result provides its exact
+identity and receipts inline and a `result_details.command` for the full saved
+result. Inspect unresolved controls before continuing. If saving the view fails
+after commitment, retry the same Turn and check its receipts.
 
 An in-flight recommendation does not require keeping a completed Todo open.
 Validate its original declaration, use ordinary completion when satisfied, and
@@ -277,6 +294,13 @@ writeback 读取，避免重复交付；当前准入、选择与停止事实仍�
 Todo 或 obligation/Turn 的 canonical 待结算命令并验证回执；不重新 guard、换绑或
 完成 Todo。验证失败、检查点未满足、dry-run 与无扣额收尾不能扣额；响应不确定时
 按原回执恢复，精确重试不会重复扣额。不传此选项保持原 refresh 行为。
+指定 `--delivery-workspace-path` 后，组合操作也在该交付工作区执行待结算命令，
+继续使用原调用方的 CLI 实现。原工作区和结算校验保持；目录缺失或不兼容时保留
+原待结算命令以便恢复。
+
+需要紧凑回执时，在 `refresh-state --settle-turn` 后加 `--settlement-receipt`。
+结算成功后可直接核对本次身份和回执，用 `result_details.command` 读取完整结果。
+先处理未解决的控制项。若结算已提交而视图保存失败，按原 Turn 重试并核对回执。
 
 执行中续跑建议不要求把已完成的 Todo 保持开放。原声明验收满足后可正常完成，并
 在原 Turn 上按语义收尾写入有证据的 vision；未完成的阶段进展仍可保留开放状态。
@@ -296,9 +320,10 @@ TurnEnvelope 先给出 `review` 状态读取，再给出 `writeback` 格式读�
 
 捕获后的读取沿用调用方显式选择的 `--cli-bin`，后续验收和 Explore 读取也不会
 悄悄切换到环境中的其他版本。复盘视图提供结构化事实，不预设诊断方法；写回视图
-移除预填的 Vision／stride 答案示例，保留字段限制、合法选项、来源绑定和结算规则。
-stride 的必需字段与 basis 选项独立展示，完整快照仍可用于按需查看示例与源材料。
-这是有意减少建议性提示，不删除验收、权限或停止义务，也不证明自主决策质量提升。
+只移除通用 Vision 的预填示例，保留字段限制、合法选项、来源绑定和结算规则。
+启用 Stride 时保留当前 owner 的嵌套语法示例，必需字段与 basis 选项也独立展示；
+判断和证据仍须来自实际复盘，完整快照仍可按需读取。示例不代表推荐决定或已采用
+证据，不删除验收、权限或停止义务，也不证明自主决策质量提升。
 
 新决定用精简的目标、证据和权限边界替换原方法清单及重复的 stride 规划建议：复盘
 一次交付这些边界与事实，写回提供既有格式。可执行 Todo 的次序和 agent 自拟候选
@@ -530,6 +555,42 @@ work context 中已加载的来源，其次保留 planning horizon 或第一份�
 详情选项同样复用；权威状态和完整决策捕获不改。TurnEnvelope 将已知引用移到自己
 签名覆盖的 work context，拒绝缺失或不可用来源。这只证明展示成本下降，尚不证明
 上游读取减少、模型采用或完整任务效率提升。
+
+Known Todo diagnostic lanes share `quota/diagnostic_projection.ts` through the
+existing coarse context call. Read-only status/plan projects all rows in one
+call, rather than a call per Goal or lane. Unknown lists, fields, versions and
+complex nested item content remain full; field recognition reuses the canonical
+Todo contract. Retained items, capability candidates, portfolio text, planning
+horizon and selected-work sources are not shortened. Explicit detail returns the
+original summaries. Upstream compaction remains visible as `source_projection`.
+Status/plan adds one projection request; Agent/vision detail still needs one
+when the User summary remains compact. Explicit full Todo roles bypass that
+diagnostic request. These transport costs must be included in comparisons.
+Diagnostic replies carry only display edits and references to the immutable
+input. The Python adapter applies them to its original facts, preserving float
+spelling, negative zero, large-integer precision and relocated upstream metadata.
+Reference-only callers keep their existing transport; no Python compaction
+decision is reintroduced. The read codec's `content_revision` is recognized as
+known display metadata and remains on retained items.
+The legacy detail command observes current state and cannot recover an earlier
+decision. The scoped native consumer and original-capture reference are a separate
+[controller integration proposal](https://github.com/loopx-project/loopx/pull/7430),
+which reuses this same owner. This does not change admission, claims, leases,
+settlement or native context defaults; it does not qualify net efficiency gains.
+
+中文：已知 Todo 诊断列表通过既有粗粒度上下文调用复用同一 typed owner；只读
+status/plan 整批行只调用一次，不逐 Goal 或列表调用。未知列表、字段、版本和
+复杂嵌套条目保留全文，字段识别复用规范 Todo 契约；保留条目、候选、portfolio
+正文、规划视野和当前工作来源不截短，详情返回原摘要，上游压缩信息保留于
+`source_projection`。旧详情命令读取当前状态，不能恢复历史决定。
+status/plan 新增一次投影请求；Agent/vision 详情若仍压缩 User 摘要，也需一次；
+显式展开两类 Todo 则跳过诊断投影。这些传输成本须计入比较。scoped 原生
+消费者及同 capture 引用属于单独的 controller 集成提案 #7430，复用同一 owner。
+此处不改准入、claim、lease、结算或原生默认，也不代表完整效率收益通过。
+诊断回复只传展示变更及不可变输入的引用；Python adapter 在原始事实上应用，
+保留浮点表示、负零、大整数精度及迁移后的上游元数据。仅引用的旧调用方保持
+原传输行为，不重新引入 Python 裁剪决定。读取 codec 已有的 `content_revision`
+属于已知展示元数据，在保留条目上仍完整存在。
 
 The selected-Todo display body is display-only and may be bounded; the typed
 owner validates the exact read against selected identity, lifecycle, claim and
@@ -878,16 +939,33 @@ read basis，同一 TS recommendation owner 仍在追加 run 前拒绝跨任务�
 本项修复此前错误接受的跨任务写入，不清依赖、不改变 Todo 权威或授予新 Turn。
 
 For an eligible explicit choice deferred solely by runnable autonomous replan,
-the typed qualifier adds `inline_reentry_allowed=true`. After durably retaining
-that choice, the CLI now executes one same-Turn guard reentry and returns its
-fresh result directly, including in TurnEnvelope mode. This changes the previous
-default of returning a failed selection before asking the caller to reenter.
+the typed qualifier adds `inline_reentry_allowed=true`. The CLI executes one
+same-Turn guard reentry and returns its fresh result directly, including in
+TurnEnvelope mode. With an existing receipt it first durably retains the choice.
+On the first guard it carries that choice internally until the final receipt,
+without emitting an intermediate refusal or an unbound discovery packet. A
+concurrent receipt appearing during this first-call retry stops the retry;
+it cannot replace the other caller's binding. This changes the previous first-call
+refusal that required the model to read discovery and binding packets separately.
 It grants no delivery or spend authority: the fresh guard and receipt owner
 still decide the Todo/replan binding, and may return a newly changed gate. It
-does not retry other hard lanes, missing candidates, or a first-call refusal
-without a durable choice receipt. The reentry has no explicit selection, so it
+does not retry other hard lanes or missing candidates. The reentry has no explicit selection, so it
 cannot recursively retry. Hosts that do not execute this CLI path can continue
 to use the existing recovery command.
+
+When native context delivery is enabled, rejected guards keep their error,
+original receipt and recovery action within the configured output budget.
+The full captured rejection is optional diagnostic detail, available through
+the digest-checked reader. Oversized diagnostics use a selected read of those
+failure fields. Neither response enters pending context delivery or establishes
+a differential baseline; disabled context delivery keeps its ordinary output.
+
+中文：已知且合格的任务仅因自主重规划被推迟时，首次调用内部完成一次同 Turn
+重判，只交付最终绑定结果，不要求模型先读拒绝、再读发现包、再读绑定包。
+已有回执仍先持久化选择；首次重试期间出现并发回执则拒绝覆盖。
+重判仍检查当前停止条件和额度，后续交付仍需新 Turn。启用原生上下文传输时，
+拒绝响应有界交付错误、原回执及恢复动作；完整失败包仅供按需诊断，
+不会建立差分基线。关闭该功能时保留原输出。
 
 For other refusals, the agent receives
 `recovery_action=reenter_guard_without_selection` and one executable
@@ -956,6 +1034,12 @@ identity-less and delivery-blocked until the agent explicitly chooses.
 The compact envelope does not truncate those executable commands into unusable
 strings. It carries non-exhaustive `writeback.suggested_todo_ids` plus
 `selection_command_ref`; the full decision remains the authority for exact argv.
+When a captured heartbeat replan still requires a choice, the review's
+`next.selection_command_ref` points into the current guard's CLI channel. Use
+that selection command with the chosen eligible Todo. It carries the caller's
+context delivery settings into the same Turn. Read the writeback format from
+the newly bound capture. A replan already bound to a Todo or a standalone
+replan obligation goes directly from review to its captured writeback reader.
 
 Packet-bearing historical decisions and `contract_capsule.protocol_action_packet`
 witnesses are unsupported under [the retirement contract](protocol-action-packet-decision-v0.md).

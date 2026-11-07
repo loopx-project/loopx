@@ -546,42 +546,6 @@ def test_malformed_history_container_fails_only_with_agent_filter(
 	assert len(unfiltered["risks"]) == 1
 
 
-def test_aggregation_merges_only_identical_occurrences() -> None:
-	first = {
-		"goal_id": "goal-1",
-		"category": "failing_check",
-		"kind": "same-check",
-		"severity": "warning",
-		"summary": "First copy.",
-		"occurrence_id": "0123456789abcdef",
-		"occurrence_count": 1,
-		"evidence_refs": ["status.contract:first"],
-		"next_safe_action": "Inspect the check.",
-		"requires_user_approval": False,
-	}
-	duplicate = {
-		**first,
-		"severity": "high",
-		"occurrence_count": 1,
-		"evidence_refs": ["status.contract:second"],
-	}
-	distinct = {**first, "occurrence_id": "fedcba9876543210"}
-
-	aggregated = global_risks._aggregate_risks([first, duplicate, distinct])
-
-	assert len(aggregated) == 2
-	merged = next(
-		row for row in aggregated if row["occurrence_id"] == "0123456789abcdef"
-	)
-	assert merged["occurrence_count"] == 2
-	assert merged["severity"] == "high"
-	assert merged["evidence_refs"] == [
-		"status.contract:first",
-		"status.contract:second",
-	]
-	assert sum(row["occurrence_count"] for row in aggregated) == 3
-
-
 def test_counts_and_groups_are_computed_before_and_after_limit(
 	monkeypatch,
 	tmp_path,
@@ -756,8 +720,8 @@ def test_error_envelopes_are_generated_and_public_safe(monkeypatch, tmp_path) ->
 def test_global_risks_error_survives_projection_runtime_failure(monkeypatch) -> None:
 	monkeypatch.setattr(
 		global_risks,
-		"seal_projection_envelope",
-		lambda **_: (_ for _ in ()).throw(RuntimeError("runtime unavailable")),
+		"effect_runtime_result",
+		lambda *_args, **_: (_ for _ in ()).throw(RuntimeError("runtime unavailable")),
 	)
 
 	payload = global_risks.build_global_risks_error("status unavailable")

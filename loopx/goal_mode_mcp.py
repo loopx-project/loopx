@@ -1,6 +1,7 @@
 """Shared MCP control plane for host-specific LoopX goal adapters."""
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import shutil
@@ -9,14 +10,7 @@ import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Any
-
-try:  # pydantic ships with the FastMCP extra; base installs have no pydantic.
-    from pydantic import Strict
-except ImportError:  # pragma: no cover - exercised on base installs only
-    class Strict:  # type: ignore[no-redef]
-        """Inert stand-in so the shared annotation still evaluates without
-        pydantic; FastMCP cannot run on such an install anyway."""
+from typing import Any
 
 from .control_plane.host_adapter_settlement import (
     HostTodoSettlementRequest,
@@ -28,14 +22,6 @@ from .control_plane.host_adapter_settlement import (
 
 
 ContextResolver = Callable[[], dict[str, Any] | None]
-
-# The one boundary type for a caller-supplied lease version. FastMCP validates
-# tool arguments with pydantic, and lax pydantic coerces JSON true to 1 before
-# any loopx code runs, so strictness must live in the annotation itself; the
-# control-plane method and the FastMCP wrapper share this alias so the two
-# signatures cannot drift.
-ExpectedTaskLeaseVersion = Annotated[int, Strict()] | None
-
 
 @dataclass(frozen=True)
 class GoalModeMCPConfig:
@@ -235,8 +221,7 @@ class GoalModeMCPControlPlane:
         agent_id: str,
         evidence: str,
         next_agent_todo: str = "",
-        task_lease_idempotency_key: str = "",
-        task_lease_expected_version: ExpectedTaskLeaseVersion = None,
+        claim_operation_id: str | None = None,
         no_follow_up: bool = False,
         successor_todo_ids: list[str] | None = None,
         agent_vision: dict[str, Any] | None = None,
@@ -280,13 +265,8 @@ class GoalModeMCPControlPlane:
             args += ["--next-agent-todo", next_agent_todo]
         for successor in successor_todo_ids or []:
             args += ["--successor-todo-id", successor]
-        if task_lease_idempotency_key:
-            args += ["--task-lease-idempotency-key", task_lease_idempotency_key]
-        if task_lease_expected_version is not None:
-            args += [
-                "--task-lease-expected-version",
-                str(task_lease_expected_version),
-            ]
+        if claim_operation_id is not None:
+            args += ["--claim-operation-id", claim_operation_id]
         if no_follow_up:
             args.append("--no-follow-up")
         request = HostTodoSettlementRequest(
@@ -336,6 +316,7 @@ def create_fastmcp_server(
 ):
     try:
         from mcp.server.fastmcp import FastMCP
+        from mcp.server.fastmcp.exceptions import ToolError
     except Exception as exc:  # pragma: no cover - exercised by real adapter startup
         raise SystemExit(
             "MCP SDK v1 is required. Install the adapter with loopx-kunluncode install.\n"
@@ -343,7 +324,17 @@ def create_fastmcp_server(
         ) from exc
 
     control = GoalModeMCPControlPlane(config, context_resolver)
-    server = FastMCP(config.server_name)
+    completion_arguments = frozenset(inspect.signature(control.complete_task).parameters)
+
+    class GoalModeServer(FastMCP):
+        async def call_tool(self, name: str, arguments: dict[str, Any]):
+            # FastMCP ignores unknown arguments by default. Retired execution
+            # proof must reject, never disappear before a completion write.
+            if name == "complete_task" and set(arguments) - completion_arguments:
+                raise ToolError("Unsupported complete_task arguments; use its current schema and the claim_operation_id returned by claim_task")
+            return await super().call_tool(name, arguments)
+
+    server = GoalModeServer(config.server_name)
 
     if config.legacy_host_surface == "claude_code":
         @server.tool()
@@ -363,7 +354,7 @@ def create_fastmcp_server(
 
     @server.tool()
     def claim_task(todo_id: str, agent_id: str) -> str:
-        """Claim one todo as the bound agent."""
+        """Claim one Todo; retain its claim_operation_id for updates and completion."""
         return control.claim_task(todo_id, agent_id)
 
     @server.tool()
@@ -392,14 +383,15 @@ def create_fastmcp_server(
         agent_id: str,
         evidence: str,
         next_agent_todo: str = "",
-        task_lease_idempotency_key: str = "",
-        task_lease_expected_version: ExpectedTaskLeaseVersion = None,
+        claim_operation_id: str | None = None,
         no_follow_up: bool = False,
         successor_todo_ids: list[str] | None = None,
         agent_vision: dict[str, Any] | None = None,
         vision_unchanged_reason: str = "",
     ) -> str:
-        """Complete verified work and settle once. Link existing planned successors
+        """Complete verified work and settle once using claim_operation_id from claim_task.
+        Reuse that reference on retries; ownership and expiry are checked internally.
+        Link existing planned successors
         with successor_todo_ids; next_agent_todo creates a NEW Todo, not an id link.
         no_follow_up closes this Todo's continuation, NOT the Goal's vision.
         Do not duplicate existing work; only the fresh should_run contract can
@@ -415,8 +407,7 @@ def create_fastmcp_server(
             agent_id,
             evidence,
             next_agent_todo=next_agent_todo,
-            task_lease_idempotency_key=task_lease_idempotency_key,
-            task_lease_expected_version=task_lease_expected_version,
+            claim_operation_id=claim_operation_id,
             no_follow_up=no_follow_up,
             successor_todo_ids=successor_todo_ids,
             agent_vision=agent_vision,

@@ -20,13 +20,12 @@ from loopx.control_plane.goals.goal_vision_policy import DEFAULT_PLANNING_HORIZO
 from benchmark.edgebench.feedback import FEEDBACK_MODES
 from benchmark.edgebench.feedback_hook import FEEDBACK_PAYLOAD
 
-from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution, prepare_codex_home
+from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution, codex_settings, prepare_codex_home
 from .codex_offline import CodexOffline, MODEL_CATALOG_REMOTE, stage_portable_python
 from .harbor import (
     BenchmarkCodex, _CONTROL, _CODEX_HOME, _PYTHON, _SCHEDULER_STATE, _SRC,
 )
 from .scheduler import worker_command
-from .worker import PHASE_WORK_RESERVE_SECONDS
 
 
 # Experiment profiles, local to the research runner; not new LoopX modes.
@@ -93,7 +92,8 @@ class SForgeWorker(CodexAgent):
                  task_objective: str | None = None,
                  task_entry: str | None = None,
                  turn_envelope: bool = False,
-                 context_delivery: str = "off",
+                 context_delivery: str | None = None,
+                 provider_request_admission: bool = False,
                  native_goal_continue: bool = False,
                  replan_after_turns: int | None = None,
                  replan_after_todos: int | None = None,
@@ -114,8 +114,18 @@ class SForgeWorker(CodexAgent):
             mode="heartbeat" if profile.startswith("heartbeat-") else "plain",
             context_delivery=context_delivery,
         ).context_delivery
-        if timeout_seconds <= PHASE_WORK_RESERVE_SECONDS:
-            raise ValueError("Worker budget must exceed the 160s startup/settlement reserve")
+        if type(provider_request_admission) is not bool:
+            raise ValueError("provider_request_admission must be a boolean opt-in")
+        if provider_request_admission and not profile.startswith("heartbeat-"):
+            raise ValueError("provider_request_admission requires a heartbeat profile")
+        if provider_request_admission:
+            if not (config.agent_api_base_url or "").strip() or not (config.agent_api_key or "").strip():
+                raise ValueError("provider_request_admission requires a custom provider URL and API key")
+            if (os.environ.get("CODEX_WIRE_API") or "responses") != "responses":
+                raise ValueError("provider_request_admission requires the Responses wire API")
+        self.provider_request_admission = provider_request_admission
+        if timeout_seconds <= 0:
+            raise ValueError("Worker budget must be positive")
         if not config.agent_model or not config.agent_effort:
             raise ValueError("Explicit model and reasoning effort are required")
         if config.agent_api_base_url and not config.agent_api_key:
@@ -207,9 +217,9 @@ class SForgeWorker(CodexAgent):
         self.instructions_installed = False
         self.prompt_installed = False
         self.timeout_seconds = timeout_seconds
-        # Let one call use the trial budget. The shared worker recomputes the
-        # remaining deadline on every continuation, retaining cleanup time.
-        self.turn_timeout = timeout_seconds - PHASE_WORK_RESERVE_SECONDS
+        # The phase owns the total budget. No separate per-wake cap is needed;
+        # the scheduler's transport watchdog may outlive bounded child cleanup.
+        self.turn_timeout = timeout_seconds
         self.runtime = None
         self.prepared = False
         # Only the official profile delegates continuation to SForge. Heartbeat
@@ -299,11 +309,12 @@ class SForgeWorker(CodexAgent):
             self.runtime = BenchmarkCodex(
                 **common, execution_mode=mode,
                 iteration_context="resume" if mode == "heartbeat" else "fresh",
-                turn_timeout_sec=self.turn_timeout,
+                turn_timeout_sec=None,
                 scheduler_timeout_sec=self.timeout_seconds,
                 task_entry=self.task_entry,
                 turn_envelope=self.turn_envelope,
                 context_delivery=self.context_delivery,
+                **({"provider_request_admission": True} if self.provider_request_admission else {}),
                 native_goal_continue=self.native_goal_continue,
                 replan_after_turns=self.replan_after_turns,
                 replan_after_todos=self.replan_after_todos,
@@ -317,7 +328,24 @@ class SForgeWorker(CodexAgent):
             )
             asyncio.run(self.runtime.install(self.environment))
             if self.warm_start is not None:
-                research_paths = asyncio.run(self.warm_start.stage(self.environment, self.cwd))
+                route_settings = {}
+                if runtime_base_url:
+                    worker_env = self.runtime._worker_env(cwd=self.cwd)
+                    route_settings = {
+                        "provider_base_url": runtime_base_url,
+                        "effective_config": codex_settings(
+                            execution=self.runtime.execution, workspace=Path(self.cwd),
+                            model=worker_env["MODEL_NAME"], effort=worker_env["REASONING_EFFORT"],
+                            base_url=runtime_base_url,
+                            wire_api=worker_env["CODEX_WIRE_API"],
+                            web_search=worker_env["LOOPX_WEB_SEARCH"],
+                            model_catalog=self.runtime._model_catalog_source,
+                            model_catalog_destination=(Path(MODEL_CATALOG_REMOTE)
+                                if self.runtime._model_catalog_staged else None),
+                        ).encode("utf-8"),
+                    }
+                research_paths = asyncio.run(self.warm_start.stage(
+                    self.environment, self.cwd, **route_settings))
                 self._warm_command("workspace", user="root")
                 result = backend.exec_run(handle,
                     ["chown", "-R", "-P", "agent:agent", self.cwd, *research_paths], user="root")
@@ -375,6 +403,7 @@ class SForgeWorker(CodexAgent):
                if self.task_entry == "loopx-planned" else {}),
             "stop_hook": self.profile == "official",
             **(self.runtime._turn_envelope_receipt() if self.runtime is not None else {}),
+            **({"provider_request_admission": "on"} if self.provider_request_admission else {}),
             **({"native_goal_continue": True} if self.native_goal_continue else {}),
             "outer_resume": self.resume_cmd is not None,
             "explore_graph": self.profile == "heartbeat-explore",
@@ -420,8 +449,15 @@ class SForgeWorker(CodexAgent):
                 raise RuntimeError("Native task prompt is unavailable")
             self.runtime._phase_number = 1
             if self.runtime.execution.uses_loopx:
-                asyncio.run(self.runtime._prepare_phase(self.environment, result.stdout, cwd=self.cwd))
-                if self.profile == "heartbeat-explore":
+                if self.warm_start is not None:
+                    # The sealed Goal, task graph, review counters and strategy
+                    # are the continuing state. Do not bootstrap, seed another
+                    # task, or reset an existing configuration during restore.
+                    asyncio.run(self.runtime._write_task_document(self.environment, result.stdout))
+                    asyncio.run(self.runtime._verify_phase_configuration(self.environment, cwd=self.cwd))
+                else:
+                    asyncio.run(self.runtime._prepare_phase(self.environment, result.stdout, cwd=self.cwd))
+                if self.profile == "heartbeat-explore" and self.warm_start is None:
                     observed = asyncio.run(self.runtime._loopx(self.environment, [
                         "configure-goal", "--goal-id", self.runtime.goal_id,
                         "--explore-graph-enabled", "--explore-harness-enabled",
@@ -444,7 +480,8 @@ class SForgeWorker(CodexAgent):
         if self.warm_start is not None:
             env["LOOPX_WARM_START"] = f"{_CONTROL}/warm-start.json"
         command = worker_command(env, python=f"{_PYTHON}/bin/python3", source=_SRC,
-                                 state_file=_SCHEDULER_STATE, host_timeout=self.turn_timeout)
+                                 state_file=_SCHEDULER_STATE, host_timeout=self.turn_timeout,
+                                 resume_budget_stop=self.warm_start is not None)
         if self.task_entry == "loopx-planned" and self.warm_start is None:
             env["LOOPX_PLANNING_RESULT"] = "/opt/loopx-benchmark/control/planning-phase-001.json"
             command = [f"{_PYTHON}/bin/python3", "-m", "benchmark.runtime.sforge_entry", *command]

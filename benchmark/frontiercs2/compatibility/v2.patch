@@ -1,0 +1,373 @@
+diff --git a/docker_environment.py b/docker_environment.py
+--- a/docker_environment.py
++++ b/docker_environment.py
+@@ -1,4 +1,5 @@
+ """Private Docker transport for the existing shared benchmark installer."""
++import asyncio
+ import io
+ from pathlib import Path
+ import shlex
+@@ -15,6 +16,25 @@
+         self.security_bootstrap = security_bootstrap
+         self.sealed = sealed
+
++    @staticmethod
++    async def _run(argv, *, timeout, data=None):
++        process = await asyncio.create_subprocess_exec(
++            *argv, stdin=asyncio.subprocess.PIPE if data is not None else None,
++            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
++        try:
++            stdout, stderr = await asyncio.wait_for(process.communicate(data), timeout)
++        except (TimeoutError, asyncio.CancelledError) as error:
++            if process.returncode is None:
++                try:
++                    process.kill()
++                except ProcessLookupError:
++                    pass
++            await process.wait()
++            if isinstance(error, TimeoutError):
++                raise subprocess.TimeoutExpired(argv, timeout) from error
++            raise
++        return SimpleNamespace(returncode=process.returncode, stdout=stdout, stderr=stderr)
++
+     async def exec(self, command, *, user=None, env=None, cwd=None, timeout_sec=None):
+         effective_user = self.default_user if self.sealed else user or self.default_user
+         argv = ['docker', 'exec', '--user', effective_user]
+@@ -29,19 +49,32 @@
+         else:
+             argv += [self.name, '/usr/bin/python3', '-c', self.security_bootstrap,
+                      '/bin/bash', '-c', command]
+-        result = subprocess.run(argv, capture_output=True, text=True, timeout=timeout_sec or 300)
++        result = await self._run(argv, timeout=timeout_sec or 300)
++        stdout, stderr = result.stdout.decode(), result.stderr.decode()
+         if result.returncode:
+-            print('environment command exit', result.returncode, 'user', user,
+-                  'command', command[:200], 'stderr', result.stderr[-1200:], flush=True)
+-        return SimpleNamespace(return_code=result.returncode, stdout=result.stdout, stderr=result.stderr)
++            print('environment command exit', result.returncode, flush=True)
++        return SimpleNamespace(return_code=result.returncode, stdout=stdout, stderr=stderr)
+
+     async def upload_file(self, source, target):
+-        if self.sealed:
+-            code = 'import pathlib,sys; p=pathlib.Path(sys.argv[1]); p.write_bytes(sys.stdin.buffer.read()); p.chmod(0o644)'
+-            result = subprocess.run(['docker', 'exec', '-i', '--user', self.default_user,
++        writable = await self.exec('test -w ' + shlex.quote(str(Path(target).parent)))
++        if self.sealed or writable.return_code == 0:
++            mode = 0o644 if self.sealed else Path(source).stat().st_mode & 0o777
++            code = '''import os,pathlib,sys,tempfile
++p = pathlib.Path(sys.argv[1])
++descriptor, temporary = tempfile.mkstemp(dir=p.parent, prefix='.'+p.name+'-')
++try:
++    with os.fdopen(descriptor, 'wb') as output:
++        output.write(sys.stdin.buffer.read())
++        output.flush()
++        os.fchmod(output.fileno(), int(sys.argv[2]))
++        os.fsync(output.fileno())
++    os.replace(temporary, p)
++finally:
++    pathlib.Path(temporary).unlink(missing_ok=True)
++'''
++            result = await self._run(['docker', 'exec', '-i', '--user', self.default_user,
+                  self.name, '/usr/bin/python3', '-c', self.security_bootstrap,
+-                 '/usr/bin/python3', '-c', code, target], input=Path(source).read_bytes(),
+-                 capture_output=True, timeout=120)
++                 '/usr/bin/python3', '-c', code, target, str(mode)], data=Path(source).read_bytes(), timeout=120)
+             if result.returncode:
+                 raise RuntimeError(result.stderr.decode(errors='replace')[-1500:])
+             return
+@@ -54,15 +87,18 @@
+                 info.uname = info.gname = ''
+                 return info
+             archive.add(source, arcname=Path(target).name, filter=owned)
+-        result = subprocess.run(['docker', 'cp', '-', self.name + ':' + str(Path(target).parent)],
+-                                input=stream.getvalue(), capture_output=True, timeout=120)
++        result = await self._run(['docker', 'cp', '-', self.name + ':' + str(Path(target).parent)],
++                                 data=stream.getvalue(), timeout=120)
+         if result.returncode:
+             raise RuntimeError(result.stderr.decode(errors='replace')[-1500:])
+
+     async def upload_dir(self, source, target):
+-        result = await self.exec('mkdir -p ' + shlex.quote(target), user='root')
++        result = await self.exec('mkdir -p ' + shlex.quote(target))
++        if result.return_code and not self.sealed:
++            result = await self.exec('mkdir -p ' + shlex.quote(target), user='root')
+         if result.return_code:
+             raise RuntimeError(result.stderr)
++        writable = await self.exec('test -w ' + shlex.quote(target))
+         stream = io.BytesIO()
+         with tarfile.open(fileobj=stream, mode='w') as archive:
+             def owned(info):
+@@ -70,7 +106,15 @@
+                 info.uname = info.gname = ''
+                 return info
+             archive.add(source, arcname='.', filter=owned)
+-        result = subprocess.run(['docker', 'cp', '-', self.name + ':' + target],
+-                                input=stream.getvalue(), capture_output=True, timeout=240)
++        if self.sealed or writable.return_code == 0:
++            # docker cp cannot reliably populate tmpfs mounts. Extract in the
++            # container's mount namespace, keeping the unprivileged owner.
++            result = await self._run(['docker', 'exec', '-i', '--user', self.default_user,
++                     self.name, '/usr/bin/python3', '-c', self.security_bootstrap,
++                     '/bin/tar', '-xpf', '-', '--no-same-owner', '-C', target],
++                     data=stream.getvalue(), timeout=240)
++        else:
++            result = await self._run(['docker', 'cp', '-', self.name + ':' + target],
++                                     data=stream.getvalue(), timeout=240)
+         if result.returncode:
+             raise RuntimeError(result.stderr.decode(errors='replace')[-1500:])
+diff --git a/frontier_submit.py b/frontier_submit.py
+--- a/frontier_submit.py
++++ b/frontier_submit.py
+@@ -14,6 +14,7 @@
+ import stat
+ import sys
+ import tarfile
++import tempfile
+ import time
+ from urllib.parse import urlsplit
+
+@@ -236,11 +237,27 @@
+         raise SubmitError("Driver submission response is invalid")
+     result = {"schema_version": SCHEMA, "operation": "final", "state": "accepted",
+               "payload_id": payload_id, "verification_id": verification_id}
+-    FINAL_RECEIPT.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+-    descriptor = os.open(FINAL_RECEIPT, flags, 0o600)
+-    with os.fdopen(descriptor, "wb") as destination:
+-        destination.write(canonical(result)); destination.flush(); os.fsync(destination.fileno())
++    if "accepted_at" in view:
++        result["accepted_at"] = view["accepted_at"]
++    temporary = None
++    try:
++        FINAL_RECEIPT.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
++        descriptor, temporary = tempfile.mkstemp(dir=FINAL_RECEIPT.parent, prefix=".final-")
++        with os.fdopen(descriptor, "wb") as destination:
++            destination.write(canonical(result))
++            destination.flush()
++            os.fsync(destination.fileno())
++        os.replace(temporary, FINAL_RECEIPT)
++    except OSError:
++        # Remote acceptance is the authority even when this local cache fails.
++        # Repeating final with the same tar replays the remote intent and repairs it.
++        result["receipt_pending_recovery"] = True
++    finally:
++        if temporary is not None:
++            try:
++                Path(temporary).unlink(missing_ok=True)
++            except OSError:
++                pass
+     return result
+
+
+diff --git a/submission_bridge.py b/submission_bridge.py
+--- a/submission_bridge.py
++++ b/submission_bridge.py
+@@ -3,12 +3,17 @@
+ This is a single-host experiment adapter, not the upstream Management/Driver
+ implementation. Every accepted train request uses its real verifier output.
+ """
++import copy
+ import hashlib
+ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+ import json
++import logging
++import os
+ from pathlib import Path
++import re
+ import secrets
+ import threading
++import tempfile
+ import time
+ import uuid
+
+@@ -34,21 +39,102 @@
+         self.final = None
+         self.final_at = None
+         self.rejected_requests = 0
++        self._pending_requeued = False
++        self.root.mkdir(parents=True, mode=0o700, exist_ok=True)
++        if self.root.stat().st_mode & 0o077:
++            raise ValueError('trial directory must be owner-only')
+         (self.root/'payloads').mkdir(parents=True, mode=0o700, exist_ok=True)
++        self.recovery_path = self.root/'trial-recovery.json'
++        if self.recovery_path.exists():
++            self._restore()
++        elif (self.root/'submission-state.json').exists():
++            raise ValueError('v1 observation is not a recoverable trial; use a new directory')
+
+     def snapshot(self):
+         return {'arm': self.arm, 'phase': self.phase, 'deadline': self.deadline,
+                 'train_calls': self.train_calls, 'train_wall_seconds': self.train_wall_seconds,
+                 'saved_payload': self.saved, 'final_payload': self.final,
++                'final_at': self.final_at,
+                 'jobs': {k: {x: v[x] for x in ['mode', 'state', 'payload_id']}
+                          for k, v in self.jobs.items()},
+                 'rejected_requests': self.rejected_requests}
+
++    def _recovery(self):
++        return {'version': 2, 'arm': self.arm, **{key: copy.deepcopy(getattr(self, key))
++                for key in ('token', 'deadline', 'phase', 'payloads', 'jobs', 'idempotency',
++                            'train_calls', 'train_wall_seconds', 'saved', 'final',
++                            'final_at', 'rejected_requests')}}
++
++    def _restore(self):
++        path = self.recovery_path
++        if path.is_symlink() or path.stat().st_mode & 0o077:
++            raise ValueError('recovery record must be an owner-only regular file')
++        record = json.loads(path.read_text())
++        if record.get('version') != 2 or record.get('arm') != self.arm:
++            raise ValueError('recovery identity mismatch')
++        if set(record) != set(self._recovery()):
++            raise ValueError('incomplete recovery record')
++        for identifier, payload in record['payloads'].items():
++            digest = payload['sha256']
++            if (not re.fullmatch(r'sha256:[0-9a-f]{64}', digest)
++                    or payload['purpose'] not in ('train', 'final')
++                    or identifier != 'payload_'+digest.removeprefix('sha256:')+'_'+payload['purpose']):
++                raise ValueError('recovery payload identity mismatch')
++            source = self.root/'payloads'/(identifier+'.tar')
++            if source.is_symlink() or 'sha256:'+hashlib.sha256(source.read_bytes()).hexdigest() != digest:
++                raise ValueError('recovery payload bytes mismatch')
++            payload['path'] = str(source)
++        for key, value in record.items():
++            if key not in ('version', 'arm'):
++                setattr(self, key, value)
++        # Never replay an uncertain native evaluation or refund its opportunity.
++        # The controller must reconcile its original worker/result separately.
++        for job in self.jobs.values():
++            if job['state'] == 'running':
++                job.update(state='failed', failure={'code': 'controller_recovery_required',
++                           'message': 'Reconcile the original native worker and result.',
++                           'retryable': False})
++
++    @staticmethod
++    def _write(path, value):
++        descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix='.'+path.name+'-')
++        try:
++            with os.fdopen(descriptor, 'w') as output:
++                json.dump(value, output, indent=2, allow_nan=False)
++                output.flush()
++                os.fsync(output.fileno())
++            os.replace(temporary, path)
++        finally:
++            try:
++                Path(temporary).unlink(missing_ok=True)
++            except OSError:
++                pass
++
+     def persist(self):
+-        p = self.root/'submission-state.json'
+-        temporary = p.with_suffix('.pending')
+-        temporary.write_text(json.dumps(self.snapshot(), indent=2))
+-        temporary.replace(p)
++        with self.lock:
++            self._write(self.recovery_path, self._recovery())
++            try:
++                self._write(self.root/'submission-state.json', self.snapshot())
++            except OSError:
++                # An observation failure cannot undo an accepted durable intent.
++                logging.getLogger(__name__).warning('recovery committed; inspection projection unavailable')
++
++    def requeue_pending(self):
++        """Call once after controller recovery, with the old scorer stopped."""
++        with self.lock:
++            if self._pending_requeued:
++                return
++            if self._needs_reconciliation():
++                raise Rejected(409, 'original native work requires reconciliation')
++            self.persist()
++            for identifier, job in self.jobs.items():
++                if job['state'] == 'queued' and job['mode'] == 'train':
++                    self.queue.put((self, identifier))
++            self._pending_requeued = True
++
++    def _needs_reconciliation(self):
++        return any(job.get('failure', {}).get('code') == 'controller_recovery_required'
++                   for job in self.jobs.values())
+
+     def start(self, seconds):
+         with self.lock:
+@@ -73,10 +159,20 @@
+                 if old != fingerprint:
+                     raise Rejected(409, 'idempotency key is bound to different bytes')
+                 return status, response
+-            status, result = self._request(method, path, body, headers)
+-            if key:
+-                self.idempotency[key] = (fingerprint, status, result)
+-            self.persist()
++            before = self._recovery()
++            try:
++                status, result = self._request(method, path, body, headers)
++                if key:
++                    self.idempotency[key] = (fingerprint, status, copy.deepcopy(result))
++                self.persist()
++            except BaseException:
++                for name, value in before.items():
++                    if name not in ('version', 'arm'):
++                        setattr(self, name, value)
++                raise
++            # Admission and the replay response are durable before worker handoff.
++            if method == 'POST' and path == '/v1/verifier-train':
++                self.queue.put((self, result['verification_id']))
+             return status, result
+
+     def _request(self, method, path, body, headers):
+@@ -99,7 +195,20 @@
+             identifier = 'payload_'+digest.split(':')[1]+'_'+purpose
+             if identifier not in self.payloads:
+                 target = self.root/'payloads'/(identifier+'.tar')
+-                target.write_bytes(body)
++                if target.is_symlink() or target.exists():
++                    if target.is_symlink() or target.read_bytes() != body:
++                        raise Rejected(409, 'existing payload bytes mismatch')
++                else:
++                    descriptor, temporary = tempfile.mkstemp(dir=target.parent, prefix='.payload-')
++                    try:
++                        with os.fdopen(descriptor, 'wb') as output:
++                            output.write(body)
++                            output.flush()
++                            os.fchmod(output.fileno(), 0o444)
++                            os.fsync(output.fileno())
++                        os.replace(temporary, target)
++                    finally:
++                        Path(temporary).unlink(missing_ok=True)
+                 # The enclosing host directory remains private; the native
+                 # unprivileged verifier receives this one file read-only.
+                 target.chmod(0o444)
+@@ -112,6 +221,8 @@
+         except (ValueError, KeyError, TypeError):
+             raise Rejected(400, 'unknown trial payload') from None
+         if method == 'POST' and path == '/v1/verifier-train':
++            if self._needs_reconciliation():
++                raise Rejected(409, 'original native work requires reconciliation')
+             if payload['purpose'] != 'train':
+                 raise Rejected(400, 'payload purpose mismatch')
+             if self.train_calls >= 100 or self.train_wall_seconds >= 180000:
+@@ -121,7 +232,6 @@
+                    'mode': 'train', 'state': 'queued', 'metrics': {}}
+             self.jobs[verification] = job
+             self.train_calls += 1
+-            self.queue.put((self, verification))
+             return 202, self.view(job)
+         if method == 'POST' and path == '/v1/submissions/checkpoint':
+             if payload['purpose'] != 'final':
+@@ -139,7 +249,7 @@
+             self.phase = 'final_selected'
+             self.jobs[verification] = {'verification_id': verification,
+                 'payload_id': identifier, 'mode': 'eval', 'state': 'queued', 'metrics': {}}
+-            return 202, {'verification_id': verification}
++            return 202, {'verification_id': verification, 'accepted_at': self.final_at}
+         raise Rejected(404, 'unsupported operation')
+
+
+@@ -178,7 +288,9 @@
+             status, result = error.status, {'error': error.reason}
+             if trial:
+                 trial.rejected_requests += 1
+-        except (ValueError, OSError):
++        except OSError:
++            status, result = 503, {'error': 'trial state commit unavailable'}
++        except ValueError:
+             status, result = 400, {'error': 'malformed request'}
+         raw = json.dumps(result, separators=(',', ':'), allow_nan=False).encode()
+         self.send_response(status)

@@ -7,6 +7,7 @@ import sys
 import pytest
 
 from loopx.capabilities.manager_context.inspection import ManagerInspection, TOOL_NAME
+from loopx.control_plane.runtime.public_safety import validate_public_safe_value
 
 
 def setup(tmp_path, *, owner=True, scope=None, valid=lambda: True):
@@ -77,17 +78,20 @@ def test_repeated_roles_expose_scoped_binding_context_without_host_access(tmp_pa
     result = reader.read(TOOL_NAME, {"view": "agents", "query": "operations"})
     assert result["matched"] == 2
     rows = {row["goal_id"]: row for row in result["rows"]}
+    assert rows["research"]["host_surfaces"] == ["codex-app"]
     assert rows["research"]["registered_host_binding"] == {
         "outcome": "single_candidate", "candidate_count": 1,
         "address_shared": False, "scope": "goals_supplied",
     }
+    assert rows["new-work"]["host_surfaces"] == []
     assert rows["new-work"]["registered_host_binding"]["outcome"] == "no_candidate"
     assert rows["new-work"]["registered_host_binding"]["candidate_count"] == 0
+    assert reader.read(TOOL_NAME, {"view": "agents", "query": "codex-app"})["matched"] == 1
     assert all(row["execution_readiness"] == "not_checked" for row in rows.values())
     assert all(row["context_delivery"] == "not_granted" for row in rows.values())
     assert "private-host-address" not in json.dumps(result)
     assert "hidden-worker" not in json.dumps(result)
-    assert records == [result]
+    assert records[0] == result
     assert not (tmp_path / "manager-context").exists()
 
 
@@ -106,6 +110,63 @@ def test_directory_binding_summary_keeps_multiple_and_shared_addresses(tmp_path)
         "address_shared": True, "scope": "goals_supplied",
     }
     assert page["rows"][0]["execution_readiness"] == "not_checked"
+
+
+@pytest.mark.parametrize(
+    "unsafe_surface",
+    [
+        "/Users/alice/private-host",
+        "~/private-host",
+        "file:///tmp/private-host",
+        "./local-host",
+        "ghp_" + "1234567890abcdefghijklmnopqrstuvwxyz1234",
+        "token:secret-value",
+    ],
+)
+def test_private_host_surface_is_withheld_from_discovery_and_cli_export(tmp_path, unsafe_surface):
+    registry, reader, _ = setup(tmp_path, owner=False)
+    data = json.loads(registry.read_text())
+    data["goals"][0]["coordination"]["thread_agent_bindings"] = [
+        {"agent_id": "worker-00", "host_surface": unsafe_surface, "thread_id": "bound-only-unsafe"},
+        {"agent_id": "worker-34", "host_surface": unsafe_surface, "thread_id": "bound-unsafe"},
+        {"agent_id": "worker-34", "host_surface": "codex-app", "thread_id": "bound-safe"},
+    ]
+    registry.write_text(json.dumps(data))
+
+    restricted = reader.read(TOOL_NAME, {"view": "agents", "goal_id": "research", "limit": 12})
+    validate_public_safe_value(restricted, path="manager_inspection.agents")
+    assert unsafe_surface not in json.dumps(restricted)
+    rows = {row["agent_id"]: row for row in restricted["rows"]}
+    assert rows["worker-00"]["host_surfaces"] == []
+    assert rows["worker-00"]["registered_host_binding"] == {
+        "outcome": "single_candidate",
+        "candidate_count": 1,
+        "address_shared": False,
+        "scope": "goals_supplied",
+    }
+    assert reader.read(TOOL_NAME, {"view": "agents", "query": unsafe_surface})["matched"] == 0
+
+    exported = subprocess.run(
+        [
+            sys.executable, "-m", "loopx.cli", "--registry", str(registry),
+            "--runtime-root", str(tmp_path / "runtime"), "--format", "json",
+            "goal-portfolio", "--manager-view", "agents", "--query", "worker-34",
+            "--goal-id", "research",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert unsafe_surface not in exported.stdout
+    page = json.loads(exported.stdout)
+    validate_public_safe_value(page, path="goal_portfolio.agents")
+    assert page["rows"][0]["host_surfaces"] == ["codex-app"]
+    assert page["rows"][0]["registered_host_binding"] == {
+        "outcome": "multiple_candidates",
+        "candidate_count": 2,
+        "address_shared": False,
+        "scope": "goals_supplied",
+    }
 
 
 def test_stopped_is_historical_not_a_delivery_target(tmp_path):
@@ -183,8 +244,12 @@ def test_conversation_resolves_existing_peer_from_real_read_only_host_store(tmp_
     home = tmp_path / "host"
     home.mkdir()
     rollout = home / "current.jsonl"
-    rollout.write_text(json.dumps({"type": "session_meta", "payload": {"id": "current"}}) + "\n" + json.dumps({"timestamp": "2026-01-01T00:00:00Z", "type": "event_msg",
-        "payload": {"type": "task_complete"}}) + "\n")
+    rollout.write_text(
+        json.dumps({"type": "session_meta", "payload": {"id": "current", "model_provider": "openai"}}) + "\n"
+        + json.dumps({"timestamp": "2026-01-01T00:00:00Z", "type": "event_msg", "payload": {"type": "task_started", "turn_id": "turn-1"}}) + "\n"
+        + json.dumps({"timestamp": "2026-01-01T00:00:00Z", "type": "turn_context", "payload": {"turn_id": "turn-1", "model": "gpt-6.1-sol", "effort": "max"}}) + "\n"
+        + json.dumps({"timestamp": "2026-01-01T00:00:00Z", "type": "event_msg", "payload": {"type": "task_complete", "turn_id": "turn-1"}}) + "\n"
+    )
     db = home / "state_5.sqlite"
     with sqlite3.connect(db) as connection:
         connection.execute("CREATE TABLE threads(id TEXT, rollout_path TEXT, archived INTEGER)")
@@ -195,6 +260,11 @@ def test_conversation_resolves_existing_peer_from_real_read_only_host_store(tmp_
     assert result["status"] == "resolved"
     assert result["selected_route"] == {"host_surface": "codex-app", "thread_id": "current"}
     assert result["host_observation"]["state"] == "idle"
+    assert result["execution_identity"]["status"] == "runtime_reported"
+    assert result["execution_identity"]["model"] == "gpt-6.1-sol"
+    assert result["execution_identity"]["provider"] == "OpenAI"
+    assert result["execution_identity"]["reasoning_effort"] == "max"
+    assert result["execution_identity"]["active_turn_verified"] is False
     assert result["host_delivery"] == "not_attempted" and result["authority"] == "locator_only"
     assert records == [result]
     assert before == [p.read_bytes() for p in (registry, db, rollout)]

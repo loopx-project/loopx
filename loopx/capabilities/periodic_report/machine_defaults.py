@@ -111,6 +111,7 @@ def normalize_periodic_report_machine_defaults(
             "route_ref",
             "timezone",
             "schedule",
+            "review_required",
         },
         label="periodic_report",
     )
@@ -160,6 +161,12 @@ def normalize_periodic_report_machine_defaults(
                     f"periodic_report.{field}",
                 )
     schedule = normalize_report_cadence(periodic.get("schedule"))
+    if "review_required" in periodic:
+        if type(periodic["review_required"]) is not bool:
+            raise TypeError("periodic_report.review_required must be a boolean")
+        if periodic["review_required"]:
+            raise ValueError("automatic report review requires an explicit managed Session Goal override")
+        normalized_periodic["review_required"] = False
     if schedule is not None:
         if schedule["timezone"] != timezone:
             raise ValueError("schedule.timezone must match periodic_report.timezone")
@@ -294,6 +301,9 @@ def _normalized_goal_subscription(
             raise ValueError("session tasks require an explicit Goal override")
         normalized = normalize_configuration(config)
         subscription["task"] = normalized["task"]
+    if "review_required" in config:
+        from .goal_configuration import normalize_configuration
+        subscription["review_required"] = normalize_configuration(config)["review_required"]
     schedule = normalize_report_cadence(config.get("schedule"))
     if schedule is not None:
         if schedule["timezone"] != timezone_name:

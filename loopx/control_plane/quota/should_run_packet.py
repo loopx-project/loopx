@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+from typing import Any, cast
 import json
 from .effective_action import EffectiveAction
 from ..effect_runtime import effect_runtime_result
@@ -6,7 +8,6 @@ from .effect_program import ReceiptBoundReplayPhase
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from ...long_task_cadence import reconcile_long_task_cadence_hint
 from ...state_projection import (
@@ -63,6 +64,9 @@ from ..quota.recent_runs import (
 )
 from ..quota.selected_todo_projection import (
     selected_todo_projection as _selected_todo_projection,
+)
+from ..quota.execution_preparation import (
+    apply_selected_todo_execution_preparation,
 )
 from ..quota.stall_repair import (
     stall_repair_blocked_action_scope,
@@ -295,7 +299,7 @@ def _apply_agent_monitor_only_precedence(
     if not monitor_only or inbox_priority_due:
         return
     work_lane = (
-        payload.get("work_lane_contract")
+        cast(dict[str, Any], payload.get("work_lane_contract"))
         if isinstance(payload.get("work_lane_contract"), dict)
         else {}
     )
@@ -796,8 +800,8 @@ class _QuotaDecisionRoute:
     agent_scope_frontier: dict[str, Any] | None
     agent_lane_frontier_hint: dict[str, Any] | None
     state_action_projection_warning: dict[str, Any] | None
-    active_state_next_action_text: str
-    latest_run_recommended_action_text: str
+    active_state_next_action_text: str | None
+    latest_run_recommended_action_text: str | None
     next_action_warning: dict[str, Any] | None
     goal_route_hint: dict[str, Any] | None
     payload_work_lane_contract: dict[str, Any] | None
@@ -901,7 +905,7 @@ def _with_lane_recommendation(
         context = lane_recommendation_context(source, agent_id=actor,
             selected_todo=agent_lane_next_action, task=task,
             prior_resolution=latest_lane_recommendation_from_status(
-                prepared.status_payload, goal_id=prepared.safe_goal_id, agent_id=actor))
+                prepared.status_payload, goal_id=prepared.safe_goal_id, agent_id=cast(str, actor)))
         agent_lane_next_action = context["selected_todo"]
     return agent_lane_next_action
 
@@ -1157,7 +1161,7 @@ def _resolve_quota_should_run_route(
     if receipt_bound_deferred:
         # The no-spend route and its public next action must describe the
         # same committed binding, even when summaries offer independent work.
-        selected_recommended_action = prepared.work_lane_contract["action"]
+        selected_recommended_action = cast(dict[str, Any], prepared.work_lane_contract)["action"]
     elif (
         not replan_decision_allowed
         and not receipt_bound_monitor_settled
@@ -1360,11 +1364,14 @@ def _quota_payload_context(prepared: _QuotaDecisionPreparation, route: _QuotaDec
             )
             if prepared.project_asset
             else None,
-        "long_task_cadence_hint": prepared.item.get("long_task_cadence_hint")
+        "long_task_cadence_hint": cast(dict[str, Any], prepared.item.get("long_task_cadence_hint"))
             if isinstance(prepared.item.get("long_task_cadence_hint"), dict)
             else None,
         "handoff_readiness": prepared.item.get("handoff_readiness"),
-        "goal_boundary": prepared.goal_boundary,
+        "goal_boundary": (
+            {**(prepared.goal_boundary or {}), "handoff_mode": prepared.item["handoff_mode"]}
+            if prepared.item.get("handoff_mode") is not None else prepared.goal_boundary
+        ),
         "plan_summary": prepared.plan.get("summary")
     }
 
@@ -1606,7 +1613,7 @@ def _build_active_quota_payload(
         blocked_priority_fallback=prepared.blocked_priority_fallback,
     )
     attention_queue = (
-        prepared.status_payload.get("attention_queue")
+        cast(dict[str, Any], prepared.status_payload.get("attention_queue"))
         if isinstance(prepared.status_payload.get("attention_queue"), dict)
         else {}
     )
@@ -1693,6 +1700,23 @@ def _build_quota_should_run_payload(
         payload["delivery_workspace_isolation"] = observe_goal_delivery_workspace_isolation(
             prepared.item, selected_todo,
         )
+    apply_selected_todo_execution_preparation(
+        payload,
+        runtime_root=_interaction_runtime_root(runtime_root, prepared.status_payload),
+        goal_id=prepared.safe_goal_id,
+        agent_id=quota_decision_agent_id(payload) or prepared.requested_agent_id,
+        obligation=(
+            payload["execution_obligation"]
+            if isinstance(payload.get("execution_obligation"), dict)
+            else None
+        ),
+        recommendation=(
+            payload["heartbeat_recommendation"]
+            if isinstance(payload.get("heartbeat_recommendation"), dict)
+            else None
+        ),
+        receipt_bound=prepared.receipt_bound_todo_id is not None,
+    )
     _attach_automation_cadence_readback(
         payload,
         goal_id=prepared.safe_goal_id,

@@ -278,7 +278,7 @@ Todo 关联保留既有可恢复边界与 claim/lease 证明；恢复旧批次�
 - 选中的分支、置信度、hazards 与 reason codes；
 - 被排除的 `continuous_monitor` 诊断——仍可见，但绝不进入探索调度器或消耗分支宽度；
 - 基线串行执行与 DSpark 风格选中前缀的 dry-run A/B 估计（`ab_result.estimated_speedup_vs_baseline`）；
-- 供 operator 或注册 peer runner 显式执行的 `loopx todo claim` / `loopx task-lease acquire` 建议；
+- 供 operator 或注册 peer runner 执行的普通 `loopx todo claim` 建议；认领管理执行并返回任务引用；
 - 保持 packet 咨询性、而非替代 `quota should-run` 的安全边界。
 
 advancement todo 可通过挂一个或多个显式 Explore node id 选择 typed 结果诊断：
@@ -320,15 +320,17 @@ loopx explore worker-branch-plan --goal-id <id> --worker-width 5 \
 
 资源输入可选。没有 `--resource-capacity` 时，无 lane 与 legacy todos 保留现有 width/scheduler 行为。资源感知模式下，无 tag todos 保持原来的无约束行为；带 tag lane 必须有匹配的声明容量。使用没有匹配容量的 usage 会 fail closed，以捕捉拼错的 lane key。
 
+Lane key 会统一大小写、空格与连字符（`LONG POOL` 和 `long-pool` 都表示 `long_pool`）。CLI 与映射输入都会拒绝规范化后的重复 key，避免覆盖容量或占用。计数必须是非负整数；布尔值与非整数小数会被拒绝。
+
 这仍是仅分析证据：`resource_portfolio.score_delta=0`、typed evidence 保持 `score_delta=0`、planner 只读。容量与占用不 claim todo、不 acquire lease、不 launch worker、不写状态、不授予 quota 权威。它们只约束预测 portfolio；执行仍进入下面描述的正常 LoopX 生命周期。
 
 该命令只读，需要开启 Goal 有效模式。它设计为**叠加在现有 LoopX harness 之上**，而不是并排或取代：
 
 1. LoopX 提供 harness 输入：quota/status 上下文、open agent todo 投影、explore result 投影、所有权、能力、写作用域元数据。
 2. opt-in planner 把 todos 分组为 worker-lane 候选，用 DSpark 风格 confidence/prefix/load 打分选择 worker branch 前缀。
-3. 执行必须回到正常 LoopX 路径：`quota should-run`、`todo claim`、`task-lease acquire`、worker 执行、`explore node|edge|finding`、`refresh-state`、`quota spend-slot`。
+3. 执行必须回到正常 LoopX 路径：`quota should-run`、`todo claim`、worker 执行、`explore node|edge|finding`、`refresh-state`、`quota spend-slot`。
 
-因此 packet 对已 opt-in 的 goal 包含 `harness_compatibility` 与 `boundary` 字段：`replaces_loopx_runtime=false`、`launches_workers=false`、`claim_and_lease_are_suggested_only=true`；deny-by-default 的 disabled packet 携带 `boundary` 块和 opt-in `required_contract`。packet 可被控制器或 operator 用来决定启动哪些 worker，但不能自行 launch worker 或变更控制面。
+因此 packet 对已 opt-in 的 goal 包含 `harness_compatibility` 与 `boundary` 字段：`replaces_loopx_runtime=false`、`launches_workers=false`、`claim_is_suggested_only=true`；deny-by-default 的 disabled packet 携带 `boundary` 块和 opt-in `required_contract`。packet 可被控制器或 operator 用来决定启动哪些 worker，但不能自行 launch worker 或变更控制面。
 
 ### 每 Goal 独立 Opt-In 门控
 

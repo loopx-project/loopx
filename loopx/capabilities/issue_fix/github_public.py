@@ -333,6 +333,81 @@ def _fetch_issue_comment_metadata(
     return {"comments": comments}
 
 
+def _fetch_body_free_event_list(
+    gh: str, endpoint: str, jq_filter: str, *, timeout_seconds: float
+) -> list[Any]:
+    result = subprocess.run(
+        [
+            gh,
+            "api",
+            "-H",
+            "Accept: application/vnd.github+json",
+            "--paginate",
+            endpoint,
+            "--jq",
+            jq_filter,
+        ],
+        check=False,
+        text=True, encoding="utf-8", errors="replace",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=timeout_seconds,
+    )
+    if result.returncode != 0:
+        raise RuntimeError("gh pull request event metadata request failed")
+    # --paginate with --jq emits one JSON array per page.
+    events: list[Any] = []
+    for line in result.stdout.splitlines():
+        if not line.strip():
+            continue
+        page = json.loads(line)
+        if not isinstance(page, list):
+            raise RuntimeError("pull request event metadata must be a JSON array")
+        events.extend(page)
+    return events
+
+
+def fetch_github_pull_request_event_metadata(
+    *, owner: str, repo: str, number: int, timeout_seconds: float
+) -> dict[str, Any]:
+    """Fetch PR issue comments, reviews and review comments without bodies.
+
+    Each item keeps only the provider id, author login, author association,
+    timestamps and html URL so a host-asserted correction can be matched to
+    the event that carried it.
+    """
+
+    gh = shutil.which("gh")
+    if not gh:
+        raise RuntimeError("pull request event metadata fetch requires GitHub CLI `gh`")
+    comment_filter = (
+        "[.[] | {id: .id, author: .user.login, "
+        "author_association: .author_association, created_at: .created_at, "
+        "updated_at: .updated_at, url: .html_url}]"
+    )
+    review_filter = (
+        "[.[] | {id: .id, author: .user.login, "
+        "author_association: .author_association, submitted_at: .submitted_at, "
+        "url: .html_url}]"
+    )
+    base = f"repos/{owner}/{repo}"
+    return {
+        "comments": _fetch_body_free_event_list(
+            gh, f"{base}/issues/{number}/comments?per_page=100", comment_filter,
+            timeout_seconds=timeout_seconds,
+        ),
+        "reviews": _fetch_body_free_event_list(
+            gh, f"{base}/pulls/{number}/reviews?per_page=100", review_filter,
+            timeout_seconds=timeout_seconds,
+        ),
+        "reviewComments": _fetch_body_free_event_list(
+            gh, f"{base}/pulls/{number}/comments?per_page=100", comment_filter,
+            timeout_seconds=timeout_seconds,
+        ),
+        "body_captured": False,
+    }
+
+
 def _parse_github_timestamp(value: Any) -> datetime | None:
     if not value:
         return None

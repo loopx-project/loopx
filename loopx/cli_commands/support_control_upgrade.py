@@ -86,6 +86,8 @@ def build_upgrade_plan(
     doctor_payload: dict[str, Any] | None = None,
     registry_path: Path | None = None,
     runtime_root: str | None = None,
+    build_from_source: bool = False,
+    allow_downgrade: bool = False,
 ) -> dict[str, Any]:
     doctor = (
         doctor_payload
@@ -111,8 +113,11 @@ def build_upgrade_plan(
         doctor_payload=doctor,
         registry_path=registry_path,
         runtime_root=runtime_root,
+        build_from_source=build_from_source,
+        allow_downgrade=allow_downgrade,
+        resolve_remote=doctor_payload is None,
     )
-    desktop = desktop_upgrade_plan(selected_ref)
+    desktop = desktop_upgrade_plan(payload.get("source", {}).get("ref") if selected_ref else selected_ref)
     payload["desktop_upgrade"] = desktop
     next_action = payload.get("next_action", {})
     command = next_action.get("command")
@@ -155,12 +160,16 @@ def _restart_app(
     app: Path, request_id: str, channel: str, timeout_seconds: int
 ) -> None:
     # AppleScript receives the path as an argv value, never interpolated code.
-    # A normal quit lets Desktop save navigation and stop its owned services.
+    # Quit is asynchronous. Keep the bounded wait in the same normal App
+    # lifecycle so a replacement cannot lose its request to the old instance.
     subprocess.run(
         [
             "/usr/bin/osascript",
             "-e",
-            "on run argv\n if application (item 1 of argv) is running then\n tell application (item 1 of argv) to quit\n end if\nend run",
+            "on run argv\n if application (item 1 of argv) is running then\n"
+            " tell application (item 1 of argv) to quit\n"
+            " repeat while application (item 1 of argv) is running\n"
+            " delay 0.1\n end repeat\n end if\nend run",
             str(app),
         ],
         check=True,

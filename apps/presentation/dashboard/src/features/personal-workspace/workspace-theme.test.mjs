@@ -26,9 +26,9 @@ assert.match(styles, /data-pw-theme="loopx"/, "LoopX standard owns scoped styles
 assert.match(styles, /--pw-bg: #fafafa/, "LoopX standard uses the design-system canvas");
 assert.match(styles, /--pw-text: #171717/, "LoopX standard uses the design-system ink");
 assert.match(styles, /--pw-line: #ebebeb/, "LoopX standard uses the design-system hairline");
-assert.ok(styles.includes('.personal-home-lanes { gap: 0; border-block: 1px solid #ebebeb'), "LoopX standard uses continuous lane dividers");
 assert.ok(styles.includes('[data-pw-theme="loopx"] .personal-goal-mark { border: 1px solid #ebebeb; border-radius: 8px; background: #fff; color: #171717; }'), "LoopX standard removes decorative Goal tile colors");
-assert.match(styles, /personal-home-goal-card { border-radius: 12px/, "LoopX standard uses the card radius for Goal cards");
+// Home now presents Goal rows. Actual desktop/narrow geometry, long labels and
+// preserved counts are exercised by goal-activity and confirmed-operations.
 assert.match(styles, /personal-channel-composer { border-radius: 6px/, "LoopX standard uses the control radius for the composer");
 assert.match(styles, /personal-channel-composer \.personal-composer-send,[\s\S]*background: #171717/, "LoopX standard uses an ink command button");
 assert.match(styles, /personal-quick-prompts button {[^}]*background: #fff/, "Shortcut actions keep one neutral chip style");

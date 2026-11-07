@@ -11,7 +11,7 @@ from urllib.parse import urlencode
 
 import pytest
 
-from loopx import chat_automation_cadence_api
+from loopx.chat import automation_cadence_api as chat_automation_cadence_api
 from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
 from loopx.control_plane.effect_runtime import (
     EffectRuntimeConflict,

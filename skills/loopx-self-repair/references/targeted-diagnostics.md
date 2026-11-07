@@ -7,7 +7,7 @@ does not authorize borrowing another session's identity or changing providers.
 | Missing fact | First useful surface |
 | --- | --- |
 | Why the current operation was rejected | Its existing JSON error, typed recovery and operation receipt; look up the error before opening other projections |
-| Whether a receipt defect still needs a source fix | Resolve the failing executable and source revision, then run the same synthetic sequence on the intended current base. An installed release can predate an already merged repair; source tests do not prove installed behavior. |
+| Whether a receipt defect still needs a source fix | Resolve the failing executable, imported package and source revision in the same process mode/environment, then run the same synthetic sequence on the intended current base. An inherited `PYTHONPATH` can shadow an editable install in `uv run loopx` while `python -c` or `-m` from the checkout imports correctly. Bind or clear it only for the source-validation command and exercise the real console. An installed release can predate an already merged repair; source tests do not prove installed behavior. |
 | Whether an ambiguous Todo create committed | `loopx --format json todo receipt --goal-id <goal> --operation-id <original-id>`; inspect the receipt before any retry with the same identity |
 | Current lease ownership/version | `loopx --format json task-lease inspect --goal-id <goal> --todo-id <todo>` |
 | One Todo's current state | `loopx --format json todo list --goal-id <goal> --todo-id <todo>`; use `--agent-id` when needed by the existing lane |
@@ -29,6 +29,27 @@ different actions; neither a successful installation nor a fresh Turn proves
 recovery of the original operation.
 
 ## Read one response more than once, not one command
+
+When paths or record IDs are already known, read them directly. Batch independent
+required reads through an existing multi-selector API; otherwise group independent
+read-only calls when the tool supports it. If a location is unknown, discover the
+nearest relevant parent once, then read the needed values. An index describes
+available content; it does not prove that content was read. Avoid selecting both
+a parent and its children, which repeats the same evidence.
+
+For captured LoopX context, repeat `--select` on the original capture/hash.
+Use `--list` only for unknown pointers and `--list-depth 2` for useful nested
+discovery. A missing pointer rejects the entire selection: inspect its parent in
+that same capture before retrying, rather than guessing another batch or rerunning
+admission. For large arrays, prefer the known record selector or a focused item
+over recursively listing every record.
+
+Size a batch against the combined tool-result and retained-history limits, not
+only each child call's limit. Inspect every result, retain errors and running
+process handles, and reduce the batch or page size after truncation. Keep reads
+that depend on earlier results, writes, approvals and uncertain-effect recovery
+sequential. Batching is an efficiency choice, not permission to omit required
+evidence, reuse stale authority or parallelize effects.
 
 When JSON may exceed the tool output budget, capture it once in an ignored
 private file with restricted permissions, or in the tool runtime's value store.
@@ -52,6 +73,33 @@ a relevant mutation, refresh the facts needed by the next operation; a cached
 diagnostic is not current authority.
 
 ## Measure the right latency
+
+### Preserve the command tool's completion state
+
+Read the command tool's result envelope before projecting its stdout. A code cell
+can finish while its child command is still running. For a tool exposing
+`session_id` and `exit_code`, forwarding only `result.output` loses the distinction:
+
+| Observed tool result | Next action |
+| --- | --- |
+| Running session handle, no terminal exit code; stdout may be empty or partial | Retain the handle and collect that same command's completion through the tool's continuation API. Do not submit the command again. |
+| Terminal zero exit code, empty stdout | The command exited silently. If a structured result was required, use the original operation's receipt/capture recovery; empty text does not establish its domain outcome. |
+| Terminal nonzero exit code, empty stdout | Preserve the failure and available stderr/typed recovery. Empty text does not turn failure into a running command or grant a retry. |
+
+Respect the existing timeout, cancellation and stop conditions during collection.
+For example, `text(result)` preserves these fields where `text(result.output)`
+would discard them. With large output, retain the complete result in the tool's
+value store or an authorized private capture and expose its completion metadata
+and pinned reader; obey the original context-read contract for required content.
+The child output budget does not raise the enclosing code cell's output budget.
+
+If the handle was already lost and the operation may have committed, recover its
+original receipt or digest-bound capture before considering another execution.
+Preserve Goal, Agent, Turn and operation identity. A directory listing, a wrapper's
+"completed" label or a later file's existence does not prove the child outcome,
+full context delivery or current authority.
+
+### Separate tool waits from command duration
 
 Distinguish command start-to-exit duration from the tool's initial yield or
 poll wait. Separately record response bytes, output truncation, read count and

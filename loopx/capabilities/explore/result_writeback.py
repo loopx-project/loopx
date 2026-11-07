@@ -98,7 +98,8 @@ def _evolution_plan(attachment, projection, *, agent_id):
     })
 
 
-def _events(attachment, *, goal_id, agent_id, source_id, recorded_at, existing_node=None):
+def _events(attachment, *, goal_id, agent_id, source_id, recorded_at, existing_node=None,
+            _check_execution_measurements=True):
     previous = existing_node or {}
     update = attachment.get("question_update") or {}
     node = build_explore_node_event(
@@ -135,6 +136,7 @@ def _events(attachment, *, goal_id, agent_id, source_id, recorded_at, existing_n
         tags=["writeback-result"],
         execution_observation=attachment.get("execution_observation"),
         measurements=attachment.get("measurements"),
+        _check_execution_measurements=_check_execution_measurements,
         recorded_at=recorded_at,
     )
     relations = [build_explore_edge_event(
@@ -307,6 +309,11 @@ def deliver_result_attachment(
         if len(intents) != 1:
             raise ValueError("Explore result hook did not admit one ingestion intent")
         intent = intents[0]
+        # Exact old payloads remain readable; equivalent current shorthand
+        # still normalizes through the typed owner before comparing intents.
+        if (attachment != intent["payload"]["attachment"]
+                and normalize_result_attachment(attachment) != intent["payload"]["attachment"]):
+            raise ValueError("Explore attachment conflicts with its committed ingestion intent")
         # Readback-only replay after success needs no new lease or Todo write.
         existing_events = load_explore_result_events_strict(
             explore_result_log_path(runtime_root, goal_id), goal_id=goal_id
@@ -317,6 +324,12 @@ def deliver_result_attachment(
             agent_id=agent_id,
             source_id=intent["idempotency_key"],
             recorded_at=committed_at,
+            # A durable terminal intent can describe an old writer's event.
+            # Structural reconstruction is only for exact canonical readback;
+            # a missing event still goes through strict preparation below.
+            _check_execution_measurements=(
+                "explore.result_writeback" not in dispatch.get("replayed_hooks", [])
+            ),
         )
         detail = list_goal_todos(
             registry_path=registry_path,

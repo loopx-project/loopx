@@ -108,17 +108,22 @@ def test_process_launch_permission_denial_preserves_type_and_releases_lock(
     assert not list(tmp_path.glob("start-*.lock"))
 
 
+@pytest.mark.parametrize("command_name", ["status", "plan"])
+@pytest.mark.parametrize("output_format", ["json", "markdown"])
 def test_cli_configuration_collection_reports_host_fault_without_review_execution(
-    tmp_path: Path, monkeypatch, capsys,
+    tmp_path: Path, monkeypatch, capsys, command_name, output_format,
 ) -> None:
     from loopx.cli_commands import quota as command
     from loopx.capabilities.pr_review_queue.goal_configuration import configuration_summary
 
-    _locator(tmp_path, monkeypatch)
+    locator, info = _locator(tmp_path, monkeypatch)
     registry = tmp_path / "registry.json"
     registry.write_text("{}")
 
+    connections = []
+
     def denied(*_args, **_kwargs):
+        connections.append(True)
         raise PermissionError(errno.EPERM, "private sandbox details")
 
     monkeypatch.setattr(effect_runtime.socket, "create_connection", denied)
@@ -130,13 +135,56 @@ def test_cli_configuration_collection_reports_host_fault_without_review_executio
         }}})
 
     monkeypatch.setattr(command, "collect_status", collect)
-    assert main(["--format", "json", "--registry", str(registry), "--runtime-root",
-                 str(tmp_path), "quota", "status"]) == 1
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["ok"] is False
-    assert payload["error_code"] == "quota_runtime_permission_denied"
-    assert "host-approved" in payload["health_items"][0]["recommended_action"]
-    assert "private sandbox" not in json.dumps(payload)
+    assert main(["--format", output_format, "--registry", str(registry), "--runtime-root",
+                 str(tmp_path), "quota", command_name]) == 1
+    output = capsys.readouterr().out
+    if output_format == "json":
+        payload = json.loads(output)
+        assert payload["ok"] is False
+        assert payload["error_code"] == "quota_runtime_permission_denied"
+        assert "host-approved" in payload["health_items"][0]["recommended_action"]
+    else:
+        assert "- ok: `False`" in output
+        assert "host-approved" in output
+    assert "private sandbox" not in output
+    assert len(connections) == 1, "failure presentation must not reconnect"
+    assert json.loads(locator.read_text()) == info
+    assert registry.read_text() == "{}"
+
+
+@pytest.mark.parametrize("turn_envelope", [False, True])
+@pytest.mark.parametrize("output_format", ["json", "markdown"])
+def test_failed_guard_keeps_host_recovery_without_runtime_presentation(
+    tmp_path: Path, monkeypatch, capsys, turn_envelope, output_format,
+) -> None:
+    from loopx.cli_commands import quota as command
+    from loopx.cli_runtime import print_payload
+
+    registry = tmp_path / "registry.json"
+    registry.write_text("{}")
+    args = build_parser().parse_args([
+        "--format", output_format, "quota", "should-run", "--goal-id", "fixture-goal",
+        *(["--turn-envelope"] if turn_envelope else []),
+    ])
+
+    def denied(*_args, **_kwargs):
+        raise effect_runtime.EffectRuntimeHostPermissionError()
+
+    monkeypatch.setattr(command, "_prepare_quota_command_execution", denied)
+    monkeypatch.setattr(effect_runtime, "effect_runtime_result",
+        lambda *_a, **_k: pytest.fail("failed guard must not invoke runtime projection"))
+    assert command.handle_quota_command(
+        args, registry_path=registry, runtime_root_arg=str(tmp_path),
+        print_payload=print_payload, append_cli_rollout_event=lambda *_a, **_k: {},
+    ) == 1
+    output = capsys.readouterr().out
+    assert "host-approved" in output
+    if output_format == "json":
+        payload = json.loads(output)
+        assert payload["ok"] is False and payload["should_run"] is False
+        assert payload["error_code"] == "quota_runtime_permission_denied"
+    else:
+        assert "- ok: `False`" in output
     assert registry.read_text() == "{}"
 
 

@@ -13,6 +13,7 @@ from loopx.control_plane.testing.capability_monitor_repair_tool_behavior import 
     _build_capability_repair_fixture,
 )
 from loopx.control_plane.testing.model_tool_behavior import (
+    QuotaToolContext,
     scripted_assistant_response as _scripted_assistant_response,
     scripted_exec_tool_response as _tool_response,
 )
@@ -31,10 +32,10 @@ def _projected_reentry_command(request: Mapping[str, Any]) -> str:
         if not isinstance(message, Mapping) or message.get("role") != "tool":
             continue
         try:
-            packet = json.loads(str(message.get("content") or ""))
+            packet = QuotaToolContext.from_output(str(message.get("content") or "")).packet
         except json.JSONDecodeError:
             continue
-        reentry = packet.get("runtime_capability_reentry")
+        reentry = (packet.get("interaction_contract") or {}).get("cli_channel", {}).get("runtime_capability_reentry")
         if isinstance(reentry, Mapping):
             return str(reentry["candidates"][0]["command"])
     raise AssertionError("quota result did not project runtime capability re-entry")
@@ -122,14 +123,13 @@ def test_real_quota_capability_repair_executes_before_monitor_fallback(
     )
     assert fixture.task_body in trigger_message
 
-    quota_result = json.loads(requests[1]["messages"][-1]["content"])
-    quota_keys = list(quota_result)
-    assert (
-        quota_keys.index("heartbeat_receipt")
-        < quota_keys.index("runtime_capability_reentry")
-        < quota_keys.index("interaction_contract")
-        <= 8
-    )
+    quota_result = QuotaToolContext.from_output(requests[1]["messages"][-1]["content"]).packet
+    # Native output is navigation, not an ordering of duplicated inline keys.
+    # Preserve receipt metadata and validate the canonical repair owner below;
+    # capability repair does not itself establish admission or settlement.
+    assert isinstance(quota_result["heartbeat_receipt"], Mapping)
+    assert quota_result["interaction_contract"]["cli_channel"][
+        "runtime_capability_reentry"]["candidates"]
     assert quota_result.get("selected_todo") is None
     assert quota_result["interaction_contract"]["mode"] == (
         "capability_bridge_repair"

@@ -156,6 +156,8 @@ export async function executeCanonicalTaskLeaseLifecycle(store: AuthorityStore, 
     if (decision.outcome === "rejected" || decision.outcome === "conflict") {
       return {...failed(decision.code, decision.code === "handoff_mode_retired"
         ? "Legacy ownership cannot renew or transfer execution; release retained leases and review handoff-mode plan-migration/migrate."
+        : decision.code === "lease_cas_mismatch"
+          ? "lease owner or idempotency key mismatch; retain the original execution owner and key for this lease generation"
         : `canonical task lease ${input.operation} rejected: ${decision.code}`),
         handoff_mode: mode, expected_version: input.expected_version, actual_version: leaseVersion(lease),
         ...(todo ? {todo_status: todo.status, claimed_by: todo.claimed_by ?? null, excluded_agents: excluded} : {})};

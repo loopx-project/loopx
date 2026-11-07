@@ -6,6 +6,14 @@ validation only; resolving a source merge followed by a build produces one
 coherent HTML/JavaScript/CSS set. Do not concatenate competing HTML entrypoints or
 asset-retention manifests when resolving an older PR.
 
+The source launcher (`bash scripts/dashboard-dev.sh`, also used by source-mode
+`loopx dashboard`) needs Node.js 22.22.3 or newer for the control plane, even
+when an older Node can run Vite. It uses the runtime's existing version rule,
+tries compatible installed NVM candidates, and rejects unsupported runtimes
+before installing frontend dependencies. For a UI-only preview, run
+`npm run dev:web` in `apps/presentation/dashboard`; that command does not start
+the control plane or change the installed runtime.
+
 For owner-authorized reads of existing runtimes, shared access lives in
 `loopx.control_plane.status.goal_source`. Native status and Explore owners retain
 their semantics; this Python IO provider adds neither decisions nor lifecycle
@@ -163,12 +171,142 @@ matches. Search retains the existing authorized source scope and bounded scan;
 partial/unreadable records stay explicitly incomplete, and **Retry** repeats the
 same query. Browsing does not acknowledge, cancel or execute a request.
 
+The dialog keeps **Load next page** and its loaded/total count in a fixed footer,
+including an unavailable count while the first page is loading. Opening it reads
+the inventory; a closed dialog does not rescan history on conversation arrivals.
+Arrivals mark **Conversation updated** beside Refresh; they do not cancel or
+restart an active read or keep pagination busy. Opening, searching, paging and
+explicitly refreshing read current facts. Request authorization, receipt/agenda
+classification and search still cover
+the existing bounded inventory on every HTTP read. Linked Core work is fetched
+only when **Linked work and records** is expanded, through the same authorized
+reader and current request revision. It is a separate current observation, not
+part of the request ordering/paging digest. Original conversations remain readable
+through their existing complete-history reader. The 2,000-entry discovery bound
+and explicit incomplete coverage remain; this change does not claim an unbounded
+history index or an atomic snapshot.
+
+Inventory and original-history HTTP reads both pin the shared runtime code
+revision once per request. Without that boundary, every collaboration rule on a
+large history page requalified the same source tree and could exhaust the
+original reader's deadline. This reuses the existing request scope; each new
+HTTP read still qualifies its code, and current receipts and source permissions
+are reread. It caches no authorization or completion decision.
+
 在管家页头打开**委派**，输入请求内容、Goal、Agent 或请求 ID 后点**搜索**。
 查询不区分大小写，匹配原始问题及当前交办的目的/背景，先筛选再分页。
 **全部记录**包括已回传和已取消的请求；展开可回看交办、关联工作及原对话。
 **清空**恢复列表。页头数量仍表示全部待跟进请求，并非搜索命中数；读取不完整
 时保留提示，**重试**沿用当前查询。搜索沿用既有来源授权和扫描上限，不确认、
 取消或执行任何请求。
+
+分页栏固定显示**加载下一页**和已显示/匹配数量，首次读取时也保留入口与未知数量。
+关闭窗口不扫描历史；阅读期间的对话消息只提示更新，不打断读取或持续占用分页。
+打开、搜索、翻页和手动刷新仍核验当前来源与回执。**关联工作与记录**展开后才读取
+当前任务，且绑定原请求版本。原对话继续沿完整历史读取；既有 2,000 条发现上限与
+覆盖不完整提示保留，不据此宣称无界历史或原子快照。
+清单与原对话的每个 HTTP 请求只核验一次共享运行时代码版本，避免长历史逐条规则
+重复扫描同一源码。后续 HTTP 请求仍独立核验代码；当前回执和来源权限仍重新读取，
+不缓存授权或完成判断。
+
+The packaged synthetic reader below shows the previous layout and the fixed
+footer. No live conversation or model result is used. During loading the footer
+remains visible; after loading it provides the next page at desktop and narrow
+widths. 这些图使用打包后的合成数据：加载期间和窄屏均保留分页入口。
+
+![Previous delegation reader](../assets/personal-workspace/delegation-loading/before-desktop.png)
+![Loading with the pagination footer](../assets/personal-workspace/delegation-loading/loading-desktop.png)
+![Loaded desktop reader](../assets/personal-workspace/delegation-loading/after-desktop.png)
+![Narrow reader](../assets/personal-workspace/delegation-loading/after-narrow.png)
+
+### Reading original replies / 阅读原回复
+
+For a bound external conversation, the transcript and delegation's **Original
+conversation** show the original user body with **Reply and thread context**
+closed by default. Expand it to read the exact quoted target and ordered earlier
+thread excerpts. Excerpt labels remain visible inside the reader; this does not
+claim a complete provider thread. Opening long context keeps its summary in view
+instead of following the latest message to the end.
+
+The read projection requires the original Session, Turn and both existing
+transport/Core correlation receipts. Canonical messages, model input and history
+cursors remain unchanged. Missing, changed or unsupported frozen context keeps
+the full original message visible. Browsing neither replays work nor contacts the
+provider to fill missing context.
+
+外部原会话和委派的**原对话**优先显示用户原文，**引用与话题上下文**默认折叠。
+展开后可读准确引用和按原顺序保存的话题节选，长内容不会跳到末尾。节选标记保留，
+不据此宣称完整话题已同步；原 Session、Turn 或任一关联回执不匹配时保留完整旧正文。
+只读投影不改模型输入、历史游标或业务执行。
+
+After building Chat, reproduce the production SQLite/HTTP journey with:
+
+```sh
+node apps/presentation/dashboard/smoke/conversation-reply-browser-smoke.mjs
+node apps/presentation/dashboard/smoke/delegation-media-browser-smoke.mjs
+```
+
+The first uses synthetic provider identity and the real existing frozen-context
+producer; the second also checks the shared reader inside original delegations.
+Both check read-only browsing. Source/receipt negatives live in
+`tests/test_manager_context_roundtrip.py`; captures and limits are described in
+[the history evidence](../assets/personal-workspace/conversation-pagination/README.md).
+
+### Workspace reading and request continuity / 工作区阅读与请求连续性
+
+The home brief counts observed native attention items separately from affected
+Goals and operation delivery. Equal titles never merge identities. Open a request,
+review its existing typed action, and return to that same request; leaving the
+drawer while preview or apply is pending does not let its late response replace
+the new selection. Canonical receipts still read back through their existing owner.
+Linked-source requests remain read-only even when opened directly from home.
+
+Overview and Tasks share source/Goal-scoped filters and view choices in the URL.
+The selected Todo stays addressable when filtered out. Completed lists start
+folded; selecting a completed Todo opens its lane, and switching between board
+and list preserves that expansion. Search over already-listed tasks filters the
+complete owner-scoped snapshot without discarding rows. Changing or clearing a
+saved query restores the matching completions even on a read-only source, where
+local completed-history requests remain disabled. Files opens with a native
+result catalog; select a row to read only that result, retain its exact version on
+refresh, and return to the original row. These readers retain their existing paging
+and error contracts; a missing or changed version is not silently replaced.
+
+Answer reports use semantic headings, a stable table of contents and a manual
+Markdown copy fallback. Return restores the original Session/Message without
+changing the currently selected runtime. Older stable messages may show a
+complete-block excerpt; expanding it preserves the reading position. The newest
+reply and streaming content remain expanded.
+
+Todo creation, combined Goal intention and source requirements use the existing
+400/1000/8000 limits after Python-compatible whitespace normalization and Unicode
+code-point counting. Drafts remain raw until submission. Device and Goal settings
+distinguish a failed write from a known write whose readback failed; the latter
+retains the draft and retries GET without applying again. Changing target still
+discards that target's draft and preview.
+
+首页将原生事项、受影响目标和操作投递分开计数，标题相同不会合并身份。处理时
+可回到原请求；切换或关闭后，迟到的预览/写入回执不会抢回当前选择，原生回读
+仍会保存真实结果。关联来源从首页打开也保持只读。概览与任务共用按来源/Goal
+隔离的路由筛选；成果先列目录，按需读取并固定准确版本，返回恢复原条目。
+完成列表默认收起；选中已完成任务后自动展开，切换看板与列表保留展开状态。
+已列出任务的搜索只筛选完整负责人快照，不删除缓存行；只读来源修改或清空
+已保存的查询也能恢复相应完成项，且不会请求本地完成历史。
+报告提供语义标题、稳定目录和手动复制降级，返回准确原消息；仅旧稳定消息
+默认节选，展开保持阅读位置。输入沿用规范化后的 400/1000/8000 码点限制，
+保留原始草稿。设置的“写入成功、回读未确认”只重试读取，切换目标仍丢弃旧草稿。
+
+After building Chat, the existing `attention-user-action`, `goal-activity`,
+`confirmed-operations`, `answer-presentation`, `managed-goal-results`,
+`research-results`, `team-evidence`, `goal-workspace-create`, `goal-draft`,
+`task-inspector-return`, `steward-model-settings`, `capability-scope`,
+`completed-history-isolation`, `typed-actions`, `conversation-input` and
+`report-download` scenarios
+exercise these boundaries via `examples/personal-workspace-browser-smoke.mjs`.
+Set `LOOPX_PERSONAL_WORKSPACE_PACKAGED=1` and `LOOPX_PERSONAL_WORKSPACE_SCENARIO`
+to the chosen scenario. The existing task-inspector-route and workspace-craft
+smokes cover navigation and narrow ordering. Packaged-browser checks do not
+establish installed native-WebView or live-team qualification.
 
 ## Task-first delivery / 从用户任务开始
 
@@ -335,6 +473,13 @@ uv run --extra test python scripts/chat_bundle.py build --install
 uv run --extra test python scripts/chat_bundle.py verify --source
 uv run --extra test loopx chat --no-open
 ```
+
+`loopx update apply` and `loopx upgrade` keep their detached worker on the
+requesting installation, including when invoked inside another LoopX checkout.
+The caller's working directory and explicit registry/runtime routes remain in
+effect; a workspace or `PYTHONPATH` entry must not select another installation's
+update code. An observer disconnect still leaves one durable worker and the
+existing installation lock, status and result readback in control.
 
 Builds start with current assets only. Use `build --previous /path/to/prior/chat`
 when deliberately carrying a prior local delivery; release and installation

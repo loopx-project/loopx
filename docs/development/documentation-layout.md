@@ -111,6 +111,67 @@ enough reason to break a widely linked path.
 - keep source-backed artifacts inspectable;
 - archive superseded packets without rewriting history.
 
+## Visual Evidence Retention
+
+Keep executable scenarios and synthetic fixture inputs in Git. Generated
+screenshots, recordings and capture manifests describe one execution; store them
+in ignored `output/playwright/` or `.local/` and attach the selected public-safe
+evidence to the PR. The first-screen review requirement still applies, including
+before/after views, tested revision, build/data boundary and material updates.
+Attaching evidence does not require committing its binary files.
+
+| Material | Retention |
+| --- | --- |
+| Test source and fixture inputs needed to reproduce a durable invariant | Track with the owning test; preserve independent and negative cases |
+| Images used by a current guide, design reference or shipped product | Keep one canonical copy, referenced by its consumers |
+| A fixed visual comparison fixture | Track only when its test or explicitly versioned comparison contract needs those exact bytes |
+| One-run screenshots, recordings, capture JSON and before/after galleries | Ignored output plus PR attachments or a durable, revision-pinned artifact |
+| Published release/showcase media | Keep its working distribution path until a verified replacement and all consuming links are ready |
+| Superseded capture packs without an active consumer | Remove from the current tree; retain original evidence through its fixed Git revision or PR |
+
+A README that only indexes a capture pack is not, by itself, a reason to keep
+the pack. Before adding tracked media, name its actual reader or fixture
+contract in the PR. Reuse existing assets; when a view is unchanged, say so
+and reference one image instead of committing identical before/after copies.
+Do not create another archive directory in the same repository for retired
+binary evidence. The old `examples/personal-workspace-browser/evidence/` and
+`screenshots/` output locations are ignored to prevent renewed accumulation.
+
+Before removing a pack, inspect references across documentation, navigation,
+source code, tests and distribution/build scripts, including references to its
+README or manifest. Preserve transitive consumers and distinguish fixture reads
+from screenshot output paths. No static references is a review signal, not proof
+of disuse. Repair current links in the same change, preserve the bytes of retained
+assets, and run the relevant link/asset checks. Retire tests only under the
+[smoke retention rules](good-smokes.md), not because their files are large.
+
+Historical capture packs from the initial cleanup remain inspectable at fixed
+revision `bcb1a8710844bda6b84c2a00cf5d86ba78e126d9`:
+[development captures](https://github.com/loopx-project/loopx/tree/bcb1a8710844bda6b84c2a00cf5d86ba78e126d9/docs/development/assets),
+[browser captures](https://github.com/loopx-project/loopx/tree/bcb1a8710844bda6b84c2a00cf5d86ba78e126d9/examples/personal-workspace-browser),
+and [workspace media](https://github.com/loopx-project/loopx/tree/bcb1a8710844bda6b84c2a00cf5d86ba78e126d9/docs/assets/personal-workspace).
+Use that revision and the original PR to inspect a past result; newly generated
+captures do not replace historical evidence. Deleting files from the current
+tree does not shrink existing Git history. Rewriting shared history is a
+separate maintainer decision, outside routine cleanup.
+
+可执行场景和可复现的合成 fixture 输入保留在 Git；单次运行的截图、录像和 capture
+manifest 放到已忽略的 `output/playwright/` 或 `.local/`，将选定的公开安全证据附在
+PR 中。首屏审阅仍要求前后对照、实际版本、构建/数据边界和变更后的证据更新，
+但不要求把这些二进制文件提交进仓库。
+
+当前指南、设计规范或产品使用的图片保留一份，多个入口复用。固定视觉 fixture
+只有在测试或明确的版本化比较合同需要其原始字节时才长期保留。发布和展示媒体
+须先验证替代地址并迁好所有引用，再移除原分发文件。仅为截图包建立 README 不构成
+长期保留理由；前后视图相同则明确说明并复用一张图。退役产物留在固定 Git 提交或
+原 PR 中，不搬到仓库内另一个 archive 目录。
+
+清理前核对文档、导航、代码、测试和构建/分发脚本的引用，包括 README/manifest 的
+间接引用；区分 fixture 输入和截图输出路径。静态无引用只是审阅线索。当前引用须
+保持可用，保留资源的字节不变，并执行对应链接/资源检查。测试按独立语义和覆盖面
+判断保留，不按体积删除。上述固定版本可回看这次清理前的历史证据；重新生成的图
+不能替代旧结果。删除当前文件不会清除 Git 历史，重写共享历史须另行决策。
+
 ## Placement Checklist
 
 Before adding a public document, answer:

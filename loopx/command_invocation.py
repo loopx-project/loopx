@@ -36,14 +36,45 @@ def loopx_cli_argv(cli_bin: str | None = None) -> list[str]:
     return [program] if program == "loopx" else [program, "--cli-bin", program]
 
 
+def cli_option_args(flag: str, value: object) -> list[str]:
+    """Keep a legal option-looking value from becoming another CLI option."""
+    text = str(value)
+    return [f"{flag}={text}"] if text.startswith("-") else [flag, text]
+
+
 def current_loopx_cli_argv() -> list[str]:
-    """Pin captured readers to this installed interpreter or explicit CLI.
+    """Pin captured readers to this installed release or explicit CLI.
 
     A native Host can run from a project outside the source checkout. An ambient
-    ``loopx`` may be another installation and lack this capture's reader.
+    ``loopx`` may be another installation and lack this capture's reader. The
+    installed launcher also preserves the release root that made this module
+    importable; invoking its Python without that launcher can load a stale module.
     """
     route = loopx_cli_argv()
-    return [sys.executable, "-m", "loopx.entrypoint"] if route == ["loopx"] else route
+    if route != ["loopx"]:
+        return route
+
+    release_root_text = os.environ.get("LOOPX_RELEASE_ROOT", "").strip()
+    if release_root_text:
+        release_root: Path | None = None
+        module_root: Path | None = None
+        launcher: Path | None = None
+        launcher_ready = False
+        try:
+            release_root = Path(release_root_text).expanduser().resolve()
+            module_root = Path(__file__).resolve().parents[1]
+            launcher = release_root / "scripts" / (
+                "loopx.ps1" if os.name == "nt" else "loopx"
+            )
+            launcher_ready = launcher.is_file() and (
+                os.name == "nt" or os.access(launcher, os.X_OK)
+            )
+        except (OSError, RuntimeError):
+            pass
+        if release_root == module_root and launcher is not None and launcher_ready:
+            return loopx_cli_argv(str(launcher))
+
+    return [sys.executable, "-m", "loopx.entrypoint"]
 
 
 def resolve_command_path(

@@ -1,0 +1,459 @@
+{
+  "description": "Complete captured Explore display state from a recent real Grid Turing Robot run. Original wording, recording times, identities, measurements and references are unchanged.",
+  "source_sha256": "d91047d06aa7ef43249bc79e70d8ba53d37a88240c124dcd17a75034ea524375",
+  "source_bytes": 20575,
+  "goal_id": "benchmark-goal",
+  "display_name": "Grid · context off · 2026-11-03",
+  "provenance": {
+    "case_id": "grid_turing_robot",
+    "source_run_id": "grid-sol-xhigh-explore-stride-context-off-20261103-18h-r7",
+    "selection": "Both terminal R7 context arms, selected by recency and complete saved Explore log availability, including negative and unknown observations; no event or score-based sampling.",
+    "capture_kind": "terminal_collected_display_state",
+    "exported_at": "2026-11-03T17:24:14.634397+00:00",
+    "claim_scope": "diagnostic_only",
+    "score_countable": false,
+    "runner_status": "runner_invalid",
+    "limitations": [
+      "The complete saved Explore log is not the complete solver trajectory or a coverage claim for every attempt.",
+      "Recorded confirmed labels are source-authored. Negative and unknown results remain in their original prose.",
+      "No explicit parent or relationship edges were recorded; shared wording or chronological adjacency does not establish causality.",
+      "The two arms have the same logical Goal ID in different runtimes. Load them as independent sources.",
+      "These runs include operational interventions and are not a qualified causal comparison. Local and native measurements retain separate scopes."
+    ],
+    "redactions": [],
+    "boundary": "Display-state events only. No execution/authority store, credentials, raw session transcript, hidden evaluator, workspace or model weights are included."
+  },
+  "source_counts": {
+    "event_count": 11,
+    "event_kinds": {
+      "node": 2,
+      "finding": 9
+    },
+    "statuses": {
+      "resolved": 2,
+      "confirmed": 9
+    },
+    "first_recorded_at": "2026-11-03T06:04:18+00:00",
+    "last_recorded_at": "2026-11-03T14:55:52Z",
+    "edge_count": 0,
+    "parent_records": 0
+  },
+  "events": [
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "2b7d84b345c01fbf",
+      "event_kind": "node",
+      "goal_id": "benchmark-goal",
+      "node_kind": "question",
+      "recorded_at": "2026-11-03T06:04:18+00:00",
+      "result_id": "question_50bda2a8b490f6141421dd06905838ab3a6d497d1bfb8d8df655df376a7e9cb5",
+      "run_id": "explore-result:f541d3f6517716e37d8847940e8e246107f4de2eaf479f487c713665bd2b418c",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "resolved",
+      "summary": "Grid Turing Robot local generated suite; no native generalization claim.",
+      "title": "Can backward color/state packing complete generated routes with substantially fewer resources than periodic packing?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "17d2453a9052a440",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:packed-v2-local40"
+      ],
+      "goal_id": "benchmark-goal",
+      "measurements": [
+        {
+          "candidate_ref": "sha256:3caa8b62e16999df468ac0caca68b792da1bcd87e03e63ca76454634815d70a3",
+          "comparison_scope": "grid-turing:local40:30s-v1",
+          "evaluation_ref": "sha256:7fbe2f5df81193f650cfb2b79e1ed1d991225a8980bcb780c76dc56efb866828",
+          "evidence_ref": "evidence:packed-v2-local40",
+          "higher_is_better": false,
+          "input_revision": "sha256:4a379082f19059e6e8aeda9f7a3ee70c7f356dc2dd5353ac4977df9f9a76a592",
+          "metric": "total_score",
+          "unit": "score",
+          "value": 1938
+        }
+      ],
+      "node_id": "question_50bda2a8b490f6141421dd06905838ab3a6d497d1bfb8d8df655df376a7e9cb5",
+      "recorded_at": "2026-11-03T06:04:18+00:00",
+      "result_id": "finding_f541d3f6517716e37d8847940e8e246107f4de2eaf479f487c713665bd2b418c",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "confirmed",
+      "summary": "Input revision: sha256:4a379082f19059e6e8aeda9f7a3ee70c7f356dc2dd5353ac4977df9f9a76a592 Applicability: Grid Turing Robot local generated suite; no native generalization claim. Observation: All 40 local cases complete; total score 1938, maximum 6.874 s and 21000 KiB. Five-case score falls from 358 to 216. Interpretation: Lookahead that assigns both state and color is the implementation route. Shortest paths preserve T feasibility. Native fixed-case quality and useful further improvements remain to be evaluated in the existing optimization Todo.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Can backward color/state packing complete generated routes with substantially fewer resources than periodic packing?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "13b9e044274a6087",
+      "event_kind": "node",
+      "goal_id": "benchmark-goal",
+      "node_kind": "question",
+      "recorded_at": "2026-11-03T06:22:37+00:00",
+      "result_id": "question_50bda2a8b490f6141421dd06905838ab3a6d497d1bfb8d8df655df376a7e9cb5",
+      "run_id": "explore-result:7695b7f81a2352cf357c7d3c433797b10b282ac6ce81845f92e148e9cd9db8aa",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "resolved",
+      "summary": "Grid Turing Robot local generated suite; no native generalization claim.",
+      "title": "Can backward color/state packing complete generated routes with substantially fewer resources than periodic packing?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "8679228da660d572",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:packed-v3-local40"
+      ],
+      "goal_id": "benchmark-goal",
+      "measurements": [
+        {
+          "candidate_ref": "sha256:391ca3ab068d2ff5559b81f3ff267a626ee1be77c4ba87dd8b2eff1bcb156f82",
+          "comparison_scope": "grid-turing:local40:30s-v1",
+          "evaluation_ref": "sha256:7fbe2f5df81193f650cfb2b79e1ed1d991225a8980bcb780c76dc56efb866828",
+          "evidence_ref": "evidence:packed-v3-local40",
+          "higher_is_better": false,
+          "input_revision": "sha256:4a379082f19059e6e8aeda9f7a3ee70c7f356dc2dd5353ac4977df9f9a76a592",
+          "metric": "total_score",
+          "unit": "score",
+          "value": 1883
+        }
+      ],
+      "node_id": "question_50bda2a8b490f6141421dd06905838ab3a6d497d1bfb8d8df655df376a7e9cb5",
+      "recorded_at": "2026-11-03T06:22:37+00:00",
+      "result_id": "finding_7695b7f81a2352cf357c7d3c433797b10b282ac6ce81845f92e148e9cd9db8aa",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "confirmed",
+      "summary": "Input revision: sha256:4a379082f19059e6e8aeda9f7a3ee70c7f356dc2dd5353ac4977df9f9a76a592 Applicability: Grid Turing Robot local generated suite; no native generalization claim. Observation: Packed_v3 completes all 40 local cases with total 1883 versus 1938 for v2; 31 improve, none regress. Max 16.0328 s and 22356 KiB. Interpretation: Additional shortest-route and backward-placement alternatives improve the same local suite by 2.84% within the runtime limit. Retain v3 locally and the separately native-validated v2 recovery source. Native score 2224 belongs to v2; v3 native evaluation is pending cooldown.",
+      "tags": [
+        "writeback-result"
+      ],
+      "title": "Can backward color/state packing complete generated routes with substantially fewer resources than periodic packing?"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "29b57a2ff80b4a67",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:packed-v6-local40",
+        "research/ALLOCATION_REFINEMENT.md"
+      ],
+      "goal_id": "benchmark-goal",
+      "measurements": [
+        {
+          "candidate_ref": "sha256:5f17f0d630204a2f7ed51a2c84a8fb0a5eda922f7d6b7fc009afcf668951f554",
+          "comparison_scope": "grid-turing:local40:30s-v1",
+          "evaluation_ref": "sha256:7fbe2f5df81193f650cfb2b79e1ed1d991225a8980bcb780c76dc56efb866828",
+          "evidence_ref": "evidence:packed-v6-local40",
+          "higher_is_better": false,
+          "input_revision": "sha256:4a379082f19059e6e8aeda9f7a3ee70c7f356dc2dd5353ac4977df9f9a76a592",
+          "metric": "total_score",
+          "unit": "score",
+          "value": 1856
+        }
+      ],
+      "node_id": "question_50bda2a8b490f6141421dd06905838ab3a6d497d1bfb8d8df655df376a7e9cb5",
+      "recorded_at": "2026-11-03T08:24:32Z",
+      "result_id": "finding_4c5955f2c47f",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "confirmed",
+      "summary": "Same generated input bytes and official tester under the 30-second external limit: total 1856 versus 1866 for v5, nine improvements, zero regressions. The added color-popularity phase follows complete v5 and shares the 24-second internal deadline. Five existing holdout and three fresh large-board cases also pass; max across all 48 is 23.5196 seconds and 23520 KiB. This supports retaining v6 locally. Native v5 is 2139, but v6 has no native result; its next comparison is cooldown-limited. See research/ALLOCATION_REFINEMENT.md and research/results/packed_v6/report.json.",
+      "title": "V6 completes the original 40 local cases for 1856 with adaptive color and state allocation"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "8d75a6d45003bc32",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:packed-v7-local40",
+        "research/GROUPED_STATES.md"
+      ],
+      "goal_id": "benchmark-goal",
+      "measurements": [
+        {
+          "candidate_ref": "sha256:5d1ba686381bd6a4eb88ef695dab9b28faccf6772c849a40d44d58886ab36300",
+          "comparison_scope": "grid-turing:local40:30s-v1",
+          "evaluation_ref": "sha256:7fbe2f5df81193f650cfb2b79e1ed1d991225a8980bcb780c76dc56efb866828",
+          "evidence_ref": "evidence:packed-v7-local40",
+          "higher_is_better": false,
+          "input_revision": "sha256:4a379082f19059e6e8aeda9f7a3ee70c7f356dc2dd5353ac4977df9f9a76a592",
+          "metric": "total_score",
+          "unit": "score",
+          "value": 1850
+        }
+      ],
+      "node_id": "question_50bda2a8b490f6141421dd06905838ab3a6d497d1bfb8d8df655df376a7e9cb5",
+      "recorded_at": "2026-11-03T09:32:00Z",
+      "result_id": "finding_38bb42448035",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "confirmed",
+      "summary": "Same input bytes, official tester and 30-second external limit. V7 scores 1850 versus 1856 for v6 on the original 40 cases, six improvements and no regressions. Five existing holdout cases improve 100 to 98, and three stress cases pass unchanged. Maximum across all 48 is 26.1593 seconds and 22852 KiB. The full v6 search precedes paired-direction packing; its final phase has a 26-second total internal soft cutoff. Shared-pool and one-versus-three probes give no additional gains in their tested cohorts. Native v6 is 2131; v7 has no native result and awaits eligibility. See research/GROUPED_STATES.md.",
+      "title": "V7 completes the same 40 local cases for 1850 using paired-direction states"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "9d9348028e3d3850",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:packed-v8-local40",
+        "research/THREE_GROUPS.md"
+      ],
+      "goal_id": "benchmark-goal",
+      "measurements": [
+        {
+          "candidate_ref": "sha256:5b23e1cc59ee40a8bd20ac9ad51b187a0481350f14407b033055b05ae8f6ad61",
+          "comparison_scope": "grid-turing:local40:30s-v1",
+          "evaluation_ref": "sha256:7fbe2f5df81193f650cfb2b79e1ed1d991225a8980bcb780c76dc56efb866828",
+          "evidence_ref": "evidence:packed-v8-local40",
+          "higher_is_better": false,
+          "input_revision": "sha256:4a379082f19059e6e8aeda9f7a3ee70c7f356dc2dd5353ac4977df9f9a76a592",
+          "metric": "total_score",
+          "unit": "score",
+          "value": 1844
+        }
+      ],
+      "node_id": "question_50bda2a8b490f6141421dd06905838ab3a6d497d1bfb8d8df655df376a7e9cb5",
+      "recorded_at": "2026-11-03T10:35:44Z",
+      "result_id": "finding_59c93c429d7c",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "confirmed",
+      "summary": "Same input bytes, official tester and 30-second external protocol. V8 scores 1844 versus 1850 for v7, six improvements and no regressions on original40. Five reused short cases remain98 and three reused stress cases remain251. All48 pass; max26.1678 seconds and23008 KiB. The complete v7 search precedes six three-group state partitions, within the same26-second total internal soft cutoff. Joint color/state choice adds no gain in two nine-case probes. Direction-color groups match one already-achieved gain in the initial cohort and add none on six additional v8 cases, so remain unselected. Native v7 is separately source-matched at2124 with50/50 passes; v8 native score is unknown. See research/THREE_GROUPS.md.",
+      "title": "V8 completes the same 40 local cases for 1844 using three direction-state groups"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "e2c09dfc1b064778",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:packed-v9-local40",
+        "research/CONDITIONAL_COLORS.md"
+      ],
+      "goal_id": "benchmark-goal",
+      "measurements": [
+        {
+          "candidate_ref": "sha256:d9841a57d345daef50f9cb804b6f84ed73e8cf3215ee0dd781662854d9e4ef2d",
+          "comparison_scope": "grid-turing:local40:30s-v1",
+          "evaluation_ref": "sha256:7fbe2f5df81193f650cfb2b79e1ed1d991225a8980bcb780c76dc56efb866828",
+          "evidence_ref": "evidence:packed-v9-local40",
+          "higher_is_better": false,
+          "input_revision": "sha256:4a379082f19059e6e8aeda9f7a3ee70c7f356dc2dd5353ac4977df9f9a76a592",
+          "metric": "total_score",
+          "unit": "score",
+          "value": 1840
+        }
+      ],
+      "node_id": "question_50bda2a8b490f6141421dd06905838ab3a6d497d1bfb8d8df655df376a7e9cb5",
+      "recorded_at": "2026-11-03T11:40:51Z",
+      "result_id": "finding_50c700341a47",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "confirmed",
+      "summary": "Same input bytes, official tester and 30-second external protocol. V9 scores 1840 versus 1844 for v8, four improvements and no regressions on original40. Reused holdout5 stays98 and stress3 stays251. All48 pass; max26.1552 seconds and22856 KiB. Conditional color preference runs after the complete v8 portfolio within the same26-second total internal soft cutoff. Counts reflect existing output triples whose next state supports the next movement after the preceding cell visit. Allocation-transfer and static permitted-direction probes add no gain on their nine-case cohorts and remain unselected. Native v8 is separately source-matched at2115 with50/50 passes; v9 native feedback is unknown. See research/CONDITIONAL_COLORS.md.",
+      "title": "V9 completes the same 40 local cases for 1840 with next-direction-conditioned repaint colors"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "d934478a9e2c7a12",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "evidence:packed-v10-local40",
+        "research/MERGE_REPAIR.md"
+      ],
+      "goal_id": "benchmark-goal",
+      "measurements": [
+        {
+          "candidate_ref": "sha256:5a47930a4263daa10a1c1f0a2873ee59f5a94cd9cfcf0f88f9ba87f115ac1178",
+          "comparison_scope": "grid-turing:local40:30s-v1",
+          "evaluation_ref": "sha256:7fbe2f5df81193f650cfb2b79e1ed1d991225a8980bcb780c76dc56efb866828",
+          "evidence_ref": "evidence:packed-v10-local40",
+          "higher_is_better": false,
+          "input_revision": "sha256:4a379082f19059e6e8aeda9f7a3ee70c7f356dc2dd5353ac4977df9f9a76a592",
+          "metric": "total_score",
+          "unit": "score",
+          "value": 1834
+        }
+      ],
+      "node_id": "question_50bda2a8b490f6141421dd06905838ab3a6d497d1bfb8d8df655df376a7e9cb5",
+      "recorded_at": "2026-11-03T12:52:45Z",
+      "result_id": "finding_747a75eff5fa",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "confirmed",
+      "summary": "Same input bytes, official tester and 30-second external protocol. V10 scores 1834 versus 1840 for v9, six improvements and no regressions on original40. Reused holdout5 stays98 and stress3 improves251 to250. All48 pass; max26.1982 seconds and23560 KiB. A bounded merging repair phase follows the complete v9 portfolio within the same26-second total soft cutoff. Surviving mapped rules are unreserved hints; each actual input pair is committed once. Straight deletion adds no gain on nine cases. Preferring incumbent input hints adds no resource gain beyond the known base repair in its nine-case follow-up; its one gain matches the earlier standalone result on an identical input program. Native v9 is separately source-matched at2113 with50/50 passes; v10 native feedback is unknown. See research/MERGE_REPAIR.md.",
+      "title": "V10 completes the same 40 local cases for 1834 using symbol merging with partial-table repair"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "351bc93b9a55d336",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "research/PHASE_BUDGET.md",
+        "research/results/packed_v10/report_all_cases.json",
+        "research/results/packed_v11/report_all_cases.json",
+        "research/results/packed_v11/report.json"
+      ],
+      "goal_id": "benchmark-goal",
+      "measurements": [
+        {
+          "candidate_ref": "sha256:b338497fa9523c1003508995ad0f200d300469fecbf5825a89874a64e3815402",
+          "comparison_scope": "grid-turing:local48:30s-v1",
+          "evaluation_ref": "sha256:7fbe2f5df81193f650cfb2b79e1ed1d991225a8980bcb780c76dc56efb866828",
+          "evidence_ref": "research/results/packed_v11/report_all_cases.json",
+          "higher_is_better": false,
+          "input_revision": "sha256:f6496759b49b5987dbc22a1cd7a485d14c279afae60d9940073ab181e1d6d399",
+          "metric": "total_score",
+          "unit": "score",
+          "value": 2181
+        },
+        {
+          "candidate_ref": "sha256:b338497fa9523c1003508995ad0f200d300469fecbf5825a89874a64e3815402",
+          "comparison_scope": "grid-turing:local40:30s-v1",
+          "evaluation_ref": "sha256:7fbe2f5df81193f650cfb2b79e1ed1d991225a8980bcb780c76dc56efb866828",
+          "evidence_ref": "research/results/packed_v11/report.json",
+          "higher_is_better": false,
+          "input_revision": "sha256:4a379082f19059e6e8aeda9f7a3ee70c7f356dc2dd5353ac4977df9f9a76a592",
+          "metric": "total_score",
+          "unit": "score",
+          "value": 1834
+        }
+      ],
+      "node_id": "question_50bda2a8b490f6141421dd06905838ab3a6d497d1bfb8d8df655df376a7e9cb5",
+      "recorded_at": "2026-11-03T13:36:45Z",
+      "result_id": "finding_fba351edeccc",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "confirmed",
+      "summary": "Two fixed-budget alternatives pass pilot12: reserve4 scores618 and reserve8 scores617 versus619 for v10. Select reserve8 under the predeclared maximum72 solver runs. Its production source matches the pilot AST after removing tracing. All48 production cases pass for2181 versus2182. Core40 ties1834 with improvements on10 and24 and regressions on17 and27; short5 ties98; stress3 improves250 to249 on1021. Maximum26.1603 seconds and25016KiB under the same26-second soft cutoff and30-second process limit. Adopt v11 by the declared lower-aggregate criterion and retain all adverse cases. Four-second allocation has no full48 result. Cohorts are reused, not fresh. Native-supported v9 remains2113 with50/50 passes; v10 and v11 have no native result. See research/PHASE_BUDGET.md.",
+      "title": "V11 passes48 local cases for2181 by reserving eight seconds for merge repair"
+    },
+    {
+      "agent_id": "benchmark-agent",
+      "boundary": {
+        "absolute_paths_recorded": false,
+        "credential_values_recorded": false,
+        "raw_logs_recorded": false,
+        "raw_session_transcript_recorded": false,
+        "raw_task_text_recorded": false,
+        "raw_trajectory_recorded": false
+      },
+      "event_id": "2e0f169a424b2988",
+      "event_kind": "finding",
+      "evidence_refs": [
+        "research/CONDITIONAL_TAIL.md",
+        "research/results/conditional_tail_pilot/full_validation.json",
+        "research/results/conditional_tail_2_full/report_all_cases.json",
+        "research/results/conditional_tail_2_full/report.json"
+      ],
+      "goal_id": "benchmark-goal",
+      "measurements": [
+        {
+          "candidate_ref": "sha256:d235a01b40581d68cba564206a83a4c2bd1895fd5c50c199c867643b992f93d8",
+          "comparison_scope": "grid-turing:local48:30s-v1",
+          "evaluation_ref": "sha256:7fbe2f5df81193f650cfb2b79e1ed1d991225a8980bcb780c76dc56efb866828",
+          "evidence_ref": "research/results/conditional_tail_2_full/report_all_cases.json",
+          "higher_is_better": false,
+          "input_revision": "sha256:f6496759b49b5987dbc22a1cd7a485d14c279afae60d9940073ab181e1d6d399",
+          "metric": "total_score",
+          "unit": "score",
+          "value": 2176
+        },
+        {
+          "candidate_ref": "sha256:d235a01b40581d68cba564206a83a4c2bd1895fd5c50c199c867643b992f93d8",
+          "comparison_scope": "grid-turing:local40:30s-v1",
+          "evaluation_ref": "sha256:7fbe2f5df81193f650cfb2b79e1ed1d991225a8980bcb780c76dc56efb866828",
+          "evidence_ref": "research/results/conditional_tail_2_full/report.json",
+          "higher_is_better": false,
+          "input_revision": "sha256:4a379082f19059e6e8aeda9f7a3ee70c7f356dc2dd5353ac4977df9f9a76a592",
+          "metric": "total_score",
+          "unit": "score",
+          "value": 1830
+        }
+      ],
+      "node_id": "question_50bda2a8b490f6141421dd06905838ab3a6d497d1bfb8d8df655df376a7e9cb5",
+      "recorded_at": "2026-11-03T14:55:52Z",
+      "result_id": "finding_b36af3cc3c07",
+      "schema_version": "loopx_explore_result_event_v0",
+      "status": "confirmed",
+      "summary": "Pilot26/27/28 passes12 runs with totals316/315/314. Select two extra seconds after complete v10 prefix. Production d235a01b40581d68cba564206a83a4c2bd1895fd5c50c199c867643b992f93d8 passes48 for2176 versus historical v10 2182: core1830 versus1834, short98, stress248 versus250; six improvements and no regressions. Same input bytes, official tester and30-second external protocol; cohorts reused. Full max28.1595s,23344KiB; separate pilot max29.5348s preserves narrow-margin evidence. All18 helpers and35 original solve-prefix statements match v10 by AST; timed outcomes need not match. Actual root seed1021 passes87 in28.1411s. V9 native best remains2113; v12 submission e4fcfc225623 is pending as of the latest query. No native-quality or completion claim.",
+      "title": "V12 completes48 local cases for2176 with appended conditional refinement"
+    }
+  ]
+}

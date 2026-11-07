@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import secrets
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -21,6 +23,7 @@ from typing import IO, Any, Literal, TypeAlias
 
 from ..file_lock import process_is_alive
 from .runtime.file_reads import iter_binary_file_reads
+from .runtime.private_permissions import protect_private_path, require_private_path
 from .runtime.node_probe import (
     HOST_PERMISSION_RECOMMENDATION,
     MINIMUM_NODE_VERSION as MINIMUM_NODE_VERSION,
@@ -38,36 +41,23 @@ EFFECT_RUNTIME_READINESS_SCHEMA_VERSION = "loopx_effect_runtime_readiness_v0"
 EFFECT_RUNTIME_STARTUP_ERROR_SCHEMA_VERSION = (
     "loopx_effect_runtime_startup_error_v0"
 )
-MAX_RESPONSE_BYTES = 2 * 1024 * 1024
-MAX_REQUEST_BYTES = 2 * 1024 * 1024
+MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+MAX_REQUEST_BYTES = 8 * 1024 * 1024
 MAX_LOCAL_SNAPSHOT_BYTES = 64 * 1024 * 1024
-LOCAL_SNAPSHOT_METHODS = frozenset({
-    "todo.read",
-    "collaboration.inbox.read",
-    "collaboration.delegation.inventory_page",
-    "benchmark.trajectory.codex-usage",
-    "coordination.local_authority.todo_source",
-    "coordination.local_authority.todo_snapshot",
-    "todo.context.page",
-    "work_item.context.project",
-    "work_item.interaction_reads.project",
-    "scheduler.hint.project",
-    "work_item.task_graph.goal_topology",
-    "work_item.replan_semantics.project",
-    "quota.settlement.read",
-    "quota.spend.commit",
-    "quota.turn_envelope.evaluate",
-    "goal.checkpoint_read_context.resolve",
-    "goal.checkpoint_read_context.commit",
-    "goal.checkpoint_read_context.inspect_replay",
-    "performance_diagnosis.inspect",
-    "state.recovery.archive.verify",
-    "state.recovery.manifest.verify",
-    "runtime.checkpoint_artifacts",
-})
+# Shared packaged transport eligibility; business authority stays with each method.
+LOCAL_SNAPSHOT_METHODS = frozenset(json.loads(
+    Path(__file__).with_name("effect_runtime_snapshot_methods.json").read_text(encoding="utf-8"),
+))
 MAX_STARTUP_DIAGNOSTIC_BYTES = 8 * 1024
 STARTUP_LOCK_TIMEOUT_SECONDS = 15.0
 STARTUP_POLL_SECONDS = 0.025
+# A managed runtime publishes its typed startup diagnostic when it gives up,
+# so the host can only recover the exact code after that publication. When the
+# ready budget expires while the runtime is still running, the host gives it
+# one more ready budget to publish and exit instead of discarding a diagnostic
+# the runtime already computed. The window reuses the ready budget the
+# repository already owns rather than introducing an unrelated number.
+STARTUP_DIAGNOSTIC_GRACE_SECONDS = STARTUP_READY_TIMEOUT_SECONDS
 RUNTIME_LOCATOR_PERMISSION_RETRIES = 3
 RUNTIME_RETRY_SETTLE_SECONDS = 0.25
 RUNTIME_LOCATOR_RECOVERY_TIMEOUT_SECONDS = 1.0
@@ -80,7 +70,38 @@ DEFAULT_REQUEST_TIMEOUT_SECONDS = 10.0
 CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS = 45.0
 CANONICAL_AUTHORITY_READ_TIMEOUT_SECONDS = 15.0
 _RUNTIME_SOURCE_SUFFIXES = frozenset({".json", ".ts"})
+_RUNTIME_SOURCE_PATHS = frozenset({"runtime/private_permissions.py"})
 _RuntimeSourceSnapshot = tuple[tuple[str, int, int, int], ...]
+_SOURCE_DIGEST_SCHEMA_VERSION = "loopx_effect_runtime_source_digest_v1"
+_SOURCE_DIGEST_MAX_BYTES = 4096
+# A coarse ctime clock can give a rewrite the timestamp it already had. Sources
+# changed this recently are hashed but not recorded for other processes.
+_SOURCE_DIGEST_SETTLE_NS = 2_000_000_000
+
+
+def source_number_tokens(value: object) -> list[list[Any]]:
+    """Carry numeric IO spellings that a JavaScript number cannot distinguish.
+
+    This is transport metadata, not a hash codec or a projection policy.
+    Fractional doubles and safe integers keep their existing object transport.
+    """
+    tokens: list[list[Any]] = []
+
+    def visit(item: object, path: list[str | int]) -> None:
+        if isinstance(item, float) and not math.isfinite(item):
+            raise ValueError("Context source numbers must be finite")
+        if (isinstance(item, float) and item.is_integer()
+                or type(item) is int and abs(item) > 2**53 - 1):
+            tokens.append([path, json.dumps(item, allow_nan=False)])
+        elif isinstance(item, Mapping):
+            for key, child in item.items():
+                visit(child, [*path, key])
+        elif isinstance(item, (list, tuple)):
+            for index, child in enumerate(item):
+                visit(child, [*path, index])
+
+    visit(value, [])
+    return tokens
 
 
 class _RuntimeSourceChanged(RuntimeError):
@@ -100,6 +121,11 @@ class _RequestRuntimeRevision:
         self._revision: _RuntimeRevision | None = None
         self._scope_count = 1
         self._closed = False
+        # The Todo context handler is a pure lens over supplied records. Share
+        # its exact results only inside this already revision-pinned request;
+        # authority reads, clocks, mutation and settlement never enter here.
+        self._todo_context: dict[bytes, bytes] = {}
+        self._todo_context_bytes = 0
 
     def try_join(self) -> bool:
         with self._lock:
@@ -122,6 +148,20 @@ class _RequestRuntimeRevision:
             if self._scope_count == 0:
                 self._closed = True
                 self._revision = None
+                self._todo_context.clear()
+                self._todo_context_bytes = 0
+
+    def todo_context_result(self, key: bytes) -> bytes | None:
+        with self._lock:
+            return None if self._closed else self._todo_context.get(key)
+
+    def remember_todo_context(self, key: bytes, result: bytes) -> None:
+        with self._lock:
+            size = len(key) + len(result)
+            if (not self._closed and key not in self._todo_context
+                    and self._todo_context_bytes + size <= MAX_REQUEST_BYTES):
+                self._todo_context[key] = result
+                self._todo_context_bytes += size
 
 
 _REQUEST_RUNTIME_REVISION: ContextVar[_RequestRuntimeRevision | None] = (
@@ -152,12 +192,14 @@ class EffectRuntimeRejected(EffectRuntimeRemoteError):
         message: str,
         *,
         diagnostic_code: str = "invalid_request",
+        details: tuple[str, ...] = (),
     ) -> None:
         super().__init__(
             message,
             error_kind="request_rejected",
             diagnostic_code=diagnostic_code,
         )
+        self.details = details
 
 
 class EffectRuntimeConflict(EffectRuntimeRemoteError):
@@ -277,42 +319,40 @@ def _control_plane_root() -> Path:
     return Path(__file__).resolve().parent
 
 
-def _scan_runtime_source_files(root: Path) -> tuple[str, ...]:
-    files: list[str] = []
+def _scan_runtime_source_snapshot(root: Path) -> _RuntimeSourceSnapshot:
+    snapshot: list[tuple[str, int, int, int]] = []
     for directory, child_directories, filenames in os.walk(root):
         child_directories.sort()
         relative_directory = os.path.relpath(directory, root)
         if relative_directory == ".":
             relative_directory = ""
-        files.extend(
-            Path(relative_directory, filename).as_posix()
-            for filename in sorted(filenames)
-            if Path(filename).suffix in _RUNTIME_SOURCE_SUFFIXES
-            and Path(directory, filename).is_file()
-        )
-    return tuple(sorted(files))
-
-
-def _runtime_file_snapshot(
-    root: Path,
-    files: tuple[str, ...],
-) -> _RuntimeSourceSnapshot:
-    return tuple(
-        (
-            relative,
-            (metadata := (root / relative).stat()).st_mtime_ns,
-            metadata.st_ctime_ns,
-            metadata.st_size,
-        )
-        for relative in files
-    )
+        for filename in sorted(filenames):
+            relative = Path(relative_directory, filename).as_posix()
+            dot = filename.rfind(".")
+            if ((dot <= 0 or filename[dot:] not in _RUNTIME_SOURCE_SUFFIXES)
+                    and relative not in _RUNTIME_SOURCE_PATHS):
+                continue
+            source = Path(directory, filename)
+            try:
+                metadata = source.stat()
+            except OSError:
+                # Preserve pathlib's missing-file and platform-specific error policy.
+                if not source.is_file():
+                    continue
+                raise
+            except ValueError:
+                continue
+            if stat.S_ISREG(metadata.st_mode):
+                snapshot.append((relative,
+                    metadata.st_mtime_ns, metadata.st_ctime_ns, metadata.st_size))
+    return tuple(sorted(snapshot))
 
 
 def _runtime_source_snapshot(root: Path | None = None) -> _RuntimeSourceSnapshot:
     """Return cheap metadata that invalidates the packaged-source hash."""
 
     source_root = (root or _control_plane_root()).resolve()
-    return _runtime_file_snapshot(source_root, _scan_runtime_source_files(source_root))
+    return _scan_runtime_source_snapshot(source_root)
 
 
 def _runtime_source_files(root: Path | None = None) -> tuple[str, ...]:
@@ -321,20 +361,130 @@ def _runtime_source_files(root: Path | None = None) -> tuple[str, ...]:
     return tuple(relative for relative, *_metadata in _runtime_source_snapshot(root))
 
 
+def _source_digest_location(
+    root: str,
+    snapshot: _RuntimeSourceSnapshot,
+) -> tuple[Path, str] | None:
+    """Name one private digest per release and interpreter, keyed by metadata.
+
+    Only POSIX ctime cannot be set by a writer, so other hosts keep full reads.
+    """
+
+    if os.name != "posix":
+        return None
+    try:
+        directory = _runtime_dir()
+    except OSError:
+        return None
+    identity = hashlib.sha256()
+    for part in (_SOURCE_DIGEST_SCHEMA_VERSION, sys.executable, str(sys.version_info[:3])):
+        identity.update(part.encode("utf-8") + b"\0")
+    identity.update(os.fsencode(os.path.normcase(root)) + b"\0")
+    path = directory / f"source-digest-{identity.hexdigest()[:32]}.json"
+    identity.update(json.dumps(snapshot, separators=(",", ":")).encode("ascii"))
+    return path, identity.hexdigest()
+
+
+def _private_directory(path: Path) -> bool:
+    try:
+        metadata = os.lstat(path)
+    except OSError:
+        return False
+    return (stat.S_ISDIR(metadata.st_mode) and metadata.st_uid == os.getuid()
+            and not metadata.st_mode & 0o077)
+
+
+def _read_source_digest(path: Path, key: str) -> str | None:
+    if not _private_directory(path.parent):
+        return None
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        return None
+    try:
+        with os.fdopen(descriptor, "rb") as file:
+            metadata = os.fstat(file.fileno())
+            if (not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.getuid()
+                    or metadata.st_mode & 0o077):
+                return None
+            payload = json.loads(file.read(_SOURCE_DIGEST_MAX_BYTES + 1))
+    except (OSError, ValueError, RecursionError):
+        return None
+    if (not isinstance(payload, dict)
+            or payload.get("schema_version") != _SOURCE_DIGEST_SCHEMA_VERSION
+            or payload.get("key") != key):
+        return None
+    fingerprint = payload.get("fingerprint")
+    if not isinstance(fingerprint, str) or BARE_SHA256_PATTERN.fullmatch(fingerprint) is None:
+        return None
+    return fingerprint
+
+
+def _write_source_digest(
+    path: Path,
+    key: str,
+    fingerprint: str,
+    snapshot: _RuntimeSourceSnapshot,
+) -> None:
+    """Best-effort publication into an existing private runtime namespace."""
+
+    settled_before = time.time_ns() - _SOURCE_DIGEST_SETTLE_NS
+    if any(max(mtime, ctime) > settled_before for _name, mtime, ctime, _size in snapshot):
+        return
+    if not _private_directory(path.parent):
+        return
+    data = json.dumps({
+        "schema_version": _SOURCE_DIGEST_SCHEMA_VERSION,
+        "key": key,
+        "fingerprint": fingerprint,
+    }, separators=(",", ":")).encode("ascii")
+    temporary = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
+    try:
+        descriptor = os.open(
+            temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600,
+        )
+    except OSError:
+        return
+    try:
+        with os.fdopen(descriptor, "wb") as file:
+            file.write(data)
+        os.replace(temporary, path)
+    except OSError:
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
+
+
+def _require_unchanged_snapshot(root: Path, snapshot: _RuntimeSourceSnapshot) -> None:
+    current_snapshot = _runtime_source_snapshot(root)
+    if current_snapshot != snapshot:
+        raise _RuntimeSourceChanged(current_snapshot)
+
+
 @lru_cache(maxsize=8)
 def _runtime_fingerprint_for_snapshot(
     root: str,
     snapshot: _RuntimeSourceSnapshot,
 ) -> str:
+    # A fresh CLI process would otherwise open every source; on hosts that scan
+    # each open this dominates short commands. The record is only a memo.
+    source_root = Path(root)
+    location = _source_digest_location(root, snapshot)
+    if location is not None:
+        recorded = _read_source_digest(*location)
+        if recorded is not None:
+            # A hit adopts the record only under the full hash's freshness check.
+            _require_unchanged_snapshot(source_root, snapshot)
+            return recorded
     digest = hashlib.sha256()
     # The daemon's fixed Python adapter context must follow the interpreter
     # selected by this caller, even when two environments share source files.
     digest.update(sys.executable.encode("utf-8"))
     digest.update(str(sys.version_info[:3]).encode("ascii"))
-    source_root = Path(root)
     # Lazy imports and Python bridges resolve from this physical release. Equal
     # bytes in another checkout must not reuse a loader whose release may retire.
-    # Resolved aliases still share one owner; source bytes remain fully checked.
+    # Resolved aliases still share one owner; the digest covers every source byte.
     digest.update(b"loopx_effect_runtime_source_instance_v1\0")
     digest.update(os.fsencode(os.path.normcase(root)))
     digest.update(b"\0")
@@ -351,7 +501,10 @@ def _runtime_fingerprint_for_snapshot(
     current_snapshot = _runtime_source_snapshot(source_root)
     if current_snapshot != snapshot:
         raise _RuntimeSourceChanged(current_snapshot)
-    return digest.hexdigest()
+    fingerprint = digest.hexdigest()
+    if location is not None:
+        _write_source_digest(*location, fingerprint, snapshot)
+    return fingerprint
 
 
 def _runtime_fingerprint() -> str:
@@ -771,22 +924,7 @@ def _stop_effect_runtime(
             if not _pid_is_alive(pid):
                 stopped = True
                 break
-            if os.name == "posix":
-                # A non-child zombie cannot write, but kill(pid, 0) still sees
-                # it. Managed runtimes start in their own session/process group.
-                from ..extensions.process_runtime import _posix_owned_group_has_exited
-                try:
-                    stopped = _posix_owned_group_has_exited(
-                        pid, max(.001, deadline - time.monotonic()),
-                    )
-                except (OSError, subprocess.TimeoutExpired, UnicodeError, RuntimeError):
-                    stopped = False
-                if stopped:
-                    # The child may have exited during the group snapshot,
-                    # after the first nonblocking reap. Retire its wait status
-                    # before returning successful namespace cleanup.
-                    _reap_exited_runtime_child(info)
-                    break
+            # A zombie leader can still have threads writing into the namespace.
             time.sleep(.05)
             continue
         published, published_token = _serving_token(info_path)
@@ -809,6 +947,13 @@ def _stop_effect_runtime(
     }
 
 
+def _encode_rpc_json(value: Mapping[str, Any]) -> bytes:
+    # Count and transmit UTF-8 bytes; lone surrogates retain valid JSON escapes.
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode(
+        "utf-8", errors="backslashreplace",
+    )
+
+
 def _request_with_info(
     info: Mapping[str, Any],
     *,
@@ -827,7 +972,6 @@ def _request_with_info(
     }
     with ExitStack() as stack:
         response_sink: Path | None = None
-        encoded = (json.dumps(request, separators=(",", ":")) + "\n").encode()
         if large_local_snapshot:
             if method not in LOCAL_SNAPSHOT_METHODS:
                 raise EffectRuntimeRejected(
@@ -835,13 +979,17 @@ def _request_with_info(
                     diagnostic_code="invalid_request",
                 )
             directory = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="loopx-effect-")))
+            protect_private_path(directory, directory=True)
             response_sink = directory / "response.json"
             descriptor = os.open(response_sink, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-            os.close(descriptor)
+            try:
+                protect_private_path(response_sink)
+            finally:
+                os.close(descriptor)
             request["response_sink"] = str(response_sink)
-            encoded = (json.dumps(request, separators=(",", ":")) + "\n").encode()
+            encoded = _encode_rpc_json(request) + b"\n"
             if len(encoded) > MAX_REQUEST_BYTES:
-                params_bytes = json.dumps(dict(params), separators=(",", ":")).encode()
+                params_bytes = _encode_rpc_json(dict(params))
                 if len(params_bytes) > MAX_LOCAL_SNAPSHOT_BYTES:
                     raise EffectRuntimeRejected(
                         "TypeScript Effect runtime local snapshot is oversized",
@@ -850,6 +998,7 @@ def _request_with_info(
                 params_path = directory / "params.json"
                 descriptor = os.open(params_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
                 with os.fdopen(descriptor, "wb") as file:
+                    protect_private_path(params_path)
                     file.write(params_bytes)
                 request.pop("params")
                 request["params_ref"] = {
@@ -857,7 +1006,9 @@ def _request_with_info(
                     "path": str(params_path), "byte_count": len(params_bytes),
                     "sha256": hashlib.sha256(params_bytes).hexdigest(),
                 }
-                encoded = (json.dumps(request, separators=(",", ":")) + "\n").encode()
+                encoded = _encode_rpc_json(request) + b"\n"
+        else:
+            encoded = _encode_rpc_json(request) + b"\n"
         if len(encoded) > MAX_REQUEST_BYTES:
             raise EffectRuntimeRejected(
                 "TypeScript Effect runtime request is oversized",
@@ -1037,8 +1188,10 @@ def _read_local_snapshot_response(
                 or size > MAX_LOCAL_SNAPSHOT_BYTES or not isinstance(digest, str)
                 or BARE_SHA256_PATTERN.fullmatch(digest) is None):
             raise ValueError("invalid local snapshot reference")
+        require_private_path(sink.parent, directory=True)
         descriptor = os.open(sink, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
         with os.fdopen(descriptor, "rb") as file:
+            require_private_path(sink, descriptor=file.fileno())
             metadata = os.fstat(file.fileno())
             if (not os.path.isfile(sink) or metadata.st_size != size
                     or (hasattr(os, "getuid") and
@@ -1079,7 +1232,14 @@ def _remote_runtime_error(value: object) -> EffectRuntimeRemoteError:
     )
     rendered = rendered[:240] or "TypeScript Effect runtime request failed"
     if kind == "request_rejected":
-        return EffectRuntimeRejected(rendered, diagnostic_code=code)
+        details = value.get("details", [])
+        if (not isinstance(details, list) or len(details) > 128
+                or any(not isinstance(detail, str) or len(detail) > 240 for detail in details)):
+            return EffectRuntimeInternalError(
+                "TypeScript Effect runtime returned invalid request validation details",
+                diagnostic_code="invalid_error_envelope",
+            )
+        return EffectRuntimeRejected(rendered, diagnostic_code=code, details=tuple(details))
     if kind == "conflict":
         return EffectRuntimeConflict(rendered, diagnostic_code=code)
     if kind == "io_transient":
@@ -1144,6 +1304,66 @@ def _startup_diagnostic(raw: bytes) -> tuple[str, str] | None:
     return None
 
 
+def _published_startup_failure(
+    startup_stderr: IO[bytes],
+) -> EffectRuntimeStartupError | None:
+    """Return the typed failure a managed runtime published, if it published one.
+
+    The runtime publishes its startup envelope before it exits, so the
+    envelope is authoritative even while the runtime is still running. Other
+    stderr content, such as a Node.js stack trace, is not a typed diagnostic
+    and must not be reported as one.
+    """
+
+    diagnostic = _startup_diagnostic(_read_startup_stderr(startup_stderr))
+    if diagnostic is None:
+        return None
+    code, message = diagnostic
+    if code == "runtime_host_permission_denied":
+        return EffectRuntimeHostPermissionError()
+    return EffectRuntimeStartupError(message, diagnostic_code=code)
+
+
+def _await_startup_publication(
+    process: subprocess.Popen[bytes],
+    startup_stderr: IO[bytes],
+    *,
+    info_path: Path,
+    fingerprint: str,
+    deadline: float,
+) -> dict[str, Any] | None:
+    """Wait for a running runtime to publish its locator or its diagnostic.
+
+    Returns the locator the runtime published. Raises the typed failure the
+    runtime published, or the stable exit diagnostic when it exits without
+    one. Returns None when the deadline passes with neither.
+    """
+
+    while time.monotonic() < deadline:
+        try:
+            info = _read_info(info_path, fingerprint=fingerprint)
+        except EffectRuntimeHostPermissionError:
+            if process.poll() is None:
+                process.terminate()
+            raise
+        if info is not None:
+            return info
+        exit_code = process.poll()
+        failure = _published_startup_failure(startup_stderr)
+        if failure is not None:
+            if exit_code is None:
+                process.terminate()
+            raise failure
+        if exit_code is not None:
+            raise EffectRuntimeStartupError(
+                "TypeScript Effect runtime exited before becoming ready "
+                f"(exit_code={exit_code})",
+                diagnostic_code="runtime_exited_before_ready",
+            )
+        time.sleep(STARTUP_POLL_SECONDS)
+    return None
+
+
 def _start_runtime(*, fingerprint: str, info_path: Path) -> dict[str, Any]:
     runtime_dir = info_path.parent
     runtime_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -1197,6 +1417,8 @@ def _start_runtime(*, fingerprint: str, info_path: Path) -> dict[str, Any]:
         environment["LOOPX_EFFECT_RUNTIME_TOKEN"] = token
         # Fixed daemon context, never a model-supplied executable argument.
         environment["LOOPX_EFFECT_RUNTIME_PYTHON"] = sys.executable
+        # Windows snapshot ACL facts use this parent-selected interpreter only.
+        environment["LOOPX_EFFECT_RUNTIME_PYTHON_BIN"] = sys.executable
         # Capture stderr so a rejected startup can publish a typed
         # startup diagnostic instead of a bare exit status. The capture
         # is an unlinked temporary file, so it cannot deadlock the child on a
@@ -1249,23 +1471,33 @@ def _start_runtime(*, fingerprint: str, info_path: Path) -> dict[str, Any]:
                     return info
                 exit_code = process.poll()
                 if exit_code is not None:
-                    diagnostic = _startup_diagnostic(
-                        _read_startup_stderr(startup_stderr)
-                    )
-                    if diagnostic is not None:
-                        code, message = diagnostic
-                        if code == "runtime_host_permission_denied":
-                            raise EffectRuntimeHostPermissionError()
-                        raise EffectRuntimeStartupError(
-                            message,
-                            diagnostic_code=code,
-                        )
+                    failure = _published_startup_failure(startup_stderr)
+                    if failure is not None:
+                        raise failure
                     raise EffectRuntimeStartupError(
                         "TypeScript Effect runtime exited before becoming ready "
                         f"(exit_code={exit_code})",
                         diagnostic_code="runtime_exited_before_ready",
                     )
                 time.sleep(STARTUP_POLL_SECONDS)
+            # The runtime is still running when the ready budget expires, so it
+            # may yet publish its locator or the diagnostic it has already
+            # computed. Give it a bounded window to do either before the host
+            # reports a generic timeout and terminates it.
+            info = _await_startup_publication(
+                process,
+                startup_stderr,
+                info_path=info_path,
+                fingerprint=fingerprint,
+                deadline=time.monotonic() + STARTUP_DIAGNOSTIC_GRACE_SECONDS,
+            )
+            if info is not None:
+                return info
+            failure = _published_startup_failure(startup_stderr)
+            if failure is not None:
+                if process.poll() is None:
+                    process.terminate()
+                raise failure
             if process.poll() is None:
                 process.terminate()
             raise EffectRuntimeStartupError(
@@ -1368,13 +1600,49 @@ def effect_runtime_result(
     retry_safe: bool = True,
     large_local_snapshot: bool = False,
 ) -> Any:
-    return effect_runtime_request(
+    state = _REQUEST_RUNTIME_REVISION.get() if method == "todo.context.page" else None
+    key = None
+    if state is not None:
+        # Preserve JSON order and scalar types, including bool/int, signed zero
+        # and exact integers. Do not infer equality from a digest or Todo id.
+        try:
+            key = json.dumps([params, timeout, retry_safe, large_local_snapshot],
+                             ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
+        except (TypeError, ValueError, OverflowError, UnicodeError, RecursionError):
+            pass  # Invalid/non-JSON input still reaches the original validator.
+        if key is not None:
+            prior = state.todo_context_result(key)
+            if prior is not None:
+                return json.loads(prior)  # A caller cannot mutate another view.
+    result = effect_runtime_request(
         method,
         params,
         timeout=timeout,
         retry_safe=retry_safe,
         large_local_snapshot=large_local_snapshot,
     ).get("result")
+    if state is not None and key is not None and isinstance(result, dict):
+        try:
+            encoded = json.dumps(result, ensure_ascii=False, allow_nan=False,
+                                 separators=(",", ":")).encode("utf-8")
+        except (TypeError, ValueError, OverflowError, UnicodeError, RecursionError):
+            pass
+        else:
+            state.remember_todo_context(key, encoded)
+    return result
+
+
+def effect_runtime_projection_result(method: str, params: Mapping[str, Any]) -> Any:
+    """Keep projections inline unless a size refusal requires a local snapshot."""
+
+    try:
+        return effect_runtime_result(method, params)
+    except EffectRuntimeRejected as error:
+        if error.diagnostic_code != "request_too_large":
+            raise
+        # Reuse the existing bounded transport after refusal, never replay an
+        # ambiguous response or truncate the projection's complete source.
+        return effect_runtime_result(method, params, large_local_snapshot=True)
 
 
 def _serving_runtime_identity() -> dict[str, Any] | None:

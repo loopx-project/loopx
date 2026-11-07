@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CalendarClock, Check, MessageCircleQuestion, MessageSquareReply, MoreHorizontal, Square, X } from "lucide-react";
 import type { DecisionOutcome } from "../../../../../../loopx/control_plane/todos/user_completion_types.js";
 import { canDecideAttention, canHandleUserAction, canReviewAttention, nextMorningResumeWhen } from "./attention-details";
@@ -15,9 +15,16 @@ export function AttentionActions({ item, readOnly, callbacks, fallbackAgentId }:
   callbacks: PersonalWorkspaceCallbacks;
   fallbackAgentId: string;
 }) {
-  const { t } = useWorkspaceI18n();
+  const { t, locale } = useWorkspaceI18n();
+  const reportReview = item.details?.reportReview === true;
   const [preview, setPreview] = useState<PreviewState>({ status: "idle" });
-  useEffect(() => setPreview({ status: "idle" }), [item.goalId, item.todoId]);
+  const scope = JSON.stringify([item.sourceId ?? "", item.goalId, item.todoId]);
+  const pendingRequest = useRef<{scope: string; token: object | null}>({scope, token: null});
+  if (pendingRequest.current.scope !== scope) pendingRequest.current = {scope, token: null};
+  useEffect(() => {
+    setPreview({ status: "idle" });
+    return () => { pendingRequest.current.token = null; };
+  }, [scope]);
   // User actions bind their actor through bound_agent; gates use blocks_agent.
   // The native owner still validates registration and the exact Todo binding.
   const agentId = (item.details?.interaction === "user_action"
@@ -26,13 +33,19 @@ export function AttentionActions({ item, readOnly, callbacks, fallbackAgentId }:
   const key = (suffix: string) => `workspace-attention-${item.todoId}-${suffix}-${Date.now().toString(36)}`;
 
   async function requestPreview(request: WorkspaceActionPreviewRequest) {
-    if (preview.status === "pending" || !callbacks.onPreviewAction) return;
+    // Fence synchronous repeat clicks before React commits disabled controls,
+    // and ignore a response after switching to a different source/request.
+    if (pendingRequest.current.token || !callbacks.onPreviewAction) return;
+    const token = {};
+    pendingRequest.current = {scope, token};
     setPreview({ status: "pending" });
     try {
       await callbacks.onPreviewAction(request);
-      setPreview({ status: "idle" });
+      if (pendingRequest.current.token === token) setPreview({ status: "idle" });
     } catch (error) {
-      setPreview({ status: "error", message: error instanceof Error ? error.message : String(error) });
+      if (pendingRequest.current.token === token) setPreview({ status: "error", message: error instanceof Error ? error.message : String(error) });
+    } finally {
+      if (pendingRequest.current.token === token) pendingRequest.current.token = null;
     }
   }
 
@@ -71,7 +84,7 @@ export function AttentionActions({ item, readOnly, callbacks, fallbackAgentId }:
     ? <p className="personal-proposal-state is-error" role="alert"><X size={16} /><span>{t("drawer.attentionPreviewFailed", { error: preview.message })}</span></p>
     : pending ? <p className="personal-proposal-state" role="status">{t("drawer.attentionPreparing")}</p> : null;
   const reply = callbacks.onReplyToAttention
-    ? <button className="personal-secondary-action" onClick={() => callbacks.onReplyToAttention?.(item, "reply")} type="button"><MessageSquareReply size={16} />{t("drawer.attentionReply")}</button>
+    ? <button className="personal-secondary-action" onClick={() => callbacks.onReplyToAttention?.(item, "reply")} type="button"><MessageSquareReply size={16} />{reportReview ? (locale === "zh-CN" ? "提出反馈" : "Give feedback") : t("drawer.attentionReply")}</button>
     : null;
   const explain = (label: string) => callbacks.onExplainDecision
     ? <button onClick={() => void callbacks.onExplainDecision?.(item)} type="button"><MessageCircleQuestion size={16} />{label}</button>
@@ -98,9 +111,9 @@ export function AttentionActions({ item, readOnly, callbacks, fallbackAgentId }:
   }
   if (canHandleUserAction(item)) {
     return <>
-      <p className="personal-proposal-explainer">{t(item.details?.unblocksTodoId ? "drawer.userActionUnblocks" : "drawer.userActionReminder")}</p>
+      {!reportReview ? <p className="personal-proposal-explainer">{t(item.details?.unblocksTodoId ? "drawer.userActionUnblocks" : "drawer.userActionReminder")}</p> : null}
       <div className="personal-decision-bar" role="group" aria-label={t("drawer.userActionGroup")}>
-        <button className="personal-primary-action" disabled={pending} onClick={() => previewUserAction(item, "complete")} type="button"><Check size={17} />{t("drawer.userActionComplete")}</button>
+        <button className="personal-primary-action" disabled={pending} onClick={() => previewUserAction(item, "complete")} type="button"><Check size={17} />{reportReview ? (locale === "zh-CN" ? "验收这份材料" : "Accept this material") : t("drawer.userActionComplete")}</button>
         {reply}
       </div>
       {feedback}

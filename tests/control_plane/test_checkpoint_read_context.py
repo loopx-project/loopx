@@ -84,6 +84,11 @@ def test_missing_replaced_stale_context_requires_reread_and_preserves_delivery(t
     assert rc == 0 and result["appended"] and result["vision_checkpoint"]["satisfied"], result
     assert result["vision_checkpoint"]["read_context"]["read_context_id"] == fresh["read_context_id"]
     after = index.read_bytes()
+    rc, inapplicable = _run_cli(registry, runtime, "checkpoint-context", *binding, cwd=project)
+    assert rc == 1 and inapplicable["error_code"] == "checkpoint_context_not_missing", inapplicable
+    assert inapplicable["checkpoint_read_context"]["reread_required"] is False
+    assert "normal guard" in inapplicable["error"]
+    assert index.read_bytes() == after, "an inapplicable recovery must not append another receipt"
     state.write_text(state.read_text(encoding="utf-8") + "\n## Acceptance\n\nNew acceptance after commit.\n", encoding="utf-8")
     rc, replay = _run_cli(registry, runtime, *supplement, cwd=project)
     assert rc == 0 and replay["idempotent_replay"] and not replay["appended"], replay
@@ -98,7 +103,6 @@ def test_large_goal_context_keeps_complete_basis_and_checkpoint_only_recovery(
 ):
     from canonical_authority_fixture import advance_canonical_fixture_authority, isolate_sqlite_runtime
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
-    from loopx.control_plane.effect_runtime import MAX_REQUEST_BYTES
 
     if provider == "sqlite":
         isolate_sqlite_runtime(tmp_path, monkeypatch)
@@ -113,10 +117,10 @@ def test_large_goal_context_keeps_complete_basis_and_checkpoint_only_recovery(
         projection = build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=[todo])
         advance_canonical_fixture_authority(runtime, GOAL_ID, projection, operation_id="fixture-checkpoint-context")
     # The original failure came from complete source prose, not from the
-    # small prior Turn receipt. Keep the source intact and cross both 2 MiB
-    # request and response boundaries through the real local CLI/runtime.
+    # small prior Turn receipt. Retain the original over-2-MiB workload even
+    # when a larger ordinary wire lets it travel inline.
     large_prose = "This is retained Goal context.\n" * 115_000
-    assert len(large_prose.encode()) > MAX_REQUEST_BYTES
+    assert len(large_prose.encode()) > 2 * 1024 * 1024
     state.write_text(state.read_text(encoding="utf-8") + "\n## Context\n\n" + large_prose,
                      encoding="utf-8")
     rc, context = _run_cli(registry, runtime, "checkpoint-context", *binding, cwd=project)

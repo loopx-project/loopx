@@ -5,6 +5,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from ...control_plane.projects.registry_codec import load_project_registry
 from ...agent_registry import load_goal_from_registry
 from ...boundary_authority import checkpointed_boundary_authority_summary
 from ...control_plane.runtime.time import now_utc_iso
@@ -13,6 +14,8 @@ from ...domain_packs.issue_fix import (
     default_issue_fix_domain_state_ledger_path,
     default_issue_fix_feasibility_ledger_path,
     default_issue_fix_repository_snapshot_ledger_path,
+    issue_fix_maintainer_correction_entries,
+    read_issue_fix_pr_lifecycle_ledger_row,
     retain_issue_fix_repository_snapshot_jsonl,
     upsert_issue_fix_candidate_preflight_ledger_jsonl,
     upsert_issue_fix_feasibility_ledger_jsonl,
@@ -26,6 +29,11 @@ from .acceptance_loop import (
     render_issue_fix_acceptance_loop_markdown,
 )
 from .candidate_evidence import collect_public_github_candidate_preflight_input
+from .correction_settlement import (
+    _correction_todo_readback_receipt,
+    _resolve_origin_request_identity,
+    _settle_maintainer_correction_entries,
+)
 from .feasibility import (
     build_issue_fix_feasibility_packet,
     render_issue_fix_feasibility_markdown,
@@ -105,9 +113,7 @@ PrintPayload = Callable[
 FormatSelector = Callable[..., str]
 AddFormat = Callable[[argparse.ArgumentParser], None]
 
-
-def _comparable_delivery_evidence(
-    value: dict[str, Any] | None,
+def _comparable_delivery_evidence(    value: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
     if value is None:
         return None
@@ -573,6 +579,12 @@ def register_issue_fix_commands(
             "Path to mocked gh pr view JSON metadata, or '-' for stdin. "
             "Bodies, comments, raw logs, and provider responses stay out."
         ),
+    )
+    pr_lifecycle_parser.add_argument("--origin-registry", help="Origin lifecycle registry path.")
+    pr_lifecycle_parser.add_argument("--origin-runtime-root", help="Origin runtime root path.")
+    pr_lifecycle_parser.add_argument(
+        "--origin-request-id",
+        help="Bind this PR row to the originating steward request (requires Goal and agent).",
     )
     pr_lifecycle_parser.add_argument(
         "--maintainer-correction-json",
@@ -1259,6 +1271,73 @@ def handle_issue_fix_command(
                 raise ValueError("--execute-transition requires --goal-id")
             if args.execute_transition and not args.claimed_by:
                 raise ValueError("--execute-transition requires --claimed-by")
+            if args.maintainer_correction_json and args.execute_transition:
+                # Resolve the Goal before any ledger write so a missing Goal
+                # cannot leave a pending correction entry behind.
+                if load_goal_from_registry(registry_path, args.goal_id) is None:
+                    raise ValueError(
+                        f"goal {args.goal_id} is not resolvable from registry {registry_path}"
+                    )
+            should_write_domain_state = bool(
+                not args.no_write_domain_state and (args.goal_id or args.ledger_path)
+            )
+            ledger_path: Path | None = None
+            prior_maintainer_corrections = None
+            prior_row = None
+            if any((args.origin_request_id, args.origin_registry, args.origin_runtime_root)) and not all(
+                (args.origin_request_id, args.origin_registry, args.origin_runtime_root)
+            ):
+                raise ValueError("--origin-request-id requires --origin-registry and --origin-runtime-root")
+            if args.origin_request_id:
+                from ...control_plane.content_digest import BARE_SHA256_PATTERN
+
+                if not BARE_SHA256_PATTERN.fullmatch(args.origin_request_id):
+                    raise ValueError("invalid origin request id")
+                origin_registry = Path(args.origin_registry).expanduser().resolve()
+                origin_runtime = Path(args.origin_runtime_root).expanduser().resolve()
+                if not args.goal_id or not args.claimed_by or not should_write_domain_state:
+                    raise ValueError("--origin-request-id requires --goal-id and --claimed-by and ledger writes")
+            if should_write_domain_state:
+                ledger_path = (
+                    Path(args.ledger_path).expanduser()
+                    if args.ledger_path
+                    else default_issue_fix_domain_state_ledger_path(
+                        project=args.project,
+                        goal_id=args.goal_id,
+                    )
+                )
+                prior_reference = normalise_github_issue_reference(
+                    repo=args.repo, issue_ref=args.pr_ref, url=args.url
+                )
+                prior_row = read_issue_fix_pr_lifecycle_ledger_row(
+                    ledger_path,
+                    repo=str(prior_reference["repo"]),
+                    pr_ref=str(prior_reference["issue_ref"]),
+                )
+                prior_maintainer_corrections = (
+                    issue_fix_maintainer_correction_entries(prior_row)
+                )
+            origin = (prior_row or {}).get("origin_request")
+            if args.origin_request_id:
+                if origin and (origin["request_id"] != args.origin_request_id
+                        or origin["registry_path"] != str(origin_registry)
+                        or origin["runtime_root"] != str(origin_runtime)):
+                    raise ValueError("origin_request_conflict")
+                if not origin_registry.is_file() or not origin_runtime.is_dir():
+                    raise ValueError("origin registry and runtime root must exist")
+                try:
+                    origin_profile = load_project_registry(origin_registry).get("profile_id")
+                except (ValueError, OSError) as exc:
+                    raise ValueError("origin registry is unreadable") from exc
+                if origin_profile != "source_session_v1":
+                    raise ValueError("origin registry requires source_session_v1")
+                candidate = {"request_id": args.origin_request_id,
+                    "registry_path": str(origin_registry), "runtime_root": str(origin_runtime),
+                    **_resolve_origin_request_identity(origin_runtime, args.origin_request_id),
+                    "recorded_at": origin["recorded_at"] if origin else generated_at}
+                if origin and origin != candidate:
+                    raise ValueError("origin_request_conflict")
+                origin = candidate
             payload = build_issue_fix_pr_lifecycle_monitor_packet(
                 repo=args.repo,
                 pr_ref=args.pr_ref,
@@ -1274,20 +1353,13 @@ def handle_issue_fix_command(
                     if args.maintainer_correction_json
                     else None
                 ),
+                prior_maintainer_corrections=prior_maintainer_corrections,
                 generated_at=generated_at,
             )
-            should_write_domain_state = bool(
-                not args.no_write_domain_state and (args.goal_id or args.ledger_path)
-            )
-            if should_write_domain_state:
-                ledger_path = (
-                    Path(args.ledger_path).expanduser()
-                    if args.ledger_path
-                    else default_issue_fix_domain_state_ledger_path(
-                        project=args.project,
-                        goal_id=args.goal_id,
-                    )
-                )
+            pending_source_events = payload.pop("_maintainer_correction_source_events", None)
+            if origin:
+                payload["origin_request"] = origin
+            if should_write_domain_state and ledger_path is not None:
                 upsert_issue_fix_pr_lifecycle_ledger_jsonl(
                     ledger_path,
                     payload,
@@ -1331,7 +1403,49 @@ def handle_issue_fix_command(
                         grouped_monitor_writeback.get("write_performed")
                     )
                 decision = str(transition.get("decision") or "")
-                if decision in {"runnable_successor", "user_gate"}:
+                correction_admission = payload.get("maintainer_correction_admission")
+                settlement: dict[str, object] | None = None
+                if ledger_path is not None:
+                    settlement = _settle_maintainer_correction_entries(
+                        payload=payload,
+                        ledger_path=ledger_path,
+                        registry_path=registry_path,
+                        goal_id=args.goal_id,
+                        claimed_by=args.claimed_by,
+                        project=Path(args.project).expanduser(),
+                        source_events=(
+                            pending_source_events
+                            if isinstance(pending_source_events, dict)
+                            else None
+                        ),
+                    )
+                    if settlement.get("settlements") or isinstance(
+                        correction_admission, dict
+                    ):
+                        payload["maintainer_correction_settlement"] = settlement
+                if isinstance(correction_admission, dict) and settlement is not None:
+                    settled_write = settlement.get("todo_write")
+                    todo_write_receipt = (
+                        settled_write if isinstance(settled_write, dict) else {}
+                    )
+                    todo_changed = bool(todo_write_receipt.get("write_performed"))
+                    if not todo_write_receipt:
+                        todo_write_receipt = _correction_todo_readback_receipt(
+                            skip_reason="terminal_or_no_followup",
+                        )
+                    if (
+                        not todo_changed
+                        and "skip_reason" in todo_write_receipt
+                        and decision == "monitor_continuation"
+                        and correction_admission.get("disposition") == "accepted"
+                    ):
+                        todo_write_receipt["skip_reason"] = "unchanged_monitor_quiet"
+                    payload["todo_write"] = todo_write_receipt
+                    payload["todo_write_performed"] = todo_changed
+                    writeback_contract = payload.get("writeback_contract")
+                    if isinstance(writeback_contract, dict):
+                        writeback_contract["todo_write_performed"] = bool(todo_changed)
+                elif decision in {"runnable_successor", "user_gate"}:
                     role = str(transition.get("role") or "agent")
                     todo_write = add_goal_todo(
                         registry_path=registry_path,
@@ -1821,5 +1935,6 @@ def handle_issue_fix_command(
             if getattr(args, "issue_fix_command", None) in REVIEWER_COMMANDS
             else render_issue_fix_acceptance_loop_markdown
         )
+    payload.pop("origin_request", None)
     print_payload(payload, output_format(args), renderer)
     return 0 if payload.get("ok") else 1

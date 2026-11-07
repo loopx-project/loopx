@@ -177,7 +177,7 @@ assert.match(timeline, /t\("timeline\.waitingConfirmation"\)/, "Historical gated
 assert.match(timeline, /gatedItems\.length/, "The compact Gate summary exposes the pending count");
 assert.match(timeline, /Boolean\(item\.run\.sessionId\)/, "Running count requires a discovered execution Session");
 assert.match(timeline, /Boolean\(item\.run\.canInterrupt\)/, "Running count requires an active interruptible turn");
-assert.match(page, /accept="image\/png,image\/jpeg,image\/webp,image\/gif"/, "Composer accepts bounded image types");
+assert.match(page, /accept="image\/png,image\/jpeg,image\/webp,image\/gif,\.md,\.txt"/, "Composer accepts bounded image types");
 assert.match(page, /imageInputRef\.current\?\.click\(\)/, "Attachment button explicitly opens the native file chooser");
 assert.match(page, /onDrop=\{\(event\)/, "Composer accepts dragged image files");
 assert.match(page, /onPaste=\{[^}]*handleComposerPaste/s, "Composer accepts pasted clipboard images");
@@ -323,16 +323,8 @@ assert.match(attentionActions, /role="group" aria-label=\{t\("drawer\.decisionGr
 assert.match(drawer, /const hasProjectedRunActivity = selection\.kind === "run"[\s\S]*selection\.item\.completedSteps > 0/, "Session empty-state copy distinguishes projected progress from a truly idle run");
 assert.match(drawer, /t\("drawer\.runRecordProjected"/, "A projected run does not claim that the Agent never started");
 assert.match(drawer, /t\("drawer\.runRecordEmpty"\)/, "A truly empty Session still explains why there is no timeline yet");
-assert.match(page, /function ManagerConversationTray/, "Manager home has a dedicated conversation tray instead of burying replies in the board timeline");
 assert.match(page, /managerMessages/, "Manager conversation is derived from the active manager message context");
-assert.match(page, /managerConversationReceiptVisible/, "Manager conversation is a send-triggered receipt instead of permanent history chrome");
-assert.match(page, /setManagerConversationReceiptVisible\(true\)/, "A new manager send reveals the temporary conversation receipt");
-assert.match(page, /setManagerConversationReceiptVisible\(false\)/, "Opening or leaving the receipt clears it from the overview");
-assert.match(page, /personal-manager-conversation-tray/, "Manager conversation stays anchored beside the composer");
-assert.match(page, /aria-live="polite"/, "Manager conversation announces streamed replies without moving focus");
-assert.match(page, /t\("conversation\.full"\)/, "The compact manager conversation can expand in place");
-assert.match(page, /onOpenConversation/, "The compact manager conversation has a dedicated full-chat navigation action");
-assert.match(page, /managerChatOpen/, "Manager full conversation uses a dedicated Chat view instead of stretching the home tray");
+assert.match(page, /managerChatOpen/, "Manager conversation uses a dedicated Chat view");
 assert.match(page, /managerChatItems/, "Manager Chat only renders conversation and confirmation items");
 assert.match(page, /sessionProposalIds\.includes\(item\.proposal\.previewId\)/, "Manager Chat only shows proposals created in the current UI session");
 assert.match(page, /\["preview_ready", "gated", "deferred", "applying"\]\.includes\(proposal\.status\)[\s\S]*compileActionReviewPlan\(proposal\)\.retryOriginal === true/, "Restored proposal history uses wire states and preserves retryable original operations");
@@ -347,8 +339,6 @@ assert.doesNotMatch(sidebar, /personal-manager-channels/, "The sidebar does not 
 assert.doesNotMatch(sidebar, /onSelectChannel/, "The sidebar only navigates to the manager or a concrete Goal");
 assert.doesNotMatch(page, /selectedChannel|selectChannel\(|__manager_channel__/, "Manager state lanes do not create hidden conversation channels");
 assert.match(page, /personal-digest-stats[\s\S]*t\("digest\.completed"\)/, "The away digest is a non-interactive summary");
-assert.match(page, /!selectedGoal && !managerChatOpen && managerConversationReceiptVisible[\s\S]*<ManagerConversationTray/, "The tray only appears on the manager overview after a send");
-assert.match(page, /managerMessages\.some\(\(message\) => message\.pending\)[\s\S]*setManagerConversationReceiptVisible\(true\)/, "A recovered active Manager turn restores its compact conversation tray");
 assert.match(page, /goal\.needsYou \?\? goal\.nextSentence/, "Needs-you cards keep the source Goal action visible");
 assert.match(page, /onClick=\{\(\) => onSelectGoal\(goal\.goalId\)\}/, "Manager cards open their source Goal instead of a hidden lane channel");
 assert.doesNotMatch(page, /managerConversationActive/, "Sending from the manager never replaces the overview with a separate conversation page");
@@ -722,3 +712,18 @@ assert.match(source("./context-drawer.tsx"), /selection\.item\.gate\?\.kind === 
 for (const key of ["proposal.agentGate.title", "proposal.agentGate.summary", "proposal.agentGate.reason.executable_not_found", "proposal.agentGate.reason.api_key_not_set", "proposal.agentGate.reason.unregistered", "proposal.agentGate.reason.unavailable", "proposal.agentGate.nextAction", "proposal.agentGate.impact"]) {
   assert.equal((i18n.match(new RegExp(`"${key.replace(/\./g, "\\.")}":`, "g")) ?? []).length, 2, `${key} exists in both locales`);
 }
+
+// S5/S11 Design hierarchy convergence & Explanations on Demand:
+// Layout explains itself; auxiliary explanation prose in overview & research history
+// is collapsed into ContextHelp instead of cluttering the primary reading view.
+const overview = source("./goal-overview.tsx");
+const overviewCss = source("./goal-overview.css");
+const researchHistory = source("./goal-research-history.tsx");
+const researchHistoryCss = source("./goal-research-history.css");
+
+assert.match(overview, /goal-overview-worker-status[\s\S]*?<ContextHelp/, "WorkerReadback puts explanation into ContextHelp beside status");
+assert.match(overview, /details className="goal-overview-worker-details"/, "WorkerReadback technical details start collapsed");
+assert.match(overviewCss, /\.goal-overview-worker-status\s*\{[^}]*display:\s*flex/, "Worker status row is structured via flex");
+assert.match(overviewCss, /@media\s*\(max-width:\s*640px\)\s*\{[\s\S]*?\.goal-overview-worker-state dl/, "Worker state has narrow mobile grid rules");
+assert.match(researchHistory, /execution_observation[\s\S]*?<ContextHelp label=\{zh \? "执行观测说明"/, "Execution observation explanation is attached to summary ContextHelp");
+assert.match(researchHistoryCss, /margin-inline-start:\s*0;\s*margin-top:\s*8px;/, "Research history mobile action wraps cleanly on 390px");

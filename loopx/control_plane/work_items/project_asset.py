@@ -519,6 +519,7 @@ PROJECT_ASSET_TODO_DISPLAY_FIELDS = (
     "source_section",
     "task_class",
     "action_kind",
+    "capability_binding_ref",
     "task_domain",
     "task_repository",
     "required_write_scopes",
@@ -626,6 +627,12 @@ def build_project_asset_todo_summary(
         "total": total_count,
         **metadata,
     }
+    capability_actions = todos.get("capability_actions")
+    if todo_role == "user" and isinstance(capability_actions, dict):
+        # Derived from the full canonical User Todo source before its generic
+        # display items are capped. This is a bounded projection, not another
+        # review or decision authority.
+        summary["capability_actions"] = dict(capability_actions)
     if todos.get("advancement_done_count") is not None:
         summary["advancement_done_count"] = todos.get("advancement_done_count")
     open_items = open_todo_items(todos, limit=item_limit)

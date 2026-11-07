@@ -114,7 +114,7 @@ def test_public_dsh_operation_entry_and_confirmed_callback(service, monkeypatch,
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     monkeypatch.setenv("DEEPSEEK_API_KEY", "loopback-fixture-placeholder")
-    monkeypatch.setenv("DEEPSEEK_BASE_URL", f"http://127.0.0.1:{server.server_port}")
+    monkeypatch.setenv("DEEPSEEK_BASE_URL", f"http://127.0.0.1:{server.server_port}/anthropic")
     patch_module = root / "restrict.mjs"
     patch_module.write_text(
         "export const name='fixture-operation-only';\nexport function apply(ctx){"

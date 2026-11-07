@@ -74,10 +74,7 @@ class TickDecision:
     final_probe_action: str
     reset_token: str
     terminal: bool
-
-    @property
-    def sleep_seconds(self) -> int:
-        return max(5, int(self.interval_minutes) * 60)
+    recheck_after_seconds: int | None = None
 
 
 def _mapping(value: Any) -> dict[str, Any]:
@@ -150,6 +147,10 @@ def parse_tick(payload: dict[str, Any]) -> TickDecision:
         raise ValueError(f"{admission_field} must be a boolean; refusing model wake")
     local = _extract_local_scheduler(payload)
 
+    recheck = local.get("recheck_after_seconds")
+    if recheck is not None and (type(recheck) is not int or recheck <= 0):
+        raise ValueError("local_scheduler.recheck_after_seconds must be a positive integer")
+
     progression_values = local.get("example_progression_minutes")
     progression: tuple[int, ...] = ()
     if isinstance(progression_values, (list, tuple)):
@@ -194,6 +195,7 @@ def parse_tick(payload: dict[str, Any]) -> TickDecision:
         final_probe_action=str(final_probe.get("action") or "").strip(),
         reset_token=_extract_reset_token(payload),
         terminal=False,
+        recheck_after_seconds=recheck,
     )
 
 
@@ -207,6 +209,7 @@ def run_quota_should_run(
         stdin=b"",
         timeout_seconds=max(0.01, timeout_seconds),
         output_limit_bytes=PROCESS_OUTPUT_LIMIT_BYTES,
+        env={**os.environ, "LOOPX_CONTEXT_DELIVERY": "off"},
     )
     if completed.failure_kind is not None:
         raise RuntimeError(f"quota should-run failed: {completed.failure_kind}")
@@ -675,6 +678,10 @@ def build_should_run_command(args: argparse.Namespace) -> list[str]:
             args.runtime_profile,
             "--include-detail",
             "scheduler",
+            # This observer consumes the decision itself. The admitted wake
+            # owns its Turn, native context and capture; keep its env unchanged.
+            "--context-delivery",
+            "off",
         ]
     )
     return command
@@ -814,6 +821,9 @@ def _run_worker_locked(
             interval_minutes, phase = select_interval(
                 decision, unchanged_count=unchanged_count
             )
+            interval_seconds = interval_minutes * 60
+            if not decision.should_run and decision.recheck_after_seconds is not None:
+                interval_seconds = min(interval_seconds, decision.recheck_after_seconds)
 
             effective_action = str(payload.get("effective_action") or "").strip()
             selected = _mapping(payload.get("selected_todo"))
@@ -1004,7 +1014,7 @@ def _run_worker_locked(
                 "status=waiting "
                 f"phase={phase} class={decision.cadence_class} "
                 f"effective_action={effective_action or '-'} "
-                f"next_check_minutes={interval_minutes} "
+                f"next_check_minutes={interval_seconds / 60:g} "
                 f"unchanged_count={unchanged_count}"
                 + (
                     f" unchanged_limit={decision.unchanged_limit}"
@@ -1081,7 +1091,7 @@ def _run_worker_locked(
         # still owns continuation; waiting/observe-only ticks retain their
         # cadence and failures use the independent backoff path above.
         if not wake_completed:
-            sleep(max(5, interval_minutes * 60))
+            sleep(interval_seconds)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

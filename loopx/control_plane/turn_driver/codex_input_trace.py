@@ -4,22 +4,21 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import stat
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from .decision_capture import capture_page_range as _capture_page_range
+from .decision_capture import capture_page_range as _capture_page_range, open_regular_capture
 
 
 def read_native_trace_file(path: Path, *, tail: bool = False) -> bytes:
     from ..effect_runtime import MAX_REQUEST_BYTES
 
-    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    descriptor = open_regular_capture(path)
     with os.fdopen(descriptor, "rb") as stream:
         metadata = os.fstat(stream.fileno())
-        if not stat.S_ISREG(metadata.st_mode) or (metadata.st_size > MAX_REQUEST_BYTES and not tail):
+        if metadata.st_size > MAX_REQUEST_BYTES and not tail:
             raise ValueError("native observation is not a bounded regular file")
         offset = max(0, metadata.st_size - MAX_REQUEST_BYTES) if tail else 0
         stream.seek(offset)

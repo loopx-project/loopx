@@ -695,7 +695,7 @@ times separately. Check whether later work implemented the proposed mechanism;
 a decision record, saved snapshot or new identifier alone does not establish
 adoption, restoration or improved results. These are refinements of the existing
 Agent questions, not new decision fields, score thresholds or settlement gates;
-the strategy remains default-off. Identify the remaining authoritative goal gap, its limiting
+the inherited capability default enables the strategy; explicit off and saved legacy configurations retain their meaning. Identify the remaining authoritative goal gap, its limiting
 component and plausible headroom before choosing the next mechanism. Compare
 continuation with plausible alternatives that change the limiting assumption or
 mechanism, including complete cost. A stalled route calls for a discriminating
@@ -870,7 +870,8 @@ source-bound stride decision. Typed progress, successor and terminal results
 remain valid evidence/outcomes, while a bare Todo successor transition cannot
 stand in for the review. An evidenced path decision can retain unfinished useful
 work without a fabricated new progress identifier or Todo. Explicit acceptance
-and capability outcome restrictions still apply; default-off and other sources
+and capability outcome restrictions still apply; explicit off, saved legacy
+cadence-only configurations and other sources
 retain their prior exit policies. No new detector, threshold or action is added.
 
 The frozen [EdgeBench diagnostic window](https://huggingface.co/datasets/songwells/loopxbench/blob/c5dd30bfaa2f5af42ccd7d0ca9ed59b865a81d42/public/edgebench-20261018-v1/diagnostic_windows.csv)
@@ -888,12 +889,25 @@ This proves the scripted control path, not model adoption or EdgeBench score gai
 Existing negative-result and later-work followthrough coverage remains necessary.
 The effective review cadence remains owned by the
 [Goal Vision/replan contract](../../reference/protocols/goal-vision-replan-contract-v0.md#default-review-cadence)
-and Goal/device configuration. Six effective work Turns is the default; enabling
-the stride strategy for one Goal inherits its live review cadence, and only an
-explicit Goal cadence override pins a separate count or unit. The cadence is not
-Todo size, an experiment boundary or a mandatory route switch; this refinement
-does not change counting. Matched continuation must qualify actual
-adoption, target benefit and full cost before promotion or synergy claims.
+and Goal/device configuration; six effective work Turns is the default. Stride
+no longer maps grow/verify to fixed cadence multipliers. It governs work shape:
+apply the three independent plans to actual Todo scope and acceptance through
+existing authoring/update commands, record verified IDs in `todo_delta`, and
+execute the retained or revised work under normal admission. Supported grow
+consolidates fragmented setup, implementation, integration and decisive validation
+into a coherent accepted deliverable or complete interpretable experiment.
+Keep dependencies, acceptance, risk, authority and per-Turn settlement boundaries.
+The next review must distinguish declared scope from actual execution, outcome
+quality and full cost; preserving a plan is not adoption or benefit.
+
+Evidence-conditioned stride is the capability default for inherited configuration.
+Explicit off, saved legacy cadence-only configurations and historical records
+retain their semantics. Clear overrides to inherit, or select off to roll back;
+no installed configuration, frozen worker or historical receipt is rewritten.
+The codec's missing historical strategy remains off. Review questions and syntax
+examples remain together; no extra decision fields, strategy versions or
+machine-enforced semantic classifier are added. Matched continuation must still
+qualify target benefit and full cost before promotion or synergy claims.
 
 Exploratory iteration may run only strategy-enabled test arms and reuse historical
 baselines as descriptive references. A fresh concurrent baseline is not required
@@ -925,8 +939,8 @@ ten hours is an experiment setting, not a product default or automatic pivot.
 The proposed automatic capture policy is **off by default; when explicitly
 enabled, capture at each fresh replan node before its strategy decision**. Reuse
 the canonical replan obligation identity: repeated context reads or retries of
-that node do not create another point. Ordinary work Turns do not trigger a full
-capture. A successful point records the replan identity, the completed Host
+that node do not create another point. Ordinary work Turns do not automatically
+trigger a full capture. A successful point records the replan identity, the completed Host
 cursor, source revisions and current strategy version; these are evidence
 bindings, not authority. Branches can then compare different replan decisions
 from the same retained research state, including a decision to keep the route.
@@ -945,6 +959,25 @@ they do not qualify a complete research checkpoint or extend the original deadli
 Measure capture time and storage per node before choosing compression, shared
 immutable members or retention limits. Retention must preserve declared study
 points and their branches rather than silently selecting favorable outcomes.
+
+An explicitly requested full benchmark capture can also use the existing
+completed-wake boundary: omit the declaration's `trigger` and supply native
+session, canonical research state, evaluation opportunity and controller handoff
+together. The original work must already be settled and its native turn completed;
+no synthetic replan, extra guard or work-slot spend is introduced. The same
+controller writer barrier, participant rereads and fresh destination admission
+apply. File-loaded and preloaded full declarations share the original 90-second
+capture window, capped by the source phase, plus the existing bounded sealing
+allowance after writer release. Ordinary file-only captures keep their 30-second
+window. A missed point continues the source and does not authorize a signal-based
+handoff or relabel a later state. The Host retains the first attempt per declared
+destination, even on failure or a lost reply; replay cannot replace its original
+settled source. The original wake retains its declaration before the optional
+artifact-side index is written; index permission recovery cannot admit later
+state at the missed point. An exhausted phase performs no declaration/source reads.
+The joint native qualification has an explicit
+`settled_work` variant; deterministic inference qualifies mechanical adoption,
+not a scientific advantage or live rollout.
 
 Record the actual boundary and any skew:
 

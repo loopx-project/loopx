@@ -299,10 +299,15 @@ function completeCadenceProjection(request: CompleteHintRequest, profile: HintPr
   const cooldown = notificationCooldown(profile, decision, request);
   if (cooldown) hint.user_gate_notification_cooldown = cooldown;
   const frontier = hintFrontier(request);
+  const frontierSeconds = frontier?.frontier_recheck_after_seconds;
+  const scheduled = arbitration.scheduled_recheck_after_seconds;
+  const recheck = typeof scheduled === "number"
+    ? Math.min(scheduled, typeof frontierSeconds === "number" ? frontierSeconds : scheduled) : frontierSeconds;
+  if (typeof scheduled === "number") (loops.local_scheduler as JsonObject).recheck_after_seconds = recheck;
   if (request.include_detail) hint.cold_path_detail = {schema_version: "scheduler_hint_detail_v0", source: "quota.should-run", ...loops,
     final_quota_replan_check: replan, reset_policy_detail: resetDetail(profile, identity, cadence, keys), stateful_backoff_detail: backoffDetail(profile, cadence, decision),
     ...(profile.detail ? {cadence_context: profile.detail} : {}), ...(frontier ? {frontier_recheck: frontier} : {})};
-  return applyHintExecutionContext(hint, context, frontier?.frontier_recheck_after_seconds);
+  return applyHintExecutionContext(hint, context, recheck);
 }
 
 const CADENCE_PROFILES: Record<string, HintProfile> = {
@@ -408,7 +413,7 @@ function invalidContextHint(context: JsonObject): JsonObject {
     unchanged_poll: {local_scheduler: "stop_until_context_repaired", codex_cli_tui: "stop_until_context_repaired",
       [SSH]: "stop_until_context_repaired", claude_code_loop: "stop_until_context_repaired", final_quota_replan_check_enabled: false, spend_policy: spend},
     consistency_error: {source: "scheduler_execution_context", errors: context.errors},
-    [stripPythonWhitespace(String(context.host_surface ?? "")) === "trae_app" ? "app_automation" : "codex_app"]: {
+    [["trae_app", "antigravity_app"].includes(stripPythonWhitespace(String(context.host_surface ?? ""))) ? "app_automation" : "codex_app"]: {
       applicability: "blocked_invalid_context", apply: "none", host_action: "none", ack_required: false}};
 }
 
@@ -454,7 +459,7 @@ function selectedProfile(request: JsonObject, arbitration: JsonObject): HintProf
   const disposition = String(arbitration.disposition);
   let profile = CADENCE_PROFILES[disposition];
   if (!profile) throw new EffectRuntimeRequestError(`unhandled scheduler disposition: ${disposition}`);
-  if (disposition === "monitor_wait" && arbitration.pending_dependency_wait === true) {
+  if (disposition === "monitor_wait" && (arbitration.pending_dependency_wait === true || arbitration.scheduled_recheck_after_seconds != null)) {
     profile = {...profile, cli_limit: null, claude_limit: null};
   }
   if (disposition === "human_gate" || disposition === "monitor_wait") profile = boundedMonitorProfile(profile, payload, request);

@@ -25,6 +25,23 @@ def original(steward):
     return row["session_id"], transport.managed_steward
 
 
+def retain_codex_fallback(store, runtime, sid):
+    """Seed trusted allocation metadata only in disposable native/HTTP fixtures."""
+    from loopx.chat_manager import manager_executor_allocation
+
+    session = store.load_session(sid)
+    assert session["agent_id"] == session["executor_endpoint_id"] == "codex"
+    allocation = session.get("manager_executor_allocation") or manager_executor_allocation(runtime, environ={})
+    store.update_session(sid, manager_executor_allocation={**allocation,
+        "selection_policy": "flexible", "configured_endpoint": "antigravity",
+        "executor_endpoint": "codex", "eligible_endpoints": ["antigravity", "codex"],
+        "allocation_reason": "flexible_availability_fallback"},
+        upstream_context_history=[*(session.get("upstream_context_history") or []),
+            {"agent_id": "antigravity", "thread_id": "original-native-thread",
+                "manager_context_version": None, "agent_model_id": "gemini-4-argon-high"}])
+    return allocation
+
+
 def storage(runtime, provider):
     args = {"runtime_root": runtime.coordination_runtime_root,
         "registry": build_builtin_machine_configuration_registry(),
@@ -74,6 +91,59 @@ def test_native_preparation_preserves_original_and_creates_one_real_actor(stewar
     assert transport.bindings.read()["bindings"][-1]["managed_actor"] == actor
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_retained_actor_on_another_executor_does_not_block_captured_project_work(steward, tmp_path, monkeypatch, provider):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    store, runtime, external, transport, binding, capture, _ = steward
+    sid, service = original(steward)
+    storage(runtime, provider)
+    preview = service.prepare(binding["binding_id"], session_id=sid)
+    actor = service.prepare(binding["binding_id"], session_id=sid,
+        expected_plan_id=preview["plan"]["plan_id"], execute=True)["actor"]
+    event = external.event("notes-app", "captured-project-work", "Explain this project")
+    admit = transport.core.admit
+
+    def unavailable(**_kwargs):
+        raise OSError("source captured before Core admission")
+
+    monkeypatch.setattr(transport.core, "admit", unavailable)
+    with pytest.raises(OSError, match="before Core admission"):
+        transport.admit("notes-app", event)
+    monkeypatch.setattr(transport.core, "admit", admit)
+    path = next(path for path in transport.root.glob("*.json")
+                if json.loads(path.read_text())["event"]["message_id"] == event["message_id"])
+    assert json.loads(path.read_text())["status"] == "captured"
+    # A persisted executor selection retains the previously prepared identity.
+    # This compatibility fixture is isolated from all real bindings and Goals.
+    current = transport.bindings.read()
+    selected = next(row for row in current["bindings"] if row["binding_id"] == binding["binding_id"])
+    selected["executor_endpoint_id"] = "antigravity"
+    transport.bindings.path.write_text(json.dumps(current))
+    before = capture.read_bytes()
+    transport.reconcile_request(path)
+    row = transport.core.read_request(json.loads(path.read_text())["request_ref"])
+    assert row["status"] == "accepted"
+    result = finish(runtime, row)
+    assert result["status"] == "completed"
+    transport.reconcile()
+    delivered = json.loads(path.read_text())
+    assert delivered["status"] == "delivered" and delivered["deliveries"]["terminal"]["verified"]
+    reply = external.messages[delivered["deliveries"]["terminal"]["attempt"]["message_ref"]]
+    assert reply["chat_id"] == event["chat_id"]
+    assert [message["text"] for message in store.messages(row["session_id"]) if message["role"] == "user"] == [event["content"]]
+    packets = [json.loads(line) for line in capture.read_bytes()[len(before):].splitlines()]
+    assert sum(packet["method"] == "turn/start" for packet in packets) == 1
+    assert transport.reconcile() == 0
+    transport.ingress.observe()
+    assert transport.ingress.health(binding["binding_id"])["status"] == "verified"
+    assert next(item for item in transport.bindings.read()["bindings"]
+                if item["binding_id"] == binding["binding_id"])["managed_actor"] == actor
+    before_prepare = capture.read_bytes(), runtime.registry_path.read_bytes()
+    with pytest.raises(ValueError):
+        service.prepare(binding["binding_id"], session_id=sid)
+    assert (capture.read_bytes(), runtime.registry_path.read_bytes()) == before_prepare
+
+
 @pytest.mark.parametrize("fault", ["queued", "provider", "stale_preview", "foreign_session"])
 def test_rejected_preparation_has_no_native_goal_or_model_effect(steward, fault):
     store, runtime, provider, _, binding, capture, _ = steward
@@ -121,7 +191,8 @@ def test_preparation_recovers_native_creation_after_registration_loses_response(
     assert capture.read_bytes() == before
 
 
-def test_http_preparation_requires_current_preview_and_reads_original_binding(steward, tmp_path, monkeypatch):
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_http_preparation_requires_current_preview_and_reads_original_binding(steward, tmp_path, monkeypatch, provider):
     import http.client
     import threading
     from types import SimpleNamespace
@@ -130,7 +201,7 @@ def test_http_preparation_requires_current_preview_and_reads_original_binding(st
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     store, runtime, _, transport, binding, capture, _ = steward
     sid, _ = original(steward)
-    storage(runtime, "sqlite")
+    storage(runtime, provider)
     server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
     server.chat_store, server.runtime_controller = store, runtime
     server.registry_path, server.runtime_root_override = runtime.registry_path, store.root.parent
@@ -204,6 +275,74 @@ def test_http_preparation_requires_current_preview_and_reads_original_binding(st
         assert row["managed_steward"]["scheduling_enabled"] is False
         assert row["managed_steward"]["monitor"]["status"] == "blocked"
         assert store.messages(sid) == before_history and capture.read_bytes() == before_calls
+        # Retained configuration remains inspectable after an executor change.
+        # Reading it never supplies the original Codex execution authority.
+        from datetime import datetime, timezone
+        from loopx.capabilities.native_chat.steward_reports import StewardReports
+        from loopx.capabilities.periodic_report.cadence_journal import admit_cadence_window, cadence_journal_path
+
+        report_route = route + "/report"
+        report_setting = {"binding_id": binding["binding_id"], "operation": "enable",
+            "schedule": {"schema_version": "periodic_report_schedule_v0", "schedule_id": "retained-report",
+                "timezone": "UTC", "rrule": "FREQ=DAILY;BYHOUR=9;BYMINUTE=0", "start_date": "2001-01-01"}}
+        code, report_preview = request(report_route, report_setting)
+        assert code == 200
+        assert request(report_route, {**report_setting, "execute": True,
+            "plan_id": report_preview["plan"]["plan_id"]})[0] == 200
+        reports = StewardReports(runtime)
+        subscription = reports.subscription(binding["binding_id"])
+        actor = applied["actor"]
+        admitted = admit_cadence_window(runtime_root=runtime.coordination_runtime_root,
+            goal_id=actor["goal_id"], agent_id=actor["agent_id"], subscription=subscription,
+            now=datetime.now(timezone.utc), subscription_resolver=lambda: subscription)
+        assert admitted["status"] == "pending"
+        journal_path = cadence_journal_path(runtime.coordination_runtime_root, actor["goal_id"])
+        journal = journal_path.read_bytes()
+        expected = next(row for row in request(base)[1]["connections"]
+            if row["binding_id"] == binding["binding_id"])["managed_steward"]
+        current = transport.bindings.read()
+        selected = next(row for row in current["bindings"] if row["binding_id"] == binding["binding_id"])
+        selected["executor_endpoint_id"] = "antigravity"
+        transport.bindings.path.write_text(json.dumps(current))
+        # Core may already have retained this same Session on its qualified
+        # Codex fallback. Neither the UI nor native consent chooses a new host.
+        allocation = retain_codex_fallback(store, runtime, sid)
+        fallback = next(row for row in request(base)[1]["connections"]
+            if row["binding_id"] == binding["binding_id"])["managed_steward"]
+        assert fallback.pop("execution_available") is True
+        assert "execution_error_code" not in fallback and fallback == expected
+        assert request(route, {"binding_id": binding["binding_id"]})[0] == 200
+        assert request(report_route, report_setting)[0] == 200
+        assert request(monitor_route, {**setting, "operation": "enable"})[0] == 200
+        assert journal_path.read_bytes() == journal
+        assert store.messages(sid) == before_history and capture.read_bytes() == before_calls
+        # A historical thread alone cannot qualify an unallocated executor.
+        store.update_session(sid, manager_executor_allocation=allocation)
+        original_binding, registry = transport.bindings.path.read_bytes(), runtime.registry_path.read_bytes()
+        row = next(row for row in request(base)[1]["connections"] if row["binding_id"] == binding["binding_id"])
+        state = row["managed_steward"]
+        assert state.pop("execution_available") is False
+        assert state.pop("execution_error_code") == "unsupported_executor"
+        assert state == expected
+        assert state["report"]["retained_window_due_at"] == admitted["window"]["due_at"]
+        for endpoint, body in [(route, {"binding_id": binding["binding_id"]}),
+                (monitor_route, setting), (report_route, report_setting),
+                (report_route, {"binding_id": binding["binding_id"], "operation": "pause"}),
+                (report_route, {"binding_id": binding["binding_id"], "operation": "cancel"})]:
+            assert request(endpoint, body)[0] == 409
+        assert journal_path.read_bytes() == journal
+        assert transport.bindings.path.read_bytes() == original_binding
+        assert runtime.registry_path.read_bytes() == registry
+        assert store.messages(sid) == before_history and capture.read_bytes() == before_calls
+        selected["executor_endpoint_id"] = "codex"
+        transport.bindings.path.write_text(json.dumps(current))
+        restored = next(row for row in request(base)[1]["connections"] if row["binding_id"] == binding["binding_id"])
+        assert restored["managed_steward"] == expected
+        selected["executor_endpoint_id"] = "antigravity"
+        selected.pop("managed_actor")
+        transport.bindings.path.write_text(json.dumps(current))
+        unprepared = next(row for row in request(base)[1]["connections"] if row["binding_id"] == binding["binding_id"])
+        assert "managed_steward" not in unprepared
     finally:
         server.shutdown()
         server.server_close()

@@ -171,3 +171,10 @@ assert.deepEqual(
   { wait_for_ci: false, review_priority: "other-developers-first" },
   "an explicit Goal CI opt-out must survive default projection and omit envelope fields",
 );
+
+// Capability defaults may enable Stride without changing saved legacy choices.
+const enabledStrideDefault = {...cadenceDefault, stride_strategy: "evidence_conditioned_v1"};
+assert.deepEqual(goalReplanCadenceEditorValue(null, enabledStrideDefault), enabledStrideDefault);
+assert.equal(goalReplanCadenceEditorValue({stride_strategy: "off"}, enabledStrideDefault).stride_strategy, "off");
+assert.equal(goalReplanCadenceEditorValue({count_unit: "effective_turns", count: 3}, enabledStrideDefault).stride_strategy, "off");
+assert.equal(projectEditableCapabilityConfiguration(cadenceEditor, {}, enabledStrideDefault).stride_strategy, "evidence_conditioned_v1");

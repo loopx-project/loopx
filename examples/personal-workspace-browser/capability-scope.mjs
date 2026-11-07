@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import assert from "node:assert/strict";
 import { outputDir } from "./fixture.mjs";
 import { openWorkspacePage } from "./scenario-context.mjs";
 
@@ -39,6 +40,30 @@ export const capabilityScopeScenario = {
       await page.locator(".personal-capability-supported-scopes").filter({ hasText: "仅单个 Goal 配置 · 无设备默认值" }).waitFor();
       await page.locator(".personal-capability-editor-status.is-read-only").waitFor();
       await catalog.getByRole("button", { name: /周期报告/ }).click();
+      let releasePreview;
+      let previewRequested;
+      const previewGate = new Promise(resolve => { releasePreview = resolve; });
+      const previewStarted = new Promise(resolve => { previewRequested = resolve; });
+      const previewRoute = "**/api/chat/goal-configuration/preview";
+      await page.route(previewRoute, async route => {
+        previewRequested();
+        await previewGate;
+        await route.fallback();
+      });
+      await page.getByLabel(/^报告 Profile/u).fill("discarded-periodic-draft");
+      const delayedPreview = page.waitForResponse(response => response.url().endsWith("/goal-configuration/preview"));
+      await page.getByRole("button", { name: "预览变更", exact: true }).click();
+      await previewStarted;
+      await catalog.getByRole("button", { name: /飞书事件收件箱/ }).click();
+      await page.locator(".personal-capability-editor-status.is-read-only").waitFor();
+      releasePreview();
+      await (await delayedPreview).finished();
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      assert.equal(await page.locator(".personal-capability-preview").count(), 0,
+        "A late Goal capability preview cannot cross to a different capability");
+      await page.unroute(previewRoute);
+      await catalog.getByRole("button", { name: /周期报告/ }).click();
+      assert.notEqual(await page.getByLabel(/^报告 Profile/u).inputValue(), "discarded-periodic-draft");
       await page.getByLabel(/^报告 Profile/u).fill("unsaved-scope-test");
       await page.getByRole("button", { name: "预览变更", exact: true }).click();
       await page.getByText("锁定 revision 的变更预览", { exact: true }).waitFor();
@@ -66,10 +91,26 @@ export const capabilityScopeScenario = {
       await composition.selectOption("explicit_only");
       await page.getByRole("button", { name: "预览变更", exact: true }).click();
       await page.getByText("锁定 revision 的变更预览", { exact: true }).waitFor();
+      let readbackUnavailable = true;
+      await page.route("**/api/chat/goal-configuration?*", async route => {
+        if (readbackUnavailable && api.goalConfigurationRequests.some(item => item.phase === "apply")) {
+          await route.fulfill({status: 503, json: {ok: false, error: "Synthetic Goal configuration readback outage"}});
+        } else await route.fallback();
+      });
       await Promise.all([
         page.waitForResponse((response) => new URL(response.url()).pathname === "/api/chat/goal-configuration" && response.request().method() === "GET"),
         page.getByRole("button", { name: "应用此预览", exact: true }).click(),
       ]);
+      const recovery = page.locator(".personal-capability-recovery");
+      await recovery.getByText("配置已写入，读回尚未确认", {exact: true}).waitFor();
+      assert.equal(await page.getByLabel(/^研究覆盖范围/u).inputValue(), "joint-scope",
+        "A failed post-write readback keeps the current Goal draft mounted");
+      const writesBeforeRetry = api.goalConfigurationRequests.filter(item => item.phase === "apply").length;
+      readbackUnavailable = false;
+      await recovery.getByRole("button", {name: "刷新源配置", exact: true}).click();
+      await recovery.waitFor({state: "hidden"});
+      assert.equal(api.goalConfigurationRequests.filter(item => item.phase === "apply").length, writesBeforeRetry,
+        "Goal configuration readback recovery must not apply another write");
       await catalog.getByRole("button", { name: /探索 Harness/ }).click();
       if (await composition.inputValue() !== "explicit_only" || await page.getByLabel(/^研究覆盖范围/u).inputValue() !== "joint-scope"
         || await explorationMode.inputValue() !== "planning") throw new Error("Applied composition configuration did not read back from its Goal");
@@ -148,7 +189,7 @@ export const capabilityScopeScenario = {
       await page.locator(".personal-goal-link", { hasText: "Product Release" }).click();
       await page.getByRole("button", { name: "Goal 设置", exact: true }).click();
       if (!await goalScope.isChecked() || await target.inputValue() !== "product-release") throw new Error("Goal settings entry lost its target");
-      if (context.errors.length) throw new Error(context.errors.join(" | "));
+      if (context.errors.some(error => !/503/.test(error))) throw new Error(context.errors.join(" | "));
       return { coverageEntries: await context.close(), note: "One capability destination; explicit device/Goal scope; fresh target reads; no cross-scope drafts or writes; Goal entry preserved; desktop/mobile verified." };
     } catch (error) {
       await page.screenshot({ path: resolve(outputDir, "capability-scope-failure.png"), animations: "disabled" });

@@ -13,11 +13,15 @@ from .control_plane.projects.identity import GoalCreationConflictError
 from .control_plane.coordination.new_goal_storage_transport import initialize_goal_storage_target
 from .chat import apply_todo_review_preview, build_todo_review_preview
 from .chat_action_normalization import ChatActionNormalizationMixin
-from .chat_action_store import ActionConflictError, ChatActionStore
+from .chat_action_store import (
+    ACTION_KINDS as SUPPORTED_ACTION_KINDS,
+    ActionConflictError,
+    ChatActionStore,
+)
 from .chat_goal_lifecycle_actions import ChatGoalLifecycleActionMixin
-from .chat_monitor_actions import ChatMonitorActionMixin
+from .chat.monitor_actions import ChatMonitorActionMixin
 from .chat_store import ChatSessionStore
-from .chat_todo_actions import ChatTodoActionMixin
+from .chat.todo_actions import ChatTodoActionMixin
 from .control_plane.goals.acceptance_actions import GoalAcceptanceActionMixin
 from .control_plane.goals.goal_objective_actions import GoalObjectiveActionMixin
 from .configure_goal import configure_goal
@@ -40,22 +44,7 @@ from .control_plane.todos.mutation_api import add_goal_todo, update_goal_todo
 
 
 CHAT_ACTION_RESPONSE_SCHEMA_VERSION = "loopx_chat_action_response_v1"
-SUPPORTED_ACTION_KINDS = {
-    "goal.acceptance.check",
-    "todo.create",
-    "todo.update",
-    "run.correct",
-    "goal.create",
-    "goal.update",
-    "goal.lifecycle",
-    "agent.bind",
-    "heartbeat.bind",
-    "monitor.create",
-    "monitor.update",
-    "gate.resolve",
-    "operation.execute",
-    "team.plan",
-}
+
 # Runtime Endpoint ids and durable Goal agent ids are chosen independently, so
 # a family token collapses both onto the host that produced them: Endpoint
 # `codex` has to resolve to a registered `codex-main-control`. Every host that
@@ -818,6 +807,32 @@ class ChatActionService(
             step="todos_created",
             receipt={"outcome": "todos_created", "todo_ids": todo_ids},
         )
+        completion_plan = effect_runtime_result("presentation.action_review_plan.compile", {
+            "proposal": self.store.load(proposal_id),
+        })
+        completion = completion_plan.get("creationOutcome")
+        completion_progress = completion_plan.get("creationProgress") or {}
+        if completion and not completion_progress.get("completionRecorded"):
+            from .control_plane.goals.acceptance import inspect_goal_acceptance, refine_goal_outcome
+
+            basis = completion_progress.get("completionBasis")
+            if basis is None:
+                current = inspect_goal_acceptance(registry_path=self.registry_path,
+                    runtime_root=str(runtime_root), goal_id=goal_id, agent_id=agent_id)
+                basis = {"providerRevision": current["provider_revision"], "operationId": completion["operationId"]}
+                # Persist the original CAS before sending the canonical write.
+                # An uncertain response must replay this request, not new intent.
+                self.store.save_checkpoint(proposal_id, step="goal_completion_prepared", receipt={
+                    "outcome": "goal_completion_prepared", "goal_id": goal_id,
+                    "operation_id": basis["operationId"], "provider_revision": basis["providerRevision"],
+                })
+            retained = refine_goal_outcome(registry_path=self.registry_path, runtime_root=str(runtime_root),
+                goal_id=goal_id, agent_id=agent_id, refinement=completion["refinement"],
+                operation_id=basis["operationId"], expected_provider_revision=basis["providerRevision"], execute=True)
+            self.store.save_checkpoint(proposal_id, step="goal_completion_recorded", receipt={
+                "outcome": "goal_completion_recorded", "goal_id": goal_id,
+                "operation_id": basis["operationId"], "provider_revision": retained["provider_revision"],
+            })
         projected = self._goal(goal_id)
         if agent_id and agent_id not in registered_agent_ids_for_goal(projected):
             raise ValueError(

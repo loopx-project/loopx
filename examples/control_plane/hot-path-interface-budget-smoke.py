@@ -79,7 +79,10 @@ SURFACE_BUDGETS = {
         # 15,419/18,636 characters, 378/513 nested keys, and 52/53 top-level
         # keys. Keep the complete typed envelope rather than dropping source
         # facts that the consumer must inspect before it spends compute.
-        "max_json_chars": 20_500,
+        # Native canary isolation adds a parent directory to every fixture
+        # path: the same payload is 20,341 chars direct / 20,509 in the runner.
+        # Retain complete source paths and 491 chars of runner headroom.
+        "max_json_chars": 21_000,
         # Explicitly importing this same fixture exposes the current canonical
         # read shape on both base/head: 20,287 chars, 564 nested / 54 top-level
         # keys. Preserve source/Task provenance; retain 11 nested and one
@@ -465,6 +468,17 @@ def main() -> int:
             assert_surface("quota_should_run_json", quota_payload),
             assert_surface("dashboard_status_json", status_payload),
         ]
+        oversized_quota = {
+            **quota_payload,
+            "reason": "x" * int(SURFACE_BUDGETS["quota_should_run_json"]["max_json_chars"]),
+        }
+        try:
+            assert_surface("quota_should_run_json", oversized_quota)
+        except AssertionError as error:
+            assert error.args[0][0] == "quota_should_run_json", error
+            assert error.args[0][1] > SURFACE_BUDGETS["quota_should_run_json"]["max_json_chars"], error
+        else:
+            raise AssertionError("quota character budget accepted an oversized payload")
         cadence = build_interface_budget_cadence(
             summaries,
             checked_at="2099-01-01T00:10:00+00:00",

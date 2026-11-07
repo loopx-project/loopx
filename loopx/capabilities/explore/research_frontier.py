@@ -5,12 +5,13 @@ work authority is performed while projecting research evidence.
 """
 from __future__ import annotations
 
+from typing import Any, Iterator, TYPE_CHECKING
+
 from .machine_defaults import resolve_explore_goal
 
 from collections.abc import Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
 
 from ...control_plane.work_items.autonomous_replan_obligation import build_autonomous_replan_obligation_payload
 from .research_evidence import _research_result, _research_todo_facts
@@ -130,10 +131,14 @@ def public_research_composition_frontier(frontier: Mapping[str, Any] | None) -> 
     return public
 
 
+if TYPE_CHECKING:
+    from ...control_plane.work_items.semantic_replan_writeback import CapabilityReplanEvidence
+
+
 def prepare_research_replan_evidence(
     *, runtime_root: Path, goal_id: str, agent_id: str, registry_goal: dict[str, Any] | None,
     state_text: str, capability_guard: Mapping[str, Any] | None = None,
-):
+) -> CapabilityReplanEvidence | None:
     """IO composition root adapter; the shared gate never imports Explore."""
     import shlex
     from ...control_plane.work_items.semantic_replan_writeback import CapabilityReplanEvidence
@@ -147,7 +152,7 @@ def prepare_research_replan_evidence(
         agent_id=agent_id, state_text=state_text, capability_guard=capability_guard,
         status_payload={"run_history": {"goals": [goal]}}) or {}
 
-    def qualify(guard: Mapping[str, Any], obligation_id: str, progress: dict[str, Any] | None, runs: list[dict[str, Any]]):
+    def qualify(guard: Mapping[str, Any], obligation_id: str, progress: dict[str, Any] | None, runs: list[dict[str, Any]]) -> tuple[dict[str, Any], dict[str, Any]]:
         if guard.get("capability_id") != "explore":
             raise ValueError("selected capability writeback owner is not available")
         obligation = research_composition_obligation(
@@ -205,7 +210,7 @@ def attach_research_execution_projection(
 def hold_research_completion_evidence(
     *, registry_path: Path, runtime_root: Path, goal_id: str, todo: Mapping[str, Any],
     state_text: str, actor_agent_id: str | None,
-):
+) -> Iterator[dict[str, Any] | None]:
     """Legacy writer transport; the same typed rule guards canonical commits."""
     from ...history import load_registry
     from ...materials import find_registry_goal

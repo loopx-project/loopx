@@ -1,4 +1,7 @@
 /** One full-source Todo read reduction; the existing owners decide every lane. */
+import {evaluateTodoCompletionFence, TODO_COMPLETION_FENCE_REQUEST_SCHEMA} from "./completion_fence.ts";
+import {normalizeTodoNoFollowup, normalizeTodoCompletionContinuation, normalizeTodoCompletionRecovery} from "./completion_state.ts";
+import {pythonFieldText} from "./read_codec.ts";
 import {authorityUnicodeCompare} from "../coordination/authority_store_codec.ts";
 import {stripPythonWhitespace} from "../coordination/todo_agents.ts";
 import {compactTodoReadSummary} from "./read_presentation.ts";
@@ -100,6 +103,73 @@ function handoffGates(items: JsonObject[], evaluations: JsonObject[]): JsonObjec
   }).sort((a, b) => Number(a.index || 999999) - Number(b.index || 999999) || authorityUnicodeCompare(text(a.todo_id), text(b.todo_id)));
 }
 
+const CAPABILITY_ACTION_ITEM_LIMIT = 3;
+const CAPABILITY_ACTION_BINDING = /^[a-z][a-z0-9_.-]{0,31}:[a-z][a-z0-9_.:-]{2,95}$/u;
+const CAPABILITY_ACTION_KIND = /^[a-z][a-z0-9_-]{0,63}$/;
+
+/** Capability-bound User actions grouped before the generic Todo display cap. */
+function projectCapabilityActions(
+  items: readonly JsonObject[], openIndices: readonly number[], compacts: readonly JsonObject[],
+): JsonObject {
+  const groups = new Map<string, number[]>();
+  for (const index of openIndices) {
+    const item = items[index]!;
+    const status = stripPythonWhitespace(text(item.status || (item.done === true ? "done" : "open"))).toLowerCase();
+    if (item.done === true || item.archive_state === "archive" || id(item.superseded_by) !== null
+        || !["open", "blocked"].includes(status)) continue;
+    if (taskClass(item) !== "user_action") continue;
+    const actionKind = stripPythonWhitespace(text(item.action_kind)).toLowerCase();
+    const binding = stripPythonWhitespace(text(item.capability_binding_ref)).toLowerCase();
+    if (!CAPABILITY_ACTION_KIND.test(actionKind) || !CAPABILITY_ACTION_BINDING.test(binding)) continue;
+    const group = groups.get(actionKind) ?? [];
+    group.push(index);
+    groups.set(actionKind, group);
+  }
+  const byRecency = (left: number, right: number) => {
+    const l = compacts[left]!, r = compacts[right]!;
+    return authorityUnicodeCompare(text(r.updated_at || r.created_at), text(l.updated_at || l.created_at)) ||
+      authorityUnicodeCompare(text(l.todo_id), text(r.todo_id));
+  };
+  const projectedGroups = [...groups.entries()].map(([actionKind, indices]) => {
+    const ordered = [...indices].sort(byRecency);
+    return {
+      action_kind: actionKind,
+      count: ordered.length,
+      latest_at: ordered.length ? (compacts[ordered[0]!]!.updated_at ?? compacts[ordered[0]!]!.created_at ?? null) : null,
+      items: ordered.slice(0, CAPABILITY_ACTION_ITEM_LIMIT).flatMap(index => {
+        const item = items[index]!;
+        const summary = compacts[index]!;
+        const todoId = id(item.todo_id);
+        const title = compactTodoReadText(text(item.title || item.text), 200);
+        if (!todoId || !title) return [];
+        return [withoutNull({
+          index: item.index ?? null,
+          done: false,
+          text: title,
+          todo_id: todoId,
+          role: "user",
+          goal_id: item.goal_id ?? null,
+          status: text(item.status) || "open",
+          task_class: "user_action",
+          action_kind: actionKind,
+          capability_binding_ref: text(item.capability_binding_ref).toLowerCase(),
+          created_by: summary.created_by ?? null,
+          bound_agent: summary.bound_agent ?? null,
+          created_at: summary.created_at ?? null,
+          updated_at: summary.updated_at ?? null,
+        })];
+      }),
+    };
+  }).sort((left, right) =>
+    authorityUnicodeCompare(text(right.latest_at), text(left.latest_at)) ||
+    authorityUnicodeCompare(left.action_kind, right.action_kind));
+  return {
+    schema_version: "todo_capability_actions_v0",
+    total_count: projectedGroups.reduce((sum, group) => sum + group.count, 0),
+    groups: projectedGroups,
+  };
+}
+
 export async function projectTodoReadGroup(input: JsonObject): Promise<JsonObject> {
   if (!Array.isArray(input.items) || !Array.isArray(input.lineage)) throw new EffectRuntimeRequestError("Todo read requires complete source arrays");
   const items = input.items.map(value => ({...requireJsonObject(value, "Todo read item")}));
@@ -178,6 +248,9 @@ export async function projectTodoReadGroup(input: JsonObject): Promise<JsonObjec
       return row;
     });
   }
+  if (input.role === "user") {
+    summary.capability_actions = projectCapabilityActions(items, projected.source_indices, compacts);
+  }
   if (summary.todo_succession_warning) object(summary.todo_succession_warning).items = summary.completed_without_successor_items!;
   const chosen = projected.source_indices.map(index => items[index]!);
   const chosenDecisions = projected.source_indices.map(index => decisions[index]!);
@@ -199,12 +272,13 @@ export async function projectCanonicalTodoFields(input: JsonObject): Promise<Jso
   const checksConfigured = configuredGoalChecks(acceptance) !== null;
   const lineage = Array.isArray(input.lineage) ? input.lineage.map(value => requireJsonObject(value, "Todo lineage")) : all;
   const lineageFacts = input.lineage_facts ?? lineage.map(successionFacts);
+  const includeArchived = input.include_archived === true || input.retained === true;
   const query = input.kind === "query" && input.selection == null ? object(input.query) : {};
   const detailId = query.agent_id == null && query.limit == null ? query.todo_id : null;
   const fields: JsonObject = {}, evaluations: JsonObject = {};
   for (const role of ["user", "agent"]) {
     const section = role === "agent" ? "Agent Todo" : "User Todo / Owner Review Reading Queue";
-    const items = all.filter(row => (row.role === "user" ? "user" : "agent") === role && (input.retained === true || !archived.has(row.todo_id)))
+    const items = all.filter(row => (row.role === "user" ? "user" : "agent") === role && (includeArchived || !archived.has(row.todo_id)))
       .map(row => structureCanonicalTodo({...row,
         ...(input.retained !== true && checksConfigured && guards[text(row.todo_id)] ? {goal_acceptance_guard: guards[text(row.todo_id)]} : {})}, role, section,
         input.retained === true ? null : 500, input.retained !== true));
@@ -307,8 +381,12 @@ export async function projectSourceTodoFields(input: JsonObject): Promise<JsonOb
 
 export async function readTodo(value: unknown, observedAt = new Date().toISOString()): Promise<JsonObject> {
   const input = requireJsonObject(value, "Todo read request");
-  if (input.schema_version !== TODO_READ_REQUEST || !["group", "fields", "canonical_fields", "select", "source_fields", "query", "historical_fields"].includes(text(input.kind))) {
+  if (input.schema_version !== TODO_READ_REQUEST || !["group", "fields", "canonical_fields", "select", "source_fields", "query", "historical_fields", "completion_evidence"].includes(text(input.kind))) {
     throw new EffectRuntimeRequestError("Todo read request schema mismatch");
+  }
+  if (input.kind === "completion_evidence") {
+    const {readCompletionEvidence} = await import("./read_transaction.ts");
+    return readCompletionEvidence(input);
   }
   if (input.kind === "canonical_fields" || input.kind === "query") {
     const {readCanonicalTodoProjection} = await import("./read_transaction.ts");
@@ -321,4 +399,69 @@ export async function readTodo(value: unknown, observedAt = new Date().toISOStri
   if (input.kind === "select") return selectTodoReadFields(input);
   if (input.kind === "source_fields") return projectSourceTodoFields(input);
   return input.kind === "fields" ? projectCanonicalTodoFields(input) : projectTodoReadGroup(input);
+}
+
+/** Complete continuation read, including the original fence-first diagnostics. */
+export function projectCompletionEvidence(input: JsonObject): JsonObject {
+  const todo = requireJsonObject(input.todo, "durable completion Todo");
+  const operation = input.operation;
+  if (!["intent", "outcome", "terminal"].includes(String(operation))) throw new EffectRuntimeRequestError("unsupported completion evidence operation");
+  const terminal = operation === "terminal";
+  if (terminal || input.completion_turn_key != null) {
+    const fenceTodo = input.fence_todo == null ? {
+      status: pythonFieldText(todo, "status") || "open",
+      no_followup: typeof todo.no_followup === "boolean" ? todo.no_followup : pythonFieldText(todo, "no_followup") || null,
+      completion_continuation: pythonFieldText(todo, "completion_continuation") || null,
+      completion_turn_key: pythonFieldText(todo, "completion_turn_key") || null,
+      successor_todo_ids: todo.successor_todo_ids ?? null,
+    } : requireJsonObject(input.fence_todo, "completion fence Todo");
+    const fence = evaluateTodoCompletionFence({schema_version: TODO_COMPLETION_FENCE_REQUEST_SCHEMA,
+      projection_source: input.projection_source ?? "materialized", todo: fenceTodo,
+      requested_no_followup: terminal, requested_completion_turn_key: input.completion_turn_key ?? null,
+      requested_completion_identity_source: null, goal_id: null, todo_id: null});
+    if (terminal && fence.outcome === "continue") {
+      if (fence.reason === "same_turn_terminal_upgrade" || fence.reason === "not_terminal" && fence.status === "open") return {kind: "absent"};
+      throw new EffectRuntimeRequestError("durable terminal completion is not safely replayable");
+    }
+    if (terminal && stripPythonWhitespace(pythonFieldText(todo, "status")).toLowerCase() !== "done")
+      throw new EffectRuntimeRequestError("durable terminal completion is not safely replayable");
+  }
+  const expected = id(input.expected_todo_id);
+  if (!expected) throw new EffectRuntimeRequestError("durable completion requires a public Todo id");
+  if (id(pythonFieldText(todo, "todo_id")) !== expected)
+    throw new EffectRuntimeRequestError("durable completion todo_id does not match the selected Todo");
+  const requireDone = operation !== "intent";
+  if (requireDone && stripPythonWhitespace(pythonFieldText(todo, "status")).toLowerCase() !== "done")
+    throw new EffectRuntimeRequestError("durable completion requires the selected Todo to be durably done");
+  const rawSuccessors = todo.successor_todo_ids;
+  const successorValues = Array.isArray(rawSuccessors) ? rawSuccessors.map((_, i) => pythonFieldText(rawSuccessors, i)) : [pythonFieldText(todo, "successor_todo_ids")];
+  const successors = ids(successorValues);
+  const noFollowup = normalizeTodoNoFollowup(typeof todo.no_followup === "boolean" ? todo.no_followup : pythonFieldText(todo, "no_followup"));
+  let continuation = normalizeTodoCompletionContinuation(pythonFieldText(todo, "completion_continuation"));
+  const rawRecovery = pythonFieldText(todo, "completion_recovery"), recovery = normalizeTodoCompletionRecovery(rawRecovery);
+  if (rawRecovery && recovery === null) throw new EffectRuntimeRequestError("durable completion_recovery is invalid");
+  if (requireDone && continuation === null) throw new EffectRuntimeRequestError("durable completion is missing completion_continuation; repair the Todo with `loopx todo complete`");
+  continuation ??= noFollowup === true ? "no_followup" : successors.length ? "successor" : "active_goal";
+  let completion: JsonObject;
+  if (noFollowup === true) {
+    if (successors.length) throw new EffectRuntimeRequestError("durable completion records both no_followup and successor_todo_ids");
+    if (continuation !== "no_followup") throw new EffectRuntimeRequestError("durable completion_continuation contradicts no_followup");
+    completion = {todo_id: expected, continuation: "no_followup"};
+  } else if (successors.length) {
+    if (recovery !== null) throw new EffectRuntimeRequestError("durable completion_recovery requires a no_followup continuation");
+    if (continuation !== "successor") throw new EffectRuntimeRequestError("durable completion_continuation contradicts successor_todo_ids");
+    if (input.existing_todo_ids != null) {
+      if (!Array.isArray(input.existing_todo_ids)) throw new EffectRuntimeRequestError("existing Todo ids must be an array");
+      const existing = new Set(input.existing_todo_ids), missing = successors.filter(value => !existing.has(value));
+      if (missing.length) throw new EffectRuntimeRequestError("durable completion declares missing successor Todo ids: " + missing.join(", "));
+    }
+    completion = {todo_id: expected, continuation: "successor", successor_todo_ids: successors};
+  } else {
+    if (continuation !== "active_goal") throw new EffectRuntimeRequestError("durable completion_continuation requires matching no_followup or successor_todo_ids");
+    if (recovery !== null) throw new EffectRuntimeRequestError("durable completion_recovery requires a no_followup continuation");
+    completion = {todo_id: expected, continuation: "active_goal"};
+  }
+  if (!terminal) return completion;
+  if (completion.continuation !== "no_followup") throw new EffectRuntimeRequestError("durable terminal completion is not no-follow-up");
+  return {kind: "committed", completion};
 }

@@ -41,6 +41,68 @@ Mini-World 既可独立交付，也可成为视频中的素材或镜头；按具
 同时审阅完整成片的表达、画面、声音、节奏与全部制作成本；机械检查、创意判断、
 观众证据和未验证项分别记录。
 
+### Source-led selection and whole-film refinement / 全景选材与整片精修
+
+For an engineering launch or retrospective, inventory the topic's full relevant
+timeline before selecting examples. Include early architectural decisions,
+mid-course corrections, outcome evidence and counterexamples. Distinguish a
+proposal, a merged implementation and demonstrated adoption. A recent PR, a
+large diff or a striking number is not by itself the strongest story. Keep a
+compact selection rationale with the draft: the audience question, mistaken
+assumption, changed mechanism, decisive evidence and why this example matters.
+Update linked articles and companion posts when that selection changes.
+
+When a canonical film already exists, inspect the complete film and its source
+description first. Refine from that source unless the brief calls for a new work;
+retain its identity, reusable footage, editable composition and an edit list.
+Remove superseded candidates from the active review set without erasing their
+source history. Do not quietly substitute an unrelated recent demo.
+
+Review the full proposed edit, not only its opening or poster:
+
+- Give each passage a distinct viewer question and observable payoff. Prefer
+  a concrete action, result or contrast to repeated positioning. Cut duplication
+  across narration, captions, slide copy and adjacent shots. Information density
+  means more understood information, not smaller type, faster speech or a fixed
+  quota of cuts per minute.
+- Let the evidence determine framing and duration. Keep units, conditions,
+  counterexamples and source boundaries legible; preserve a result's limitation
+  when moving or shortening its shot. Judge screenshots at the actual viewing
+  size, including a narrow player, rather than only at editing resolution.
+- Listen to complete narration and joins, and watch caption entry/exit against
+  the image. Check names, pronunciation, emphasis, pauses, abrupt audio changes
+  and music masking. Decoder success, PCM peaks and a supplied transcript cannot
+  certify this listening judgment. Report it as untested if not performed.
+- Keep the baseline and candidate available for comparison. Record what changed
+  across the whole film, remaining creative weaknesses and production cost.
+  Distinguish technical readiness, editorial judgment and observed audience
+  comprehension; do not label an untested candidate the highest-quality result.
+- Validate playback in the intended review surface, including seeking across
+  edit joins, captions and source/candidate switching. A local decoder can accept
+  a mixed-source export that the browser rejects. Repair the encoding and repeat
+  that actual playback path before calling the artifact technically ready.
+  Check which audio tracks the player actually selects: separate narration tracks
+  may be treated as alternatives rather than mixed together. For one intended
+  soundtrack, render a mix containing every required layer and check narration
+  at the opening and inserted shots; a nonzero full-film peak can hide silent
+  passages. This does not replace listening to the complete result.
+
+工程宣发先按完整时间线铺开材料，再选能说明核心机制、技术价值和实际结果的
+案例；近期 PR、改动行数和醒目数字不能替代选材理由。选材改变时，同步修订
+文章、配套帖与影片。已有正式素材时先完整检查原片及来源，再保留工程与剪辑
+映射进行精修，退下的候选退出当前审阅目录。
+
+整片逐段检查观众问题、画面证据与新增信息，删除跨旁白、字幕和镜头的重复。
+提高信息密度不靠小字、加速语音或强行缩短停顿。条件、单位、反例和来源必须
+仍能读懂。完整听看声音衔接、字幕节奏和实际观看尺寸；未做听审或观众理解
+测试就保留未验证，不以成功导出代替创作质量。在实际审阅播放器中检查完整
+播放、跨剪辑点拖动、字幕和版本切换；本地解码通过不代表浏览器兼容。
+还应核对播放器实际选择的音轨：独立旁白轨可能被当作备选轨，而非同时
+混音。只有一套配音时，导出包含全部所需声音层的混音，并核对开场和新增镜头
+是否有旁白；整片峰值非零不能排除局部静音，也不能替代完整听审。以上
+复用现有作品修订和交付检查，不新增自动接受、发布权限、强制审批轮次或
+独立视频编辑器。
+
 The capability also ships a provider-neutral item lifecycle for real local
 operations queues. It preserves stable item identity, revision-bound approval,
 delivery receipts, exact readback, and supersession without copying draft bodies

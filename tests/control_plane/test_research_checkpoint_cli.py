@@ -13,6 +13,7 @@ from canonical_authority_fixture import isolate_sqlite_runtime
 from loopx.cli import main
 from loopx.control_plane.turn_driver.codex_agent_session import CodexAgentSession
 from loopx.control_plane.turn_driver.codex_sessions import _store_codex_cli_session
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 from tests.control_plane.test_research_context_adoption import (
     _ordinary_review_and_work, no_benchmark_dependency,  # noqa: F401 -- fixture is active in this module
 )
@@ -29,7 +30,7 @@ def test_explicit_ordinary_goal_capture_preserves_context_without_activation(tmp
     prefix = ['--format', 'json', '--registry', str(registry), '--runtime-root', str(runtime)]
     def cli(*args, ok=True):
         code = main([*prefix, *args])
-        value = json.loads(capsys.readouterr().out)
+        value = read_cli_policy_payload(capsys.readouterr().out, returncode=code)
         assert code == (0 if ok else 1), value
         assert value['ok'] is ok
         return value
@@ -148,7 +149,7 @@ def test_explicit_ordinary_goal_capture_preserves_context_without_activation(tmp
         branch_prefix = ['--format', 'json', '--registry', str(branch_registry), '--runtime-root', str(branch_root)]
         def branch(*args):
             code = main([*branch_prefix, *args])
-            result = json.loads(capsys.readouterr().out)
+            result = read_cli_policy_payload(capsys.readouterr().out, returncode=code)
             assert code == 0, result
             return result
         branch('bootstrap', '--project', str(workspace), '--goal-id', 'branch', '--objective', 'Continue retained experiments.',

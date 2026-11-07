@@ -445,7 +445,7 @@ def _find_monitor_poll_turn(
     index_path: Path,
     *,
     goal_id: str,
-    agent_id: str,
+    agent_id: str | None,
     turn_instance_id: str,
     todo_id: str | None = None,
     target_key: str | None = None,
@@ -492,7 +492,7 @@ def find_quota_monitor_poll_turn(
     runtime_root: Path,
     *,
     goal_id: str,
-    agent_id: str,
+    agent_id: str | None,
     turn_instance_id: str,
     todo_id: str | None = None,
     target_key: str | None = None,
@@ -527,7 +527,7 @@ def _monitor_poll_effect_id(
     *,
     runtime_root: Path,
     goal_id: str,
-    agent_id: str,
+    agent_id: str | None,
     turn_instance_id: str | None,
     todo_id: str | None,
     target_key: str | None,
@@ -921,7 +921,7 @@ def record_quota_monitor_poll_for_decision(
             not _monitor_poll_receipt_path(runtime_root, goal_id, effect_id).exists()
         ):
             raise ValueError("original Monitor poll transaction is unavailable; reconcile its original operation before retrying")
-        common = {
+        common: dict[str, Any] = {
             "effect_id": effect_id,
             "runtime_root": runtime_root,
             "goal_id": goal_id,
@@ -1043,10 +1043,10 @@ def record_quota_monitor_poll_for_decision(
             )
         return payload
 
-    payload = native.get("payload")
-    if not isinstance(payload, Mapping) or payload.get("ok") is not True:
+    committed_payload = native.get("payload")
+    if not isinstance(committed_payload, Mapping) or committed_payload.get("ok") is not True:
         raise RuntimeError("TypeScript quota monitor-poll commit omitted its payload")
-    result = dict(payload)
+    result = dict(committed_payload)
     index_record = native.get("index_record")
     if execute and isinstance(index_record, dict):
         after_status = _status_with_monitor_poll(

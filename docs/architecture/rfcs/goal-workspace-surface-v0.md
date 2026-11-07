@@ -789,6 +789,25 @@ qualification and installed/live-team evidence retain their existing owners.
 V6/V9 evidence is the focused command-entry test and packaged command-palette
 browser smoke, including a disposable real Todo/status owner and read recovery.
 
+**Checkpoint 2026-10-28 (integrated reading and task continuity, proposed).**
+The home brief distinguishes loaded native attention items, affected Goals,
+delivered confirmations and operations still awaiting delivery. Each native item
+opens its own request; linked-source requests retain their read-only boundary.
+On a narrow overview, blocking attention precedes the long objective in both
+visual and DOM order. Overview and Tasks share query, owner, state and view
+choices through the existing route, scoped to the exact source and Goal;
+refresh and Back preserve the native selected Todo and expose hidden selection.
+
+Files lists native result identities before reading a selected body. Managed,
+team and research readers retain their own version checks, paging and failures;
+returning restores the original row. Report headings and the table of contents
+share stable anchors, while return restores the exact original Session/Message.
+Only older stable long messages use complete-block excerpts; current output
+stays expanded. These presentation changes retain existing authority and do not
+complete M4, target authoring, provider/runtime qualification or installed-App
+acceptance. The PR records packaged synthetic browser evidence and isolated real
+Todo-owner write/recovery evidence separately from fixture settings/result reads.
+
 ## 12. Open decisions
 
 | # | Decision | Owner | Options | Recommendation | Needed before |

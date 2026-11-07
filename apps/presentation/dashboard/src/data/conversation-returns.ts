@@ -1,6 +1,8 @@
 import type { ChatVisibleMessage } from "./chat";
 
 type ConversationMessage = {
+  queueInputRevision?: number;
+  queueInputCancelled?: true;
   sourceSessionId?: string;
   sourceMessageId?: string;
   sourceTurnId?: string;
@@ -8,7 +10,10 @@ type ConversationMessage = {
   role?: string;
   pending?: boolean;
   collaboration?: ChatVisibleMessage["collaboration"];
+  collaborations?: ChatVisibleMessage["collaborations"];
   returnDelivery?: ChatVisibleMessage["return_delivery"];
+  replyContext?: ChatVisibleMessage["reply_context"];
+  text?: string;
 };
 
 /** Delivery of one result does not close the conversation or its later updates. */
@@ -18,13 +23,20 @@ export function conversationReturnSessions(activeSessionId: string | undefined, 
   return [...sessions].sort();
 }
 
+/** Only the current brief's conclusion can settle its outstanding return. */
+export function currentCollaborationConclusion(request: NonNullable<ChatVisibleMessage["collaboration"]>) {
+  const replies = request.returns.filter(reply => reply.phase === "conclusion"
+    && (request.request_revision === undefined || (reply.request_revision ?? 1) === request.request_revision));
+  return replies.find(reply => reply.status === "delivered")
+    ?? replies.find(reply => reply.status !== "superseded") ?? replies[0];
+}
+
 /** Metadata can change before a new transcript row is appended. */
 export function conversationPendingReturnSessions(messages: ConversationMessage[]): string[] {
   const sessions = new Set<string>();
   for (const message of messages) {
-    const waitingForConclusion = message.collaboration && !message.collaboration.returns.some(
-      (reply) => reply.phase === "conclusion" && reply.status === "delivered",
-    );
+    const requests = message.collaborations ?? (message.collaboration ? [message.collaboration] : []);
+    const waitingForConclusion = requests.some(request => currentCollaborationConclusion(request)?.status !== "delivered");
     const delivery = message.returnDelivery;
     const waitingForDelivery = delivery && !["delivered", "superseded"].includes(delivery.status);
     const waitingForTranscript = message.sourceTurnId && !message.sourceMessageId;
@@ -59,11 +71,26 @@ export function reconcileConversationReturns<T extends ConversationMessage>(
     // its outstanding read obligation until a newer observation arrives.
     const returnDelivery = source.return_delivery ?? row.returnDelivery;
     const collaboration = source.collaboration ?? row.collaboration;
+    const collaborations = source.collaborations ?? row.collaborations;
     const sourceCreatedAt = source.created_at ?? row.sourceCreatedAt;
+    const replyContext = source.reply_context ?? row.replyContext;
+    // Only the exact canonical user body can switch to its source-backed view.
+    // A background read never replaces a live answer or a different draft.
+    const inputChanged = row.role === "user" && source.role === "user"
+      && (!row.sourceTurnId || source.turn_id === row.sourceTurnId) && typeof source.queue_input_revision === "number"
+      && source.queue_input_revision > (row.queueInputRevision ?? 0);
+    const queueInputRevision = inputChanged ? source.queue_input_revision : row.queueInputRevision;
+    const queueInputCancelled = inputChanged ? source.queue_input_cancelled : row.queueInputCancelled;
+    const text = inputChanged ? source.text : row.role === "user" && source.reply_context && row.text === source.text
+      ? source.reply_context.source_text : row.text;
     if (row.sourceMessageId === source.message_id && JSON.stringify(row.returnDelivery) === JSON.stringify(returnDelivery)
-      && JSON.stringify(row.collaboration) === JSON.stringify(collaboration) && row.sourceCreatedAt === sourceCreatedAt) return row;
+      && JSON.stringify(row.collaboration) === JSON.stringify(collaboration)
+      && JSON.stringify(row.collaborations) === JSON.stringify(collaborations) && row.sourceCreatedAt === sourceCreatedAt
+      && JSON.stringify(row.replyContext) === JSON.stringify(replyContext) && row.text === text
+      && row.queueInputRevision === queueInputRevision && row.queueInputCancelled === queueInputCancelled) return row;
     changed = true;
-    return { ...row, sourceMessageId: source.message_id, sourceCreatedAt, returnDelivery, collaboration };
+    return { ...row, sourceMessageId: source.message_id, sourceCreatedAt, returnDelivery, collaboration, collaborations, replyContext, text,
+      queueInputRevision, queueInputCancelled };
   });
   for (const message of messages) {
     if (message.origin !== "manager_followup" || seen.has(message.message_id)) continue;
@@ -85,10 +112,15 @@ export function reconcileConversationHistory<T extends ConversationMessage>(
   }
   // A history read can arrive before admission hydrates the optimistic row.
   // Deduplicate only established Session/message identities, never body text.
+  // A live row owns the stream callbacks and controls even when the history
+  // row appeared first. Keep that row when both acquire the same identity.
+  const pendingIdentities = new Set(updated.filter(message => message.pending && message.sourceSessionId && message.sourceMessageId)
+    .map(message => JSON.stringify([message.sourceSessionId, message.sourceMessageId])));
   const identities = new Set<string>();
   const unique = updated.filter((message) => {
     if (!message.sourceSessionId || !message.sourceMessageId) return true;
     const key = JSON.stringify([message.sourceSessionId, message.sourceMessageId]);
+    if (pendingIdentities.has(key) && !message.pending) return false;
     if (identities.has(key)) return false;
     identities.add(key);
     return true;

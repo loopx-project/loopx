@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from typing import Any, Mapping
+
 from datetime import datetime, timedelta
-from typing import Any
 
 from ..runtime.time import now_utc
 from ..todos.contract import (
@@ -42,7 +43,7 @@ def monitor_next_due_at(
     ).next_due_at
 
 
-def monitor_todo_task_class(item: dict[str, Any], *, task_text: str | None = None) -> str:
+def monitor_todo_task_class(item: Mapping[str, Any], *, task_text: str | None = None) -> str:
     text = str(item.get("text") or "") if task_text is None else task_text
     return normalize_todo_task_class(
         item.get("task_class"),

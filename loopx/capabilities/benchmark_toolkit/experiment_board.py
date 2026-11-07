@@ -64,6 +64,14 @@ _ROW_FIELDS = {
 }
 
 
+class BenchmarkExperimentBoardValidationError(ValueError):
+    """A board rejection whose diagnostic is safe for caller-facing output.
+
+    Messages must contain only fixed contract text or normalized status values,
+    never paths, raw field names, or values from unvalidated input.
+    """
+
+
 def benchmark_run_status_is_terminal(value: object) -> bool:
     """Return whether a normalized run status closes its lifecycle."""
 
@@ -310,17 +318,27 @@ def normalize_benchmark_experiment_board_row(
     countability = _countability(payload.get("countability"))
     if countability["official_result_present"]:
         if primary_metric not in metrics:
-            raise ValueError("official result must include primary_metric")
+            raise BenchmarkExperimentBoardValidationError(
+                "official result must include primary_metric"
+            )
         missing_guardrails = [name for name in guardrails if name not in metrics]
         if missing_guardrails:
-            raise ValueError("official result is missing declared guardrail metrics")
+            raise BenchmarkExperimentBoardValidationError(
+                "official result is missing declared guardrail metrics"
+            )
     if countability["score_countable"]:
         if status != "completed":
-            raise ValueError("score_countable requires completed status")
+            raise BenchmarkExperimentBoardValidationError(
+                "score_countable requires completed status"
+            )
         if not countability["integrity_qualified"]:
-            raise ValueError("score_countable requires integrity_qualified")
+            raise BenchmarkExperimentBoardValidationError(
+                "score_countable requires integrity_qualified"
+            )
         if not countability["official_result_present"]:
-            raise ValueError("score_countable requires official_result_present")
+            raise BenchmarkExperimentBoardValidationError(
+                "score_countable requires official_result_present"
+            )
 
     row: dict[str, Any] = {
         "schema_version": BENCHMARK_EXPERIMENT_BOARD_ROW_SCHEMA_VERSION,
@@ -437,7 +455,7 @@ def _validate_benchmark_run_status_transition(
     existing_status = str(existing.get("status") or "")
     candidate_status = str(candidate.get("status") or "")
     if candidate_status not in _RUN_STATUS_TRANSITIONS.get(existing_status, set()):
-        raise ValueError(
+        raise BenchmarkExperimentBoardValidationError(
             f"benchmark run status cannot move from {existing_status} to {candidate_status}"
         )
 

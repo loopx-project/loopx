@@ -14,7 +14,6 @@ import asyncio
 import json
 import os
 import signal
-import stat
 import subprocess
 import sys
 import time
@@ -35,7 +34,6 @@ from .file_lock import (
 from .control_plane.effect_runtime import (
     effect_runtime_request_scope, effect_runtime_result, EffectRuntimeRemoteError,
 )
-from .control_plane.coordination.local_authority import local_authority_is_promoted
 from .control_plane.runtime.validation_command import noninteractive_validation
 from .control_plane.turn_driver.journal_store import (
     load_turn_journal,
@@ -66,10 +64,11 @@ from .control_plane.collaboration.goal_instance_scope import (
 )
 from .control_plane.collaboration import delegation_results, delegation_stop_lease, delegation_validation
 from .control_plane.collaboration.source_grant_observation import (
-    read_delegation_source_execution, require_delegation_source_execution,
+    read_delegation_source_execution, verify_delegation_source_execution,
 )
 from .control_plane.collaboration.source_policy_fence import source_policy_fence
 from .control_plane.collaboration.peers import (
+    InboxReadResponseAmbiguous,
     _goal,
     consume_return,
     read_inbox,
@@ -78,6 +77,7 @@ from .control_plane.collaboration.peers import (
 )
 from .presentation.answer_instruction import (
     collaboration_answer_instruction,
+    collaboration_brief_instruction,
     conversation_answer_instruction,
 )
 
@@ -121,31 +121,6 @@ def _pinned_release_environment() -> dict[str, str]:
 
 def _python_module_command(module: str) -> list[str]:
     return [sys.executable, "-P", "-m", module]
-
-
-def _observe_bound_workspace(path: Path) -> tuple[str, tuple[int, int, Path] | None]:
-    """Observe a directory and its target identity without exposing its path.
-
-    The binding is operator-owned, but a worktree or symlink can disappear or
-    change targets while a read-only Turn preview is running.  Identity is a
-    host fact; the shared TypeScript preflight still owns the readiness rule.
-    """
-
-    try:
-        observed = path.stat()
-        if not stat.S_ISDIR(observed.st_mode):
-            return "not_directory", None
-        resolved = path.resolve(strict=True)
-        target = resolved.stat()
-        if (observed.st_dev, observed.st_ino) != (target.st_dev, target.st_ino):
-            return "unavailable", None
-        return "available", (observed.st_dev, observed.st_ino, resolved)
-    except FileNotFoundError:
-        return "missing", None
-    except NotADirectoryError:
-        return "not_directory", None
-    except (OSError, RuntimeError):
-        return "unavailable", None
 
 
 def _pinned_module_command(module: str, *, interpreter: str | None = None) -> list[str]:
@@ -264,15 +239,20 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
         Follow next_cursor for later requests. Omit cursor to start a fresh scan.
         Pages are live; reading all pages does not complete outstanding work.
         """
-        result = read_inbox(
-            root,
-            registry,
-            goal_id,
-            agent_id,
-            workspace=workspace,
-            cursor=cursor,
-            caller_goal_ref=caller_goal_ref,
-        )
+        try:
+            result = read_inbox(
+                root,
+                registry,
+                goal_id,
+                agent_id,
+                workspace=workspace,
+                cursor=cursor,
+                caller_goal_ref=caller_goal_ref,
+            )
+        except InboxReadResponseAmbiguous as exc:
+            from mcp.server.fastmcp.exceptions import ToolError
+
+            raise ToolError(json.dumps(exc.result, ensure_ascii=False)) from exc
         result["instruction"] += " " + collaboration_answer_instruction()
         return result
 
@@ -316,20 +296,20 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
             todo_ids or [], evidence_ids or [], caller_goal_ref=caller_goal_ref,
         )
 
-    @server.tool()
+    @server.tool(description=(
+        "Request same-Goal peer help/review with a collaboration_brief_v0 and stable retry id. "
+        "Brief fields: schema_version, purpose, context, constraints (strings), inputs "
+        "(relative ref, description, optional sha256), acceptance (nonempty strings), "
+        "return_requirement. Preserve relevant corrections and rejected approaches. "
+        "New review rounds use new operation ids. No worker is launched by this tool. "
+        + collaboration_brief_instruction()
+    ))
     def request_peer(
         peer_agent_id: str,
         operation_id: str,
         brief: dict,
         parent_request_id: str | None = None,
     ) -> dict:
-        """Request same-Goal peer help/review with a collaboration_brief_v0 and stable retry id.
-
-        Brief fields: schema_version, purpose, context, constraints (strings), inputs
-        (relative ref, description, optional sha256), acceptance (nonempty strings),
-        return_requirement. Preserve relevant corrections and rejected approaches.
-        New review rounds use new operation ids. No worker is launched by this tool.
-        """
         check_scope()
         return request(
             root,
@@ -349,13 +329,18 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
         "For a bound-owner App return, attachment_refs explicitly attaches up to four "
         "relative Goal-workspace files; a filename in text does not attach a file. "
         "Neither a blocker nor a returned result certifies completion of the work. "
+        "For a partial result, supply remaining_work with summary and resume_when; "
+        "it stays visible for the receiver without creating a Todo or wakeup. "
         + conversation_answer_instruction()
     ))
     def return_result(request_id: str, text: str, update_id: str | None = None,
-                      attachment_refs: list[str] | None = None, request_revision: int | None = None) -> dict:
+                      attachment_refs: list[str] | None = None, request_revision: int | None = None,
+                      remaining_work: dict[str, str] | None = None) -> dict:
         """Return a conclusion to the original requester. For a later changed fact,
         append an update with a stable update_id; retry with the same id and text.
         Neither a blocker nor a returned result certifies completion of the work.
+        For a partial result, remaining_work contains summary and resume_when;
+        the receiving Agent still owns this remainder. It creates no Todo or wakeup.
         """
         check_scope()
         # The host adapter selects Chat/Lark transport; the shared collaboration
@@ -372,6 +357,7 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
             update_id=update_id,
             attachment_refs=attachment_refs,
             request_revision=request_revision,
+            remaining_work=remaining_work,
             workspace=workspace,
             registry=registry,
             caller_goal_ref=caller_goal_ref,
@@ -568,144 +554,18 @@ class Delegations:
         with effect_runtime_request_scope():
             return read_delegation_inventory(self, limit=limit, cursor=cursor)
 
-    def inspect(self, binding_id: str) -> dict:
+    def inspect(self, binding_id: str, *, source_request_id: str | None = None) -> dict:
         """Observe the real Turn preflight; never create a request or run a host."""
         # Pin executable source only for this observation, not authority data.
         # Bindings, acceptance and validation files are still read twice below;
         # the next inspection must resolve its own current source revision.
         with effect_runtime_request_scope():
-            return self._inspect(binding_id)
-
-    def _inspect(self, binding_id: str) -> dict[str, object]:
-        binding = self.binding(binding_id, require_active=True)
-        # Host filesystem facts only; the shared TS owner projects readiness.
-        # Do not expose a path/error body or probe authority in a missing cwd.
-        workspace_path = Path(binding["workspace"])
-        workspace_state, workspace_identity = _observe_bound_workspace(workspace_path)
-
-        def workspace_fault(state: str) -> dict[str, object]:
-            return effect_runtime_result("collaboration.delegation.preflight", {
-                "binding": {key: binding[key] for key in ("id", "agent_id", "todo_id")},
-                "workspace": {"state": state},
-                "authority": None, "preview": None, "acceptance": None,
-                "validation_files_current": False,
-            })
-
-        def recheck_workspace() -> dict[str, object] | None:
-            if self.binding(binding_id, require_active=True) != binding:
-                raise ValueError("delegation preflight source changed; retry inspection")
-            current_state, current_identity = _observe_bound_workspace(workspace_path)
-            if current_state == "available" and current_identity == workspace_identity:
-                return None
-            # A replacement directory is not the directory whose authority
-            # and acceptance were observed at entry.  No path or error leaks.
-            return workspace_fault(
-                current_state if current_state != "available" else "unavailable"
-            )
-
-        def authority_fault(exc: OSError | ValueError) -> dict[str, object]:
-            fault = recheck_workspace()
-            if fault is not None:
-                return fault
-            # Authority admission is a readiness observation, not a reason for
-            # inspection to invent a provider launch or collapse into a raw CLI error.
-            try:
-                promoted = local_authority_is_promoted(
-                    runtime_root=self.root,
-                    goal_id=self.goal_id,
-                )
-            except (OSError, RuntimeError):
-                # A mode readback failure is an unavailable authority, never a
-                # reason to suggest that a fresh promotion should be attempted.
-                promoted = True
-            return effect_runtime_result("collaboration.delegation.preflight", {
-                "binding": {key: binding[key] for key in ("id", "agent_id", "todo_id")},
-                "workspace": {"state": workspace_state},
-                "authority": {
-                    "ready": False,
-                    "reason": str(exc),
-                    "state": "unavailable" if promoted else "promotion_required",
-                    "next_action": (
-                        "repair_canonical_authority"
-                        if promoted
-                        else "preview_reviewed_goal_authority_promotion"
-                    ),
-                },
-                "preview": None, "acceptance": None, "validation_files_current": False,
-            })
-
-        if workspace_state != "available":
-            if self.binding(binding_id, require_active=True) != binding:
-                raise ValueError("delegation preflight source changed; retry inspection")
-            return workspace_fault(workspace_state)
-        assert workspace_identity is not None
-        try:
-            acceptance = delegation_validation.capture(self, binding)
-        except (OSError, ValueError) as exc:
-            return authority_fault(exc)
-        fault = recheck_workspace()
-        if fault is not None:
-            return fault
-        operation = "inspect-" + _hash(binding_id)[:32]
-        arguments = ["turn", "run-once", "--goal-id", self.goal_id,
-                     "--agent-id", binding["agent_id"], "--todo-id", binding["todo_id"],
-                     "--turn-instance-id", operation, *self._execution_arguments(binding, operation)]
-        # Host arguments are operator-owned, but inspection must stay read-only
-        # even when they contain an abbreviated execution flag or a selector.
-        from .cli_runtime import _build_selected_parser, _SelectedParseRejected
-
-        try:
-            selected = _build_selected_parser("turn").parse_args(arguments)
-        except (SystemExit, _SelectedParseRejected) as exc:
-            raise ValueError("invalid delegation Turn arguments") from exc
-        workspace = workspace_identity[2]
-        selected_project = Path(selected.project)
-        if not selected_project.is_absolute():
-            selected_project = workspace / selected_project
-        if (selected.execute or selected.resume_turn_key
-                or (selected.goal_id, selected.agent_id, selected.todo_id, selected.turn_instance_id)
-                != (self.goal_id, binding["agent_id"], binding["todo_id"], operation)
-                or selected_project.resolve() != workspace):
-            fault = recheck_workspace()
-            if fault is not None:
-                return fault
-            raise ValueError("delegation inspection cannot execute or retarget bound work")
-        try:
-            preview = self._cli(binding, *arguments)
-        except (OSError, ValueError, subprocess.TimeoutExpired):
-            fault = recheck_workspace()
-            if fault is not None:
-                return fault
-            raise
-        fault = recheck_workspace()
-        if fault is not None:
-            return fault
-        if preview.get("status") != "preview" and "selection_rejection" not in preview:
-            raise ValueError(f"delegation Turn preflight unavailable: {preview.get('error') or preview.get('status')}")
-        try:
-            current = delegation_validation.capture(self, binding)
-        except (OSError, ValueError) as exc:
-            # Do not return the first acceptance or an already-read preview
-            # when current authority cannot be confirmed at the final fence.
-            return authority_fault(exc)
-        fault = recheck_workspace()
-        if fault is not None:
-            return fault
-        if acceptance != current or self.binding(binding_id, require_active=True) != binding:
-            raise ValueError("delegation preflight source changed; retry inspection")
-        return effect_runtime_result("collaboration.delegation.preflight", {
-            "binding": {key: binding[key] for key in ("id", "agent_id", "todo_id")},
-            "workspace": {"state": workspace_state},
-            "authority": {"ready": True, "reason": None},
-            "preview": preview, "acceptance": acceptance["plan"],
-            "validation_files_current": acceptance["files_current"],
-            "lane": {"state": turn_lane_liveness(self._lane_target(binding))["state"]},
-        })
+            return delegation_validation.inspect_binding(self, binding_id, source_request_id=source_request_id)
 
     def start(self, binding_id: str, operation_id: str, brief: dict,
               parent_request_id: str | None = None, *, conversation: dict | None = None,
               confirmed_operation_id: str | None = None,
-              source_request_id: str | None = None) -> dict:
+              source_request_id: str | None = None, _defer_worker: bool = False) -> dict:
         """Start or replay one bound operation.
 
         ``conversation`` is supplied only by the trusted Chat host, never by
@@ -714,6 +574,8 @@ class Delegations:
         that conversation and no other. ``source_request_id`` is also host-only:
         the receiver's existing inbox request, separate from the user brief.
         """
+        if _defer_worker and source_request_id is None:
+            raise ValueError("deferred execution requires the original Chat source")
         binding = self.binding(binding_id, require_active=True)
         require_operation_id(operation_id)
         brief = normalize_request({"goal_id": self.goal_id, "agent_id": binding["agent_id"], "brief": brief})["brief"]
@@ -740,6 +602,8 @@ class Delegations:
             identity = {"binding": binding, "request_id": delivered["request_id"], "operation_id": operation_id}
             if source_request_id is not None:
                 identity["source_request_id"] = source_request_id
+            if binding["todo_id"] is None:
+                identity["request_subject"] = delegation_validation.ordinary_request_subject(self, {"identity": identity}, binding)
             if confirmed_operation_id is not None:
                 # Internal callback adapter only: a canonical locator/CAS fence,
                 # not an executor identity or domain execution permission.
@@ -752,8 +616,10 @@ class Delegations:
                           if conversation else None)
                 prepare_host_process_record(self._host_process_record(path))
                 _write(path, {"identity": identity, "status": "prepared", "created_at": time.time(),
+                              "work_context_required": True,
                               **({"conversation": origin} if origin else {})})
-                self._spawn(operation_id)
+                if not _defer_worker:
+                    self._spawn(operation_id)
         return self.read(operation_id)
 
     def _spawn(self, operation_id: str, *, prepared_source_request_id: str | None = None) -> None:
@@ -864,10 +730,17 @@ class Delegations:
         binding = self.binding(row["identity"]["binding"]["id"], require_active=require_active)
         if row["identity"]["binding"] != binding:
             raise ValueError("delegation binding changed; reconcile original execution")
+        if require_active and binding["todo_id"] is None:
+            if row["identity"].get("request_subject") != delegation_validation.ordinary_request_subject(self, row, binding):
+                raise ValueError("delegation request revision or execution scope changed; reconcile original execution")
         if require_active and "source_request_id" in row["identity"]:
-            require_delegation_source_execution(self.root, self.registry, goal_id=self.goal_id,
-                requester_agent_id=self.agent_id, source_request_id=row["identity"]["source_request_id"], binding=binding,
-                caller_goal_ref=self._caller_goal_ref(), policy_locked=policy_locked)
+            try:
+                verify_delegation_source_execution(self, binding["id"], row["identity"]["operation_id"],
+                    source_request_id=row["identity"]["source_request_id"],
+                    brief=delegation_results.operation_brief(self, row), conversation=row.get("conversation", {}),
+                    policy_locked=policy_locked)
+            except OSError as exc:
+                raise ValueError("original source execution provenance unavailable") from exc
         return binding
 
     @staticmethod
@@ -905,6 +778,7 @@ class Delegations:
         stop = self._read_stop(path)
         result = {"operation_id": operation_id, "request_id": row["identity"]["request_id"],
                   "agent_id": binding["agent_id"], "todo_id": binding["todo_id"],
+                  **({"request_subject": row["identity"]["request_subject"]} if "request_subject" in row["identity"] else {}),
                   "status": row["status"], "worker_active": active,
                   "recovery_required": not active and row["status"] not in DELEGATION_TERMINAL_STATUSES
                   and stop is None and time.time() - row.get("created_at", 0) > 15}
@@ -1419,7 +1293,7 @@ class Delegations:
                 row["worker"] = self._worker_identity()
                 self._fenced_write(path, row)
                 # Different request ids cannot run the same assigned task concurrently.
-                task_lock = _root(self.root) / "execution-slots" / _hash([self.goal_id, binding["todo_id"]])
+                task_lock = _root(self.root) / "execution-slots" / _hash([self.goal_id, binding["todo_id"] or row["identity"]["request_subject"]])
                 with exclusive_file_lock(task_lock, policy=LockAcquisitionPolicy.SINGLE_FLIGHT):
                     self._execute(path, row, binding)
             except (ValueError, KeyError, subprocess.TimeoutExpired, EffectRuntimeRemoteError) as exc:
@@ -1481,31 +1355,11 @@ class Delegations:
 
     def _record_turn_result(
         self, path: Path, row: dict, result: dict, *, publish: bool = True,
-        already_locked: bool = False,
+        already_locked: bool = False, unstarted_turn: bool = False,
     ) -> None:
-        turn_key = result.get("resume_turn_key")
-        if turn_key:
-            # Validate the public shape before persisting an address supplied
-            # by the CLI boundary.
-            turn_journal_path(self.root, goal_id=self.goal_id, turn_key=turn_key)
-            row["turn_key"] = turn_key
-        row["turn_result"] = {
-            key: result.get(key)
-            for key in (
-                "status",
-                "result_kind",
-                "resume_turn_key",
-                "reason",
-                "host_failure",
-                "error",
-            )
-        }
-        if publish:
-            self._observe(path, row, "turn_returned", already_locked=already_locked)
-        elif already_locked:
-            self._fenced_write_locked(path, row)
-        else:
-            self._fenced_write(path, row)
+        # Keep the bound service seam used by existing recovery/fault-injection callers.
+        delegation_validation.record_turn_result(self, path, row, result, publish=publish,
+            already_locked=already_locked, unstarted_turn=unstarted_turn)
 
     def _receiver_adopted(self, row: dict, binding: dict) -> bool:
         request_id = row["identity"]["request_id"]
@@ -1610,6 +1464,13 @@ class Delegations:
     ) -> dict:
         """Acquire the promoted hard lease before worker or completion effects."""
 
+        if binding["todo_id"] is None:
+            if row.get("task_lease", {}).get("required") is True:
+                raise ValueError("ordinary request cannot discard an existing task lease")
+            row["task_lease"] = {"required": False, "request_subject": row["identity"]["request_subject"]}
+            self._fenced_write(path, row)
+            return row["task_lease"]
+
         from .control_plane.work_items.task_lease import inspect_task_lease
 
         observed = inspect_task_lease(registry_path=self.registry, runtime_root=self.root,
@@ -1691,6 +1552,9 @@ class Delegations:
         }
 
     def _complete_delegated_todo(self, row: dict, binding: dict) -> None:
+        if binding["todo_id"] is None:
+            self._validate(binding)
+            return  # Request validation never creates or completes a Todo.
         lease = row.get("task_lease")
         if not isinstance(lease, dict):
             raise ValueError("delegation Todo completion requires its acquired task lease")
@@ -1795,18 +1659,19 @@ class Delegations:
                 selector = (
                     ["--resume-turn-key", turn_key]
                     if turn_key
-                    else [
-                        "--todo-id",
-                        binding["todo_id"],
-                        "--turn-instance-id",
-                        self._turn_instance_id(row),
-                    ]
+                    else [*( ["--todo-id", binding["todo_id"]] if binding["todo_id"] is not None else []),
+                          "--turn-instance-id", self._turn_instance_id(row)]
                 )
-                result = self._cli(binding, "turn", "run-once", *common, *selector, *execution,
+                from .control_plane.collaboration.delegation_context import delegated_turn_context_arguments
+                context = delegated_turn_context_arguments(self, row) if turn_key is None else []
+                result = self._cli(binding, "turn", "run-once", *common, *selector, *execution, *context,
                                    "--execute", timeout=binding["timeout_seconds"] + 60,
                                    delegated_lease=self._delegated_lease_context(row, binding),
                                    host_record=self._host_process_record(path))
-                self._record_turn_result(path, row, result)
+                self._record_turn_result(path, row, result,
+                    unstarted_turn=turn_key is None and "turn_key" not in row)
+                if row["status"] == "prepared":
+                    return  # Native lane refused before this operation launched a Host.
         finally:
             # The compatibility bootstrap is private host input.  Keeping it
             # after the host returns (including an exception or timeout) makes
@@ -1833,6 +1698,17 @@ class Delegations:
             delegation_results.require_dependencies(self, binding, delegation_results.operation_brief(self, row))
             if needs_settlement and not isinstance(row.get("task_lease"), dict):
                 self._acquire_delegation_lease(path, row, binding)
+            if binding["todo_id"] is None and needs_settlement:
+                # The request's native settlement adapter owns the original
+                # Stop/source fences. Do not hold a parent policy lock while a
+                # child process reacquires it to resume the same transaction.
+                result = self._cli(binding, "turn", "run-once", *common,
+                    "--resume-turn-key", row["turn_key"], *execution, "--execute",
+                    timeout=binding["timeout_seconds"] + 60, host_record=self._host_process_record(path))
+                self._record_turn_result(path, row, result, publish=False)
+                if result.get("status") != "committed" or result.get("result_kind") != "validated_progress":
+                    raise ValueError(str(result.get("error") or result.get("reason") or "request settlement remains incomplete"))
+                needs_settlement = False
             # Both effects commit inside the dispatch lock that a stop also
             # takes, so the two sides linearize: either a stop is written first
             # and neither effect runs, or both effects commit first and the stop
@@ -1909,7 +1785,10 @@ class Delegations:
                         caller_goal_ref=self._caller_goal_ref(),
                     )
                 self._observe(path, row, "accepted", already_locked=True,
-                              canonical_done=True, acceptance_ready=True, artifacts_current=True,
+                              canonical_done=binding["todo_id"] is not None,
+                              request_validated=binding["todo_id"] is None,
+                              request_subject=row["identity"].get("request_subject"),
+                              acceptance_ready=True, artifacts_current=True,
                               requester=self._wake_requester(row))
         except (ValueError, KeyError, subprocess.TimeoutExpired, EffectRuntimeRemoteError) as exc:
             # Retain uncertain execution for explicit same-operation recovery.
@@ -1944,19 +1823,19 @@ def register_delegation_tools(server, delegations: Delegations) -> None:
         """
         return delegations.operations(limit=limit, cursor=cursor)
 
-    @server.tool()
+    @server.tool(description=(
+        "Start one bounded peer Turn. Reuse the same operation id after lost replies. "
+        "Supply brief with schema_version=collaboration_brief_v0, purpose, context, "
+        "constraints (strings), inputs (relative ref/description/optional sha256; "
+        "optional delegation={operation_id,ref,relation} requires sha256, an accepted "
+        "source owned by this requester and the matching receiver file; relation is "
+        "responds_to, revises or uses), acceptance (strings), return_requirement. "
+        "Work continues independently of this MCP conversation. Read its durable "
+        "operation later; do not repeat timed-out work. "
+        + collaboration_brief_instruction()
+    ))
     def start_delegation(binding_id: str, operation_id: str, brief: dict,
                          parent_request_id: str | None = None) -> dict:
-        """Start one bounded peer Turn. Reuse the same operation id after lost replies.
-
-        Supply brief with schema_version="collaboration_brief_v0", purpose, context,
-        constraints (strings), inputs (relative ref/description/optional sha256;
-        optional delegation={operation_id,ref,relation} requires sha256, an accepted
-        source owned by this requester and the matching receiver file; relation is
-        responds_to, revises or uses),
-        acceptance (strings), return_requirement. Work continues independently of this MCP
-        conversation. Read its durable operation later; do not repeat timed-out work.
-        """
         return delegations.start(binding_id, operation_id, brief, parent_request_id)
 
     @server.tool()

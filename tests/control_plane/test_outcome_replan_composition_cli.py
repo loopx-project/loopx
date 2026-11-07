@@ -18,6 +18,42 @@ from tests.control_plane.test_quota_settlement_cli import (
 )
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_invalid_complete_vision_leaves_fixture_untouched_before_history_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    vision = project / "invalid-vision.json"
+    vision.write_text(json.dumps({"state": "vision_closed", "vision_patch": {}}))
+
+    def files() -> dict:
+        return {
+            (str(root), str(path.relative_to(root))): (
+                path.stat().st_mode, path.stat().st_ino,
+                path.stat().st_mtime_ns, path.stat().st_ctime_ns,
+                path.read_bytes() if path.is_file() else None,
+            )
+            for root in (project, runtime)
+            for path in (root, *root.rglob("*"))
+        }
+
+    before = files()
+    code, result = _run_cli(
+        registry, runtime, "refresh-state", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--classification", "validated_delivery",
+        "--delivery-batch-scale", "single_surface", "--delivery-outcome", "outcome_progress",
+        "--agent-vision-json", str(vision), "--no-global-sync", "--suppress-external-sinks",
+        cwd=project,
+    )
+    assert code == 1 and result["ok"] is False and result["appended"] is False
+    assert "at least one bounded vision field" in result["error"]
+    assert files() == before
+    assert not (runtime / "goals" / GOAL_ID / "runs").exists()
+
+
 def _review_packet(control: dict | None) -> dict:
     packet = {
         "schema_version": "goal_vision_replan_contract_v0",

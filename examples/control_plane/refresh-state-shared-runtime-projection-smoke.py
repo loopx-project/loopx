@@ -49,6 +49,7 @@ def run_cli(*args: str, cwd: Path, shared_runtime: Path) -> dict:
             **os.environ,
             "PYTHONPATH": str(REPO_ROOT),
             "LOOPX_RUNTIME_ROOT": str(shared_runtime),
+            "LOOPX_CONTEXT_DELIVERY": "off",
         },
     )
     assert result.returncode == 0, result.stdout + result.stderr
@@ -68,6 +69,7 @@ def run_cli_failure(*args: str, cwd: Path, shared_runtime: Path) -> dict:
             **os.environ,
             "PYTHONPATH": str(REPO_ROOT),
             "LOOPX_RUNTIME_ROOT": str(shared_runtime),
+            "LOOPX_CONTEXT_DELIVERY": "off",
         },
     )
     assert result.returncode != 0, result.stdout + result.stderr
@@ -93,6 +95,8 @@ def write_fixture(root: Path) -> tuple[Path, Path, Path, Path]:
     goal = {
         "id": GOAL_ID,
         "domain": "refresh-state-shared-runtime-smoke",
+        # This fixture qualifies routing/writeback, not a Stride review.
+        "execution_profile": {"stride_strategy": "off"},
         "status": "active",
         "repo": str(project),
         "state_file": str(state_file.relative_to(project)),
