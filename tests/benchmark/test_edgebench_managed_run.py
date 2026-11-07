@@ -201,15 +201,40 @@ def test_managed_terminal_flows_from_runner_to_controller(tmp_path, entry, capsy
     assert GOAL not in json.dumps(runtime) and str(project) not in json.dumps(runtime)
     proof = trial / TERMINAL_FILENAME
     if stage == "receipt_persistent":
-        retained = json.loads((trial / RUNTIME_FILENAME).read_bytes())
+        runtime_path = trial / RUNTIME_FILENAME
+        original_runtime = runtime_path.read_bytes()
+        retained = json.loads(original_runtime)
         assert retained["status"] == "starting" and retained["run_id"] == admission["run"]["run_id"]
         assert "solver_execution_sha256" not in retained["managed_run"]
         assert len(terminal_receipt_attempts) == 2 and not proof.exists()
-        assert _replay(trial, execute=True).returncode == 2
-        assert read_benchmark_experiment_board_rows(board) == [running]
-        assert read_benchmark_concurrency_envelope(envelope)["active_runs"] == [admission["run"]]
-        return
-    if stage.startswith("receipt_"):
+        final_path = trial / "final_result.json"
+        original_final = final_path.read_bytes()
+        final = json.loads(original_final)
+        assert final["solver_execution"] == json.loads((trial / "solver_execution.json").read_bytes())
+        final_path.unlink()
+        assert _replay(trial, execute=True).returncode == 2 and not proof.exists()
+        for change in (
+            {"task": "other-task"},
+            {"runtime_status": "cancelled"},
+            {"solver_execution": final["solver_execution"] | {"status": "nonzero_exit"}},
+        ):
+            final_path.write_text(json.dumps(final | change))
+            assert _replay(trial, execute=True).returncode == 2 and not proof.exists()
+        final_path.write_bytes(original_final)
+        history = trial / "run_history.json"
+        original_history = history.read_bytes()
+        history.write_text(json.dumps(json.loads(original_history) | {"run_id": "different-run"}))
+        assert _replay(trial, execute=True).returncode == 2 and not proof.exists()
+        history.write_bytes(original_history)
+        runtime_path.write_text(json.dumps(retained | {"runner_commit": "different-runner"}))
+        assert _replay(trial, execute=True).returncode == 2 and not proof.exists()
+        runtime_path.write_bytes(original_runtime)
+        preview = _replay(trial)
+        assert preview.returncode == 0 and json.loads(preview.stdout) == {"ready": True, "dry_run": True}
+        assert runtime_path.read_bytes() == original_runtime and not proof.exists()
+        assert _replay(trial, execute=True).returncode == 0
+        assert runtime_path.read_bytes() == original_runtime
+    elif stage.startswith("receipt_"):
         retained = json.loads((trial / RUNTIME_FILENAME).read_bytes())
         assert retained["managed_run"]["solver_execution_sha256"]
         assert retained["run_id"] == admission["run"]["run_id"] and retained["status"] == "terminal"

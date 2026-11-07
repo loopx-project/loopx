@@ -11,6 +11,7 @@ import argparse
 from datetime import UTC, datetime
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import stat
@@ -26,6 +27,7 @@ from loopx.capabilities.benchmark_toolkit.runtime_continuity import (
 from loopx.control_plane.runtime.document_io import atomic_write_state_text
 from loopx.file_lock import write_json_atomic
 from loopx.public_safe_text import LETTER_LED_COMPACT_TOKEN_PATTERN
+from .result_publication import native_grading_complete
 
 
 BINDING_FILENAME = "managed-run.json"
@@ -211,6 +213,22 @@ def _grading_drained(trial: Path, *, history_file: str, run_id: str, task_id: st
             and all(_terminal_history_entry(entry, task_id=task_id) for entry in entries))
 
 
+def _retained_completed_result(trial: Path, receipt: dict) -> dict | None:
+    """Read the runner's completion marker when its terminal receipt did not land."""
+    try:
+        result, _ = _read_record(trial / "final_result.json")
+    except FileNotFoundError:
+        return None
+    duration = result.get("runtime_seconds")
+    if (any(result.get(field) != receipt.get(field) for field in ("run_id", "task", "model", "effort"))
+            or result.get("runtime_status", "terminal") != "terminal"
+            or result.get("evaluation_coverage") == "online_only"
+            or not native_grading_complete(result)
+            or type(duration) not in (int, float) or not math.isfinite(duration) or duration <= 0):
+        return None
+    return result
+
+
 def publish_managed_terminal(trial: Path, *, execute: bool = False) -> bool:
     """Check retained native evidence and optionally publish this attempt's proof."""
     if (trial.parent.parent.name != "runs" or not trial.is_dir()
@@ -224,16 +242,28 @@ def publish_managed_terminal(trial: Path, *, execute: bool = False) -> bool:
         raise ValueError("Managed runtime receipt differs from the selected attempt")
     status = _BOARD_STATUS.get(receipt.get("status"))
     retained = receipt.get("managed_run")
-    if status is None or not isinstance(retained, dict) or "solver_execution_sha256" not in retained:
+    if not isinstance(retained, dict):
+        return False
+    recovered_completion = None
+    if receipt.get("status") == "starting":
+        recovered_completion = _retained_completed_result(trial, receipt)
+        if recovered_completion is None:
+            return False
+        status = _BOARD_STATUS["terminal"]
+    elif status is None or "solver_execution_sha256" not in retained:
         return False
     history_file = retained.get("history_file")
     if history_file not in _NATIVE_HISTORY_FILES:
         raise ValueError("Retained managed grading history path differs")
     execution, solver_digest = _read_record(trial / "solver_execution.json")
+    if recovered_completion is None:
+        solver_matches = retained.get("solver_execution_sha256") == solver_digest
+    else:
+        solver_matches = json.dumps(execution, sort_keys=True) == json.dumps(
+            recovered_completion.get("solver_execution"), sort_keys=True)
     admitted = _timestamp(binding["admission_receipt"]["run"]["admitted_at"])
-    if (retained.get("solver_execution_sha256") != solver_digest
-            or not _solver_ended(execution, admitted_at=admitted.timestamp(),
-                                 observed_at=datetime.now(UTC).timestamp())):
+    if not solver_matches or not _solver_ended(execution, admitted_at=admitted.timestamp(),
+                                               observed_at=datetime.now(UTC).timestamp()):
         raise ValueError("Retained solver termination evidence differs")
     if not _grading_drained(trial, history_file=history_file, run_id=run_id, task_id=task_id):
         return False
