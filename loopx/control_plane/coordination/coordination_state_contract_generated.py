@@ -198,7 +198,9 @@ COORDINATION_STATE_CONTRACT: Final = _freeze({'schema_version': 'loopx_coordinat
  'action_portfolio_protocol': {'selection_request_schema': 'action_selection_qualification_request_v0',
                                'selection_result_schema': 'action_selection_qualification_v0',
                                'planning_packet_request_schema': 'quota_planning_packet_request_v0',
-                               'planning_packet_result_schema': 'quota_planning_packet_v0'},
+                               'planning_packet_result_schema': 'quota_planning_packet_v0',
+                               'planning_packet_request_v1_schema': 'quota_planning_packet_request_v1',
+                               'planning_packet_result_v1_schema': 'quota_planning_packet_v1'},
  'todo_resume_protocol': {'normalize_request_schema': 'todo_resume_normalize_request_v0',
                           'evaluation_request_schema': 'todo_resume_evaluation_request_v0',
                           'evaluation_result_schema': 'todo_resume_evaluation_v0',
@@ -316,6 +318,8 @@ ACTION_PORTFOLIO_SELECTION_REQUEST_SCHEMA: Final[str] = 'action_selection_qualif
 ACTION_PORTFOLIO_SELECTION_RESULT_SCHEMA: Final[str] = 'action_selection_qualification_v0'
 ACTION_PORTFOLIO_PLANNING_PACKET_REQUEST_SCHEMA: Final[str] = 'quota_planning_packet_request_v0'
 ACTION_PORTFOLIO_PLANNING_PACKET_RESULT_SCHEMA: Final[str] = 'quota_planning_packet_v0'
+ACTION_PORTFOLIO_PLANNING_PACKET_REQUEST_V1_SCHEMA: Final[str] = 'quota_planning_packet_request_v1'
+ACTION_PORTFOLIO_PLANNING_PACKET_RESULT_V1_SCHEMA: Final[str] = 'quota_planning_packet_v1'
 
 TODO_RESUME_NORMALIZE_REQUEST_SCHEMA: Final[str] = 'todo_resume_normalize_request_v0'
 TODO_RESUME_EVALUATION_REQUEST_SCHEMA: Final[str] = 'todo_resume_evaluation_request_v0'

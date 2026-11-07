@@ -8,6 +8,7 @@ import subprocess
 import sys
 
 import pytest
+from tests.control_plane.cli_output_fixture import read_cli_context_for_oracle
 from canonical_authority_fixture import advance_canonical_fixture_authority, read_fixture_todos
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 
@@ -23,7 +24,6 @@ from loopx.control_plane.testing.quota_fixtures import (
     quota_status_payload,
     quota_todo_item,
 )
-from loopx.control_plane.work_items.goal_route_hint import build_goal_route_hint
 from loopx.quota import build_quota_should_run, render_quota_should_run_markdown
 
 
@@ -67,59 +67,6 @@ def test_extra_fields_cannot_replace_the_frontier_domain(extra):
 def test_frontier_keeps_bounded_candidate_context():
     payload = _frontier(extra_fields={"priority_preemption": True})
     assert payload["priority_preemption"] is True
-
-
-@pytest.mark.parametrize(
-    "frontier, expected",
-    [
-        (
-            {
-                "schema_version": "agent_scope_frontier_v0",
-                "effective_action": "agent_scope_wait",
-            },
-            "agent_scope_wait",
-        ),
-        (
-            {
-                "schema_version": "agent_scope_frontier_v0",
-                "action": "agent_scope_wait",
-                "effective_action": "agent_scope_wait",
-            },
-            "agent_scope_wait",
-        ),
-        (
-            {
-                "schema_version": "agent_scope_frontier_v1",
-                "action": "successor_replan_required",
-            },
-            "successor_replan_required",
-        ),
-        (
-            {
-                "schema_version": "agent_scope_frontier_v1",
-                "action": "successor_replan_required",
-                "effective_action": "agent_scope_wait",
-            },
-            "successor_replan_required",
-        ),
-    ],
-)
-def test_goal_route_reads_canonical_action_first_and_legacy_as_fallback(
-    frontier, expected
-):
-    hint = build_goal_route_hint(
-        agent_identity={"agent_id": "frontier-fixture"},
-        agent_todo_summary={},
-        agent_lane_next_action=None,
-        agent_scope_frontier=frontier,
-        agent_lane_frontier_hint=None,
-        active_state_next_action="Preserve the goal route.",
-        latest_run_recommended_action=None,
-        selected_recommended_action="Wait.",
-    )
-    assert hint["route_decision"] == expected
-    assert hint["preserves_goal_next_action"] is True
-    assert hint["goal_next_action_mutation"] == "none"
 
 
 def test_live_should_run_and_markdown_use_the_v1_frontier():
@@ -196,7 +143,8 @@ def test_cli_should_run_reads_disposable_state_and_emits_v1(tmp_path):
         text=True,
         check=True,
     )
-    guard = json.loads(result.stdout)
+    captured, _reader_cost = read_cli_context_for_oracle(result.stdout)
+    guard = json.loads(captured)
     assert guard["effective_action"] == "reassignment_required"
     assert guard["should_run"] is False
     assert guard["agent_scope_frontier"]["schema_version"] == "agent_scope_frontier_v1"

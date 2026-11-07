@@ -11,6 +11,8 @@ import {
 import type { JsonObject } from "../effect_program.ts";
 import {
   ACTION_PORTFOLIO_PLANNING_PACKET_REQUEST_SCHEMA,
+  ACTION_PORTFOLIO_PLANNING_PACKET_REQUEST_V1_SCHEMA,
+  ACTION_PORTFOLIO_PLANNING_PACKET_RESULT_V1_SCHEMA,
   ACTION_PORTFOLIO_PLANNING_PACKET_RESULT_SCHEMA,
   ACTION_PORTFOLIO_SELECTION_REQUEST_SCHEMA,
   ACTION_PORTFOLIO_SELECTION_RESULT_SCHEMA,
@@ -24,6 +26,7 @@ import {
   PLANNING_HORIZON_REQUEST_SCHEMA_VERSION,
   projectQuotaPlanningHorizon,
 } from "./planning_horizon.ts";
+import { projectGoalRouteHint } from "./goal_route_hint.ts";
 import { EffectiveAction } from "../quota/effective_action.generated.ts";
 
 export const ACTION_PORTFOLIO_SCHEMA_VERSION = "quota_action_portfolio_v2";
@@ -341,6 +344,20 @@ function projectQuotaPlanningPacket(request: JsonObject): JsonObject {
  */
 export function projectQuotaActionPortfolio(value: unknown): JsonObject | null {
   const request = requireJsonObject(value, "action_portfolio_request");
+  if (request.schema_version === ACTION_PORTFOLIO_PLANNING_PACKET_REQUEST_V1_SCHEMA) {
+    // Decode both optional blocks at the boundary. A route-only packet must not
+    // synthesize an inventory or run any planning/Goal-context projection.
+    const planning = request.planning === null ? null
+      : requireJsonObject(request.planning, "planning_packet_request.planning");
+    const route = request.goal_route_context === null ? null
+      : projectGoalRouteHint(request.goal_route_context);
+    const projected = planning === null ? {} : projectQuotaPlanningPacket(planning);
+    return {
+      ...projected,
+      schema_version: ACTION_PORTFOLIO_PLANNING_PACKET_RESULT_V1_SCHEMA,
+      ...(route === null ? {} : { goal_route_hint: route }),
+    };
+  }
   if (request.schema_version === QUOTA_PLANNING_PACKET_REQUEST_SCHEMA_VERSION) {
     return projectQuotaPlanningPacket(request);
   }

@@ -297,6 +297,7 @@ def test_owner_cadence_wait_is_app_only_and_has_no_scheduler_side_effect(
         "eligible_now": False,
         "next_eligible_at_ms": next_eligible_at_ms,
     }
+    assert "goal_route_hint" not in packet
     assert packet["decision"] == "wait"
     assert packet["effective_action"] == "blocked_wait"
     assert packet["should_run"] is False

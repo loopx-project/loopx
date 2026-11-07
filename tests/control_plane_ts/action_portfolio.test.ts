@@ -589,3 +589,55 @@ test("retained explicit selection cannot be replaced by a projected default", ()
     },
   });
 });
+
+function routeFacts() {
+  return {
+    agent_id: "agent", agent_lane_next_action: null, agent_scope_frontier: {}, agent_lane_frontier_hint: null,
+    agent_todo_summary: {
+      claimed_advancement_open_items: null, claimed_by_others_items: null,
+      executable_backlog_items: [], unclaimed_priority_open_items: null,
+      current_agent_handoff_gates: [], handoff_gates: null,
+      current_agent_claimed_advancement_count: 0, claimed_advancement_open_count: 0,
+    },
+    active_state_next_action: "durable", selected_recommended_action: "", latest_run_recommended_action: "",
+    actions_projection_aligned: true, goal_route_hint_override: null,
+  };
+}
+
+test("v1 route-only batch needs no selected Todo, inventory or Goal context", () => {
+  const request = {schema_version: "quota_planning_packet_request_v1", planning: null, goal_route_context: routeFacts()};
+  const original = structuredClone(request);
+  const result = projectQuotaActionPortfolio(request)!;
+  assert.equal(result.schema_version, "quota_planning_packet_v1");
+  assert.equal((result.goal_route_hint as Record<string, unknown>).route_decision, "agent_scope_frontier");
+  assert.equal(result.action_portfolio, undefined);
+  assert.equal(result.agent_todo_planning_inventory, undefined);
+  assert.deepEqual(request, original);
+  assert.deepEqual(projectQuotaActionPortfolio({...request, goal_route_context: null}), {schema_version: "quota_planning_packet_v1"});
+});
+
+test("v1 combines planning and routing using exactly the v0 planning projection", () => {
+  const primary = candidate("todo_primary001", "Run primary", "P0");
+  const legacy = planningPacketRequest(primary, [candidate("todo_other0001", "Run other", "P1")]);
+  const legacyResult = projectQuotaActionPortfolio(legacy)!;
+  const {schema_version: ignored, ...planning} = legacy;
+  const context = routeFacts();
+  const combined = projectQuotaActionPortfolio({schema_version: "quota_planning_packet_request_v1", planning, goal_route_context: context})!;
+  const {schema_version, goal_route_hint, ...views} = combined;
+  const {schema_version: oldVersion, ...oldViews} = legacyResult;
+  assert.equal(schema_version, "quota_planning_packet_v1");
+  assert.deepEqual(views, oldViews);
+  assert.ok(goal_route_hint);
+  assert.deepEqual(projectQuotaActionPortfolio({schema_version: "quota_planning_packet_request_v1", planning, goal_route_context: null}),
+    {...legacyResult, schema_version: "quota_planning_packet_v1"});
+});
+
+test("v1 rejects omitted blocks, bad block types, malformed route facts and unsupported versions", () => {
+  const base = {schema_version: "quota_planning_packet_request_v1", planning: null, goal_route_context: null};
+  for (const request of [
+    {schema_version: base.schema_version}, {...base, planning: []}, {...base, planning: {}},
+    {...base, goal_route_context: []}, {...base, goal_route_context: {}},
+    {...base, schema_version: "quota_planning_packet_request_v99"},
+    {schema_version: QUOTA_PLANNING_PACKET_REQUEST_SCHEMA_VERSION, goal_route_context: routeFacts()},
+  ]) assert.throws(() => projectQuotaActionPortfolio(request));
+});

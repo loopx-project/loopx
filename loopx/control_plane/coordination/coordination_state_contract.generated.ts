@@ -110,6 +110,8 @@ export const ACTION_PORTFOLIO_SELECTION_REQUEST_SCHEMA = "action_selection_quali
 export const ACTION_PORTFOLIO_SELECTION_RESULT_SCHEMA = "action_selection_qualification_v0";
 export const ACTION_PORTFOLIO_PLANNING_PACKET_REQUEST_SCHEMA = "quota_planning_packet_request_v0";
 export const ACTION_PORTFOLIO_PLANNING_PACKET_RESULT_SCHEMA = "quota_planning_packet_v0";
+export const ACTION_PORTFOLIO_PLANNING_PACKET_REQUEST_V1_SCHEMA = "quota_planning_packet_request_v1";
+export const ACTION_PORTFOLIO_PLANNING_PACKET_RESULT_V1_SCHEMA = "quota_planning_packet_v1";
 
 export const TODO_RESUME_NORMALIZE_REQUEST_SCHEMA = "todo_resume_normalize_request_v0";
 export const TODO_RESUME_EVALUATION_REQUEST_SCHEMA = "todo_resume_evaluation_request_v0";
@@ -355,7 +357,9 @@ export const COORDINATION_STATE_CONTRACT = deepFreeze({
     "selection_request_schema": ACTION_PORTFOLIO_SELECTION_REQUEST_SCHEMA,
     "selection_result_schema": ACTION_PORTFOLIO_SELECTION_RESULT_SCHEMA,
     "planning_packet_request_schema": ACTION_PORTFOLIO_PLANNING_PACKET_REQUEST_SCHEMA,
-    "planning_packet_result_schema": ACTION_PORTFOLIO_PLANNING_PACKET_RESULT_SCHEMA
+    "planning_packet_result_schema": ACTION_PORTFOLIO_PLANNING_PACKET_RESULT_SCHEMA,
+    "planning_packet_request_v1_schema": ACTION_PORTFOLIO_PLANNING_PACKET_REQUEST_V1_SCHEMA,
+    "planning_packet_result_v1_schema": ACTION_PORTFOLIO_PLANNING_PACKET_RESULT_V1_SCHEMA
   },
   "todo_resume_protocol": {
     "normalize_request_schema": TODO_RESUME_NORMALIZE_REQUEST_SCHEMA,
