@@ -1845,7 +1845,7 @@ def render_start_goal_guided_markdown(payload: dict[str, Any]) -> str:
                 if step.step_id == "connect_if_needed"
                 else str(command).splitlines()[0]
             )
-            step_lines.append(f"   - command/source: `{rendered_command}`")
+            step_lines.append(f"   - `{rendered_command}`")
     preserve = transaction.get("preserve_todos_policy")
     preserve = preserve if isinstance(preserve, dict) else {}
     identity_gate = transaction.get("identity_selection_gate")
