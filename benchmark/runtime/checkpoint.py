@@ -229,26 +229,32 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
                "--runtime-root", env["LOOPX_RUNTIME_ROOT"], "quota", "should-run",
                "--goal-id", env["LOOPX_GOAL_ID"], "--agent-id", env["LOOPX_AGENT_ID"],
                "--runtime-profile", "generic_cli", "--turn-instance-id", receipt["turn_id"],
-               "--available-capability", "shell", "--available-capability", "filesystem_write",
-               "--decision-output-root", str(capture_root)]
+               "--available-capability", "shell", "--available-capability", "filesystem_write"]
     native_context = env.get("LOOPX_CONTEXT_DELIVERY") == "on" and bool(env.get("LOOPX_CODEX_CONTEXT_DIR"))
     if native_context:
-        # Capture the complete Goal now, but let the actual native tool select
-        # full/delta after SessionStart. Do not consume or invalidate continuity
-        # while the Host is preparing a checkpoint outside the model session.
-        command += ["--context-delivery", "on", "--codex-context-dir", env["LOOPX_CODEX_CONTEXT_DIR"],
+        # The native reader selects full/delta after SessionStart. Ask the
+        # existing preparation route for the committed capture reference now.
+        capture_directory = capture_root / "decision-original"
+        command += ["--decision-output-dir", str(capture_directory), "--prepared-capture-reference",
+                    "--context-delivery", "on", "--codex-context-dir", env["LOOPX_CODEX_CONTEXT_DIR"],
                     "--defer-context-presentation"]
+    else:
+        command += ["--decision-output-root", str(capture_root)]
     guard_run = subprocess.run(command, cwd=env["LOOPX_PROJECT"], env=env, capture_output=True,
                                text=True, timeout=120, check=True)
     projected = json.loads(guard_run.stdout)
     captures = list(capture_root.glob("decision-*/decision.json"))
     if len(captures) != 1:
         raise ValueError("checkpoint requires exactly one captured original quota decision; do not replay the guard")
-    raw_guard = captures[0].read_bytes()
+    source_path = captures[0]
+    raw_guard = source_path.read_bytes()
+    guard_digest = hashlib.sha256(raw_guard).hexdigest() if native_context else None
     guard = json.loads(raw_guard)
     if (not isinstance(guard, dict) or guard.get("ok") is not True or
             not isinstance(projected, dict) or projected.get("ok") is not True):
         raise ValueError("checkpoint requires a successful original quota guard")
+    if native_context and projected.get("capture_sha256") != guard_digest:
+        raise ValueError("checkpoint prepared capture differs from the original guard; do not replay the guard")
     # A previous preflight on this wake may already have allowed model work,
     # even if its optional attempt marker (or final receipt) could not be saved.
     # Such reentry can verify an existing point, but cannot capture a later one.
@@ -258,17 +264,9 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
     if native_context:
         from .context_delivery import preflight_context_instruction
 
-        # A repeated preflight can replace wake-level paths. Bind both native
-        # read commands to the exact CLI view of this particular guard.
-        view_bytes = guard_run.stdout.encode("utf-8")
-        source_path = captures[0]
-        if view_bytes != raw_guard:
-            source_path = capture_root / "checkpoint-start-view.json"
-            with source_path.open("xb") as stream:
-                os.fchmod(stream.fileno(), 0o600)
-                stream.write(view_bytes)
-        reading = preflight_context_instruction(env, source_path,
-            hashlib.sha256(view_bytes).hexdigest(), receipt["turn_id"], guide_in_host=guide_in_host)
+        assert guard_digest is not None
+        reading = preflight_context_instruction(env, source_path, guard_digest,
+            receipt["turn_id"], guide_in_host=guide_in_host)
     else:
         view_path = guard_path.with_name("checkpoint-start-view.json")
         view_path.write_text(guard_run.stdout, encoding="utf-8")
