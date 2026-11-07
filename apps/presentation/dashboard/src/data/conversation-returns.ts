@@ -9,6 +9,7 @@ type ConversationMessage = {
   sourceCreatedAt?: string;
   role?: string;
   pending?: boolean;
+  queued?: boolean;
   collaboration?: ChatVisibleMessage["collaboration"];
   collaborations?: ChatVisibleMessage["collaborations"];
   returnDelivery?: ChatVisibleMessage["return_delivery"];
@@ -81,16 +82,19 @@ export function reconcileConversationReturns<T extends ConversationMessage>(
       && source.queue_input_revision > (row.queueInputRevision ?? 0);
     const queueInputRevision = inputChanged ? source.queue_input_revision : row.queueInputRevision;
     const queueInputCancelled = inputChanged ? source.queue_input_cancelled : row.queueInputCancelled;
-    const text = inputChanged ? source.text : row.role === "user" && source.reply_context && row.text === source.text
+    const queueAnswered = row.queued === true && !row.pending && row.role === "assistant"
+      && Boolean(row.sourceTurnId) && source.role !== "user" && source.origin !== "manager_followup" && source.turn_id === row.sourceTurnId;
+    const queued = queueAnswered ? false : row.queued;
+    const text = inputChanged || queueAnswered ? source.text : row.role === "user" && source.reply_context && row.text === source.text
       ? source.reply_context.source_text : row.text;
     if (row.sourceMessageId === source.message_id && JSON.stringify(row.returnDelivery) === JSON.stringify(returnDelivery)
       && JSON.stringify(row.collaboration) === JSON.stringify(collaboration)
       && JSON.stringify(row.collaborations) === JSON.stringify(collaborations) && row.sourceCreatedAt === sourceCreatedAt
       && JSON.stringify(row.replyContext) === JSON.stringify(replyContext) && row.text === text
-      && row.queueInputRevision === queueInputRevision && row.queueInputCancelled === queueInputCancelled) return row;
+      && row.queueInputRevision === queueInputRevision && row.queueInputCancelled === queueInputCancelled && row.queued === queued) return row;
     changed = true;
     return { ...row, sourceMessageId: source.message_id, sourceCreatedAt, returnDelivery, collaboration, collaborations, replyContext, text,
-      queueInputRevision, queueInputCancelled };
+      queueInputRevision, queueInputCancelled, ...(queueAnswered ? {queued: false} : {}) };
   });
   for (const message of messages) {
     if (message.origin !== "manager_followup" || seen.has(message.message_id)) continue;
