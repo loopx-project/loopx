@@ -320,6 +320,11 @@ export const goalMastheadScenario = {
             const source = mode === "mixed" ? mixed : mode === "complete" ? complete
               : mode === "mixed-complete" ? mixedComplete : mode === "optional" ? optionalComplete : native;
             Object.assign(queue, structuredClone(source));
+            if (["mixed", "bounded", "unknown"].includes(mode)) {
+              // The producer can now return all 21 canonical rows. Keep the
+              // bounded case on the actual three-row projection from that read.
+              queue.user_todos.items = structuredClone(queue.project_asset.user_todos.items);
+            }
             if (mode === "empty") {
               queue.user_todos.items = [];
               queue.project_asset.user_todos.items = [];
@@ -336,7 +341,7 @@ export const goalMastheadScenario = {
         await openGoal(ui.page, title);
         const needs = await vital(ui.page, locale === "en" ? "Needs you" : "等你决定");
         const expected = mode === "complete" ? "21" : mode === "mixed-complete" ? "1" : mode === "optional" ? "0" : "—";
-        assert.equal(needs.value, expected, "Only complete classified rows qualify a blocking total; open User Todo totals do not classify hidden rows");
+        assert.equal(needs.value, expected, `${locale}/${mode}: Only complete classified rows qualify a blocking total`);
         const partial = !["complete", "mixed-complete", "optional"].includes(mode);
         const coverageHelp = partial ? await readVitalHelp(ui.page, needs.cell) : "";
         if (partial) assert.match(coverageHelp, locale === "en" ? /oldest unknown/ : /最早时间未知/);
