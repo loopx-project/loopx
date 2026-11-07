@@ -1470,3 +1470,62 @@ def test_native_checkpoint_storage_guidance_reaches_both_prompt_surfaces(tmp_pat
         run.main(args)
     receipt = json.loads((tmp_path / "runs/storage/fixture/runtime-receipt.json").read_text())
     assert receipt.get("context_delivery") == (expected_delivery if expected_delivery != "off" else None)
+
+
+@pytest.mark.parametrize(("profile", "selected"), [
+    ("heartbeat-explore", False), ("heartbeat-explore", True), ("native-goal", True),
+])
+def test_edgebench_cli_reuses_local_probe_and_reports_selection_before_model(tmp_path, monkeypatch, capsys,
+                                                                              profile, selected):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from types import SimpleNamespace
+    from benchmark.edgebench import run
+    from benchmark.runtime.harbor import BenchmarkCodex
+
+    producer = "local_probe" if selected else None
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.setenv("LOOPX_SRC_DIR", str(tmp_path))
+    monkeypatch.setenv("LOOPX_EXPECTED_COMMIT", "fixture")
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-unused-credential")
+    (tmp_path / "fixture.json").write_text("{}")
+    monkeypatch.setattr(run, "source_pins", lambda *a: ("fixture", "fixture"))
+    monkeypatch.setattr(run, "load_benchmark", lambda *a: None)
+    monkeypatch.setattr(run, "make_task_spec", lambda *a: SimpleNamespace(
+        cwd="/task", work_image_key="work", judge_image_key="judge", internet=False,
+        game_mode=False, submit_paths=["solver.py"], work=SimpleNamespace(agent_query="Original acceptance."),
+        judge=SimpleNamespace(selection="score_first", score_direction="maximize")))
+    backend = SimpleNamespace(image_exists=lambda image: True,
+                              exec_run=lambda *a, **k: SimpleNamespace(exit_code=0))
+    monkeypatch.setattr(run, "RecordingDockerBackend", lambda **k: backend)
+
+    async def install_at_transport_boundary(self, environment):
+        assert environment.default_user == "agent"
+        assert self.execution_observation == producer
+        assert self._worker_env(cwd="/task").get("LOOPX_EXECUTION_OBSERVATION") == producer
+
+    monkeypatch.setattr(BenchmarkCodex, "install", install_at_transport_boundary)
+    trial = tmp_path / "runs" / "probe" / "fixture"
+
+    def stop_before_model(**kwargs):
+        worker = kwargs["agent"]
+        worker.install_stop_hook(backend, None, trial, None)
+        assert json.loads((trial / "worker-profile.json").read_text()).get("execution_observation") == producer
+        raise RuntimeError("isolated install boundary")
+
+    monkeypatch.setattr(run, "run_agent", stop_before_model)
+    args = ["--task", "fixture", "--tasks-dir", str(tmp_path), "--log-dir", str(tmp_path),
+            "--run-id", "probe", "--worker", profile, "--model", "fixture",
+            "--effort", "xhigh", "--judge-url", "http://127.0.0.1:9999"]
+    if selected:
+        args += ["--execution-observation", producer]
+    if profile == "native-goal":
+        with pytest.raises(SystemExit, match="2"):
+            run.main(args)
+        assert "--execution-observation requires a heartbeat worker" in capsys.readouterr().err
+        assert not trial.exists()
+        return
+    with pytest.raises(RuntimeError, match="isolated install boundary"):
+        run.main(args)
+    receipt = json.loads((trial / "runtime-receipt.json").read_text())
+    assert receipt.get("execution_observation") == producer

@@ -124,6 +124,8 @@ def main(argv=None):
                         help="Opt-in short heartbeat context with same-invocation full captures")
     parser.add_argument("--context-delivery", choices=("off", "on"),
                         help="Native Codex context delivery: on by default for heartbeat workers; pass off to disable")
+    parser.add_argument("--execution-observation", choices=("local_probe",),
+                        help="Optional local execution probe for heartbeat workers")
     parser.add_argument("--provider-request-admission", action="store_true",
                         help="Opt-in canonical admission before each heartbeat custom Responses request")
     parser.add_argument("--native-goal-continue", action="store_true",
@@ -151,6 +153,8 @@ def main(argv=None):
                         help="Host-private native checkpoint controller; requires full fresh-replan handoff")
     parser.add_argument("--checkpoint-export-root", type=Path,
                         help="Existing physical host volume for full worker checkpoints; must preserve Linux filenames")
+    parser.add_argument("--preserve-failed-worker", action="store_true",
+                        help="Opt-in terminal joint capture and stopped-worker retention after a failed heartbeat execution; requires full controller capture")
     parser.add_argument("--checkpoint-request", type=Path,
                         help="Explicit host JSON declaration staged into a heartbeat worker; omitted disables capture")
     parser.add_argument("--restore-checkpoint", type=Path,
@@ -204,6 +208,8 @@ def main(argv=None):
         args.context_delivery = Execution(mode="heartbeat" if args.worker.startswith("heartbeat-") else "plain").context_delivery
     if args.context_delivery != "off" and not args.worker.startswith("heartbeat-"):
         parser.error("--context-delivery requires a heartbeat worker")
+    if args.execution_observation is not None and not args.worker.startswith("heartbeat-"):
+        parser.error("--execution-observation requires a heartbeat worker")
     if args.provider_request_admission:
         if not args.worker.startswith("heartbeat-"):
             parser.error("--provider-request-admission requires a heartbeat worker")
@@ -231,6 +237,10 @@ def main(argv=None):
         parser.error("controller file and full controller_handoff must be enabled together with native feedback")
     if (args.checkpoint_retention_policy is not None or args.no_checkpoint_retention) and not handoff:
         parser.error("Checkpoint retention requires the explicit native controller capture path")
+    if args.preserve_failed_worker and not handoff:
+        parser.error("Failed-worker preservation requires full native controller capture")
+    if args.preserve_failed_worker and args.eval_interval != 0:
+        parser.error("Failed-worker preservation requires agent-only native submissions")
     if args.checkpoint_export_root is not None:
         if not handoff:
             parser.error("Checkpoint export storage requires full controller capture")
@@ -374,6 +384,8 @@ def main(argv=None):
                          task_entry=args.task_entry,
                          turn_envelope=args.turn_envelope,
                          context_delivery=args.context_delivery,
+                         **({"execution_observation": args.execution_observation}
+                            if args.execution_observation is not None else {}),
                          **({"provider_request_admission": True} if args.provider_request_admission else {}),
                          native_goal_continue=args.native_goal_continue,
                          replan_after_turns=args.replan_after_turns,
@@ -405,9 +417,15 @@ def main(argv=None):
         from benchmark.edgebench.checkpoint_supervisor import CheckpointSupervisor
         destination = (args.checkpoint_export_root / args.run_id / args.task / "checkpoints"
                        if args.checkpoint_export_root is not None else trial / "checkpoints")
+        terminal = None
+        if args.preserve_failed_worker:
+            from benchmark.edgebench.terminal_capture import terminal_components
+            terminal = terminal_components(declaration, task.cwd)
         checkpoint = CheckpointSupervisor(args.checkpoint_controller_file, destination,
                                           retention_policy=args.checkpoint_retention_policy,
-                                          retention_enabled=not args.no_checkpoint_retention)
+                                          retention_enabled=not args.no_checkpoint_retention,
+                                          terminal_components=terminal,
+                                          terminal_receipt=(trial / "terminal-preservation.json") if terminal else None)
     backend = RecordingDockerBackend(log_dir=trial / "collected", logger=logger,
                                      oauth_proxy=bool(args.api_proxy_url or api_base_url),
                                      blind_api_endpoint=blind_endpoint, feedback=feedback,
@@ -444,6 +462,8 @@ def main(argv=None):
         "sforge_source": active_source_receipt(),
         **turn_envelope_receipt(explicit=args.turn_envelope),
         **({"context_delivery": "on"} if args.context_delivery != "off" else {}),
+        **({"execution_observation": args.execution_observation}
+           if args.execution_observation is not None else {}),
         **({"provider_request_admission": "on"} if args.provider_request_admission else {}),
         **({"native_goal_continue": True} if args.native_goal_continue else {}),
         "task_sha256": hashlib.sha256(task_file.read_bytes()).hexdigest(),
@@ -475,6 +495,7 @@ def main(argv=None):
         **({"checkpoint_request_sha256": hashlib.sha256(checkpoint_request).hexdigest()}
            if checkpoint_request is not None else {}),
         **({"checkpoint_export_directory": str(checkpoint.destination)} if checkpoint is not None else {}),
+        **({"preserve_failed_worker": True} if args.preserve_failed_worker else {}),
     }
     receipt_path = trial / "runtime-receipt.json"
     receipt_path.write_text(json.dumps(receipt, indent=2))

@@ -8,6 +8,7 @@ import sys
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import partial
 from pathlib import Path
 from typing import Any, Callable
 
@@ -305,6 +306,7 @@ def _run_check(
     check_index: int | None = None,
     check_count: int | None = None,
     repo_root: Path | None = None,
+    cli_output_base_ref: str | None = None,
 ) -> dict[str, Any]:
     repo_root = (repo_root or REPO_ROOT).resolve()
     normalized = normalize_canary_command(str(check.get("command") or ""), repo_root=repo_root)
@@ -328,6 +330,14 @@ def _run_check(
             home.mkdir()
             env = {**os.environ, "LOOPX_USAGE_PING": "0", "HOME": str(home),
                    "CODEX_HOME": str(home / ".codex")}
+            if (
+                cli_output_base_ref is not None
+                and normalized["script"] == "examples/control_plane/cli-output-budget-regression-smoke.py"
+            ):
+                # Match CI's two-ref handoff so the child uses the selected
+                # base's merge-base with HEAD, even for non-main targets.
+                env["LOOPX_CLI_OUTPUT_BASE_REF"] = cli_output_base_ref
+                env["LOOPX_CLI_OUTPUT_MAIN_REF"] = cli_output_base_ref
             for name in ("LOOPX_RUNTIME_ROOT", "LOOPX_REGISTRY"):
                 env.pop(name, None)
             for name in ("TMPDIR", "TEMP", "TMP"):
@@ -612,6 +622,7 @@ def build_canary_smoke_suite_run(
     parallel_jobs: int = 1,
     progress_callback: ProgressCallback | None = None,
     repo_root: Path | None = None,
+    cli_output_base_ref: str | None = None,
 ) -> dict[str, Any]:
     """Build and optionally execute a continue-on-failure smoke suite.
 
@@ -712,6 +723,14 @@ def build_canary_smoke_suite_run(
         "auto_restored": False,
     }
     if execute:
+        run_check = partial(
+            _run_check,
+            timeout_seconds=max(1.0, timeout_seconds),
+            check_count=len(selected),
+            repo_root=repo_root,
+        )
+        if cli_output_base_ref is not None:
+            run_check = partial(run_check, cli_output_base_ref=cli_output_base_ref)
         git_ok, tracked_before, git_stderr = _tracked_change_paths(repo_root=repo_root)
         clean_start = git_ok and not tracked_before
         if allow_tracked_side_effects:
@@ -749,13 +768,7 @@ def build_canary_smoke_suite_run(
                     check=check,
                     repo_root=repo_root,
                 )
-                result = _run_check(
-                    check,
-                    timeout_seconds=max(1.0, timeout_seconds),
-                    check_index=index,
-                    check_count=len(selected),
-                    repo_root=repo_root,
-                )
+                result = run_check(check, check_index=index)
                 if side_effect_guard["enforced"]:
                     after_ok, tracked_after, after_stderr = _tracked_change_paths(repo_root=repo_root)
                     side_effects = sorted(set(tracked_after) - set(tracked_before))
@@ -799,14 +812,7 @@ def build_canary_smoke_suite_run(
                         check=check,
                         repo_root=repo_root,
                     )
-                    future = executor.submit(
-                        _run_check,
-                        check,
-                        repo_root=repo_root,
-                        timeout_seconds=max(1.0, timeout_seconds),
-                        check_index=index,
-                        check_count=len(selected),
-                    )
+                    future = executor.submit(run_check, check, check_index=index)
                     futures[future] = (index, check)
                 for future in as_completed(futures):
                     index, check = futures[future]
@@ -840,13 +846,7 @@ def build_canary_smoke_suite_run(
                     check=check,
                     repo_root=repo_root,
                 )
-                result = _run_check(
-                    check,
-                    timeout_seconds=max(1.0, timeout_seconds),
-                    check_index=index,
-                    check_count=len(selected),
-                    repo_root=repo_root,
-                )
+                result = run_check(check, check_index=index)
                 result["serial_execution_required"] = True
                 result["serial_execution_reason"] = _serial_smoke_reason(check, repo_root=repo_root)
                 indexed_results[index] = result

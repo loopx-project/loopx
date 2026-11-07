@@ -269,12 +269,20 @@ When `--delivery-workspace-path` names the producing worktree, the combined
 operation also runs the owed command there, using the originating CLI's
 implementation. The normal workspace and settlement guards still apply; a
 missing or incompatible workspace leaves the original owed command recoverable.
+In JSON, a failed spend's response is available under `quota_spend`, including
+any `workspace_guard` remediation or bounded child reader. For a workspace
+refusal, use the guard's required action and the original `settlement_owed`
+command. Use the parent's verified receipts to determine what committed.
 
 Callers that need a compact result can add `--settlement-receipt` to
 `refresh-state --settle-turn`. A successful settled result provides its exact
 identity and receipts inline and a `result_details.command` for the full saved
 result. Inspect unresolved controls before continuing. If saving the view fails
 after commitment, retry the same Turn and check its receipts.
+If a failed result exceeds the receipt budget, read the complete selected parent
+controls first and follow any required reader under `quota_spend`. If the
+failure capture cannot be saved, the result returns its original failure controls
+with `result_delivery_error`.
 
 An in-flight recommendation does not require keeping a completed Todo open.
 Validate its original declaration, use ordinary completion when satisfied, and
@@ -297,10 +305,15 @@ Todo 或 obligation/Turn 的 canonical 待结算命令并验证回执；不重�
 指定 `--delivery-workspace-path` 后，组合操作也在该交付工作区执行待结算命令，
 继续使用原调用方的 CLI 实现。原工作区和结算校验保持；目录缺失或不兼容时保留
 原待结算命令以便恢复。
+JSON 的 `quota_spend` 保留子扣额的失败响应，包括工作区 guard 的恢复动作和已有的
+分页读取入口。工作区拒绝时，按 guard 的要求和原 `settlement_owed` 命令恢复，并以父层
+核验的回执判断已提交的效果。
 
 需要紧凑回执时，在 `refresh-state --settle-turn` 后加 `--settlement-receipt`。
 结算成功后可直接核对本次身份和回执，用 `result_details.command` 读取完整结果。
 先处理未解决的控制项。若结算已提交而视图保存失败，按原 Turn 重试并核对回执。
+失败结果超过回执预算时，先完整读取父层选中的控制项，再按 `quota_spend` 中的要求
+继续读取子结果。若失败结果无法保存，响应保留原控制项并返回 `result_delivery_error`。
 
 执行中续跑建议不要求把已完成的 Todo 保持开放。原声明验收满足后可正常完成，并
 在原 Turn 上按语义收尾写入有证据的 vision；未完成的阶段进展仍可保留开放状态。

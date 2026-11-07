@@ -599,6 +599,76 @@ R0 可以先于目录移动交付，但不代表内核合格。R3/R4 可选，�
   不关闭完整 R0/V10、M1、拆包安装、R1 managed minimal 或 D1–D7。不改变 preset、
   前端操作、权限或持久化状态；受保护执行仍由既有 owner 所有。
 
+### 2026-11-07 — 调用方进程传输按需加载提案
+
+- **基线与边界：**`7f521ff4505fa916a98a7401032922189eef414a` 的纯
+  Turn-decision import 会加载 `extensions.process_runtime`。Doctor Git、
+  contract 扫描、调用方 validation 和 Host bridge transport 改为使用时解析既有
+  reexport。保留原函数对象、签名、direct/from/star import、名称发现、调用方补丁点、
+  预加载 owner 的绑定和 reload 行为。复用现有 lazy-export 模式；导出名集合是本地
+  兼容元数据，不是共享状态词汇。Python 保留平台传输，TypeScript 保留决策、deadline、
+  authority 与 receipt；不新增 provider、capability、default 或进程算法。
+- **可执行证据：**四个冷加载调用方 oracle 在不可变基线上失败。提案通过聚焦兼容
+  检查和既有架构 oracle，保留 Turn-preview 的未选模块隔离门。真实隔离的 Git、
+  validation 和 bridge 测试覆盖 timeout、cancellation、leader 退出后的后代、stdin
+  策略、framing 和未确认 cleanup。重新构建的单体 wheel 在源码目录外重复兼容与真实
+  进程检查；完整公开 discovery/star 名称集合及 transport 签名与基线一致。这是
+  source/wheel 提案证据，不代表现有 host 升级或实际采用。
+- **实测范围：**纯 Turn-decision import 的 LoopX 模块数从 338 降至 337。
+  纯 import 和 help 没有进程启动或连接，支持的 help、unknown-command 输出与退出码
+  保持一致。共享合成 SQLite fixture 覆盖接受与拒绝的已注册 Turn plan：两个版本都
+  启动两个 Node 进程和十三个 Git probe，连接观察分别为 62/61 次。完整返回 envelope
+  仅 fresh observation 的 source-decision digest 不同。已注册 plan 仍会选择进程
+  transport，完整 preview 依赖闭包尚未通过冷加载资格。减少一个 import 不能证明
+  latency、RSS、完整成本、managed-Turn 或长程收益。
+- **剩余与回滚：**I3 至少保留一个 minor release。D2、D5、D6、I3、D3，以及完整
+  R0/V10/M1/R1/context/model/install 验收仍开放。Canary 六个 direct check 通过，
+  18 个 selected check 中 17 个通过；`first-connect-contract-smoke.py` 在基线与
+  提案都报 `KeyError: should_run`，其 inline-field 假设需要独立修复。该失败与既有
+  全库 lint/browser 失败仍开放。完成的作者提案可披露 hold 后进入正常 review；受保护 runtime
+  合入仍需 maintainer 授权。回退本调用方加载改动即可恢复 eager binding，无需状态
+  迁移或无关语言重写。
+
+### 2026-11-06 — History 读取路径的所选加载
+
+- **基线与边界：** `22b0f6c25`。普通 `history` 读取与帮助通过共享 CLI grammar
+  和 guard 复用既有 registrar/handler。维护动作、parser 拒绝及已预加载完整 CLI
+  的进程保留原路径，包括 handler/renderer patch 点。历史算法、证据窗口、公开
+  import 与 TS owner 均不变。这是单体发行物中可回滚的 R0 读取片；公开迁移的
+  I3 仍至少保留一个 minor 版本。
+- **真实路径证据：** 基线／候选源码与实际安装 wheel 的四个环境，各有 27 个
+  console 用例保留 stdout/stderr/退出码、UTC 排序、Agent 过滤、limit、空／未知
+  输入与当前／过期证据读取。另有四个安装／源码 facade 探针保留被 patch 的
+  handler 与 renderer。预加载 handler 的 oracle 在修复前失败；最终 history／
+  parser 选择通过 26 个测试。既有历史、artifact 与证据 oracle 保留。必需原生
+  服务使用可丢弃的数据／进程命名空间，并通过认证的退出回读确认清理。
+- **匹配测量：** Apple M4 Pro、48 GiB、macOS 27 arm64、Python 3.13.5、
+  Node 26.0.0；Python 依赖及源码配对中的 Node 依赖版本一致。四个负载各有 30
+  组交错基线／候选配对，bytecode 预编译，Python 每次启动新进程，原生服务暖复用。
+  最终采样 229 秒，三轮合计 698 秒，低于冻结的 20 分钟采样上限；安装、验证及
+  tracing 单独记录。此前环境／兼容性修正前的观察保留原有效性范围。
+
+| 负载 | elapsed 中位数 / p95 ms，基线 → 候选 | CPU 中位数 ms | CLI 峰值 RSS 中位数 MiB |
+| --- | --- | --- | --- |
+| 源码帮助 | 1552 / 1862 → 204 / 349 | 670 → 100 | 91.4 → 31.3 |
+| 源码 Agent 读取 | 1603 / 1833 → 417 / 482 | 665 → 150 | 91.9 → 34.4 |
+| Wheel 帮助 | 1621 / 2053 → 220 / 375 | 695 → 100 | 91.8 → 31.0 |
+| Wheel Agent 读取 | 1648 / 1825 → 414 / 462 | 725 → 150 | 92.2 → 34.6 |
+
+- **加载与效果：** 源码／wheel 帮助由 1157 降至 155 个 LoopX 模块，注册 Goal
+  读取由 1158 降至 208，证据读取由 1159 降至 210。Python audit 的 read-open
+  观察中，源码帮助为 1290 → 246，冷原生读取为 1311 → 723；wheel 分别为
+  1291 → 247、1710 → 723。帮助观察到的写入／进程／连接均为零。冷注册读取
+  保留六次 write-open、两个进程启动、一个连接，客户端 IPC 发送／接收为
+  252/355 bytes；证据读取保留一次 write-open、两个连接及 1377/804 IPC bytes。
+  这些必需效果不属于可选激活。已有服务可在 PATH 无 Node 时继续工作，冷缺失
+  保留原拒绝。输出字节一致；耗时包含解释器与进程调用，子孙进程 CPU/RSS/I/O、
+  完整模型与人工注意力成本仍未知。
+- **保留项与后续：** 实测帮助 p95 仍高于提出的 200 ms 目标，不采纳 D6。
+  source-session loader 清单及 Turn preview import 检查在未改动基线上同样失败，
+  保留为资格验证限制。本片不关闭完整 R0/V10、M1、拆包安装、R1／context／宿主
+  资格或开放设计决策。回滚只需撤回加载片，不涉及状态迁移。
+
 ### 2026-11-06 — Version 按需加载及匹配成本
 
 独立候选 `8a79d8602e699e51452ca1f43dc9b9527c81aa1b` 对比基线
@@ -1016,6 +1086,143 @@ owner；采纳性能变更前必须另做匹配的真实路径对照。本 check
 预算、preset 或默认行为。R0 完整清点、R1/minimal、D2/D5/D6、I3/D3、
 hard-lease／context／model 和拆包安装验收仍开放；采纳仍受独立 exact-head
 评审及必需验证约束。
+### 2026-11-07 — 完整 governed CLI 组合成本与归档后终结边界
+
+对照 main `8e86f173f08bd55eb833d8cdf42360f93bf989fe` 和私有实验组合：
+#8240 `4df990c9e66465171f980176fba4e3602d41f826` 加上
+#8243 `668bed2f03a274f273d39c187121a1a4ede67165`。候选只应用两提案的七个
+生产 Python 路径差分。分别构建、独立安装的单体 wheel 各有 1,998 个文件、
+约 8.91 MiB 压缩大小，1,836 个 runtime resource 与对应源码逐字节核对。
+全部环境在 macOS arm64 上使用 CPython 3.13.5、Node 26.0.0、真实 Node 所有的
+SQLite 3.53.1 和相同的 57 个依赖版本。这里只是作者实验组合，没有升级已安装
+host，也没有修改交付 preset、authority provider 或公共 runtime。
+
+采样前冻结代码/resource/wheel hash、工作负载、缓存、instrumentation、串行对照
+顺序、采样和解释规则。每次 CLI 都是新 Python、独立空 bytecode cache prefix，
+并禁止写入 bytecode。每个 episode 在 prequota 启动独立冷 Node，之后仅在同一轮
+复用；compile cache 和临时根隔离。磁盘缓存及其他 host 负载不受控；每对交替
+base/candidate 顺序。1,500 秒上限包含 fixture 准备、执行、退出与采样编排。
+pilot、负例、打包和独立 instrumentation census 分别记账。
+
+流程覆盖普通 hard-lease claim/admission、独立 Git worktree、完整连续 native
+initial read、独立验证的 JSON 求和产物 `45`、Todo completion、fresh evidence-linked
+Vision/writeback、一次 spend、terminal result/readback，以及 completion/writeback/
+spend/terminal 的原参数重放。明确关闭 global sync 和 external sinks；本实验不
+覆盖 standard fanout。小状态有一个活动 Todo；大状态增加 100 个带较长文本的
+已完成背景 Todo。大状态失败保留为失败，不算成功成本样本。
+
+全部 60 个计划观测在 **1,164.996 秒**内完成，未改变上限：52 个小状态 episode
+完成，八个大状态 episode 保留相同终结失败。代码、脚本与冻结 inventory 未变。
+小状态四组各有 8/6/6/6 对串行交错样本；大状态各一对，仅验证观察到的兼容性失败。
+
+| 小状态路径 | 对数 | Baseline 秒，median / p95 | Candidate 秒，median / p95 | 配对差的 median，秒 | 探索性 95% percentile 区间 |
+| --- | --- | --- | --- | --- | --- |
+| Source / Sqlite | 8 | 16.942 / 17.173 | 14.986 / 15.399 | -1.806 | -2.156 to -1.669 |
+| Source / File | 6 | 16.751 / 17.036 | 14.725 / 14.917 | -2.086 | -2.159 to -1.875 |
+| Wheel / Sqlite | 6 | 17.066 / 22.878 | 15.169 / 19.378 | -1.932 | -5.246 to 2.348 |
+| Wheel / File | 6 | 16.689 / 17.454 | 14.801 / 15.195 | -1.917 | -2.491 to -1.553 |
+
+p95 使用 nearest rank；在这个样本量下就是观测最大值，不能作为尾延时上界。
+区间来自固定 seed 的 10,000 次配对重采样。两臂 median 的差与配对差的 median
+是不同统计量。两臂 median 改善约 11–12%；wheel/SQLite 区间跨过零，保留了两个
+方向的尾部波动。这是小状态路径的局部证据，不是通用速度门槛或长程收益。
+
+| 小状态路径 | Target 加已等待 descendants CPU 秒，median（base → candidate） | 每次调用 target/waited RSS 最大值 MiB，median（base → candidate） | 目标 broker CPU 秒，median（base → candidate） | Broker 结束时 RSS MiB，median（base → candidate） |
+| --- | --- | --- | --- | --- |
+| Source / Sqlite | 10.536 → 9.190 | 126.60 → 90.02 | 0.767 → 0.775 | 126.59 → 125.28 |
+| Source / File | 10.507 → 9.101 | 127.77 → 87.15 | 0.716 → 0.702 | 126.77 → 126.70 |
+| Wheel / Sqlite | 10.782 → 9.289 | 134.83 → 91.51 | 0.799 → 0.797 | 125.77 → 126.91 |
+| Wheel / File | 10.606 → 9.348 | 132.01 → 88.21 | 0.729 → 0.723 | 127.97 → 127.77 |
+
+RSS 是各次 CLI 调用峰值的最大值，不是同时存活进程树的总峰值。Broker counter
+不含退出阶段，使用校准后的 Darwin timebase。默认 SQLite 的 target/waited CPU
+下降约 13–14%；broker CPU/RSS 没有一致改善。Source/SQLite prequota median
+从 3.425 降到 1.468 秒；guard 为 1.845 → 1.863 秒，成为候选最重阶段。
+Wheel/SQLite prequota 为 3.463 → 1.581 秒，guard 为 1.844 → 2.033 秒。
+降耗主要集中在新 Python 的 prequota loading，不能归因为 authority 执行加速。
+
+各组 setup median 为 2.15–2.29 秒，retirement 为 0.36–0.40 秒。包含 setup、
+退出和 driver 开销后，source/SQLite median 为 20.238 → 18.146 秒，wheel/SQLite
+为 20.393 → 19.793 秒。两个 wheel 独立构建/安装用时 43.881 秒。准备、验证、恢复
+与 census 有重叠，不能相加。准备阶段作者成本、完整 native/thread/进程树 I/O、
+model token、model/人工成本及长程结果仍未完整测量。内核观察到的 broker 磁盘写入
+保持约每轮 SQLite 5.85 MiB、File 220 KiB；这不是全部文件系统流量。
+
+60 个观测的产物字节、原绑定、完整结算义务、一次 writeback 和一次 debit 一致。
+小状态必读 native initial body 为 23,498–24,442 bytes；`bytes / 4` 仅是粗 token
+proxy，不是 tokenizer 结果或 model retention 证明。候选多出的 source 85 / wheel
+165 bytes 来自路径/reference 展示；规范化后的结算义务逐条一致，没有删减。
+
+101 个 Todo 时，普通 completion 会把原展示位置靠前的选中 Todo 和 90 个背景
+Todo 自动归档。Validation、writeback、一次 spend 已提交，后续原 Turn 的
+`todo complete --no-follow-up` 却因 `todo_archived` 拒绝。四组 source/wheel ×
+File/SQLite 对照在两臂均复现。失败轮没有计入验收成功，也不用于宣称完整大状态
+加速。既有 `todo_terminal_lifecycle.ts`、`todo_archive_selection.ts` owner 需要协调
+自动归档和原 receipt 的终结。相关 #5677 已负责 freshness/terminal recovery；其
+公开的 0/1/4 history 矩阵没有验证本次自动归档分支。扩展既有 owner 时，保留 fresh
+archived-Todo、变更 actor/lease/evidence 和重复 effect 的拒绝。
+
+独立 census 在八个 source/wheel × File/SQLite 变体中保留 invalid Vision/workspace
+拒绝。每个变体另有四个失败检查：missing Node admission、missing provider、capture
+digest 不匹配，以及 released-claim completion；没有提交 writeback/debit。
+Prequota 的 soft failure 继续进入 quota，不授予 admission。负例检查用时 69.559 秒，
+instrumented census 用时 90.358 秒，两阶段有重叠。采样/census 的所有 broker 都已
+观察到 shutdown 与 OS exit；pilot 初次 wrong-source retirement/pending wait 的失败
+保留在历史中，随后在其独立 namespace 完成退出回读。
+
+剔除 census 额外两个拒绝后，各变体完整 episode 的 RPC 均为 271 → 270，spend
+单独为 83 → 82。实际 receive 流量为 999,060–1,004,527 → 966,984–972,825 bytes；
+send 为 1,025,077–1,037,023 → 1,026,956–1,040,098 bytes，增加来自候选更长的路径。
+Parent read-open 为 13,532–13,561 → 11,700–11,728，write-open 为 285 → 284。
+带 instrumentation 的 prequota module graph 为 source 1,404 → 480、wheel
+1,403 → 479，包含 instrumentation 自身 import，不是未插桩的 loading 预算。
+Census 的冷 Node/readiness 为 0.217–0.249 秒，version probe 为 0.026–0.032 秒。
+单次插桩用时不能证明重复延时收益；socket/open 计数也未覆盖全部 native/broker I/O。
+
+**基于证据的下一步：**把归档分支交给既有 terminal/freshness owner 和 #5677
+集成验证，再验证完整大状态生命周期。保留原 operation/read/receipt identity 与
+所有拒绝边界；不为让这个工作负载通过而修改归档策略。随后 characterize 剩余
+`quota should-run` parser/loading 与共享 projection caller，再选择性能改动。
+小状态数据支持继续对 #8240/#8243 的精确 head 做 review，不授予 merge 或已安装
+host 采纳资格。I3 至少保留一个 minor release；M1/#8011、完整 R0/V10/R1、
+D2/D5/D6/D3、context/model/split-install、真实 adoption 和完整成本验收仍开放。
+没有新增 budget、preset、provider 或 authority。
+
+Source 重放时，拉取两个精确 PR head，仅将生产 `loopx/` 差分应用到隔离的
+baseline archive；记录的 merge base 分别为
+`79665b97a0a453380da02e15b1b62eee895147df`、
+`97cc1e0c40e766c73193b8077526a7f565dc561b`。使用 `uv sync --extra test` 准备
+console，并用 `uv build --wheel` 分别构建单体 wheel；构建前通过既有 owner 验证
+Chat bundle。复用 `tests/control_plane/test_quota_settlement_cli.py` 的 source fixture：
+在 `_initialize_fixture_authority` 前完整编写 synthetic Goal/背景 Todo，选择 File
+或 SQLite 与 `hard_lease`，通过普通 claim 准备执行。Todo 和 Goal boundary 同时
+声明产物 write scope，复用 Git fixture helper 并创建独立 worktree。
+
+以下重放序列的每条命令都必须指定该 fixture 的 registry/runtime/worktree；guard
+提供完整 read/recovery 命令。保持同一 Goal、Agent、Todo、Turn 和 claim operation：
+
+```text
+loopx heartbeat-prompt --thin --codex-app --goal-id <fixture-goal> --agent-id <fixture-agent>
+loopx heartbeat-prequota -g <fixture-goal> -a <fixture-agent>
+loopx todo claim --goal-id <fixture-goal> --todo-id <fixture-todo> --agent-id <fixture-agent> --claimed-by <fixture-agent> --claim-operation-id <fixture-claim>
+loopx quota should-run --goal-id <fixture-goal> --agent-id <fixture-agent> --todo-id <fixture-todo> --turn-instance-id <fixture-turn> --codex-app --context-delivery on
+# Execute first_read_command and every emitted contiguous next_command.
+# Produce {"sum_0_through_9":45}; verify it independently before completion.
+loopx todo complete --goal-id <fixture-goal> --agent-id <fixture-agent> --todo-id <fixture-todo> --turn-instance-id <fixture-turn> --claim-operation-id <fixture-claim> --evidence artifact:verified-sum
+loopx refresh-state --goal-id <fixture-goal> --agent-id <fixture-agent> --todo-id <fixture-todo> --turn-instance-id <fixture-turn> --classification synthetic_cli_cost_artifact --delivery-boundary semantic_closeout --delivery-batch-scale single_surface --delivery-outcome outcome_progress --agent-vision-json <fixture-vision> --delivery-workspace-path <fixture-worktree> --no-global-sync --suppress-external-sinks
+loopx quota spend-slot --goal-id <fixture-goal> --agent-id <fixture-agent> --todo-id <fixture-todo> --turn-instance-id <fixture-turn> --slots 1 --source heartbeat --execute
+loopx todo complete --goal-id <fixture-goal> --agent-id <fixture-agent> --todo-id <fixture-todo> --turn-instance-id <fixture-turn> --claim-operation-id <fixture-claim> --evidence artifact:verified-sum --no-follow-up
+loopx todo list --goal-id <fixture-goal> --todo-id <fixture-todo> --include-archived
+```
+
+Admission/writeback/spend 声明该 fixture 已观察到的 shell、filesystem-write、network
+和 evidence-poll capability；生成的 reader 命令使用实际安装的 console。用不变参数
+重放 completion、writeback、spend、terminal。Missing Node 使用隔离 PATH，missing
+provider 使用空的 disposable runtime，stale source 使用不匹配的 capture digest，
+stale claim 使用普通 release 后的 lease。它们必须在 writeback/debit 前拒绝；invalid
+Vision/workspace 同样保留拒绝。临时测量 harness 和 raw capture 保持私有；这个 recipe
+描述重复的 workload/oracle，不是分发的 benchmark runner 或公共复现 receipt。
+
 ### 2026-11-07 — 原 Turn 终结在 Todo 自动归档后仍可完成
 
 #8257 的完整 CLI 比较在 101 个合成 Todo 下暴露了生命周期故障。基于
