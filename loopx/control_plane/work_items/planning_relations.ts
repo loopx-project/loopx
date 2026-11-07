@@ -1,5 +1,5 @@
 import type { JsonObject } from "../effect_program.ts";
-import { normalizeTodoResumeWhen, TODO_RESUME_NORMALIZE_REQUEST_SCHEMA_VERSION } from "../todos/resume_condition.ts";
+import { todoResumeDependencyId } from "../todos/resume_condition.ts";
 
 export const PLANNING_TODO_ID = /^todo_[A-Za-z0-9_-]{3,80}$/;
 
@@ -78,13 +78,7 @@ export function projectRelations(items: readonly PlanningRelationSource[]): Plan
 
 export function todoRef(value: string): string | null {
   if (PLANNING_TODO_ID.test(value)) return value;
-  const condition = normalizeTodoResumeWhen({
-    schema_version: TODO_RESUME_NORMALIZE_REQUEST_SCHEMA_VERSION, resume_when: value,
-  });
-  if (!condition) return null;
-  const [kind, target] = condition.split(":");
-  if (kind === "todo_done") return target;
-  return kind === "monitor_changed" ? target?.split("@", 1)[0] ?? null : null;
+  return todoResumeDependencyId(value);
 }
 
 export interface PlanningRelationSource {

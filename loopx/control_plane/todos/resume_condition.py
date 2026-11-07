@@ -172,6 +172,17 @@ def normalize_supported_todo_resume_when(value: Any) -> str | None:
     return None
 
 
+def todo_resume_dependency_id(value: Any) -> str | None:
+    """Decode the supported wire token for bounded source transport, not readiness."""
+    candidate = normalize_supported_todo_resume_when(value)
+    if candidate is None:
+        return None
+    kind, _, target = candidate.partition(":")
+    if kind == TODO_RESUME_KIND_MONITOR_CHANGED:
+        return target.partition("@")[0]
+    return target if kind == TODO_RESUME_KIND_TODO_DONE else None
+
+
 def require_supported_todo_resume_when(value: Any) -> str | None:
     """Validate new authoring through the TypeScript Todo-domain contract."""
 

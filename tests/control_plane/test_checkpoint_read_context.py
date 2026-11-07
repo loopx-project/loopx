@@ -46,6 +46,82 @@ def test_checkpoint_recovery_is_not_a_fresh_turn_preflight(tmp_path):
     assert _spend_run_count(runtime) == 0
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("suffix", ["", "@case-a/run-1", "@case-a:run-1"])
+def test_public_scoped_wait_retains_dependency_through_original_turn_recovery(
+    tmp_path, monkeypatch, provider, suffix,
+):
+    from canonical_authority_fixture import advance_canonical_fixture_authority, isolate_sqlite_runtime
+    from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    from loopx.control_plane.goals.goal_frontier.fallback_source import select_fallback_source_items
+    from loopx.control_plane.effect_runtime import restart_effect_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry, binding, delivery, original = _missing(tmp_path, provider=provider)
+    source = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID)["todos"]
+    monitor_id = "todo_scope_monitor"
+    source.append({"schema_version": "todo_item_v0", "todo_id": monitor_id, "index": 2,
+                   "role": "agent", "status": "open", "done": False, "text": "Observe case changes.",
+                   "task_class": "continuous_monitor", "archive_state": "active",
+                   "source_section": "Agent Todo", "claimed_by": AGENT_ID,
+                   "material_change_generation": 0})
+    successor_id = "todo_independent_successor"
+    source.append({"schema_version": "todo_item_v0", "todo_id": successor_id, "index": 3,
+                   "role": "agent", "status": "open", "done": False, "text": "Validate independent work.",
+                   "task_class": "advancement_task", "action_kind": "validate", "archive_state": "active",
+                   "source_section": "Agent Todo", "claimed_by": AGENT_ID})
+    advance_canonical_fixture_authority(runtime, GOAL_ID,
+        build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=source, handoff_mode="soft_claim"),
+        operation_id="fixture-monitor-source")
+    token = f"monitor_changed:{monitor_id}{suffix}"
+    rc, updated = _run_cli(registry, runtime, "todo", "update", "--goal-id", GOAL_ID,
+        "--todo-id", TODO_ID, "--agent-id", AGENT_ID, "--resume-when", token,
+        "--successor-todo-id", successor_id,
+        "--execute", cwd=project)
+    assert rc == 0 and updated["ok"], json.dumps(updated)
+    source = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID)["todos"]
+    assert next(row for row in source if row["todo_id"] == TODO_ID)["resume_when"] == token
+    index = runtime / f"goals/{GOAL_ID}/runs/index.jsonl"
+    before = index.read_bytes()
+    original_bytes = Path(original["json_path"]).read_bytes()
+
+    rc, context = _run_cli(registry, runtime, "checkpoint-context", *binding, cwd=project)
+    assert rc == 0, context
+    assert [row["todo_id"] for row in context["basis"]["dependencies"]] == [monitor_id]
+    assert context["basis"]["todo"]["resume_when"] == token
+    selected = select_fallback_source_items(source, {TODO_ID})
+    assert isinstance(selected, list)
+    assert {row["todo_id"] for row in selected} == {TODO_ID, monitor_id}
+    rc, changed = _run_cli(registry, runtime, "todo", "update", "--goal-id", GOAL_ID,
+        "--todo-id", monitor_id, "--agent-id", AGENT_ID, "--note", "New source evidence.",
+        "--execute", cwd=project)
+    assert rc == 0 and changed["ok"], changed
+    supplement = (*delivery, "--vision-unchanged-reason", "The scoped dependency still applies.")
+    rc, stale = _run_cli(registry, runtime, *supplement,
+        "--checkpoint-read-context", context["read_context_id"], cwd=project)
+    assert rc == 1 and stale["error_code"] == "checkpoint_read_context_stale", stale
+    assert "dependencies" in stale["checkpoint_read_context"]["changed_components"]
+    assert index.read_bytes() == before
+
+    retired = restart_effect_runtime(wait_for_exit=True)
+    assert retired["status"] == "stopped", retired
+    rc, fresh = _run_cli(registry, runtime, "checkpoint-context", *binding, cwd=project)
+    assert rc == 0, fresh
+    assert fresh["basis"]["dependencies"][0]["note"] == "New source evidence."
+    rc, repaired = _run_cli(registry, runtime, *supplement,
+        "--checkpoint-read-context", fresh["read_context_id"], cwd=project)
+    assert rc == 0 and repaired["vision_checkpoint"]["satisfied"], repaired
+    assert repaired["settlement_identity"] == original["settlement_identity"]
+    after = index.read_bytes()
+    rc, replay = _run_cli(registry, runtime, *supplement,
+        "--checkpoint-read-context", fresh["read_context_id"], cwd=project)
+    assert rc == 0 and replay["idempotent_replay"], replay
+    assert index.read_bytes() == after
+    assert Path(original["json_path"]).read_bytes() == original_bytes
+    assert _spend_run_count(runtime) == 0
+
+
 def test_missing_replaced_stale_context_requires_reread_and_preserves_delivery(tmp_path):
     project, runtime, registry, binding, delivery, original = _missing(tmp_path)
     state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"

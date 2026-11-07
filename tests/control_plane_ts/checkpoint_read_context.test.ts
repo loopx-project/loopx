@@ -31,6 +31,23 @@ test("read captures the exact task, transitive upstream results and goal accepta
   assert.equal(check(result.receipt).ok, true);
 });
 
+for (const suffix of ["", "@case-a/run-1", "@case-a:run-1"]) {
+  test(`monitor checkpoint dependency retains the source for ${suffix || "global"}`, () => {
+    const current = {...facts, todos: [
+      {todo_id: "task", resume_when: `monitor_changed:todo_monitor${suffix}`},
+      {todo_id: "todo_monitor", task_class: "continuous_monitor", material_change_generation: 3},
+    ]};
+    const result = read({facts: current});
+    assert.deepEqual((result.basis as JsonObject).dependencies, [current.todos[1]]);
+    assert.equal(check(result.receipt, {facts: current}).ok, true);
+    const changed = structuredClone(current);
+    changed.todos[1].material_change_generation = 4;
+    assert.deepEqual(check(result.receipt, {facts: changed}).changed_components, ["dependencies"]);
+    assert.throws(() => read({facts: {...current, todos: current.todos.slice(0, 1)}}),
+      /checkpoint dependency todo_monitor is absent/);
+  });
+}
+
 test("an inapplicable recovery does not direct the caller to repeat the same read", () => {
   const result = read({prior: {vision_checkpoint: {
     decision: "unchanged_with_reason", satisfied: true, delivery_boundary: "in_flight_continuation",

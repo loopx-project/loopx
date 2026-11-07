@@ -76,8 +76,9 @@ def test_resume_at_python_readback_matches_typed_authoring_precision(fraction: s
     assert resume_condition.require_supported_todo_resume_when(value) == canonical
 
 
-def test_scoped_monitor_resume_python_adapter_matches_typed_owner() -> None:
-    value = "monitor_changed:todo_watch001@case-a/run-7"
+@pytest.mark.parametrize("scope", ["case-a/run-7", "case-a:run-7", "a" * 96])
+def test_scoped_monitor_resume_python_adapter_matches_typed_owner(scope: str) -> None:
+    value = f"monitor_changed:todo_watch001@{scope}"
     assert resume_condition.normalize_todo_resume_when(value) == value
     assert resume_condition.normalize_supported_todo_resume_when(value) == value
     assert resume_condition.require_supported_todo_resume_when(value) == value
