@@ -35,7 +35,8 @@ def preflight_context_instruction(env: dict[str, str], path: Path, digest: str, 
         + "\n```\n" + ("" if guide_in_host else CONTEXT_CAPTURE_NAVIGATION_GUIDANCE)
         + "If the projection command itself fails, recover necessary facts from the same original capture. "
         "When pointers are unknown, discover them with:\n```sh\n" + shlex.join(recovery_index)
-        + "\n```\nAfter the first read, continue the returned page for required facts. "
+        + "\n```\nBefore choosing work, use remaining_read_command when present, or follow next_command for any required facts "
+        "still missing, including applicable Goal acceptance, permissions and stop conditions. "
         "Use the same capture's generic reader and exact selectors for additional detail or recovery. "
         "Use navigation.recovery.command to reread without projecting again. "
         "Discovery does not require draining the packet. "

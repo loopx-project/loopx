@@ -514,11 +514,14 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
   const sources = object(channel?.work_context)?.sources;
   const sourceRows = Array.isArray(sources) ? sources.map((source, index) => ({source, index})) : [];
   const selectedTodo = object(context.selected_todo);
-  const agentId = context.agent_id ?? object(context.agent_identity)?.agent_id;
+  const identityAgent = object(context.agent_identity)?.agent_id;
+  const agentId = context.agent_id ?? identityAgent;
   // Deliver the opted-in decision cue before work, while the candidate or
   // test can still change. The template and evidence stay on their owner read.
+  const cueStart = pointers.length;
   if (context.effective_action === EffectiveAction.NORMAL_RUN && context.normal_delivery_allowed === true
-      && typeof selectedTodo?.todo_id === "string" && typeof context.goal_id === "string" && typeof agentId === "string") {
+      && typeof selectedTodo?.todo_id === "string" && typeof context.goal_id === "string" && typeof agentId === "string"
+      && (identityAgent === undefined || identityAgent === agentId)) {
     for (const {source, index} of sourceRows) {
       const row = object(source), view = object(row?.content), graph = object(view?.graph);
       if (row?.kind !== "explore_turn_context" || row.capability_id !== "explore"
@@ -534,6 +537,13 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
       }
       break;
     }
+  }
+  // Place the cue after the run decision, before variable-size Goal and work
+  // fields. This also works when the full selection falls back to plain paging.
+  const decisionEnd = pointers.indexOf("/normal_delivery_allowed");
+  if (decisionEnd >= 0 && pointers.length > cueStart) {
+    const cuePointers = pointers.splice(cueStart);
+    pointers.splice(decisionEnd + 1, 0, ...cuePointers);
   }
   // If the full starting selection needs paging, put the current decision and
   // its read obligations in one independently readable opening. The rest is
