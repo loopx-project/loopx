@@ -210,13 +210,13 @@ export function quotaSummaryReferences(payload: JsonObject): JsonObject[] {
     const summary = jsonObject(payload[root]);
     if (summary?.schema_version !== "todo_summary_v0") continue;
     const seen = new Map<string, ProjectionPath>();
-    for (const [lane, rows] of Object.entries(summary)) {
-      if (!DIAGNOSTIC_LANES.has(lane) || !Array.isArray(rows)) continue;
+    const referenceRows = (rows: unknown, lanePath: ProjectionPath): void => {
+      if (!Array.isArray(rows)) return;
       rows.forEach((value, index) => {
         const row = jsonObject(value);
         if (!row || row.schema_version !== "todo_item_v0" || typeof row.todo_id !== "string"
             || !row.todo_id || !Object.keys(row).every(key => ITEM_FIELDS.has(key)) || !safeNumbers(row)) return;
-        const key = JSON.stringify(canonicalAuthorityJson(row)), path = [root, lane, index];
+        const key = JSON.stringify(canonicalAuthorityJson(row)), path = [...lanePath, index];
         const from = seen.get(key);
         if (!from) { seen.set(key, path); return; }
         // Keep the original literal as the target; references never form chains.
@@ -224,7 +224,13 @@ export function quotaSummaryReferences(payload: JsonObject): JsonObject[] {
         if (Buffer.byteLength(JSON.stringify(reference)) < Buffer.byteLength(JSON.stringify(row)))
           references.push({path, from, value: reference});
       });
-    }
+    };
+    for (const [lane, rows] of Object.entries(summary))
+      if (DIAGNOSTIC_LANES.has(lane)) referenceRows(rows, [root, lane]);
+    const scope = jsonObject(summary.claim_scope);
+    if (root === "agent_todo_summary" && scope?.schema_version === "agent_claim_scope_v0")
+      for (const lane of ["other_agent_claimed_items", "blocked_claimed_items"])
+        referenceRows(scope[lane], [root, "claim_scope", lane]);
   }
   return references;
 }
