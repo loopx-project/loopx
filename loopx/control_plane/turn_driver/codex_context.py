@@ -222,9 +222,13 @@ def record_native_claim_source(
     if location is None:
         return
     with _locked(location) as root:
-        if _state(root).get("session_id") in (None, session):
-            write_decision_capture(root / "claim-source.json",
-                {"session_id": session, "sha256": digest}, publish=os.replace)
+        active_session = _state(root).get("session_id")
+        if session and active_session not in (None, session):
+            return
+        # A caller outside the Host can explicitly select its private directory.
+        # The journal identifies that session even without an ambient thread ID.
+        write_decision_capture(root / "claim-source.json",
+            {"session_id": session or active_session, "sha256": digest}, publish=os.replace)
 
 
 def _original_native_claim_source(
