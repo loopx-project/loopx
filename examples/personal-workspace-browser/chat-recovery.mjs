@@ -449,21 +449,29 @@ export const chatRecoveryScenario = {
         const path = `${submissionRoute}/${turnId}/events`;
         const heldEvents = [];
         await page.route(path, (route) => { heldEvents.push(route); });
+        const readAdoption = ({sessionId, turnId, details = false}) => {
+          const replies = Array.from(document.querySelectorAll(".personal-channel-timeline .personal-message button"))
+            .filter(button => button.textContent.trim() === "中断本轮");
+          const sameSession = replies.length === 1
+            && replies[0].closest("[data-message-session]")?.dataset.messageSession === sessionId;
+          const sameTurn = document.querySelector(".personal-composer-stop")?.dataset.turnId === turnId;
+          return details ? {replyCount: replies.length, sameSession, sameTurn} : sameSession && sameTurn;
+        };
         return {
           async verifyAdoption() {
-            for (let attempt = 0; attempt < 200 && !heldEvents.length; attempt += 1) {
-              await page.waitForTimeout(50);
+            const identity = {sessionId: busySessionId, turnId};
+            try {
+              for (let attempt = 0; attempt < 200 && !heldEvents.length; attempt += 1) {
+                await page.waitForTimeout(50);
+              }
+              if (!heldEvents.length) throw new Error("Session readback did not attach the reported Turn's stream");
+              // The handoff reply is visible before the read returns as well.
+              // Check its Session and single-reply count after stream adoption.
+              await page.waitForFunction(readAdoption, identity, {timeout: 5_000});
+            } catch (error) {
+              const details = await page.evaluate(readAdoption, {...identity, details: true});
+              throw new Error(`Expected one adopted reply, observed ${JSON.stringify({...details, streamReads: heldEvents.length})}`, {cause: error});
             }
-            if (!heldEvents.length) throw new Error("Session readback did not attach the reported Turn's stream");
-            // The handoff reply is visible before the read returns as well.
-            // Check its Session and single-reply count after stream adoption.
-            await page.waitForFunction(({sessionId, turnId}) => {
-              const replies = Array.from(document.querySelectorAll(".personal-channel-timeline .personal-message button"))
-                .filter(button => button.textContent.trim() === "中断本轮");
-              return replies.length === 1
-                && replies[0].closest("[data-message-session]")?.dataset.messageSession === sessionId
-                && document.querySelector(".personal-composer-stop")?.dataset.turnId === turnId;
-            }, {sessionId: busySessionId, turnId}, {timeout: 5_000});
           },
           async release() {
             await page.unroute(path);
@@ -602,6 +610,9 @@ export const chatRecoveryScenario = {
       await page.unroute("**/api/chat/sessions?*");
       await retriedTurnEvents.verifyAdoption();
       if (await composerInput.inputValue() !== draft) throw new Error("The draft rejected by a running Turn was not kept across the failed read");
+      if (await page.locator(".personal-channel-timeline .personal-message").filter({ hasText: draft }).count()) {
+        throw new Error("The retried readback displayed a message the Session did not accept");
+      }
       await retriedTurnEvents.release();
       await retriedTurnControl.waitFor({ state: "hidden", timeout: 10_000 });
       if (await sendButton.isDisabled()) throw new Error("Send stayed blocked after the retried recovery saw the Turn complete");
