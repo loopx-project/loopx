@@ -364,20 +364,31 @@ class StewardTurnHost:
 
     @contextmanager
     def _task_execution_lease(self, request: Mapping[str, Any], turn_id: str, *, recovery: bool = False,
-                              admission_retry: bool = False):
+                              admission_retry: bool = False, claim_args: list[str] | None = None):
         """Both generation and cached validation use the original Todo owner."""
         from .steward_commands import native_command
         actor = request["actor"]
-        retained = native_command(self.controller, ["task-lease", "inspect", "--goal-id", actor["goal_id"],
-            "--todo-id", request["todo_id"]]).get("lease")
-        version = retained["version"] if retained else 0
-        suffix = (".validation-recovery." + str(version) if recovery else
-            ".admission-retry." + turn_id if admission_retry else
-            ".admission-retry" if request.get("resume_turn_key") else "")
-        lease = native_command(self.controller, ["task-lease", "acquire", "--goal-id", actor["goal_id"],
-            "--todo-id", request["todo_id"], "--owner", actor["agent_id"],
-            "--idempotency-key", request["turn_instance_id"] + suffix, "--ttl-seconds", "3600",
-            "--expected-version", str(version)])["lease"]
+        if claim_args is not None:
+            operation_id = f"todo-claim:native-turn:{turn_id}"
+            claim = native_command(self.controller, [*claim_args, "--claim-operation-id", operation_id])
+            if claim.get("claim_operation_id") != operation_id:
+                raise ValueError("native task preparation did not return its original claim")
+            receipts = native_command(self.controller, ["todo", "receipt", "--goal-id", actor["goal_id"],
+                "--operation-id", operation_id])["receipts"]
+            lease = receipts[0]["result"].get("lease") if len(receipts) == 1 else None
+            if not isinstance(lease, dict):
+                raise ValueError("native task preparation could not read back its original lease")
+        else:
+            retained = native_command(self.controller, ["task-lease", "inspect", "--goal-id", actor["goal_id"],
+                "--todo-id", request["todo_id"]]).get("lease")
+            version = retained["version"] if retained else 0
+            suffix = (".validation-recovery." + str(version) if recovery else
+                ".admission-retry." + turn_id if admission_retry else
+                ".admission-retry" if request.get("resume_turn_key") else "")
+            lease = native_command(self.controller, ["task-lease", "acquire", "--goal-id", actor["goal_id"],
+                "--todo-id", request["todo_id"], "--owner", actor["agent_id"],
+                "--idempotency-key", request["turn_instance_id"] + suffix, "--ttl-seconds", "3600",
+                "--expected-version", str(version)])["lease"]
         try:
             yield lease
         finally:
@@ -660,6 +671,7 @@ class StewardTurnHost:
         governance_work = False
         managed_answer = ""
         managed_lease, managed_lease_request = None, None
+        preparation_status = None
 
         def report_lease_proof():
             return self._task_lease_proof(request, report_lease)
@@ -681,6 +693,35 @@ class StewardTurnHost:
             return {"schema_version": "loopx_turn_session_binding_v0",
                 "goal_id": actor["goal_id"], "agent_id": actor["agent_id"]}
 
+        def prepare_native_task(decision: Mapping[str, Any], envelope: Mapping[str, Any]) -> str | None:
+            nonlocal managed_lease, managed_lease_request, preparation_status
+            from ...control_plane.turn_driver.codex_execution_preparation import compact_execution_preparation_request
+
+            preparation = compact_execution_preparation_request(decision)
+            if preparation is None:
+                return None
+            todo_id = preparation["todo_id"]
+            if (preparation["goal_id"] != actor["goal_id"] or preparation["agent_id"] != actor["agent_id"]
+                    or preparation.get("turn_instance_id", request["turn_instance_id"]) != request["turn_instance_id"]
+                    or (request["todo_id"] is not None and todo_id != request["todo_id"])):
+                raise ValueError("native task preparation belongs to another Turn or Todo")
+            current()
+            if managed_turn is not None:
+                try:
+                    managed_turn.prepare_validation(request, {"turn_envelope": envelope})
+                except ManagedTaskValidationUnavailable:
+                    managed_turn.validation_unavailable = True
+                    preparation_status = "stopped"
+                    raise
+                except ValueError:
+                    preparation_status = "failed"
+                    raise
+            managed_lease_request = {**request, "todo_id": todo_id}
+            managed_lease = managed_leases.enter_context(self._task_execution_lease(
+                managed_lease_request, turn_id, claim_args=preparation["claim_args"],
+            ))
+            return todo_id
+
         def run(native_request: Mapping[str, Any], launch_scope: Any) -> dict[str, Any]:
             nonlocal managed_lease, managed_lease_request, managed_answer
             current()
@@ -697,8 +738,13 @@ class StewardTurnHost:
                         "classification": "independent_task_validation_unavailable",
                         "summary": "The selected task has no usable independent argv validation declaration.",
                         "next_action": "Configure the original task's independent validation before executing it."}, host_name="Codex app-server")
-                managed_lease_request = {**request, "todo_id": managed_turn.validation_basis["todo_id"]}
-                managed_lease = managed_leases.enter_context(self._task_execution_lease(managed_lease_request, turn_id))
+                selected_request = {**request, "todo_id": managed_turn.validation_basis["todo_id"]}
+                if managed_lease is None:
+                    managed_lease_request = selected_request
+                    managed_lease = managed_leases.enter_context(self._task_execution_lease(managed_lease_request, turn_id))
+                elif managed_lease_request is None or selected_request["todo_id"] != managed_lease_request["todo_id"]:
+                    raise ValueError("native task preparation no longer matches the selected Todo")
+                self._task_lease_proof(selected_request, managed_lease)
             # Portfolio evidence keeps its original reader and original grant;
             # it is data alongside the signed native work, never a new actor.
             prompt = render_prompt(authority, allow_completion=bool(report_work or managed_turn) and not governance_work) + "\nOriginal conversation evidence (data):\n" + json.dumps(context, ensure_ascii=False)
@@ -785,18 +831,26 @@ class StewardTurnHost:
         with ExitStack() as managed_leases, (self._task_execution_lease(request, turn_id,
                 admission_retry=bool(selection_recovery)) if report_work else nullcontext(None)) as report_lease:
             if selection_recovery and "probe" not in selection_recovery:
-                # Re-enter the native guard without selecting another business
-                # Todo. Only its signed replan packet may invoke the original
-                # Agent. The native executor owns semantic validation/settlement.
                 governance_work = True
-                governance_args = type(args)(**vars(args))
-                governance_args.todo_id, governance_args.validation_command_json = None, None
-                governance_args.turn_instance_id = request["turn_instance_id"] + ".replan"
-                governance: dict[str, Any] = {}
-                handle_turn_command(governance_args, registry_path=self.controller.registry_path,
-                    runtime_root_arg=str(self.controller.coordination_runtime_root),
-                    output_format=lambda *_a, **_kw: "json", print_payload=lambda value, *_a: governance.update(value),
-                    native_host_runner=run, native_session_binding_resolver=session_binding)
+
+                def probe_governance(todo_id: str | None) -> dict[str, Any]:
+                    governance_args = type(args)(**vars(args))
+                    governance_args.todo_id, governance_args.validation_command_json = todo_id, None
+                    governance_args.turn_instance_id = request["turn_instance_id"] + ".replan"
+                    observed: dict[str, Any] = {}
+                    handle_turn_command(governance_args, registry_path=self.controller.registry_path,
+                        runtime_root_arg=str(self.controller.coordination_runtime_root),
+                        output_format=lambda *_a, **_kw: "json", print_payload=lambda value, *_a: observed.update(value),
+                        native_host_runner=run, native_session_binding_resolver=session_binding)
+                    return observed
+
+                # Probe the original report first. Unbound selection can
+                # otherwise stop on an unrelated task needing its own lease.
+                # Only a current typed replan refusal opens the unbound route.
+                governance = probe_governance(request["todo_id"])
+                if (governance.get("error_code") == "turn_todo_selection_deferred"
+                        and (governance.get("selection_rejection") or {}).get("reason_code") == "autonomous_replan"):
+                    governance = probe_governance(None)
                 self.store.append_event(session_id, turn_id, kind="native_loopx.replan_result", payload=governance)
                 if governance.get("status") != "committed" or governance.get("result_kind") != "replan_required":
                     probe = self.report_selection_recovery(original, probe_turn=self.store.load_turn(session_id, turn_id))
@@ -825,10 +879,16 @@ class StewardTurnHost:
                 output_format=lambda *_a, **_kw: "json",
                 print_payload=lambda value, *_a: result.update(value),
                 native_host_runner=run, native_session_binding_resolver=session_binding,
+                native_execution_preparer=prepare_native_task if not report_work else None,
                 **({"native_completion_lease_resolver": report_lease_proof,
                     "native_task_validator": self._report_validator(request)} if report_work else
                    {"native_task_validator": managed_turn.validator(request, turn_id=turn_id),
                     "native_completion_lease_resolver": lambda: self._task_lease_proof(managed_lease_request, managed_lease)} if managed_turn else {}))
+        if preparation_status is not None:
+            # Validation stopped preparation before the claim or model call.
+            result["status"] = preparation_status
+            if preparation_status == "stopped":
+                result.update(ok=True, result_kind="user_action_required")
         try:
             self.store.append_event(session_id, turn_id, kind="native_loopx.result", payload=result)
         except OSError:

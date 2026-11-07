@@ -356,7 +356,19 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
         # into the immutable source or a second admission. Native lifecycle
         # still owns when the following full/delta view can be published.
         transport = _capture_selection_transport_template(payload, args, capture_root=root)
-        prepared = prepare_codex_context(payload, directory=directory, capture_directory=cache,
+        presentation = payload
+        if args.initial_read and activation["progressive_enabled"]:
+            from .quota_presentation import _project_quota_cli_payload
+
+            # Match the ordinary selection guard's view while keeping the
+            # digest-bound original available for detail recovery.
+            presentation = _project_quota_cli_payload(
+                payload, argparse.Namespace(quota_command="should-run"), frozenset(), None,
+                captured_decision_path=str(path),
+            )
+            if "host_poll_receipt" in payload:
+                presentation["host_poll_receipt"] = payload["host_poll_receipt"]
+        prepared = prepare_codex_context(presentation, directory=directory, capture_directory=cache,
             goal_id=args.goal_id, agent_id=args.agent_id, surface="quota_packet",
             capture_id=hashlib.sha256(raw).hexdigest(),
             continuity_generation=getattr(args, "_context_delivery_generation", None),
@@ -507,13 +519,20 @@ def prepare_decision_capture(args: argparse.Namespace) -> Path | None:
     return directory
 
 
-def capture_decision(directory: Path | None, payload: dict[str, object]) -> str | None:
+def capture_decision(directory: Path | None, payload: dict[str, object], *,
+                     args: argparse.Namespace | None = None, native_context: bool = False) -> str | None:
     if directory is None:
         return
     from ..control_plane.turn_driver.decision_capture import write_decision_capture
 
     try:
-        return write_decision_capture(directory / "decision.json", payload, publish=os.replace)
+        digest = write_decision_capture(directory / "decision.json", payload, publish=os.replace)
+        if native_context and args is not None and args.quota_command == "should-run" and payload.get("ok") is True:
+            from ..control_plane.turn_driver.codex_context import record_native_claim_source
+
+            record_native_claim_source(payload, digest, directory=args.codex_context_dir,
+                context_root=getattr(args, "codex_context_root", None))
+        return digest
     except (OSError, ValueError) as exc:
         raise QuotaDecisionTransportError(
             "Decision capture failed after guard evaluation; the Turn receipt may "
@@ -833,6 +852,7 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
             record_native_execution_preparation,
         )
         from ..control_plane.turn_driver.codex_execution_preparation import (
+            LegacyNativePreparationCapture,
             codex_execution_preparation_context,
             execute_codex_execution_preparation,
         )
@@ -851,11 +871,14 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
                 directory = codex_context_directory(directory=args.codex_context_dir,
                     root=getattr(args, "codex_context_root", None), session=event.get("session_id"), create=True)
                 payload = codex_context_hook(directory, event)
+                preparation_context = ""
                 try:
                     request = native_execution_preparation_request(directory, event)
                     if request is not None:
                         workspace = Path(event.get("cwd") or "")
                         if workspace.is_absolute() and workspace.resolve() == Path.cwd().resolve():
+                            if "claim_source_sha256" not in request:
+                                raise LegacyNativePreparationCapture()
                             capture = (
                                 Path(tempfile.mkdtemp(prefix="prepared-", dir=directory)) / "ready"
                                 if request.get("turn_instance_id") else None
@@ -894,24 +917,21 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
 
                                     receipt["context"]["recovery_command"] = context_capture_read_command(
                                         source, digest, reader_argv=current_loopx_cli_argv())
-                            existing = payload.get("hookSpecificOutput")
-                            existing_context = (
-                                str(existing.get("additionalContext") or "")
-                                if isinstance(existing, dict)
-                                else ""
-                            )
-                            payload["hookSpecificOutput"] = {
-                                "hookEventName": event["hook_event_name"],
-                                "additionalContext": " ".join(filter(None, [
-                                    existing_context,
-                                    codex_execution_preparation_context(receipt),
-                                ])),
-                            }
+                            preparation_context = codex_execution_preparation_context(receipt)
+                except LegacyNativePreparationCapture as error:
+                    preparation_context = str(error)
                 except (OSError, RuntimeError, subprocess.SubprocessError, ValueError, TypeError, RecursionError):
                     # Preserve the original explicit action and any context
                     # recovery output when Host-side preparation cannot prove
                     # its postcondition.
                     pass
+                if preparation_context:
+                    existing = payload.get("hookSpecificOutput")
+                    existing_context = str(existing.get("additionalContext") or "") if isinstance(existing, dict) else ""
+                    payload["hookSpecificOutput"] = {
+                        "hookEventName": event["hook_event_name"],
+                        "additionalContext": " ".join(filter(None, [existing_context, preparation_context])),
+                    }
             else:
                 payload = {}
         except (OSError, RuntimeError, subprocess.SubprocessError, ValueError, TypeError, RecursionError):
