@@ -265,6 +265,16 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
         from .context_delivery import preflight_context_instruction
 
         assert guard_digest is not None
+        if guard.get("replan_read_path"):
+            from loopx.control_plane.quota.turn_envelope import _turn_envelope_result
+            from loopx.control_plane.turn_driver.decision_capture import write_decision_capture
+
+            # Replan's staged commands are derived from the original packet.
+            # Keep their source hash and path bound to that immutable capture.
+            view = _turn_envelope_result("replan_cli_view", payload=guard)
+            if view != guard:
+                source_path = capture_root / "checkpoint-start-view.json"
+                guard_digest = write_decision_capture(source_path, view)
         reading = preflight_context_instruction(env, source_path, guard_digest,
             receipt["turn_id"], guide_in_host=guide_in_host)
     else:
