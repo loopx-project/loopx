@@ -5,6 +5,8 @@ import {parseTodoTimestampMicros} from "../runtime_timestamp.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireJsonObject, type JsonObject} from "../runtime_decode.ts";
 import {isExploreEvidenceRef} from "../capabilities/explore_evidence_ref.ts";
+import {projectExploreMeasurementFeedback, type ExploreMeasurementFeedback,
+  type ExploreMeasurementPoint} from "../capabilities/explore_measurements.ts";
 
 export const WORK_YARDSTICK_DECISION_SCHEMA = "work_yardstick_decision_v0";
 export type WorkYardstickProfile = {metric: string; unit: string; higher_is_better: boolean;
@@ -77,12 +79,15 @@ export function normalizeWorkYardstickCapture(params: JsonObject): WorkYardstick
   }
   return {decision: normalizeWorkYardstickDecision(capture.decision, params.evidence_refs), binding: normalized as WorkYardstickCapture["binding"]};
 }
+function belongsToWork(row: JsonObject, binding: JsonObject): boolean {
+  const capture = row.work_yardstick as WorkYardstickCapture | undefined;
+  const source = capture?.binding;
+  return !!source && source.goal_id === binding.goal_id && source.agent_id === binding.agent_id
+    && source.todo_id === binding.todo_id;
+}
+
 function currentFinding(findings: JsonObject[], binding: JsonObject): JsonObject | undefined {
-  return findings.filter(row => {
-    const capture = row.work_yardstick as JsonObject | undefined;
-    const source = capture?.binding as JsonObject | undefined;
-    return source && ["goal_id", "agent_id", "todo_id"].every(key => source[key] === binding[key]);
-  }).sort((a, b) => {
+  return findings.filter(row => belongsToWork(row, binding)).sort((a, b) => {
     // Late delivery reuses the original committed time, not append order.
     const left = parseTodoTimestampMicros(String(a.last_updated_at ?? ""));
     const right = parseTodoTimestampMicros(String(b.last_updated_at ?? ""));
@@ -107,15 +112,52 @@ export function validateWorkYardstickContinuation(params: JsonObject): JsonObjec
   }
   return {decision};
 }
+
+function measuredPair(row: ExploreMeasurementFeedback | undefined) {
+  const previous = row?.previous_best, latest = row?.latest;
+  if (!previous || !latest || !Number.isFinite(previous.value)) return null;
+  const {value, candidate_ref, evidence_ref} = latest.measurement;
+  if (value === null || !Number.isFinite(value) || candidate_ref === previous.candidate_ref) return null;
+  const recent: ExploreMeasurementPoint = {finding_id: latest.finding_id, candidate_ref, evidence_ref, value};
+  const preferred = value === previous.value ? null : (value > previous.value) === row.higher_is_better
+    ? candidate_ref : previous.candidate_ref;
+  return {previous_best: previous, latest: recent, preferred_candidate_ref: preferred};
+}
+
+function matchesProfile(row: ExploreMeasurementFeedback, profile: WorkYardstickProfile): boolean {
+  return Object.entries(profile).every(([key, value]) => row[key as keyof WorkYardstickProfile] === value);
+}
+
+function measuredSearchComparison(feedback: ExploreMeasurementFeedback[], decision: WorkYardstickDecision) {
+  const pairFor = (profile: WorkYardstickProfile) => measuredPair(feedback.find(row => matchesProfile(row, profile)));
+  const goal = pairFor(decision.authoritative);
+  if (!goal) return null;
+  const screen = decision.proxy && pairFor(decision.proxy);
+  // Both comparisons have two distinct candidates. Order is append/declaration
+  // order, so join the unordered pair instead of assuming execution chronology.
+  const goalCandidates = [goal.previous_best.candidate_ref, goal.latest.candidate_ref];
+  const proxy = screen && goalCandidates.includes(screen.previous_best.candidate_ref)
+    && goalCandidates.includes(screen.latest.candidate_ref) ? screen : null;
+  const reversed = !!(goal.preferred_candidate_ref && proxy?.preferred_candidate_ref
+    && goal.preferred_candidate_ref !== proxy.preferred_candidate_ref);
+  const opening = goal.preferred_candidate_ref === null
+    ? "Observed goal results tie under this scope. Check remaining headroom before another evaluation. "
+    : (reversed ? "The proxy reverses the observed goal order. " : "") +
+      "Use the better-scoring candidate under this scope as a comparison base when available. ";
+  return {goal, ...(proxy ? {proxy, proxy_order_reversed: reversed} : {}),
+    guidance: opening + "Weigh continuing, a different mechanism or a compatible combination by expected end-to-end gain and full implementation and validation cost. Prefer a bounded check that can change the choice."};
+}
+
 export function projectWorkYardstickCue(params: JsonObject): JsonObject | null {
   if (params.enabled !== true || !params.todo_id) return null;
-  const source = currentFinding((params.findings ?? []) as JsonObject[], params);
+  const findings = (params.findings ?? []) as JsonObject[];
+  const source = currentFinding(findings, params);
   if (!source) return null;
   const capture = normalizeWorkYardstickCapture({capture: source.work_yardstick, evidence_refs: source.evidence_refs,
     goal_id: params.goal_id, agent_id: params.agent_id});
-  const decision = capture.decision as JsonObject;
-  const counter = decision.counterevidence_refs as string[];
-  const previous = ((params.findings ?? []) as JsonObject[]).find(row => row.finding_id === decision.prior_finding_id);
+  const decision = capture.decision;
+  const counter = decision.counterevidence_refs;
+  const previous = findings.find(row => row.finding_id === decision.prior_finding_id);
   const priorCapture = previous?.work_yardstick as JsonObject | undefined;
   const priorBinding = priorCapture?.binding as JsonObject | undefined;
   const priorDecision = priorCapture?.decision as JsonObject | undefined;
@@ -127,11 +169,21 @@ export function projectWorkYardstickCue(params: JsonObject): JsonObject | null {
       candidate_sha256: execution.candidate_sha256, evidence_refs: execution.evidence_refs,
       recorded_planned_method_matches: execution.planned_method_id === (priorDecision!.next_action as JsonObject).method_id}
     : null;
-  const profiles = [decision.authoritative, decision.proxy].filter(Boolean) as JsonObject[];
-  const feedback = ((params.measurement_feedback ?? []) as JsonObject[]).filter(row => row.node_id === source.node_id && profiles.some(p =>
-    Object.entries(p).every(([key, value]) => row[key] === value)));
+  const profiles = decision.proxy ? [decision.authoritative, decision.proxy] : [decision.authoritative];
+  const feedback = ((params.measurement_feedback ?? []) as ExploreMeasurementFeedback[]).filter(row =>
+    row.node_id === source.node_id && profiles.some(p => matchesProfile(row, p)));
+  // An earlier target can share the same evaluator profile and work identity.
+  // Filter source findings before ranking so its best cannot displace a legal pair.
+  const scopedFindings = findings.filter(row => {
+    const target = (row.work_yardstick as WorkYardstickCapture | undefined)?.decision?.target;
+    return row.node_id === source.node_id && belongsToWork(row, params) && target !== undefined
+      && target.summary === decision.target.summary && target.scope === decision.target.scope
+      && target.acceptance_ref === decision.target.acceptance_ref;
+  });
+  const searchComparison = measuredSearchComparison(projectExploreMeasurementFeedback(scopedFindings), decision);
   return {source_finding_id: source.finding_id, node_id: source.node_id, binding: capture.binding, ...decision,
     measurement_feedback: feedback,
+    ...(searchComparison ? {search_comparison: searchComparison} : {}),
     ...(followthrough ? {previous_decision_followthrough: followthrough} : {}),
     guidance: counter.length
       ? "Counterevidence is recorded for this scoped proxy. Reassess its use at the next concrete choice; a local screening heuristic cannot veto an informative authoritative check by itself. Preserve accepted correctness, authorization and budget constraints."
