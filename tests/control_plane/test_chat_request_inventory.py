@@ -512,8 +512,8 @@ def test_inventory_rereads_goal_lifetime_between_batches(api, monkeypatch, limit
             response={"context_handoff_receipt": delivered})
         server.chat_store.finalize_managed_turn_completion(session["session_id"], turn["turn_id"])
     original_scope = inventory.collaboration_goal_scope
-    original_decide = inventory.decide_collaboration_lifecycle
-    calls, modes = [], []
+    original_inspect = inventory.inspect_original_request_batch
+    calls, modes, batch_sizes = [], [], []
 
     @contextmanager
     def scope(*args, **kwargs):
@@ -525,20 +525,45 @@ def test_inventory_rereads_goal_lifetime_between_batches(api, monkeypatch, limit
             calls.append(current.current_goal_ref)
             yield current
 
-    def decide(*args, **kwargs):
-        result = original_decide(*args, **kwargs)
-        modes.append(result.get("mode"))
-        return result
+    def inspect(current, deliveries):
+        results = original_inspect(current, deliveries)
+        batch_sizes.append(len(deliveries))
+        modes.extend(result.get("mode") for result in results)
+        return results
 
     monkeypatch.setattr(inventory, "collaboration_goal_scope", scope)
-    monkeypatch.setattr(inventory, "decide_collaboration_lifecycle", decide)
+    monkeypatch.setattr(inventory, "inspect_original_request_batch", inspect)
     code, value = _inventory(api, route["session_id"], view="history", limit=limit)
     assert code == 200 and len(calls) == 2
     assert calls[0] == f["ref"] and calls[1] != f["ref"]
     # The existing typed owner permits proven historical inspection after a
     # replacement; it must observe the new lifetime rather than reuse the old.
+    assert batch_sizes == [12, 1]
     assert modes == ["current_instance"] * 12 + ["historical_read"]
     assert value["matched"] == 13 and value["coverage"] == {"scan_complete": True, "unreadable": 0, "diagnostics": []}
+
+def test_inventory_falls_back_only_when_inspection_exceeds_the_wire_limit(api, monkeypatch):
+    from loopx.control_plane.collaboration import goal_instance_scope
+    from loopx.control_plane.effect_runtime import EffectRuntimeRejected
+
+    _, _, route = _source(api)
+    original = goal_instance_scope.effect_runtime_result
+    operations = []
+    batch_method = "collaboration.goal_instance.inspect_original_requests"
+    single_method = "collaboration.goal_instance.decide"
+
+    def result(method, params):
+        operations.append(method)
+        if method == batch_method:
+            raise EffectRuntimeRejected("oversized inspection", diagnostic_code="request_too_large")
+        return original(method, params)
+
+    monkeypatch.setattr(goal_instance_scope, "effect_runtime_result", result)
+    code, value = _inventory(api, route["session_id"], view="history")
+    assert code == 200 and value["matched"] == 1
+    assert value["rows"][0]["request_id"] == route["request_id"]
+    assert operations == [batch_method, single_method]
+
 
 def test_conflicting_receipt_is_diagnosable_but_does_not_authorize_content_or_controls(api):
     control, _, route = _source(api)

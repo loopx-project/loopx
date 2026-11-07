@@ -126,7 +126,9 @@ def heartbeat_body(env: dict[str, str], turn_id: str, *, native_goal: bool,
     )
     from .research_probe import runtime_execution_guidance
 
-    return body + runtime_execution_guidance(env)
+    from .interruption_recovery import recovery_handoff
+    _, handoff = recovery_handoff(env)
+    return body + runtime_execution_guidance(env) + ("\nRecovery handoff (content only):\n" + handoff if handoff else "")
 
 
 @contextmanager
@@ -207,11 +209,18 @@ def native_child_process(command, *, env, stdout, stderr, session_wake, receipt,
         guard = ProviderRequestAdmission(env, session_wake, receipt, wake,
             timeout=timeout, original_quota=original_quota)
         scope = guard.serve(command)
+    observation = guard
+    if env.get("LOOPX_HOST_ATTEMPT_ID") and session_wake is not None:
+        from loopx.capabilities.benchmark_toolkit.native_codex_process import NativeCodexProcessObservation
+        from .interruption_recovery import ProcessObservers
+
+        native_observation = NativeCodexProcessObservation(lambda value: receipt.update(native_process=value))
+        observation = ProcessObservers(native_observation, guard)
     with scope as routed:
         with child_process(routed, env=env, stdout=stdout, stderr=stderr,
                 goal_admission=session_wake.admission if session_wake is not None else None,
                 check_current_launch=heartbeat_launch_check(env, session_wake, original_quota=original_quota),
-                **({"process_observation": guard} if guard is not None else {})) as process:
+                **({"process_observation": observation} if observation is not None else {})) as process:
             yield process
     if guard is not None and guard.refusal_code is not None:
         from loopx.control_plane.goals.first_party_host_admission import FirstPartyHostRuntimeRejected
@@ -496,6 +505,8 @@ def run_once(env: dict[str, str]) -> dict:
         task_entry=env.get("LOOPX_TASK_ENTRY"),
         turn_envelope=env.get("LOOPX_TURN_ENVELOPE", "0") == "1",
         context_delivery=env.get("LOOPX_CONTEXT_DELIVERY"),
+        native_child_limit=(int(env["LOOPX_NATIVE_CHILD_LIMIT"])
+                            if env.get("LOOPX_NATIVE_CHILD_LIMIT") else None),
     )
     request_admission = False
     if env.get("LOOPX_PROVIDER_REQUEST_ADMISSION", "off") != "off":
@@ -542,12 +553,19 @@ def run_once(env: dict[str, str]) -> dict:
         **({"turn_envelope": True, "turn_envelope_source": "explicit"}
            if execution.turn_envelope else {}),
         **({"context_delivery": "on"} if execution.context_delivery != "off" else {}),
+        **({"native_child_limit": execution.native_child_limit}
+           if execution.native_child_limit is not None else {}),
         **({"provider_request_admission": "on"} if request_admission else {}),
         "stage": stage,
         "home_scope": "trial",
         "ok": False,
         "timed_out": False,
     }
+    if env.get("LOOPX_HOST_ATTEMPT_ID"):
+        # The scheduler supplies the transport identity, never model prose.
+        receipt.update(host_attempt_id=env["LOOPX_HOST_ATTEMPT_ID"],
+            goal_id=env.get("LOOPX_GOAL_ID"), agent_id=env.get("LOOPX_AGENT_ID"),
+            phase_deadline_epoch=env.get("LOOPX_PHASE_DEADLINE_EPOCH"))
     session_wake = None
     phase_work_deadline = None
     checkpoint_context = ExitStack()
@@ -555,6 +573,10 @@ def run_once(env: dict[str, str]) -> dict:
         Path(env.get("LOOPX_RUNTIME_ROOT", str(home))) / "benchmark-pending-turn.json"
     )
     try:
+        from .interruption_recovery import recovery_handoff
+        handoff, _ = recovery_handoff(env)
+        if handoff is not None:
+            receipt["recovery_handoff_sha256"] = handoff["sha256"]
         if stage == "execute" and env.get("LOOPX_PHASE_DEADLINE_EPOCH"):
             remaining = float(env["LOOPX_PHASE_DEADLINE_EPOCH"]) - time.time()
             # Heartbeat work uses the whole remaining phase. Cleanup is bounded

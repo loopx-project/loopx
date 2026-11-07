@@ -94,6 +94,8 @@ def _resolve_benchmark_project(
             project_override=requested,
         )
         return project
+    if args.benchmark_command == "terminal-reconcile":
+        raise ValueError("managed terminal reconciliation requires a registered Goal")
     return requested
 
 

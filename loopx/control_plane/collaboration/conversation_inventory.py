@@ -12,7 +12,7 @@ import hashlib
 import json
 
 from ..content_digest import BARE_SHA256_PATTERN
-from .goal_instance_scope import CollaborationLifecycleRejected, collaboration_goal_scope, decide_collaboration_lifecycle
+from .goal_instance_scope import collaboration_goal_scope, inspect_original_request_batch
 from .inbox import _entry, _now, _read, _receipt, _request_lock, _root, read_inbox_transaction, reply_status
 from .links import read_linked_work
 from .source_chat_observation import is_source_chat_host, original_delivery_facts, original_turn_reader
@@ -175,7 +175,7 @@ def read_conversation_requests(root, registry, store, session, *, goal_ids, core
                                          caller_goal_ref=requests[0][1].get("goal_ref")) as scope,
                 _locked_request_batch(root, scope, requests) as available,
             ):
-                prepared = []
+                candidates = []
                 for path, route, request_id in requests:
                     if path not in available:
                         failed += 1
@@ -196,23 +196,24 @@ def read_conversation_requests(root, registry, store, session, *, goal_ids, core
                             continue
                         grant = source_context_target_authority(root, source_session, turn,
                             {"goal_id": gid, "agent_id": route["agent_id"]})
-                        try:
-                            decide_collaboration_lifecycle(scope, operation="original_request_inspect", record=row, route=route,
-                                initial_delivery=original_delivery_facts(row, route, turn, source_id=grant["source_id"]))
-                        except CollaborationLifecycleRejected as exc:
-                            # Only this typed refusal proves the route and source
-                            # matched before the conflicting receipt was observed.
-                            # Withhold the brief, work and completion state as before.
-                            if exc.decision.get("delivery_proof_reason") == "handoff_receipt_conflict" and len(diagnostics) < 12:
-                                diagnostics.append({"request_id": row["request_id"], "goal_id": gid, "agent_id": row["agent_id"],
-                                    "code": exc.decision["code"], "reason": exc.decision["delivery_proof_reason"]})
-                            raise
-                        # Do not retain full model responses while waiting for
-                        # linked-work IO; only the displayed question is used.
+                        delivery = original_delivery_facts(row, route, turn, source_id=grant["source_id"])
+                        # Keep the displayed question and original handoff proof.
                         source_turn = {"turn_id": turn["turn_id"], "message": turn.get("message", "")}
-                        prepared.append((row, source_session["session_id"], source_turn))
+                        candidates.append((row, source_session["session_id"], source_turn, delivery))
                     except (OSError, ValueError, KeyError, TypeError):
                         failed += 1
+                decisions = inspect_original_request_batch(scope, [item[3] for item in candidates])
+                prepared = []
+                for (row, source_session_id, source_turn, _), decision in zip(candidates, decisions, strict=True):
+                    if decision["kind"] == "reject":
+                        failed += 1
+                        # The typed owner only reports a conflict after matching
+                        # the original route and source.
+                        if decision.get("delivery_proof_reason") == "handoff_receipt_conflict" and len(diagnostics) < 12:
+                            diagnostics.append({"request_id": row["request_id"], "goal_id": gid, "agent_id": row["agent_id"],
+                                "code": decision["code"], "reason": decision["delivery_proof_reason"]})
+                        continue
+                    prepared.append((row, source_session_id, source_turn))
                 observations = _read_receipt_batch(root, [row for row, _, _ in prepared])
                 for (row, source_session_id, source_turn), observed in zip(prepared, observations, strict=True):
                     if observed is None:

@@ -166,7 +166,7 @@ export function ChannelHeader({
   const sourceNamedByTitle = selectedGoal?.title === readOnlySourceLabel;
   const runtimeControl = scopeUnavailable || agentWorkActive ? null : readOnlySourceLabel ? (
     <div className="personal-read-only-source">
-      <ContextHelp icon={Eye} label={sourceNamedByTitle ? t("header.readOnlySourceHelp") : `${readOnlySourceLabel} · ${t("common.readOnly")}`}><p>{t("header.readOnlySourceDescription", { source: readOnlySourceLabel })}</p></ContextHelp>
+      <ContextHelp icon={Eye} label={sourceNamedByTitle ? t("header.readOnlySourceHelp") : `${readOnlySourceLabel} · ${t("common.readOnly")}`}><p>{t("header.readOnlySourceDescription", { source: readOnlySourceLabel })}</p>{selectedGoal?.sourceAccess?.original_goal_id ? <p>{locale === "zh-CN" ? "原始 Goal：" : "Original Goal: "}<code>{selectedGoal.sourceAccess.original_goal_id}</code></p> : null}</ContextHelp>
       {sourceNamedByTitle ? null : <span className="personal-read-only-source-label">{readOnlySourceLabel}</span>}
       <small>{t("common.readOnly")}</small>
     </div>

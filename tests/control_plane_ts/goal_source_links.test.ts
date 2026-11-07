@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {projectGoalSourceLinks} from '../../loopx/control_plane/presentation/goal_source_links.ts';
+import {projectGoalSourceLinks, projectGoalSourceStatus} from '../../loopx/control_plane/presentation/goal_source_links.ts';
 
 const link = () => ({goal_id: 'original-solver', parent_goal_id: 'research-parent',
   label: 'Original experiment', namespace: 'a'.repeat(64)});
@@ -43,4 +43,35 @@ test('a native local Goal takes precedence over a retained source reference', ()
 
 test('the empty catalog preserves the local-only directory', () => {
   assert.deepEqual(projectGoalSourceLinks({local_goal_ids: ['research-parent'], links: []}), {goals: []});
+});
+
+test('distinct workspace views keep repeated original ids physically scoped', () => {
+  const links = [{...link(), workspace_goal_id: 'run-a'},
+    {...link(), workspace_goal_id: 'run-b', namespace: 'b'.repeat(64)}];
+  const result = projectGoalSourceLinks({local_goal_ids: ['research-parent'], links});
+  assert.deepEqual((result.goals as {id: string; source_access: {original_goal_id: string}}[])
+    .map(goal => [goal.id, goal.source_access.original_goal_id]),
+  [['run-a', 'original-solver'], ['run-b', 'original-solver']]);
+  for (const invalid of [
+    {...links[1], workspace_goal_id: 'run-a'},
+    {...links[1], namespace: links[0].namespace},
+    {...links[1], workspace_goal_id: 'research-parent'},
+    {...links[1], workspace_goal_id: '../other'},
+  ]) assert.throws(() => projectGoalSourceLinks({local_goal_ids: ['research-parent'], links: [links[0], invalid]}));
+});
+
+test('workspace routing preserves native record content and source bytes', () => {
+  const status = {goal_filter: 'original-solver', run_history: {goals: [{id: 'original-solver',
+    parent_goal_id: null, title: 'original-solver'}]}, todo_index: {items: [{goal_id: 'original-solver',
+    todo_id: 'native-task', text: 'Read original-solver evidence'}]},
+    agent_management_projection: {agents: [{goal_ids: ['original-solver'], current_todo: {goal_id: 'original-solver'}}]}};
+  const before = structuredClone(status);
+  const row = (projectGoalSourceLinks({local_goal_ids: ['research-parent'],
+    links: [{...link(), workspace_goal_id: 'case-a'}]}).goals as object[])[0];
+  const result = projectGoalSourceStatus({status, row} as never);
+  assert.equal((result.todo_index as typeof status.todo_index).items[0].goal_id, 'case-a');
+  assert.equal((result.todo_index as typeof status.todo_index).items[0].todo_id, 'native-task');
+  assert.equal((result.todo_index as typeof status.todo_index).items[0].text, 'Read original-solver evidence');
+  assert.deepEqual(status, before);
+  assert.throws(() => projectGoalSourceStatus({status: {...status, run_history: {goals: [{id: 'another'}]}}, row} as never));
 });

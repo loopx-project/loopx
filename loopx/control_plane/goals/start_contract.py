@@ -16,6 +16,25 @@ _FIRST_DELIVERY_GUIDANCE = (
     "substitute them for the requested deliverable."
 )
 
+_GOAL_REQUIREMENTS_GUIDANCE = (
+    "In this first planning step, read the original Goal/task and existing outcome "
+    "requirements, including owner-approved Goal creation completion criteria. As the Agent, "
+    "reuse the existing outcome when it covers the request; declare source-grounded overall requirements through "
+    "goal-acceptance refine only for missing requirements before task Todos, then link the actual authored/reused "
+    "Todo ids and read the canonical declaration back. Preserve explicit user criteria, "
+    "constraints, permissions and Stop; an open-ended objective stays open-ended, and "
+    "a maximum timeout is not a requirement to spend it. Do not invent metrics, minimum "
+    "duration, authority or paid work. Reuse the same outcome and original Goal/Agent "
+    "on continuation; retain cumulative requirements and reconcile conflicts through "
+    "the existing owner. Unchanged declarations need no rewrite. Configure independent "
+    "executable checks only when separately appropriate; they are optional and do not "
+    "enable ordinary requirement retention. Local Todo completion does not close an "
+    "unmet overall requirement: use the existing frontier/replan or accurate wait/Stop. "
+    "The caller supplies raw facts; you author requirements. Retry the original operation "
+    "after response loss; reread and reconcile conflicts. Use this same planning invocation, "
+    "not an additional model call or a setup Todo."
+)
+
 
 def goal_planner_contract(*, fine_grained: bool = False) -> dict[str, Any]:
     planner = {
@@ -56,6 +75,7 @@ def goal_planner_contract(*, fine_grained: bool = False) -> dict[str, Any]:
             "to strengthen delivery; replan uncertain later work."
         ),
         "first_delivery_guidance": _FIRST_DELIVERY_GUIDANCE,
+        "goal_requirements_guidance": _GOAL_REQUIREMENTS_GUIDANCE,
     }
     if fine_grained:
         planner["fine_grained_plan_horizon"] = (
@@ -226,7 +246,7 @@ Goal id: {goal_id}.{agent_clause}
 Rules:
 1. Identity: use verified binding/active contract; a stable unbound host gets a fresh public-safe agent. Existing lanes require explicit takeover plus bind/readback before Todo; never infer peers from Todo/worktree/arguments. Unknown host: `loopx agent-onboard --list-agent-types`.
 2. Capability: only `selected_capability_route`; run entry/admission and its later `capability show`; never infer from text/URLs. Capability state owns facts; generic Todos schedule.
-3. Todos: {todo_rule}. {_FIRST_DELIVERY_GUIDANCE}
+3. Goal requirements and Todos: {_GOAL_REQUIREMENTS_GUIDANCE} {todo_rule}. {_FIRST_DELIVERY_GUIDANCE}
 4. Writeback: current Todo evidence + next executable Todo, then `loopx refresh-state --goal-id {goal_id}` and quota readback. Chat/model summaries are not durable state.
 5. Host loop: after Todo write, activate missing/unknown/stale/type-changed Codex App heartbeat automation, CLI/TraeX `/goal`, Claude `/loop`, OpenCode bridge, Ark one-shot, or custom gate. Else surface the exact pasteable gate; never claim autonomy.
 6. Run the returned typed `quota_guard`; finish one bounded segment with validation + LoopX writeback or an exact blocker. Setup/planning/claim is not delivery.

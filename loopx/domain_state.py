@@ -45,6 +45,23 @@ def default_domain_state_file_path(
     )
 
 
+def _replace_domain_state_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
+    """Replace a ledger while its existing domain-state lock is held."""
+    with tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", dir=path.parent,
+        prefix=f"{path.name}.", suffix=".tmp", delete=False,
+    ) as tmp_file:
+        tmp_name = tmp_file.name
+        tmp_file.write("".join(
+            json.dumps(row, sort_keys=True, ensure_ascii=False) + "\n"
+            for row in rows
+        ))
+    try:
+        os.replace(tmp_name, path)
+    finally:
+        Path(tmp_name).unlink(missing_ok=True)
+
+
 def upsert_domain_state_jsonl(
     ledger_path: str | Path,
     payload: dict[str, Any],
@@ -102,22 +119,7 @@ def upsert_domain_state_jsonl(
             rows.append(candidate)
 
         if not unchanged:
-            with tempfile.NamedTemporaryFile(
-                "w",
-                encoding="utf-8",
-                dir=path.parent,
-                prefix=f"{path.name}.",
-                suffix=".tmp",
-                delete=False,
-            ) as tmp_file:
-                tmp_name = tmp_file.name
-                tmp_file.write(
-                    "".join(
-                        json.dumps(row, sort_keys=True, ensure_ascii=False) + "\n"
-                        for row in rows
-                    )
-                )
-            os.replace(tmp_name, path)
+            _replace_domain_state_jsonl(path, rows)
     return {
         "status": "unchanged" if unchanged else "updated" if updated else "inserted",
         "write_performed": not unchanged,

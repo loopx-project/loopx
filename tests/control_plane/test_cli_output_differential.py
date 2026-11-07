@@ -382,7 +382,8 @@ def test_authoring_observations_require_complete_structured_or_rendered_guidance
         f"5. `read_back_authored_todos` (operator_or_agent_actions): {purpose}\n"
         f"   - command/source: `{step['command_template']}`"
     )
-    for text in (json.dumps({"steps": [step]}), rendered):
+    compact_rendered = rendered.replace("   - command/source: ", "   - ")
+    for text in (json.dumps({"steps": [step]}), rendered, compact_rendered):
         assert authoring_input_observations(text)["complete_todo_readback"]
         assert not authoring_input_observations(text.replace("Excerpts cannot verify writes. ", ""))[
             "complete_todo_readback"

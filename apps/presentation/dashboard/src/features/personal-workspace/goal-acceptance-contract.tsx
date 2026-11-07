@@ -118,10 +118,10 @@ export function GoalAcceptanceContractSection({goalId, contract: retained, copy,
           <button type="button" disabled={busy || !writeCurrent || !checksConfigured} onClick={() => void operate("clear-checks")}>{zh ? "移除检查配置" : "Remove check configuration"}</button>
         </div>
         <dl className="delivery-acceptance-source"><div><dt>{copy.source}</dt><dd><code>{goalId}</code></dd></div>
-          {checksConfigured ? <><div><dt>{copy.scope}</dt><dd>{contract.scope?.kind === "selected_work" ? copy.selectedWork : copy.allWork}</dd></div>
+          {checksConfigured ? <><div><dt>{copy.scope}</dt><dd>{contract.scope?.kind === "goal" ? copy.goalOnly : contract.scope?.kind === "selected_work" ? copy.selectedWork : copy.allWork}</dd></div>
             <div><dt>{copy.revision}</dt><dd>{contract.revision}</dd></div><div><dt>{copy.digest}</dt><dd><code>{contract.digest}</code></dd></div></> : null}
         </dl>
-        {checksConfigured ? <><p>{contract.non_goals.join(" · ")}</p><h4>{copy.tasks}</h4>
+        {checksConfigured ? <><p>{contract.non_goals.join(" · ")}</p>{contract.tasks.length ? <h4>{copy.tasks}</h4> : null}
           <ul>{contract.tasks.map(task => <li key={task.todo_id}><code>{task.todo_id}</code> · {copy.taskState[task.state]}
             <p>{copy.criteria}: {task.criterion_ids.join(", ") || copy.unknown}</p>
             {task.applicable === false ? <p>{copy.notApplicable}</p> : null}
@@ -171,7 +171,7 @@ export function GoalAcceptanceContractSection({goalId, contract: retained, copy,
           onClick={() => void operate(plan ? "adopt" : "verify")}>{busy ? (zh ? "正在检查…" : "Checking…") : plan ? (zh ? "采用并检查" : "Use plan and check") : (zh ? "检查交付" : "Check delivery")}</button> : null}
       </header> : null}
       {plan ? <div className="delivery-check-plan">
-        <p>{plan.document.scope.kind === "all_advancement" ? copy.allWork
+        <p>{plan.document.scope.kind === "goal" ? copy.goalOnly : plan.document.scope.kind === "all_advancement" ? copy.allWork
           : (zh ? `仅覆盖方案选定的 ${plan.document.scope.todo_ids.length} 项任务` : `Covers only ${plan.document.scope.todo_ids.length} selected tasks`)}</p>
         <ul>{plan.document.criteria.map(item => <li key={item.id}>{item.description}</li>)}</ul>
         {plan.document.criteria.some(item => item.oracle?.output_refs.length) ? <p>{zh ? "交付物" : "Delivery"}: {Array.from(new Set(plan.document.criteria.flatMap(item => item.oracle?.output_refs ?? []))).join(" · ")}</p> : null}

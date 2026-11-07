@@ -4,6 +4,10 @@ import argparse
 from collections.abc import Callable
 from pathlib import Path
 
+from ..cli_runtime import (
+    _handle_registry_inspection_command,
+    _register_registry_inspection_commands,
+)
 from ..chat_server import (
     DEFAULT_CHAT_HOST,
     DEFAULT_CHAT_PORT,
@@ -106,30 +110,7 @@ def register_support_control_commands(
     register_update_command(subparsers, add_subcommand_format)
     register_dsh_launch_command(subparsers, add_subcommand_format)
 
-    subparsers.add_parser(
-        "registry", help="Inspect registry goals and adapter declarations."
-    )
-    registry_boundary_parser = subparsers.add_parser(
-        "registry-boundary",
-        help="Classify a registry file as local-only, global-local, public projection, or public fixture.",
-    )
-    registry_boundary_parser.add_argument(
-        "--path",
-        help="Registry path to classify. Defaults to the active --registry path.",
-    )
-    registry_boundary_parser.add_argument(
-        "--require-not-tracked",
-        action="store_true",
-        help=(
-            "For registries that cannot be pushed, return non-zero if tracked "
-            "or if Git cannot verify the tracking state."
-        ),
-    )
-    registry_boundary_parser.add_argument(
-        "--require-gitignored",
-        action="store_true",
-        help="Return non-zero if the registry should be ignored but is neither ignored nor tracked.",
-    )
+    _register_registry_inspection_commands(subparsers)
 
     serve_status_parser = subparsers.add_parser(
         "serve-status", help="Serve live status JSON for the local dashboard."
@@ -253,24 +234,16 @@ def handle_support_control_command(
         )
 
     if args.command == "heartbeat-prequota":
-        prequota_registry = (
-            registry_path
-            if registry_was_supplied
-            else explicit_global_registry(args.runtime_root)
+        from .support_control_heartbeat import handle_heartbeat_prequota_command
+
+        return handle_heartbeat_prequota_command(
+            args, registry_path=registry_path,
+            registry_was_supplied=registry_was_supplied,
+            print_payload=print_payload, output_format=output_format,
+            runner=run_heartbeat_pre_quota,
+            markdown_renderer=render_heartbeat_pre_quota_markdown,
+            global_registry_resolver=explicit_global_registry,
         )
-        payload = run_heartbeat_pre_quota(
-            registry_path=prequota_registry,
-            runtime_root_arg=args.runtime_root,
-            goal_id=args.goal_id,
-            agent_id=args.agent_id,
-            fetch_timeout_seconds=args.fetch_timeout_seconds,
-        )
-        print_payload(
-            payload,
-            output_format(args),
-            render_heartbeat_pre_quota_markdown,
-        )
-        return 0
 
     supervisor_result = handle_supervisor_control_command(
         args,
@@ -300,39 +273,13 @@ def handle_support_control_command(
             output_format=output_format,
         )
 
-    if args.command == "registry":
-        payload = inspect_registry(registry_path)
-        print_payload(payload, args.format, render_registry_markdown)
-        return 0 if payload.get("ok") else 1
-
-    if args.command == "registry-boundary":
-        boundary_path = Path(args.path).expanduser() if args.path else registry_path
-        payload = inspect_registry_boundary(boundary_path)
-        git = payload.get("git") if isinstance(payload.get("git"), dict) else {}
-        if (
-            args.require_not_tracked
-            and payload.get("ok")
-            and not payload.get("github_push_allowed")
-            and git.get("probe_status") == "git_unavailable"
-            and (git.get("inside_worktree") or git.get("worktree_discovery_unknown"))
-        ):
-            payload["ok"] = False
-            payload["error"] = "Could not determine whether the registry is tracked by Git."
-        if (
-            args.require_gitignored
-            and payload.get("ok")
-            and payload.get("should_be_gitignored")
-        ):
-            if (
-                git.get("inside_worktree")
-                and not git.get("ignored")
-                and not git.get("tracked")
-            ):
-                payload = dict(payload)
-                payload["ok"] = False
-                payload.setdefault("risks", []).append("registry_should_be_gitignored")
-        print_payload(payload, args.format, render_registry_boundary_markdown)
-        return 0 if payload.get("ok") else 1
+    if args.command in {"registry", "registry-boundary"}:
+        return _handle_registry_inspection_command(
+            args, registry_path=registry_path, print_payload=print_payload,
+            inspect_registry=inspect_registry, render_registry_markdown=render_registry_markdown,
+            inspect_registry_boundary=inspect_registry_boundary,
+            render_registry_boundary_markdown=render_registry_boundary_markdown,
+        )
 
     if args.command == "serve-status":
         try:

@@ -12,6 +12,10 @@ This records producer evidence, not verified execution or utility. Findings,
 replan context and the existing research-history detail retain it; omission
 preserves old events. See the [local probe producer](../../../benchmark/runtime/EXECUTION_OBSERVATIONS.md).
 
+When the observed execution used the finding's tested input revision, result
+attachments can bind it once and select the evidence to reuse. Readback and
+standalone observations keep the complete observation form. [Execution evidence authoring](../../../docs/reference/protocols/explore-result-from-path-delta-v0.md#execution-evidence-on-the-same-input)
+
 ## Quantitative findings
 
 An ordinary result attachment can include `measurements`, saved on its existing
@@ -28,8 +32,8 @@ Manual capture uses `explore finding --node <id> --evidence-ref result:a
 
 Each result reference must belong to the finding's `evidence_refs`; ordinary
 attachments also require the same `input_revision`. Use a new finding id per
-evaluated candidate, and reuse an id only to correct that finding. Missing values
-are explicit `null`; zero and negative values remain valid measurements.
+evaluation or paired comparison, and reuse an id only to correct that finding.
+Missing values are explicit `null`; zero and negative values remain valid measurements.
 
 When an `execution_observation` declares a `result_ref`, each measurement must
 cite that same result. This applies to manual findings and writeback attachments,
@@ -66,7 +70,7 @@ separate. This convenience grants no evaluation, correction or execution authori
 
 Keep comparison conditions separate from the candidate and its result:
 
-| Field | Meaning across successive findings |
+| Field | Meaning across observations |
 | --- | --- |
 | `input_revision` | Evaluated task/data revision; retain it when the evaluated inputs are verified unchanged. |
 | `evaluation_ref` | Evaluator/scoring protocol version; retain it when the evaluation protocol is verified unchanged. |
@@ -86,6 +90,15 @@ Changed or unknown evaluation conditions must stay separate. Do not invent a
 shared revision merely to obtain a comparison. A growing local corpus does not
 change the input revision for an unchanged evaluated subset; changed samples do.
 
+A paired comparison may instead record both candidates in **one finding** under
+the same verified comparison conditions. Keep both `candidate_ref` and
+`evidence_ref` values, and list both results in the finding's `evidence_refs`.
+Distinct candidates do not require invented metrics or scopes. A repeated
+candidate under the same metric, unit, direction and conditions is still a
+duplicate, even with another result reference; record a repeat evaluation in a
+new finding. Every measurement still requires a candidate reference. A paired
+finding cannot claim two separate receipts as one execution observation's result.
+
 Comparisons require the same node, metric, unit, direction, comparison scope,
 input revision and evaluator. Producers must change the scope when task,
 model/resource budget or evaluation conditions change, and separate native
@@ -93,8 +106,11 @@ evaluation from local proxies. Explore validates the declared comparison keys,
 not their truth. It computes the latest recorded measurement, historical best
 candidate/source and direction-adjusted improvement against the prior best,
 before applying the context's display limit. Latest follows source-log append
-order, including tied or backfilled timestamps; its ordinal is derived, not
-another persisted fact. Corrected findings replace earlier
+order, including tied or backfilled timestamps. Within a finding, observations
+follow their declared array order: latest is the last matching observation and
+prior best includes earlier observations in that batch. This order does not
+assert execution chronology or identify the retained candidate. The source ordinal
+is derived, not another persisted fact. Corrected findings replace earlier
 versions in comparisons; original versions remain in history. Counts are records,
 not independent trials. Feedback pages reuse `--result-limit` (1..20, default 3),
 `--result-offset`, `--result-revision` and the optional `--result-node` filter.
@@ -106,6 +122,23 @@ regressions or revisit better candidates before repeating work. Best does not
 identify the current retained candidate, establish causality, satisfy acceptance
 or authorize execution. Actual adoption and outcome benefit require subsequent
 work and evidence; automatic branch rankings remain unchanged.
+
+When an enabled work Yardstick has two different measured candidates on its
+declared goal profile, from findings on the same node and Goal/Agent/Todo
+binding, Explore context names the observed better-scoring candidate as an
+available comparison base and links the scoped evidence. A
+tied goal outcome calls for checking headroom. The detail read shows a proxy
+ordering only when its exact profile compares the same two candidates, with
+separate result references and metric directions for each profile. Weigh
+continuation, a distinct mechanism or a compatible combination by expected
+end-to-end gain and full implementation and validation cost. Use a bounded
+check that can change the choice while honoring the accepted constraints and
+budget. The compact cue keeps the recorded next-action reason and adds a
+separate comparison cue. The detail read retains the complete work decision.
+The comparison uses findings from the current work, target, and acceptance
+reference. A different target or acceptance reference needs its own eligible
+pair, even when the measured metric, evaluator and inputs stay the same.
+The comparison is advisory and carries no retention or execution obligation.
 
 Manually captured measured findings also appear in the existing result pages
 and, when linked to eligible work, its exact-source comparison cards. They need

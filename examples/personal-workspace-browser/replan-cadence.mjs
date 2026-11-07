@@ -85,6 +85,8 @@ export const replanCadenceScenario = {
       await waitForInputValue(count, "6");
       if (await strategy.inputValue() !== "evidence_conditioned_v1") throw new Error("Stride must default to evidence_conditioned_v1");
       if (await unit.inputValue() !== "effective_turns") throw new Error("Product default is not settled work Turns");
+      const yardstick = page.getByLabel(/^复核衡量标准/);
+      assert.equal(await yardstick.isChecked(), false, "Yardstick remains a separate explicit opt-in");
       const horizonGoal = page.getByLabel(/^在规划视野中显示 Goal/);
       const advanced = page.getByText("高级设置", {exact: true});
       assert.equal(await horizonGoal.isVisible(), false, "ordinary configuration does not require a Goal-context opt-in");
@@ -271,6 +273,8 @@ export const replanCadenceScenario = {
       await page.keyboard.press("Tab");
       if (!(await strategy.evaluate((element) => element === document.activeElement))) throw new Error("Strategy is not keyboard reachable");
       await page.keyboard.press("Tab");
+      assert.equal(await yardstick.evaluate((element) => element === document.activeElement), true, "Measurement review is keyboard reachable");
+      await page.keyboard.press("Tab");
       assert.equal(await advanced.evaluate((element) => element === document.activeElement), true, "Advanced settings is keyboard reachable");
       await page.keyboard.press("Enter");
       await page.keyboard.press("Tab");
@@ -346,7 +350,54 @@ export const replanCadenceScenario = {
       await page.waitForFunction(element => !element.disabled, await englishCount.elementHandle());
       assert.equal(goalApplyCount, committedApplies + 1);
       assert.equal((await readGoalCadence()).current.count, 4, "A fresh preview can be applied after readback recovery");
-      return { coverageEntries: context.coverageEntries, note: "Packaged default six effective Turns, machine v0→v2 migration, strategy-only JSON/form inheritance across later machine changes, equal-value explicit pin and interval-only clear, default-off/versioned strategy, invalid preview, Goal override/clear, device removal, mobile keyboard and English labels through real handlers. Delayed post-apply readback keeps editing closed across capability changes; failed readback retains the disabled draft and invalidates its preview, recovers through GET only, then admits a new explicitly previewed change." };
+      // A pinned interval does not suppress the independent live Yardstick
+      // preference. Editing that interval does not silently pin the switch.
+      const measurementPreference = {namespace: "todo_replan_cadence", namespace_configuration: {
+        schema_version: "todo_replan_cadence_machine_defaults_v2", count_unit: "effective_turns", count: 6,
+        stride_strategy: "evidence_conditioned_v1", yardstick_enabled: true,
+      }};
+      const measurementPreview = await request(base + "/preview", measurementPreference);
+      await request(base + "/apply", {...measurementPreference, expected_plan_revision: measurementPreview.plan_revision});
+      await reopenGoalCadence();
+      const englishYardstick = page.getByLabel(/^Review measurement criteria/);
+      await waitForInputValue(englishCount, "4");
+      assert.equal(await englishYardstick.isChecked(), true);
+      assert.equal((await readGoalCadence()).current.yardstick_enabled, undefined);
+      await englishCount.fill("3");
+      await page.getByRole("button", {name: "Preview changes", exact: true}).click();
+      await applyGoalPreview("Apply preview");
+      await reopenGoalCadence();
+      assert.equal((await readGoalCadence()).current.yardstick_enabled, undefined,
+        "saving a different option must preserve live measurement inheritance");
+      assert.equal(await englishYardstick.isChecked(), true);
+      await englishYardstick.uncheck();
+      await page.getByRole("button", {name: "Preview changes", exact: true}).click();
+      await applyGoalPreview("Apply preview");
+      await reopenGoalCadence();
+      assert.equal(await englishYardstick.isChecked(), false);
+      assert.equal((await readGoalCadence()).current.yardstick_enabled, false);
+      assert.equal((await request(base)).machine_configuration.namespaces.todo_replan_cadence.yardstick_enabled, true);
+      await page.screenshot({path: resolve(outputDir, "yardstick-goal-explicit-off-desktop.png"), animations: "disabled"});
+      await page.setViewportSize({width: 390, height: 844});
+      await englishYardstick.scrollIntoViewIfNeeded();
+      await page.screenshot({path: resolve(outputDir, "yardstick-goal-explicit-off-mobile.png"), animations: "disabled"});
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
+      await page.setViewportSize({width: 1512, height: 982});
+      await englishYardstick.check();
+      await page.getByRole("button", {name: "Preview changes", exact: true}).click();
+      await applyGoalPreview("Apply preview");
+      await reopenGoalCadence();
+      assert.equal((await readGoalCadence()).current.yardstick_enabled, true);
+      await page.getByRole("button", {name: "Edit JSON", exact: true}).click();
+      await page.locator("#goal-configuration-json").fill(JSON.stringify({count_unit: "effective_turns", count: 3, stride_strategy: "off"}));
+      await page.getByRole("button", {name: "Back to form", exact: true}).click();
+      await page.getByRole("button", {name: "Preview changes", exact: true}).click();
+      await applyGoalPreview("Apply preview");
+      await reopenGoalCadence();
+      assert.equal((await readGoalCadence()).current.yardstick_enabled, undefined);
+      assert.equal(await englishYardstick.isChecked(), true, "clearing only the switch restores independent device inheritance");
+      await page.screenshot({path: resolve(outputDir, "yardstick-goal-inherited-desktop.png"), animations: "disabled"});
+      return { coverageEntries: context.coverageEntries, note: "Packaged default six effective Turns, machine v0→v2 migration, strategy-only JSON/form inheritance across later machine changes, equal-value explicit pin and interval-only clear, default-off/versioned strategy, invalid preview, Goal override/clear, device removal, mobile keyboard and English labels through real handlers. Independent default-off Yardstick inheritance, explicit false/true and sparse JSON/form clear reuse the same revision-checked handler. Delayed post-apply readback keeps editing closed across capability changes; failed readback retains the disabled draft and invalidates its preview, recovers through GET only, then admits a new explicitly previewed change." };
     } catch (error) {
       if (context) {
         await context.page.screenshot({ path: resolve(outputDir, "replan-cadence-failure.png"), animations: "disabled" });

@@ -256,14 +256,20 @@ For a saved benchmark preflight, the ordinary wake prompt carries the command fo
 the first page: native JSON `quota context-project --initial-read` publishes the
 saved decision and reads it in one call. Replace `--initial-read` with repeated
 `--select` for known fields. The output is a normal bounded reader page with its
-navigation attached. Follow `next_command` for remaining bytes or use
-`navigation.recovery.command` for other fields. If no output arrived, read the
-original digest-bound capture identified in the wake prompt. Neither retry
-requires another projection, guard, notification or model acknowledgement.
+navigation attached. Forward the whole response within the tool's output
+budget and read its top-level `content`. When `eof` is false, follow the
+top-level `next_command` for remaining bytes. Use
+`navigation.first_read_command`, when present, to recover missing initial
+context, and `navigation.recovery.command` for other fields. A smaller
+`--max-page-output-bytes` bounds the combined response for tighter tool limits.
+If the response is lost, use the original digest-bound capture in the wake
+prompt. Read recovery reuses the saved decision and its original receipt.
 
 中文：对于已保存的 benchmark 准入结果，唤醒正文直接给出首读命令。一次调用即可
-取得首屏；已知字段可改用多个 `--select`。续页和补读都沿原文件读取。如果没拿到
-任何输出，就用唤醒正文中的原文件及其摘要恢复，无须重做投影或准入。
+取得首屏，已知字段可改用多个 `--select`。在工具输出预算内转发完整结果并阅读顶层
+`content`，`eof` 为 false 时按顶层 `next_command` 续读。`navigation.first_read_command`
+用于补读缺失的首读上下文，其他字段沿 `navigation.recovery.command` 读取。工具预算较小时可
+降低 `--max-page-output-bytes`。结果丢失时，用唤醒正文中的原文件及其摘要恢复，复用原决策和回执。
 
 When the existing acceptance owner supplies complete `outcome_context`
 navigation matching this capture's Goal, Agent, selected Todo, outcome revision

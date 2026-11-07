@@ -671,6 +671,28 @@ and credentials belong outside the public repository.
 
 ## Research checkpoint storage
 
+New native non-game runs give every worker profile the same research directory,
+`/tmp/loopx-benchmark-research`, outside the task workspace and submitted paths.
+Keep experiment notes, local probes and candidate history there; required build
+and runtime inputs still belong in the task's declared submission paths. The
+runner does not filter submissions, extend evaluator feedback or alter grading.
+Overlapping submission/capture roots and existing unrelated data at this reserved
+path reject setup before solver execution.
+
+Terminal collection retains this directory under `collected/research`. With an
+explicit checkpoint request, the runner adds a separate `benchmark_research`
+component to the staged declaration, without modifying the caller's file. Warm
+continuation restores that exact component at its original path through the
+ordinary verified research-file transport. Other external research components
+still require explicit selection. Old checkpoints remain valid and preserve
+their workspace files; they start with an empty external research directory,
+without automatic relocation or deletion of historical artifacts. A warm receiver
+appends a bounded storage-policy update to its existing `AGENTS.md`, preserving
+the original task text and prior feedback policy; it does not rewrite the sealed
+checkpoint or Goal state. Terminal
+collection alone does not make a run resumable. Game and restricted-feedback
+runs retain their existing storage behavior.
+
 Full controller capture requires a filesystem that preserves case-sensitive and
 Unicode-normalization-sensitive filenames. A Linux controller using a shared
 host volume may not have those properties. New controller-enabled launches probe
@@ -688,6 +710,54 @@ the source export and sealed copy. Credentials and native evaluator storage keep
 their existing owners. No worker path, scoring, deadline or capture opportunity
 changes. Select this option only for a new run; it does not relocate a running
 bank or recover a missed point.
+
+## Preserve a failed worker before teardown
+
+For a new heartbeat run with full native controller capture, add
+`--preserve-failed-worker` to preserve the last source after a nonzero or uncertain
+solver exit. This is opt-in and requires agent-only submissions (`--eval-interval 0`);
+ordinary runs, successful exits and Native Goal completion keep their previous
+cleanup behavior. Removing the option disables the policy for later runs; it does
+not delete a previously retained worker.
+
+At the exact solver-return boundary, before the native provider stops its work
+container, the adapter closes the periodic observer and attempts one bounded joint
+capture through the existing Docker writer barrier and native checkpoint owner.
+It captures the complete task workspace, declared external research components,
+Goal state, scheduler/wake evidence, native session/configuration and native SQLite
+participants (including committed WAL data). It never exports the native credential
+home or `auth.json`. The native capsule retains its own submission history,
+incumbent, opportunity counter, cooldown and original phase. No new submission,
+model request, successful settlement or extended clock is created.
+
+The trial's private `terminal-preservation.json` records the original execution,
+export outcome/digest, preservation time and confirmed stopped-container state.
+The file export explicitly remains **unqualified for restoration**: a failed native
+Turn is not a completed conversation checkpoint. Both successful and failed exports
+retain the original stopped container until an operator separately qualifies a
+receiver or authorizes disposal. Compute is stopped before returning to provider final-archive extraction or
+grading drain, and cleanup verifies that stop again;
+a stop failure is reported without deleting the source. Missing participants, full
+storage or an uncertain writer barrier cannot fall through to force-removal.
+The provider still performs its ordinary network/proxy cleanup and grader drain.
+Its best-effort final submission archive may be absent because its extraction
+requires a running container; latest files remain in the stopped source and, on
+successful export, the terminal point. Native graded history/results remain
+independent and are not discarded with that optional archive.
+
+If the optional preservation receipt cannot be written, a redacted warning reports
+that gap; observer shutdown, one capture attempt and verified source stopping
+still proceed. The known solver exit and native grading remain authoritative.
+An unconfirmed stop still fails explicitly, even if receipt storage also fails.
+Missing receipt files never establish successful export or recovery eligibility.
+
+Inspect this receipt, the exported manifest and the exact retained container before
+planning recovery. Do not restart it, treat a file digest as receiver adoption, or
+roll back to an older point to fill a tail gap. Retained containers still occupy
+**disk** and may contain their original private credentials; reserve storage and
+explicitly dispose of the exact owned container after recovery/disposal approval.
+Terminal preservation does not rotate away the last qualified regular checkpoint,
+and it does not increase the daily/fresh-replan capture frequency.
 
 ## Default research checkpoint retention
 
@@ -784,6 +854,48 @@ keeping objective guidance, task/scorer version, model and budgets matched.
 Omit the flag on the next run to disable it. No active experiment is changed by
 installing this code. Inspect wake receipts and the saved decisions before
 claiming adoption; score countability still requires the usual integrity review.
+
+## Close a managed native attempt
+
+For a native-feedback run with an existing experiment-board row and a fresh
+concurrency admission, pass `--managed-run-json PRIVATE_BINDING.json` to the
+EdgeBench runner. Keep the binding owner-only and outside the solver workspace.
+It contains `goal_id`, the absolute controller `project` path, the original
+`admission_receipt` from `loopx benchmark concurrency-admit --execute --format json`,
+and the board `identity` (`benchmark_id`, `study_id`, `case_id`, `run_id`, `arm_id`,
+`arm_role`, `attempt`). Match `case_id` to `--task` and `run_id` to `--run-id`.
+Use the receipt that created the slot and a unique run ID across the Goal.
+
+The runner retains `managed-run.json` beside the runtime receipt. Before the
+solver starts, the receipt captures the binding and source pins. At return, it
+binds the original solver execution record when termination is confirmed. The
+runner publishes `managed-terminal.json` after validating those receipts and
+the native grading drain for the same run. The controller holds the registered
+Goal and project access.
+
+If grading drains later, the native grading owner must first retain its
+complete, drained `grading_status.json` and the matching history in the same
+attempt. To validate that evidence or retry a proof write, run the following
+once on the host that owns the attempt. Omit `--execute` to preview.
+
+```sh
+python -m benchmark.edgebench.managed_run --trial "$ATTEMPT_DIR" --execute
+```
+
+The replay reads retained evidence. Pending, unknown, or mismatched native
+evidence leaves the reservation active. After a terminal receipt write fails,
+replay can use the runner's completed result when it agrees with the original
+launch pins, the exact native solver record, and the drained grading history.
+Use the proof from the exact attempt on the controller and retain the command's
+JSON receipt with its binding.
+
+```sh
+loopx benchmark terminal-reconcile --goal-id "$GOAL_ID" --project "$PROJECT" \
+  --request-json "$ATTEMPT_DIR/managed-terminal.json" --execute --format json
+```
+
+The [toolkit closeout contract](../../loopx/capabilities/benchmark_toolkit/README.md#concurrency-envelope)
+defines readback, release and replay. Omit the flag on new ordinary trials.
 
 ## Sharing terminal results
 

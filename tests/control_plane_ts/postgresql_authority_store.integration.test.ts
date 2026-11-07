@@ -20,6 +20,9 @@ import {
 import { openLocalAuthorityStoreHandle } from "../../loopx/control_plane/coordination/local_authority_provider.ts";
 import {readLocalCoordinationTodoSource} from "../../loopx/control_plane/coordination/local_authority_read.ts";
 import {coordinationTodoReadModel} from "../../loopx/control_plane/coordination/coordination_projection.ts";
+import {inspectGoalAcceptance, refineGoalAcceptanceOutcome} from "../../loopx/control_plane/goals/acceptance_authority.ts";
+import {authorityProjectionFixture} from "./authority_projection_fixture.ts";
+import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import {
   authorityStoreCommitFixture as commit,
   registerAuthorityStoreConformance,
@@ -121,6 +124,35 @@ async function cleanScope(tenantId: string, goalId: string): Promise<void> {
 }
 
 if (database && installed) {
+  test("PostgreSQL planning reads the Agent declaration and work links from the canonical head", async t => {
+    await installed;
+    const options = {tenant_id: `tenant-${randomUUID()}`, goal_id: `goal-${randomUUID()}`};
+    t.after(() => cleanScope(options.tenant_id, options.goal_id));
+    const store = new PostgreSqlAuthorityStore(database, options);
+    const projection = authorityProjectionFixture(options.goal_id, [{todo_id: "todo_plan", role: "agent",
+      status: "open", done: false, archive_state: "active", text: "Implement the requested outcome",
+      task_class: "advancement_task", claimed_by: "author"}]);
+    await store.commitAuthority({expected_provider_revision: null, operation_id: "seed-planning",
+      events: [], receipts: [], next_projection: projection});
+    const inspect = () => inspectGoalAcceptance(store, options.goal_id, undefined, undefined, false, "author");
+    const before = await inspect();
+    assert.equal((before.planning_requirements as JsonObject).declaration_current, false);
+    const result = await refineGoalAcceptanceOutcome(store, {goal_id: options.goal_id,
+      actor_agent_id: "author", expected_provider_revision: before.provider_revision, operation_id: "declare-planning",
+      refinement: {outcome_id: "requested", owner_agent_id: "author", objective: "Deliver the requested outcome",
+        requirements: [{id: "complete", description: "Complete the requested implementation"}],
+        todo_ids: ["todo_plan"], source: {ref: "message:request", summary: "The owner requested this implementation"}}});
+    assert.equal(result.status, "applied");
+    const after = await inspect();
+    const loaded = await store.loadAuthority();
+    assert.equal(loaded.status, "loaded");
+    if (loaded.status !== "loaded") return;
+    assert.equal(after.provider_revision, loaded.provider_revision);
+    assert.deepEqual(after.planning_requirements, {agent_id: "author", declaration_current: true,
+      outcome_ids: ["requested"], linked_todo_ids: ["todo_plan"]});
+    assert.deepEqual((after.goal_acceptance_contract as JsonObject).criteria ?? [], [], "Independent executable checks remain optional");
+  });
+
   test("PostgreSQL historical Todo source retains the original frontier", async t => {
     await installed;
     const options = {tenant_id: `tenant-${randomUUID()}`, goal_id: `goal-${randomUUID()}`};

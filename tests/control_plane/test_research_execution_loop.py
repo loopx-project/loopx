@@ -141,6 +141,180 @@ def test_probe_cli_preserves_a_failed_candidate_exit_and_its_observation(tmp_pat
     observed = json.loads(output.read_text())
     assert observed["exit_code"] == 3 and observed["search_iterations"] is None
     assert json.loads(output.with_suffix(".json.candidate.json").read_text())["candidate_sha256"] == observed["candidate_sha256"]
+    assert not output.with_suffix(".json.memory.json").exists()
+
+
+def test_memory_observation_without_samples_leaves_timeout_and_next_method_unknown(tmp_path, monkeypatch):
+    import benchmark.runtime.research_probe as producer
+
+    monkeypatch.setattr(producer, "_group_pss_sample", lambda _group: None)
+    observed = probe(tmp_path, monkeypatch, source="import time; time.sleep(1)",
+                     limit_seconds=0.08, memory_limit_bytes=1024)
+    sidecar = tmp_path / "observation.json.memory.json"
+    evidence = json.loads(sidecar.read_bytes())
+    assert observed["stop_reason"] == "host_timeout" and observed["exit_code"] < 0
+    assert evidence["candidate_sha256"] == observed["candidate_sha256"]
+    assert evidence["complete_samples"] == 0 and evidence["peak_sampled_pss_bytes"] is None
+    assert "observed_limit_exceeded" not in evidence and "next_action" not in evidence
+    assert "resource:" + hashlib.sha256(sidecar.read_bytes()).hexdigest() in observed["evidence_refs"]
+
+
+def test_changed_candidate_cannot_publish_memory_evidence(tmp_path, monkeypatch):
+    with pytest.raises(ValueError, match="candidate changed"):
+        probe(tmp_path, monkeypatch,
+              source="from pathlib import Path; Path(__file__).write_text('print(0)')", memory_limit_bytes=1024)
+    assert json.loads((tmp_path / "observation.json").read_text())["ok"] is False
+    assert not (tmp_path / "observation.json.memory.json").exists()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="requires a real Linux file size limit")
+def test_optional_memory_file_short_write_preserves_cli_result(tmp_path):
+    candidate = tmp_path / "candidate.py"
+    candidate.write_text("print('candidate finished'); raise SystemExit(7)")
+    # Change only the kernel limit for the optional file. The memory read
+    # and resulting real FileIO.write still use their production paths.
+    (tmp_path / "sitecustomize.py").write_text("""
+from contextlib import contextmanager
+from pathlib import Path
+import resource
+
+original_open = Path.open
+
+@contextmanager
+def limit_size(stream):
+    soft, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
+    try:
+        resource.setrlimit(resource.RLIMIT_FSIZE, (64, hard))
+        with stream as opened:
+            yield opened
+    finally:
+        resource.setrlimit(resource.RLIMIT_FSIZE, (soft, hard))
+
+def open_with_limit(path, *args, **kwargs):
+    stream = original_open(path, *args, **kwargs)
+    return limit_size(stream) if path.name.endswith(".memory.json") else stream
+
+Path.open = open_with_limit
+""")
+    output = tmp_path / "observed.json"
+    process = subprocess.run([sys.executable, "-m", "benchmark.runtime.research_probe",
+        "--candidate-file", str(candidate), "--output", str(output), "--input-revision", "fixture-v1",
+        "--planned-method-id", "method:work", "--executed-method-id", "method:work",
+        "--evidence-ref", "probe:failed", "--limit-seconds", "5", "--memory-limit-bytes", "1024",
+        "--", sys.executable, str(candidate)], cwd=tmp_path, capture_output=True, text=True, timeout=10,
+        env={**os.environ, "PYTHONPATH": os.pathsep.join((str(tmp_path), str(fixture.REPO_ROOT)))})
+    assert process.returncode == 7, process.stderr
+    assert "Optional process-group memory observation could not be retained." in process.stderr
+    assert output.with_suffix(".json.memory.json").stat().st_size == 64
+    assert output.with_suffix(".json.stdout").read_text().strip() == "candidate finished"
+    observation = json.loads(output.read_bytes())
+    assert json.loads(process.stdout) == observation and observation["exit_code"] == 7
+    assert not any(ref.startswith("resource:") for ref in observation["evidence_refs"])
+
+
+@pytest.mark.skipif(sys.platform != "linux" or not Path("/proc/self/smaps_rollup").exists(),
+                    reason="requires live Linux process-group PSS")
+def test_sampled_memory_compares_complete_workloads_with_equal_outputs(tmp_path):
+    limit_bytes = 38 * 1024 * 1024
+    revision = "two-complete-shards-v1"
+    shard_size = 22 * 1024 * 1024
+    # All three mechanisms compute the same independent workload. One expands
+    # both buffers at once. A streaming contender bounds retained state.
+    template = """
+import json
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+if len(sys.argv) == 2:
+    marker = int(sys.argv[1])
+    if {streaming}:
+        total = 0
+        chunk_size = 1024 * 1024
+        for offset in range(0, {shard_size}, chunk_size):
+            scratch = bytearray([marker]) * min(chunk_size, {shard_size} - offset)
+            total += sum(scratch)
+    else:
+        scratch = bytearray([marker]) * {shard_size}
+        total = sum(scratch)
+    # The parent releases this worker only after reading the amount of live
+    # payload. In the concurrent case both buffers are held at that barrier.
+    print(total, len(scratch), flush=True)
+    sys.stdin.readline()
+else:
+    def shard(marker):
+        return subprocess.Popen(
+            [sys.executable, __file__, str(marker)],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
+        )
+    def read(process):
+        total, retained = (int(item) for item in process.stdout.readline().split())
+        assert process.poll() is None
+        return total, retained
+    def finish(process):
+        process.stdin.close()
+        assert process.wait(timeout=3) == 0
+    first = shard(1)
+    a, retained_a = read(first)
+    if {parallel}:
+        second = shard(2)
+        b, retained_b = read(second)
+        simultaneous_payload = retained_a + retained_b
+        time.sleep(0.60)
+        finish(first)
+        finish(second)
+    else:
+        time.sleep(0.60)
+        finish(first)
+        second = shard(2)
+        b, retained_b = read(second)
+        simultaneous_payload = max(retained_a, retained_b)
+        time.sleep(0.60)
+        finish(second)
+    receipt = dict(values=[a, b], simultaneous_payload=simultaneous_payload)
+    Path("last-workload.json").write_text(json.dumps(receipt))
+    print(json.dumps(receipt))
+"""
+
+    def execute(name, *, streaming=False, parallel, method_id):
+        candidate = tmp_path / f"{name}.py"
+        candidate.write_text(template.format(shard_size=shard_size, streaming=streaming, parallel=parallel))
+        output = tmp_path / f"{name}.observation.json"
+        command = [sys.executable, "-m", "benchmark.runtime.research_probe",
+            "--candidate-file", str(candidate), "--output", str(output), "--input-revision", revision,
+            "--planned-method-id", method_id, "--executed-method-id", method_id,
+            "--evidence-ref", f"probe:{name}", "--limit-seconds", "6",
+            "--memory-limit-bytes", str(limit_bytes), "--", sys.executable, str(candidate)]
+        process = subprocess.run(command, cwd=tmp_path, env={**os.environ, "PYTHONPATH": str(fixture.REPO_ROOT)},
+                                 text=True, capture_output=True, timeout=10)
+        assert process.returncode == 0, process.stderr
+        execution = json.loads(output.with_suffix(".json.stdout").read_text())
+        assert execution["values"] == [shard_size, 2 * shard_size]
+        observation = json.loads(process.stdout)
+        memory_bytes = output.with_suffix(".json.memory.json").read_bytes()
+        memory = json.loads(memory_bytes)
+        ref = "resource:" + hashlib.sha256(memory_bytes).hexdigest()
+        assert ref in observation["evidence_refs"]
+        assert memory["candidate_sha256"] == observation["candidate_sha256"]
+        assert memory["input_revision"] == revision and memory["complete_samples"] > 0
+        assert memory["reference_memory_bytes"] == limit_bytes
+        assert "observed_limit_exceeded" not in memory and "next_action" not in memory
+        return observation, memory, execution
+
+    baseline, incumbent_memory, incumbent_run = execute(
+        "incumbent", parallel=False, method_id="method:sequential")
+    challenger, expanded_memory, expanded_run = execute(
+        "expanded", parallel=True, method_id="method:expanded")
+    contender, streamed_memory, streamed_run = execute(
+        "streamed", streaming=True, parallel=True, method_id="method:streaming")
+    assert incumbent_run["simultaneous_payload"] == shard_size < limit_bytes
+    assert expanded_run["simultaneous_payload"] == 2 * shard_size > limit_bytes
+    assert streamed_run["simultaneous_payload"] == 2 * 1024 * 1024 < limit_bytes
+    assert expanded_memory["members_at_peak"] == 3
+    assert (streamed_memory["peak_sampled_pss_bytes"] < incumbent_memory["peak_sampled_pss_bytes"]
+            < expanded_memory["peak_sampled_pss_bytes"])
+    assert len({baseline["candidate_sha256"], challenger["candidate_sha256"], contender["candidate_sha256"]}) == 3
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
