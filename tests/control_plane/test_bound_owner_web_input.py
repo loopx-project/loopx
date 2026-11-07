@@ -246,6 +246,25 @@ def test_http_local_input_cannot_inherit_a_group_topic(bound_chat):
     assert status == 409 and "sessions" not in denied
 
 
+def test_http_bound_steward_starts_with_current_directory_and_deferred_status(bound_chat, monkeypatch):
+    from loopx import goal_portfolio
+
+    store, runtime, _, _, post, open_bound, _, _ = bound_chat
+    _, session = open_bound("steward")
+    monkeypatch.setattr(goal_portfolio, "collect_status",
+        lambda **_: pytest.fail("ordinary steward input must not eagerly collect Goal status"))
+    status, accepted = post(session, {
+        "message": "Which approved changes are still open?", "client_turn_id": "directory-only",
+    })
+    assert status == 202, accepted
+    turn = runtime.wait_for_turn(session_id=session["session_id"], turn_id=accepted["turn_id"], timeout_sec=15)
+    assert turn["status"] == "completed" and turn["origin"] == "web", turn
+    events = store.events_after(session["session_id"], turn["turn_id"], None)
+    context = next(event["payload"] for event in events if event["kind"] == "manager.context")
+    assert context["authorization_scope_id"] and context["coverage"]["attempted"] == 0
+    assert [(row["goal_id"], row["quality"]) for row in context["goals"]] == [("goal-a", "omitted")]
+
+
 def test_http_bound_steward_keeps_web_provenance_at_coordination_root(bound_chat, monkeypatch):
     store, runtime, _, _, post, open_bound, _, canonical = bound_chat
     _, session = open_bound("steward")
