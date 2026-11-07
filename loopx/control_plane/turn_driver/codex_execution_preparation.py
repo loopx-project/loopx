@@ -7,20 +7,32 @@ the same Todo (and Turn when present) is ready before returning a Host receipt.
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 from ...command_invocation import current_loopx_cli_argv
+from ..content_digest import BARE_SHA256_PATTERN
 
 
 CommandRunner = Callable[..., subprocess.CompletedProcess[str]]
+NATIVE_CLAIM_REPLAY_BOUND = "native_claim_replay_bound"
+
+
+class LegacyNativePreparationCapture(ValueError):
+    """The capture cannot identify any claim made by an older Host."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "This saved capture predates capture-bound Host claims. Preserve any existing claim receipt. "
+            "If preparation is still needed, run the current quota should-run for the original Goal, "
+            "Agent, Todo and Turn with a fresh capture and follow its preparation only if eligible."
+        )
 
 
 def compact_execution_preparation_request(
-    payload: Mapping[str, Any],
+    payload: Mapping[str, Any], *, claim_source_sha256: str | None = None,
 ) -> dict[str, Any] | None:
     """Retain only the exact Host-executable action beside a private capture."""
 
@@ -63,6 +75,11 @@ def compact_execution_preparation_request(
         if isinstance(receipt, Mapping)
         else ""
     )
+    claim_binding = {}
+    if turn_instance_id and claim_source_sha256 is not None:
+        operation_id = f"todo-claim:codex-capture:{claim_source_sha256}"
+        expected_claim += ["--claim-operation-id", operation_id]
+        claim_binding["claim_source_sha256"] = claim_source_sha256
     return {
         "goal_id": goal_id,
         "agent_id": agent_id,
@@ -76,6 +93,7 @@ def compact_execution_preparation_request(
             "runtime_root": str(runtime_root),
         },
         **({"turn_instance_id": turn_instance_id} if turn_instance_id else {}),
+        **claim_binding,
     }
 
 
@@ -174,7 +192,6 @@ def execute_codex_execution_preparation(
         not goal_id
         or not agent_id
         or not todo_id
-        or request.get("claim_args") != expected_claim
         or not registry_path.is_absolute()
         or registry_path.resolve() != registry_path
         or not runtime_root.is_absolute()
@@ -190,20 +207,19 @@ def execute_codex_execution_preparation(
     ):
         raise ValueError("Codex execution preparation requires a physical workspace")
     invoke = runner or _default_runner
-    claim_args = expected_claim
     claim_operation_id = None
-    if context_directory is not None:
-        if capture_directory is None or not turn_instance_id:
+    if context_directory is not None or "source_sha256" in request:
+        if context_directory is None or capture_directory is None or not turn_instance_id:
             raise ValueError("Native execution preparation requires a bound captured Turn")
-        source_sha256 = request.get("source_sha256")
-        if not isinstance(source_sha256, str) or re.fullmatch(r"[0-9a-f]{64}", source_sha256) is None:
+        source_sha256 = request.get("claim_source_sha256")
+        if not isinstance(source_sha256, str) or BARE_SHA256_PATTERN.fullmatch(source_sha256) is None:
             raise ValueError("Native execution preparation requires its original capture digest")
-        # The same capture can reappear after a lost readiness result. Let the
-        # managed claim owner recover the original receipt and current lease.
         claim_operation_id = f"todo-claim:codex-capture:{source_sha256}"
-        claim_args = [*expected_claim, "--claim-operation-id", claim_operation_id]
+        expected_claim += ["--claim-operation-id", claim_operation_id]
+    if request.get("claim_args") != expected_claim:
+        raise ValueError("invalid Codex execution-preparation claim arguments")
     claimed = _run_json(
-        claim_args,
+        expected_claim,
         registry_path=registry_path,
         runtime_root=runtime_root,
         cwd=workspace,
