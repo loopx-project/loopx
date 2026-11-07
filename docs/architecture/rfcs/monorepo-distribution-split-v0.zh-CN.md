@@ -1626,6 +1626,8 @@ user-summary 路径，旧字符串计数变为 null；只有 `next` 的输入绕
 
 生产代码 `4c3ed5d39` 让既有选择器同时返回来源和原投影类型；display／inventory
 调用方仍使用同一选中来源，没有新增词汇、持久字段或 authority。13 个新用例以原
+最后静态校验补充了可变长度 source-candidate tuple 注解，执行 bytecode 不变；
+该类型失败保留，修正后的 mypy 仅剩 main 既有 annotation hold。新用例以原
 独立选择器的完整 summary 为对照，覆盖双 role、共享／复制输入、canonical 优先级
 及真实 guard 选择／拒绝；前一 head 六个失败，修复后全过。首版测试错误假定旧计数
 为数值，且未绑定 guard；其失败保留，最终 oracle 遵循原字符串值和绑定 Agent／Turn

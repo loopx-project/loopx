@@ -539,7 +539,7 @@ def _select_todo_source(
     project_asset_value: Any,
 ) -> tuple[str, dict[str, Any]] | None:
     """Keep the projection kind selected by precedence, including aliased values."""
-    sources = (("user", canonical_value), ("project_asset", project_asset_value))
+    sources: tuple[tuple[str, Any], ...] = (("user", canonical_value), ("project_asset", project_asset_value))
     if not is_canonical_attention_todo_summary(canonical_value):
         sources = tuple(reversed(sources))
     return next(((kind, source) for kind, source in sources if isinstance(source, dict)), None)
