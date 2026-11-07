@@ -925,7 +925,18 @@ def test_accepted_return_with_missing_original_route_terminates_without_resend(f
     assert sender.sends == 1 and path.read_bytes() == saved
 
 
-def test_known_provider_locator_is_verified_after_restart_without_resend(flow):
+def test_known_provider_locator_is_verified_after_restart_without_resend(flow, monkeypatch):
+    from loopx.capabilities.manager_context import roundtrip
+
+    class Clock:
+        instant = datetime.now(timezone.utc)
+
+        @classmethod
+        def now(cls, tz):
+            assert tz is timezone.utc
+            return cls.instant
+
+    monkeypatch.setattr(roundtrip, "datetime", Clock)
     root, registry, store, create = flow
     session, _, receipt = create(True)
     rid = receipt["request_id"]
@@ -960,6 +971,7 @@ def test_known_provider_locator_is_verified_after_restart_without_resend(flow):
         def verify(self, route, session, turn, text, attempt):
             self.verify_calls += 1
             assert attempt["message_ref"] == "om_provider_reply"
+            Clock.instant += timedelta(seconds=7)
             return {
                 "ok": True,
                 "verification_performed": True,
@@ -982,6 +994,7 @@ def test_known_provider_locator_is_verified_after_restart_without_resend(flow):
     drain(root, registry, ChatSessionStore(root), transport)
     recovered = reply_status(root, receipt)[0]
     assert recovered["status"] == "delivered"
+    assert datetime.fromisoformat(recovered["delivered_at"]) == Clock.instant
     assert recovered["verification"] == "reconciled_after_restart"
     assert transport.send_calls == 1
     assert transport.verify_calls == 1

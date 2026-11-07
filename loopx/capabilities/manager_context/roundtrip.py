@@ -425,7 +425,7 @@ def _return_source(host, path, frozen_route, original_grant=None):
 
 
 def _return_transaction(host, path, phase, request):
-    root, now, exact = (host[key] for key in ("root", "now", "exact"))
+    root, exact = (host[key] for key in ("root", "exact"))
     payload = {key: value for key, value in request.items() if key != "facts"}
     observed = dict(request["facts"])
     for field, keys in {
@@ -438,7 +438,7 @@ def _return_transaction(host, path, phase, request):
     result = effect_runtime_result("manager.return_delivery.transact", {
         "schema_version": RETURN_DELIVERY_TRANSACTION,
         "runtime_root": str(root.resolve()), "request_id": path.parent.name,
-        "result_key": path.stem, "phase": phase, "now": now.isoformat(),
+        "result_key": path.stem, "phase": phase, "now": host["clock"]().isoformat(),
         "exact": exact, "facts": observed, **payload,
     }, retry_safe=False)
     if (not isinstance(result, dict) or result.get("schema_version") != RETURN_DELIVERY_TRANSACTION
@@ -539,13 +539,13 @@ def _belongs_to_chat_host(root, store, path):
 
 
 def _pending_return_paths(host, paths):
-    root, now, exact, cancelled = (host[key] for key in ("root", "now", "exact", "cancelled"))
+    root, scan_at, exact, cancelled = (host[key] for key in ("root", "scan_at", "exact", "cancelled"))
     paths = iter(paths)
     while not cancelled() and (batch := list(islice(paths, 128))):
         candidates = [{"request_id": path.parent.name, "result_key": path.stem} for path in batch]
         selected = effect_runtime_result("manager.return_delivery.transact", {
             "schema_version": RETURN_DELIVERY_TRANSACTION, "phase": "scan",
-            "runtime_root": str(root.resolve()), "now": now.isoformat(), "exact": exact,
+            "runtime_root": str(root.resolve()), "now": scan_at.isoformat(), "exact": exact,
             "candidates": candidates,
         })
         if not isinstance(selected, dict) or selected.get("schema_version") != RETURN_DELIVERY_TRANSACTION:
@@ -561,13 +561,22 @@ def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda:
     """Run the typed return transaction with the existing Chat/provider adapters."""
     if cancelled():
         return 0
-    now = now or datetime.now(timezone.utc)
+
+    def clock() -> datetime:
+        return datetime.now(timezone.utc) if now is None else now
+
+    # Keep one eligibility instant for the scan. The per-return transaction
+    # observes its own time after acquiring the route and source guards.
+    scan_at = clock()
     try:
         exact = load_project_registry(registry).get("profile_id") == SOURCE_SESSION_PROFILE_ID
     except (OSError, ValueError, TypeError):
         exact = False
     processed = 0
-    host = {"root": root, "registry": registry, "store": store, "now": now, "exact": exact, "cancelled": cancelled}
+    host = {
+        "root": root, "registry": registry, "store": store,
+        "scan_at": scan_at, "clock": clock, "exact": exact, "cancelled": cancelled,
+    }
     paths = iter_result_paths(_root(root) / "replies")
     for path in _pending_return_paths(host, paths):
         progress()
