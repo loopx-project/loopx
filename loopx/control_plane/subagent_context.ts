@@ -6,23 +6,31 @@ import { isAbsolute } from "node:path";
 import { delegationRuntimeFacts, selectDelegationBinding } from "./collaboration/delegation.ts";
 
 export const subagentContextProvider: AgentContextProvider = {
-  hookId: "multi_subagent.coordinator", capabilityId: "multi_subagent", revision: "v7",
+  hookId: "multi_subagent.coordinator", capabilityId: "multi_subagent", revision: "v8",
   phases: AGENT_CONTEXT_PHASES,
   produce(input, config) {
+    const nativeCapacity = input.phase === "after_delegate_result"
+      ? boundedNativeCapacityObservation(input.observations.native_host_capacity)
+      : null;
+    const capacityExhausted = nativeCapacity?.outcome === "agent_thread_limit_reached";
+    // Leave room for the complete model preference and bounded route or receipt facts.
     const guidance = {
       before_plan: [
-        "Delegate coherent independent outcomes, not isolated calls; leave method choices to the child. max_children is a ceiling, not a target or live availability. Admit incrementally, avoid duplicate reads, and keep useful parent work.",
-        "Host-native child work uses loopx native-child record/read for bounded Turn receipts; these calls do not start Turns or spend quota.",
-        "Choose authorized routes under user preferences. Host-native tools need no delegation binding. For bound delegation, inspect the selected binding; runtime availability is not admission. Peer-activation blocks assess neither route. Do not relaunch all routes each heartbeat.",
+        "Delegate coherent independent outcomes and leave methods to children. Add them incrementally within max_children. Avoid duplicate reads and keep useful parent work.",
+        "Honor user preferences. Use authorized host-native tools directly. Inspect the chosen binding for admission. Peer activation gates apply only to peers. Don't relaunch all routes each heartbeat.",
+        "Use loopx native-child record/read for Turn receipts without starting Turns or spending quota.",
       ],
       before_delegate: [
-        "Give each child a coherent question, acceptance, sources, read/write limits and stopping condition; leave room to investigate and challenge the hypothesis. Identify dependencies and concurrent parent work.",
-        "Use authorized host-native tools directly; only bound delegation needs its binding entrypoint and runtime/profile/budget preflight. Preserve user model preferences; never silently substitute runtime/model. Record selection reason and stable operation id; report native decisions or skips, leaving missing reports unknown.",
+        "Give each child a question, acceptance, sources, read/write limits and stop condition. Invite inquiry and challenge. Name dependencies and parallel parent work.",
+        "Use authorized host-native tools directly. Only bound delegation needs its entrypoint and runtime/profile/budget preflight. Honor model preferences. Never silently substitute runtime/model. Record why and a stable operation ID. Report native decisions/skips. Missing reports stay unknown.",
       ],
       after_delegate_result: [
-        "Check returned sources, omissions and contradictions against acceptance. Record native result and parent review separately; reconcile fresh receipts for the route actually used. Missing or rejected receipts do not establish completed work.",
-        "On typed agent_thread_limit_reached, stop same-Turn spawn/followup retries, mark unlaunched work incomplete, and continue useful parent work.",
-        "Verify decisive sources and record accept/defer/reject with reasons. Link accepted evidence to the deliverable and run parent validation before writeback; opinions are not independent evidence.",
+        "Reconcile fresh receipts for the route used. Missing/rejected receipts can't prove completion. Separate native result and parent review.",
+        // The exhaustion observation already carries the stop and recovery actions.
+        ...(capacityExhausted ? [] : [
+          "On typed agent_thread_limit_reached, stop same-Turn spawn/followup retries. Mark unlaunched work incomplete and continue useful parent work.",
+        ]),
+        "Check originals, gaps and conflicts against acceptance. Opinions aren't independent evidence. Log accept/defer/reject reasons. Link evidence. Validate before writeback.",
       ],
     }[input.phase];
     const facts: JsonObject = {
@@ -46,14 +54,10 @@ export const subagentContextProvider: AgentContextProvider = {
       facts.delegation_context = delegation;
     }
     if (input.phase === "after_delegate_result") {
-      const nativeCapacity = boundedNativeCapacityObservation(
-        input.observations.native_host_capacity,
-      );
       if (nativeCapacity) {
         facts.native_host_capacity = nativeCapacity;
         const contract = facts.capacity_contract as JsonObject;
-        contract.live_availability = nativeCapacity.outcome === "agent_thread_limit_reached"
-          ? "capacity_exhausted" : "attempt_observed";
+        contract.live_availability = capacityExhausted ? "capacity_exhausted" : "attempt_observed";
       }
       const nativeActivity = boundedNativeChildActivity(input.observations.native_child_activity);
       if (nativeActivity) {
