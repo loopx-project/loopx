@@ -139,6 +139,9 @@ The comparison uses findings from the current work, target, and acceptance
 reference. A different target or acceptance reference needs its own eligible
 pair, even when the measured metric, evaluator and inputs stay the same.
 The comparison is advisory and carries no retention or execution obligation.
+On an admitted work turn, the progressive starting read includes the enabled
+Yardstick's decision guidance and any compact cue for the selected Todo. Use
+the Explore context reader for the attachment template and scoped evidence.
 
 Manually captured measured findings also appear in the existing result pages
 and, when linked to eligible work, its exact-source comparison cards. They need

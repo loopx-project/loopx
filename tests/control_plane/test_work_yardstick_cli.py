@@ -7,6 +7,7 @@ import hashlib
 from itertools import groupby
 import json
 
+import pytest
 
 from tests.control_plane.test_quota_settlement_cli import (
     _initialize_fixture_authority, _projected_cli_args, _write_fixture, _run_cli, GOAL_ID, AGENT_ID, TODO_ID,
@@ -75,6 +76,40 @@ def context(runtime, path, *, detail=True):
     if detail and cues:
         return explore_turn_context(**params, result_node=cues[0]["node_id"])
     return compact
+
+
+def starting_page(project, runtime, path, turn, saved):
+    data = saved.read_bytes()
+    assert json.loads(data)["effective_action"] == "normal_run"
+    page = run(project, runtime, path, "quota", "context-project", *turn,
+               "--capture-file", str(saved), "--capture-sha256", hashlib.sha256(data).hexdigest(),
+               "--initial-read", "--max-page-output-bytes", "18000",
+               "--context-delivery", "on", "--delta-delivery", "off")
+    assert saved.read_bytes() == data
+    return page["content"]
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_yardstick_cue_reaches_the_starting_read_before_candidate_selection(tmp_path, enabled):
+    project, runtime, path = setup(tmp_path, enabled, active=True)
+    turn = binding("yardstick-before-choice")
+    capture = tmp_path / "capture"
+    guard = run(project, runtime, path, "quota", "should-run", "--codex-app", *turn,
+                "--decision-output-dir", str(capture), "--context-delivery", "on", "--delta-delivery", "off")
+    assert guard["schema_version"] == "context_capture_navigation_v1"
+    opening = starting_page(project, runtime, path, turn, capture / "decision.json")
+    # The independently readable page carries the decision cue. The complete
+    # attachment template stays available on the existing Explore reader.
+    cue_path = "/content/graph/work_yardstick_capture/guidance"
+    assert (cue_path in opening) is enabled
+    assert "/content/graph/work_yardstick_capture/template" not in opening
+    graph = context(runtime, path, detail=False)["graph"]
+    if enabled:
+        assert "use one bounded accepted-outcome comparison" in opening
+        assert graph["work_yardstick_capture"]["optional"] is True
+        assert graph["work_yardstick_capture"]["template"]["proxy"] is None
+    else:
+        assert "work_yardstick_capture" not in graph
 
 
 def test_measured_yardstick_restarts_comparison_when_the_acceptance_basis_changes(tmp_path):
@@ -160,7 +195,10 @@ def test_measured_yardstick_changes_next_work_from_local_screening_to_a_whole_go
     assert first["explore_result_delivery"]["ok"]
     run(project, runtime, path, *_projected_cli_args(first["settlement_owed"]["command"], turn_instance_id="turn-pair"))
 
-    guard = run(project, runtime, path, "quota", "should-run", "--codex-app", *binding("turn-compare"))
+    compare_turn = binding("turn-compare")
+    capture = tmp_path / "compare"
+    guard = run(project, runtime, path, "quota", "should-run", "--codex-app", *compare_turn,
+                "--decision-output-dir", str(capture))
     compact = run(project, runtime, path, "explore", "turn-context", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
                   "--todo-id", TODO_ID)["graph"]["work_yardsticks"][0]
     assert compact["comparison_candidate_ref"] == "candidate:dictionary"
@@ -168,6 +206,9 @@ def test_measured_yardstick_changes_next_work_from_local_screening_to_a_whole_go
     assert "different mechanism or a compatible combination" in compact["comparison_cue"]
     assert "full implementation and validation cost" in compact["comparison_cue"]
     assert compact["comparison_cue"] in json.dumps(guard)
+    opening = starting_page(project, runtime, path, compare_turn, capture / "decision.json")
+    assert '"comparison_candidate_ref":"candidate:dictionary"' in opening
+    assert "/content/graph/work_yardsticks/" in opening
     detailed = run(project, runtime, path, "explore", "turn-context", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
                    "--todo-id", TODO_ID, "--result-node", compact["node_id"])["graph"]["work_yardsticks"][0]
     assert detailed["next_action"] == choice["next_action"]

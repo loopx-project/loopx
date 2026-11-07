@@ -354,7 +354,7 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
       counts: projection.counts ?? {},
       ...(params.yardstick_enabled === true ? {
         work_yardstick_capture: {optional: true, field: "work_yardstick_decision", schema_version: WORK_YARDSTICK_DECISION_SCHEMA,
-          guidance: "At a meaningful target, yardstick or next-method change, optionally attach the current decision to the existing Explore result. No change needs no attachment. Cite prior_finding_id from this Todo's current decision (null initially). Distinguish the accepted outcome's evaluation profile from an unqualified proxy; record counterevidence and bounded next work without changing user constraints. Read the ordinary task-scoped context for omitted decisions.",
+          guidance: "Before a proxy would discard a viable candidate or redirect work, check agreement with the accepted outcome in this scope. When agreement is unknown or the signals disagree, use one bounded accepted-outcome comparison if available within the existing constraints. At a meaningful target, yardstick or method change, optionally record that decision and its counterevidence in the same Todo's Explore result. Cite its prior_finding_id (null initially); omit the attachment when the decision is unchanged. Read the task-scoped Explore context for the template and omitted decisions.",
           template: {schema_version: WORK_YARDSTICK_DECISION_SCHEMA,
             target: {summary: "", scope: "", acceptance_ref: ""},
             authoritative: {metric: "", unit: "", higher_is_better: true, comparison_scope: "", input_revision: "", evaluation_ref: ""},
