@@ -2545,7 +2545,7 @@ def test_app_long_input_feedback_uses_its_last_verified_post(ordinary):  # noqa:
         runtime.close()
 
 
-def test_enabling_app_feedback_does_not_backfill_old_finished_mirrors(ordinary):  # noqa: F811
+def test_enabling_app_feedback_does_not_backfill_old_finished_mirrors(ordinary, monkeypatch):  # noqa: F811
     store, runtime, provider, transport, original, turns, before = _app_projection_journey(ordinary)
     transport.reaction_feedback = False
     baseline = list(provider.reaction_creates)
@@ -2557,6 +2557,21 @@ def test_enabling_app_feedback_does_not_backfill_old_finished_mirrors(ordinary):
             runner=provider, cli_bin="lark-cli", reaction_feedback=True)
         for _ in range(3):
             restarted.reconcile()
+        assert provider.writes == sent and provider.reaction_creates == baseline
+        # An idle worker must not decode or authorize the full App history on
+        # every feedback tick just to find the same finished inputs again.
+        transcript = store.sessions_root / original["session_id"] / "messages.jsonl"
+        path_type = type(transcript)
+        original_read = path_type.read_bytes
+
+        def read(path):
+            assert path != transcript, "idle feedback reread the complete Chat transcript"
+            return original_read(path)
+
+        with monkeypatch.context() as idle:
+            idle.setattr(path_type, "read_bytes", read)
+            for _ in range(3):
+                restarted.reconcile_app_feedback()
         assert provider.writes == sent and provider.reaction_creates == baseline
     finally:
         runtime.close()
