@@ -459,11 +459,13 @@ def main() -> int:
     )
     args = parser.parse_args()
     _install_pytest_import_stub()
-    probe = _load_module("loopx_cli_output_probe_fixture", args.test_source)
+    # Bind the frozen workload's helpers before it imports them. LoopX itself
+    # still comes from the product checkout selected for this subprocess.
     fixture_support = _load_module(
-        "loopx_cli_output_fixture_support",
+        "tests.control_plane.cli_output_fixture",
         Path(__file__).with_name("cli_output_fixture.py"),
     )
+    probe = _load_module("loopx_cli_output_probe_fixture", args.test_source)
     # Scenario helpers also call this owner; historical test modules must not
     # re-enter their old /tmp implementation from inside the shared outer root.
     probe._stable_budget_fixture_root = fixture_support.stable_budget_fixture_root
