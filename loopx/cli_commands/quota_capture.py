@@ -519,6 +519,7 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
                                 captured_recovery: dict[str, Any] | None = None,
                                 metadata: dict[str, Any] | None = None,
                                 max_page_output_bytes: int | None = None,
+                                first_read_page_bytes: int | None = None,
                                 page_attached: bool = False,
                                 reader_argv: list[str] | None = None,
                                 initial_read_plan: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -540,7 +541,8 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
     # command. Keep its inferred budget out of bulk and selection recovery.
     first_output_bytes = (output_bytes if max_page_output_bytes is not None
         else min(output_bytes, NATIVE_CONTEXT_FIRST_READ_FALLBACK_BYTES))
-    first_page_bytes = min(page_bytes, first_output_bytes)
+    first_page_bytes = (min(page_bytes, first_output_bytes) if first_read_page_bytes is None
+        else first_read_page_bytes)
     first_read_budget = first_page_bytes, first_output_bytes
     typed = projected.get("schema_version") == "context_delivery_v1"
     mode = projected["mode"] if typed else "full"
@@ -915,7 +917,8 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
             progressive_enabled=activation["progressive_enabled"], initial_read_plan=prepared.initial_read_plan,
             metadata={"recovery": full_reference, "capture_sha256": args.capture_sha256,
                 "context_delivery": activation},
-            max_page_output_bytes=caller_output_limit, page_attached=saved_page,
+            max_page_output_bytes=caller_output_limit,
+            first_read_page_bytes=args.page_bytes if args.initial_read else None, page_attached=saved_page,
             reader_argv=reader_argv)
         reference = {key: native_view[key] for key in ("path", "sha256", "command")}
         mode, target = native_view["mode"], native_view.get("target")
@@ -934,8 +937,8 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
                     "original decision and receipt; do not rerun admission."
                 )
             page_bytes, output_bytes = native_context_page_budget()
-            if isinstance(output_limit, int) and output_limit > 0:
-                output_bytes = min(output_bytes, output_limit)
+            if isinstance(caller_output_limit, int) and caller_output_limit > 0:
+                output_bytes = min(output_bytes, caller_output_limit)
                 page_bytes = min(page_bytes, output_bytes)
             recovery_index = {**full_reference, "command": context_capture_read_command(
                 Path(full_reference["path"]), full_reference["sha256"],
