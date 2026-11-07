@@ -1896,7 +1896,11 @@ transaction, matched complete-cost qualification and affected backend acceptance
 stay open. I3 remains at least one minor release; M1/#8011, full R0/V10/R1,
 D2/D5/D6/D3, context/model/split-install, adoption and all frozen failures remain.
 
-#### Remaining provider-first transaction boundary
+#### Provider-first transaction requirements before the next proposal
+
+The following records the prerequisite gap at the display-only revision. The
+next checkpoint reports the canonical transaction proposal and its measured
+limits; it does not turn these earlier observations into a historical pass.
 
 The next implementation must compose the existing provider-admitted
 `canonicalTodoCollection` and projection owners. The native snapshot owner binds
@@ -1924,6 +1928,101 @@ to all three display views, checks unchanged provider/source data, observes a
 new provider revision after a separate commit, and refuses a stale continuation.
 This qualifies a composition prerequisite. The combined guard transaction,
 PostgreSQL source/wheel host journey and complete-cost benefit remain open.
+
+### 2026-11-07 — Canonical Todo transaction proposal and observed lifecycle cost
+
+The proposal materializes canonical selection and resume rows in the existing
+TypeScript owners after binding actor/profile/clock inputs. `todo.read` composes
+the Agent source's explicitly requested summary, planning and retained-terminal
+views, the User summary, quota selection and the existing Vision-wait basis.
+Within that quota request, matching native references share one complete
+provider read. Complete field digests, store incarnation, provider revision,
+cursor and the original query/selection replay recipe bind the source. A later
+request reads again; this is not a cache of provider authority.
+
+The actual governed CLI query now retains its source recipe through quota
+preparation. Previously, the full query response lost the ephemeral origin
+even though status had preserved it. Both query and selection paths now carry
+the complete provenance into the same typed transaction. Provider outages keep
+their original diagnostic code/payload, and stale references fail before
+projection. Source fields, Python scalar facts and owner-declared Todo source
+lanes cannot be overwritten through reference metadata. Independent caller
+metadata remains complete; callers that transform provider rows use the full
+supplied-source codec. Strict integer/float/bool and list/tuple distinctions,
+legacy fnmatch facts, lane/ordinal precedence and distant microsecond clocks
+retain their observable semantics. No Todo-id lookup restores lost provenance.
+
+The existing Vision-wait owner retains causal obligations and shared witnesses.
+Prepared basis reuse requires the same actor, complete terminal rows and logical
+request identity; independent lineage callers keep their existing path. A
+standalone display still requests one view. Complete notes, evidence, write
+scopes, archive/replay identity and independent closure/pending intent remain
+in the parity boundary. Existing source-lane constants are exported for native
+provenance validation; no new lane vocabulary, persisted state or authority is
+introduced.
+
+Production code at `66ff8bf48`, compared with `main@e2371c476`, passes four
+101-Todo source/isolated-wheel × File/default-SQLite CLI lifecycles. A separate
+verifier accepts sum=45; original completion time, four receipts, one debit,
+Effect restart, invalid Vision/workspace refusal, evidence-replacement refusal
+and settled replay remain intact. The wheel's affected sources match the source
+checkout. The final focused suites pass 132 Python and 86 TypeScript cases;
+the broader real CLI suite passed 244 cases before the final diagnostic/lane
+corrections, which the focused suites cover. Real disposable PostgreSQL 16.15
+passes 391 store and 11 service cases with zero skips, including two-role native
+quota composition, one complete provider load, unchanged data and stale-source
+refusal. This does not qualify a PostgreSQL source/wheel host journey.
+
+Five interleaved, unprofiled source CLI pairs use the same 101-Todo fixture and
+default SQLite provider. Each runs provenance, bootstrap, claim, guard, required
+context reads, artifact verification, completion, negative cases, writeback,
+spend, restart and terminal/refusal replay. Fixture setup and final teardown are
+reported separately. Normal bytecode conditions are inherited equally. The
+candidate is slower in three pairs and wall-time ranges overlap:
+
+| Observation, median unless stated | Main | Proposal |
+| --- | ---: | ---: |
+| Lifecycle wall time (range) | 14.093 s (13.765–14.933) | 14.145 s (13.461–15.190) |
+| Fixture setup / final teardown | 2.403 / 0.062 s | 2.338 / 0.062 s |
+| CLI child CPU + observed daemon CPU | 5.511 s | 5.757 s |
+| Daemon boundary physical footprint | 140,787,912 B | 146,456,920 B |
+| CLI maximum resident size | 70,746,112 B | 70,221,824 B |
+| Observed daemon disk / logical writes | 9,048,064 / 14,090,240 B | 10,227,712 / 15,646,720 B |
+| CLI output / required context bytes | 177,595 / 21,168 B | 179,482 / 21,257 B |
+
+Daemon CPU/writes are cumulative process observations at CLI boundaries,
+excluding final exit work. CLI CPU excludes the unsampled provenance process
+and harness work. CLI RSS and daemon footprint are separate observations, not a
+continuous full-system peak. These bounds do not measure complete model cost,
+human attention or installed-host/long-horizon benefit.
+
+A separate instrumented pair observes the following communication delta; its
+elapsed time is excluded from the wall-time comparison:
+
+| Diagnostic | Main | Proposal |
+| --- | ---: | ---: |
+| Guard RPCs / JSON parameter bytes | 90 / 1,903,233 | 84 / 837,940 |
+| Full episode socket sent / received bytes | 3,537,350 / 6,380,604 | 1,948,250 / 6,388,112 |
+| Loaded guard LoopX modules | 503 | 503 |
+
+Both guard role sources use the native transaction. Fewer request bytes and
+calls demonstrate transport adoption, while received bytes, observed writes
+and CPU do not improve together. Whole-path acceleration or complete marginal
+cost benefit is therefore **not qualified**. The next decision remains with
+this transaction's original acceptance: independent review and attribution of
+the remaining lifecycle costs before proposing further optimization. These
+negative results do not justify another leaf-RPC migration or a new provider.
+
+The proposal was rebased onto `main@e58ba30bc`; the affected production and test
+files remain byte-identical to the measured revision. TypeScript typecheck and
+Ruff pass. Mypy retains main's existing missing return annotation in
+`decision_capture.py`; the standard premerge also retains main's peer-boundary
+scanner failure on unchanged benchmark documentation. Neither is a passing
+skip. Required exact-head review, validation/readiness and maintainer merge
+authorization remain separate; there is no merge or installed-host upgrade.
+The original task stays open for benefit and remaining acceptance. Retain I3
+for at least one minor release, M1/#8011, full R0/V10/R1, D2/D5/D6/D3,
+context/model/split-install, adoption/full-cost gaps and every frozen failure.
 
 ## Appendix B: Decision log
 

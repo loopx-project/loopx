@@ -1451,7 +1451,10 @@ transaction。Provider 读取、revision、lease/actor fence 和状态写入保�
 保留一个 minor release；M1/#8011、完整 R0/V10/R1、D2/D5/D6/D3、context/model/
 split-install、adoption 和所有冻结失败继续保留。
 
-#### 后续 provider-first 事务边界
+#### 下一提案之前的 provider-first 事务要求
+
+以下保留展示增量 revision 时的前置缺口。下一 checkpoint 记录 canonical 事务
+提案及其测量限制；不会把先前观察改写成历史通过。
 
 下一实现应组合既有经过 provider 准入的 `canonicalTodoCollection` 和 projection
 owner。Native snapshot owner 把 Goal、store incarnation、provider revision、cursor
@@ -1475,6 +1478,85 @@ witness 的情况。完整 note、write scopes、archive/settled identity 和来
 provider/source 数据不变，在独立 commit 后观察新的 provider revision，并拒绝旧
 continuation。它验证的是组合前置条件；完整 guard transaction、PostgreSQL
 source/wheel host journey 和完整成本收益仍开放。
+
+### 2026-11-07 — Canonical Todo 事务提案与已观测生命周期成本
+
+提案在绑定 actor/profile/clock 输入后，由既有 TypeScript owner materialize
+canonical selection 与 resume rows。`todo.read` 组合显式请求的 Agent summary、
+planning、保留 terminal 的视图，以及 User summary、quota selection 和既有
+Vision-wait basis。同一次 quota 请求中，匹配的 native reference 共享一次完整
+provider read。完整字段 digest、store incarnation、provider revision、cursor
+和原 query/selection replay recipe 约束来源。后续请求重新读取；不缓存 provider
+authority。
+
+实际受管 CLI query 现在通过 quota preparation 保留来源 recipe。此前 status
+虽保留 ephemeral origin，完整 query response 却丢失它。Query 与 selection 路径
+现在都把完整 provenance 传入同一 typed transaction。Provider outage 保留原
+诊断 code/payload，stale reference 在 projection 前拒绝。Reference metadata
+不能覆盖 provider 原字段、Python scalar facts 或 owner 声明的 Todo source lane。
+独立 caller metadata 保持完整；改写 provider row 的调用方使用完整 supplied-source
+codec。严格 integer/float/bool、list/tuple 区别、旧 fnmatch facts、lane/ordinal
+优先级及远期微秒时钟均保留可观察语义。不通过 Todo id 查找补回丢失的 provenance。
+
+既有 Vision-wait owner 保留 causal obligation 与共用 witness。复用 prepared
+basis 必须匹配 actor、完整 terminal rows 及逻辑 request identity；独立 lineage
+调用方保留原路径。Standalone display 仍只请求一种视图。完整 note、evidence、
+write scope、archive/replay identity、独立 closure/pending intent 均属于 parity
+边界。既有 source-lane 常量导出给 native provenance 校验复用，没有新增 lane
+词汇、持久状态或 authority。
+
+生产代码 `66ff8bf48` 对照 `main@e2371c476`，通过四组 101-Todo 源码／隔离 wheel
+× File／默认 SQLite CLI 生命周期。独立 verifier 验收 sum=45；原完成时间、四份
+receipt、一次 debit、Effect 重启、无效 Vision/workspace 拒绝、证据替换拒绝与已
+结算 replay 均保留。Wheel 的受影响源码与 checkout 一致。最终聚焦用例通过
+132 个 Python 和 86 个 TypeScript；较广真实 CLI suite 在最后诊断／lane 修正
+之前通过 244 个用例，这些最后修正由聚焦 suite 覆盖。真实 disposable PostgreSQL
+16.15 通过 391 个 store 和 11 个 service 用例，零 skip；包含两种 role 的 native
+quota 组合、一次完整 provider load、数据不变与 stale-source 拒绝。这不验收
+PostgreSQL 源码／wheel host journey。
+
+五组交错、无 profiler 的源码 CLI 对照使用相同 101-Todo fixture 与默认 SQLite。
+每组执行 provenance、bootstrap、claim、guard、必需 context read、产物验证、
+completion、反例、writeback、spend、restart 和 terminal／refusal replay。Fixture
+setup 与最终 teardown 单独报告，两边同样继承正常 bytecode 条件。三组候选更慢，
+墙钟范围重叠：
+
+| 观察，未说明时为中位数 | Main | 提案 |
+| --- | ---: | ---: |
+| 生命周期墙钟（范围） | 14.093 秒（13.765–14.933） | 14.145 秒（13.461–15.190） |
+| Fixture setup／最终 teardown | 2.403／0.062 秒 | 2.338／0.062 秒 |
+| CLI child CPU＋已观测 daemon CPU | 5.511 秒 | 5.757 秒 |
+| Daemon 边界 physical footprint | 140,787,912 B | 146,456,920 B |
+| CLI 最大 resident size | 70,746,112 B | 70,221,824 B |
+| 已观测 daemon disk／logical writes | 9,048,064／14,090,240 B | 10,227,712／15,646,720 B |
+| CLI output／必需 context 字节 | 177,595／21,168 B | 179,482／21,257 B |
+
+Daemon CPU／写入是 CLI 边界处累计 process 观察，不含最终退出工作。CLI CPU
+不含未采样的 provenance process 和 harness 工作。CLI RSS 与 daemon footprint
+分别观测，不是连续全系统峰值。这些边界不测量完整 model cost、人工注意力或
+installed-host／长程收益。
+
+另一组独立插桩对照观察到以下通信变化；其耗时不进入墙钟比较：
+
+| 诊断 | Main | 提案 |
+| --- | ---: | ---: |
+| Guard RPC／JSON 参数字节 | 90／1,903,233 | 84／837,940 |
+| 完整 episode socket 发送／接收字节 | 3,537,350／6,380,604 | 1,948,250／6,388,112 |
+| Guard 加载 LoopX 模块 | 503 | 503 |
+
+Guard 两种 role 的来源均使用 native transaction。请求字节和调用减少证明传输
+路径已采纳，而接收字节、已观测写入与 CPU 没有一起改善。因此完整路径提速或
+完整边际成本收益**未取得资格**。后续决策保留原事务验收：独立评审，并归因剩余
+生命周期成本后再提出优化。负面结果不支持另做 leaf-RPC migration 或新增 provider。
+
+提案 rebase 到 `main@e58ba30bc` 后，受影响生产及测试文件与测量 revision 逐字节
+相同。TypeScript typecheck 与 Ruff 通过。Mypy 保留 main 已有的
+`decision_capture.py` 缺少返回类型错误；标准 premerge 也保留 main 对未修改
+benchmark 文档的 peer-boundary scanner 失败。两者均不是通过的 skip。Exact-head
+review、验证／readiness 与 maintainer merge 授权保持独立；没有合入或 installed-host
+升级。原 Task 为收益及剩余验收继续开放。I3 至少保留一个 minor release；M1/#8011、
+完整 R0/V10/R1、D2/D5/D6/D3、context/model/split-install、adoption/full-cost
+缺口及所有冻结失败继续保留。
 
 ## 附录 B：决策日志
 
