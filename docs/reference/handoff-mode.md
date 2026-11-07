@@ -84,6 +84,16 @@ For an eligible task edit without explicit proof, recovery now offers ordinary
 through inspect/acquire/release. Expired or replaced references remain rejected;
 recovery advice itself never grants execution or changes state.
 
+If the refused edit supplied `--update-expected-provider-revision`, reclaiming
+execution does not validate that old revision, even when the claim reports no
+Todo change. Recovery then gives a targeted `todo list --todo-id ...` step after
+claiming. Reconcile that Todo with the intended edit before filling the retry's
+claim reference and `authority_read.provider_revision` from the read. No full
+Goal reread is needed by this recovery contract. The CLI does not replace the
+CAS automatically; a later concurrent edit still rejects the retry. Keep the
+original operation id and reconciled intent. Calls without an explicit CAS
+retain the direct claim-and-retry path, and recovery never overrides a Stop.
+
 An expired hard-lease execution can be reclaimed with ordinary `todo claim`
 by an eligible registered Agent. When the expired holder still matches the Todo
 claim, the claim owner and a fresh execution generation change in one canonical
@@ -362,6 +372,13 @@ claim+lease 均不可执行，必须先审核迁移；合并式 claim+lease 仍�
 冲突不会得到不可执行的 acquire 建议；修改已租用工作的要求或状态须走对应 lifecycle。
 提示不包含 execution key、不授予权限，也不修改 mode 或 provider。并发造成 version
 变化时重新读取，不能绕过 CAS；dry-run 和拒绝路径不产生 Todo 或租约写入。
+
+如果被拒绝的编辑提供了 `--update-expected-provider-revision`，重新认领不证明旧版本
+仍可用于编辑，即使认领回包显示 Todo 没有变化。恢复提示会在认领后给出只读取该 Todo
+的 `todo list --todo-id ...`。核对当前内容与原编辑意图后，再把新认领引用和这次读取的
+`authority_read.provider_revision` 填入重试命令；此恢复契约不要求重读整个 Goal。
+CLI 不会自动替换 CAS，读取后若再有并发修改，重试仍会拒绝。保留原 operation id 和
+核对后的意图。不带显式 CAS 的调用保持直接认领并重试，恢复也不会覆盖 Stop。
 
 修改已 deferred Todo 的等待条件若被拒绝，恢复命令先以 `--status open
 --clear-resume-when`、审核后的 reason、新 update operation 和当前 provider CAS
