@@ -214,7 +214,8 @@ def test_todo_list_validation_preserves_exact_unsupported_diagnostic() -> None:
 
     assert str(exc_info.value) == (
         "todo list only accepts --goal-id, optional --role, --status, --todo-id, "
-        "--agent-id, --limit, --thin, --project, --state-file, --dry-run, and "
+        "--agent-id, --limit, --thin, --summary, --include-archived, --project, "
+        "--state-file, --dry-run, and "
         "--format; "
         "unsupported: --note, --evidence"
     )
@@ -507,6 +508,23 @@ def test_quota_action_selection_requires_turn_identity() -> None:
     assert str(exc_info.value) == (
         "`loopx quota should-run --todo-id` requires --turn-instance-id or --begin-turn"
     )
+
+
+def test_monitor_change_scope_requires_material_transition() -> None:
+    args = build_parser().parse_args(
+        [
+            "quota",
+            "monitor-poll",
+            "--goal-id",
+            "goal",
+            "--material-change-scope",
+            "case-a/run-1",
+        ]
+    )
+    with pytest.raises(ValueError, match="requires quota monitor-poll --material-change"):
+        validate_quota_command_request(args)
+    args.material_change = True
+    validate_quota_command_request(args)
 
 
 @pytest.mark.parametrize(

@@ -13,6 +13,9 @@ import {
   planTodoExternalWaitTransition,
   resumeConditionHasKnownPendingTarget,
 } from "../../loopx/control_plane/todos/resume_condition.ts";
+import {
+  monitorChangeScopeDigest,
+} from "../../loopx/control_plane/todos/monitor_scope.ts";
 
 function todo(
   todoId: string,
@@ -34,6 +37,10 @@ test("resume syntax is normalized by the typed Todo boundary", () => {
     schema_version: TODO_RESUME_NORMALIZE_REQUEST_SCHEMA_VERSION,
     resume_when: " Monitor_Changed:TODO_WATCH001 ",
   }), "monitor_changed:todo_watch001");
+  assert.equal(normalizeTodoResumeWhen({
+    schema_version: TODO_RESUME_NORMALIZE_REQUEST_SCHEMA_VERSION,
+    resume_when: " Monitor_Changed:TODO_WATCH001@CASE-A/RUN-7 ",
+  }), "monitor_changed:todo_watch001@case-a/run-7");
   assert.equal(normalizeTodoResumeWhen({
     schema_version: TODO_RESUME_NORMALIZE_REQUEST_SCHEMA_VERSION,
     resume_when: "note_contains:approved",
@@ -308,6 +315,58 @@ test("monitor resume is generation-fenced and fail-closed without a baseline", (
   assert.equal(conditions[1].satisfied, false);
   assert.equal(conditions[1].invalid_state, "baseline_generation_missing");
   assert.equal(conditions[1].availability_reason, "resume_condition_invalid");
+});
+
+test("scoped monitor resume ignores unrelated material transitions", () => {
+  const scope = "case-a/run-1";
+  const digest = monitorChangeScopeDigest(scope);
+  const waiting = todo("todo_scoped_wait", "open", "advancement_task", {
+    resume_when: `monitor_changed:todo_watch001@${scope}`,
+    resume_monitor_generation: 3,
+  });
+  const evaluate = (scopedGeneration: number, globalGeneration: number) => {
+    const result = evaluateTodoResumeConditions({
+      schema_version: TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION,
+      items: [waiting],
+      source_items: [todo("todo_watch001", "open", "continuous_monitor", {
+        material_change_generation: globalGeneration,
+        material_change_scope_generations: `${digest}:${scopedGeneration}`,
+      })],
+    });
+    return (result.conditions as Array<{condition: Record<string, unknown>}>)[0].condition;
+  };
+  const unrelated = evaluate(3, 11);
+  assert.equal(unrelated.satisfied, false);
+  assert.equal(unrelated.material_change_generation, 11);
+  assert.equal(unrelated.scoped_material_change_generation, 3);
+  assert.equal(unrelated.monitor_change_scope, scope);
+  assert.equal(resumeConditionHasKnownPendingTarget(unrelated, waiting), true);
+  const matched = evaluate(12, 12);
+  assert.equal(matched.satisfied, true);
+  assert.equal(matched.scoped_material_change_generation, 12);
+});
+
+test("scoped external wait captures its own scope generation", () => {
+  const scope = "case-a/run-1";
+  const result = planTodoExternalWaitTransition({
+    schema_version: TODO_EXTERNAL_WAIT_REQUEST_SCHEMA_VERSION,
+    todo_id: "todo_waiting001",
+    resume_when: `monitor_changed:todo_watch001@${scope}`,
+    successor_todo_ids: ["todo_fallback001"],
+    items: [
+      todo("todo_waiting001", "open"),
+      todo("todo_watch001", "open", "continuous_monitor", {
+        material_change_generation: 9,
+        material_change_scope_generations: `${monitorChangeScopeDigest(scope)}:4`,
+      }),
+      todo("todo_fallback001", "open"),
+    ],
+  });
+  assert.equal(result.baseline_generation, 4);
+  assert.deepEqual(result.metadata_updates, {
+    resume_when: `monitor_changed:todo_watch001@${scope}`,
+    resume_monitor_generation: 4,
+  });
 });
 
 test("external wait atomically binds a monitor baseline and runnable successor", () => {

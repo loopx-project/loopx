@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import sys
 from pathlib import Path
 
@@ -218,6 +219,75 @@ def assert_monitor_generation_resumes_without_boolean_or_replay_drift() -> None:
     assert selected_todo_id(resumed_quota) == MATERIAL_WAIT_ID, resumed_quota
 
 
+def assert_scoped_monitor_generation_ignores_unrelated_case_changes() -> None:
+    scope = "case-a/run-1"
+    scope_digest = hashlib.sha256(scope.encode()).hexdigest()[:24]
+
+    def summary(scoped_generation: int, global_generation: int) -> dict:
+        return quota_todo_summary(
+            [
+                quota_todo_item(
+                    todo_id=MATERIAL_MONITOR_ID,
+                    index=1,
+                    text="[P0] Poll the benchmark campaign.",
+                    task_class="continuous_monitor",
+                    claimed_by=AGENT_ID,
+                    material_change_generation=global_generation,
+                    material_change_scope_generations=(
+                        f"{scope_digest}:{scoped_generation}"
+                    ),
+                    watch_only=True,
+                ),
+                quota_todo_item(
+                    todo_id=MATERIAL_WAIT_ID,
+                    index=2,
+                    text="[P0] Reconcile case-a run-1 after its terminal score.",
+                    claimed_by=AGENT_ID,
+                    required_capabilities=["shell"],
+                    resume_when=f"monitor_changed:{MATERIAL_MONITOR_ID}@{scope}",
+                    resume_monitor_generation=4,
+                ),
+                quota_todo_item(
+                    todo_id=FALLBACK_TODO_ID,
+                    index=3,
+                    priority="P1",
+                    text=FALLBACK_ACTION,
+                    claimed_by=AGENT_ID,
+                    required_capabilities=["shell"],
+                ),
+            ],
+            role="agent",
+        )
+
+    unrelated = summary(4, 9)
+    waiting = next(
+        item for item in unrelated["backlog_items"]
+        if item["todo_id"] == MATERIAL_WAIT_ID
+    )
+    assert waiting["resume_ready"] is False, waiting
+    assert waiting["resume_condition"]["material_change_generation"] == 9, waiting
+    assert waiting["resume_condition"]["scoped_material_change_generation"] == 4, waiting
+    unrelated_quota = build_quota_should_run(
+        status_payload(unrelated, next_action=waiting["text"]),
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+    )
+    assert selected_todo_id(unrelated_quota) == FALLBACK_TODO_ID, unrelated_quota
+
+    matched = summary(10, 10)
+    resumed = next(
+        item for item in matched["backlog_items"]
+        if item["todo_id"] == MATERIAL_WAIT_ID
+    )
+    assert resumed["resume_ready"] is True, resumed
+    matched_quota = build_quota_should_run(
+        status_payload(matched, next_action=resumed["text"]),
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+    )
+    assert selected_todo_id(matched_quota) == MATERIAL_WAIT_ID, matched_quota
+
+
 def assert_ready_deferred_p0_preempts_open_p1_for_successor_replan() -> None:
     deferred_action = "[P0] Resume the validated release successor."
     agent_todos = quota_todo_summary(
@@ -410,6 +480,7 @@ def main() -> int:
     assert_not_ready_open_resume_todo_is_not_executable()
     assert_ready_open_resume_todo_can_run()
     assert_monitor_generation_resumes_without_boolean_or_replay_drift()
+    assert_scoped_monitor_generation_ignores_unrelated_case_changes()
     assert_ready_deferred_p0_preempts_open_p1_for_successor_replan()
     assert_nonblocking_user_action_preserves_successor_replan()
     assert_archived_done_resume_target_wakes_claimed_monitor()
