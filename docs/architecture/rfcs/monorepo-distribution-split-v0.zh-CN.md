@@ -599,6 +599,77 @@ R0 可以先于目录移动交付，但不代表内核合格。R3/R4 可选，�
   不关闭完整 R0/V10、M1、拆包安装、R1 managed minimal 或 D1–D7。不改变 preset、
   前端操作、权限或持久化状态；受保护执行仍由既有 owner 所有。
 
+### 2026-11-06 — 发现路径集成与下一条可执行边界
+
+- **已集成：** [#8012](https://github.com/loopx-project/loopx/pull/8012)
+  于 11 月 4 日将提案 head `58442be4d` 合并为 `83f569178`。在独立准备的
+  `main` 版本 `62e234c93` 上，全部 23 个发现与受保护分发用例通过。复验命令：
+  `uv run --extra test python -m pytest -q tests/test_cli_entrypoint.py -k 'capability_discovery or capability_non_discovery'`。
+  这验证当前源码集成；此前安装 wheel 与成对性能证据仍绑定原版本和环境。本次
+  复验不证明已安装宿主或新 wheel 的资格。
+- **已解决的前置问题：** [#8054](https://github.com/loopx-project/loopx/pull/8054)
+  （`886f2cdff`）将 capture I/O 移出 settlement plan 的冷 import。
+  `uv run --extra test python -m pytest -q tests/architecture/test_control_plane_import_boundaries.py::test_settlement_plan_import_does_not_load_native_capture_io`
+  在 `62e234c93` 上通过。11 月 4 日的失败仍是历史证据；后续修复移除了这一
+  特定 import 阻塞。本版本没有重跑更广的套件或配置的 mypy，不能将此前结果改写
+  为当前通过资格。
+- **下一源码切片：** 刻画既有 `generic-cli` managed Turn 路径，使用 SQLite
+  authority 并关闭可选任务 hook，作为所选 D2/D5 装配的候选。复用 Turn、host
+  selector 与类型化 authority owner。`tests/test_loopx_turn_driver.py` 中既有
+  CLI 中断与 successor 重放测试可定位集成接缝，但不证明 minimal preset。
+  下一片必须明确实际依赖闭包，并通过隔离、能产生任务产物的宿主进程验证中断、
+  重启和独立验收后的结果回读，保留原身份且不重复已确认效果。确定性的本地宿主
+  可以验证其合成 transport 边界，不证明模型宿主或完整 V4 旅程。
+- **剩余：** 完整 R0/V10、M1/I3/D3、独立 status 提案 #8011、拆包安装与 R1
+  均未关闭。D2/D5 仍由 owner 决策；本候选不改变 preset、默认值、执行权限或
+  发布承诺。继续移动目录不构成下一条执行证据。
+
+### 2026-11-06 — generic-cli/SQLite 装配候选与恢复证据
+
+这是 D2/D5 候选及源码刻画，不是已批准的 preset。复用既有 Turn、宿主选择、
+authority 与 settlement owner。
+
+| 维度 | 候选／观察到的边界 |
+| --- | --- |
+| 安装 | 当前单体 `loopx` 源码 checkout；macOS arm64 上 Python 3.13.5、Node 26.0.0。test extras 只准备实验，不是最小安装；不证明拆分发行物或已安装宿主资格 |
+| 宿主 | 既有 `generic-cli`、`isolated-headless`，经 `--host-adapter-command-json` 使用 JSON stdio；一个确定性的本地任务产物进程和独立、受信 argv 验收器。该夹具无须模型 session 或 workspace/IM 服务 |
+| Authority | 经既有 TypeScript effect runtime 及本地 RPC 传输使用规范 SQLite，并复用 Turn journal、验收与结算。测试脚手架以 `soft_claim` shadow 初始化；不能仅靠这些证据证明正常 hard-lease 的 V2 一致性 |
+| 必需的逻辑内核 | Bootstrap／所选 CLI、TurnEnvelope 与宿主准入、当前 authority／stop／budget／claim 规则、journal／恢复、进程监督、独立验收和结果／结算回读。owner 与 standard 共享 |
+| 可选激活 | 夹具不启用任务 memory 或其他可选 hook，不运行模型任务或外部操作。加载 settings／policy helper 不证明激活，也不授权删除它们 |
+| 身份与恢复 | 使用 `--resume-turn-key` 恢复原 journal；该路径有意拒绝新的 `--turn-instance-id`。复用缓存中已确认的宿主工作；未确认工作及其他中断点继续由各自契约治理 |
+
+- **真实任务与恢复：** 真实宿主进程写出零至七的平方数，独立进程检查预先给定的
+  字面数组。正常路径和 typed host result 持久化后对所持 CLI 注入 OS `SIGKILL`
+  的路径，在各自隔离 SQLite 夹具中最终都只有一次宿主调用、一次 writeback 和
+  一次扣额。中断路径在重启前没有扣额；重启验收缓存结果，不再次调用宿主。随后
+  committed 重放报告没有重复 host／writeback／扣额／scheduler 效果。两条路径的
+  产物字节一致；没有对活跃项目状态注入故障。
+- **实际加载：** 产品版本 `62e234c93` 上，正常 Python 路径加载 538 个 LoopX
+  模块，涉及 21 个 capability 命名空间，不加载 `loopx.cli` 或 `loopx.chat` 树。
+  第二轮使用隔离的既有 runtime broker 和透明 Node module-load observer；其
+  bootstrap、执行与恢复加载 `control_plane` 下 231 个 TypeScript 文件和八个
+  JSON 文件。这是观察到的闭包，不是已批准的 core 成员。已核验私有 broker 的
+  身份、停止 ACK 和进程退出；没有停止共享服务。
+- **成本与限制：** 父进程插桩区分必需本地 RPC 与外部网络连接，后者观察为零。
+  正常调用观察到 34 个 Git 子进程、一个 Node 版本探测、一个 Node 宿主监督器和
+  一个 Python 验收器；监督器另行启动任务宿主。child／broker CPU 与 RSS、完整
+  wire／context 字节及模型宿主成本尚未测量。这些小规模插桩演练不是重复的成对
+  性能采样，不建立 D6 预算或长程收益证据。
+- **独立回归证据：** `tests/test_loopx_turn_driver.py` 中
+  `test_managed_start_interruption_preserves_reservation_and_attempt` 的六个
+  SQLite 用例，以及 `test_turn_run_once_cli_rejects_unproven_host_claim_before_writeback`
+  和 `test_turn_run_once_cli_replays_declared_successor_after_interruption` 均通过。
+  探针设置拒绝与产品失败分别保留：过宽网络 observer、错误的 host-request schema
+  及冲突的恢复 flags 已修正，不改生产代码、不放松权限，失败观察仍保留。
+- **下一 owner 变更：** `loopx/cli_commands/turn_run_once.py` 在选宿主前导入
+  DSH host builder，但调用点只在 `args.host == "dsh"` 分支。generic 路径因此
+  加载未选择的 `turn_dsh_host` 和 `dsh_goal_mode.turn_host_adapter`。先刻画既有
+  export／patch 点，再在其 owner 接缝延迟加载，并复验 generic／DSH／Codex 行为
+  与默认关闭一致性。命名空间数量本身不支持删除共享 policy helper。
+- **剩余：** opt-in minimal 选择、完整 D2/D5 采纳、hard-lease 与上下文 V2/V5
+  一致性、尚未确认的宿主工作期间中断、模型宿主 V4、完整 V10 与拆包安装资格仍
+  未关闭。不引入新 engine、provider、默认值、权限字段或 runtime self-merge。
+
 ### 2026-11-07 — Heartbeat pre-quota 按需加载
 
 - **基线与 owner：**`79665b97a`。heartbeat builder 已在 external evidence polling
