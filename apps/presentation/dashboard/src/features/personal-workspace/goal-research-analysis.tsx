@@ -7,6 +7,8 @@ import {requestJson} from "../../data/chat";
 import {sourceReadApiUrl} from "../../data/local-status-query";
 import {ContextHelp} from "./context-help";
 import {ResearchSynthesis} from "./goal-research-synthesis";
+import {ResearchCaseStudy} from "./research-case-study";
+import type {TrajectoryCaseStudy} from "../../../../../../loopx/control_plane/capabilities/trajectory_case_study.js";
 import "./goal-research-analysis.css";
 
 // Transport views of the existing toolkit producer, not an assessment, score,
@@ -16,6 +18,8 @@ type Job = {status: string; attempt?: number; analysis_wall_seconds?: number | n
   config?: {model: string; effort: string; service_tier: string}; served_service_tier?: string | null;
   usage?: {input_tokens?: number; output_tokens?: number; reasoning_output_tokens?: number} | null};
 type Pack = ResearchProgressPack & {source_count: number; analysis_key: string; method_version: string;
+  case_study?: TrajectoryCaseStudy;
+  case_study_summary?: {title: string; language: TrajectoryOutputLanguage};
   display_request?: {schema_version: 'research_display_v1'; snapshot_key: string; source_id: string; source_namespace: string; eligible: number};
   result_attempt?: number;
   result_job?: Job;
@@ -344,6 +348,26 @@ export function ResearchReportSummary({analysis: a}: {analysis: Controller}) {
   // Keep the originating control mounted for keyboard return after closing.
   return result?.synthesis ? <div hidden={a.location.open}><ResearchSynthesis key={result.analysis_key} synthesis={result.synthesis} zh={a.zh}
     onExpand={origin => {a.trigger.current = origin; a.show();}} onCitation={a.readCitation}/></div> : null;
+}
+
+export function ResearchCaseReading({analysis: a, onHistory}: {analysis: Controller; onHistory: () => void}) {
+  const packs = (a.snapshot?.catalog.packs ?? []).filter(p => p.case_study_summary);
+  const p = a.pack;
+  const firstStudy = packs[0]?.pack_id;
+  useEffect(() => {
+    if (!a.loading && !a.readError && p && !p.case_study && firstStudy) a.select(firstStudy);
+  }, [a.loading, a.readError, p?.pack_id, Boolean(p?.case_study), firstStudy]);
+  return <section className="research-case-reader" aria-label={a.zh ? "Case 深度解读" : "Case studies"}>
+    <header className="case-reader-toolbar"><label>{a.zh ? "解读版本" : "Study version"}
+      <select aria-label={a.zh ? "选择解读版本" : "Select study version"} value={p?.case_study ? p.pack_id : ""} onChange={e => a.select(e.target.value)}>
+        {!p?.case_study ? <option value="">{a.zh ? "选择已保存的解读" : "Choose a saved study"}</option> : null}
+        {packs.map(pack => <option key={pack.pack_id} value={pack.pack_id}>{pack.title}</option>)}
+      </select></label><button type="button" onClick={onHistory}>{a.zh ? "研究记录与分析" : "Research records and analysis"} ↗</button></header>
+    <AnalysisReadState analysis={a}/>
+    {p?.case_study ? <ResearchCaseStudy key={p.pack_id} study={p.case_study} zh={a.zh} historical={p.applicability !== "current"}
+      scope={p.scope} onCitation={a.readCitation}/> : !a.loading && !a.readError ? <p>{a.zh ? "选择一份解读，阅读问题背景、策略差异、关键转折与证据。" : "Choose a study to read its background, approaches, turning points and evidence."}</p> : null}
+    <ResearchCitationPanel analysis={a}/>
+  </section>;
 }
 
 function CitedToolText({text, zh}: {text: string; zh: boolean}) {
