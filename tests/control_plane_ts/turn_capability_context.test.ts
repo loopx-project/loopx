@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
+import {quotaActionSignatureDocument} from "../../loopx/control_plane/quota/turn_envelope.ts";
 import {validateTurnContextRegistration, validateTurnContextContribution,
   projectTurnContextContribution} from "../../loopx/control_plane/turn_driver/capability_context.ts";
 
@@ -42,6 +44,20 @@ const quotaSource = {goal_id: "fixture-goal", agent_id: "fixture-agent",
   goal_boundary: {write_scope: ["fixture/**"], capabilities: {reward_memory: {
     enabled: true, configured_for_agent: true, experiment_available: true,
     automatic_recall: true, automatic_ingest: false}}}};
+
+test("an existing quota contribution can replay with its exact legacy reader binding", () => {
+  const source = {...quotaSource, replan_read_path: "fixture/decision.json",
+    replan_action_packet: {obligation_id: "fixture-replan", decision: "replan_required"}};
+  const current = validateTurnContextContribution({registration, source, result});
+  const {basis_digest: currentBasis, ...value} = current;
+  const legacyBasis = canonicalAuthoritySha256({source: {goal_id: source.goal_id, agent_id: source.agent_id,
+    governing: quotaActionSignatureDocument(source)}, ...value});
+  assert.notEqual(legacyBasis, currentBasis);
+  const contribution = {...value, basis_digest: legacyBasis};
+  assert.deepEqual(projectTurnContextContribution({contribution, source, readback: result.readback}), contribution);
+  assert.throws(() => projectTurnContextContribution({contribution, readback: result.readback,
+    source: {...source, replan_read_path: "fixture/other.json"}}));
+});
 
 test("native quota context survives location-only capture binding", () => {
   const contribution = validateTurnContextContribution({registration, source: quotaSource, result});
