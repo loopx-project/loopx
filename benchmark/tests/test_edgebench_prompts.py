@@ -1,10 +1,12 @@
 from pathlib import Path
 from types import SimpleNamespace
+import asyncio
 import json
 import os
 import subprocess
 import sys
 import tempfile
+import time
 
 import pytest
 
@@ -194,8 +196,9 @@ def test_native_goal_transport_rejects_objective_outside_task_prompt(objective, 
 
 
 @pytest.mark.parametrize("profile", ["heartbeat-resume", "heartbeat-explore"])
+@pytest.mark.parametrize("native_child_limit", [None, 3])
 def test_native_research_objective_and_full_planning_input_survive_real_goal_bootstrap(
-        tmp_path, monkeypatch, profile):
+        tmp_path, monkeypatch, profile, native_child_limit):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
     from sforge.harness.config import SForgeConfig
@@ -243,13 +246,34 @@ def test_native_research_objective_and_full_planning_input_survive_real_goal_boo
     prompt = native_task_prompt(query, ["solution.py"], **options)
     worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
         profile=profile, cwd=str(project), feedback_prompt=prompt, workspace_instructions=policy,
-        task_objective=query)
+        task_objective=query, native_child_limit=native_child_limit)
+    from benchmark.runtime.codex import native_child_instructions
+    prompt = native_child_instructions(native_child_limit) + prompt
+    policy = native_child_instructions(native_child_limit) + policy
     worker.install_stop_hook(None, None, tmp_path, None)
     worker.environment = Environment()
     remote = control / "entry.md"
     try:
         command = worker.format_run_cmd(str(remote), internet=False)
         registry = json.loads(Path(harbor._REGISTRY).read_text())
+        spawn = registry["goals"][0]["spawn_policy"]
+        assert spawn["allowed"] is (native_child_limit is not None)
+        assert spawn["mode"] == ("multi_subagent" if native_child_limit else "default")
+        assert spawn["max_children"] == 3
+        assert registry["goals"][0]["coordination"]["registered_agents"] == ["benchmark-agent"]
+        delegation = asyncio.run(worker.runtime._loopx(worker.environment, [
+            "agent-context", "--goal-id", "benchmark-goal", "--agent-id", "benchmark-agent",
+            "--phase", "before_plan",
+        ], cwd=str(project)))
+        assert delegation["read_only"] is True
+        assert delegation["host_receipts_observed"] is False
+        context = delegation["agent_context"]
+        if native_child_limit is None:
+            assert context is None
+        else:
+            contribution = next(c for c in context["contributions"] if c["capability_id"] == "multi_subagent")
+            assert contribution["facts"]["max_children"] == 3
+            assert contribution["facts"]["capacity_contract"]["live_availability"] == "not_observed"
         state = Path(registry["goals"][0]["state_file"])
         if not state.is_absolute():
             state = project / state
@@ -280,6 +304,30 @@ def test_native_research_objective_and_full_planning_input_survive_real_goal_boo
         assert core["objective_source"] == "active_state" and core["acceptance_contract"] is None
         assert worker.format_run_cmd(str(remote), internet=False, resume=True) == command
         assert (project / "AGENTS.md").read_text().count(policy) == 1
+        if native_child_limit is not None:
+            before_registry = Path(harbor._REGISTRY).read_bytes()
+            before_state = state.read_bytes()
+            before_task = Path(harbor._TASK_DOC).read_bytes()
+            asyncio.run(worker.runtime._verify_phase_configuration(worker.environment, cwd=str(project)))
+            assert Path(harbor._REGISTRY).read_bytes() == before_registry
+            assert state.read_bytes() == before_state
+            # A receiver may not repair an incompatible retained Goal implicitly.
+            from dataclasses import replace
+            worker.runtime.execution = replace(worker.runtime.execution, native_child_limit=2)
+            with pytest.raises(RuntimeError, match="Native child authorization differs"):
+                asyncio.run(worker.runtime._prepare_phase(worker.environment, "Mismatched receiver input", cwd=str(project)))
+            assert Path(harbor._REGISTRY).read_bytes() == before_registry
+            assert state.read_bytes() == before_state
+            assert Path(harbor._TASK_DOC).read_bytes() == before_task
+            # The same read-before-write requirement applies to the ordinary
+            # warm receiver entrypoint after workspace restoration.
+            worker.prepared = False
+            worker.warm_start = SimpleNamespace(deadline_epoch=time.time() + 300)
+            with pytest.raises(RuntimeError, match="Native child authorization differs"):
+                worker.format_run_cmd(str(remote), internet=False)
+            assert Path(harbor._REGISTRY).read_bytes() == before_registry
+            assert state.read_bytes() == before_state
+            assert Path(harbor._TASK_DOC).read_bytes() == before_task
     finally:
         subprocess.run([sys.executable, "-c", "from loopx.control_plane.effect_runtime import "
             "effect_runtime_result; effect_runtime_result('runtime.shutdown',{},retry_safe=False)"],

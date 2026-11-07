@@ -76,10 +76,11 @@ def point(tmp_path, request, monkeypatch):
     (workspace / "candidate").write_text("retained candidate")
     (workspace / "candidate").chmod(0o600)
     config = tmp_path / "config.toml"
-    if getattr(request, "param", None) in {"gateway", "gateway-on"}:
+    if getattr(request, "param", None) in {"gateway", "gateway-on", "gateway-children"}:
         from benchmark.runtime.codex import Execution, codex_settings
         config.write_text(codex_settings(execution=Execution(context="resume",
-            context_delivery="on" if request.param == "gateway-on" else "off"),
+            context_delivery="on" if request.param == "gateway-on" else "off",
+            native_child_limit=3 if request.param == "gateway-children" else None),
             workspace=workspace, model="original", effort="high",
             base_url="http://gateway:4001/v1", wire_api="responses"))
     else:
@@ -231,10 +232,12 @@ def test_staging_preserves_sealed_modes(point, monkeypatch, tmp_path, model_tran
         assert "destination_config" not in declaration
 
 
-@pytest.mark.parametrize("point,context_delivery", [("gateway", "off"), ("gateway-on", "on")], indirect=["point"])
+@pytest.mark.parametrize("point,context_delivery,native_child_limit", [
+    ("gateway", "off", None), ("gateway-on", "on", None), ("gateway-children", "off", 3),
+], indirect=["point"])
 @pytest.mark.parametrize("model_transition", [False, True])
 def test_fresh_gateway_stages_exact_first_worker_settings(point, monkeypatch, tmp_path,
-                                                        model_transition, context_delivery):
+                                                        model_transition, context_delivery, native_child_limit):
     from benchmark.runtime.codex import Execution, prepare_codex_home
 
     start, workspace = point
@@ -272,7 +275,8 @@ def test_fresh_gateway_stages_exact_first_worker_settings(point, monkeypatch, tm
     home.mkdir()
     skills.mkdir()
     (home / "config.toml").write_bytes(effective)
-    args = dict(home=home, execution=Execution(context="resume", context_delivery=context_delivery), workspace=workspace,
+    args = dict(home=home, execution=Execution(context="resume", context_delivery=context_delivery,
+        native_child_limit=native_child_limit), workspace=workspace,
         model=model, effort=effort, base_url="http://gateway:4002/v1",
         api_key="synthetic", wire_api="responses", skills=skills)
     old_receiver = tmp_path / "unrebound-home"
@@ -282,8 +286,26 @@ def test_fresh_gateway_stages_exact_first_worker_settings(point, monkeypatch, tm
         prepare_codex_home(**{**args, "home": old_receiver})
     assert (old_receiver / "config.toml").read_bytes() == requested
     prepare_codex_home(**args)
+    if native_child_limit is not None:
+        for changed in [None, 2]:
+            with pytest.raises(ValueError, match="settings changed within a trial"):
+                prepare_codex_home(**{**args, "execution": replace(args["execution"], native_child_limit=changed)})
+        assert (home / "config.toml").read_bytes() == effective
     with pytest.raises(ValueError, match="settings changed within a trial"):
         prepare_codex_home(**{**args, "base_url": "http://gateway:4003/v1"})
+
+
+@pytest.mark.parametrize("point", ["gateway-children"], indirect=True)
+def test_warm_render_cannot_change_native_child_authorization(point):
+    start, workspace = point
+    effective = start.config.read_bytes().replace(b':4001/', b':4002/').replace(
+        b'max_concurrent_threads_per_session = 3', b'max_concurrent_threads_per_session = 2')
+    class NoEffects:
+        def __getattr__(self, name):
+            pytest.fail("capacity mismatch must reject before restoring workspace or authority")
+    with pytest.raises(ValueError):
+        asyncio.run(start.stage(NoEffects(), str(workspace), effective_config=effective,
+            provider_base_url="http://gateway:4002/v1"))
 
 
 @pytest.mark.parametrize("point", ["gateway"], indirect=True)
