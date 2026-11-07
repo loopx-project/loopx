@@ -13,7 +13,7 @@ from loopx.control_plane import effect_runtime as runtime
 
 def test_todo_source_views_share_only_the_exact_request_source(monkeypatch):
     from loopx.control_plane.todos.summary_item import (
-        todo_planning_source_items, todo_summary_source_items,
+        todo_source_display_views,
     )
 
     requests = []
@@ -29,22 +29,23 @@ def test_todo_source_views_share_only_the_exact_request_source(monkeypatch):
                          "role": "agent", "status": "done", "done": True,
                          "note": "Original recovery detail", "successor_todo_ids": ["todo_next"]}]}
     with runtime.effect_runtime_request_scope():
-        assert todo_summary_source_items(source) == []
-        assert todo_planning_source_items(source) == []
-        terminal = todo_planning_source_items(source, include_terminal=True)
+        views = todo_source_display_views(source)
+        assert views["summary"] == []
+        assert views["planning"] == []
+        terminal = views["terminal"]
         assert len(terminal) == 1
         assert terminal[0]["note"] == "Original recovery detail"
         assert terminal[0]["successor_todo_ids"] == ["todo_next"]
         assert len(requests) == 1
         terminal[0]["successor_todo_ids"].append("todo_unrelated")
-        assert todo_planning_source_items(source, include_terminal=True)[0]["successor_todo_ids"] == ["todo_next"]
+        assert todo_source_display_views(source)["terminal"][0]["successor_todo_ids"] == ["todo_next"]
         # The same Todo id cannot alias changed full-source facts.
         source["items"][0]["note"] = "Changed recovery detail"
-        assert todo_planning_source_items(source, include_terminal=True)[0]["note"] == "Changed recovery detail"
+        assert todo_source_display_views(source)["terminal"][0]["note"] == "Changed recovery detail"
         assert len(requests) == 2
     # A later logical request starts with a new source read and result.
     with runtime.effect_runtime_request_scope():
-        assert todo_planning_source_items(source, include_terminal=True)[0]["note"] == "Changed recovery detail"
+        assert todo_source_display_views(source)["terminal"][0]["note"] == "Changed recovery detail"
     assert len(requests) == 3
 
 
@@ -70,8 +71,30 @@ def test_large_or_unscoped_todo_sources_keep_single_view_transport(monkeypatch):
     assert set(requests[1]) == {"summary_display"}
 
 
+def test_explicit_large_source_falls_back_to_existing_single_view_limits(monkeypatch):
+    from loopx.control_plane.todos.summary_item import todo_source_display_views
+
+    requests = []
+    original = runtime.effect_runtime_request
+
+    def track(method, params, **kwargs):
+        if method == "todo.context.page":
+            requests.append(params)
+        return original(method, params, **kwargs)
+
+    monkeypatch.setattr(runtime, "effect_runtime_request", track)
+    source = {"items": [{"todo_id": "todo_retained", "text": "Completed work", "status": "done", "done": True,
+                         "note": "Complete recovery detail " * (runtime.MAX_REQUEST_BYTES // 64)}]}
+    with runtime.effect_runtime_request_scope():
+        views = todo_source_display_views(source)
+    assert views["summary"] == views["planning"] == []
+    assert views["terminal"][0]["note"] == source["items"][0]["note"]
+    assert len(requests) == 3
+    assert all(set(request) == {"summary_display"} for request in requests)
+
+
 def test_incomplete_source_views_fail_before_entering_the_request_memo(monkeypatch):
-    from loopx.control_plane.todos.summary_item import todo_summary_source_items
+    from loopx.control_plane.todos.summary_item import todo_source_display_views
 
     calls = []
     original = runtime.effect_runtime_request
@@ -87,9 +110,68 @@ def test_incomplete_source_views_fail_before_entering_the_request_memo(monkeypat
     source = {"items": [{"todo_id": "todo_retained", "text": "Acceptance", "status": "done"}]}
     with runtime.effect_runtime_request_scope():
         with pytest.raises(RuntimeError, match="invalid TypeScript Todo source views"):
-            todo_summary_source_items(source)
-        assert todo_summary_source_items(source) == []
+            todo_source_display_views(source)
+        assert todo_source_display_views(source)["summary"] == []
     assert len(calls) == 2
+
+
+def test_single_view_delivery_does_not_compute_or_snapshot_unused_views(monkeypatch):
+    from loopx.control_plane.work_items.delivery_history import project_delivery_response
+
+    requests, snapshots = [], []
+    original = runtime.effect_runtime_request
+    read_snapshot = runtime._read_local_snapshot_response
+
+    def track(method, params, **kwargs):
+        if method == "todo.context.page":
+            requests.append(params)
+        return original(method, params, **kwargs)
+
+    def snapshot(*args, **kwargs):
+        snapshots.append(args)
+        return read_snapshot(*args, **kwargs)
+
+    monkeypatch.setattr(runtime, "effect_runtime_request", track)
+    monkeypatch.setattr(runtime, "_read_local_snapshot_response", snapshot)
+    source = {"items": [{"todo_id": f"todo_{i}", "text": "Work", "role": "agent",
+                         "status": "open", "successor_todo_ids": ["todo_next"]}
+                        for i in range(8000)]}
+    with runtime.effect_runtime_request_scope():
+        result = project_delivery_response({"todo_id": "todo_0", "agent_id": "agent-a"}, source)
+    assert result["schema_version"] == "delivery_response_v0"
+    assert len(requests) == 1
+    assert set(requests[0]) == {"summary_display"}
+    assert requests[0]["summary_display"]["include_terminal"] is True
+    assert snapshots == [], "a sub-limit single display must not materialize unused views"
+
+
+def test_quota_caller_explicitly_composes_only_the_agent_source(monkeypatch):
+    from loopx.control_plane.testing.quota_fixtures import quota_status_payload, quota_todo_item, quota_todo_summary
+    from loopx.quota import build_quota_should_run
+
+    requests = []
+    original = runtime.effect_runtime_request
+
+    def track(method, params, **kwargs):
+        if method == "todo.context.page":
+            requests.append(params)
+        return original(method, params, **kwargs)
+
+    monkeypatch.setattr(runtime, "effect_runtime_request", track)
+    agent = quota_todo_summary([quota_todo_item(todo_id="todo_agent", title="Agent work", claimed_by="agent-a")])
+    user = quota_todo_summary([quota_todo_item(todo_id="todo_user", title="User action", role="user", blocks_agent="agent-b")])
+    status = quota_status_payload(goal_id="goal-a", status="active_state_agent_todo",
+                                  recommended_action="Agent work", agent_todos=agent, user_todos=user,
+                                  coordination={"registered_agents": ["agent-a", "agent-b"]})
+    with runtime.effect_runtime_request_scope():
+        result = build_quota_should_run(status, goal_id="goal-a", agent_id="agent-a", available_capabilities=["shell"])
+    bundles = [p["summary_display_views"] for p in requests if "summary_display_views" in p]
+    assert len(bundles) == 1
+    assert bundles[0]["source"]["record"]["first_open_items"][0]["todo_id"] == "todo_agent"
+    assert any("summary_display" in p and
+               p["summary_display"].get("source", {}).get("record", {}).get("first_open_items", [{}])[0].get("todo_id") == "todo_user"
+               for p in requests)
+    assert result["agent_identity"]["agent_id"] == "agent-a"
 
 
 def serial_fingerprint(root: Path) -> str:

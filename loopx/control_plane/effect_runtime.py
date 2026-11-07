@@ -1601,38 +1601,16 @@ def effect_runtime_result(
     large_local_snapshot: bool = False,
 ) -> Any:
     state = _REQUEST_RUNTIME_REVISION.get() if method == "todo.context.page" else None
-    source_view = None
-    if state is not None and set(params) == {"summary_display"}:
-        display = params["summary_display"]
-        if (isinstance(display, dict) and isinstance(display.get("source"), dict)
-                and set(display) <= {"source", "handoff_gates", "include_terminal"}):
-            # The source is a complete read record, not a Todo-id cache. Compose
-            # its existing lenses once within this revision-pinned request;
-            # later views reuse the same bytes, without another authority read.
-            bundle = {"summary_display_views": {
-                "source": display["source"],
-                "handoff_gates": display.get("handoff_gates", []),
-            }}
-            try:
-                size = len(_encode_rpc_json(bundle))
-            except (TypeError, ValueError, OverflowError, UnicodeError, RecursionError):
-                size = MAX_REQUEST_BYTES
-            # Reserve space for all three results under the existing ceiling.
-            # Larger sources retain their original single-view transport.
-            if size <= MAX_REQUEST_BYTES // 4:
-                params = bundle
-                source_view = ("terminal" if display["include_terminal"] is True else "planning") if "include_terminal" in display else "summary"
-
-    def project_view(result: Any) -> Any:
-        if source_view is None:
-            return result
-        if not isinstance(result, dict) or any(
+    def validate_result(result: Any) -> Any:
+        # A caller must explicitly request a bundle. A request scope or a small
+        # source does not establish that it will consume additional views.
+        if set(params) == {"summary_display_views"} and (not isinstance(result, dict) or any(
             not isinstance(result.get(view), list)
             or any(not isinstance(row, dict) for row in result[view])
             for view in ("summary", "planning", "terminal")
-        ):
+        )):
             raise RuntimeError("invalid TypeScript Todo source views")
-        return {"items": result[source_view]}
+        return result
 
     key = None
     if state is not None:
@@ -1646,7 +1624,7 @@ def effect_runtime_result(
         if key is not None:
             prior = state.todo_context_result(key)
             if prior is not None:
-                return project_view(json.loads(prior))  # A caller cannot mutate another view.
+                return validate_result(json.loads(prior))  # A caller cannot mutate another view.
     result = effect_runtime_request(
         method,
         params,
@@ -1654,7 +1632,7 @@ def effect_runtime_result(
         retry_safe=retry_safe,
         large_local_snapshot=large_local_snapshot,
     ).get("result")
-    projected = project_view(result)
+    validate_result(result)
     if state is not None and key is not None and isinstance(result, dict):
         try:
             encoded = json.dumps(result, ensure_ascii=False, allow_nan=False,
@@ -1663,7 +1641,7 @@ def effect_runtime_result(
             pass
         else:
             state.remember_todo_context(key, encoded)
-    return projected
+    return result
 
 
 def effect_runtime_projection_result(method: str, params: Mapping[str, Any]) -> Any:

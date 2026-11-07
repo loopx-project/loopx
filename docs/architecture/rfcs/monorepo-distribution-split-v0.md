@@ -1825,14 +1825,30 @@ implementation; all earlier milestone, adoption and complete-cost gaps remain.
 ### 2026-11-07 — Reuse complete Todo display sources within a managed request
 
 The existing `todo.context.page` owner can compose summary, planning and retained
-terminal display views from one complete supplied source. The Python transport
-reuses those results only inside an already revision-pinned logical request,
-using exact source JSON and request options rather than Todo ids. Changed source
-facts and later requests revalidate; mutable callers receive independent decoded
-values. Large and unscoped sources keep the original single-view transport, and
-an incomplete response fails before entering the bounded request memo.
+terminal display views from one complete supplied source. The quota preparation
+caller explicitly requests the Agent source's three views and passes retained
+terminal rows to its frontier consumer. User-source and general display callers
+keep their requested single view. Source selection and each display rule retain
+their existing owners. The orchestration fallback reuses an independent copy of
+the already selected summary instead of requesting it again.
 
-Against `main@32167518b3`, the source and isolated wheel passed six synthetic
+Inside an already revision-pinned logical request, exact source JSON and request
+options bound the transport memo. Changed source facts and later requests
+revalidate; mutable callers receive independent decoded values. Large opt-in
+inputs keep the original per-view transport, and incomplete bundles fail before
+memo admission. The batch input threshold does not predict response size or
+promise inline transport. An explicit multi-view request can use the existing
+private response snapshot when the combined output exceeds the socket limit.
+
+Independent review of the initial proposal found that the generic transport
+expanded single-view calls into three views. An 8,000-row delivery-response
+caller retained the same final output but materialized about 11.18 MB of unused
+combined response instead of its roughly 3.73 MB single-view socket response.
+That performance failure is retained. The corrected caller-owned composition
+removes the implicit expansion; matching single-view and complete governed
+source/wheel qualification are recorded with the revision being proposed.
+
+The initial proposal against `main@32167518b3` passed six synthetic source and isolated-wheel
 101-Todo File/SQLite governed CLI lifecycles. They retained the verified artifact,
 original completion time, four settlement receipts, one debit, Effect restart
 recovery and rejected evidence replacement. A dropped write-scope response
@@ -1841,6 +1857,37 @@ fixtures and focused source-isolation tests also cover the existing three views.
 One profiled SQLite guard reduced JSON parameter bytes from about 1.900 MB to
 1.556 MB and calls from 89 to 87; loaded modules remained 503. These counts are
 diagnostic and do not qualify complete wire cost, latency or long-horizon benefit.
+
+
+The corrected single-call comparison uses the same synthetic source on
+`main@dee549663`, the reviewed defective head and the repaired source. All three
+produce the same final delivery response. The repaired request parameters and serialized response
+bytes match main exactly; its nonempty response snapshot bytes are
+zero for both row counts. Five warm calls per arm gave the following exploratory
+medians, including the display and delivery-response projections:
+
+| Rows | Main seconds | Defective proposal seconds | Repair seconds | Defective response snapshot bytes | Repair snapshot bytes |
+| --- | --- | --- | --- | --- | --- |
+| 8,000 | 0.159 | 0.636 | 0.161 | 9,480,165 | 0 |
+| 15,000 | 0.284 | 1.344 | 0.286 | 17,775,165 | 0 |
+
+This reproduces and removes the single-view regression. It does not qualify the
+complete CLI, daemon CPU/memory, full marginal cost or long-horizon benefit.
+
+
+The repaired source and isolated wheel pass six 101-Todo File/SQLite governed
+CLI lifecycles with the verified artifact, original completion time, four
+receipts, one debit, restart and refusal/replay checks. A recursive dropped-scope
+response mutation fails at the independent public guard oracle. The isolated
+PostgreSQL 16.15 suites pass 390 store and 11 service cases with zero skipped.
+
+Three interleaved unprofiled default-SQLite whole-CLI pairs have median wall time
+12.24 seconds on main and 12.71 seconds on the repair. Two candidate runs are
+slower; ranges overlap. A separate profiled guard reduces parameter bytes from
+1,899,603 to 1,546,162 and calls from 90 to 87, with 503 modules unchanged.
+These observations do not establish a whole-path performance benefit. Daemon
+CPU/memory, total wire/file writes, complete marginal cost and adoption remain
+unqualified; the provider-first transaction remains the next accepted boundary.
 
 This is a reversible display-transport increment, not the complete provider-first
 Todo projection transaction. Provider reads, revisions, lease/actor fences and
@@ -1867,7 +1914,7 @@ boolean or text distinctions remain observable. Provider rows cannot substitute
 for independent caller evidence or pending intent; all-done counts alone cannot
 reconstruct a closure declaration.
 
-`goal_vision_wait` separately consumes complete lineage, scoped blockers,+acceptance gaps and resume facts. The combined transaction must preserve each
+`goal_vision_wait` separately consumes complete lineage, scoped blockers, acceptance gaps and resume facts. The combined transaction must preserve each
 causal obligation, including when two obligations share a witness. Full notes,
 write scopes, archive/settled identity and source provenance remain part of its
 parity oracle.

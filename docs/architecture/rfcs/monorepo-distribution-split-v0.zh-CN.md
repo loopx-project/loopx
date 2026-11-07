@@ -1394,18 +1394,56 @@ lineage、pause/gates 与 pending intents。新增更多 leaf RPC 或有损裁�
 ### 2026-11-07 — 在受管请求内复用完整 Todo 展示来源
 
 既有 `todo.context.page` owner 可从同一完整输入来源组合 summary、planning 和
-保留 terminal 的展示视图。Python 传输仅在已经固定 runtime revision 的逻辑请求
-内复用结果，以完整 source JSON 和请求选项匹配，不以 Todo id 猜测相等。来源事实
-变化和后续请求重新验证；可变调用方获得独立解码值。大来源和不在请求 scope 内的
-调用保留原 single-view 传输；不完整响应在进入既有有界 request memo 前失败。
+保留 terminal 的展示视图。Quota preparation 调用方显式请求 Agent 来源的三种
+视图，并把保留 terminal 的 rows 传给 frontier 消费方。User 来源及通用展示调用方
+保留自己请求的单一视图。来源选择和每种展示规则保留原 owner。Orchestration
+fallback 复用已选 summary 的独立副本，避免再次请求相同展示。
 
-对照 `main@32167518b3`，源码与隔离安装 wheel 的六组 101-Todo File/SQLite
+已经固定 runtime revision 的逻辑请求内，以完整 source JSON 和请求选项约束
+传输 memo。来源事实变化和后续请求重新验证；可变调用方获得独立解码值。较大的
+显式组合输入保留原逐视图传输，不完整组合响应在进入 memo 前失败。Batch 输入
+阈值不能预测响应大小，也不保证 socket 内联传输；显式多视图的合计输出超过
+socket 限制时，仍可能使用既有私有响应 snapshot。
+
+初始提案的独立评审发现，通用传输把单视图调用扩大为三种视图。8,000 条记录的
+单次 delivery-response 调用最终输出相同，却把原约 3.73 MB 的单视图 socket
+响应扩大成约 11.18 MB 的组合响应并写盘。保留这次性能失败。修复后的调用方
+显式组合移除了这种隐式扩大；单视图对照和完整受管 source/wheel 验证按本次提案
+revision 记录。
+
+初始提案对照 `main@32167518b3`，源码与隔离安装 wheel 的六组 101-Todo File/SQLite
 受管 CLI 生命周期通过，保留已验证产物、原完成时间、四种 settlement receipt、
 一次 debit、Effect 重启恢复及 evidence 替换拒绝。刻意丢弃 write-scope 响应字段的
 mutation 在独立公开 guard scope 检查失败。冻结展示 fixture 和聚焦来源隔离用例
 同时覆盖既有三种视图。一次带 profiler 的 SQLite guard 观察到 JSON 参数约
 1.900 MB → 1.556 MB，调用 89 → 87，已加载模块仍为 503。这些计数仅用于诊断，
 不验收完整 wire 成本、延迟或长程收益。
+
+
+修复后的单次调用对照在 `main@dee549663`、已评审的缺陷 head 和修复源码上
+使用相同合成来源，三者最终 delivery response 相同。修复的请求参数和响应字节
+与 main 完全一致；两种记录规模的非空响应 snapshot 字节都为零。每个版本五次
+热调用的探索性中位数如下，包含 display 和 delivery-response 两种 projection：
+
+| Rows | Main 秒 | 缺陷提案秒 | 修复秒 | 缺陷响应 snapshot 字节 | 修复 snapshot 字节 |
+| --- | --- | --- | --- | --- | --- |
+| 8,000 | 0.159 | 0.636 | 0.161 | 9,480,165 | 0 |
+| 15,000 | 0.284 | 1.344 | 0.286 | 17,775,165 | 0 |
+
+此对照复现并消除了单视图性能回归，不能验收完整 CLI、daemon CPU/内存、完整
+边际成本或长程收益。
+
+
+修复后的源码及隔离 wheel 通过六组 101-Todo File/SQLite 受管 CLI 生命周期，
+保留已验证产物、原完成时间、四种 receipt、一次 debit、重启恢复与拒绝／重放。
+递归丢弃响应中的 write scope 的 mutation 在独立公开 guard oracle 失败。隔离
+PostgreSQL 16.15 的 390 个 store 和 11 个 service 用例通过，零 skipped。
+
+三组交错、无 profiler 的默认 SQLite 完整 CLI 对照中，main 墙钟中位数为
+12.24 秒，修复为 12.71 秒；两次候选更慢，范围重叠。独立 profiled guard 的参数
+字节从 1,899,603 降到 1,546,162，调用从 90 降到 87，模块仍为 503。这些观察
+未证明完整路径性能收益。Daemon CPU/内存、总 wire/file 写入、完整边际成本及
+采纳仍未验收；完整 provider-first 事务继续作为下一验收边界。
 
 这是可独立回滚的展示传输增量，尚非完整 provider-first Todo projection
 transaction。Provider 读取、revision、lease/actor fence 和状态写入保留原 owner。
