@@ -262,23 +262,9 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
     guard_path.write_bytes(raw_guard)
     guard_path.chmod(0o600)
     if native_context:
-        from loopx.control_plane.quota.turn_envelope import COMPLETE_TURN_DECISION_VERSION
-
         from .context_delivery import preflight_context_instruction
 
         assert guard_digest is not None
-        # Complete decisions already carry the replan contract. Rewriting it
-        # as a legacy staged view would invalidate its signed source.
-        if guard.get("schema_version") != COMPLETE_TURN_DECISION_VERSION and guard.get("replan_read_path"):
-            from loopx.control_plane.quota.turn_envelope import _turn_envelope_result
-            from loopx.control_plane.turn_driver.decision_capture import write_decision_capture
-
-            # Replan's staged commands are derived from the original packet.
-            # Keep their source hash and path bound to that immutable capture.
-            view = _turn_envelope_result("replan_cli_view", payload=guard)
-            if view != guard:
-                source_path = capture_root / "checkpoint-start-view.json"
-                guard_digest = write_decision_capture(source_path, view)
         reading = preflight_context_instruction(env, source_path, guard_digest,
             receipt["turn_id"], guide_in_host=guide_in_host)
     else:

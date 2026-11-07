@@ -788,6 +788,7 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
             capture_id=hashlib.sha256(raw).hexdigest(),
             continuity_generation=getattr(args, "_context_delivery_generation", None),
             progressive_enabled=activation["progressive_enabled"], selection_command_args_template=transport,
+            captured_decision_path=str(path) if args.initial_read and activation["progressive_enabled"] else None,
             hook_session=hook_session)
         projected = prepared.delivery
         native_prepared = True
@@ -1025,7 +1026,7 @@ def budgeted_settlement_result(
 
 def _capture_selection_transport_template(payload: dict[str, Any], args: argparse.Namespace, *,
                                           capture_root: Path) -> str | None:
-    """Derive caller display argv without changing a captured complete source."""
+    """Derive display argv without editing the captured decision."""
     interaction = payload.get("interaction_contract")
     cli = interaction.get("cli_channel") if isinstance(interaction, dict) else None
     selection = cli.get("selection_command") if isinstance(cli, dict) else None
@@ -1034,8 +1035,7 @@ def _capture_selection_transport_template(payload: dict[str, Any], args: argpars
     presentation = {**payload, "interaction_contract": {**interaction,
         "cli_channel": {**cli, "selection_command": dict(selection)}}}
     bind_capture_selection_transport(presentation, args, capture_root=capture_root)
-    cli = (presentation.get("interaction_contract") or {}).get("cli_channel") or {}
-    return (cli.get("selection_command") or {}).get("command_args_template")
+    return presentation["interaction_contract"]["cli_channel"]["selection_command"].get("command_args_template")
 
 
 def bind_capture_selection_transport(payload: dict[str, Any], args: argparse.Namespace, *,

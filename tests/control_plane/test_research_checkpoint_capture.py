@@ -101,9 +101,11 @@ def test_native_preflight_uses_the_committed_capture(tmp_path, monkeypatch, prov
             page = json.loads(selected.stdout)
             assert page["ok"] and page["eof"], page
             actions = {row["pointer"]: row["value"] for row in json.loads(page["content"])["selections"]}
-            assert "/replan_action_packet/planning_guidance" in actions
-            assert actions["/replan_action_packet/planning_guidance"] == original_packet["replan_action_packet"]["planning_guidance"]
-            assert actions["/autonomous_replan_obligation/obligation_id"] == original_packet["replan_action_packet"]["obligation_id"]
+            review = actual_run(shlex.split(actions["/replan_action_packet/review"]),
+                                cwd=project, env=env, capture_output=True, text=True, check=True)
+            review_packet = json.loads(review.stdout)
+            assert review_packet["obligation_id"] == original_packet["replan_action_packet"]["obligation_id"]
+            assert review_packet["planning_guidance"] == original_packet["replan_action_packet"]["planning_guidance"]
             assert actions["/heartbeat_receipt"] == original_packet["heartbeat_receipt"]
             native = json.loads((context / "session.json").read_bytes())
             assert native["recovery"]["target"]["surface"] == "complete_turn"
