@@ -675,13 +675,15 @@ def context_selection_binding(select: list[str], *, list_fields: bool, list_dept
 
 def write_initial_context_read_reference(path: Path, digest: str, payload: dict[str, Any],
                                         selections: list[dict[str, Any]], *,
-                                        observed_read: dict[str, Any] | None = None) -> Path:
+                                        observed_read: dict[str, Any] | None = None) -> tuple[Path, bytes]:
+    """Pin the shared rendered selection and return its exact rendered bytes."""
     raw, presented = _context_selection_bytes(payload, selections, list_fields=False, list_depth=None,
         present_goal_narrative=True)
-    return write_context_read_reference(path, digest,
+    reference = write_context_read_reference(path, digest,
         selection=context_selection_binding([item["pointer"] for item in selections], list_fields=False,
             list_depth=None, sha256=hashlib.sha256(raw).hexdigest(), presented=bool(presented)),
         observed_read=observed_read)
+    return reference, raw
 
 
 def context_selection_view(payload: dict[str, Any], *, select: list[str] | None,

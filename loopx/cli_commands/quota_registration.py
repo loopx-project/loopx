@@ -255,7 +255,9 @@ def register_quota_command(
              "including captured outcome reads. Follow next_command rather than computing it.")
     quota_parser.add_argument("--offset", type=int, default=0, help="For context-read: byte offset returned by the previous page.")
     quota_parser.add_argument("--page-bytes", type=int,
-        help="For context-read: maximum UTF-8 content bytes per page (JSON default: 64000 under a 64000-byte stdout budget; Markdown: 4096). "
+        help="For context-read or an attached native JSON context-project page: maximum UTF-8 content bytes per page. "
+             "The ordinary reader defaults to 64000 in JSON and 4096 in Markdown. "
+             "The serialized stdout limit includes JSON framing and navigation. "
              "Larger pages require a sufficient --max-page-output-bytes within the capture limit; "
              "use only with known sufficient direct and retained-history output budgets.")
     quota_parser.add_argument("--max-page-output-bytes", type=int,

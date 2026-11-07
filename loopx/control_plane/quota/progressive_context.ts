@@ -431,16 +431,16 @@ export function prepareProgressiveContextDelivery(request: JsonObject, legacyFie
   // Full native delivery can use that copy; delta still carries its own edits.
   if (request.source_edits === true && delivery.mode === "full") delete delivery.context;
   const observe = request.observe_first_read === true && !!jsonObject(required.context.selected_todo)?.todo_id;
-  const navigation = request.include_initial_read_plan === true || observe
-    ? nativeContextReadPlan(required.context, decisionFields) : undefined;
-  const observed = observe && navigation?.initial
-    ? observedFirstRead(codec, initialContextReadPointers(required.context, decisionFields)) : undefined;
+  const groups = observe || request.include_initial_read_plan === true
+    ? initialContextReadGroups(required.context, decisionFields) : undefined;
+  const pointers = groups ? [...groups.opening, ...groups.remaining] : [];
+  const observed = observe && pointers.length ? observedFirstRead(codec, pointers) : undefined;
   const {operation: _operation, source_edits: _edits, source_number_tokens: _numbers, ...source} = request;
   return contextProjectionChanges(source, {context: required.context, delivery, projected: required.projected,
     ...(observed ? {observed_first_read: observed} : {}),
     read_sections: inlineReadSections(request, required.context),
-    ...(request.include_initial_read_plan === true
-      ? {initial_read_plan: navigation} : {})}, sourceValues);
+    ...(request.include_initial_read_plan === true && groups
+      ? {initial_read_plan: nativeContextReadPlan(required.context, pointers, groups)} : {})}, sourceValues);
 }
 
 /** Stateless presentation uses the same plan without inventing a native session,
@@ -454,18 +454,28 @@ export function prepareProgressiveContext(request: JsonObject, plan?: JsonObject
 
 /** Invocation-local navigation, not captured input or a read/retention receipt.
  * Decision vocabulary comes from the same owner as standalone initial reads. */
-function nativeContextReadPlan(context: JsonObject, decisionFields: readonly string[]): JsonObject {
-  const pointers = initialContextReadPointers(context, decisionFields), initial = pointers.length > 0;
-  return {initial, plan: capturedContextSelection(initial ? {context, initial_read: true}
-    : {context, select: [""], list_fields: true}, pointers)};
+function nativeContextReadPlan(context: JsonObject, pointers: string[],
+    groups: ReturnType<typeof initialContextReadGroups>): JsonObject {
+  if (!pointers.length) return {initial: false,
+    plan: capturedContextSelection({context, select: [""], list_fields: true})};
+  const select = (addresses: string[]) => capturedContextSelection({context, initial_read: true}, addresses);
+  return {initial: true, plan: select(pointers), ...(groups.opening.length && groups.remaining.length
+    ? {opening: select(groups.opening), remaining: select(groups.remaining)} : {})};
 }
 
 export function initialContextReadPointers(context: JsonObject, decisionFields: readonly string[]): string[] {
+  const {opening, remaining} = initialContextReadGroups(context, decisionFields);
+  return [...opening, ...remaining];
+}
+
+function initialContextReadGroups(context: JsonObject, decisionFields: readonly string[]): {
+  opening: string[]; remaining: string[];
+} {
   const object = (value: unknown): JsonObject | undefined =>
     value !== null && typeof value === "object" && !Array.isArray(value) ? value as JsonObject : undefined;
   const interaction = object(context.interaction_contract);
   // Unknown envelopes retain generic discovery instead of guessing their policy.
-  if (interaction?.schema_version !== "loopx_interaction_contract_v0") return [];
+  if (interaction?.schema_version !== "loopx_interaction_contract_v0") return {opening: [], remaining: []};
   const pointers: string[] = [];
   const include = (...path: (string | number)[]): void => {
     let value: unknown = context;
@@ -523,6 +533,10 @@ export function initialContextReadPointers(context: JsonObject, decisionFields: 
   include("interaction_contract", "agent_channel", "required_reads");
   const work = ["interaction_contract", "agent_channel", "work_context"];
   include(...work, "instruction");
+  // If the full starting selection needs paging, put the current decision and
+  // its read obligations in one independently readable opening. The rest is
+  // still required under the original ordering and authority.
+  const opening = pointers.splice(0);
   include(...work, "user_todos");
   const channel = object(interaction.agent_channel);
   const sources = object(channel?.work_context)?.sources;
@@ -675,5 +689,5 @@ export function initialContextReadPointers(context: JsonObject, decisionFields: 
   } else if (details && known(details, ["command_template", "path", "sha256"])) {
     include("context_details");
   } else include("context_details", "unread_context_index");
-  return pointers;
+  return {opening, remaining: pointers};
 }
