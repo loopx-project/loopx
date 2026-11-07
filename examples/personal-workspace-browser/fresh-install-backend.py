@@ -29,8 +29,11 @@ bins.mkdir(exist_ok=True)
 if "--no-agent" not in sys.argv[2:]:
     (bins / "codex").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     (bins / "codex").chmod(0o755)
-for variable in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
+for variable in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "ANTIGRAVITY_CSRF_TOKEN"):
     os.environ.pop(variable, None)
+# A configured endpoint without credentials is unavailable and cannot fall
+# back to discovering a language server in the operator's live session.
+os.environ["ANTIGRAVITY_LS_URL"] = "http://127.0.0.1:1"
 os.environ["LOOPX_USAGE_PING"] = "0"
 os.environ["DO_NOT_TRACK"] = "1"
 with socket.socket() as probe:
