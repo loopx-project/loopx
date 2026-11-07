@@ -166,6 +166,54 @@ test("a completed project partial result admits one restricted review while reta
     ...retained.pending_observation, stop_observed: true}}).pending, false);
   assert.equal(planBoundConversationRequest({...packet, request: retained.request,
     context_recovery: {...packet.context_recovery, failed_turn: reviewed}}).recovery_candidate, false);
+
+  // A review does not consume the original single writable continuation.
+  // Its original live owner must independently settle the native effects first.
+  const reviewedTurn = {...reviewed, upstream_turn_id: "native-review",
+    response: {schema_version: "loopx_chat_agent_response_v0", ...reviewed.response}};
+  const retainedReview = {reservation: {...reservation, binding_snapshot: selected}, turn: reviewedTurn};
+  const settled = {thread_id: "native", turn_id: completed.upstream_turn_id,
+    completed_work: true, all_effects_settled: true, unfinished_work: work,
+    native_inventory_sha256: "2".repeat(64)};
+  const afterReview = {...packet, request: {...retained.request, context_recovery: retainedReview.reservation},
+    context_recovery: {...packet.context_recovery, retained_result_review: retainedReview,
+      live_work_owner: true, native_observation: settled}};
+  const resumed = planBoundConversationRequest(afterReview);
+  assert.equal(resumed.recovery_eligible, true);
+  assert.equal(resumed.work_attempt, 1);
+  assert.equal(resumed.failed_turn_id, completed.turn_id);
+  assert.equal(resumed.completed_review_turn_id, reviewed.turn_id);
+  assert.equal(resumed.read_only_review, undefined);
+  for (const change of [{live_work_owner: false}, {source_verified: false}, {stop_observed: true},
+    {steering_observed: true}, {queued_input_present: true}, {later_equivalent_input_present: true},
+    {attachments_present: true}, {native_observation: proof},
+    {native_observation: {...settled, all_effects_settled: false}},
+    {native_observation: {...settled, turn_id: "different-original"}},
+    {retained_result_review: {...retainedReview, turn: {...reviewedTurn, status: "failed"}}},
+    {retained_result_review: {...retainedReview, reservation: {...retainedReview.reservation, answer_review: true}}},
+    {retained_result_review: {...retainedReview, reservation: {...retainedReview.reservation,
+      unfinished_work: {...work, remaining: "Unrelated work"}}}},
+    {retained_result_review: {...retainedReview, reservation: {...retainedReview.reservation,
+      binding_snapshot: {...selected, project_ref: "0".repeat(24)}}}},
+  ]) assert.notEqual(planBoundConversationRequest({...afterReview,
+    context_recovery: {...afterReview.context_recovery, ...change}}).recovery_eligible, true);
+  const workReservation = {version: 22, failed_turn_id: completed.turn_id, work_attempt: 1,
+    unfinished_work: work, client_turn_id: resumed.client_turn_id, completed_review_turn_id: reviewed.turn_id,
+    original_turn: completed, binding_snapshot: selected};
+  const admitted = {...reviewedTurn, turn_id: "remaining", client_turn_id: resumed.client_turn_id, status: "queued"};
+  const crash = {...afterReview, request: {...afterReview.request, context_recovery: workReservation,
+      context_recovery_history: [retainedReview.reservation]},
+    current_session: {...session, status: "busy", active_turn_id: admitted.turn_id},
+    context_recovery: {...afterReview.context_recovery, native_observation: null, live_work_owner: false,
+      admitted_turn: admitted, queued_input_present: true, later_equivalent_input_present: true}};
+  assert.equal(planBoundConversationRequest(crash).admitted_turn_id, admitted.turn_id);
+  assert.equal(planBoundConversationRequest({...crash, context_recovery: {
+    ...crash.context_recovery, source_verified: false}}).recovery_eligible, false);
+  assert.equal(planBoundConversationRequest({...crash, request: {
+    ...crash.request, turn_id: admitted.turn_id}}).recovery_candidate, false);
+  const failedContinuation = {...retained, request: {...crash.request, turn_id: admitted.turn_id},
+    pending_observation: {turn: {...admitted, status: "failed", response: null, error_code: "host_gate"}, stop_observed: false}};
+  assert.equal(planBoundConversationRequest(failedContinuation).pending, true);
 });
 
 test("a restarted Codex steward retains one restricted answer instead of replaying business", () => {
