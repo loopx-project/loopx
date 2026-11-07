@@ -1653,6 +1653,56 @@ revision 校验；provider 编辑先按普通流程准备 Task scope／ownership
 exact-head 评审、完整路径／完整成本、host／model／adoption 验收继续开放；I3、
 M1/#8011、R0/V10/R1、D2/D5/D6/D3、context／split-install 及全部冻结失败保留。
 
+### 2026-11-07：已选 SQLite snapshot 的读取生命周期
+
+既有 `AuthorityStore` 增加可选的 storage-only identity／head 成对读取，由原
+canonical snapshot owner 消费。`SqliteAuthorityStore` 仅在 `existingOnly` store
+提供该方法；身份和完整已验证 head 使用同一个同步只读事务，不跨调用保留连接、
+head 或 provider authority。普通 SQLite、File、PostgreSQL 及未提供可选方法的
+custom store 保留原 identity／load 顺序和失败优先级。不新增持久状态、wire 词表、
+capability、selector 或 Python 规则 owner。
+
+Provider 选择仍校验已配置 incarnation；snapshot 准入在读取 head 后仍独立重开
+pathname。Revision、cursor、完整 read-model digest、stale continuation、WAL、
+lease 和 receipt／replay 检查保留。读取 head 后真实替换数据库目录会被拒绝，且
+不返回部分行。私有 mutation 取消最终 incarnation 检查后，同一公开 snapshot
+oracle 失败。
+
+Runtime commit `61f7c3c33` 通过相关 TypeScript 873 用例与类型检查、四条完整
+source／wheel File／SQLite 101-Todo 生命周期，以及真实隔离 PostgreSQL 16.15
+store391／service11，零 skip。生命周期保留 sum45、原完成时间、四种回执、一次
+debit、重启和 refusal／replay；23 个变更 production 文件与 wheel 逐字节一致。
+Native before／head 诊断保持完整响应与数据库 hash 相同，只读连接从四次降到
+三次，每个 snapshot 的 observed daemon disk-counter 字节从 147,456 降到
+110,592。这些计数不代表物理设备写入，插桩诊断耗时不进入性能资格。
+
+新一轮五组交错、无插桩的默认 SQLite 完整生命周期，对照同一 101-Todo fixture
+在 main `8a4d4f9da`、前一版本 `c40d8ec31` 和 runtime `61f7c3c33` 的表现，环境为
+CPython3.13.5／Node26.0.0／已合格 SQLite3.53.1。十五条生命周期均保留同一独立
+验证成果与原结算。
+
+| 已观测指标，中位数（所示范围） | Main | 前一版本 | 成对读取 |
+| --- | --- | --- | --- |
+| 生命周期墙钟 | 14.945 秒（12.664–16.597） | 14.924 秒（14.570–19.232） | 14.871 秒（14.412–16.775） |
+| setup 后 CLI＋采样 daemon CPU | 7.084 秒 | 7.388 秒 | 7.292 秒 |
+| setup 后 daemon disk-counter 字节 | 8,896,512 | 10,076,160 | 8,314,880 |
+| setup 后 daemon logical-write counter 字节 | 13,897,728 | 15,618,048 | 12,840,960 |
+| Fixture setup／最终 teardown 墙钟 | 2.373／0.060 秒 | 2.387／0.062 秒 | 2.336／0.062 秒 |
+
+五组中候选两次慢于 main、两次慢于前一版本，墙钟范围重叠。已观测写入减少，
+但 CPU 中位数仍高于 main，完整收益未合格。CPU 使用已验证 Mach timebase125／3，
+扣除每个 daemon 的 setup 基线；未采样最终退出、部分 restart helper、provenance
+和 harness CPU。CLI RSS 与 daemon 边界 footprint 分开观察，不代表连续全系统
+峰值。对照期间没有重型验证；model cost、人工注意力和 installed-host adoption
+仍未测。新结果不替换或重标任何历史 campaign。下一步先独立评审并归因完整 CLI
+剩余 CPU 成本，再选择优化，保留新鲜读取栅栏。
+
+标准 premerge 六项直接检查及 19 项选中检查中的 18 项通过；peer hard-cut scanner
+在 main 与候选上仍因同一未改动 benchmark README 失败。原 Task 的独立 exact-head
+评审、匹配完整路径／完整边际成本及 host／model／adoption 验收继续开放。保留至少
+一个 minor release 的 I3、M1／#8011、R0／V10／R1、D2／D5／D6／D3、context／
+split-install 及全部历史失败；连接数或验证通过均不证明完整最小化内核目标已完成。
+
 ## 附录 B：决策日志
 
 | 日期 | 决策 | 负责人 / 批准 | 备选 | 变更的规范章节 |
