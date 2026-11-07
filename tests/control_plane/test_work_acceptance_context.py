@@ -172,8 +172,17 @@ def test_selected_acceptance_read_keeps_global_requirements_and_exact_binding(
     def unavailable(**_kwargs):
         raise OSError("acceptance source unavailable")
 
+    planner_sources = []
+    runtime_result = context_readback.effect_runtime_result
+
+    def observe_planner_source(method, params, **options):
+        if method == "work_item.context.plan":
+            planner_sources.append(params["packet"])
+        return runtime_result(method, params, **options)
+
     with monkeypatch.context() as fault:
         fault.setattr(context_readback, "inspect_goal_acceptance", unavailable)
+        fault.setattr(context_readback, "effect_runtime_result", observe_planner_source)
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
             code = main(["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
@@ -182,6 +191,11 @@ def test_selected_acceptance_read_keeps_global_requirements_and_exact_binding(
         assert code == 0 and failed["delivery_allowed"] is False
         assert failed["work_context"]["complete"] is False
         assert any(row.get("source") == "goal_acceptance" for row in failed["required_reads"])
+    assert planner_sources
+    for source in planner_sources:
+        assert set(source) == {"selected_todo", "task_orchestration_contract", "effective_action", "interaction_contract"}
+        assert set(source["interaction_contract"]["cli_channel"]) <= {"selection_required"}
+        assert set(source["task_orchestration_contract"]) <= {"schema_version", "mode", "primary_todo_id"}
     recovered = read_cli_policy_payload(json.dumps(cli(
         "quota", "should-run", "--goal-id", goal, "--agent-id", "agent-a")), returncode=0)
     assert recovered["interaction_contract"]["agent_channel"]["work_context"]["complete"] is True
