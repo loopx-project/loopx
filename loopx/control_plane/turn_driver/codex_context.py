@@ -210,6 +210,42 @@ def _save(root: Path, state: dict[str, Any]) -> None:
     write_decision_capture(root / "session.json", state, publish=os.replace)
 
 
+def record_native_claim_source(
+    payload: Mapping[str, Any], digest: str, *, directory: str | None, context_root: str | None,
+) -> None:
+    """Remember the live guard's latest eligible capture outside its JSON."""
+    preparation = compact_execution_preparation_request(payload)
+    session = os.environ.get("CODEX_THREAD_ID") or None
+    if not preparation or not preparation.get("turn_instance_id") or (not session and directory is None):
+        return
+    location = codex_context_directory(directory=directory, root=context_root, session=session, create=True)
+    if location is None:
+        return
+    with _locked(location) as root:
+        if _state(root).get("session_id") in (None, session):
+            write_decision_capture(root / "claim-source.json",
+                {"session_id": session, "sha256": digest}, publish=os.replace)
+
+
+def _original_native_claim_source(
+    root: Path, session: str, digest: object, *, bind_unattached: bool = False,
+) -> bool:
+    if not isinstance(digest, str):
+        return False
+    try:
+        path = root / "claim-source.json"
+        saved = _read(path)
+    except (OSError, ValueError):
+        return False
+    bound = {"session_id": session, "sha256": digest}
+    if bind_unattached and saved == {**bound, "session_id": None}:
+        # An explicit private directory can receive a guard before startup.
+        # Adopt it once from the live session while holding its journal lock.
+        write_decision_capture(path, bound, publish=os.replace)
+        return True
+    return saved == bound
+
+
 def read_codex_context_reference(directory: str, *, goal_id: str | None, agent_id: str | None) -> tuple[str, str]:
     """Select an original capture after a lost hook; never assert retention.
 
@@ -421,7 +457,10 @@ def native_execution_preparation_request(
                 and previous.get("state") == "ready"
             ):
                 return None
-            return {**request, "source_sha256": source_sha256}
+            action = {**request, "source_sha256": source_sha256}
+            if not _original_native_claim_source(root, session, action.get("claim_source_sha256")):
+                action.pop("claim_source_sha256", None)
+            return action
     except (OSError, ValueError, TypeError, RecursionError):
         return None
 
@@ -620,7 +659,6 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                           continuity_generation: str | None = None,
                           include_initial_read_plan: bool = True,
                           progressive_enabled: bool | None = None,
-                          claim_source_sha256: str | None = None,
                           selection_command_args_template: str | None = None,
                           captured_decision_path: str | None = None,
                           hook_session: str | None = None) -> NativeContextPreparation:
@@ -674,13 +712,13 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                 state["source_recovery"] = {key: recovery[key] for key in ("path", "sha256")}
                 state.pop("section_reads", None)  # partial reads of an older source are not current coverage
                 page_bytes, output_bytes = native_context_page_budget()
+                preparation = compact_execution_preparation_request(payload)
+                if preparation and _original_native_claim_source(root, session, capture_id, bind_unattached=True):
+                    preparation = compact_execution_preparation_request(payload, claim_source_sha256=capture_id)
 
                 def publish_recovery(reference: dict[str, Any]) -> None:
                     reference["command"] = context_capture_read_command(Path(reference["path"]), reference["sha256"],
                         page_bytes=page_bytes, max_page_output_bytes=output_bytes)
-                    preparation = compact_execution_preparation_request(
-                        payload, claim_source_sha256=claim_source_sha256,
-                    )
                     state["recovery"] = {**{key: reference[key] for key in ("path", "sha256", "command")},
                         "goal_id": goal_id, "agent_id": agent_id,
                         "total_bytes": Path(reference["path"]).stat().st_size,

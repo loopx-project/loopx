@@ -630,8 +630,7 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
 
 def project_native_quota_context(payload: dict[str, Any], args: argparse.Namespace, *,
                                  capture_directory: Path, capture_id: str, decision_identity: tuple[str, str],
-                                 progressive_enabled: bool, reader_argv: list[str] | None,
-                                 captured_claim_replay: bool = False) -> dict[str, Any]:
+                                 progressive_enabled: bool, reader_argv: list[str] | None) -> dict[str, Any]:
     """Prepare one already-decided native view; callers retain receipt failures."""
     from ..control_plane.turn_driver.codex_context import (
         NativeContextSessionUnavailable, codex_context_directory, prepare_codex_context,
@@ -645,8 +644,7 @@ def project_native_quota_context(payload: dict[str, Any], args: argparse.Namespa
         capture_directory=capture_directory, goal_id=decision_identity[0], agent_id=decision_identity[1],
         surface="turn_envelope" if getattr(args, "turn_envelope", False) else "quota_packet",
         capture_id=capture_id, continuity_generation=getattr(args, "_context_delivery_generation", None),
-        progressive_enabled=progressive_enabled,
-        claim_source_sha256=capture_id if captured_claim_replay else None)
+        progressive_enabled=progressive_enabled)
     recovery = prepared.delivery.get("recovery")
     view = native_context_capture_view(prepared.delivery, capture_directory, context_directory=directory,
         progressive_enabled=progressive_enabled, initial_read_plan=prepared.initial_read_plan,
@@ -770,7 +768,6 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
             pass  # The complete original reference remains the fallback below.
     try:
         from ..control_plane.turn_driver.codex_context import codex_context_directory, prepare_codex_context
-        from ..control_plane.turn_driver.codex_execution_preparation import NATIVE_CLAIM_REPLAY_BOUND
 
         if not activation["enabled"]:
             raise ValueError("context delivery is off")
@@ -811,7 +808,6 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
             continuity_generation=getattr(args, "_context_delivery_generation", None),
             progressive_enabled=activation["progressive_enabled"], selection_command_args_template=transport,
             captured_decision_path=str(path) if args.initial_read and activation["progressive_enabled"] else None,
-            claim_source_sha256=args.capture_sha256 if payload.get(NATIVE_CLAIM_REPLAY_BOUND) is True else None,
             hook_session=hook_session)
         projected = prepared.delivery
         native_prepared = True
@@ -957,13 +953,20 @@ def prepare_decision_capture(args: argparse.Namespace) -> Path | None:
     return directory
 
 
-def capture_decision(directory: Path | None, payload: dict[str, object]) -> str | None:
+def capture_decision(directory: Path | None, payload: dict[str, object], *,
+                     native_args: argparse.Namespace | None = None) -> str | None:
     if directory is None:
         return
     from ..control_plane.turn_driver.decision_capture import write_decision_capture
 
     try:
-        return write_decision_capture(directory / "decision.json", payload, publish=os.replace)
+        digest = write_decision_capture(directory / "decision.json", payload, publish=os.replace)
+        if native_args is not None and native_args.quota_command == "should-run" and payload.get("ok") is True:
+            from ..control_plane.turn_driver.codex_context import record_native_claim_source
+
+            record_native_claim_source(payload, digest, directory=native_args.codex_context_dir,
+                context_root=getattr(native_args, "codex_context_root", None))
+        return digest
     except (OSError, ValueError) as exc:
         raise QuotaDecisionTransportError(
             "Decision capture failed after guard evaluation; the Turn receipt may "
