@@ -26,6 +26,23 @@ TODO = "todo_execution_preparation"
 AGENT = "agent-a"
 
 
+@pytest.mark.parametrize("status", ["open", "deferred"])
+def test_explicit_non_delivery_obligation_does_not_prepare_selected_execution(monkeypatch, status):
+    from loopx.control_plane.quota import execution_preparation
+
+    def no_execution_read(**_):
+        pytest.fail("A planning operation must not consult the selected delivery Todo's lease")
+
+    monkeypatch.setattr(execution_preparation, "project_selected_todo_execution_preparation", no_execution_read)
+    obligation = {"must_attempt_work": True, "delivery_allowed": False}
+    payload = {"should_run": True, "selected_todo": {"todo_id": TODO, "status": status},
+        "execution_obligation": obligation}
+    apply_selected_todo_execution_preparation(payload, runtime_root=None, goal_id=GOAL,
+        agent_id=AGENT, obligation=obligation)
+    assert payload == {"should_run": True, "selected_todo": {"todo_id": TODO, "status": status},
+        "execution_obligation": {"must_attempt_work": True, "delivery_allowed": False}}
+
+
 def _todo() -> dict[str, object]:
     return {
         "schema_version": "todo_item_v0",
@@ -274,7 +291,7 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
     assert selected["/heartbeat_receipt"]["turn_instance_id"] == "preparation-turn"
     plan = selected["/interaction_contract/cli_channel"]["settlement_plan"]
     assert plan["identity"]["todo_id"] == TODO and plan["identity"]["turn_instance_id"] == "preparation-turn"
-    assert plan["schema_version"] == "quota_settlement_plan_v1"
+    assert plan["schema_version"] == "quota_settlement_plan_v2"
     sources = selected["/interaction_contract/agent_channel/work_context"]["sources"]
     task = next(item["content"]["todo"] for item in sources if item["source"] == "selected_todo")
     # The v0 owner may deduplicate short text already in selected_todo.
@@ -403,7 +420,7 @@ def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
     "same-execution", "released-execution", "legacy-released-execution",
     "reencoded-released-execution", "legacy-marked-released-execution",
 ])
-def test_native_hook_replays_the_original_claim_after_guard_timeout(
+def test_native_hook_recovers_the_original_claim_after_guard_timeout(
     tmp_path, monkeypatch, capsys, provider, case,
 ):
     import io
@@ -450,8 +467,8 @@ def test_native_hook_replays_the_original_claim_after_guard_timeout(
                "quota", "context-hook", "--codex-app", "--context-delivery", "on",
                "--codex-context-dir", str(native)]
 
-    def hook():
-        data = json.dumps({**event, "hook_event_name": "PostToolUse"}).encode()
+    def hook(name="PostToolUse"):
+        data = json.dumps({**event, "hook_event_name": name}).encode()
         monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(data)))
         capsys.readouterr()
         assert main(command) == 0
@@ -462,16 +479,26 @@ def test_native_hook_replays_the_original_claim_after_guard_timeout(
         assert code == 0 and payload["ok"], payload
         return payload
 
+    def projected_read(command):
+        result = subprocess.run(shlex.split(command), cwd=tmp_path, capture_output=True,
+                                check=True, text=True)
+        return json.loads(result.stdout)
+
     if legacy:
-        # Before the upgrade the Host issued the ordinary claim without a
-        # persisted operation ID, then could lose the ready result.
+        # Older Hosts may have committed a claim without a captured operation ID.
         legacy_claim = read(*before["execution_preparation"]["claim"]["cli_args"])
         original_id = legacy_claim["claim_operation_id"]
+        original = read("todo", "receipt", "--goal-id", GOAL, "--operation-id", original_id)
     else:
-        assert hook() == {}
+        hint = hook()["hookSpecificOutput"]["additionalContext"]
+        request = json.loads(hint.rsplit("Receipt: ", 1)[1])
+        assert request["event"] == "host_execution_preparation_readback_required"
+        assert (request["goal_id"], request["agent_id"], request["todo_id"], request["turn_instance_id"]) == (
+            GOAL, AGENT, TODO, turn,
+        )
         original_id = claims[0]["claim_operation_id"]
-        assert original_id == f"todo-claim:codex-capture:{digest}"
-    original = read("todo", "receipt", "--goal-id", GOAL, "--operation-id", original_id)
+        assert request["claim_operation_id"] == original_id == f"todo-claim:codex-capture:{digest}"
+        original = projected_read(request["receipt_command"])
     lease = original["receipts"][0]["result"]["lease"]
     if released:
         read("task-lease", "release", "--goal-id", GOAL, "--todo-id", TODO, "--owner", AGENT,
@@ -499,19 +526,20 @@ def test_native_hook_replays_the_original_claim_after_guard_timeout(
         assert "host_execution_prepared" not in guidance
         assert len(claims) == len(guards) == (0 if legacy else 1)
         assert not current["active"] and current["lease"]["lease_epoch"] == lease["lease_epoch"]
-    elif released:
-        assert len(claims) == 2
-        assert result == {} and not claims[1]["ok"]
-        assert not current["active"] and current["lease"]["lease_epoch"] == lease["lease_epoch"]
-        assert guards == [turn]
     else:
-        assert len(claims) == 2
-        context = result["hookSpecificOutput"]["additionalContext"]
-        receipt = json.loads(context.rsplit("Receipt: ", 1)[1])
-        assert receipt["claim_operation_id"] == claims[1]["claim_operation_id"] == original_id
-        assert receipt["turn_instance_id"] == turn and receipt["execution_preparation"]["state"] == "ready"
-        assert current["active"] and current["lease"] == lease
-        assert guards == [turn, turn]
+        assert result == {} and hook() == {}
+        resume = hook("SessionStart").get("hookSpecificOutput", {}).get("additionalContext", "")
+        assert "host_execution_preparation_readback_required" not in resume
+        assert len(claims) == 1 and guards == [turn]
+        assert projected_read(request["lease_command"]) == current
+        if released:
+            assert not current["active"] and current["lease"]["lease_epoch"] == lease["lease_epoch"]
+        else:
+            assert current["active"] and current["lease"] == lease
+            ready = read("quota", "should-run", "--goal-id", GOAL, "--agent-id", AGENT,
+                "--context-delivery", "off", "--codex-app", "--turn-instance-id", turn, "--todo-id", TODO)
+            assert ready["execution_preparation"]["state"] == "ready"
+            assert ready["heartbeat_receipt"]["turn_instance_id"] == turn
     readback = read("todo", "receipt", "--goal-id", GOAL, "--operation-id", original_id)
     assert readback["cursor"] == original["cursor"] and readback["receipts"] == original["receipts"]
 

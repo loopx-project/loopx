@@ -22,8 +22,21 @@ from loopx.control_plane.turn_driver.post_settlement import (
 )
 
 
-def test_invalid_or_duplicate_context_registration_never_reinvokes_provider() -> None:
+def test_invalid_or_duplicate_context_registration_never_reinvokes_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx.control_plane import capability_hooks
+
     calls = []
+    validation_requests = []
+    invoke = capability_hooks.effect_runtime_result
+
+    def observe(method, params, **kwargs):
+        if method == "capability_hook.turn_context.validate":
+            validation_requests.append(params)
+        return invoke(method, params, **kwargs)
+
+    monkeypatch.setattr(capability_hooks, "effect_runtime_result", observe)
 
     def produce():
         calls.append("read")
@@ -44,6 +57,10 @@ def test_invalid_or_duplicate_context_registration_never_reinvokes_provider() ->
     dispatch_turn_context_hooks(payload, (invalid, valid, valid))
     assert calls == ["read"]
     assert len(payload["turn_context_hook_failures"]) == 2
+    assert payload["fixture_readback"] == {}
+    assert "turn_context_contributions" not in payload
+    request, = validation_requests
+    assert request["readback_only"] is True and "source" not in request
 
     # Retrying composition on an already populated packet must not repeat IO.
     dispatch_turn_context_hooks(payload, (valid,))

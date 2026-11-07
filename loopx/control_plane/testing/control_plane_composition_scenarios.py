@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Any
 
 from ...quota import build_quota_should_run
-from ..quota.turn_envelope import build_turn_envelope
 from ..scheduler.execution_context import (
     scheduler_execution_context_for_runtime_profile,
 )
@@ -208,19 +207,4 @@ def build_control_plane_composition_scenario_sources(
             goal_id=goal_id,
             agent_id=agent_id,
         ),
-    }
-
-
-def build_control_plane_composition_scenario_packets(
-    *,
-    goal_id: str,
-    agent_id: str,
-) -> dict[str, dict[str, Any]]:
-    sources = build_control_plane_composition_scenario_sources(
-        goal_id=goal_id,
-        agent_id=agent_id,
-    )
-    return {
-        scenario_id: build_turn_envelope(source)
-        for scenario_id, source in sources.items()
     }

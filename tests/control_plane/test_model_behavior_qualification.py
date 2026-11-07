@@ -9,7 +9,11 @@ from typing import Any
 
 import pytest
 
-from loopx.control_plane.quota.turn_envelope import build_turn_envelope
+from loopx.control_plane.quota.turn_envelope import (
+    assert_complete_turn_decision,
+    build_turn_envelope,
+    compose_turn_decision,
+)
 from loopx.control_plane.quota.live_decision import bind_scheduler_followup_cli_routes
 from loopx.control_plane.runtime.public_safety import SECRET_LIKE_SURFACE_PATTERN
 from loopx.control_plane.testing.model_behavior_qualification import (
@@ -925,3 +929,102 @@ def test_same_wrong_semantics_in_both_arms_fail_source_alignment() -> None:
     assert result["semantic_contract_complete"] is False
     assert result["semantic_contract_drift"] == {}
     assert result["safety_violations"] == ["semantic_contract_mismatch:write_scope"]
+
+
+@pytest.mark.parametrize("arm", ["full_packet", "candidate_packet"])
+def test_complete_source_reaches_actor_request_without_a_legacy_projection(arm: str) -> None:
+    full = _full_packet()
+    full["supporting_evidence"] = {"exact_count": 9007199254740993, "ratio": 1.0}
+    packet = compose_turn_decision(full)
+    before = json.dumps(packet, sort_keys=True)
+    request = build_model_behavior_actor_request(packet, qualification_id="complete-source", arm=arm)
+    assert request["packet_schema_version"] == "loopx_turn_envelope_v1"
+    assert json.dumps(request["packet"], sort_keys=True) == before
+    assert "action_signature" not in request["packet"]
+    assert request["sandbox"]["tools_enabled"] is False
+    assert request["sandbox"]["filesystem_writes_allowed"] is False
+    assert request["sandbox"]["external_writes_allowed"] is False
+    assert normalize_model_behavior_actor_request(request) == request
+    semantics = model_behavior_semantic_contract_from_packet(packet, arm=arm)
+    assert semantics["write_scope"] == ["loopx/**", "tests/**"]
+    assert semantics["peer_route"]["agent_id"] == "codex-fixture"
+
+
+@pytest.mark.parametrize("captured,composed_settlement", [(False, False), (True, False), (True, True)])
+def test_complete_pair_preserves_original_source_and_settlement(captured: bool, composed_settlement: bool) -> None:
+    full = _full_packet()
+    candidate = compose_turn_decision(full, composed_settlement=composed_settlement)
+    source = candidate if captured else full
+    result = run_model_behavior_qualification_pair(source, candidate,
+        qualification_id="complete-pair", actor=_actor)
+    assert result["equivalent"] is True
+    assert result["safety_violations"] == []
+
+
+@pytest.mark.parametrize("field,value", [
+    ("goal_id", "other-goal"),
+    ("agent_identity", {"agent_id": "other-agent"}),
+    ("selected_todo", {"todo_id": "todo_other001", "status": "open"}),
+    ("recommended_action", "Inspect a different source."),
+    ("supporting_evidence", {"exact_count": 9007199254740993}),
+])
+def test_valid_complete_candidate_from_another_source_is_refused_before_actor(field: str, value: Any) -> None:
+    full = _full_packet()
+    candidate = compose_turn_decision({**full, field: value})
+    assert_complete_turn_decision(candidate)
+    calls = []
+    with pytest.raises(ValueError, match="does not derive"):
+        run_model_behavior_qualification_pair(full, candidate,
+            qualification_id="wrong-complete-source", actor=lambda request: calls.append(request))
+    assert calls == []
+
+
+@pytest.mark.parametrize("mutation", ["version", "binding", "source_hash", "content_hash", "body"])
+def test_malformed_complete_source_never_falls_back_to_legacy(mutation: str) -> None:
+    packet = compose_turn_decision(_full_packet())
+    if mutation == "version":
+        packet["schema_version"] = "loopx_turn_envelope_v0"
+    elif mutation == "binding":
+        del packet["contract_binding"]
+    elif mutation == "body":
+        packet["interaction_contract"]["agent_channel"]["delivery_allowed"] = False
+    else:
+        key = "source_decision_hash" if mutation == "source_hash" else "content_hash"
+        packet["contract_binding"][key] = "sha256:" + "0" * 64
+    calls = []
+    with pytest.raises(ValueError):
+        run_model_behavior_qualification_pair(_full_packet(), packet,
+            qualification_id="bad-complete-source", actor=lambda request: calls.append(request))
+    assert calls == []
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("arm_order", [("full_packet", "candidate_packet"), ("candidate_packet", "full_packet")])
+def test_pair_checks_both_privacy_boundaries_before_either_actor(legacy: bool, arm_order: tuple[str, str]) -> None:
+    full = {**_full_packet(), "api_key": "synthetic-private-value"}
+    candidate = build_turn_envelope(full) if legacy else compose_turn_decision(full)
+    calls = []
+    with pytest.raises(ValueError, match="credential-shaped field"):
+        run_model_behavior_qualification_pair(full, candidate,
+            qualification_id="pair-private", actor=lambda request: calls.append(request), arm_order=arm_order)
+    assert calls == []
+
+
+@pytest.mark.parametrize("operation", ["ack", "host_failure"])
+@pytest.mark.parametrize("private", [False, True])
+def test_complete_candidate_scans_actual_scheduler_source_paths(operation: str, private: bool) -> None:
+    wire = _scheduler_wire(operation)
+    if private:
+        payload = json.loads(zlib.decompress(wire))
+        payload["host_facts"]["api_key"] = "synthetic-private-value"
+        wire = zlib.compress(json.dumps(payload).encode())
+    full, _ = _scheduler_transport_packet("full_packet", operation, compressed=wire)
+    packet = compose_turn_decision(full)
+    before = json.dumps(packet, sort_keys=True)
+    if private:
+        with pytest.raises(ValueError, match="credential-shaped field"):
+            build_model_behavior_actor_request(packet, qualification_id="complete-wire", arm="candidate_packet")
+    else:
+        request = build_model_behavior_actor_request(packet, qualification_id="complete-wire", arm="candidate_packet")
+        assert json.dumps(request["packet"], sort_keys=True) == before
+    assert json.dumps(packet, sort_keys=True) == before

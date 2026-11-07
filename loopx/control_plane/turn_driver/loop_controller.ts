@@ -3,7 +3,8 @@
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { settlementIdentityFromPlan } from "../effect_program.ts";
 import { jsonObject, type JsonObject } from "../runtime_decode.ts";
-import { turnEnvelopeRoute as typedTurnRoute } from "../quota/turn_envelope.ts";
+import { COMPLETE_TURN_DECISION_VERSION, completePlanningFacts,
+  turnEnvelopeRoute as typedTurnRoute } from "../quota/turn_envelope.ts";
 import { EffectiveAction } from "../quota/effective_action.generated.ts";
 import { stripPythonWhitespace } from "../coordination/todo_agents.ts";
 import { pythonFieldText } from "../todos/read_codec.ts";
@@ -165,7 +166,7 @@ function budget(value: unknown): Budget | null {
  * returns never require a later progress budget or host retry policy. */
 export function decideLoopDisposition(params: JsonObject): JsonObject {
   const receipt = params.receipt == null ? null : object(params.receipt);
-  const decision = object(params.decision);
+  let decision = object(params.decision);
   let route: LoopXTurnRouteValue = "contract_error";
   let chosen: Lineage = lineage({});
   let effective = {...chosen};
@@ -198,7 +199,12 @@ export function decideLoopDisposition(params: JsonObject): JsonObject {
   const check = (name: string): void => {
     switch (name) {
       case "envelope":
-        route = typedTurnRoute(decision, jsonObject(params.historical_route_text) ?? undefined);
+        if (decision.schema_version === COMPLETE_TURN_DECISION_VERSION || has(decision, "contract_binding")) {
+          const checked = completePlanningFacts({payload: decision,
+            source_number_tokens: params.decision_source_number_tokens});
+          decision = {...object(checked.work), goal_id: checked.goal_id, agent_id: checked.agent_id};
+          route = checked.route as LoopXTurnRouteValue;
+        } else route = typedTurnRoute(decision, jsonObject(params.historical_route_text) ?? undefined);
         requireThat(route !== "contract_error", "quota decision failed the shared envelope contract (schema or signature hashes)");
         if (object(decision.user).action_required === true) route = "user_action_required";
         break;
@@ -341,13 +347,15 @@ export function decideManagedStep(params: JsonObject): JsonObject {
   requireThat(identity.goal_id === params.goal_id && identity.agent_id === params.agent_id,
     "Turn journal lineage does not match the requested goal/agent");
   const inspection = interpretTurnJournal({schema_version: "loopx_turn_journal_interpretation_request_v0",
-    journal, goal_id: text(params.goal_id), agent_id: text(params.agent_id), turn_key: text(params.turn_key)});
+    journal, goal_id: text(params.goal_id), agent_id: text(params.agent_id), turn_key: text(params.turn_key),
+    source_number_tokens: params.source_number_tokens});
   requireThat(inspection.journal_consistent, `Turn journal replay is blocked: ${inspection.violations.join(", ")}`);
   const decision = object(params.decision);
   for (const key of ["goal_id", "agent_id"])
     requireThat(!text(decision[key]) || text(decision[key]) === params[key], `fresh decision ${key} does not match the managed step`);
   const disposition = decideLoopDisposition({receipt: {...receipt, lineage: identity, host_failure: journal.host_failure}, decision,
     integer_facts: integers, historical_route_text: params.historical_route_text,
+    decision_source_number_tokens: params.decision_source_number_tokens,
     predecessor_turn_key: params.predecessor_turn_key == null ? params.turn_key : params.predecessor_turn_key});
   const result: JsonObject = {schema_version: "loopx_turn_managed_step_v0", disposition: disposition.disposition,
     reason: disposition.reason, turn_key: params.turn_key, attempt};

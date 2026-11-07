@@ -26,28 +26,28 @@ def attach_turn_context(
     agent_id: str,
     decision: Mapping[str, Any],
     turn_instance_id: str,
+    composed_settlement: bool = False,
 ) -> None:
-    dispatch_turn_context_hooks(
+    memory = memory_context_registration(
         payload,
-        (
-            memory_context_registration(
-                payload,
-                registry_path=registry_path,
-                goal_id=goal_id,
-                agent_id=agent_id,
-                decision=decision,
-                turn_instance_id=turn_instance_id,
-            ),
-            anti_entropy_context_registration(
-                payload,
-                registry_path=registry_path,
-                goal_id=goal_id,
-                agent_id=agent_id,
-                decision=decision,
-                turn_instance_id=turn_instance_id,
-            ),
-        ),
+        registry_path=registry_path,
+        goal_id=goal_id,
+        agent_id=agent_id,
+        decision=decision,
+        turn_instance_id=turn_instance_id,
     )
+    anti_entropy = anti_entropy_context_registration(
+        payload,
+        registry_path=registry_path,
+        goal_id=goal_id,
+        agent_id=agent_id,
+        decision=decision,
+        turn_instance_id=turn_instance_id,
+    )
+    # The provider declares a slot for every enabled task, including when it
+    # needs to report that no retirement targets apply.
+    registrations = (memory, anti_entropy) if anti_entropy.readback_slots else (memory,)
+    dispatch_turn_context_hooks(payload, registrations, composed_settlement=composed_settlement)
 
 
 def configured_post_settlement(

@@ -7,6 +7,7 @@ from typing import Any
 
 from loopx.control_plane.quota.turn_envelope import (
     build_turn_envelope,
+    compose_turn_decision,
     quota_action_signature_document,
     turn_envelope_action_signature_document,
 )
@@ -105,7 +106,7 @@ def _actor(request: Mapping[str, Any]) -> dict[str, Any]:
     packet = request["packet"]
     signature = (
         quota_action_signature_document(packet)
-        if arm == "full_packet"
+        if arm == "full_packet" or packet.get("schema_version") == "loopx_turn_envelope_v1"
         else turn_envelope_action_signature_document(packet)
     )
     response_plan = dict(signature.get("response_plan") or {})
@@ -151,13 +152,17 @@ def test_corpus_covers_matrix_retained_counterfactual_and_ablation() -> None:
         candidate_ablations=[
             {
                 "case_id": "ablation-delivery-allowed-001",
-                "path": "action.delivery_allowed",
+                "path": "interaction_contract.agent_channel.delivery_allowed",
             }
         ],
     )
 
     result = run_model_behavior_corpus(corpus, actor=_actor, repeats=3, seed=7)
 
+    for case in corpus["cases"]:
+        expected_version = ("loopx_turn_envelope_v0" if case["source_kind"] == "state_matrix"
+                            else "loopx_turn_envelope_v1")
+        assert case["candidate_packet"]["schema_version"] == expected_version
     assert result["case_count"] == len(STATE_MATRIX["cases"]) + 3
     assert result["all_cases_passed"] is True
     assert result["corpus_gate_passed"] is True
@@ -288,3 +293,14 @@ def test_fail_closed_expectation_does_not_hide_invalid_actor_output() -> None:
         assert run["safety_violations"] == [
             f"actor_arm_failed:{run['failed_arm']}:actor_result_invalid"
         ]
+
+
+def test_corpus_accepts_an_original_complete_capture_without_recomposition() -> None:
+    source = compose_turn_decision(_full_packet(), composed_settlement=True)
+    corpus = build_model_behavior_corpus(source,
+        retained_packets=[{"case_id": "current-capture", "packet": source}])
+    assert corpus["cases"][0]["full_packet"] == source
+    assert corpus["cases"][0]["candidate_packet"] == source
+    result = run_model_behavior_corpus(corpus, actor=_actor, repeats=2)
+    assert result["all_cases_passed"] is True
+    assert result["promotion_eligible"] is False

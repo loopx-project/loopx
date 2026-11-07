@@ -194,6 +194,13 @@ class PostWritebackHookRegistration:
 
 def turn_context_source(payload: Mapping[str, Any]) -> Mapping[str, Any]:
     """Use the host envelope or the native quota identity, without new authority."""
+    if "work_contract" in payload:
+        from .quota.turn_envelope import turn_plan_host_source
+        from .quota.turn_envelope import complete_turn_host_source
+
+        source = complete_turn_host_source(turn_plan_host_source(payload), operation="plan_work")
+        assert source is not None
+        return source
     envelope = payload.get("turn_envelope")
     if isinstance(envelope, Mapping):
         return envelope
@@ -215,6 +222,8 @@ def turn_context_source(payload: Mapping[str, Any]) -> Mapping[str, Any]:
 def dispatch_turn_context_hooks(
     payload: dict[str, Any],
     registrations: Sequence[TurnContextHookRegistration],
+    *,
+    composed_settlement: bool = False,
 ) -> None:
     contributions: list[dict[str, Any]] = []
     failures: list[dict[str, str]] = []
@@ -237,12 +246,23 @@ def dispatch_turn_context_hooks(
             if any(key in payload for key in registration.readback_slots):
                 raise ValueError("context readback slot already contributed")
             result = registration.producer()
+            source = turn_context_source(payload)
+            readback_only = (
+                result.get("context_fields") == {}
+                and result.get("instructions") == []
+                and result.get("result_fields") == {}
+            )
+            binding: dict[str, Any] = (
+                {"readback_only": True} if readback_only else {"source": source}
+            )
+            if not readback_only and composed_settlement:
+                binding["composed_settlement"] = True
             contribution = effect_runtime_result(
                 "capability_hook.turn_context.validate",
                 {
                     "registration": registration.contract(),
                     "result": result,
-                    "source": turn_context_source(payload),
+                    **binding,
                 },
             )
             readback = contribution.pop("readback")

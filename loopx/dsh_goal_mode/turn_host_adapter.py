@@ -39,9 +39,11 @@ from ..control_plane.turn_driver.host_candidate import (
     TEXT_LIMITS as TEXT_LIMITS,
     _canonical_hash,
     _mapping,
+    assert_turn_host_request_version,
     build_result as _build_host_result,
     extract_action_text as extract_action_text,
     extract_turn_authority as extract_turn_authority,
+    extract_turn_work_identity,
     parse_model_json as parse_model_json,
     render_prompt as render_prompt,
 )
@@ -395,7 +397,28 @@ class DshHostConfig:
         )
 
 
-def _derive_session_id(request: Mapping[str, Any], turn_key: str) -> str:
+def _work_identity(
+    request: Mapping[str, Any], *, authority: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    if "work_contract" in request:
+        if authority is None:
+            return extract_turn_work_identity(request)
+        # Reuse the dispatch check from this invocation, never an ambient or
+        # cross-attempt cache. The complete source must not use the old decoder.
+        identity = authority.get("_work_identity")
+        if not isinstance(identity, Mapping):
+            raise ValueError("complete Turn work identity is unavailable")
+        return dict(identity)
+    # Historical requests retain raw values and their original hash/coercion.
+    envelope = _mapping(request.get("turn_envelope"))
+    selected = _mapping(_mapping(envelope.get("action")).get("selected_todo"))
+    return {"goal_id": envelope.get("goal_id"), "agent_id": envelope.get("agent_id"),
+            "todo_id": selected.get("todo_id")}
+
+
+def _derive_session_id(
+    request: Mapping[str, Any], turn_key: str, *, work_identity: Mapping[str, Any] | None = None,
+) -> str:
     planned_session = _mapping(request.get("session"))
     context_policy = _mapping(planned_session.get("context_policy"))
     if context_policy.get("mode") == "fresh":
@@ -411,14 +434,8 @@ def _derive_session_id(request: Mapping[str, Any], turn_key: str) -> str:
     # adapter concern and must not enter public LoopX state. Encode every
     # component position before hashing: delimiter-joined ids can collide when
     # an id itself contains the delimiter.
-    envelope = _mapping(request.get("turn_envelope"))
-    action = _mapping(envelope.get("action"))
-    selected_todo = _mapping(action.get("selected_todo"))
-    lineage = [
-        envelope.get("goal_id"),
-        envelope.get("agent_id"),
-        selected_todo.get("todo_id"),
-    ]
+    identity = _work_identity(request) if work_identity is None else work_identity
+    lineage = [identity.get(key) for key in ("goal_id", "agent_id", "todo_id")]
     # Keep the legacy truthiness boundary: empty or non-string false-like
     # values are not lineage identities, while their positions stay encoded.
     lineage = [value if value else None for value in lineage]
@@ -444,7 +461,9 @@ def _execute_turn_host_request(
     workspace = config.workspace.expanduser().resolve()
     dsh_home = resolve_dsh_home(workspace, config.dsh_home)
     dsh_home.mkdir(parents=True, exist_ok=True)
-    session_id = _derive_session_id(request, str(request.get("turn_key") or ""))
+    work_identity = _work_identity(request, authority=authority)
+    session_id = _derive_session_id(request, str(request.get("turn_key") or ""),
+                                    work_identity=work_identity)
     profile = config.resolved_profile()
     profile_reason = managed_profile_unavailable_reason(profile)
     if profile_reason is not None:
@@ -487,13 +506,11 @@ def _execute_turn_host_request(
             # Bind invocation-scoped tools to the verified Turn, never stale
             # ambient process identity. This is an SDK override map, not an
             # environment allowlist: the SDK still inherits the parent env.
-            envelope = _mapping(request.get("turn_envelope"))
-            selected = _mapping(_mapping(envelope.get("action")).get("selected_todo"))
             runner_arguments["env"] = {
                 **dict(config.env or {}),
-                "LOOPX_TURN_GOAL_ID": str(envelope.get("goal_id") or ""),
-                "LOOPX_TURN_AGENT_ID": str(envelope.get("agent_id") or ""),
-                "LOOPX_TURN_TODO_ID": str(selected.get("todo_id") or ""),
+                "LOOPX_TURN_GOAL_ID": str(work_identity.get("goal_id") or ""),
+                "LOOPX_TURN_AGENT_ID": str(work_identity.get("agent_id") or ""),
+                "LOOPX_TURN_TODO_ID": str(work_identity.get("todo_id") or ""),
                 "LOOPX_TURN_WORKSPACE": str(workspace),
             }
         outcome = normalize_runner_outcome(runner(**runner_arguments))
@@ -575,14 +592,15 @@ def run_dsh_host(
     the Turn journal records retryability instead of a bare ``unknown``.
     """
 
-    if (
-        not isinstance(request, Mapping)
-        or request.get("schema_version") != LOOPX_TURN_HOST_REQUEST_SCHEMA
-    ):
+    try:
+        if not isinstance(request, Mapping):
+            raise ValueError("Host request must be an object")
+        assert_turn_host_request_version(request)
+    except ValueError as exc:
         raise BuiltInHostError(
             "dsh_request_schema_mismatch",
             failure_kind="contract_rejected",
-        )
+        ) from exc
     try:
         authority = extract_turn_authority(request)
     except ValueError as exc:
@@ -663,8 +681,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (json.JSONDecodeError, ValueError) as exc:
         print(f"adapter: invalid request JSON on stdin: {exc}", file=sys.stderr)
         return 2
-    if not isinstance(request, dict) or request.get("schema_version") != LOOPX_TURN_HOST_REQUEST_SCHEMA:
-        print("adapter: stdin is not a loopx_turn_host_request_v0 object", file=sys.stderr)
+    try:
+        if not isinstance(request, dict):
+            raise ValueError("Host request must be an object")
+        assert_turn_host_request_version(request)
+    except ValueError as exc:
+        print(f"adapter: invalid LoopX Turn host request: {exc}", file=sys.stderr)
         return 2
 
     try:

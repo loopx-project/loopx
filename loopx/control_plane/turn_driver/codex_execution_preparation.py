@@ -7,6 +7,7 @@ the same Todo (and Turn when present) is ready before returning a Host receipt.
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
@@ -151,6 +152,45 @@ def prepared_capture_reference(payload: Mapping[str, Any], digest: str) -> dict[
     }
 
 
+def _native_claim_operation_id(request: Mapping[str, Any]) -> str:
+    """Reuse the captured managed claim identity on an authorized retry."""
+    digest = request.get("claim_source_sha256")
+    if not isinstance(digest, str) or BARE_SHA256_PATTERN.fullmatch(digest) is None:
+        raise ValueError("Native execution preparation requires its original capture digest")
+    return f"todo-claim:codex-capture:{digest}"
+
+
+def codex_execution_preparation_readback_context(request: Mapping[str, Any]) -> str | None:
+    """Expose only existing receipt and lease readers after an interrupted preparation."""
+    goal, agent, todo, turn = (request.get(key) for key in ("goal_id", "agent_id", "todo_id", "turn_instance_id"))
+    route = request.get("authority_route")
+    if not isinstance(route, Mapping) or not all(
+        isinstance(part, str) and part for part in (goal, agent, todo, turn)
+    ):
+        return None
+    registry_path, runtime_root = route.get("registry_path"), route.get("runtime_root")
+    if not all(isinstance(part, str) and Path(part).is_absolute() for part in (registry_path, runtime_root)):
+        return None
+    operation_id = _native_claim_operation_id(request)
+    base = [*current_loopx_cli_argv(), "--registry", registry_path,
+            "--runtime-root", runtime_root, "--format", "json"]
+    facts = {
+        "event": "host_execution_preparation_readback_required",
+        "goal_id": goal, "agent_id": agent, "todo_id": todo, "turn_instance_id": turn,
+        "claim_operation_id": operation_id,
+        "receipt_command": shlex.join([*base, "todo", "receipt", "--goal-id", goal, "--operation-id", operation_id]),
+        "lease_command": shlex.join([*base, "task-lease", "inspect", "--goal-id", goal, "--todo-id", todo]),
+    }
+    return (
+        "Automatic preparation started for this captured Turn and may still be finishing. "
+        "Read the original claim receipt and current lease before deciding how to recover. "
+        "With the matching active lease, follow the current captured same-Todo and same-Turn readiness check before work. "
+        "For an authorized retry of this claim, pass the original --claim-operation-id. "
+        "A retired lease requires a fresh eligible capture. "
+        "Receipt: " + json.dumps(facts, ensure_ascii=False, separators=(",", ":"))
+    )
+
+
 def execute_codex_execution_preparation(
     request: Mapping[str, Any],
     *,
@@ -210,10 +250,7 @@ def execute_codex_execution_preparation(
     if context_directory is not None or "source_sha256" in request:
         if context_directory is None or capture_directory is None or not turn_instance_id:
             raise ValueError("Native execution preparation requires a bound captured Turn")
-        source_sha256 = request.get("claim_source_sha256")
-        if not isinstance(source_sha256, str) or BARE_SHA256_PATTERN.fullmatch(source_sha256) is None:
-            raise ValueError("Native execution preparation requires its original capture digest")
-        claim_operation_id = f"todo-claim:codex-capture:{source_sha256}"
+        claim_operation_id = _native_claim_operation_id(request)
         expected_claim += ["--claim-operation-id", claim_operation_id]
     if request.get("claim_args") != expected_claim:
         raise ValueError("invalid Codex execution-preparation claim arguments")

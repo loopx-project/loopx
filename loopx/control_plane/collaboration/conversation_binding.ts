@@ -1288,7 +1288,7 @@ function planExhaustedStewardAnswer(recovery: JsonObject, row: JsonObject, curre
       || !Number.isFinite(now) || !Number.isFinite(ended) || now < ended + 60_000) return no;
   if (recovery.native_observation == null) return candidate;
   const proof = requireJsonObject(recovery.native_observation, "exhausted original request inventory");
-  if (typeof proof.thread_id !== "string" || !nativeThreads.includes(proof.thread_id) || proof.turn_id !== failed.upstream_turn_id
+  if (!nativeThreads.some(thread => thread === proof.thread_id) || proof.turn_id !== failed.upstream_turn_id
       || proof.only_original_user_item !== true || proof.codex_error_info !== "usageLimitExceeded") return candidate;
   const capacity = nativeRecoveryCapacity(recovery, row, current, candidate);
   return {...capacity, recovery_eligible: capacity.recovery_eligible === true && capacity.answer_executor === "codex"};
