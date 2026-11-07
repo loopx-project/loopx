@@ -136,22 +136,21 @@ stays local. The probe neither submits nor accesses hidden evaluation.
 When simultaneous memory could change a candidate choice, run the complete
 representative workload with the same probe and pass
 `--memory-limit-bytes <applicable-reference-limit>`. On Linux the producer
-samples proportional set size across the command's process group, including
-workers and the process holding their results. An unstable group is skipped.
-The adjacent `.memory.json` binds the sampled peak, limit, candidate and input
-revision. Its digest is included in the execution observation's evidence refs.
-A missing sample stays unknown. Use the same input, limits and measurement
-method when comparing candidates. Sampled PSS has different accounting from a
-container memory limit, and a sample below the reference cannot qualify
-headroom. Processes in other groups and peaks between samples are outside
-coverage. The option leaves the command's execution and time limit in place.
+estimates group proportional set size by reading one PID at a time. It skips
+samples with unstable membership. A stable group can move retained memory
+between PID reads, so the sampled sum can overstate simultaneous occupancy.
+The adjacent `.memory.json` binds that estimate and reference to the exact
+candidate and input revision. The main observation cites its digest only after
+a successful write. Missing samples stay unknown. A sidecar failure preserves
+the original process result. Processes in other groups and peaks between samples
+are outside coverage, and PSS accounting differs from a container limit.
 
-Observed excess provides an optional next action for the current Yardstick
-decision. Keep the best authoritative evidence, reuse the matching incumbent
-measurement and spend the next bounded comparison on a different lower-footprint
-mechanism over the full workload. Check its contribution to the accepted outcome
-before promotion. The current Todo, execution authority and evaluator stay with
-their owners. A native timeout alone supplies no memory observation.
+When this estimate could change a choice, check actual overlap independently
+and record the supported next comparison in the existing Yardstick decision.
+Keep the best authoritative evidence, reuse the matching incumbent observation,
+and compare a lower-footprint mechanism on the same complete workload where
+overlap matters. The estimate alone supplies no limit verdict or selected
+action. A native timeout alone supplies no memory observation.
 
 The adjacent `.candidate.json` preserves selected relative paths and hashes.
 `candidate_sha256` hashes the sorted JSON file manifest, not native archive
@@ -222,16 +221,16 @@ SForge heartbeat worker 可显式传入 `--execution-observation local_probe`，
 测量只在 worker 自己调用探针时发生。
 
 当并行内存占用会影响候选选择时，用同一入口执行完整代表性工作集并传入
-`--memory-limit-bytes <参考上限>`。Linux 采样命令进程组内各进程的 PSS，
-组成员变化或读不到完整数据时跳过该采样。相邻 `.memory.json` 绑定采样峰值、
-参考上限、候选和输入版本，其摘要进入原执行观测引用。组外进程和采样间峰值
-未覆盖。PSS 与容器内存限额的统计口径有差异，低于上限的采样不能确认余量。
-此选项沿用命令原执行及超时行为。
+`--memory-limit-bytes <参考上限>`。Linux 逐 PID 读取 PSS，组成员变化或数据
+不完整时跳过该次采样。组成员稳定时，内存仍可能在两次读取之间转移，累加值
+可能高于真实同时占用。相邻 `.memory.json` 将估计和参考值绑定到候选及输入
+版本。写入成功才把其摘要记入原观测，写入失败仍保留原进程结果。组外进程和
+采样间峰值未覆盖，PSS 与容器内存限额的统计口径有差异。
 
-实际观测超限时，现有 Yardstick 决策可采纳证据中给出的下一动作。保留最好的
-权威结果，复用同口径 incumbent 测量，把下一次有界试验用在较低占用的不同
-机制上，并在同一完整工作集验证对目标的贡献。Todo、授权和评测仍由原 owner
-管理。只有超时回执时，内存保持未知。
+这项估计会影响选择时，独立核对真实同时占用，再通过原 Yardstick 写入有证据
+的下一比较。保留最好的权威结果，复用同口径 incumbent 测量；确有并行保留
+影响时，把下一次有界试验用于同一完整工作集上的较低占用机制。估计本身不产生
+超限判定或自动选择。只有超时回执时，内存保持未知。
 
 当前授权工作实际产生或取得新的决策证据后，才进入相应工作段的检查点。旧反馈读回、
 记账和没有新增信息的确定性重复验证只是上下文，应先用于推进原任务。使用当前

@@ -154,8 +154,8 @@ def test_memory_observation_without_samples_leaves_timeout_and_next_method_unkno
     evidence = json.loads(sidecar.read_bytes())
     assert observed["stop_reason"] == "host_timeout" and observed["exit_code"] < 0
     assert evidence["candidate_sha256"] == observed["candidate_sha256"]
-    assert evidence["complete_samples"] == 0 and evidence["peak_pss_bytes"] is None
-    assert evidence["observed_limit_exceeded"] is None and "next_action" not in evidence
+    assert evidence["complete_samples"] == 0 and evidence["peak_sampled_pss_bytes"] is None
+    assert "observed_limit_exceeded" not in evidence and "next_action" not in evidence
     assert "resource:" + hashlib.sha256(sidecar.read_bytes()).hexdigest() in observed["evidence_refs"]
 
 
@@ -164,7 +164,52 @@ def test_changed_candidate_cannot_publish_memory_evidence(tmp_path, monkeypatch)
         probe(tmp_path, monkeypatch,
               source="from pathlib import Path; Path(__file__).write_text('print(0)')", memory_limit_bytes=1024)
     assert json.loads((tmp_path / "observation.json").read_text())["ok"] is False
-    assert (tmp_path / "observation.json.memory.json").read_bytes() == b""
+    assert not (tmp_path / "observation.json.memory.json").exists()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="requires a real Linux file size limit")
+def test_optional_memory_file_short_write_preserves_cli_result(tmp_path):
+    candidate = tmp_path / "candidate.py"
+    candidate.write_text("print('candidate finished'); raise SystemExit(7)")
+    # Change only the kernel limit for the optional file. The memory read
+    # and resulting real FileIO.write still use their production paths.
+    (tmp_path / "sitecustomize.py").write_text("""
+from contextlib import contextmanager
+from pathlib import Path
+import resource
+
+original_open = Path.open
+
+@contextmanager
+def limit_size(stream):
+    soft, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
+    try:
+        resource.setrlimit(resource.RLIMIT_FSIZE, (64, hard))
+        with stream as opened:
+            yield opened
+    finally:
+        resource.setrlimit(resource.RLIMIT_FSIZE, (soft, hard))
+
+def open_with_limit(path, *args, **kwargs):
+    stream = original_open(path, *args, **kwargs)
+    return limit_size(stream) if path.name.endswith(".memory.json") else stream
+
+Path.open = open_with_limit
+""")
+    output = tmp_path / "observed.json"
+    process = subprocess.run([sys.executable, "-m", "benchmark.runtime.research_probe",
+        "--candidate-file", str(candidate), "--output", str(output), "--input-revision", "fixture-v1",
+        "--planned-method-id", "method:work", "--executed-method-id", "method:work",
+        "--evidence-ref", "probe:failed", "--limit-seconds", "5", "--memory-limit-bytes", "1024",
+        "--", sys.executable, str(candidate)], cwd=tmp_path, capture_output=True, text=True, timeout=10,
+        env={**os.environ, "PYTHONPATH": os.pathsep.join((str(tmp_path), str(fixture.REPO_ROOT)))})
+    assert process.returncode == 7, process.stderr
+    assert "Optional process-group memory observation could not be retained." in process.stderr
+    assert output.with_suffix(".json.memory.json").stat().st_size == 64
+    assert output.with_suffix(".json.stdout").read_text().strip() == "candidate finished"
+    observation = json.loads(output.read_bytes())
+    assert json.loads(process.stdout) == observation and observation["exit_code"] == 7
+    assert not any(ref.startswith("resource:") for ref in observation["evidence_refs"])
 
 
 @pytest.mark.skipif(sys.platform != "linux" or not Path("/proc/self/smaps_rollup").exists(),
@@ -196,26 +241,43 @@ if len(sys.argv) == 2:
     else:
         scratch = bytearray([marker]) * {shard_size}
         total = sum(scratch)
-    time.sleep(0.75)
-    print(total)
+    # The parent releases this worker only after reading the amount of live
+    # payload. In the concurrent case both buffers are held at that barrier.
+    print(total, len(scratch), flush=True)
+    sys.stdin.readline()
 else:
     def shard(marker):
         return subprocess.Popen(
             [sys.executable, __file__, str(marker)],
-            stdout=subprocess.PIPE, text=True,
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
         )
     def read(process):
-        output, _ = process.communicate(timeout=3)
-        assert process.returncode == 0
-        return int(output)
+        total, retained = (int(item) for item in process.stdout.readline().split())
+        assert process.poll() is None
+        return total, retained
+    def finish(process):
+        process.stdin.close()
+        assert process.wait(timeout=3) == 0
     first = shard(1)
+    a, retained_a = read(first)
     if {parallel}:
         second = shard(2)
-        values = [read(first), read(second)]
+        b, retained_b = read(second)
+        simultaneous_payload = retained_a + retained_b
+        time.sleep(0.60)
+        finish(first)
+        finish(second)
     else:
-        values = [read(first), read(shard(2))]
-    Path("last-workload.json").write_text(json.dumps(values))
-    print(json.dumps(values))
+        time.sleep(0.60)
+        finish(first)
+        second = shard(2)
+        b, retained_b = read(second)
+        simultaneous_payload = max(retained_a, retained_b)
+        time.sleep(0.60)
+        finish(second)
+    receipt = dict(values=[a, b], simultaneous_payload=simultaneous_payload)
+    Path("last-workload.json").write_text(json.dumps(receipt))
+    print(json.dumps(receipt))
 """
 
     def execute(name, *, streaming=False, parallel, method_id):
@@ -230,7 +292,8 @@ else:
         process = subprocess.run(command, cwd=project, env={**os.environ, "PYTHONPATH": str(fixture.REPO_ROOT)},
                                  text=True, capture_output=True, timeout=10)
         assert process.returncode == 0, process.stderr
-        assert json.loads(output.with_suffix(".json.stdout").read_text()) == [shard_size, 2 * shard_size]
+        execution = json.loads(output.with_suffix(".json.stdout").read_text())
+        assert execution["values"] == [shard_size, 2 * shard_size]
         observation = json.loads(process.stdout)
         memory_bytes = output.with_suffix(".json.memory.json").read_bytes()
         memory = json.loads(memory_bytes)
@@ -238,32 +301,43 @@ else:
         assert ref in observation["evidence_refs"]
         assert memory["candidate_sha256"] == observation["candidate_sha256"]
         assert memory["input_revision"] == revision and memory["complete_samples"] > 0
-        return observation, memory, ref
+        assert memory["reference_memory_bytes"] == limit_bytes
+        assert "observed_limit_exceeded" not in memory and "next_action" not in memory
+        return observation, memory, ref, execution
 
-    baseline, incumbent_memory, incumbent_ref = execute("incumbent", parallel=False, method_id="method:sequential")
-    challenger, expanded_memory, expanded_ref = execute("expanded", parallel=True, method_id="method:expanded")
-    assert incumbent_memory["observed_limit_exceeded"] is False
-    assert expanded_memory["observed_limit_exceeded"] is True and expanded_memory["members_at_peak"] == 3
-    assert "next_action" not in incumbent_memory
+    baseline, incumbent_memory, incumbent_ref, incumbent_run = execute(
+        "incumbent", parallel=False, method_id="method:sequential")
+    challenger, expanded_memory, expanded_ref, expanded_run = execute(
+        "expanded", parallel=True, method_id="method:expanded")
+    assert incumbent_run["simultaneous_payload"] == shard_size < limit_bytes
+    assert expanded_run["simultaneous_payload"] == 2 * shard_size > limit_bytes
+    assert expanded_memory["members_at_peak"] == 3
 
     def result(observation, memory, evidence_ref, prior_finding_id, next_action, counterevidence):
         packet = attachment()
         yardstick = packet["work_yardstick_decision"]
         yardstick["authoritative"]["input_revision"] = revision
         yardstick["proxy"].update(metric="sampled-pipeline-memory", unit="bytes", higher_is_better=False,
-                                  input_revision=revision, evaluation_ref="evaluator:linux-process-group-pss-v1")
+                                  input_revision=revision, evaluation_ref="evaluator:linux-sequential-process-group-pss-v1")
         yardstick.update(prior_finding_id=prior_finding_id, next_action=next_action, counterevidence_refs=counterevidence)
         packet.update(input_revision=revision, evidence_refs=observation["evidence_refs"],
                       execution_observation=observation,
-                      measurements=[{**yardstick["proxy"], "value": memory["peak_pss_bytes"],
+                      measurements=[{**yardstick["proxy"], "value": memory["peak_sampled_pss_bytes"],
                           "candidate_ref": "sha256:" + observation["candidate_sha256"], "evidence_ref": evidence_ref}])
         return packet
 
     # Use the real commit/next ordinary work surface, without manufacturing a
     # replan obligation or running another evaluation in the control plane.
+    # The actor's choice follows the independent overlap witness, not a
+    # threshold verdict from the non-atomic memory estimate.
+    next_action = {
+        "method_id": "method:lower-footprint-challenge",
+        "reason": "Both full shards are retained at the same barrier. Compare streaming on the same workload.",
+        "cost_bound": "Reuse the incumbent and run one complete contender comparison",
+    }
     exceeded_attachment = project / "expanded.json"
     exceeded_attachment.write_text(json.dumps(result(challenger, expanded_memory, expanded_ref, None,
-                                                     expanded_memory["next_action"], [expanded_ref])))
+                                                     next_action, [expanded_ref])))
     first = refresh(project, runtime, registry, "memory-study-1", exceeded_attachment)
     assert first["explore_result_delivery"]["ok"]
     run(project, runtime, registry, "quota", "spend-slot", *binding("memory-study-1"),
@@ -272,12 +346,14 @@ else:
     cue = context(runtime, registry)["graph"]["work_yardsticks"][0]
     assert cue["source_finding_id"] in json.dumps(guard)
     assert cue["counterevidence_refs"] == [expanded_ref]
-    assert cue["next_action"] == expanded_memory["next_action"]
+    assert cue["next_action"] == next_action
     chosen = cue["next_action"]["method_id"]
     assert chosen == "method:lower-footprint-challenge"
-    contender, streamed_memory, streamed_ref = execute("streamed", streaming=True, parallel=True, method_id=chosen)
-    assert streamed_memory["observed_limit_exceeded"] is False
-    assert streamed_memory["peak_pss_bytes"] < incumbent_memory["peak_pss_bytes"] < expanded_memory["peak_pss_bytes"]
+    contender, streamed_memory, streamed_ref, streamed_run = execute(
+        "streamed", streaming=True, parallel=True, method_id=chosen)
+    assert streamed_run["simultaneous_payload"] == 2 * 1024 * 1024 < limit_bytes
+    assert (streamed_memory["peak_sampled_pss_bytes"] < incumbent_memory["peak_sampled_pss_bytes"]
+            < expanded_memory["peak_sampled_pss_bytes"])
     assert len({baseline["candidate_sha256"], challenger["candidate_sha256"], contender["candidate_sha256"]}) == 3
     assert incumbent_ref in baseline["evidence_refs"]
 
@@ -292,7 +368,7 @@ else:
     followthrough = context(runtime, registry)["graph"]["work_yardsticks"][0]["previous_decision_followthrough"]
     assert followthrough["executed_method_id"] == chosen and followthrough["recorded_planned_method_matches"]
     assert followthrough["candidate_sha256"] == contender["candidate_sha256"]
-    print(json.dumps({name: evidence["peak_pss_bytes"] for name, evidence in (
+    print(json.dumps({name: evidence["peak_sampled_pss_bytes"] for name, evidence in (
         ("incumbent", incumbent_memory), ("expanded", expanded_memory), ("streamed", streamed_memory))}))
 
 

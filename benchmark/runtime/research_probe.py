@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from _thread import LockType
 import argparse
-from contextlib import nullcontext
 import hashlib
 import json
 import math
@@ -49,9 +48,9 @@ def execution_observation_guidance() -> str:
         "use `loopx-research-probe --help` to wrap the relevant local execution within its existing "
         "budget. Do not repeat an experiment merely to produce an attachment. Retain actual host "
         "elapsed time, exit or timeout, and selected-file hashes; keep unmeasured values unknown. "
-        "When a candidate's aggregate memory could change the choice, reuse or measure the complete "
-        "workload with the applicable limit using --memory-limit-bytes. Use observed excess to compare "
-        "a lower-footprint method against the scored incumbent before scaling the same design. "
+        "When aggregate memory could change the choice, reuse or estimate the complete workload with "
+        "the applicable reference using --memory-limit-bytes. If the estimate is decision-critical, "
+        "verify real overlap and compare a lower-footprint method on the same workload and accepted outcome. "
         "Method ids are producer declarations and optional solver counters are reports, not "
         "independently verified execution. Attach available execution_observation through ordinary "
         "Explore writeback with matching candidate, input revision and evidence refs. This tool "
@@ -104,7 +103,8 @@ def _group_pss_sample(group_id: int) -> tuple[int, int] | None:
             if len(pss) != 3 or pss[2] != b"kB" or not pss[1].isdigit():
                 return None
             footprint += int(pss[1]) * 1024
-        # Do not silently sum a partial group when a worker exited or forked.
+        # This checks membership only. PSS reads happen one PID at a time,
+        # so a stable group can still move memory between those reads.
         if members == _group_members(group_id):
             return footprint, len(members)
     except (OSError, IndexError, ValueError, StopIteration):
@@ -123,32 +123,21 @@ def _observe_group_pss(group_id: int, stopped: threading.Event, samples: dict, l
             else:
                 peak, members = sample
                 samples["complete_samples"] += 1
-                if samples["peak_pss_bytes"] is None or peak > samples["peak_pss_bytes"]:
-                    samples.update(peak_pss_bytes=peak, members_at_peak=members)
+                if samples["peak_sampled_pss_bytes"] is None or peak > samples["peak_sampled_pss_bytes"]:
+                    samples.update(peak_sampled_pss_bytes=peak, members_at_peak=members)
         stopped.wait(0.25)
 
 
 def _memory_observation(samples: dict, source: dict, limit_bytes: int, evidence_ref: str) -> dict:
-    peak = samples["peak_pss_bytes"]
-    exceeded = None if peak is None else peak > limit_bytes
-    observation = {
-        "measurement_basis": "linux-process-group-pss-v1",
+    return {
+        "measurement_basis": "linux-sequential-process-group-pss-v1",
         "candidate_sha256": source["candidate_sha256"],
         "input_revision": source["input_revision"],
         "executed_method_id": source["executed_method_id"],
-        "probe_evidence_ref": evidence_ref,
-        "memory_limit_bytes": limit_bytes,
-        "observed_limit_exceeded": exceeded,
+        "probe_evidence_ref": evidence_ref.strip(),
+        "reference_memory_bytes": limit_bytes,
         **samples,
     }
-    if exceeded:
-        observation["next_action"] = {
-            "method_id": "method:lower-footprint-challenge",
-            "reason": "Keep the best authoritative result. Compare a lower-footprint mechanism on the same complete "
-                      "workload before scaling this candidate, and measure its contribution to the accepted outcome.",
-            "cost_bound": "Reuse applicable measurements and bound one contender check by the existing workload and budget.",
-        }
-    return observation
 
 
 def run_probe(*, command: list[str], candidate_files: list[Path], output: Path,
@@ -171,11 +160,12 @@ def run_probe(*, command: list[str], candidate_files: list[Path], output: Path,
     normalize_execution_observation(observation)  # Reject bad attribution before execution.
     if diagnostics is not None and diagnostics.exists():
         raise FileExistsError("use a fresh diagnostic path; previous observations cannot describe this probe")
-    # Reserve before any process effect. Existing evidence is never overwritten.
+    # Reserve the primary receipt before any process effect. A stale sidecar
+    # cannot be adopted as a new probe, including a dangling symbolic link.
     memory_output = output.with_suffix(output.suffix + ".memory.json")
-    with output.open("x", encoding="utf-8") as record, (
-        memory_output.open("xb") if memory_limit_bytes is not None else nullcontext()
-    ) as memory_record:
+    if memory_limit_bytes is not None and os.path.lexists(memory_output):
+        raise FileExistsError("use a fresh memory observation path")
+    with output.open("x", encoding="utf-8") as record:
         with output.with_suffix(output.suffix + ".candidate.json").open("x", encoding="utf-8") as source:
             source.write(json.dumps({"candidate_sha256": before, "files": files}, sort_keys=True) + "\n")
         env = dict(os.environ)
@@ -183,8 +173,8 @@ def run_probe(*, command: list[str], candidate_files: list[Path], output: Path,
             env["LOOPX_RESEARCH_DIAGNOSTICS"] = str(diagnostics.resolve())
         started = time.monotonic()
         timed_out = False
-        samples = (dict(complete_samples=0, incomplete_samples=0, peak_pss_bytes=None, members_at_peak=None)
-                   if memory_record is not None else None)
+        samples = (dict(complete_samples=0, incomplete_samples=0, peak_sampled_pss_bytes=None, members_at_peak=None)
+                   if memory_limit_bytes is not None else None)
         with output.with_suffix(output.suffix + ".stdout").open("xb") as stdout, \
              output.with_suffix(output.suffix + ".stderr").open("xb") as stderr:
             process = subprocess.Popen(command, cwd=workspace, env=env, stdout=stdout, stderr=stderr,
@@ -232,13 +222,14 @@ def run_probe(*, command: list[str], candidate_files: list[Path], output: Path,
         # completed execution or change its real exit/timeout status.
         result = normalize_execution_observation(observation)
         try:
-            if memory_record is not None and samples is not None and memory_limit_bytes is not None:
+            if samples is not None and memory_limit_bytes is not None:
+                measurement = _memory_observation(samples, result, memory_limit_bytes, evidence_ref)
+                encoded = json.dumps(measurement, sort_keys=True, separators=(",", ":")).encode() + b"\n"
                 try:
-                    measurement = _memory_observation(samples, result, memory_limit_bytes, evidence_ref)
-                    encoded = json.dumps(measurement, sort_keys=True, separators=(",", ":")).encode() + b"\n"
-                    memory_record.write(encoded)
-                    memory_record.flush()
-                    os.fsync(memory_record.fileno())
+                    with memory_output.open("xb", buffering=0) as memory_record:
+                        if memory_record.write(encoded) != len(encoded):
+                            raise OSError("incomplete optional memory observation")
+                        os.fsync(memory_record.fileno())
                 except OSError:
                     print("Optional process-group memory observation could not be retained.", file=sys.stderr)
                 else:
@@ -298,7 +289,7 @@ def main() -> int:
     parser.add_argument("--evidence-ref", required=True)
     parser.add_argument("--limit-seconds", type=float, required=True)
     parser.add_argument("--memory-limit-bytes", type=int,
-        help="Optionally compare sampled Linux process-group PSS to this positive diagnostic reference limit")
+        help="Write a .memory.json diagnostic with sequential Linux PSS samples and this reference (bytes)")
     parser.add_argument("--diagnostics", type=Path)
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = vars(parser.parse_args())
