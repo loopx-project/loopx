@@ -441,7 +441,19 @@ export const chatRecoveryScenario = {
       // with the running Turn. The page must adopt that Turn with its
       // controls and keep the draft; the owner can explicitly queue it next.
       const busySessionId = api.turnRequests.at(-1).sessionId;
+      const busyChannelId = page.__loopxRuntime.sessions.get(busySessionId).channel_id;
       const submissionRoute = `**/api/chat/sessions/${busySessionId}/turns`;
+      // Keep the reported Turn pending through the readback assertion. The
+      // fixture's ordinary event timer can otherwise finish it mid-check.
+      const holdTurnCompletion = async (turnId) => {
+        const path = `${submissionRoute}/${turnId}/events`;
+        const heldEvents = [];
+        await page.route(path, (route) => { heldEvents.push(route); });
+        return async () => {
+          await page.unroute(path);
+          for (const route of heldEvents) await route.fallback();
+        };
+      };
       const queuePosts = [];
       const competeOnSubmit = (turnId, rejected) => async (route) => {
         const request = route.request();
@@ -466,6 +478,7 @@ export const chatRecoveryScenario = {
       };
       const foreignTurnId = `turn-foreign-${Date.now()}`;
       const foreignTurnControl = page.locator(`.personal-composer-stop[data-turn-id="${foreignTurnId}"]`);
+      const releaseForeignTurn = await holdTurnCompletion(foreignTurnId);
       page.__loopxRuntime.turnMessages.set(foreignTurnId, "另一页面发起的中断控制回合");
       let rejectedPosts = 0;
       await page.route(submissionRoute, competeOnSubmit(foreignTurnId, () => { rejectedPosts += 1; }));
@@ -475,18 +488,13 @@ export const chatRecoveryScenario = {
       const heldReads = [];
       let holdReads = false;
       await page.route("**/api/chat/sessions?*", async (route) => {
-        if (!holdReads || route.request().method() !== "GET"
-          || !new URL(route.request().url()).searchParams.has("channel_id")) return route.fallback();
+        if (!holdReads || !rejectedPosts || route.request().method() !== "GET"
+          || new URL(route.request().url()).searchParams.get("channel_id") !== busyChannelId) return route.fallback();
         heldReads.push(route);
       });
       const draft = "这条消息在另一回合运行时发出";
       const composerInput = page.getByLabel("向 LoopX 发送消息");
       const sendButton = page.getByRole("button", { name: "发送", exact: true });
-      // The conversation hides the quick-prompt strip once it has messages, and
-      // the rejected send below adds one, so read them while they are still up.
-      // The quick-prompt strip renders only while a conversation is empty. This
-      // Goal's chat already has history, so the handoff's effect on those
-      // prompts is covered where a fresh Goal shows them, not here.
       await composerInput.fill(draft);
       holdReads = true;
       await sendButton.click();
@@ -535,6 +543,7 @@ export const chatRecoveryScenario = {
       if (await page.locator(".personal-channel-timeline .personal-message").filter({ hasText: draft }).count()) {
         throw new Error("A message the service did not accept stayed in the conversation");
       }
+      await releaseForeignTurn();
       await foreignTurnControl.waitFor({ state: "hidden", timeout: 10_000 });
       if (await sendButton.isDisabled()) throw new Error("Send stayed blocked after the adopted Turn completed");
       if (rejectedPosts !== 1) throw new Error(`The composer posted ${rejectedPosts} times into a running Turn`);
@@ -546,6 +555,7 @@ export const chatRecoveryScenario = {
       // treat the failure as the Turn having ended.
       const retriedTurnId = `turn-foreign-retry-${Date.now()}`;
       const retriedTurnControl = page.locator(`.personal-composer-stop[data-turn-id="${retriedTurnId}"]`);
+      const releaseRetriedTurn = await holdTurnCompletion(retriedTurnId);
       page.__loopxRuntime.turnMessages.set(retriedTurnId, "读取失败后仍在运行的中断控制回合");
       let retryRejectedPosts = 0;
       await page.route(submissionRoute, competeOnSubmit(retriedTurnId, () => { retryRejectedPosts += 1; }));
@@ -553,8 +563,8 @@ export const chatRecoveryScenario = {
       const heldRetryReads = [];
       let failReads = false;
       await page.route("**/api/chat/sessions?*", async (route) => {
-        if (!failReads || route.request().method() !== "GET"
-          || !new URL(route.request().url()).searchParams.has("channel_id")) return route.fallback();
+        if (!failReads || !retryRejectedPosts || route.request().method() !== "GET"
+          || new URL(route.request().url()).searchParams.get("channel_id") !== busyChannelId) return route.fallback();
         if (failedReads === 0) {
           failedReads += 1;
           return route.fulfill({ contentType: "application/json", status: 503, json: { ok: false, error: "chat store temporarily unavailable" } });
@@ -581,6 +591,7 @@ export const chatRecoveryScenario = {
         throw new Error("The retried recovery added a second pending reply instead of adopting the handoff reply");
       }
       if (await composerInput.inputValue() !== draft) throw new Error("The draft rejected by a running Turn was not kept across the failed read");
+      await releaseRetriedTurn();
       await retriedTurnControl.waitFor({ state: "hidden", timeout: 10_000 });
       if (await sendButton.isDisabled()) throw new Error("Send stayed blocked after the retried recovery saw the Turn complete");
       if (retryRejectedPosts !== 1) throw new Error(`The composer posted ${retryRejectedPosts} times into a running Turn`);
@@ -592,6 +603,10 @@ export const chatRecoveryScenario = {
       page.__loopxRuntime.sessions.set(busySessionId, { ...page.__loopxRuntime.sessions.get(busySessionId), adapter_kind: "codex_app_server" });
       await page.reload({ waitUntil: "domcontentloaded" });
       await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
+      // An enabled Send button also allows queueing. Wait for the original
+      // Session's completed reply and for its active-Turn control to clear.
+      await page.locator(`.personal-channel-timeline [data-message-session="${busySessionId}"][data-message-id="${retriedTurnId}-assistant"]`).waitFor({ state: "visible" });
+      await page.locator(".personal-composer-stop").waitFor({ state: "hidden" });
       // The pending reply shows Adjust/Interrupt from the 409 on, so before any
       // Session read returns, both must act on the exact reported Turn.
       const controlledTurnId = `turn-foreign-controls-${Date.now()}`;
@@ -605,11 +620,10 @@ export const chatRecoveryScenario = {
       await page.route(submissionRoute, competeOnSubmit(controlledTurnId, () => { controlRejectedPosts += 1; }));
       let holdControlReads = true;
       const heldControlReads = [];
-      const controlledChannelId = page.__loopxRuntime.sessions.get(busySessionId).channel_id;
       await page.route("**/api/chat/sessions?*", async (route) => {
         const request = route.request();
         if (!holdControlReads || !controlRejectedPosts || request.method() !== "GET"
-          || new URL(request.url()).searchParams.get("channel_id") !== controlledChannelId) return route.fallback();
+          || new URL(request.url()).searchParams.get("channel_id") !== busyChannelId) return route.fallback();
         heldControlReads.push(route);
       });
       const steers = [];
