@@ -248,8 +248,64 @@ try {
       await archivePage.close();
     }
   }
+  const researchPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  researchPage.on("pageerror", (error) => errors.push(error.message));
+  const researchDirectory = { ...directory, goals: ["parent", "case-a", "case-b", "other"].map((id) => ({
+    id, display_name: `${id} project`, registry_member: true, activation_state: "active",
+    ...(id.startsWith("case-") ? { parent_goal_id: "parent" } : {}),
+  })) };
+  let releaseParent;
+  const parentGate = new Promise((done) => { releaseParent = done; });
+  let parentDenied = true;
+  const exploreReads = [];
+  try {
+    await researchPage.route("**/status.json*", async (route) => {
+      const query = new URL(route.request().url()).searchParams;
+      if (query.has("view")) return route.fulfill({ json: researchDirectory });
+      const id = query.get("goal_id");
+      const row = researchDirectory.goals.find((goal) => goal.id === id);
+      assert.ok(row);
+      if (id === "parent") {
+        await parentGate;
+        if (parentDenied) return route.fulfill({ status: 500, json: { ok: false, error_code: "workspace_status_access_denied" } });
+      }
+      const status = snapshot(id);
+      Object.assign(status.run_history.goals[0], row);
+      return route.fulfill({ json: status });
+    });
+    await researchPage.route("**/api/**", (route) => route.fulfill({ status: 503, json: { ok: false } }));
+    await researchPage.route("**/api/chat/explore-results?*", (route) => {
+      const query = new URL(route.request().url()).searchParams;
+      exploreReads.push({ goal: query.get("goal_id"), view: query.get("view"), method: route.request().method() });
+      return route.fulfill({ status: 503, json: { ok: false } });
+    });
+    await researchPage.goto(`${origin}/chat/?goalId=parent&view=research`);
+    const cards = researchPage.locator(".research-child-goals button");
+    const caseButton = cards.filter({ hasText: "case-a project" });
+    const notice = researchPage.getByTestId("goal-status-loading");
+    await caseButton.waitFor();
+    await notice.waitFor();
+    assert.equal(await cards.count(), 2, "directory navigation must stay in the selected Goal hierarchy");
+    assert.deepEqual(exploreReads, [], "the parent directory is enough to navigate, not to read evidence");
+    await caseButton.press("Enter");
+    await researchPage.waitForURL((url) => url.searchParams.get("goalId") === "case-a" && url.searchParams.get("view") === "research");
+    await researchPage.locator(".research-parent-goal").waitFor();
+    releaseParent();
+    await researchPage.locator(".research-parent-goal").click();
+    await notice.getByRole("button").waitFor();
+    await caseButton.waitFor();
+    assert.ok(exploreReads.every(({ goal, view, method }) => goal !== "parent" && view !== "history-timing" && method === "GET"));
+    parentDenied = false;
+    await notice.getByRole("button").click();
+    await notice.waitFor({ state: "hidden" });
+    await caseButton.locator(".research-child-timing").waitFor();
+    assert.equal(await cards.count(), 2);
+  } finally {
+    releaseParent();
+    await researchPage.close();
+  }
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ ok: true, directory_ms: directoryMs, peak_concurrent_requests: peak, checks: ["directory-before-slow-goal", "ready-peer-usable", "queue-progress", "isolated-failure", "registry-revision-fence", "retry", "service-restart-recovery", "lazy-stopped-goals", "access-no-auto-retry", "access-manual-recovery-preserves-peers", "full-refresh-observes-external-todo", "full-refresh-invalidates-completed-history", "failed-reread-replaces-stale-snapshot", "stopped-deep-link-loading-error-retry-reload", "absent-goal-after-complete-read", "read-only-bookmark-recovery", "bilingual-access", "mobile", "no-render-errors"] }));
+  console.log(JSON.stringify({ ok: true, directory_ms: directoryMs, peak_concurrent_requests: peak, checks: ["directory-before-slow-goal", "ready-peer-usable", "queue-progress", "isolated-failure", "registry-revision-fence", "retry", "service-restart-recovery", "lazy-stopped-goals", "access-no-auto-retry", "access-manual-recovery-preserves-peers", "full-refresh-observes-external-todo", "full-refresh-invalidates-completed-history", "failed-reread-replaces-stale-snapshot", "stopped-deep-link-loading-error-retry-reload", "absent-goal-after-complete-read", "read-only-bookmark-recovery", "research-navigation-before-parent-snapshot", "research-navigation-during-denial-and-recovery", "bilingual-access", "mobile", "no-render-errors"] }));
 } finally {
   releaseSlow();
   await cleanupBrowserSmoke({ browser, server, fixturePaths: [] });
