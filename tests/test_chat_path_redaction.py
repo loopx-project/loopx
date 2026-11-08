@@ -18,7 +18,7 @@ from loopx.chat import (
     redact_response_markdown,
 )
 from loopx.chat_acp import ACPStdioAdapter
-from loopx.chat_status_api import ChatStatusRequestMixin
+from loopx.chat.status_api import ChatStatusRequestMixin
 
 
 def test_windows_near_root_finishes_without_exponential_case_backtracking():
@@ -571,7 +571,7 @@ def test_stream_holds_long_encoded_private_root_prefix_until_redacting(encoding)
 def test_status_http_hides_the_selected_custom_runtime_root(monkeypatch):
     root = Path("/custom-volume/private-state")
     monkeypatch.setattr(
-        "loopx.chat_status_api.collect_status",
+        "loopx.chat.status_api.collect_status",
         lambda **kwargs: {
             "ok": True,
             "runtime_root": str(root),
@@ -579,7 +579,7 @@ def test_status_http_hides_the_selected_custom_runtime_root(monkeypatch):
         },
     )
     monkeypatch.setattr(
-        "loopx.chat_status_api.attach_host_thread_activity",
+        "loopx.chat.status_api.attach_host_thread_activity",
         lambda *args, **kwargs: None,
     )
 
