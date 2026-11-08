@@ -1543,3 +1543,24 @@ no account response, login values or token is emitted. The ordinary startup
 probe and automatic retry path keep their previous behavior. This observation
 is not a reservation of future provider capacity; a later failure is retained
 and requires another explicit repair.
+
+For a **new** native Goal or heartbeat receiver, the startup-only account probe
+keeps its default single 25-second total window. An operator may explicitly pass
+`--native-readiness-total-seconds 75 --native-readiness-attempt-seconds 25` to
+`benchmark.edgebench.run` when bounded setup recovery is authorized. These caps
+are at most 75 seconds total and 25 seconds per attempt, with at most three
+attempts. The total is additionally clipped to the native runner's original
+remaining execution snapshot, charging entry delay, preparation, reads, cleanup
+and backoff; terminal cleanup can finish after the deadline but grants no more
+requests. A missing, invalid or expired snapshot refuses the observer.
+
+This opt-in retries only locally typed `account/read` or
+`account/rateLimits/read` transport timeouts. Its bounded `account_timeout`
+diagnostic preserves that distinction without exposing remote payloads.
+Initialization failure, identity or
+protocol rejection, disconnect, unknown failure, Stop and exhausted budget do
+not authorize another attempt. It performs no inference, token refresh, account
+switch, model retry or Goal mutation, and starts no solver phase until a probe
+succeeds. It is unavailable for Official/single profiles, custom API providers
+and warm checkpoint continuations. Omit both options to retain existing startup
+behavior; neither option changes submission counting, cooldown or solver budget.

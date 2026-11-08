@@ -573,6 +573,27 @@ R0 可以先于目录移动交付，但不代表内核合格。R3/R4 可选，�
   版本，D3 精确退役时间仍由发布负责人决定。M1 未关闭，不声明模块数量、加载性能、
   拆包或 R1 managed Turn 收益。
 
+### 2026-11-04 — M1 公开 status owner 迁移
+
+- **变化：** 完整 `ChatStatusRequestMixin` 与 `goal_read_runtime_root` 实现迁入
+  `loopx.chat.status_api`，Chat HTTP 与 Todo detail 直接导入该 owner。刻画前置
+  [#8001](https://github.com/loopx-project/loopx/pull/8001) 已合入。
+- **直接迁移：** 历史顶层 `loopx.chat_status_api` 模块直接删除，不保留 alias 或
+  warning shim。仓库调用方与公开面审计均未发现外部 importer；所有活跃调用方和
+  测试改用 `loopx.chat.status_api`。该兼容豁免仅适用于这个内部模块迁移，不构成
+  删除受支持公开 import 的通用先例。
+- **权限边界：** 同步重定向
+  `tests/architecture/test_source_session_registry_denial.py` 的两个精确 owner
+  路径项，全部拒绝断言及 `_discovery_registry` 例外不变。真实 HTTP 覆盖允许仅生命周期
+  registry 的发现，但在 collector 执行前拒绝完整 status。移动 presentation owner
+  不授予新的 runtime、来源、provider 或执行权威。
+- **证据：** owner 测试要求 canonical import，并断言顶层 shim 不存在。既有 HTTP、
+  File／SQLite 源路由、源丢失／恢复和 delivery review 测试保护原行为。解析为绝对
+  import 后的 AST 对比覆盖完整 owner；拒绝 oracle 仅有两个 owner 路径差异。
+- **剩余：** 这是 M1 的一个公开 owner 片，不关闭更广的公开 Chat 迁移、D3、发行物
+  拆分或 R1 managed minimal。删除内部顶层模块属于表示层整理，不代表加载性能或
+  长程成果收益。源码与隔离 wheel 验证不等于升级既有已安装宿主。
+
 ### 2026-11-04 — Capability 发现路径的所选加载
 
 - **基线：** `79b781865`。`capability list` / `show` 及命令帮助复用既有
@@ -1993,6 +2014,182 @@ caller 的必需依赖闭包，再选一个完整可回退的加载改动并验�
 context／model／split-install、PostgreSQL host／wheel、full-cost／adoption 要求
 继续开放；本轮不合入 main、不升级 host。
 
+### 2026-11-08 — 默认调用方加载与不可变恢复
+
+在 `a02be126957953b7a61796e3b99fcfe578eb5174` 上，以 Python 3.13.5 和正常字节码
+设置执行完整的源码/default-SQLite 生命周期，记录 22 个实际控制台进程的加载。
+原合成 101-Todo 工作流保留独立验证的 sum=45 产物、原完成时间与写范围、四张
+receipt、一次 debit、重启、证据替换拒绝和结算回放；两个自有原生 daemon 均退出。
+这证明当前源码的实际正确性与加载事实，不是新的配对成本样本或安装分发资格。
+
+新鲜 guard 加载 505 个 LoopX 模块，实际 refresh 写回加载 432 个。显式 reader
+reference 的上下文恢复，首次选择读取加载 71 个、后续分页加载 69 个，均未加载
+capability 模块。另一个恢复探针拒绝所有 capability import，仍通过两页精确重建
+原 60,888 字节 capture。修改后的 capture 仍被摘要校验拒绝；复制后具有公开文件
+权限的 reference 被私有文件检查拒绝。首个 observer 错误要求控制台路径形式的
+续读命令；接受实际出现的精确解释器/module 前缀后，沿同一固定 offset 继续。
+保留 observer 失败和复制 reference 的准备拒绝。该探针不证明新的 authority 写成本。
+
+成功 import 的跟踪定位到剩余组合边界：`cli_runtime` 在 refresh 验证前加载
+`periodic_report.post_writeback_hook`；默认禁用报告的路径也加载报告 source、
+profile 和 preset 构造依赖。已加载模块本身不证明必需性或成本。下一项有界加载改动应在
+已有 provider 内分开订阅解析与报告 source/profile/preset 构造，保留实时机器默认值和 Goal
+覆盖解析、模块导出与 patch 点，以及全部 hook/replay/authority 检查。修改边界前，
+先刻画禁用与启用两种实际写回。已隔离的不可变 reader 不支持大范围迁移上下文读取。
+
+反馈与词法 scope 提案仍是各自的评审依赖，本检查点的测量源码未包含两项提案。
+既有 File/wheel/PostgreSQL 证据保留其原源码边界。独立评审/readiness、I3 至少一个
+minor release、M1/#8011、完整 R0/V10/R1、D2/D5/D6/D3、context/model/split-install、
+PostgreSQL host/wheel、完整成本与 adoption 仍未验收。保留全部冻结失败和样本；
+这里不证明加速、完整内核验收、main 合入或 host 升级。
+
+### 2026-11-08 — 反馈校验不加载写入适配器
+
+初始 runtime `2c5212fdb15035c26c3e158420d67197d45715f2` 将 `loopx.feedback` 中
+两个既有 retained-state 写入适配器改为按需加载。适配器不可用时，纯反馈校验
+仍可执行；parent 会在模块导入时失败。Reward mutation 在 registry 读取或
+写入前解析两个适配器，原 guard 与 writer 调用位置仍查找当前模块 binding。
+保留适配器对象 identity、调用中途 patch 行为、先 index 后 state 的锁顺序、
+TypeScript guard owner、凭证拒绝及 partial-write handling。本地兼容映射、
+模块 `__getattr__`／`__dir__` 与 computed `__all__` 保留全部 50 个原 star-export
+名称，包括后面的 append／render 函数。不新增 capability、provider、持久词汇、
+规则 owner 或跨请求 authority cache。
+
+两个相关组分别通过 291 个反馈策略及 48 个适配器／写入／恢复用例。独立的
+适配器不可用用例在 parent 上失败；head 保留纯校验，并在 reward mutation 前
+拒绝缺失 writer。聚焦 mypy／Ruff 通过。Production semantic advisory 未发现
+支持范围内的新 carrier；显式纳入测试文件超出该 scanner 支持的 `loopx/` 范围。
+测试中的 refusal 字符串仍是本地 fixture。
+
+重建单体 wheel 先断言隔离安装的模块所有权，再在非 checkout 工作目录、清空
+`PYTHONPATH` 后核对全部 1840 个 packaged tracked source。相同五个 source-only
+omission 保留；相对冻结 runtime candidate，仅 `effect_runtime.py` 和
+`feedback.py` 字节变化。首次 wheel 准备因缺少 Chat bundle 失败后，既有 dashboard
+Chat build 提供所需 bundle。四条新的 candidate source／wheel × File／SQLite
+101-Todo CLI 生命周期使用默认 bytecode，全部通过原 artifact、completion time、
+scope、四份 receipt、一次 debit、restart、refusal 与 replay oracle。每条的两个
+managed native daemon 均退出。这是新 runtime 正确性检查，不是新增 matched
+cost 样本。
+
+正常缓存 profile 仅检查已结算 synthetic recovery dry-run 的加载依赖。其
+410-module 闭包及嵌套 import／compile timing 不能证明默认 provider 性能、fresh
+authority 行为或生命周期成本。初始 profile 文件名遮蔽 stdlib，在 CLI 前失败，
+仍保留为准备失败。冻结样本及上一轮归因 pair 不重跑、不扩充、不重标签。
+不新增 whole-path 收益、PostgreSQL host／wheel、model／attention 或 installed
+adoption 资格。保留 peer hard-cut hold、全部历史失败、至少一个 minor release
+的 I3、M1/#8011、完整 R0/V10/R1、D2/D5/D6/D3 及
+context／model／split-install／full-cost／adoption 验收。原 Task 与独立 exact-head
+评审／readiness 继续开放；下一段加载决策仍属于既有 quota／context／refresh
+caller。本轮不合入 main，不升级 installed host。
+
+提交准备期间，维护者在 `481436a56b47220c7c43bd6e272c1fa59d5038fe` 合入
+#8302，该 head 未包含本次反馈改动。两个尚未提交远端的反馈／checkpoint commit
+移到基于目标 main `0ed909880` 的干净后续分支，反馈源码及聚焦测试字节相同。
+后续 wheel 先验证安装所有权，再匹配 1841 个 packaged tracked source，保留
+相同五个 omission。新的 source／wheel × File／SQLite 生命周期全部通过四组
+原 oracle，每条两个 native 均退出。在此变化的集成基线上，48 个写入／恢复及
+265 个共享反馈策略用例、mypy／Ruff 通过。这些检查验收后续提案的变化基线，
+初始运行保留为历史证据，不重跑或新增性能样本。后续提案仍需独立 exact-head
+评审／readiness，原 Task 的完整验收继续开放。
+
+### 2026-11-08 — 声明 codec 保留按需加载 owner
+
+继承的 TypeScript CI 失败在目标 main `94366314f0` 复现。冷启动 handler 经由
+interaction／acceptance、outcome owner 加载 lease 执行，因为 work declaration
+从完整 acquire runtime 导入 `normalizeWriteScopes`。Runtime `b0c42af8f` 将既有
+scope／value 词法函数移到 `work_items/write_scope_codec.ts`，保留原导出。
+Coercion、原请求拼写、字符类、160 字符限制及拒绝行为不变。Lease IO、admission、
+repository／workspace identity 和 source／revision／WAL／receipt 栅栏仍由原
+owner 持有。Digest guard 登记既有 quota action 通配 matcher，可见 64-hex
+模式的拒绝保持。
+
+两个失败 CI 用例通过；Node 22.22.3 的 19 个加载／digest 用例通过，Node 26
+相关组通过 60 及 70 个用例。首组缺 PG 的 skip 随后由隔离 PostgreSQL 16.15
+覆盖：store／workspace 组通过 391／32 个，独立 service suite 通过 11 个、零
+skip。缺少 service 环境变量及复用 incarnation 的初始失败保留，修正后的 service
+使用自己的新数据库。16 个 old／head scope 值／拒绝比较及原导出 identity、
+TypeScript typing 通过。四条新的 source／wheel × File／SQLite 101-Todo CLI
+生命周期保留原 artifact、completion time、scope、四份 receipt、一次 debit、
+restart／refusal／replay 及两个 native 退出。Wheel 先验证安装根，再匹配 1842
+个 packaged tracked source；相同五个 source-only omission 保留。这验收当前
+runtime 正确性，不验收完整成本或 installed benefit。全部历史冻结失败、peer
+hard-cut 证据、I3／minor-release、M1/#8011、完整 R0/V10/R1、D2/D5/D6/D3 和
+context／model／split-install／PostgreSQL-host／full-cost／adoption 缺口保持开放。
+原 Task、独立评审／readiness 继续开放，本轮不合入 main、不升级 installed host。
+
+### 2026-11-08 — Turn 装配中的报告构造加载
+
+既有 `periodic-report` Python provider 与 CLI Turn 适配层改为按需解析报告源、
+预设、阶段投影和请求导出。在 runtime 版本
+`7858d96e83ef98174cc43870e283f8f0e6f40c0b`，禁用订阅不会导入这些构造 provider。
+能力包已有 lazy exports，本次修复的是实际装配调用方。订阅校验仍由原 owner
+负责，包括 cadence 使用 profile 中的日程校验器。Goal override、live machine
+defaults、配置 warning、原导出身份与 patch 点、hook profile digest/policy version、
+source 选择、receipt replay 和权限保持；不新增 capability、配置、UI、持久化词汇
+或决策 owner。
+
+与基线 `c263f7c78353fcaa914f23475d4d99d07eab7c01` 对照，11 个相同合成配置场景
+保持 hook 输出、trigger 决策及完整配置错误消息一致。冷进程拒绝 oracle 在修复前
+因禁用装配导入 report source 而失败；8 个聚焦场景现覆盖缺省、禁用继承、override、
+非法禁用配置、无副作用读取和导出／patch 兼容。最初更强的禁止规则也拒绝了原
+profile 日程校验器；该失败探针保留，本阶段保持校验器，不绕过它。
+
+Source 与独立构建 wheel 的 File/default-SQLite console 路径通过原始完整
+101-Todo 生命周期：fixture/artifact 不变、4 个 receipts、一次 debit、source/lease/
+拒绝／重启／重放读回，以及每条路径 2 个自有 native 退出。先验证安装 package
+归属，再比对 1,920 个实际存在的 tracked entries；17 个 source-only 或文档／媒体
+省略明确保留。Wheel 测试依赖和 frontend build 准备失败仍记录为失败。
+隔离 PostgreSQL 16 store/service 套件通过 391/11 场景，零 skip；service 首轮
+因缺少环境声明而跳过的记录仍保留。这不资格 PostgreSQL host/wheel 路径。
+报告相关套件通过 100 场景；较广的 digest inventory 检查在未改动 Todo selector
+上出现一条完全相同的 baseline/head 失败，该检查仍为失败。
+
+独立报告装配探针在 macOS arm64/CPython 3.13.5 下，两侧使用正常 bytecode、一次
+不计样本的预热，对禁用／启用场景各做 8 对交替观察。禁用 wall/CPU 中位数为
+修复前 0.255/0.111 s、修复后 0.246/0.107 s；启用为 0.331/0.117 s 和
+0.321/0.113 s。加载的 LoopX modules 从 196 降到 179/182。小样本与并行测试下
+的这些观察不证明明显提速、持续尾延迟或完整 CLI/Node/model/attention 成本收益。
+早先冻结的 20-cost、归因及正常 bytecode 实验未重跑、扩充或重标签。
+本阶段可独立回滚的增量是关闭态构造隔离。采纳仍需同 head review、CI/readiness
+和明确的受保护合并授权。I3 至少保留一个 minor release，M1/#8011、完整
+R0/V10/R1、D2/D5/D6/D3、context/model/split-install、full-cost/adoption 缺口
+及所有历史失败均保持开放；既有 runtime composition 工作继续跨越这些边界。
+
+### 2026-11-08 — 合成 Host 的 UTF-8 恢复资格
+
+#8360 的 Windows CPython 3.11 CI arm 在六个既有原任务重验证用例中失败。
+合成 Python Host 对 pipe 继承 locale decoder，而原 generic Host transport
+发送 UTF-8 JSON。Disposable File-provider counterprobe 只改变该 Host decoder：
+CP1252 产生 `host_failure`，没有 `task_failure`；UTF-8 到达独立产物 validator，
+在 `task_postcondition` 产生 `validation_failed`，并提供
+`revalidate_cached_result`。源码 macOS arm 独立通过全部12个既有重验证用例。
+这些观察定位了 fixture mismatch，不支持扩大生产 failure classification。
+
+Fixture commit `a4ce613585fdb329ba3600f0ede768864214ed84` 基于 main
+`4e949f405528fd8087f0623526c62f890c1ce982`，在读取请求前显式将 stdin 配为
+UTF-8。新增 File／SQLite regression 先只把生成 Host 的 decoder 设为 CP1252，
+发送 Unicode brief，要求被拒绝的产物到达 task validation。修复产物后，重验证
+必须沿用原 turn key 并接受结果，Host invocation 始终为一次。同一 regression
+在相同 CPython3.13.5／Node22.22.3 环境中对不可变 baseline Host 失败，修正后
+通过。不改变 transport、生产 owner、持久状态或协议词汇。
+
+macOS arm64／Node22.22.3 下，CPython3.11.15 source 与新安装的隔离单体 wheel
+各通过新增两个 provider 用例及全部12个既有原任务恢复用例。先在 checkout 外
+验证 wheel import 归属，再加载 source-owned fixture；1920个实际 packaged
+tracked runtime entry 均与源码字节相同。原17个 source-only exclusion 保留：
+canary baseline、host plugin／config、fault-test helper 和 documentation／media。
+这验收既有 File／SQLite 合成 Host 恢复路径，包括保留的 MCP
+断连及 lock-timeout 恢复用例，不验收模型采纳、split installation 或原生 Windows。
+原失败 Windows arm 保留为历史证据，直到新 exact-head Windows run 通过。
+独立 Frontstage manifest 请求在有界重试后仍为 HTTP504。
+
+原任务保持开放。保留 I3 至少一个 minor release、M1/#8011、完整 R0/V10/R1、
+D2/D5/D6/D3、context/model/split-install、PostgreSQL host/wheel、whole-path／
+full marginal-cost／adoption 验收及全部历史／冻结失败。不重跑或重标签成本
+campaign，本 fixture 资格不证明性能收益。报告按需加载提案 #8360 保留独立
+review／CI gate；下一步为本修正的 exact-head 评审与原生 Windows 读回。不包含
+合入 main 或 installed-host 升级。
+
 ## 附录 B：决策日志
 
 | 日期 | 决策 | 负责人 / 批准 | 备选 | 变更的规范章节 |
@@ -2058,3 +2255,65 @@ minor release。这些证据不关闭完整 R0/V10、M1/#8011、R1、context/mod
 精简 Codex App 输出可能只有错误码；只读
 `loopx --format json quota status --goal-id <goal-id> --verbose` 提供详细症状。
 据此区分已交付修复和安装 reader 漂移；保留外来内容拒绝，不重写活跃状态。
+
+### 2026-11-08 — 加载提案集成与可空 staged 读取
+
+声明 codec 提案现已整合目标 main `efd49352c`、#8339 的反馈加载组件，以及 main
+已有的等价固定时钟修复。组件的批准及检查仍只证明各自旧 head，组合提案需要自己的
+评审与验证。
+
+真实的保留数值精度的 `quota replan-view --replan-stage explore` 读取，在 staged
+视图仅含 string、boolean 和 null 时失败。既有 edit encoder 将整个 root 压缩为
+空 property path，Python transport 随后拒绝。将该紧凑替换限定到嵌套 record，
+保留 property-path 契约及既有 number／source lineage。独立 root-path oracle 在
+修改前失败、修改后通过；真实读取恢复原 context／hash 和缺省 Explore basis。
+不新增规则 owner、词汇、provider 或 authority。
+
+集成后的 source 与 packaged wheel 研究记录场景保留原负结果段落、两条原始历史、
+Goal 隔离及导出；packaged 对话场景也通过。此前 CI 超时在本地未复现，其平台／时序
+原因仍未知，不宣称已经修复。四条新的 source／wheel × File／SQLite 101-Todo
+正确性流程保留原 fixture／artifact、scope、completion time、四份 receipt、一次
+debit、refusal／restart／replay 和两个自有 native 退出。初始 driver 使用 `python`，
+source console 实际选择 `python3`，产生不同 runtime fingerprint，导致 warmup／
+exit oracle 失败。保留该失败；后续用例采用各 console 的实际解释器，不重跑或重标签
+任何冻结成本样本。
+
+隔离 PostgreSQL 16 的 store／service 分别通过 391／11 个用例，零 skip。
+已安装 wheel 的 1921 个 tracked package entry 字节一致；17 个 tracked 文档／媒体／
+测试或 source-only entry 未打包，不据此推断已执行 caller 之外的通用发行覆盖。
+Whole-path 成本收益、installed adoption、PostgreSQL host／wheel，以及全部
+I3／minor-release、M1/#8011、完整 R0/V10/R1、D2/D5/D6/D3、
+context／model／split-install 与历史失败资格继续开放。组合提案评审之后，下一段
+有用边界仍是报告订阅／构造加载；原 Task 保持开放。
+
+### 2026-11-08 — 组合加载与恢复资格验证
+
+组合提案在目标 main `fe36f31fd` 上采用 #8346 已有的 feedback/声明 codec
+修复、#8360 的报告构造隔离和 #8365 的 UTF-8 合成 Host fixture 修复。
+运行时代码资格基于 `251d7eaeff4581d3436340f68c5b6cd8c8ebf1ad`。
+已有的词法 `write_scope_codec.ts` 已解除观察到的完整 lease 准入依赖，无需
+增加 interaction decoder 层。错误与词汇 owner、声明 scope 拼写和保留回执均保持。
+
+Node 22.22.3 上的加载/digest 与相邻 work-requirement、lease、effect-program
+回归全部通过（60 项），控制面类型检查通过。选中 owner 的加载失败仍拒绝执行，
+不会回退。四次新的源码/wheel × File/SQLite 101-Todo console 正确性路径均保留
+前次不可变 fixture/artifact 指纹、scope、原完成时间、四份回执、一次扣额、
+拒绝/重启/重放，以及每条路径两个自有 native 进程退出。wheel 中现存的 1,921 个
+tracked 条目逐字节匹配源码，十七项源码专用、文档和媒体遗漏保持不变。
+
+真实 PostgreSQL 16.15 store/service 在隔离临时服务上全部通过（391/11，零
+跳过），自有服务随后停止。首次 service 运行漏传专用环境变量，跳过一项；
+该次资格失败单独保留，与修正后的运行区分。
+
+浏览器 fixture 的中断检查还依赖共享的五秒完成窗口，并在异步回执返回前检查请求
+记录。该场景现在只保持纠偏所对应的准确 Session/Turn 事件流，确认它仍在执行，
+并等待匹配的中断响应。原十秒中断消息断言完整保留。延迟回执探针使原场景失败；
+仅移除候选中的流保持、保留响应等待，会复现该消息超时，而完整候选通过。
+这是合成浏览器资格验证，不证明 native runtime 存在缺陷或已安装修复。
+完成优先级与 stale-Turn 保护保持不变；组合 head 仍需 packaged 验证、CI 和
+独立评审。
+
+这些路径验证组合正确性，whole-path 与完整边际成本、adoption 仍未取得资格。
+保留 I3 至少一个 minor release、M1/#8011、完整 R0/V10/R1、D2/D5/D6/D3、
+context/model/split-install、PostgreSQL host/wheel 以及每项冻结失败。
+原任务保持开放；本检查点不授权合入，也不宣告最小化内核完成。
