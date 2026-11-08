@@ -134,6 +134,13 @@ related source, note and evidence fields without replaying the outcome's inline
 requirements. An unmet or stale review stays visible before its explanation
 is opened. Agent review still does not establish independent acceptance.
 
+In the first read, an unexpanded outcome can use the parent of its selected
+`id` JSON pointer to locate supporting material. The planner omits a separate
+address only when it exactly matches that parent and the pinned instructions
+are included. The required view and explicit selectors retain the address.
+Older captures, different addresses and unavailable guidance keep the original
+first-read address.
+
 The archive remains `projection.json`; the required model view is
 `required-context.json`. Required reads, full/delta preparation and recovery use
 that same model view. A selected detail page cannot acknowledge full model retention of the required
