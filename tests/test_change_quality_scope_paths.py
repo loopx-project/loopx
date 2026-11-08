@@ -6,6 +6,12 @@ from pathlib import Path
 
 import pytest
 
+from loopx.capabilities.change_quality.result import (
+    _validate_evidence_targets,
+    _normalize_evidence_ref,
+    _normalize_validation,
+    _relative_path,
+)
 from loopx.capabilities.change_quality.scope import build_change_quality_scope
 
 
@@ -79,3 +85,57 @@ def test_changing_one_byte_of_an_untracked_file_changes_the_fingerprint(
     after = _scope(repo)["scope_fingerprint"]
 
     assert after != before
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["  padded.py  ", "line\nbreak.txt", "back\\slash.py", "café.txt"],
+)
+def test_record_evidence_keeps_the_exact_scope_path(name: str) -> None:
+    """Evidence must name the file the scope reported, not a normalized copy."""
+
+    ref = _normalize_evidence_ref(f"path:{name}", field="evidence_refs[]")
+    assert ref == f"path:{name}"
+    assert _relative_path(name, field="risk.path") == name
+
+    evidence = _normalize_validation(
+        {
+            "validator": "pytest",
+            "status": "passed",
+            "scope": "unit",
+            "covers_paths": [name],
+        },
+        index=0,
+    )
+    assert evidence["covers_paths"] == [name]
+
+
+@pytest.mark.parametrize("target", ["/abs/file.txt", "../outside.py", "a/../../b"])
+def test_record_evidence_still_rejects_escapes(target: str) -> None:
+    with pytest.raises(ValueError, match="repo-relative"):
+        _normalize_evidence_ref(f"path:{target}", field="evidence_refs[]")
+
+
+@pytest.mark.skipif(os.name != "posix", reason="special names are POSIX-only")
+def test_scope_names_match_the_path_evidence_they_are_recorded_with(
+    tmp_path: Path,
+) -> None:
+    """The names the scope reports must be the names evidence resolves against."""
+
+    repo = _repository(tmp_path)
+    names = ["  padded.py  ", "line\nbreak.txt", "back\\slash.py", "café.txt"]
+    for name in names:
+        (repo / name).write_text("content\n", encoding="utf-8")
+
+    changed = set(_scope(repo)["changed_files"])
+    assert changed == set(names)
+
+    for name in names:
+        ref = _normalize_evidence_ref(f"path:{name}", field="evidence_refs[]")
+        _validate_evidence_targets(
+            [ref],
+            field="evidence_refs",
+            changed_files=changed,
+            instruction_refs=set(),
+            validator_ids=set(),
+        )
