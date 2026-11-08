@@ -516,13 +516,13 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
     pointers.push(pointer(path));
   };
   const details = object(context.context_details), unread = object(details?.unread_context_index);
-  const source = object(unread?.source);
+  const supportingSource = object(unread?.source);
   const inlineSupportingDetails = unread && Object.keys(unread).every(key => ["source", "coverage_confirmed", "read_before_dependent_work", "pointers", "source_blocks"].includes(key))
       && (unread.source_blocks === undefined || Array.isArray(unread.source_blocks)
         && unread.source_blocks.every(pointer => typeof pointer === "string")) && unread.coverage_confirmed === false
       && unread.read_before_dependent_work === true && Array.isArray(unread.pointers)
       && unread.pointers.every(pointer => typeof pointer === "string")
-      && typeof source?.path === "string" && typeof source.sha256 === "string"
+      && typeof supportingSource?.path === "string" && typeof supportingSource.sha256 === "string"
       && typeof details?.instruction === "string" && details.instruction.length > 0;
   for (const field of decisionFields) include(field);
   // A staged replan has already replaced inline acceptance with a pinned
@@ -671,6 +671,7 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
       // The id selection already carries the same absolute outcome address.
       // Keep aliases whose source, value or read guidance cannot be verified.
       if (!(inlineSupportingDetails && details?.outcome_support_from_id === true
+          && details.path === supportingSource?.path && details.sha256 === supportingSource?.sha256
           && typeof outcomeId === "string" && row?.supporting_material_pointer === pointer(outcome)))
         include(...outcome, "supporting_material_pointer");
     });

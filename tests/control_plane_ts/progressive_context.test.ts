@@ -47,7 +47,8 @@ test("initial outcome ids carry only verified supporting-material addresses", ()
         {id: "alternate", supporting_material_pointer: "/actual/source"},
         {supporting_material_pointer: base + "/2"},
       ]}}}}]}}},
-    context_details: {outcome_support_from_id: true, instruction: "Derive the outcome address from the selected id.",
+    context_details: {path: "complete.json", sha256: "fixture-digest", outcome_support_from_id: true,
+      instruction: "Derive the outcome address from the selected id.",
       unread_context_index: {coverage_confirmed: false, read_before_dependent_work: true, pointers: [base + "/0/sources"],
         source: {path: "complete.json", sha256: "fixture-digest"}}}};
   const canonicalAlias = base + "/0/supporting_material_pointer";
@@ -59,6 +60,7 @@ test("initial outcome ids carry only verified supporting-material addresses", ()
   assert.ok(first.includes("/context_details/instruction"));
   assert.deepEqual(context, before, "the captured aliases still exist");
   for (const changed of [{...context.context_details, outcome_support_from_id: undefined},
+    {...context.context_details, path: "different.json"}, {...context.context_details, sha256: "different-digest"},
     {...context.context_details, instruction: undefined}, {...context.context_details,
       unread_context_index: {...context.context_details.unread_context_index, future_obligation: true}}]) {
     assert.ok(initialContextReadPointers({...context, context_details: changed}, []).includes(canonicalAlias));
