@@ -464,8 +464,8 @@ Task argv；拒绝和原结果恢复保留原会话与一次性效果。
 
 完整 Turn 的 capability 建议及其可选 Host 结果字段绑定到经校验的来源内容哈希和
 Turn key。所选 Todo 的 required capabilities 一旦变化，即使旧 action 投影相同，
-建议也会失效。为同一决策发布 capture 地址时保留绑定。重试时，Session 解析和
-Host 输入都读取日志里的原计划。日志里已校验的结果仍能按
+建议也会失效。为同一决策发布 capture 地址时保留绑定。重试时，Session 解析、
+Host 输入、缓存结果的任务校验和结算都使用日志里的原计划。日志里已校验的结果仍能按
 历史绑定读取原有受限结果 schema。新调用 Host 时，建议须通过完整绑定校验。
 普通 quota 与历史 v0 继续使用各自已有的 decoder。
 

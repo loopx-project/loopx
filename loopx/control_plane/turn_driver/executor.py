@@ -1489,7 +1489,7 @@ def _host_attempt_requirements(
     )
     needs_host = retry_validation or "typed_result" not in list(journal.get("completed_phases") or [])
     recorded = journal.get("plan")
-    if needs_host and isinstance(recorded, Mapping) and recorded.get("schema_version") == COMPLETE_TURN_PLAN_SCHEMA_VERSION:
+    if isinstance(recorded, Mapping) and recorded.get("schema_version") == COMPLETE_TURN_PLAN_SCHEMA_VERSION:
         return needs_host, retry_validation, recorded
     return needs_host, retry_validation, None
 
@@ -1618,8 +1618,8 @@ def run_loopx_turn_once(
                 ):
                     pass
             if recorded_plan is not None:
-                # Session recovery and optional context must use the same
-                # original plan as capture publication.
+                # Recovery uses the recorded source through Host dispatch,
+                # cached-result validation and settlement.
                 plan, request = recorded_plan, build_loopx_turn_host_request(recorded_plan)
             if settlement_lineage is not None:
                 agent_id = settlement_lineage["agent_id"]

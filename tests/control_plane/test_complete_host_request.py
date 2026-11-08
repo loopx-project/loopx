@@ -180,11 +180,13 @@ def test_complete_host_optional_context_requires_original_turn_source(
     assert not {"fixture_context", "capability_instructions", "capability_result_fields"} & wire.keys()
 
 
-def test_recorded_complete_result_recovers_previous_optional_schema(complete_host_request, tmp_path):
+@pytest.mark.parametrize("refresh_source", [False, True], ids=["original", "refreshed-caller"])
+def test_recorded_complete_result_recovers_previous_optional_schema(complete_host_request, tmp_path, refresh_source):
     from loopx.control_plane.capability_hooks import (
         TurnContextHookRegistration, turn_context_source,
     )
     from loopx.control_plane.effect_runtime import effect_runtime_result
+    from loopx.control_plane.quota.turn_envelope import compose_turn_decision
     from loopx.control_plane.turn_driver.executor import (
         run_loopx_turn_once, validate_loopx_turn_host_result,
     )
@@ -195,6 +197,10 @@ def test_recorded_complete_result_recovers_previous_optional_schema(complete_hos
     )
 
     _, contract = complete_host_request
+    source = deepcopy({key: value for key, value in contract.items()
+                       if key not in {"schema_version", "contract_binding"}})
+    source["selected_todo"]["required_capabilities"] = ["filesystem_read", "network"]
+    contract = compose_turn_decision(source)
     plan = build_loopx_turn_plan(contract, host="generic-cli",
         execution_mode="isolated-headless", turn_instance_id="recorded-capability")
     goal_id, turn_key = contract["goal_id"], plan["transaction"]["turn_key"]
@@ -238,13 +244,20 @@ def test_recorded_complete_result_recovers_previous_optional_schema(complete_hos
     })
     recovered = load_loopx_turn_plan_from_journal(runtime, goal_id=goal_id, turn_key=turn_key)
     calls = []
+    checked_sources = []
+    artifact_ready = not refresh_source
 
     def forbidden_host(_request):
         pytest.fail("a recorded typed result must not invoke the Host")
 
-    def validate(_plan, result):
+    def validate(validation_plan, result):
         assert result["fixture_result"] == candidate["fixture_result"]
         calls.append("validate")
+        validation_source = validation_plan["work_contract"]
+        checked_sources.append(validation_source["contract_binding"]["content_hash"])
+        if "network" in validation_source["selected_todo"]["required_capabilities"] and not artifact_ready:
+            return {"status": "failed", "validator_kind": "fixture",
+                    "summary": "The original required artifact is absent."}
         return {"status": "progress", "validator_kind": "fixture",
                 "summary": "Result retained.", "exit_code": 10}
 
@@ -261,11 +274,26 @@ def test_recorded_complete_result_recovers_previous_optional_schema(complete_hos
         goal_id=goal_id, timeout_seconds=10, execute=True, task_validator=validate,
         writeback=writeback, spend=spend, scheduler=lambda _: {"completed": True},
         require_decision_capture=True)
-    outcome = run_loopx_turn_once(recovered, **options)
+    retry_plan = recovered
+    if refresh_source:
+        first = run_loopx_turn_once(recovered, **options)
+        assert first["status"] == "failed" and calls == ["validate"]
+        source["selected_todo"]["required_capabilities"] = ["filesystem_read"]
+        refreshed = compose_turn_decision(source)
+        assert refreshed["contract_binding"]["content_hash"] != contract["contract_binding"]["content_hash"]
+        retry_plan = build_loopx_turn_plan(refreshed, host="generic-cli",
+            execution_mode="isolated-headless", turn_instance_id="recorded-capability")
+        assert retry_plan["transaction"]["turn_key"] == turn_key
+        failed = run_loopx_turn_once(retry_plan, retry_failed=True, **options)
+        assert failed["status"] == "failed" and calls == ["validate"] * 2
+        artifact_ready = True
+    outcome = run_loopx_turn_once(retry_plan, retry_failed=refresh_source, **options)
     assert outcome["status"] == "committed", outcome.get("reason") or outcome
-    assert calls == ["validate", "writeback", "spend"]
-    assert run_loopx_turn_once(recovered, **options)["replayed"] is True
-    assert calls == ["validate", "writeback", "spend"]
+    expected_calls = ["validate"] * (3 if refresh_source else 1) + ["writeback", "spend"]
+    assert calls == expected_calls
+    assert checked_sources == [contract["contract_binding"]["content_hash"]] * calls.count("validate")
+    assert run_loopx_turn_once(retry_plan, **options)["replayed"] is True
+    assert calls == expected_calls
     assert capture.read_bytes() == original
     assert json.loads(journal.read_text())["plan"] == plan
 
