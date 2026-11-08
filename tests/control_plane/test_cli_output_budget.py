@@ -1061,7 +1061,7 @@ def test_quota_should_run_no_format_uses_machine_contract_json(
     assert no_format_exit_code == 0, no_format_text
     assert _json_payload(no_format_text)["goal_id"] == GOAL_ID
     assert markdown_exit_code == 0, markdown_text
-    assert markdown_text.startswith("# LoopX Turn\n")
+    assert markdown_text.startswith("# LoopX Turn Envelope\n")
     rendered = json.loads(markdown_text.split("```json\n", 1)[1].rsplit("\n```", 1)[0])
     assert rendered["schema_version"] == "loopx_turn_envelope_v1"
     assert rendered["goal_id"] == GOAL_ID

@@ -632,7 +632,9 @@ def test_complete_quota_successor_settles_original_turn_without_staged_reader(tm
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("format_name,envelope_flag", [("json", True), ("markdown", True), ("markdown", False)])
+@pytest.mark.parametrize("format_name,envelope_flag", [
+    ("json", True), ("json", False), ("markdown", True), ("markdown", False),
+])
 def test_real_quota_complete_capture_and_differential_recovery(tmp_path, monkeypatch, provider, format_name, envelope_flag):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)

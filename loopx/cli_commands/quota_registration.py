@@ -189,8 +189,8 @@ def register_quota_command(
         "--turn-envelope",
         action="store_true",
         help=(
-            "For `quota should-run`, return the additive bounded TurnEnvelope view. "
-            "The default full decision remains unchanged."
+            "Compatibility spelling for the complete v1 decision from `quota should-run`. "
+            "It does not select a second packet format; --context-delivery off keeps the complete source inline."
         ),
     )
     capture_group = quota_parser.add_mutually_exclusive_group()

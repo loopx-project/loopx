@@ -55,7 +55,7 @@ def render_turn_envelope_markdown(payload: dict[str, Any]) -> str:
             + json.dumps(value, ensure_ascii=False, separators=(",", ":"))
             for key, value in payload.items()
         )
-        return "# LoopX Turn\n\n```json\n{\n" + fields + "\n}\n```"
+        return "# LoopX Turn Envelope\n\n```json\n{\n" + fields + "\n}\n```"
     action_value = payload.get("action")
     user_value = payload.get("user")
     writeback_value = payload.get("writeback")

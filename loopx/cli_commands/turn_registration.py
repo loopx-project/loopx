@@ -87,7 +87,7 @@ def register_turn_commands(
     plan.add_argument(
         "--include-transaction-detail",
         action="store_true",
-        help="Include session binding and transaction receipt planning detail.",
+        help="Include session binding, transaction receipt planning detail, and the complete inline work contract.",
     )
     plan.add_argument("--limit", type=int, default=5)
 
