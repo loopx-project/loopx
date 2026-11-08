@@ -132,13 +132,19 @@ test("a completed project partial result admits one restricted review while reta
     binding: selected, current_session: session, context_recovery: {version: 22, failed_turn: completed,
       observed_at: "2026-01-01T00:10:00Z", source_verified: true, steering_observed: false,
       stop_observed: false, attachments_present: false, queued_input_present: false,
-      later_equivalent_input_present: false, native_observation: proof}};
+      later_equivalent_input_present: false, live_work_owner: false, native_observation: proof}};
   const plan = planBoundConversationRequest(packet);
   assert.equal(plan.recovery_eligible, true);
   assert.equal(plan.read_only_review, true);
   assert.equal(plan.work_attempt, undefined);
   assert.equal(plan.answer_review, undefined, "A project never borrows the steward runtime");
   assert.equal(plan.client_turn_id, `external-${ref}-recovery-22-review-1`);
+  for (const owner of [true, undefined]) {
+    const held = planBoundConversationRequest({...packet,
+      context_recovery: {...packet.context_recovery, live_work_owner: owner}});
+    assert.equal(held.recovery_eligible, false, "A live or unknown writer cannot be replaced with a result review");
+    assert.equal(held.recovery_candidate, false);
+  }
   assert.equal(planBoundConversationRequest({...packet, context_recovery: {
     ...packet.context_recovery, later_equivalent_input_present: true}}).recovery_eligible, true,
     "A later equivalent request holds execution, not its old answer-only review");
@@ -172,9 +178,20 @@ test("a completed project partial result admits one restricted review while reta
   const reviewedTurn = {...reviewed, upstream_turn_id: "native-review",
     response: {schema_version: "loopx_chat_agent_response_v0", ...reviewed.response}};
   const retainedReview = {reservation: {...reservation, binding_snapshot: selected}, turn: reviewedTurn};
+  const reservedReview = {...reviewedTurn, status: "queued"};
+  const reserved = planBoundConversationRequest({...packet,
+    request: {...packet.request, context_recovery: retainedReview.reservation},
+    current_session: {...session, status: "busy", active_turn_id: reservedReview.turn_id},
+    context_recovery: {...packet.context_recovery, live_work_owner: true, admitted_turn: reservedReview}});
+  assert.equal(reserved.admitted_turn_id, reservedReview.turn_id, "An existing review keeps its exact queue receipt");
+  assert.equal(reserved.work_attempt, undefined);
   const settled = {thread_id: "native", turn_id: completed.upstream_turn_id,
     completed_work: true, all_effects_settled: true, unfinished_work: work,
     native_inventory_sha256: "2".repeat(64)};
+  const direct = planBoundConversationRequest({...packet,
+    context_recovery: {...packet.context_recovery, live_work_owner: true, native_observation: settled}});
+  assert.equal(direct.recovery_eligible, true, "Fresh writable proof still admits the original work-1");
+  assert.equal(direct.work_attempt, 1);
   const afterReview = {...packet, request: {...retained.request, context_recovery: retainedReview.reservation},
     context_recovery: {...packet.context_recovery, retained_result_review: retainedReview,
       live_work_owner: true, native_observation: settled}};

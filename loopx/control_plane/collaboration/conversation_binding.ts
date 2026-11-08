@@ -1230,6 +1230,10 @@ function planUnfinishedWork(recovery: JsonObject, row: JsonObject, current: Json
 function planCompletedResultReview(recovery: JsonObject, row: JsonObject, current: JsonObject,
   completed: JsonObject, previous: JsonObject | null, version: number, work: JsonObject): JsonObject {
   const no = {operation: "admit_turn", recovery_candidate: false, recovery_eligible: false};
+  // An inconclusive effect observation must not replace the original writable
+  // owner with a result reader. Keep that owner for the next fresh work proof.
+  // Already reserved reviews retain their own adoption and execution checks.
+  if (previous === null && recovery.live_work_owner !== false) return no;
   const client = `external-${ref(row.request_ref, "original request")}-recovery-${version}-review-1`;
   if (current.steward_context != null || completed.client_turn_id !== `external-${row.request_ref}`
       || completed.message !== row.message || completed.origin !== row.origin
