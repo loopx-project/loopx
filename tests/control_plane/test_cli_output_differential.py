@@ -519,6 +519,9 @@ def test_probe_compares_pinned_candidate_ancestry_when_main_advances(
     git("init", "-b", "main")
     packet = repo / "packet.json"
     common_payload = {
+        # This test varies ancestry and size inside the current declared
+        # carrier; version rejection has its own negative qualification.
+        "schema_version": "loopx_turn_envelope_v1",
         "interaction_contract": {}, "scheduler_hint": {}, "selected_todo": {},
         "note": "x" * 4000,
     }
@@ -1598,12 +1601,23 @@ def test_inline_context_transition_is_bounded_one_time_and_fixture_scoped():
     assert not compare_cli_output_receipts(_receipt(candidate), _receipt(grown))["ok"]
 
 
-def test_public_multi_subagent_probe_reaches_v4_producer(tmp_path):
+def test_public_multi_subagent_probe_reaches_complete_producer(tmp_path, monkeypatch):
     import runpy
     from pathlib import Path
     from tests.control_plane import test_cli_output_budget as probe
+    from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
     from loopx.control_plane.testing import cli_output_semantics as semantics
 
+    emitted = []
+    invoke = probe._invoke_cli
+
+    def observe(command):
+        code, text = invoke(command)
+        if code == 0:
+            emitted.append(json.loads(text))
+        return code, text
+
+    monkeypatch.setattr(probe, "_invoke_cli", observe)
     runner = runpy.run_path(
         str(
             Path(__file__).resolve().parents[2]
@@ -1612,11 +1626,19 @@ def test_public_multi_subagent_probe_reaches_v4_producer(tmp_path):
     )
     with probe._stable_budget_fixture_root(tmp_path) as root:
         rows = runner["_multi_subagent_rows"](probe, semantics, root)
-    assert len(rows) == 1
-    assert rows[0]["action_signature_coverages"] == [
-        "turn_envelope_action_dimensions_v4"
-    ]
-    assert any("agent_context" in path for path in rows[0]["json_shape_paths"])
+    assert len(rows) == len(emitted) == 1
+    source = emitted[0]
+    assert_complete_turn_decision(source)
+    # Check the enabled policy supplied by the fixture in its signed source,
+    # rather than expecting the retired short envelope's v4 coverage marker.
+    assert source["goal_boundary"]["orchestration"] == {
+        "mode": "multi_subagent", "spawn_allowed": True, "max_children": 4,
+        "model_config": {"model": "example-small", "reasoning_effort": "max"},
+    }
+    assert rows[0]["output_contract_version"] == source["schema_version"] == "loopx_turn_envelope_v1"
+    assert rows[0]["action_signature_coverages"] == []
+    assert "$.contract_binding.source_decision_hash" in rows[0]["json_shape_paths"]
+    assert "$.goal_boundary.orchestration.max_children" in rows[0]["json_shape_paths"]
 
 
 def test_measurement_only_probe_skips_ceiling_but_keeps_semantic_shape() -> None:
