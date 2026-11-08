@@ -603,13 +603,14 @@ def context_selection_transport(payload: dict[str, Any], select: list[str] | Non
             if isinstance(value, (dict, list)):
                 subtree = branch.get(token, {})
                 # Length matters when validating array indices or listing children.
-                child: Any = {} if isinstance(value, dict) else [None] * len(value)
+                child: Any = {} if isinstance(value, dict) else [0] * len(value)
                 target[key] = child
                 pending.append((value, child, subtree, depth - 1))
             else:
-                # Every scalar has the same address behavior. Keep original scalar
-                # types, precision, and byte counts at the file rendering boundary.
-                target[key] = None
+                # Every scalar has the same address behavior. A one-byte marker
+                # also prevents short scalar arrays growing during transport.
+                # Original types, precision and byte counts stay at the renderer.
+                target[key] = 0
     return result
 
 

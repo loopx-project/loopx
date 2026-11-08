@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import re
 import shlex
+import subprocess
 from copy import deepcopy
 from pathlib import Path
 
@@ -224,7 +225,8 @@ def test_replan_authoring_example_links_actual_subsequent_work(tmp_path, monkeyp
         return _run_cli(registry, runtime, *args, cwd=project)
 
     rc, configured = run("configure-goal", "--goal-id", GOAL_ID,
-                         "--execution-replan-after-turns", "1", "--execute")
+                         "--execution-replan-after-turns", "1",
+                         "--execution-stride-strategy", "off", "--execute")
     assert rc == 0, configured
     for stage in ("initial", "review", "subsequent"):
         binding = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
@@ -240,7 +242,15 @@ def test_replan_authoring_example_links_actual_subsequent_work(tmp_path, monkeyp
         if stage == "review":
             channel = guard["interaction_contract"]["agent_channel"]
             assert channel["must_attempt"] and not channel["delivery_allowed"]
-            steps = guard["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"]
+            read_command = guard["replan_action_packet"]["writeback"]
+            result = subprocess.run(
+                shlex.split(read_command), cwd=project, capture_output=True, text=True, check=True, timeout=60,
+            )
+            staged = json.loads(result.stdout)
+            assert staged["obligation_id"] == guard["replan_action_packet"]["obligation_id"], staged
+            writeback = staged["writeback"]
+            assert writeback["settlement_plan"]["identity"] == guard["heartbeat_receipt"]["settlement_identity"]
+            steps = writeback["settlement_plan"]["ordered_steps"]
             authoring = next(step["vision_authoring"] for step in steps if step["kind"] == "durable_writeback")
             example = re.search(r"retain:todo_<id>", authoring["authoring_hint"])
             assert example, "The authoring contract must offer an executable retention example."
@@ -253,7 +263,7 @@ def test_replan_authoring_example_links_actual_subsequent_work(tmp_path, monkeyp
             path.write_text(json.dumps(vision))
             # Consume the replan-only binding, rather than inventing a Todo
             # delivery admission for a periodic review.
-            args = shlex.split(guard["interaction_contract"]["cli_channel"]["next_cli_actions"][0])
+            args = shlex.split(writeback["next_cli_actions"][0])
             args = args[args.index("refresh-state"):]
             args[args.index("--agent-vision-json") + 1] = str(path)
         else:

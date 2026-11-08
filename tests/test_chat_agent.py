@@ -310,9 +310,12 @@ def test_native_turn_preserves_operator_material(monkeypatch, tmp_path, mode):
     monkeypatch.setattr(session, "_write", write)
     session.send(material, output_schema={"type": "object"} if mode == "structured" else None)
     prompt = sent[0]["input"][0]["text"]
-    assert prompt.endswith(material)
     if mode == "structured":
         assert prompt == material
+    else:
+        request, separator, footer = prompt.rpartition("\n\nAfter the visible answer,")
+        assert separator and request.endswith(material)
+        assert footer.endswith(chat_agent.CHAT_REVIEW_CLOSE_TAG)
     if mode == "review":
         assert "do not re-execute" in prompt
     for blank in ["", " \r\n\t\u00a0"]:

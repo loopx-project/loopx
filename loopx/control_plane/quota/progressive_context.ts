@@ -558,7 +558,7 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
   include("agent_lane_next_action", "next_step");
   include("agent_lane_next_action", "next_action_basis");
   include("interaction_contract", "user_channel");
-  for (const field of ["primary_action", "delivery_allowed", "must_attempt", "quiet_noop_allowed"])
+  for (const field of ["primary_action", "delivery_allowed", "must_attempt", "quiet_noop_allowed", "next_task_action"])
     include("interaction_contract", "agent_channel", field);
   const turnBindingRequired = object(interaction.cli_channel)?.turn_binding_required === true;
   if (turnBindingRequired)
@@ -707,7 +707,14 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
   if (!turnBindingRequired)
     for (const field of ["execution_preparation", "next_cli_actions", "spend_allowed_now", "spend_after_validation", "spend_policy",
       "quota_spend_source", "delivery_workspace_causality", "vision_continuation_audit"])
-      if (field !== "next_cli_actions" || !repeatsSettlement) include("interaction_contract", "cli_channel", field);
+      if (field !== "next_cli_actions" || !repeatsSettlement) {
+        const before = pointers.length;
+        include("interaction_contract", "cli_channel", field);
+        // A task-facing operation and its declared continuation belong in the
+        // same opening. Keep the existing exact settlement deduplication.
+        if (field === "next_cli_actions" && object(channel?.next_task_action) && pointers.length > before)
+          opening.push(pointers.pop()!);
+      }
   // Explicit selection clears next_cli_actions. Deliver the owner's discovery
   // and same-Turn binding recipe alongside its non-exhaustive suggestions.
   if (cli?.selection_required === true) {
