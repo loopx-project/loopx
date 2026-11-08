@@ -14,7 +14,7 @@ type Props = {
   timeline: ExploreTimeline; zh: boolean; selectedIds: readonly string[]; selectedEventId?: string; phase: number | null;
   selectedDay: string | null; dayGroups: ReturnType<typeof groupUnlinkedHistoryQuestions>["groups"]; onGroupSelect: (day: string, button: HTMLButtonElement) => void;
   onSelect: (id: string, finding?: string) => void; onSelectMany: (ids: string[], button: HTMLButtonElement) => void; onPhase: (index: number | null) => void;
-  timeLabel: (value: number) => string; dayLabel: (value: number) => string;
+  timeLabel: (value: number, precise?: boolean) => string; dayLabel: (value: number) => string;
 };
 
 const LABELS = ["confirmed", "refuted", "tentative"] as const;
@@ -23,16 +23,17 @@ const isOpen = (item: TimelineNode) => ["open", "exploring", "blocked"].includes
 
 function elapsedLabel(offset: number, zh: boolean) {
   if (offset > 0 && offset < 1_000) return `${offset}${zh ? " 毫秒" : "ms"}`;
-  let seconds = Math.floor(offset / 1_000);
+  let milliseconds = offset;
   const units: [number, string][] = zh
-    ? [[86_400, " 天"], [3_600, " 小时"], [60, " 分"], [1, " 秒"]]
-    : [[86_400, "d"], [3_600, "h"], [60, "m"], [1, "s"]];
+    ? [[86_400_000, " 天"], [3_600_000, " 小时"], [60_000, " 分"]]
+    : [[86_400_000, "d"], [3_600_000, "h"], [60_000, "m"]];
   const parts = [];
   for (const [size, unit] of units) {
-    const count = Math.floor(seconds / size);
+    const count = Math.floor(milliseconds / size);
     if (count) parts.push(`${count}${unit}`);
-    seconds %= size;
+    milliseconds %= size;
   }
+  if (milliseconds) parts.push(`${milliseconds / 1_000}${zh ? " 秒" : "s"}`);
   return parts.join(" ") || (zh ? "0 秒" : "0s");
 }
 
@@ -156,7 +157,7 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedEventId
           className={`is-${item.sections!.decision!.outcome}${inPhase(item.at) ? "" : " is-dimmed"}`} style={{left: pct(item.at!)}}/>)}</div> : null}
         {timeline.phases.slice(1).map(item => <span key={item.index} className="research-phase-divider" style={{left: pct(item.start)}}/>)}
         <div className="research-axis" role="group" aria-label={copy.axis}>{ticks.map(offset => <time
-          key={offset} dateTime={`PT${offset / 1_000}S`} title={timeLabel(start + offset)}
+          key={offset} dateTime={`PT${offset / 1_000}S`} title={timeLabel(start + offset, true)}
           className={offset === 0 ? "is-start" : offset === elapsed ? "is-end" : undefined}
           style={{left: pct(start + offset)}}>{elapsedLabel(offset, zh)}</time>)}</div>
       </div>

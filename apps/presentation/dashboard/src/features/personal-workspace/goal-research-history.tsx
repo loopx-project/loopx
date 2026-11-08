@@ -275,7 +275,10 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
     if (next !== lens || nextPhase !== phase) window.history.pushState(null, "", url);
   };
   const chooseLens = (next: Lens) => chooseView(next, phase);
-  const fullTime = (at: number) => new Intl.DateTimeFormat(zh ? "zh-CN" : "en", {month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false}).format(new Date(at));
+  const fullTime = (at: number, precise = false) => new Intl.DateTimeFormat(zh ? "zh-CN" : "en", {
+    month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false,
+    second: precise ? "2-digit" : undefined, fractionalSecondDigits: precise ? 3 : undefined,
+  }).format(new Date(at));
   const dayTime = (at: number) => new Intl.DateTimeFormat(zh ? "zh-CN" : "en", {month: "numeric", day: "numeric"}).format(new Date(at));
   const positions = new Map(layout.map(item => [item.node.id, item]));
   const selectedId = selection.nodes.length === 1 ? selection.nodes[0]! : "";
