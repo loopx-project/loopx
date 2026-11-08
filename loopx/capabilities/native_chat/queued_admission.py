@@ -65,6 +65,73 @@ def enqueue_turn(controller: Any, *, session_id: str, client_turn_id: str, messa
     return turn, created
 
 
+def deliver_native_mention(
+    controller, *, session_id: str, ingress_id: str, target_turn_id: str | None,
+    binding_matches: bool, text_only: bool, may_deliver_new: bool,
+    steering_text: str, queued_text: str, origin: str,
+) -> dict[str, Any]:
+    """Project Chat receipts through the shared mention ingress rule."""
+    from ...control_plane.chat_turn_acceptance import plan_native_mention_ingress
+
+    def plan():
+        receipt = controller.store.steering_receipt(session_id, ingress_id) if binding_matches else None
+        queued_turn_exists = (
+            binding_matches and receipt is None
+            and controller.store.turn_for_client(session_id, ingress_id) is not None
+        )
+        message = queued_text if (receipt or {}).get("mode") == "session_queue" else steering_text
+        return plan_native_mention_ingress(
+            mentioned=True, binding_matches=binding_matches, text_only=text_only, may_deliver_new=may_deliver_new,
+            target_turn_id=target_turn_id, queued_turn_exists=queued_turn_exists,
+            receipt=({key: receipt.get(key) for key in ("mode", "status", "expected_turn_id", "active_turn_id", "error_code")}
+                     if receipt is not None else None),
+            receipt_message_matches=receipt is not None and receipt.get("message") == message,
+        )
+
+    try:
+        decision = plan()
+        if decision["action"] == "enqueue":
+            # Reserve the delivery mode before creating a FIFO Turn. Replays
+            # use this mode even if a different Turn is now running.
+            controller.store.create_ingress_receipt(
+                session_id, client_ingress_id=ingress_id, mode="session_queue", message=queued_text,
+            )
+        elif decision["action"] == "steer":
+            try:
+                controller.steer_active_turn(
+                    session_id=session_id, client_ingress_id=ingress_id, message=steering_text,
+                    expected_turn_id=decision["target_turn_id"], origin=origin,
+                )
+            except Exception:
+                # The native response can be lost after sending. The existing
+                # receipt, rather than the exception, decides whether it landed.
+                pass
+            decision = plan()
+            if decision["action"] == "steer":
+                return {"action": "unresolved"}
+        return decision
+    except (OSError, ValueError):
+        return {"action": "unresolved"}
+
+
+def record_steering_delivery(
+    store, *, session_id: str, turn_id: str, ingress_id: str,
+    message: str, queued_turn_id: str | None, origin: str | None,
+) -> None:
+    """Persist transcript evidence before settling the native ingress receipt."""
+    payload = {"client_ingress_id": ingress_id}
+    if origin is not None:
+        payload["origin"] = origin
+    if queued_turn_id is None:
+        store.append_message(session_id, role="user", text=message, turn_id=turn_id, origin=origin)
+    else:
+        payload["queued_turn_id"] = queued_turn_id
+    store.append_event(session_id, turn_id, kind="turn.steered", payload=payload)
+    store.update_ingress_receipt(
+        session_id, ingress_id, status="delivered", active_turn_id=turn_id, error_code=None,
+    )
+
+
 def _enqueue_bound(controller: Any, session: dict[str, Any], client_turn_id: str, message: str,
                    attachments: list[dict[str, Any]] | None, origin: str) -> tuple[dict[str, Any], bool]:
     contexts = controller.project_contexts

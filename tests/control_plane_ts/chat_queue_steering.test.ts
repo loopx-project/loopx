@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {planQueuedChatMutation, planQueuedChatSteering, selectQueuedChatTurns, QUEUE_STEERING_SCHEMA} from "../../loopx/control_plane/turn_driver/chat_queue_steering.ts";
+import {planNativeMentionIngress, planQueuedChatMutation, planQueuedChatSteering, selectQueuedChatTurns, QUEUE_STEERING_SCHEMA} from "../../loopx/control_plane/turn_driver/chat_queue_steering.ts";
 
 function facts() {
   return {phase: "prepare", session: {status: "busy", active_turn_id: "active"}, active_status: "running",
@@ -95,4 +95,28 @@ test("acknowledgement recovers after target completion while proven rejection re
   assert.equal(planQueuedChatSteering({...f, receipt: {...receipt, status: "failed", error_code: "live_steering_turn_mismatch"}}).action, "release");
   assert.equal(planQueuedChatSteering({...f, session: {status: "ready", active_turn_id: null}}).action, "release");
   assert.equal(planQueuedChatSteering({...f, phase: "settle"}).action, "release");
+});
+
+test("native mention admission preserves the observed target and prior ingress", () => {
+  const input = {mentioned: true, binding_matches: true, text_only: true, may_deliver_new: true,
+    target_turn_id: "first", receipt_message_matches: true};
+  assert.deepEqual(planNativeMentionIngress({...input, mentioned: false}), {action: "configured"});
+  assert.deepEqual(planNativeMentionIngress(input), {action: "steer", target_turn_id: "first"});
+  assert.deepEqual(planNativeMentionIngress({...input, target_turn_id: null}), {action: "enqueue"});
+  assert.deepEqual(planNativeMentionIngress({...input, may_deliver_new: false, target_turn_id: "later"}),
+    {action: "unresolved"});
+  assert.deepEqual(planNativeMentionIngress({...input, queued_turn_exists: true}), {action: "enqueue"});
+  assert.equal(planNativeMentionIngress({...input, binding_matches: false}).action, "reject");
+  assert.equal(planNativeMentionIngress({...input, text_only: false}).error_code, "queue_steering_attachments_unavailable");
+  const receipt = {mode: "live_steering", status: "delivered", expected_turn_id: "first", active_turn_id: "first"};
+  assert.deepEqual(planNativeMentionIngress({...input, receipt, may_deliver_new: false, target_turn_id: "later"}),
+    {action: "delivered", target_turn_id: "first"});
+  for (const uncertain of [{...receipt, status: "pending"}, {...receipt, active_turn_id: "later"},
+    {...receipt, status: "failed", error_code: "live_steering_rejected"}]) {
+    assert.deepEqual(planNativeMentionIngress({...input, receipt: uncertain}), {action: "unresolved"});
+  }
+  assert.deepEqual(planNativeMentionIngress({...input, receipt, receipt_message_matches: false}), {action: "unresolved"});
+  assert.equal(planNativeMentionIngress({...input, receipt: {...receipt, status: "failed",
+    error_code: "live_steering_turn_mismatch"}}).action, "reject");
+  assert.equal(planNativeMentionIngress({...input, receipt: {mode: "session_queue"}}).action, "enqueue");
 });
