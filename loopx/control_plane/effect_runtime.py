@@ -330,10 +330,11 @@ def _scan_runtime_source_snapshot(root: Path) -> _RuntimeSourceSnapshot:
     for directory, child_directories, filenames in os.walk(root):
         child_directories.sort()
         relative_directory = os.path.relpath(directory, root)
-        if relative_directory == ".":
-            relative_directory = ""
+        relative_prefix = (
+            "" if relative_directory == "." else relative_directory.replace(os.sep, "/") + "/"
+        )
         for filename in sorted(filenames):
-            relative = Path(relative_directory, filename).as_posix()
+            relative = relative_prefix + filename
             dot = filename.rfind(".")
             if ((dot <= 0 or filename[dot:] not in _RUNTIME_SOURCE_SUFFIXES)
                     and relative not in _RUNTIME_SOURCE_PATHS):
