@@ -1902,9 +1902,16 @@ def test_turn_cli_inspection_cannot_become_execution(
     assert code == 0, inspection
     assert inspection["route"] == original_plans[0]["route"]
     assert inspection["schema_version"] == "loopx_turn_plan_v1" and "turn_envelope" not in inspection
-    assert json.dumps(inspection["work_contract"], sort_keys=True) == json.dumps(
+    recovered = inspection["work_contract"]
+    if not transaction_detail and recovered.get("schema_version") != "loopx_turn_envelope_v1":
+        from tests.control_plane.cli_output_fixture import read_pinned_cli_body
+
+        body, _, _ = read_pinned_cli_body(inspection["detail_ref"]["command"])
+        recovered = json.loads(body)
+        assert "future_fixture_observation" not in inspection["work_contract"]
+    assert json.dumps(recovered, sort_keys=True) == json.dumps(
         original_plans[0]["work_contract"], sort_keys=True)
-    assert inspection["work_contract"]["future_fixture_observation"]["numbers"][-1] == 2**60 + 1
+    assert recovered["future_fixture_observation"]["numbers"][-1] == 2**60 + 1
     if transaction_detail:
         # Explicit detail retains transport metadata, never a second source.
         detailed = build_loopx_turn_host_request(inspection)
@@ -1913,6 +1920,10 @@ def test_turn_cli_inspection_cannot_become_execution(
         # Even restoring valid transaction detail cannot promote inspection.
         inspection["transaction"] = original_plans[0]["transaction"]
         inspection["session"] = original_plans[0]["session"]
+        with pytest.raises(ValueError, match="CLI inspection"):
+            build_loopx_turn_host_request(inspection)
+        # Reading the exact complete source grants no execution authority.
+        inspection["work_contract"] = recovered
         with pytest.raises(ValueError, match="CLI inspection"):
             build_loopx_turn_host_request(inspection)
     request = build_loopx_turn_host_request(original_plans[0])
@@ -1966,7 +1977,13 @@ def test_turn_cli_resolves_its_decision_through_the_shared_owner(
 
     payload = json.loads(output.getvalue())
     assert exit_code == 0, payload
-    assert payload["work_contract"]["schema_version"] == "loopx_turn_envelope_v1"
+    source = payload["work_contract"]
+    if source.get("schema_version") != "loopx_turn_envelope_v1":
+        from tests.control_plane.cli_output_fixture import read_pinned_cli_body
+
+        body, _, _ = read_pinned_cli_body(payload["detail_ref"]["command"])
+        source = json.loads(body)
+    assert source["schema_version"] == "loopx_turn_envelope_v1"
     assert "turn_envelope" not in payload
     assert len(status_reads) == 1, (
         "`turn` must read its live status through the shared Turn decision "

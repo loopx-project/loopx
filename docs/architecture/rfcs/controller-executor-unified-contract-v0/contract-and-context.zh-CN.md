@@ -452,6 +452,12 @@ reader。本文不单独授权破坏性迁移。
 仍归父提案。未迁移 producer 的测试须守住这个边界。当前 Turn 规划直接消费完整来源，
 发布自己的不可变 capture；新组合来源与较早 executor envelope 错配时继续拒绝。
 
+原生所选 Task 的准备阶段仍把同一经校验来源私下适配给
+`StewardTurnHost.prepare_native_task` 及其现有验证 receiver。该临时 v0 adapter
+不会成为第二份发布的 Host 输入或保存的候选 decision。这个共同部署的准备 API
+仍由父提案在 active-reader 退役时迁移；lease 规则继续归原 owner，正常请求和
+capture 只使用完整来源。
+
 原生所选 Task 在 kernel delivery guard 之前准备普通 managed lease，并在模型后验证时
 复用该 proof。claim 标签本身不足，不能借用另一次执行的 lease。来源检查先于独立
 Task argv；拒绝和原结果恢复保留原会话与一次性效果。

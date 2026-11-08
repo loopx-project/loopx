@@ -617,6 +617,13 @@ unmigrated producer must preserve that boundary. Current Turn planning consumes
 its complete source directly and publishes its own immutable capture; pairing a
 newly composed source with an older executor envelope is rejected.
 
+Native selected-task preparation still adapts the same checked source privately
+for `StewardTurnHost.prepare_native_task` and its existing validation receiver.
+That temporary v0 adapter is neither a second published Host input nor a saved
+alternative decision. Migrating this co-deployed preparation API remains part of
+the parent's active-reader retirement; its lease rules stay with their current
+owner and the normal request/capture uses only the complete source.
+
 Native selected-task execution prepares its ordinary managed lease before the
 kernel delivery guard and reuses that proof during post-model validation. A
 claim label alone is insufficient, and another execution's lease remains

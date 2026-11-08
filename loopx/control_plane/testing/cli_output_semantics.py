@@ -355,63 +355,6 @@ def action_signature_semantic_sha256(value: Any) -> str | None:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def turn_plan_control_observation(value: Any, *, goal_state: dict[str, str] | None = None) -> dict[str, Any] | None:
-    """Compare current controls across the explicit plan codec migration.
-
-    This fixture observation grants no authority and does not prove full source
-    parity; complete-source and real outcome qualification remain separate.
-    Required reads and authoring clauses are compared as original JSON values.
-    """
-    if not isinstance(value, dict) or value.get("schema_version") not in {
-        "loopx_turn_plan_v0", "loopx_turn_plan_v1",
-    }:
-        return None
-    version = value["schema_version"]
-    work = value["turn_envelope"] if version == "loopx_turn_plan_v0" else value["work_contract"]
-    if version == "loopx_turn_plan_v0":
-        actor, channel, capsule, boundary = work["agent_id"], work["action"], work["contract_capsule"], work["boundary"]
-        reads, actions = work["required_reads"], work["writeback"]["next_cli_actions"]
-        selected = work["action"].get("selected_todo")
-    else:
-        actor, channel = work["agent_identity"]["agent_id"], work["interaction_contract"]["agent_channel"]
-        capsule, boundary = work, work["goal_boundary"]
-        reads, actions = channel["required_reads"], work["interaction_contract"]["cli_channel"]["next_cli_actions"]
-        selected = work.get("selected_todo")
-    # v0 asks for the original Goal file; v1 delivers those exact bytes inline.
-    # Only this known obligation may move from a read command to captured data.
-    # The frozen caller independently verifies the full-file revision first.
-    if goal_state is not None and version == "loopx_turn_plan_v0":
-        goal_read = {"command": goal_state["command"], "source": "goal_state", "ordering": "before_work",
-            "reason": "Read full Goal intent, acceptance, stops. No summaries; failed/changed sources need a fresh guard."}
-        reads = [row for row in reads if row != goal_read]
-    route = value["route"]
-    controls = {
-        "goal_id": work["goal_id"], "agent_id": actor,
-        "decision": work["decision"], "should_run": work["should_run"],
-        "effective_action": work["effective_action"],
-        "selected_todo_id": selected["todo_id"] if isinstance(selected, dict) else None,
-        "route": {key: route[key] for key in (
-            "kind", "effective_action", "would_invoke_host", "host_invocation_allowed")},
-        "execution": {key: channel[key] for key in (
-            "must_attempt", "delivery_allowed", "quiet_noop_allowed")},
-        "boundary": {key: boundary[key] for key in ("write_scope", "stop_condition")},
-        "required_reads": reads, "goal_state_material": goal_state, "next_cli_actions": actions,
-        "work_lane_contract": capsule["work_lane_contract"],
-        "execution_obligation": capsule["execution_obligation"],
-        "replan_action_packet": work.get("replan_action_packet"),
-        "effects": value["effects"],
-    }
-    if route["kind"] == "ready_for_host":
-        controls["execution_profile"] = capsule["execution_profile"]
-        controls["task_scope"] = capsule["task_scope"]
-    assert value["ok"] is True and not any(value["effects"].values())
-    encoded = json.dumps(controls, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return {"plan_version": version, "controls_sha256": hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
-            "field_sha256": {key: hashlib.sha256(json.dumps(child, ensure_ascii=False,
-                sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
-                for key, child in controls.items()}}
-
-
 def action_signature_coverages(value: Any) -> list[str]:
     coverages: set[str] = set()
 
