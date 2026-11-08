@@ -471,6 +471,8 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
             full_reference = _capture_read_reference(projected["recovery"],
                 page_bytes=page_bytes, output_bytes=output_bytes, reader_argv=reader_argv)
             reference = dict(full_reference)
+        else:
+            bind_capture_selection_transport(projected, args, capture_root=root)
         native_view = native_context_capture_view(projected, cache, context_directory=directory, hook_session=hook_session,
             progressive_enabled=activation["progressive_enabled"], initial_read_plan=prepared.initial_read_plan,
             metadata={"recovery": full_reference, "capture_sha256": args.capture_sha256,
@@ -596,6 +598,10 @@ def prepare_decision_capture(args: argparse.Namespace) -> Path | None:
             return Path(tempfile.mkdtemp(prefix="decision-", dir=parent))
         assert requested is not None  # root is absent; exactly one destination was checked above.
         directory = Path(requested).expanduser().absolute()
+        if getattr(args, "prepared_capture_reference", False):
+            # Bind the physical parent before admission: the saved selection
+            # uses it as an output root, which must not be a symlink.
+            directory = Path(os.path.realpath(directory.parent, strict=True)) / directory.name
         # A new directory per invocation prevents overwriting a prior observation,
         # including a prior invocation in the same Turn. Existing symlinks fail too.
         directory.mkdir(mode=0o700)
@@ -720,13 +726,18 @@ def _capture_selection_transport_template(payload: dict[str, Any], args: argpars
 
 
 def bind_capture_selection_transport(payload: dict[str, Any], args: argparse.Namespace, *,
-                                     capture_root: Path | None = None) -> None:
+                                     capture_root: Path | None = None,
+                                     capture_directory: Path | None = None) -> None:
     """Retain caller display/capture options in the existing selection command.
 
     Only transport argv is composed here; the typed quota owner still selects the
     action and owns admission. Each selection invocation allocates a new capture.
     """
     root = getattr(args, "decision_output_root", None)
+    # A prepared reference binds one immutable directory. Same-Turn
+    # selection uses its parent to create a fresh sibling capture.
+    if capture_directory is not None and getattr(args, "prepared_capture_reference", False):
+        capture_root = capture_directory.parent
     if root is None and capture_root is None:
         return
     interaction = payload.get("interaction_contract")

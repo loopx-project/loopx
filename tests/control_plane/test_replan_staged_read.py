@@ -245,6 +245,13 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
             original = Path(argv[argv.index("--capture-file") + 1])
             assert original == captured_dir / "decision.json" and original.is_relative_to(wake)
             assert original.read_bytes() == raw and str(source_path) not in body
+            if replan:
+                selection = source["interaction_contract"]["cli_channel"]["selection_command"]
+                followup = shlex.split(selection["command_args_template"])
+                assert followup[followup.index("--decision-output-root") + 1] == str(captured_dir.parent.resolve())
+                assert followup[followup.index("--context-delivery") + 1] == "on"
+                assert followup[followup.index("--codex-context-dir") + 1] == str(native)
+                assert "--decision-output-dir" not in followup and "--prepared-capture-reference" not in followup
             assert not list(native.iterdir()), "Host preflight must not alter native continuity"
             session_id = "checkpoint-preflight-session"
             codex_context_hook(str(native), {"hook_event_name": "SessionStart", "source": "startup",
@@ -307,6 +314,15 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
         assert {key: fixture[key].read_bytes() for key in before} == before
         assert capture.read_bytes() == source_path.read_bytes()
         assert len(commands) == 1  # Reads did not re-enter checkpoint preflight.
+        if context_delivery:
+            selected = shlex.split(selection["route_prefix"]) + followup
+            selected[selected.index("{todo_id}")] = TODO
+            result = run(selected, cwd=fixture["project"], env=env, capture_output=True, text=True, timeout=60)
+            assert result.returncode == 0, result.stdout
+            [next_capture] = set(captured_dir.parent.glob("*/decision.json")) - {capture}
+            identity = json.loads(next_capture.read_bytes())["heartbeat_receipt"]["settlement_identity"]
+            assert (identity["todo_id"], identity["turn_instance_id"]) == (TODO, TURN)
+            assert capture.read_bytes() == source_path.read_bytes()
     finally:
         restart_effect_runtime(wait_for_exit=True)
 
