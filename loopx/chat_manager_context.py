@@ -510,6 +510,7 @@ def manager_turn_context(
     requested_goal_ids: list[str] | None = None,
     include_stopped: bool = False,
     include_details: bool = True,
+    read_goal_status: bool = True,
     evidence_window_days: int | None = None,
     remote_evidence: bool = False,
     remote_runner=None,
@@ -518,6 +519,7 @@ def manager_turn_context(
 ) -> dict[str, Any]:
     conversation = conversation_scope(session)
     local_goal = conversation["kind"] == "owner_goal"
+    include_details = include_details and read_goal_status
     if evidence_window_days is None:
         evidence_window_days, days_source, days_reason = resolve_evidence_window_days()
     elif (
@@ -585,6 +587,7 @@ def manager_turn_context(
         include_goal_lifecycle=True,
         include_goal_attention=True,
         include_goal_instance_id=True,
+        read_status=read_goal_status,
     )
     labels: dict[str, str] = {}
     try:
@@ -744,6 +747,7 @@ def collect_manager_turn_context(
     *,
     include_details: bool = True,
     include_stopped: bool = False,
+    read_goal_status: bool = True,
     remote_evidence: bool = False,
     remote_runner=None,
 ) -> dict[str, Any]:
@@ -754,6 +758,7 @@ def collect_manager_turn_context(
             runtime_root,
             include_details=include_details,
             include_stopped=include_stopped,
+            read_goal_status=read_goal_status,
             remote_evidence=remote_evidence,
             remote_runner=remote_runner,
         )
@@ -815,6 +820,7 @@ def collect_manager_turn_context(
             authorized_goal_ids=before,
             include_details=include_details,
             include_stopped=include_stopped,
+            read_goal_status=read_goal_status,
             remote_evidence=remote_evidence,
             remote_runner=remote_runner,
             # Source reads and the Turn owner check the same exact authority.
