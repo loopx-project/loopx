@@ -342,15 +342,16 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
     .filter(todo => todo.role === "agent" && !todo.done && todo.claimed_by === agent
       && ["open", "pending", "in_progress", "blocked"].includes(String(todo.status))
       && (todoId === null || todo.todo_id === todoId)) : [];
-  const workCues = workTodos.map(todo => projectWorkYardstickCue({enabled: true, goal_id: goal, agent_id: agent, todo_id: todo.todo_id,
+  const currentWorkCues = workTodos.map(todo => projectWorkYardstickCue({enabled: true, goal_id: goal, agent_id: agent, todo_id: todo.todo_id,
       findings: findings.filter(row => (todo.explore_result_node_refs as unknown[] ?? []).includes(row.node_id)),
       measurement_feedback: measurementFeedback}))
-    .filter((cue): cue is JsonObject => cue !== null && (resultNode === null || cue.node_id === resultNode));
+    .filter((cue): cue is JsonObject => cue !== null);
+  const workCues = currentWorkCues.filter(cue => resultNode === null || cue.node_id === resultNode);
   // A first decision may use measurements recorded before any Yardstick
   // declaration. Reuse exact-profile feedback through canonical question links;
   // those links do not establish which Todo executed a shared finding.
   const workMeasurements = workTodos.flatMap(todo => {
-    if (todo.status !== "open" || workCues.some(cue => (cue.binding as JsonObject).todo_id === todo.todo_id)) return [];
+    if (todo.status !== "open" || currentWorkCues.some(cue => (cue.binding as JsonObject).todo_id === todo.todo_id)) return [];
     const linked = new Set(requireStringArray(todo.explore_result_node_refs ?? [], "Explore task question refs"));
     const available = measurementFeedback.filter(row => linked.has(row.node_id));
     if (!available.length) return [];
