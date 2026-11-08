@@ -2049,6 +2049,15 @@ unfinished declaration; later native inputs must be correlated to Core. This
 observation does **not** certify settled effects. A failed or signal-terminated
 command cannot acquire replay authority through this route.
 
+A new result review now requires an explicit observation that no original
+writable adapter is attached. An inconclusive effect readback while that owner
+is still attached remains a hold; it must not replace the owner with a model
+review of an already delivered partial answer. The existing reply-worker probe
+backoff remains in force. A later fresh settled-effect proof can admit the same
+single remaining-work continuation without a new user input. Unknown ownership
+also holds. Previously reserved reviews retain their exact queue-adoption checks;
+this rule does not manufacture ownership after a native process has been lost.
+
 The original worker uses its existing Session, queue and project binding. Fresh
 source and grant checks, an idle queue, the backoff, and stop/steering/attachment
 guards still apply. With a live adapter, the readback uses that same adapter
