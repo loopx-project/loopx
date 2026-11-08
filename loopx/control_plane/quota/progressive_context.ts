@@ -499,7 +499,7 @@ export function initialContextReadPointers(context: JsonObject, decisionFields: 
 }
 
 /** A pending Manager Inbox read already delivers these scoped request rows. */
-function managerAgendaHeaderFields(value: unknown, requiredReads: unknown[]): string[] | undefined {
+function canDeferManagerAgenda(value: unknown, requiredReads: unknown[]): boolean {
   const {content, ...read} = jsonObject(value) ?? {};
   const source = jsonObject(content), agenda = jsonObject(source?.unfinished_delegations);
   if (read.source !== "turn_start_capability_hook" || read.kind !== "operator_inbox"
@@ -511,10 +511,14 @@ function managerAgendaHeaderFields(value: unknown, requiredReads: unknown[]): st
       || !Array.isArray(agenda.items)
       || !known(agenda, ["count_unit", "items", "incoming_count", "outgoing_count", "omitted_count",
         "scan_complete", "unavailable_count", "observed_at", "read_command", "instruction"])
-      || !requiredReads.some(required => isDeepStrictEqual(required, read))) return undefined;
-  // Nine separate pointer wrappers cost more than a small inline agenda.
-  if (Buffer.byteLength(JSON.stringify(agenda.items), "utf8") < 2048) return undefined;
-  return Object.keys(agenda).filter(key => key !== "items");
+      || !requiredReads.some(required => isDeepStrictEqual(required, read))) return false;
+  const {incoming_count: incoming, outgoing_count: outgoing, items} = agenda;
+  if (typeof incoming !== "number" || !Number.isSafeInteger(incoming) || incoming < 0
+      || typeof outgoing !== "number" || !Number.isSafeInteger(outgoing) || outgoing < 0
+      || incoming + outgoing !== items.length) return false;
+  // Keep small agendas inline. Three pointers retain the starting counts and
+  // scan status without repeating the required read's details or guidance.
+  return Buffer.byteLength(JSON.stringify(items), "utf8") >= 2048;
 }
 
 function initialContextReadGroups(context: JsonObject, decisionFields: readonly string[]): {
@@ -653,9 +657,9 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
       include(...source, "content", field);
     include(...source, "content", "read_complete");
     const agendaPath = [...source, "content", "unfinished_delegations"];
-    const agendaFields = managerAgendaHeaderFields(_source, requiredInboxReads);
-    if (agendaFields) for (const field of agendaFields) include(...agendaPath, field);
-    else include(...agendaPath);
+    if (canDeferManagerAgenda(_source, requiredInboxReads)) {
+      for (const field of ["incoming_count", "outgoing_count", "scan_complete"]) include(...agendaPath, field);
+    } else include(...agendaPath);
     // The preference owner already supplies the complete current scoped view,
     // including corrections, retirement, provenance and advisory authority.
     // Its revision/instructions alone cannot fulfill that pre-work delivery.

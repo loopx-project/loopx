@@ -648,16 +648,18 @@ def test_initial_read_preserves_unfinished_requests_and_incomplete_observation(t
     assert detail["ok"] and "FULL-REQUEST-DETAIL-ON-DEMAND" in detail["content"]
 
 
-@pytest.mark.parametrize("route", ["matching", "different", "missing", "incomplete", "unknown", "small", "held"])
+@pytest.mark.parametrize("route", [
+    "matching", "different", "missing", "incomplete", "omitted", "unknown", "bad_counts", "small", "held",
+])
 def test_initial_read_leaves_large_agenda_rows_to_the_matching_required_read(tmp_path, decision, route):
     command = "loopx manager-inbox read --goal-id fixture --agent-id author"
     read = {"source": "turn_start_capability_hook", "kind": "operator_inbox",
         "capability_id": "manager-context", "hook_id": "manager.context_inbox",
         "ordering": "before_work", "command": command}
-    agenda = {"count_unit": "request", "incoming_count": 2, "outgoing_count": 1,
-        "items": [{"request_id": f"request-{index}", "next_action": "保留原反馈与验收材料。" * (4 if route == "small" else 48)}
-            for index in range(3)],
-        "omitted_count": 0, "scan_complete": route != "incomplete",
+    purpose = "保留原反馈与验收材料。" * (4 if route == "small" else 48)
+    agenda = {"count_unit": "request", "incoming_count": 3 if route == "bad_counts" else 2, "outgoing_count": 1,
+        "items": [{"request_id": f"request-{index}", "next_action": purpose} for index in range(3)],
+        "omitted_count": int(route == "omitted"), "scan_complete": route != "incomplete",
         "unavailable_count": int(route == "incomplete"), "read_command": command,
         "instruction": "Read the full current request before acting."}
     if route == "unknown":
@@ -669,7 +671,8 @@ def test_initial_read_leaves_large_agenda_rows_to_the_matching_required_read(tmp
         "ok": True, "read_complete": False, "unfinished_delegations": agenda,
     }})
     if route != "missing":
-        channel["required_reads"].append({**read, "command": command + " --agent-id other"} if route == "different" else read)
+        required = {**read, "command": command + " --agent-id other"} if route == "different" else read
+        channel["required_reads"].append(required)
 
     view = native_context_capture_view(decision, tmp_path)
     _, values = read_selection(view["first_read_command"])
@@ -678,8 +681,9 @@ def test_initial_read_leaves_large_agenda_rows_to_the_matching_required_read(tmp
     agenda_path = prefix + "/unfinished_delegations"
     if route == "matching":
         assert agenda_path not in values and agenda_path + "/items" not in values
-        for field in agenda.keys() - {"items"}:
+        for field in ("incoming_count", "outgoing_count", "scan_complete"):
             assert values[f"{agenda_path}/{field}"] == agenda[field]
+        assert agenda_path + "/instruction" not in values
         assert read in values["/interaction_contract/agent_channel/required_reads"]
     else:
         assert values[agenda_path] == agenda
