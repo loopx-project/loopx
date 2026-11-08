@@ -10,7 +10,7 @@ from contextlib import nullcontext
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from time import time_ns
-from typing import Any, TypedDict
+from typing import Any, NotRequired, TypedDict
 
 from ...control_plane.work_items.operator_inbox import (
     CAPTURE_SCOPES,
@@ -607,6 +607,7 @@ class LarkTopicInput(TypedDict):
     lane: tuple[str, ...]
     event: dict[str, object]
     mention_capture: dict[str, object] | None
+    live_turn_capture: NotRequired[dict[str, object]]
     started: bool
 
 
@@ -653,6 +654,7 @@ class LarkTopicInboxIntake:
         route_ref = row.get("route_ref")
         lane = row.get("lane")
         mention = row.get("mention_capture")
+        live_turn = row.get("live_turn_capture")
         started = row.get("started")
         if (
             type(order) is not int or order <= 0
@@ -662,14 +664,18 @@ class LarkTopicInboxIntake:
             or not isinstance(lane, list) or not 1 <= len(lane) <= 2
             or not all(isinstance(key, str) and 0 < len(key) <= 256 for key in lane)
             or (mention is not None and not isinstance(mention, dict))
+            or (live_turn is not None and not isinstance(live_turn, dict))
             or type(started) is not bool
         ):
             raise ValueError("invalid Lark Topic intake record")
-        return {
+        packet: LarkTopicInput = {
             "order": order, "event": event, "provider_ref": provider_ref,
             "route_ref": route_ref, "lane": tuple(lane),
             "mention_capture": mention, "started": started,
         }
+        if live_turn is not None:
+            packet["live_turn_capture"] = live_turn
+        return packet
 
     def _inputs(self) -> Iterator[tuple[Path, LarkTopicInput]]:
         for path in self._directory.glob("*.json"):
@@ -688,6 +694,7 @@ class LarkTopicInboxIntake:
     def capture(
         self, *, event: Mapping[str, object], route_ref: str, lane: tuple[str, ...],
         mention_capture: dict[str, object] | None,
+        live_turn_capture: dict[str, object] | None = None,
     ) -> bool:
         if not self._source_matches:
             raise ValueError("Lark Topic intake belongs to a different provider")
@@ -705,6 +712,8 @@ class LarkTopicInboxIntake:
             "route_ref": route_ref, "lane": lane, "event": dict(event),
             "mention_capture": mention_capture, "started": False,
         }
+        if live_turn_capture is not None:
+            packet["live_turn_capture"] = live_turn_capture
         self._directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         write_private_json_atomic(path, packet)
         return True

@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, overload
 
-from ...chat_manager import MANAGER_AGENT_OBJECTIVE, manager_channel
+from ...chat_manager import MANAGER_AGENT_OBJECTIVE
 from ...control_plane.collaboration import conversation_reply_context
 from ...file_lock import exclusive_file_lock
 from .manager_routing import (
@@ -49,9 +49,11 @@ from .goal_channel_targets import goal_channel_target_for_name
 from .goal_channel_transport import lark_provider_mention_identities, record_event_timing
 from .goal_topic_connections import decide_lark_topic_event
 from .goal_topic_dispatch import (
+    MentionCapture,
     ProfileEventDispatch,
     ProfileTopicIntake,
     TopicIntakeRoute,
+    profile_can_reserve_mention_worker,
     topic_inbox_key,
     topic_intake_route,
 )
@@ -104,7 +106,6 @@ ProposalDeliverer = Callable[
     [Mapping[str, Any], list[str]], Mapping[str, Any]
 ]
 ReviewCallbackHandler = Callable[[Mapping[str, Any]], Mapping[str, Any]]
-MentionCapture = Callable[[Mapping[str, object]], dict[str, object]]
 EventLane = tuple[str, ...]
 CapturedEventLane = tuple[EventLane, dict[str, object] | None, TopicIntakeRoute | None]
 
@@ -505,6 +506,7 @@ def poll_lark_goal_topic_profile_once(
     proposal_deliverer: ProposalDeliverer | None = None,
     private_admitter: Callable[[str, dict[str, object]], Mapping[str, object]] | None = None,
     mention_capture: Mapping[str, object] | None = None,
+    live_turn_capture: Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
     """Consume one bounded event batch for an App and reuse Inbox reply/ACK."""
 
@@ -576,6 +578,7 @@ def poll_lark_goal_topic_profile_once(
                 provider_runner=provider_runner,
                 proposal_deliverer=proposal_deliverer,
                 mention_capture=mention_capture,
+                live_turn_capture=live_turn_capture,
             )
         except Exception:
             event_statuses.append("processing_failed")
@@ -757,6 +760,7 @@ def stream_lark_goal_topic_profile(
     def dispatch_event(
         event: Mapping[str, object], mention: Mapping[str, object] | None,
         current_snapshot: Mapping[str, object],
+        *, live_turn_capture: Mapping[str, object] | None = None,
     ) -> None:
         message_id = str(event.get("message_id") or "")
         record_event_timing(profile, message_id, "dispatch_started")
@@ -776,6 +780,7 @@ def stream_lark_goal_topic_profile(
             proposal_deliverer=proposal_deliverer,
             private_admitter=private_admitter,
             mention_capture=mention,
+            live_turn_capture=live_turn_capture,
         )
         record_event_timing(profile, message_id, "dispatch_returned")
         report_result(result)
@@ -801,12 +806,20 @@ def stream_lark_goal_topic_profile(
         return (
             route is not None and route.inbox_key == inbox_key
             and route.digest == packet["route_ref"] and lane == packet["lane"]
+            and (
+                route.route.get("ingress_mode") != "live_steering"
+                or packet.get("live_turn_capture") is not None
+                or packet["mention_capture"] is not None
+            )
         )
 
     def prepare_input(inbox_key: str, packet: LarkTopicInput) -> Callable[[], None]:
         fresh = snapshot_provider()
         if matches_input(inbox_key, packet, fresh):
-            return lambda: dispatch_event(packet["event"], packet["mention_capture"], fresh)
+            return lambda: dispatch_event(
+                packet["event"], packet["mention_capture"], fresh,
+                live_turn_capture=packet.get("live_turn_capture"),
+            )
         return lambda: report_result({
             "event_count": 1, "replied_count": 0, "event_statuses": ["ignored"],
             "event_reasons": [LarkTopicEventDecisionReason.BINDING_UNAVAILABLE.value],
@@ -873,12 +886,18 @@ def stream_lark_goal_topic_profile(
                 record_event_timing(profile, message_id, "lane_ready")
                 priority = bool((mention_capture or {}).get("target_turn_id"))
                 if reserve_priority and intake_route is not None and not priority:
+                    live_turn_capture = None
+                    if (intake_route.route.get("ingress_mode") == "live_steering"
+                            and mention_capture is None and capture_mention is not None):
+                        # A delayed ordinary live input keeps its original Turn.
+                        live_turn_capture = capture_mention(intake_route.route)
                     if intake.capture(
                         dispatch, intake_route, lane, event, mention_capture,
                         lambda: _inbox_config(
                             runtime_root=root, route=intake_route.route,
                             target_payload=intake_route.targets,
                         )[0],
+                        live_turn_capture=live_turn_capture,
                     ):
                         record_event_timing(profile, message_id, "inbox_captured")
                     else:
@@ -952,66 +971,10 @@ def _profile_supports_mention_steering(
     profile: str,
     capture_mention: MentionCapture | None = None,
 ) -> bool:
-    """Reserve a priority worker only when a bound Session can steer on @mention."""
-
-    profile_config = _active_profile_configs(snapshot).get(profile)
-    if profile_config is None:
-        return False
-    bot_app_id = str(profile_config.get("bot_app_id") or "")
-    target_payload = snapshot.get("target_payload")
-    target_payload = target_payload if isinstance(target_payload, Mapping) else {}
-    binding_payloads = snapshot.get("binding_payloads")
-    binding_payloads = binding_payloads if isinstance(binding_payloads, Mapping) else {}
-    for goal_id, payload in binding_payloads.items():
-        if not isinstance(payload, Mapping):
-            continue
-        for binding in bindings_for_goal(payload, str(goal_id)):
-            if binding.get("enabled") is not True:
-                continue
-            session_id = str(binding.get("session_id") or "").strip()
-            routing = binding.get("routing")
-            routing = routing if isinstance(routing, Mapping) else {}
-            ingress_mode = str(routing.get("ingress_mode") or "")
-            if not session_id or ingress_mode not in {"live_steering", "session_queue"}:
-                continue
-            target = goal_channel_target_for_name(
-                target_payload, str(binding.get("target_ref") or "")
-            )
-            if target is None or target.get("enabled") is not True:
-                continue
-            identity = target.get("identity")
-            identity = identity if isinstance(identity, Mapping) else {}
-            sender_profile = str(identity.get("sender_profile") or "").strip()
-            same_app = bool(bot_app_id) and str(identity.get("bot_app_id") or "") == bot_app_id
-            if sender_profile != profile and not same_app:
-                continue
-            if not (identity.get("bot_app_id") or identity.get("bot_open_id")):
-                continue
-            if capture_mention is not None:
-                channel = target.get("channel")
-                channel = channel if isinstance(channel, Mapping) else {}
-                chat_id = str(channel.get("chat_id") or "")
-                kind = str(routing.get("conversation_kind") or "goal")
-                route = {
-                    "goal_id": str(goal_id),
-                    "connection_id": str(binding.get("connection_id") or ""),
-                    "agent_id": str(binding.get("agent_id") or "codex"),
-                    "session_id": session_id,
-                    "conversation_kind": kind,
-                    "manager_channel_id": (
-                        manager_channel(
-                            provider="lark",
-                            audience=f"{sender_profile or 'default'}\0{chat_id}",
-                        )
-                        if kind == "manager"
-                        else ""
-                    ),
-                    "ingress_mode": ingress_mode,
-                }
-                if capture_mention(route).get("binding_matches") is not True:
-                    continue
-            return True
-    return False
+    config = _active_profile_configs(snapshot).get(profile)
+    return config is not None and profile_can_reserve_mention_worker(
+        snapshot, profile, bot_app_id=str(config.get("bot_app_id") or ""), capture_mention=capture_mention,
+    )
 
 
 def _bound_topic_session(
@@ -1071,7 +1034,7 @@ def _route_native_mention(event: Mapping[str, object], route: Mapping[str, objec
     return isinstance(identity, Mapping) and _native_topic_mention(event, identity)
 
 
-def _mention_reply(route: Mapping[str, object], decision: Mapping[str, object]) -> dict[str, object]:
+def _steering_reply(route: Mapping[str, object], decision: Mapping[str, object]) -> dict[str, object]:
     receipt = _session_turn_effect(route)
     if decision["action"] == "delivered":
         return {"response_text": "已送达当前回合。", "effect_receipt": receipt}
@@ -1082,6 +1045,7 @@ def _mention_reply(route: Mapping[str, object], decision: Mapping[str, object]) 
         "queue_steering_attachments_unavailable": "本轮调整仅支持文字。原消息和附件保留在 Lark。",
         "live_steering_turn_mismatch": "接收时的回合已结束或切换。原消息保留在 Lark。",
         "live_steering_turn_not_started": "接收时的回合尚未就绪。原消息保留在 Lark。",
+        "live_steering_requires_active_turn": "接收消息时没有活动回合。原消息保留在 Lark。",
     }.get(str(decision.get("error_code")), "当前会话无法调整本轮。原消息保留在 Lark。")
     return {"response_text": text, "effect_receipt": receipt}
 
@@ -1168,7 +1132,7 @@ def answer_lark_goal_topic(
             queued_text=message, origin="lark",
         )
         if decision["action"] != "enqueue":
-            return _mention_reply(route, decision)
+            return _steering_reply(route, decision)
         ingress_mode = "session_queue"
 
     if ingress_mode in {"live_steering", "session_queue"}:
@@ -1184,11 +1148,37 @@ def answer_lark_goal_topic(
                 )
             raise RuntimeError("bound Agent session is unavailable or no longer matches")
         if ingress_mode == "live_steering":
-            turn, _created = runtime_controller.steer_active_turn(
-                session_id=session_id,
-                client_ingress_id=client_turn_id,
-                message=message,
-            )
+            capture = route.get("live_turn_capture")
+            if isinstance(capture, Mapping):
+                if (capture.get("binding_matches") is not True
+                        or capture.get("session_id") != session_id
+                        or capture.get("connection_id") != route.get("connection_id")):
+                    return _steering_reply(route, {"action": "reject", "error_code": "live_steering_session_not_attached"})
+                target_turn_id = capture.get("target_turn_id")
+                if not isinstance(target_turn_id, str) or not target_turn_id:
+                    return _steering_reply(route, {"action": "reject", "error_code": "live_steering_requires_active_turn"})
+                try:
+                    turn, _created = runtime_controller.steer_active_turn(
+                        session_id=session_id, client_ingress_id=client_turn_id,
+                        message=message, expected_turn_id=target_turn_id, origin="lark",
+                    )
+                except Exception:
+                    # A lost provider response may follow a successful send.
+                    # Read the Chat owner's receipt without sending again.
+                    from ...chat_runtime import STEERING_NOT_DELIVERED_CODES
+
+                    receipt = runtime_controller.store.steering_receipt(session_id, client_turn_id) or {}
+                    code = receipt.get("error_code")
+                    if (
+                        receipt.get("expected_turn_id") == target_turn_id and receipt.get("message") == message
+                        and receipt.get("status") == "failed" and code in STEERING_NOT_DELIVERED_CODES
+                    ):
+                        return _steering_reply(route, {"action": "reject", "error_code": code})
+                    return _steering_reply(route, {"action": "unresolved"})
+            else:
+                turn, _created = runtime_controller.steer_active_turn(
+                    session_id=session_id, client_ingress_id=client_turn_id, message=message,
+                )
         else:
             if (
                 manager
@@ -1342,6 +1332,7 @@ def process_lark_goal_topic_event(
     provider_runner: Any | None = None,
     proposal_deliverer: ProposalDeliverer | None = None,
     mention_capture: Mapping[str, object] | None = None,
+    live_turn_capture: Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
     """Single-flight a manager or live mention through ingress, reply and ACK.
 
@@ -1361,6 +1352,11 @@ def process_lark_goal_topic_event(
     native_mention = isinstance(route, Mapping) and _route_native_mention(event, route, target_payload)
     if mention_capture is not None and not native_mention:
         return {"ok": True, "status": "ignored", "reason": "mention_binding_changed"}
+    if live_turn_capture is not None:
+        if not isinstance(route, Mapping) or route.get("ingress_mode") != "live_steering" or native_mention:
+            return {"ok": True, "status": "ignored", "reason": LarkTopicEventDecisionReason.BINDING_UNAVAILABLE.value}
+        route = {**route, "live_turn_capture": live_turn_capture}
+        decision = {**decision, "route": route}
     if native_mention:
         route = {
             **route,

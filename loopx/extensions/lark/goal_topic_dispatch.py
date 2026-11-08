@@ -11,9 +11,14 @@ from pathlib import Path
 import threading
 from typing import NamedTuple
 
+from ...chat_manager import manager_channel
 from .event_inbox import LarkTopicInboxIntake, LarkTopicInput
+from .goal_channel_contracts import bindings_for_goal
 from .goal_channel_targets import goal_channel_target_for_name
 from .manager_context import opaque_digest
+
+
+MentionCapture = Callable[[Mapping[str, object]], dict[str, object]]
 
 
 class _Work(NamedTuple):
@@ -221,7 +226,7 @@ def topic_intake_route(
     profile: str, route: Mapping[str, object], targets: Mapping[str, object],
     event: Mapping[str, object],
 ) -> TopicIntakeRoute | None:
-    if route.get("ingress_mode") != "session_queue" or not route.get("session_id"):
+    if route.get("ingress_mode") not in {"session_queue", "live_steering"} or not route.get("session_id"):
         return None
     target = goal_channel_target_for_name(targets, str(route.get("target_ref") or ""))
     identity = target.get("identity") if target is not None else None
@@ -238,6 +243,71 @@ def topic_intake_route(
         json.dumps(dict(route), sort_keys=True),
     )
     return TopicIntakeRoute(route=route, targets=targets, digest=digest, inbox_key=key)
+
+
+def profile_can_reserve_mention_worker(
+    snapshot: Mapping[str, object],
+    profile: str,
+    *,
+    bot_app_id: str,
+    capture_mention: MentionCapture | None,
+) -> bool:
+    """Reserve a priority worker only when a bound Session can steer on @mention."""
+
+    target_payload = snapshot.get("target_payload")
+    target_payload = target_payload if isinstance(target_payload, Mapping) else {}
+    binding_payloads = snapshot.get("binding_payloads")
+    binding_payloads = binding_payloads if isinstance(binding_payloads, Mapping) else {}
+    for goal_id, payload in binding_payloads.items():
+        if not isinstance(payload, Mapping):
+            continue
+        for binding in bindings_for_goal(payload, str(goal_id)):
+            if binding.get("enabled") is not True:
+                continue
+            session_id = str(binding.get("session_id") or "").strip()
+            routing = binding.get("routing")
+            routing = routing if isinstance(routing, Mapping) else {}
+            ingress_mode = str(routing.get("ingress_mode") or "")
+            if not session_id or ingress_mode not in {"live_steering", "session_queue"}:
+                continue
+            target = goal_channel_target_for_name(
+                target_payload, str(binding.get("target_ref") or "")
+            )
+            if target is None or target.get("enabled") is not True:
+                continue
+            identity = target.get("identity")
+            identity = identity if isinstance(identity, Mapping) else {}
+            sender_profile = str(identity.get("sender_profile") or "").strip()
+            same_app = bool(bot_app_id) and str(identity.get("bot_app_id") or "") == bot_app_id
+            if sender_profile != profile and not same_app:
+                continue
+            if not (identity.get("bot_app_id") or identity.get("bot_open_id")):
+                continue
+            if capture_mention is not None:
+                channel = target.get("channel")
+                channel = channel if isinstance(channel, Mapping) else {}
+                chat_id = str(channel.get("chat_id") or "")
+                kind = str(routing.get("conversation_kind") or "goal")
+                route = {
+                    "goal_id": str(goal_id),
+                    "connection_id": str(binding.get("connection_id") or ""),
+                    "agent_id": str(binding.get("agent_id") or "codex"),
+                    "session_id": session_id,
+                    "conversation_kind": kind,
+                    "manager_channel_id": (
+                        manager_channel(
+                            provider="lark",
+                            audience=f"{sender_profile or 'default'}\0{chat_id}",
+                        )
+                        if kind == "manager"
+                        else ""
+                    ),
+                    "ingress_mode": ingress_mode,
+                }
+                if capture_mention(route).get("binding_matches") is not True:
+                    continue
+            return True
+    return False
 
 
 class ProfileTopicIntake:
@@ -265,12 +335,14 @@ class ProfileTopicIntake:
         self, dispatch: ProfileEventDispatch, route: TopicIntakeRoute, lane: tuple[str, ...],
         event: Mapping[str, object], mention: dict[str, object] | None,
         config_path: Callable[[], Path],
+        *, live_turn_capture: dict[str, object] | None = None,
     ) -> bool:
         key = route.inbox_key
         if key not in self._sources:
             self._sources[key] = self._open(config_path())
         captured = self._sources[key].capture(
             event=event, route_ref=route.digest, lane=lane, mention_capture=mention,
+            live_turn_capture=live_turn_capture,
         )
         self._offer(dispatch, key, lane)
         return captured

@@ -3597,10 +3597,12 @@ def test_message_event_projection_preserves_flat_cli_and_raw_provider_provenance
         assert row["content"] == "plain rendered text"
 
 
-@pytest.mark.parametrize("ordinary_load", [63, 64, 128])
-@pytest.mark.parametrize("manager", [False, True])
+@pytest.mark.parametrize(("manager", "ingress_mode", "ordinary_load"), [
+    *((manager, "session_queue", load) for manager in (False, True) for load in (63, 64, 128)),
+    (False, "live_steering", 63), (False, "live_steering", 64),
+])
 def test_native_mention_reaches_the_running_topic_before_its_ordinary_reply(
-    tmp_path: Path, manager: bool, ordinary_load: int
+    tmp_path: Path, manager: bool, ingress_mode: str, ordinary_load: int,
 ) -> None:
     """Use the actual listener, Inbox, Chat store, and Codex stdio protocol."""
     import runpy
@@ -3660,7 +3662,7 @@ def test_native_mention_reaches_the_running_topic_before_its_ordinary_reply(
         registry=registry,
         goal_id="goal-alpha", agent_id="codex", session_id=session_id, target_path=target_path,
         binding_path=binding_path, app_ref="mew", chat_id="oc_public_fixture", chat_name="Product group",
-        capture_scope="configured_chat_all", ingress_mode="session_queue",
+        capture_scope="configured_chat_all", ingress_mode=ingress_mode,
         conversation_kind="manager" if manager else "goal",
         turn_trigger="human_messages" if manager else None,
         runner=_connection_runner(state), cli_bin="fake-lark",
@@ -3692,11 +3694,15 @@ def test_native_mention_reaches_the_running_topic_before_its_ordinary_reply(
         }
         for index in reversed(range(ordinary_load - 2))
     ] + [wrong_bot]
-    assert len({ordinary["message_id"], *(item["message_id"] for item in backlog)}) == ordinary_load
+    ordinary_ids = {ordinary["message_id"], *(item["message_id"] for item in backlog)}
+    assert len(ordinary_ids) == ordinary_load
     idle = {**mention, "event_id": "evt_native_idle", "message_id": "om_native_idle",
             "content": "@Current bot Start normal input."}
     steered_reply = threading.Event()
     attachment_reply = threading.Event()
+    ordinary_reply_started = threading.Event()
+    allow_ordinary_reply = threading.Event()
+    ordinary_reader_blocked = threading.Event()
     last_ordinary_answer = threading.Event()
     runner = _reply_runner(state)
 
@@ -3719,6 +3725,18 @@ def test_native_mention_reaches_the_running_topic_before_its_ordinary_reply(
         mid = str(route.get("message_id") or "")
         if not route.get("native_mention"):
             observed_ordinary.append(mid)
+            if ingress_mode == "live_steering" and mid in ordinary_ids:
+                assert route["live_turn_capture"]["target_turn_id"] == store.turn_for_client(
+                    session_id, initial_id
+                )["turn_id"]
+                # The active Turn already came from the App. Hold one ordinary
+                # reply while the listener reads and delivers the native @.
+                if mid == ordinary["message_id"]:
+                    ordinary_reply_started.set()
+                    assert allow_ordinary_reply.wait(10)
+                if mid == wrong_bot["message_id"]:
+                    last_ordinary_answer.set()
+                return {"response_text": "Ordinary reply.", "effect_receipt": session_turn_effect(route)}
         if mid.startswith("om_other_bot_") and mid != backlog[0]["message_id"]:
             return {
                 "response_text": f"Runtime response for {mid}.",
@@ -3733,7 +3751,10 @@ def test_native_mention_reaches_the_running_topic_before_its_ordinary_reply(
             "response_text": result, "effect_receipt": session_turn_effect(route),
         }
 
-    initial_id = "lark." + opaque_digest(ordinary["message_id"], topic)
+    initial_id = (
+        "app-original" if ingress_mode == "live_steering"
+        else "lark." + opaque_digest(ordinary["message_id"], topic)
+    )
     mention_id = "lark." + opaque_digest(mention["message_id"], topic)
     wrong_id = "lark." + opaque_digest(wrong_bot["message_id"], topic)
     idle_id = "lark." + opaque_digest(idle["message_id"], topic)
@@ -3741,6 +3762,8 @@ def test_native_mention_reaches_the_running_topic_before_its_ordinary_reply(
 
     def lines():
         yield json.dumps(ordinary) + "\n"
+        if ingress_mode == "live_steering":
+            assert ordinary_reply_started.wait(5)
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
             initial = store.turn_for_client(session_id, initial_id)
@@ -3751,7 +3774,9 @@ def test_native_mention_reaches_the_running_topic_before_its_ordinary_reply(
             raise AssertionError("the initial Topic input never reached the native executor")
         def interrupt_fixture_if_blocked():
             if not steered_reply.is_set():
+                ordinary_reader_blocked.set()
                 controller.interrupt_turn(session_id=session_id, turn_id=initial["turn_id"])
+                allow_ordinary_reply.set()
 
         watchdog = threading.Timer(8, interrupt_fixture_if_blocked)
         watchdog.daemon = True
@@ -3759,6 +3784,7 @@ def test_native_mention_reaches_the_running_topic_before_its_ordinary_reply(
         try:
             for item in backlog:
                 yield json.dumps(item) + "\n"
+            assert not ordinary_reader_blocked.is_set(), "ordinary backpressure blocked the stream before the mention"
             assert store.load_turn(session_id, initial["turn_id"])["status"] == "running"
             yield json.dumps(attachment) + "\n"
             assert attachment_reply.wait(5), "the original file needs an explicit retained-message reply"
@@ -3773,9 +3799,11 @@ def test_native_mention_reaches_the_running_topic_before_its_ordinary_reply(
         finally:
             watchdog.cancel()
             release.touch()
+            allow_ordinary_reply.set()
         assert last_ordinary_answer.wait(40), "the FIFO backlog did not reach its last ordinary input"
-        queued = store.turn_for_client(session_id, wrong_id)
-        assert queued and queued["status"] == "completed"
+        if ingress_mode == "session_queue":
+            queued = store.turn_for_client(session_id, wrong_id)
+            assert queued and queued["status"] == "completed"
         deadline = time.monotonic() + 3
         while store.load_session(session_id).get("active_turn_id"):
             assert time.monotonic() < deadline, "the completed Turn did not release the Session"
@@ -3802,6 +3830,14 @@ def test_native_mention_reaches_the_running_topic_before_its_ordinary_reply(
             return 0
 
     try:
+        if ingress_mode == "live_steering":
+            started, _ = controller.enqueue_turn(
+                session_id=session_id, client_turn_id=initial_id, message="wait for steer",
+                work_dir=tmp_path, objective="Review delivery", origin="web",
+            )
+            fixture["wait_for_active_turn"](
+                store, session_id=session_id, turn_id=started["turn_id"], require_upstream=True,
+            )
         result = stream_lark_goal_topic_profile(
             profile="mew", snapshot_provider=lambda: snapshot, stop=threading.Event(), runtime_root=runtime_root,
             answer=answer, process_factory=lambda _: FinishedConsumer(), reply_runner=reply,
@@ -3829,7 +3865,9 @@ def test_native_mention_reaches_the_running_topic_before_its_ordinary_reply(
             *(item["message_id"] for item in backlog),
         ]
         ordinary_prompts = [msg["text"] for msg in user if msg["turn_id"] != initial["turn_id"]]
-        expected_ordinary = [backlog[0]["content"], wrong_bot["content"], idle["content"]]
+        expected_ordinary = [idle["content"]]
+        if ingress_mode == "session_queue":
+            expected_ordinary[:0] = [backlog[0]["content"], wrong_bot["content"]]
         assert len(ordinary_prompts) == len(expected_ordinary)
         for prompt, expected in zip(ordinary_prompts, expected_ordinary, strict=True):
             assert prompt.strip().endswith(expected)
@@ -3860,14 +3898,60 @@ def test_native_mention_reaches_the_running_topic_before_its_ordinary_reply(
         interrupted_id = "lark." + opaque_digest(interrupted["message_id"], topic)
         assert store.turn_for_client(session_id, interrupted_id) is None
         assert store.steering_receipt(session_id, interrupted_id) is None
+
+        if ingress_mode == "live_steering" and ordinary_load == 64:
+            replacement, _ = controller.enqueue_turn(
+                session_id=session_id, client_turn_id="app-replacement", message="wait for steer",
+                work_dir=tmp_path, objective="Review delivery", origin="web",
+            )
+            replacement_id = replacement["turn_id"]
+            fixture["wait_for_active_turn"](
+                store, session_id=session_id, turn_id=replacement_id, require_upstream=True,
+            )
+            for suffix, target, feedback in (
+                ("old", initial["turn_id"], "已结束或切换"),
+                ("idle", None, "没有活动回合"),
+                ("current", replacement_id, "Steered response."),
+            ):
+                message_id = f"om_live_capture_{suffix}"
+                input_event = {**wrong_bot, "message_id": message_id, "event_id": f"evt_live_capture_{suffix}"}
+                reply_result = process_lark_goal_topic_event(
+                    **snapshot, event=input_event, runtime_root=runtime_root, answer=answer, reply_runner=reply,
+                    live_turn_capture={
+                        "connection_id": binding_for_goal(binding_payload, "goal-alpha")["connection_id"],
+                        "session_id": session_id, "binding_matches": True, "target_turn_id": target,
+                    },
+                )
+                assert reply_result["ok"] and feedback in state["reply_text"], reply_result
+                ingress = "lark." + opaque_digest(message_id, topic)
+                receipt = store.steering_receipt(session_id, ingress)
+                assert store.turn_for_client(session_id, ingress) is None
+                if suffix == "old":
+                    assert receipt["error_code"] == "live_steering_turn_mismatch"
+                if suffix == "idle":
+                    assert receipt is None
+                if suffix == "current":
+                    assert receipt["expected_turn_id"] == receipt["active_turn_id"] == replacement_id
+                    assert receipt["status"] == "delivered"
+                steers = [
+                    event["payload"]["client_ingress_id"] for event in store.events_after(session_id, replacement_id, None)
+                    if event["kind"] == "turn.steered"
+                ]
+                assert steers == ([ingress] if suffix == "current" else [])
     finally:
         release.touch()
+        allow_ordinary_reply.set()
+        active_id = store.load_session(session_id).get("active_turn_id")
+        if active_id and store.load_turn(session_id, active_id)["status"] in {"starting", "running"}:
+            controller.interrupt_turn(session_id=session_id, turn_id=active_id)
+            controller.wait_for_turn(session_id=session_id, turn_id=active_id, timeout_sec=4)
         controller.close_session(session_id)
 
 
 @pytest.mark.parametrize("binding_change", ["unchanged", "session", "topic"])
+@pytest.mark.parametrize("ingress_mode", ["session_queue", "live_steering"])
 def test_topic_stream_recovers_only_unstarted_input_with_its_original_binding(
-    tmp_path: Path, binding_change: str,
+    tmp_path: Path, binding_change: str, ingress_mode: str,
 ) -> None:
     from loopx.extensions.lark.goal_topic_runtime import stream_lark_goal_topic_profile
     from loopx.extensions.lark.manager_context import session_turn_effect
@@ -3882,7 +3966,7 @@ def test_topic_stream_recovers_only_unstarted_input_with_its_original_binding(
         registry=registry, goal_id="goal-alpha", agent_id="codex",
         session_id="session-original", target_path=targets_path, binding_path=binding_path,
         app_ref="mew", chat_id="oc_public_fixture", chat_name="Product group",
-        capture_scope="configured_chat_all", ingress_mode="session_queue",
+        capture_scope="configured_chat_all", ingress_mode=ingress_mode,
         runner=_connection_runner(state), cli_bin="fake-lark",
     )["ok"]
     targets = read_goal_channel_targets(targets_path)
@@ -3907,6 +3991,8 @@ def test_topic_stream_recovers_only_unstarted_input_with_its_original_binding(
     answered = []
 
     def answer(route, text):
+        if ingress_mode == "live_steering":
+            assert route["live_turn_capture"]["target_turn_id"] == "turn-original"
         answered.append((route["session_id"], route["message_id"], text))
         if route["message_id"] == original["message_id"]:
             entered.set()
@@ -3943,17 +4029,17 @@ def test_topic_stream_recovers_only_unstarted_input_with_its_original_binding(
         def wait(self, timeout=None):
             return 0
 
-    def consume(stdout, stop, reply):
+    def consume(stdout, stop, reply, *, active_turn):
         return stream_lark_goal_topic_profile(
             profile="mew", snapshot_provider=lambda: snapshot, runtime_root=runtime_root,
             stop=stop, answer=answer, process_factory=lambda _: FinishedConsumer(stdout),
             reply_runner=reply, capture_mention=lambda route: {
                 "connection_id": route["connection_id"], "session_id": route["session_id"],
-                "binding_matches": True, "target_turn_id": None,
+                "binding_matches": True, "target_turn_id": active_turn,
             },
         )
 
-    stopped = consume(first_consumer(), stop, unverified_reply)
+    stopped = consume(first_consumer(), stop, unverified_reply, active_turn="turn-original")
     assert stopped["status"] == "stopped"
     assert answered == [("session-original", original["message_id"], original["content"])]
     assert first_writes == [original["message_id"]]
@@ -3989,7 +4075,7 @@ def test_topic_stream_recovers_only_unstarted_input_with_its_original_binding(
             assert last_reply.wait(5), "the original Inbox should recover without provider redelivery"
         yield "[event] exited (reason: timeout)\n"
 
-    resumed = consume(replacement_consumer(), threading.Event(), recovered_reply)
+    resumed = consume(replacement_consumer(), threading.Event(), recovered_reply, active_turn="turn-replacement")
     assert resumed["status"] == "stream_ended"
     expected = [] if rebind else [
         ("session-original", row["message_id"], row["content"]) for row in later
