@@ -2027,7 +2027,9 @@ def test_health_reads_source_controls_once_and_keeps_fresh_recovery(ordinary, mo
 @pytest.mark.parametrize("fault", [None, "changed-source", "revoked", "stop", "unknown-native",
     "background", "later-user", "completed-later", "equivalent-later", "later-failed-effect",
     "settled-command", "later-settled-command", "unsettled-command",
-    "reservation-crash", "post-enqueue-crash", "queued-newer", "queued-items", "queued-input", "private-path", "still-incomplete", "cold-native", "dead-native", "foreign-native", "failed-effect"])
+    "reservation-crash", "post-enqueue-crash", "queued-newer", "queued-items", "queued-input", "private-path", "still-incomplete", "cold-native", "dead-native", "foreign-native", "failed-effect",
+    "review-live", "review-live-source", "review-live-stop", "review-live-revoked", "review-live-equivalent", "review-live-unknown",
+    "review-live-reservation-crash", "review-live-enqueue-crash", "transient-observation"])
 def test_original_worker_continues_explicit_unfinished_project_work_once_after_restart(ordinary, monkeypatch, fault):  # noqa: F811
     """Reply-worker restart retains native ownership; native loss stays fenced."""
     from datetime import datetime, timedelta, timezone
@@ -2135,7 +2137,7 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
         if fault == "unsettled-command":
             snapshot["items"][1]["item"]["exitCode"] = None
         inventory.write_text(json.dumps(snapshot))
-    if fault == "cold-native":
+    if fault == "cold-native" or str(fault).startswith("review-live"):
         runtime.adapters.pop(original["session_id"]).close_session()
     elif fault == "dead-native":
         runtime.adapters[original["session_id"]].close_session()
@@ -2196,12 +2198,44 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
             monkeypatch.setattr(runtime, "resume_session_queue", resume)
         selected = worker()
     artifact_before_recovery = artifact.read_bytes()
+    if fault == "transient-observation":
+        from loopx.extensions.lark import private_conversations
+
+        owner = runtime.adapters[original["session_id"]]
+        observe = owner.completed_work_observation
+        observations = 0
+        monotonic = private_conversations.time.monotonic
+        elapsed = 0
+        monkeypatch.setattr(private_conversations, "time", SimpleNamespace(
+            monotonic=lambda: monotonic() + elapsed, time=private_conversations.time.time))
+
+        def unavailable_once(**kwargs):
+            nonlocal observations
+            observations += 1
+            return None if observations == 1 else observe(**kwargs)
+
+        monkeypatch.setattr(owner, "completed_work_observation", unavailable_once)
+        selected.reconcile()
+        # An inconclusive inventory is not a reason to replace the original
+        # writable owner with a model review of its already delivered answer.
+        assert selected.core.read_request(ref)["turn_id"] == original["turn_id"]
+        assert runtime.adapters[original["session_id"]] is owner and owner.healthcheck()
+        assert artifact.read_bytes() == artifact_before_recovery
+        assert observations == 1
+        assert selected.core.quota_backlog_pending(selected.core.read_request(ref))
+        selected.reconcile()
+        assert observations == 1, "The original reply worker still respects its probe backoff"
+        elapsed = 61
+        clock += timedelta(seconds=61)
     selected.reconcile()
     continued = selected.core.read_request(ref)
-    reviewed = fault in {"cold-native", "failed-effect", "equivalent-later", "later-failed-effect", "unsettled-command"}
-    if fault in {"changed-source", "revoked", "stop", "unknown-native", "background", "later-user", "dead-native", "foreign-native"}:
+    reviewed = fault == "cold-native" or str(fault).startswith("review-live")
+    if fault in {"changed-source", "revoked", "stop", "unknown-native", "background", "later-user", "dead-native", "foreign-native",
+                 "failed-effect", "equivalent-later", "later-failed-effect", "unsettled-command"}:
         assert continued["turn_id"] == original["turn_id"] and not continued.get("context_recovery")
         assert artifact.read_bytes() == artifact_before_recovery
+        if fault in {"failed-effect", "equivalent-later", "later-failed-effect", "unsettled-command"}:
+            assert runtime.adapters[original["session_id"]].healthcheck()
     elif reviewed:
         assert continued["turn_id"] != original["turn_id"]
         assert continued["session_id"] == original["session_id"]
@@ -2232,6 +2266,56 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
         assert permissions["filesystem"][":workspace_roots"] == {".": "read"}
         assert permissions["network"]["enabled"] is False
         assert sum(row.get("method") == "turn/start" for row in recovery_calls) == 1
+        if str(fault).startswith("review-live"):
+            # An ordinary source request naturally restores the writable owner.
+            # Merely opening a cold reader must never manufacture effects proof.
+            later_message = event["content"] if fault == "review-live-equivalent" else "Newer follow-up: inspect another result."
+            later_event = provider.event("notes-app", "after-result-review", later_message)
+            transport.admit("notes-app", later_event)
+            later_ref = identity_ref(binding["provider_ref"], later_event["message_id"])
+            later = transport.core.read_request(later_ref)
+            assert runtime.wait_for_turn(session_id=later["session_id"], turn_id=later["turn_id"], timeout_sec=10)["status"] == "completed"
+            transport.reconcile_request(transport.root / f"{later_ref}.json")
+            before = artifact.read_bytes()
+            if fault == "review-live-source":
+                provider.messages[event["message_id"]]["content"] = "Changed original source"
+            elif fault == "review-live-stop":
+                transport.admit("notes-app", provider.event("notes-app", "after-review-stop", "/stop"))
+            elif fault == "review-live-revoked":
+                transport.bindings.disconnect(binding["binding_id"], expected_revision=transport.bindings.read()["revision"])
+            elif fault == "review-live-unknown":
+                snapshot = json.loads(inventory.read_text())
+                snapshot["items"].append({"turnId": turn["upstream_turn_id"], "item": {"id": "unknown", "type": "futureEffect"}})
+                inventory.write_text(json.dumps(snapshot))
+            selected = worker()
+            if fault in {"review-live-reservation-crash", "review-live-enqueue-crash"}:
+                enqueue = runtime.enqueue_turn
+                def crash_after_review(**kwargs):
+                    if fault == "review-live-enqueue-crash":
+                        enqueue(**kwargs)
+                    raise OSError("synthetic post-review admission crash")
+                monkeypatch.setattr(runtime, "enqueue_turn", crash_after_review)
+                with pytest.raises(OSError, match="post-review admission crash"):
+                    selected.reconcile()
+                monkeypatch.setattr(runtime, "enqueue_turn", enqueue)
+                selected = worker()
+            selected.reconcile()
+            resumed = selected.core.read_request(ref)
+            if fault in {"review-live", "review-live-reservation-crash", "review-live-enqueue-crash"}:
+                assert resumed["turn_id"] != continued["turn_id"]
+                assert resumed["context_recovery"]["work_attempt"] == 1
+                assert resumed["context_recovery"]["failed_turn_id"] == original["turn_id"]
+                assert runtime.wait_for_turn(session_id=resumed["session_id"], turn_id=resumed["turn_id"], timeout_sec=10)["status"] == "completed"
+                selected.reconcile_request(path)
+                assert artifact.read_text() == "first\nremaining\n"
+                assert json.loads(path.read_text())["deliveries"][presentation_phase(resumed, "terminal")]["verified"]
+                after_writes = list(provider.writes)
+                worker().reconcile()
+                assert provider.writes == after_writes
+            else:
+                assert resumed["turn_id"] == continued["turn_id"]
+                assert artifact.read_bytes() == before
+            assert store._turn_path(original["session_id"], original["turn_id"]).read_bytes() == original_turn_bytes
     else:
         assert continued["turn_id"] != original["turn_id"]
         assert continued["session_id"] == original["session_id"]
@@ -2269,8 +2353,9 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
             assert "Verified remaining work completed." in bodies
     assert store._turn_path(original["session_id"], original["turn_id"]).read_bytes() == original_turn_bytes
     after_recovery_calls = [json.loads(line) for line in capture.read_text().splitlines()]
-    expected_new = {"initialize": int(reviewed) + int(fault == "cold-native"),
-        "thread/start": 0, "thread/resume": int(reviewed)}
+    restored_owner = int(str(fault).startswith("review-live"))
+    expected_new = {"initialize": int(reviewed) + int(fault == "cold-native") + 2 * restored_owner,
+        "thread/start": 0, "thread/resume": int(reviewed) + restored_owner}
     for method, count in expected_new.items():
         assert sum(row.get("method") == method for row in after_recovery_calls[len(before_recovery_calls):]) == count
 

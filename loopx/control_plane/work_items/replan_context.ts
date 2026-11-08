@@ -8,7 +8,7 @@ import {requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
 import {FRESH_PATH_DISPOSITIONS, requiredSemanticOutcomes} from "./replan_semantics.ts";
 import {readReplanSnapshot} from "./replan_history_snapshot.ts";
 import {normalizeGoalPathDelta} from "../goals/vision_checkpoint.ts";
-import {normalizeRecordedStrideDecision, normalizeStrideStrategy, projectStrideExploreBasis} from "./stride_policy.ts";
+import {normalizeRecordedStrideDecision, normalizeStrideStrategy, projectStrideExploreBasis, STRIDE_REVIEW_REFERENCE_LIMIT} from "./stride_policy.ts";
 import {PROGRESS_RESULT_CLASSES} from "./replan_history.ts";
 import {MATERIAL_DELIVERY_OUTCOMES} from "./delivery_outcome.ts";
 
@@ -294,8 +294,8 @@ function reviewEvidence(rows: JsonObject[], request: JsonObject): JsonObject {
     throw new EffectRuntimeRequestError("previous decision changed; refresh replan context before reviewing its outcome");
   }
   const refs = request.evidence_refs;
-  if (!Array.isArray(refs) || refs.length > 3 || new Set(refs).size !== refs.length) {
-    throw new EffectRuntimeRequestError("previous review accepts at most three distinct evidence references");
+  if (!Array.isArray(refs) || refs.length > STRIDE_REVIEW_REFERENCE_LIMIT || new Set(refs).size !== refs.length) {
+    throw new EffectRuntimeRequestError(`previous review accepts at most ${STRIDE_REVIEW_REFERENCE_LIMIT} distinct evidence references`);
   }
   for (const ref of refs) identifier(ref, "review evidence reference");
   const source = objectOrNull(previous!._source_facts)!;

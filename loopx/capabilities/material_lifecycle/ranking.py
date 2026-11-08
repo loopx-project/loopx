@@ -9,6 +9,7 @@ from typing import Any
 from .ownership import MaterialProjectScope, material_owner_fields
 
 from ._validation import (
+    APPLY_STATUSES,
     capability_contract,
     check_record_keys,
     compact_text,
@@ -36,9 +37,6 @@ _REQUIRED_MOVE_FIELDS = {
     "reason_code",
     "to_rank",
 }
-_APPLY_STATUSES = {"applied", "no_change", "rejected", "rolled_back"}
-
-
 def _ordered_material_refs(values: Sequence[str], *, field: str) -> list[str]:
     if isinstance(values, (str, bytes)) or not isinstance(values, Sequence):
         raise TypeError(f"{field} must be a sequence of compact tokens")
@@ -283,7 +281,7 @@ def build_material_rerank_apply_receipt(
     """Record the result of an owner-gated apply, rejection, no-op, or rollback."""
 
     normalized_status = compact_token(status, field="status")
-    if normalized_status not in _APPLY_STATUSES:
+    if normalized_status not in APPLY_STATUSES:
         raise ValueError(f"unsupported status: {normalized_status}")
     before = compact_token(before_revision, field="before_revision")
     after = compact_token(after_revision, field="after_revision")

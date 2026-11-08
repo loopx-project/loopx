@@ -1,12 +1,13 @@
 import type {JsonObject} from "../effect_program.ts";
 import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
-import {requireJsonObject, requireNonEmptyString, requireStringArray} from "../runtime_decode.ts";
+import {requireBoolean, requireJsonObject, requireNonEmptyString, requireStringArray} from "../runtime_decode.ts";
 import {quotaActionSignatureDocument, turnEnvelopeActionSignatureDocument} from "../quota/turn_envelope.ts";
 
 // This is a local host-IO contract, not a new capability or authority vocabulary.
 // Capability providers own enablement. These rules only bound their contributions.
 const RESERVED = new Set([
-  "schema_version", "turn_key", "turn_envelope", "session", "goal_ref", "route",
+  "schema_version", "turn_key", "turn_envelope", "work_contract", "source_decision_hash",
+  "session", "goal_ref", "route",
   "result_contract", "capability_context_fields", "capability_instructions",
   "capability_result_fields", "result_kind", "completed_phases", "classification",
   "next_action", "recommended_action", "summary", "agent_vision_json",
@@ -71,6 +72,15 @@ export function validateTurnContextContribution(input: JsonObject): JsonObject {
   }
   const normalized = {hook_id: registration.hook_id, capability_id: registration.capability_id,
     readback_slots: slots, context_fields: context, instructions, result_fields: resultFields, readback};
+  if (input.readback_only !== undefined && requireBoolean(input.readback_only, "readback_only")) {
+    // A status-only result is returned to the guard and is never a reusable
+    // context contribution. Keep its registration, slot and budget checks.
+    if (Object.hasOwn(input, "source") || Object.keys(context).length ||
+        instructions.length || Object.keys(resultFields).length) {
+      throw new Error("readback-only context validation cannot carry a source or a contribution");
+    }
+    return normalized;
+  }
   return {...normalized, basis_digest: canonicalAuthoritySha256({source: contextSource(input.source), ...normalized})};
 }
 

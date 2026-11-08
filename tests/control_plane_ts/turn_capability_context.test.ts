@@ -18,6 +18,22 @@ test("registered context survives location-only capture binding", () => {
     source: {...source, detail_ref: {full_decision: "fixture location"}, measurements: {bytes: 500}}}), contribution);
 });
 
+test("readback-only validation never produces or accepts a reusable contribution", () => {
+  const status = {...result, context_fields: {}, instructions: [], result_fields: {}};
+  const request = {registration, result: status, readback_only: true};
+  const readback = validateTurnContextContribution(request);
+  assert.deepEqual(readback.readback, status.readback);
+  assert.equal(Object.hasOwn(readback, "basis_digest"), false);
+  assert.throws(() => projectTurnContextContribution({contribution: readback, readback: status.readback, source}));
+  assert.throws(() => validateTurnContextContribution({...request, source}));
+  assert.throws(() => validateTurnContextContribution({registration, result: status}));
+  for (const patch of [{context_fields: result.context_fields}, {instructions: result.instructions},
+    {result_fields: result.result_fields}]) {
+    assert.throws(() => validateTurnContextContribution({...request, result: {...status, ...patch}}));
+  }
+  assert.throws(() => validateTurnContextContribution({...request, result: {...status, readback: {other_slot: {}}}}));
+});
+
 const quotaSource = {goal_id: "fixture-goal", agent_id: "fixture-agent",
   ok: true, should_run: true, mode: "should-run", effective_action: "normal_run",
   interaction_contract: {schema_version: "loopx_interaction_contract_v0", mode: "bounded_delivery",
@@ -73,8 +89,10 @@ for (const change of ["goal", "agent", "authority", "readback", "instructions", 
   });
 }
 
-for (const field of ["write_scope", "primary_action", "turn_envelope", "result_contract", "work_evidence", "validation_evidence"]) {
+for (const field of ["write_scope", "primary_action", "turn_envelope", "work_contract", "source_decision_hash",
+  "result_contract", "work_evidence", "validation_evidence"]) {
   test(`capability cannot replace ${field}`, () => {
+    assert.throws(() => validateTurnContextRegistration({...registration, readback_slots: [field]}));
     assert.throws(() => validateTurnContextContribution({registration, source,
       result: {...result, context_fields: {[field]: "replacement"}}}));
     assert.throws(() => validateTurnContextContribution({registration, source,
