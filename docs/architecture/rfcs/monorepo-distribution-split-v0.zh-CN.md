@@ -2433,3 +2433,25 @@ schema、入口 allowlist、精确计数规则与超额拒绝保持。相同七�
 上限。Pages、独立 report packet-contract 缺口、完整 CI/review/readiness，以及
 全部原 installed-host、PostgreSQL host/wheel、full-cost/adoption 和冻结资格继续
 分别保留；原完整 Task 保持开放。
+
+
+### 2026-11-09 — 完整源的报告调用方验证
+
+M0 pin 修复已在 CI 通过，同一记录中的提案 head 也通过真实 PostgreSQL、typed
+kernel、TypeScript、浏览器和 Stage 2C 检查。组合源码现已接入目标 main
+`1cba745f5`，并保留原提案祖先。报告 calendar CLI smoke 在组合源码上仍失败，
+因为它直接读取已退役的 `turn_envelope` 字段。replan 必须为 `None` 的断言也属于
+旧 projection adapter：完整源保留竞争建议，最终 capability 优先级由 typed
+controller 决定。
+
+smoke 现在将单一 `work_contract` 直接交给现有 controller，在 plan、dry-run、
+执行模式的 generic/Codex CLI 调用中验证相同的能力 owner 下一步命令、host
+空闲、消费前不生成报告制品以及全部 effect 标记不变。保留原 source binding
+却篡改命令会被拒绝；从真实 CLI 输出删除下一步命令会让独立 smoke 断言失败。
+没有新增 runtime decoder、兼容 adapter 或 authority owner。
+
+源码和隔离 wheel 的报告调用族分别 71 项全部通过，邻接 Python 101 项及控制面
+typecheck 通过。本轮盘点中存在的 tracked wheel 条目全部与源码字节一致。这关闭旧调用方测试缺口，不宣称新的执行语义、完整成本/adoption
+收益或 installed-host 资格。初次 reader 选择和缺 bundle 的准备失败分别保留。
+Pages 仍有已知且在授权范围外的断链；新 exact-head CI、review/readiness、
+maintainer 合入权限、全部原验收与冻结 campaign 仍保持开放。

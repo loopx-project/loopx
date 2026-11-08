@@ -3129,3 +3129,30 @@ it neither moves another runtime owner nor changes a production limit. Pages,
 the separate report packet-contract gap, full CI/review/readiness and every
 original installed-host, PostgreSQL host/wheel, full-cost/adoption and frozen
 qualification remain separate. The complete original task stays open.
+
+
+### 2026-11-09 — Complete-source report caller qualification
+
+The M0 pin repair passes CI, together with the real PostgreSQL, typed kernel,
+TypeScript, browser and Stage 2C checks at the recorded proposal head. Integration
+now includes target main `1cba745f5` while retaining the original proposal ancestry.
+The report calendar CLI smoke still fails on that integrated source because it
+reads the retired `turn_envelope` carrier. Its `None` replan assertion also
+belongs to the old projected adapter: the complete source retains competing
+advice while the typed controller owns final capability precedence.
+
+The smoke now gives the single `work_contract` directly to the existing controller.
+Across plan, dry-run and executing generic/Codex CLI calls, it checks the same
+owned next command, idle host, absent premature report artifacts and unchanged
+effect flags. A changed command with the original source binding is rejected.
+Dropping the next command from the real CLI result makes the independent smoke
+assertion fail. No runtime decoder, compatibility adapter or authority owner is added.
+
+The source and isolated-wheel report families each pass all 71 cases; 101
+adjacent Python cases and the control-plane typecheck pass. All inventoried
+present tracked wheel entries match the source bytes.
+This closes the stale caller-test gap without claiming new execution semantics,
+full-cost/adoption benefit or installed-host qualification. Initial reader-choice
+and missing-bundle preparation failures remain separate evidence. Pages retains
+its known out-of-scope broken link; exact-head CI, review/readiness, maintainer
+merge authority and every original acceptance/frozen campaign remain open.
