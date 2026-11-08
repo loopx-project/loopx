@@ -2229,6 +2229,50 @@ remaining cost coverage and establish any repeatable CPU regression before
 choosing further implementation; do not assume that another read/import
 optimization is justified.
 
+### Complete-cost coverage and current-main transaction checkpoint
+
+The existing proposal is integrated at `23227ee5` with main `0c28f6004`.
+Its 23 PR production-source hashes remain unchanged. Fresh checks pass 59
+focused Python and 63 TypeScript cases, typing/mypy, four complete source/wheel
+File/SQLite 101-Todo lifecycles and isolated PostgreSQL16.15 store391/service11,
+with no skips in those runs. The same artifact, original completion time,
+receipts, debit, restart and refusals/replay are preserved. Standard premerge
+retains the existing peer scanner failure (six direct and18/19 selected pass).
+The first PostgreSQL attempt lacked the checkout's `pg` dependency; its failure
+is retained separately from the successful installed-environment run.
+
+Five new unprofiled default-SQLite pairs at this current integration preserve
+the identical fixture/outcome. Main/candidate wall medians are14.255/14.382s
+(ranges13.971–14.887/13.428–14.684); sampled CLI+daemon CPU after setup is
+6.873/7.141s; observed daemon disk counters8,904,704/8,306,688B and logical-write
+counters14,491,648/13,443,072B. Setup2.314/2.187s and teardown0.061/0.057s remain
+separate. Three candidate episodes are slower and ranges overlap. Reduced
+write counters still do not qualify overall or complete marginal-cost benefit.
+
+A separate passive exit-observation pair expands the accounting boundary.
+Python self/waited-child usage covers the harness, provenance/verifier and CLI
+children; the initial owned daemon is already in waited-child usage, so only
+the later orphan daemon is added. Independent production locator PIDs require
+both daemon exit records; dropping one record fails the coverage oracle.
+Main daemon CPU after its last samples is0.147/0.045s; candidate0.149/0.046s.
+The nearly equal tails do not explain the sampled CPU difference. These exit
+callbacks cover the controlled shutdown/cache-retirement path, while observer
+emission, native post-callback work, orphan native children, physical-device
+writes and continuous system peaks remain outside this accounting. This
+instrumented pair is a coverage diagnostic, not a latency qualification or a
+replacement for any historical metric.
+
+A second instrumented complete pair records per-RPC calibrated process CPU.
+`todo.read` increases from18 to26 calls and adds0.172s sampled Node CPU; this
+locates the next investigation in the existing Todo/provider read transaction.
+Its timings cannot certify performance or justify removing current-source,
+incarnation, revision, WAL, lease or recovery checks. Characterize a cohesive
+reuse opportunity within one admitted request before further implementation;
+do not infer an import migration or cross-request authority cache from these
+observations. Original Task/vision, independent exact-head review,
+I3/minor-release, M1/#8011, R0/V10/R1, D2/D5/D6/D3, context/model/split-install,
+PostgreSQL host/wheel, full-cost/adoption gaps and all frozen failures remain.
+
 ## Appendix B: Decision log
 
 | Date | Decision | Owner / approval | Alternatives | Normative sections changed |
