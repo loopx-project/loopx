@@ -18,7 +18,7 @@ import {projectExploreMeasurementFeedback} from "./explore_measurements.ts";
  * provenance and applicability; no timestamp or revision is normalized away. */
 export function exploreReusableContextPaths(content: JsonObject = {}): (string | number)[][] {
   return [
-    ...["recent_nodes", "recent_findings", "writeback_results", "measurement_feedback", "work_yardsticks", "work_yardstick_capture",
+    ...["recent_nodes", "recent_findings", "writeback_results", "measurement_feedback", "work_measurements", "work_yardsticks", "work_yardstick_capture",
       "path_delta_attachment_template", "linked_question_attachment_template",
       "optional_question_evolution_example", "optional_execution_observation_example", "result_writeback_guidance",
       "result_attachment_template", "optional_measurement_example", "measurement_guidance",
@@ -338,14 +338,34 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
     ...(resultNode == null ? [] : ["--result-node", resultNode]),
   ) : null;
   const writeback = exploreResultWritebackAffordance();
-  const workCues = params.yardstick_enabled === true ? rows(params.work_todos)
+  const workTodos = params.yardstick_enabled === true ? rows(params.work_todos)
     .filter(todo => todo.role === "agent" && !todo.done && todo.claimed_by === agent
       && ["open", "pending", "in_progress", "blocked"].includes(String(todo.status))
-      && (todoId === null || todo.todo_id === todoId))
-    .map(todo => projectWorkYardstickCue({enabled: true, goal_id: goal, agent_id: agent, todo_id: todo.todo_id,
+      && (todoId === null || todo.todo_id === todoId)) : [];
+  const currentWorkCues = workTodos.map(todo => projectWorkYardstickCue({enabled: true, goal_id: goal, agent_id: agent, todo_id: todo.todo_id,
       findings: findings.filter(row => (todo.explore_result_node_refs as unknown[] ?? []).includes(row.node_id)),
       measurement_feedback: measurementFeedback}))
-    .filter((cue): cue is JsonObject => cue !== null && (resultNode === null || cue.node_id === resultNode)) : [];
+    .filter((cue): cue is JsonObject => cue !== null);
+  const workCues = currentWorkCues.filter(cue => resultNode === null || cue.node_id === resultNode);
+  // A first decision may use measurements recorded before any Yardstick
+  // declaration. Reuse exact-profile feedback through canonical question links;
+  // those links do not establish which Todo executed a shared finding.
+  const workMeasurements = workTodos.flatMap(todo => {
+    if (todo.status !== "open" || currentWorkCues.some(cue => (cue.binding as JsonObject).todo_id === todo.todo_id)) return [];
+    const linked = new Set(requireStringArray(todo.explore_result_node_refs ?? [], "Explore task question refs"));
+    const available = measurementFeedback.filter(row => linked.has(row.node_id));
+    if (!available.length) return [];
+    // Give distinct linked questions a place before filling the remaining
+    // budget with further metrics. No metric is inferred to be the outcome.
+    const first = new Map<string, typeof available[number]>();
+    for (const row of available) if (!first.has(row.node_id)) first.set(row.node_id, row);
+    const representatives = new Set(first.values());
+    const visible = [...representatives, ...available.filter(row => !representatives.has(row))].slice(0, 3);
+    return [{todo_id: todo.todo_id, measurement_feedback: visible,
+      omitted_measurement_feedback: available.length - visible.length,
+      details_command: command("turn-context", "--agent-id", agent, "--todo-id", String(todo.todo_id), "--result-limit", "20"),
+      guidance: "Recorded comparisons for questions linked by this Todo; shared findings do not prove this Todo executed them. Match each metric and recorded scope to the accepted outcome before choosing work. No outcome/proxy profile has been selected here. Latest recorded is not current or retained, and best is not acceptance or permission. Use the existing task reader for omitted groups; a decision attachment remains optional."}];
+  });
   return {
     ok: true, goal_id: goal, agent_id: agent, graph_enabled: graph, harness_enabled: harness,
     ...(todoId === null ? {} : {todo_id: todoId}),
@@ -354,11 +374,13 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
       counts: projection.counts ?? {},
       ...(params.yardstick_enabled === true ? {
         work_yardstick_capture: {optional: true, field: "work_yardstick_decision", schema_version: WORK_YARDSTICK_DECISION_SCHEMA,
-          guidance: "At a meaningful target, yardstick or next-method change, optionally attach the current decision to the existing Explore result. No change needs no attachment. Cite prior_finding_id from this Todo's current decision (null initially). Distinguish the accepted outcome's evaluation profile from an unqualified proxy; record counterevidence and bounded next work without changing user constraints. Read the ordinary task-scoped context for omitted decisions.",
+          guidance: "Before a proxy would discard a viable candidate or redirect work, check agreement with the accepted outcome in this scope. When agreement is unknown or the signals disagree, use one bounded accepted-outcome comparison if available within the existing constraints. At a meaningful target, yardstick or method change, optionally record that decision and its counterevidence in the same Todo's Explore result. Cite its prior_finding_id (null initially); omit the attachment when the decision is unchanged. Read the task-scoped Explore context for the template and omitted decisions.",
           template: {schema_version: WORK_YARDSTICK_DECISION_SCHEMA,
             target: {summary: "", scope: "", acceptance_ref: ""},
             authoritative: {metric: "", unit: "", higher_is_better: true, comparison_scope: "", input_revision: "", evaluation_ref: ""},
             proxy: null, counterevidence_refs: [], next_action: {method_id: "", reason: "", cost_bound: ""}, prior_finding_id: null}},
+        ...(workMeasurements.length ? {work_measurements: workMeasurements.slice(0, 3),
+          omitted_work_measurements: Math.max(0, workMeasurements.length - 3)} : {}),
         ...(workCues.length ? {work_yardsticks: workCues.slice(0, 3).map(cue => {
           if (resultNode !== null) return cue;
           const comparison = cue.search_comparison as JsonObject | undefined;

@@ -15,7 +15,7 @@ import {
 import { atomicWriteJson, withFileMutationLock } from "./effect_runtime_io.ts";
 import { retireRuntime } from "./effect_runtime_compile_cache.ts";
 import { sqliteRuntimeIdentity } from "./coordination/sqlite_runtime.ts";
-import {openPrivateResponseSink, readPrivateJsonSnapshot, writePrivateResponse} from "./effect_runtime_snapshot.ts";
+import {MAX_INLINE_RESPONSE_BYTES, openPrivateResponseSink, readPrivateJsonSnapshot, writePrivateResponse} from "./effect_runtime_snapshot.ts";
 import {
   requireJsonObject as requiredObject,
   requireNonEmptyString as requiredString,
@@ -26,7 +26,6 @@ const RESPONSE_SCHEMA = "loopx_effect_runtime_response_v1";
 const INFO_SCHEMA = "loopx_effect_runtime_info_v0";
 const STARTUP_ERROR_SCHEMA = "loopx_effect_runtime_startup_error_v0";
 const MAX_REQUEST_BYTES = 8 * 1024 * 1024;
-const MAX_INLINE_RESPONSE_BYTES = 8 * 1024 * 1024;
 // Explicit opt-in: ordinary effects retain a bounded request/response wire.
 const LOCAL_SNAPSHOT_METHODS = new Set(localSnapshotMethods);
 const DEFAULT_IDLE_MS = 5 * 60 * 1_000;

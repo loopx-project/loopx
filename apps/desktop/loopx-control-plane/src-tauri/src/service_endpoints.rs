@@ -46,6 +46,31 @@ impl ServiceEndpoints {
         })
     }
 
+    #[cfg(all(test, unix))]
+    pub(crate) fn allocate_recovery_fixture() -> std::io::Result<Self> {
+        // Keep the recovery fixtures outside the default ephemeral port range.
+        // A parallel test's bind-to-zero must not take the port between this
+        // reservation and the simulated Core child binding it.
+        let start = 20_000 + (std::process::id() % 128) as u16 * 32;
+        let mut available =
+            (start..start + 32).filter_map(|port| TcpListener::bind(("127.0.0.1", port)).ok());
+        let mut reserve = || {
+            available.next().ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::AddrInUse,
+                    "no free loopback port for the service recovery fixture",
+                )
+            })
+        };
+        let status = reserve()?;
+        let chat = reserve()?;
+        Ok(Self {
+            status: status.local_addr()?.port(),
+            chat: chat.local_addr()?.port(),
+            isolated: true,
+        })
+    }
+
     pub fn port(self, kind: ServiceKind) -> u16 {
         match kind {
             ServiceKind::Status => self.status,

@@ -14,6 +14,8 @@ import sys
 
 import pytest
 
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
+
 import test_canonical_todo_writer_isolation as journeys
 from test_canonical_todo_writer_isolation import (
     isolated_todo_distribution, retirement_wheel,  # noqa: F401 -- distribution fixtures
@@ -133,7 +135,7 @@ def test_monitor_replay_uses_retained_owners(
             cwd=tmp_path, capture_output=True, text=True, timeout=45,
         )
         assert (result.returncode == 0) is succeeds, result.stdout + result.stderr
-        return json.loads(result.stdout)
+        return read_cli_policy_payload(result.stdout, returncode=result.returncode)
 
     def current():
         return cli("todo", "list", "--goal-id", GOAL_ID)

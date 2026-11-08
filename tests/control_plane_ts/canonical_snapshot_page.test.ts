@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {mkdtemp, rm, readdir, writeFile} from "node:fs/promises";
+import {mkdtemp, rm, readdir, writeFile, rename} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
@@ -20,6 +20,8 @@ import {engageCanonicalRoute} from "./local_promotion_fixture.ts";
 import {legacyCoordinationWriterFencePath} from "../../loopx/control_plane/coordination/legacy_writer_fence.ts";
 import {listLocalCoordinationTodos, readLocalCoordinationTodo} from "../../loopx/control_plane/coordination/local_authority_read.ts";
 import {observeLocalCoordinationOwnership} from "../../loopx/control_plane/coordination/local_authority_runtime.ts";
+import {localAuthorityProviderPaths, selectLocalSqliteAuthority} from "../../loopx/control_plane/coordination/local_authority_provider.ts";
+import type {AuthorityStore} from "../../loopx/control_plane/coordination/authority_store.ts";
 
 async function fixture(t: test.TestContext, kind: "file" | "sqlite" = "file") {
   const root = await mkdtemp(join(tmpdir(), "canonical-snapshot-"));
@@ -28,6 +30,88 @@ async function fixture(t: test.TestContext, kind: "file" | "sqlite" = "file") {
   return {store: new Store(root, "goal-a"), contender: new Store(root, "goal-a")};
 }
 const qualifiedSqlite = sqliteRuntimeIdentity().sqlite_authority_qualified;
+if (qualifiedSqlite) {
+  test("selected SQLite snapshot retains the complete independent read contract", async t => {
+    const {store} = await fixture(t, "sqlite");
+    const source = productionScaleCoordinationFixture("goal-a", "native");
+    await seedSnapshot(store, source.projection);
+    const identity = await store.storeIdentity();
+    assert.equal(identity.status, "available");
+    if (identity.status !== "available") throw new Error("fixture identity missing");
+    const selected = new SqliteAuthorityStore(join(store.path, ".."), "goal-a",
+      {existingOnly: true, expectedIdentity: identity.store_identity});
+    const baseline = await readCanonicalSnapshotFromStore(snapshotRequest(), store, CANONICAL_SNAPSHOT_LOCAL_BYTES);
+    const before = await selected.loadAuthority();
+    const result = await readCanonicalSnapshotFromStore(snapshotRequest(), selected, CANONICAL_SNAPSHOT_LOCAL_BYTES);
+    assert.deepEqual(result, baseline);
+    assert.deepEqual(result.todos, source.projection.todos);
+    assert.deepEqual(await selected.loadAuthority(), before);
+    (result.todos as JsonObject[])[0]!.note = "caller mutation";
+    assert.deepEqual(await readCanonicalSnapshotFromStore(snapshotRequest(), selected, CANONICAL_SNAPSHOT_LOCAL_BYTES), baseline);
+  });
+
+  test("selected SQLite snapshot rejects a real replacement after the head read", async t => {
+    const root = await mkdtemp(join(tmpdir(), "snapshot-replacement-"));
+    t.after(() => rm(root, {recursive: true, force: true}));
+    const directory = localAuthorityProviderPaths(root, "goal-a").sqlite;
+    const store = new SqliteAuthorityStore(directory, "goal-a");
+    const projection = productionScaleCoordinationFixture("goal-a", "native").projection;
+    assert.equal((await selectLocalSqliteAuthority(root, "goal-a", true)).ok, true);
+    await engageCanonicalRoute(root);
+    await seedSnapshot(store, projection);
+    const replacement = new SqliteAuthorityStore(join(root, "replacement"), "goal-a");
+    await seedSnapshot(replacement, projection);
+    const identity = await store.storeIdentity();
+    if (identity.status !== "available") throw new Error("fixture identity missing");
+    const selected = new SqliteAuthorityStore(directory, "goal-a",
+      {existingOnly: true, expectedIdentity: identity.store_identity});
+    // Replace the database directory after the loaded result returns. The
+    // final read must reopen the pathname, not reuse an earlier connection.
+    let replaced = false;
+    const observed = new Proxy(selected, {get(target, key) {
+      const value = Reflect.get(target, key, target);
+      if ((key === "loadAuthority" || key === "readAuthoritySnapshot") && typeof value === "function") {
+        return async () => {
+          const result = await value.call(target);
+          if (!replaced) {
+            await rename(directory, join(root, "previous"));
+            await rename(join(root, "replacement"), directory);
+            replaced = true;
+          }
+          return result;
+        };
+      }
+      return typeof value === "function" ? value.bind(target) : value;
+    }});
+    const result = await readCanonicalSnapshotPage(snapshotRequest({runtime_root: root}),
+      {createStore: () => observed});
+    assert.equal(replaced, true);
+    assert.equal(result.status, "failed");
+    assert.equal(result.reason_code, "canonical_snapshot_changed");
+    assert.equal("todos" in result, false);
+    assert.equal(result.legacy_fallback_used, false);
+  });
+
+  for (const kind of ["missing", "wrong_identity", "invalid_head"] as const) {
+    test(`selected SQLite ${kind} preserves original failure precedence`, async t => {
+      const {store} = await fixture(t, "sqlite");
+      if (kind !== "missing") await seedSnapshot(store, kind === "invalid_head" ? {} :
+        productionScaleCoordinationFixture("goal-a", "native").projection);
+      const selected = new SqliteAuthorityStore(join(store.path, ".."), "goal-a",
+        {existingOnly: true, ...(kind === "wrong_identity" ? {expectedIdentity: `sqlite:${"0".repeat(32)}`} : {})});
+      // Explicitly omit any acceleration to retain the immutable two-read
+      // caller contract as a comparison on the same real SQLite database.
+      const fallback = new Proxy(selected, {get(target, key) {
+        if (key === "readAuthoritySnapshot") return undefined;
+        const value = Reflect.get(target, key, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      }}) as AuthorityStore;
+      const read = (target: AuthorityStore) => readCanonicalSnapshotFromStore(snapshotRequest(), target)
+        .then(value => ({value}), error => ({error: error.message, code: error.code}));
+      assert.deepEqual(await read(selected), await read(fallback));
+    });
+  }
+}
 if (!qualifiedSqlite) test.skip("SQLite snapshot conformance requires a qualified SQLite runtime", () => {});
 for (const kind of (qualifiedSqlite ? ["file", "sqlite"] : ["file"]) as ("file" | "sqlite")[]) {
   registerCanonicalSnapshotConformance(kind, t => fixture(t, kind));

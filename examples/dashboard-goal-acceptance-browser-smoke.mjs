@@ -38,12 +38,16 @@ try {
     await page.getByRole("button", {name: language === "en" ? "Overview" : "概览", exact: true}).click();
     const card = page.locator(".personal-goal-acceptance");
     await card.getByText("Independent verification report", {exact: true}).waitFor();
+    for (const evidence of ["vision_patch.acceptance_summary", "Independent verification report"]) {
+      await card.locator(".personal-acceptance-observation").filter({hasText: evidence}).locator("summary").click();
+    }
     assert.match(await card.innerText(), /agent-a/);
     assert.match(await card.innerText(), /vision_patch.acceptance_summary/);
     assert.match(await card.innerText(), language === "en" ? /Final outcome claim present: Failed/ : /最终成果声明齐全: 未通过/);
     assert.match(await card.innerText(), language === "en" ? /Valid path decision: Passed/ : /路径决策有效: 通过/);
-    assert.match(await card.innerText(), language === "en" ? /do not prove Goal acceptance/ : /不能证明 Goal 已通过验收/);
-    await card.locator("summary").click();
+    await card.locator(".personal-detail-card-title .context-help-trigger").focus();
+    await card.getByRole("tooltip").getByText(language === "en" ? /do not prove Goal acceptance/ : /不能证明 Goal 已通过验收/).waitFor();
+    await page.keyboard.press("Escape");
     await card.locator(".personal-detail-card-title").scrollIntoViewIfNeeded();
     assert.equal(await card.evaluate(el => el.scrollWidth > el.clientWidth + 2), false, "Acceptance content must wrap on mobile");
     await page.screenshot({path: resolve(output, `${packaged ? "packaged" : "development"}-${language}.png`)});
@@ -70,7 +74,8 @@ try {
         if (observation === current) {
           await refreshedCard.getByText("Independent verification report", {exact: true}).waitFor();
         } else {
-          await refreshedCard.getByText("Acceptance observations are unavailable. Goal completion is unknown.", {exact: true}).waitFor();
+          await refreshedCard.getByRole("button", {name: "Acceptance observations unavailable", exact: true}).focus();
+          await refreshedCard.getByRole("tooltip").getByText("Acceptance observations are unavailable. Goal completion is unknown.", {exact: true}).waitFor();
           assert.equal(await refreshedCard.locator(".personal-acceptance-observation").count(), 0, "Invalid source cannot retain prior gap rows");
         }
       }

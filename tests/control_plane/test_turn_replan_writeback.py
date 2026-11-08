@@ -72,10 +72,9 @@ def _runner(root, candidate, *, follow=False, reviewed=False):
         + (
             # Consume the structured authority actually delivered to this Host,
             # including a required captured read; do not manufacture its refs.
-            "    authority, _ = json.JSONDecoder().raw_decode(prompt.split('Turn authority JSON:\\n', 1)[1])\n"
-            "    packet = authority['replan_action_packet']\n"
-            "    if 'stride_control' not in packet:\n"
-            "        packet = json.loads(subprocess.check_output(shlex.split(packet['writeback']), text=True))\n"
+            "    request, _ = json.JSONDecoder().raw_decode(prompt.split('Turn request:\\n', 1)[1])\n"
+            "    route = request['detail_ref']['replan_action_packet']['writeback']\n"
+            "    packet = json.loads(subprocess.check_output(shlex.split(route), text=True))\n"
             "    control = packet['stride_control']\n"
             "    vision = json.loads(candidate['agent_vision_json'])\n"
             "    decision = {**control['minimal_example'], 'basis': 'uncertain_evidence', 'action': 'verify',\n"

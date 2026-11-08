@@ -32,7 +32,16 @@ def reward_memory_automation_enabled(
         or experiment.get(operation) is not True
     ):
         return False
-    if isinstance(envelope, Mapping):
+    source = None
+    if "work_contract" in payload:
+        from .capability_hooks import turn_context_source
+
+        try:
+            source = turn_context_source(payload)
+        except (ValueError, RuntimeError):
+            return False
+        boundary = source.get("boundary")
+    elif isinstance(envelope, Mapping):
         boundary = envelope.get("boundary")
     elif "turn_envelope" not in payload:
         # App guards carry the same verified capability projection directly;
@@ -59,7 +68,8 @@ def reward_memory_automation_enabled(
     try:
         from .capability_hooks import turn_context_source
 
-        source = turn_context_source(payload)
+        if source is None:
+            source = turn_context_source(payload)
     except ValueError:
         return False
     capabilities = (

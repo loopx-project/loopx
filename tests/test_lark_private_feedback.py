@@ -396,10 +396,9 @@ def test_app_feedback_scan_work_tracks_inputs_not_retained_answer_chunks(ordinar
 
         monkeypatch.setattr(store, 'load_turn', read_turn)
         transport.reconcile_app_feedback()
-        # No body has been mirrored yet, so this is discovery, not a reaction
-        # effect. One canonical input needs one Turn validation regardless of
-        # how many answer chunks the independent body outbox still owes.
-        assert reads == [(sid, turn['turn_id'])]
+        # Discovery rejects unmirrored inputs before loading any Turn. Answer
+        # chunks belong to the independent body outbox.
+        assert reads == []
         assert (journal.read_bytes(), ordinary[4].read_bytes(), provider.writes) == before
         assert store.load_turn(sid, turn['turn_id'])['status'] == 'queued'
     finally:

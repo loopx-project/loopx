@@ -1153,6 +1153,89 @@ def test_history_original_receipt_is_only_a_locator_not_route_authority(returned
     assert project_chat_return_deliveries(root, sid, messages, source_store=store) == messages
 
 
+def test_history_fallback_reads_only_visible_result_states(returned_history, monkeypatch):
+    from loopx.control_plane.collaboration import inbox
+
+    root, _, store, session, turn, receipt = returned_history
+    sid, rid = session["session_id"], receipt["request_id"]
+    # Lost locators and an unmatched legacy message must retain the exhaustive
+    # fallback, without deserializing all other requests' complete answer bodies.
+    store.update_turn(sid, turn["turn_id"], response=None)
+    store.append_message(sid, role="agent", origin="manager_followup",
+        message_id="handoff." + "0" * 64, text="Legacy result without a known receipt")
+    replies = _root(root) / "replies"
+    for index in range(30):
+        other = f"{index:064x}"
+        _write(_root(root) / "roundtrips" / f"{other}.json", {"request_id": other, "session_id": sid})
+        for version in range(4):
+            _write(replies / other / f"conclusion-{version:08}.json", {
+                "phase": "conclusion", "created_at": "2026-09-14T00:00:00+00:00",
+                "text": "A complete off-page answer. " * 1000,
+            })
+    expected = {"schema_version": "manager_return_delivery_status_v0", **reply_status(root, receipt)[0]}
+    before = {path: path.read_bytes() for path in root.rglob("*.json")}
+    original_read, reads = inbox._read, []
+
+    def read(path):
+        if path.parent.parent == replies:
+            reads.append(path)
+        return original_read(path)
+
+    monkeypatch.setattr(inbox, "_read", read)
+    messages = store.messages(sid)
+    projected = project_chat_return_deliveries(root, sid, messages, source_store=store)
+    returned = [message for message in projected if message.get("return_delivery")]
+    assert len(returned) == 1 and returned[0]["return_delivery"] == expected
+    assert set(reads) == {replies / rid / "conclusion.json", replies / rid / "conclusion.delivery.json"}
+    assert {path: path.read_bytes() for path in root.rglob("*.json")} == before
+    assert store.messages(sid) == messages
+
+
+def test_paged_history_filters_result_io_and_rereads_late_state(frozen_private_reply, private_snapshot, monkeypatch):
+    from loopx.control_plane.collaboration import inbox
+
+    store, session, turn, *_ = frozen_private_reply
+    root, sid, rid = store.root.parent, session["session_id"], "e" * 64
+    replies = _root(root) / "replies" / rid
+    _write(_root(root) / "roundtrips" / f"{rid}.json", {"request_id": rid, "session_id": sid})
+    body = "Original full body. " * 1000
+    keys = ["decision", "conclusion-00000001"]
+    for index, key in enumerate(keys):
+        _write(replies / f"{key}.json", {"created_at": "2026-09-14T00:00:00+00:00", "text": body})
+        _write(replies / f"{key}.delivery.json", {"status": "delivered"})
+        store.append_message(sid, role="agent", origin="manager_followup",
+            message_id="handoff." + _hash([rid, key]), turn_id=turn["turn_id"], text=body)
+        if index == 0:
+            for filler in range(205):
+                store.append_message(sid, role="agent", message_id=f"filler-{filler}", text=f"Earlier row {filler}")
+    original_read, reads = inbox._read, []
+
+    def read(path):
+        if path.parent == replies:
+            reads.append(path.name)
+        return original_read(path)
+
+    monkeypatch.setattr(inbox, "_read", read)
+    first = private_snapshot(message_limit=200)
+    assert set(reads) == {"decision.json", "decision.delivery.json"}
+    assert next(message for message in first["messages"] if message.get("return_delivery"))["text"] == body
+    _write(replies / "conclusion-00000001.delivery.json", {
+        "status": "verification_required", "error": "provider_delivery_unverified",
+    })
+    reads.clear()
+    tail = private_snapshot(message_limit=200, message_cursor=first["message_page"]["next_cursor"])
+    returned = next(message for message in tail["messages"] if message.get("return_delivery"))
+    assert returned["text"] == body
+    assert returned["return_delivery"]["result_key"] == "conclusion-00000001"
+    assert returned["return_delivery"]["status"] == "verification_required"
+    assert set(reads) == {"conclusion-00000001.json", "conclusion-00000001.delivery.json"}
+    (replies / "conclusion-00000001.delivery.json").write_text("{")
+    fresh = private_snapshot(message_limit=200, message_cursor=first["message_page"]["next_cursor"])
+    failed = next(message for message in fresh["messages"] if message.get("return_delivery"))
+    assert failed["return_delivery"]["status"] == "explicit_unverified"
+    assert failed["return_delivery"]["error"] == "delivery_state_unreadable"
+
+
 def test_provider_verification_outage_retries_read_only_without_resend(flow):
     root, registry, store, create = flow
     _, _, receipt = create(True)

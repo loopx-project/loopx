@@ -1391,6 +1391,657 @@ lineage、pause/gates 与 pending intents。新增更多 leaf RPC 或有损裁�
 解决的性能 hold 保持独立。新实现仍需完整 source/wheel 正确性，以及不插桩、
 匹配条件的默认 SQLite 全路径比较；既有里程碑、采纳与完整成本缺口继续开放。
 
+### 2026-11-07 — 在受管请求内复用完整 Todo 展示来源
+
+既有 `todo.context.page` owner 可从同一完整输入来源组合 summary、planning 和
+保留 terminal 的展示视图。Quota preparation 调用方显式请求 Agent 来源的三种
+视图，并把保留 terminal 的 rows 传给 frontier 消费方。User 来源及通用展示调用方
+保留自己请求的单一视图。来源选择和每种展示规则保留原 owner。Orchestration
+fallback 复用已选 summary 的独立副本，避免再次请求相同展示。
+
+已经固定 runtime revision 的逻辑请求内，以完整 source JSON 和请求选项约束
+传输 memo。来源事实变化和后续请求重新验证；可变调用方获得独立解码值。较大的
+显式组合输入保留原逐视图传输，不完整组合响应在进入 memo 前失败。Batch 输入
+阈值不能预测响应大小，也不保证 socket 内联传输；显式多视图的合计输出超过
+socket 限制时，仍可能使用既有私有响应 snapshot。
+
+初始提案的独立评审发现，通用传输把单视图调用扩大为三种视图。8,000 条记录的
+单次 delivery-response 调用最终输出相同，却把原约 3.73 MB 的单视图 socket
+响应扩大成约 11.18 MB 的组合响应并写盘。保留这次性能失败。修复后的调用方
+显式组合移除了这种隐式扩大；单视图对照和完整受管 source/wheel 验证按本次提案
+revision 记录。
+
+初始提案对照 `main@32167518b3`，源码与隔离安装 wheel 的六组 101-Todo File/SQLite
+受管 CLI 生命周期通过，保留已验证产物、原完成时间、四种 settlement receipt、
+一次 debit、Effect 重启恢复及 evidence 替换拒绝。刻意丢弃 write-scope 响应字段的
+mutation 在独立公开 guard scope 检查失败。冻结展示 fixture 和聚焦来源隔离用例
+同时覆盖既有三种视图。一次带 profiler 的 SQLite guard 观察到 JSON 参数约
+1.900 MB → 1.556 MB，调用 89 → 87，已加载模块仍为 503。这些计数仅用于诊断，
+不验收完整 wire 成本、延迟或长程收益。
+
+
+修复后的单次调用对照在 `main@dee549663`、已评审的缺陷 head 和修复源码上
+使用相同合成来源，三者最终 delivery response 相同。修复的请求参数和响应字节
+与 main 完全一致；两种记录规模的非空响应 snapshot 字节都为零。每个版本五次
+热调用的探索性中位数如下，包含 display 和 delivery-response 两种 projection：
+
+| Rows | Main 秒 | 缺陷提案秒 | 修复秒 | 缺陷响应 snapshot 字节 | 修复 snapshot 字节 |
+| --- | --- | --- | --- | --- | --- |
+| 8,000 | 0.159 | 0.636 | 0.161 | 9,480,165 | 0 |
+| 15,000 | 0.284 | 1.344 | 0.286 | 17,775,165 | 0 |
+
+此对照复现并消除了单视图性能回归，不能验收完整 CLI、daemon CPU/内存、完整
+边际成本或长程收益。
+
+
+修复后的源码及隔离 wheel 通过六组 101-Todo File/SQLite 受管 CLI 生命周期，
+保留已验证产物、原完成时间、四种 receipt、一次 debit、重启恢复与拒绝／重放。
+递归丢弃响应中的 write scope 的 mutation 在独立公开 guard oracle 失败。隔离
+PostgreSQL 16.15 的 390 个 store 和 11 个 service 用例通过，零 skipped。
+
+三组交错、无 profiler 的默认 SQLite 完整 CLI 对照中，main 墙钟中位数为
+12.24 秒，修复为 12.71 秒；两次候选更慢，范围重叠。独立 profiled guard 的参数
+字节从 1,899,603 降到 1,546,162，调用从 90 降到 87，模块仍为 503。这些观察
+未证明完整路径性能收益。Daemon CPU/内存、总 wire/file 写入、完整边际成本及
+采纳仍未验收；完整 provider-first 事务继续作为下一验收边界。
+
+这是可独立回滚的展示传输增量，尚非完整 provider-first Todo projection
+transaction。Provider 读取、revision、lease/actor fence 和状态写入保留原 owner。
+后续 canonical-source 事务、匹配的完整成本对照及受影响后端验收仍开放。I3 至少
+保留一个 minor release；M1/#8011、完整 R0/V10/R1、D2/D5/D6/D3、context/model/
+split-install、adoption 和所有冻结失败继续保留。
+
+#### 下一提案之前的 provider-first 事务要求
+
+以下保留展示增量 revision 时的前置缺口。下一 checkpoint 记录 canonical 事务
+提案及其测量限制；不会把先前观察改写成历史通过。
+
+下一实现应组合既有经过 provider 准入的 `canonicalTodoCollection` 和 projection
+owner。Native snapshot owner 把 Goal、store incarnation、provider revision、cursor
+及 query 绑定到完整 rows、leases、read-model 验证和 acceptance guards。Continuation
+只是同一次读取中的位置，不是可复用的 current-head handle；snapshot 变化后应重新
+完整读取。展示保留来源不会获取新的 authority。
+
+`quota_selection.py` 仍在 encoded selection rows 和 source-row facts 之外发送
+完整 summary source。请求还包含时钟、actor/profile、capabilities、closure evidence、
+route/handoff facts 和 resume 输入。合并传输之前，先把 canonical row materialization
+放入既有 typed owner。严格 integer、boolean 或文本区别仍可观测时，保留
+Python-value codec。Provider rows 不能替代独立 caller evidence 或 pending intent；
+all-done 计数本身无法重建 closure declaration。
+
+`goal_vision_wait` 还独立消费完整 lineage、scoped blockers、acceptance gaps 和
+resume facts。合并事务应保留每个 causal obligation，包括两个 obligation 共用
+witness 的情况。完整 note、write scopes、archive/settled identity 和来源 provenance
+仍属于 parity oracle。
+
+真实 PostgreSQL 集成用例把既有 native snapshot read 接到三种展示视图，检查
+provider/source 数据不变，在独立 commit 后观察新的 provider revision，并拒绝旧
+continuation。它验证的是组合前置条件；完整 guard transaction、PostgreSQL
+source/wheel host journey 和完整成本收益仍开放。
+
+### 2026-11-07 — Canonical Todo 事务提案与已观测生命周期成本
+
+提案在绑定 actor/profile/clock 输入后，由既有 TypeScript owner materialize
+canonical selection 与 resume rows。`todo.read` 组合显式请求的 Agent summary、
+planning、保留 terminal 的视图，以及 User summary、quota selection 和既有
+Vision-wait basis。同一次 quota 请求中，匹配的 native reference 共享一次完整
+provider read。完整字段 digest、store incarnation、provider revision、cursor
+和原 query/selection replay recipe 约束来源。后续请求重新读取；不缓存 provider
+authority。
+
+实际受管 CLI query 现在通过 quota preparation 保留来源 recipe。此前 status
+虽保留 ephemeral origin，完整 query response 却丢失它。Query 与 selection 路径
+现在都把完整 provenance 传入同一 typed transaction。Provider outage 保留原
+诊断 code/payload，stale reference 在 projection 前拒绝。Reference metadata
+不能覆盖 provider 原字段、Python scalar facts 或 owner 声明的 Todo source lane。
+独立 caller metadata 保持完整；改写 provider row 的调用方使用完整 supplied-source
+codec。严格 integer/float/bool、list/tuple 区别、旧 fnmatch facts、lane/ordinal
+优先级及远期微秒时钟均保留可观察语义。不通过 Todo id 查找补回丢失的 provenance。
+
+既有 Vision-wait owner 保留 causal obligation 与共用 witness。复用 prepared
+basis 必须匹配 actor、完整 terminal rows 及逻辑 request identity；独立 lineage
+调用方保留原路径。Standalone display 仍只请求一种视图。完整 note、evidence、
+write scope、archive/replay identity、独立 closure/pending intent 均属于 parity
+边界。既有 source-lane 常量导出给 native provenance 校验复用，没有新增 lane
+词汇、持久状态或 authority。
+
+生产代码 `66ff8bf48` 对照 `main@e2371c476`，通过四组 101-Todo 源码／隔离 wheel
+× File／默认 SQLite CLI 生命周期。独立 verifier 验收 sum=45；原完成时间、四份
+receipt、一次 debit、Effect 重启、无效 Vision/workspace 拒绝、证据替换拒绝与已
+结算 replay 均保留。Wheel 的受影响源码与 checkout 一致。最终聚焦用例通过
+132 个 Python 和 86 个 TypeScript；较广真实 CLI suite 在最后诊断／lane 修正
+之前通过 244 个用例，这些最后修正由聚焦 suite 覆盖。真实 disposable PostgreSQL
+16.15 通过 391 个 store 和 11 个 service 用例，零 skip；包含两种 role 的 native
+quota 组合、一次完整 provider load、数据不变与 stale-source 拒绝。这不验收
+PostgreSQL 源码／wheel host journey。
+
+五组交错、无 profiler 的源码 CLI 对照使用相同 101-Todo fixture 与默认 SQLite。
+每组执行 provenance、bootstrap、claim、guard、必需 context read、产物验证、
+completion、反例、writeback、spend、restart 和 terminal／refusal replay。Fixture
+setup 与最终 teardown 单独报告，两边同样继承正常 bytecode 条件。三组候选更慢，
+墙钟范围重叠：
+
+| 观察，未说明时为中位数 | Main | 提案 |
+| --- | ---: | ---: |
+| 生命周期墙钟（范围） | 14.093 秒（13.765–14.933） | 14.145 秒（13.461–15.190） |
+| Fixture setup／最终 teardown | 2.403／0.062 秒 | 2.338／0.062 秒 |
+| CLI child CPU＋已观测 daemon CPU（历史记录，单位换算无效） | 5.511 秒 | 5.757 秒 |
+| Daemon 边界 physical footprint | 140,787,912 B | 146,456,920 B |
+| CLI 最大 resident size | 70,746,112 B | 70,221,824 B |
+| 已观测 daemon disk／logical writes | 9,048,064／14,090,240 B | 10,227,712／15,646,720 B |
+| CLI output／必需 context 字节 | 177,595／21,168 B | 179,482／21,257 B |
+
+上表 CPU 使用了错误的 Mach 时钟换算，不能作为 CPU 证据。三个独立 CPU busy
+子进程校准确认，该 macOS arm64 runtime 的 daemon usage 单位为 Mach tick，
+须先乘实测 timebase `125/3`，再把纳秒换成秒。原始观察保持不变。修正五组历史
+对照后，包含 setup daemon 工作的 combined observed CPU 为 7.071→7.469 秒；
+再减各自初始 daemon baseline，CLI episode 为 6.706→7.107 秒，相应 daemon
+disk／logical writes 为 8,892,416／13,783,040→10,072,064／15,355,904 字节。
+修正后的观察仍未证明完整路径收益。
+
+Daemon CPU／写入是 CLI 边界处累计 process 观察，不含最终退出工作。CLI CPU
+不含未采样的 provenance process 和 harness 工作。CLI RSS 与 daemon footprint
+分别观测，不是连续全系统峰值。这些边界不测量完整 model cost、人工注意力或
+installed-host／长程收益。
+
+另一组独立插桩对照观察到以下通信变化；其耗时不进入墙钟比较：
+
+| 诊断 | Main | 提案 |
+| --- | ---: | ---: |
+| Guard RPC／JSON 参数字节 | 90／1,903,233 | 84／837,940 |
+| 完整 episode socket 发送／接收字节 | 3,537,350／6,380,604 | 1,948,250／6,388,112 |
+| Guard 加载 LoopX 模块 | 503 | 503 |
+
+Guard 两种 role 的来源均使用 native transaction。请求字节和调用减少证明传输
+路径已采纳，而接收字节、已观测写入与 CPU 没有一起改善。因此完整路径提速或
+完整边际成本收益**未取得资格**。后续决策保留原事务验收：独立评审，并归因剩余
+生命周期成本后再提出优化。负面结果不支持另做 leaf-RPC migration 或新增 provider。
+
+提案 rebase 到 `main@e58ba30bc`。最后 scope-fit 检查发现 read transport 的
+provenance binding 超过 decision-function budget，已把完整来源绑定和 selected-row
+evaluation 恢复提取为局部 helper；24 个聚焦 parity 用例和 maintainability ratchet
+通过。成本表仍是提取 helper 前 `66ff8bf48` 的观察，不是最终 exact head 的成本
+资格。TypeScript typecheck 与 Ruff 通过。Mypy 保留 main 已有的
+`decision_capture.py` 缺少返回类型错误；标准 premerge 也保留 main 对未修改
+benchmark 文档的 peer-boundary scanner 失败。两者均不是通过的 skip。Exact-head
+review、验证／readiness 与 maintainer merge 授权保持独立；没有合入或 installed-host
+升级。原 Task 为收益及剩余验收继续开放。I3 至少保留一个 minor release；M1/#8011、
+完整 R0/V10/R1、D2/D5/D6/D3、context/model/split-install、adoption/full-cost
+缺口及所有冻结失败继续保留。
+
+### 2026-11-08 — 完整 quota 响应传输与校准成本
+
+独立评审在 `e7db1711f` 复现剩余回归：8,000-row quota 组合结果序列化为
+13,080,176 字节，产生 13,080,177 字节同步 response-snapshot 写入；main 的独立
+视图低于该响应阈值。既有 Todo read adapter 现在对超过共享 8 MiB inline budget、
+且处于原 complete-frame budget 内的 quota 结果使用无损 gzip，经既有 result-piece
+envelope 返回 encoding 与 decoded extent，base64 分片保留 socket 预算余量。
+更大的 read 保留原分页。Python adapter 验证完整 digest／identity、有界 decoded
+size、精确 extent 与单一完整 gzip member；未知 encoding、截断或 trailing data
+均拒绝。原响应预算值与 server 共用，不重复定义；没有 provider cache、持久状态、
+rule owner 或 authority 变更。
+
+相同 8,000-row 诊断现在为 561,291 wire 字节，response snapshot 字节为零。
+完整结果与原独立 summary、planning、terminal 视图一致，未知字段和 Unicode
+保真。单次诊断耗时不证明提速。12 个 transport 用例及既有 24 个 parity 用例通过；
+两个 native File／SQLite 8,000-row quota 用例保留双 role 来源、完整视图及 provider
+数据／revision，且不产生 response snapshot。22 个 TypeScript context／quota
+用例与 8 个真实 receipt／replan／reentry 用例通过。此前过强的测试 oracle 失败，
+因为 display owner 有意展示不同字段；最终比较各自完整独立输出，不修改展示行为。
+
+生产代码 `2c9d6360e` 基于 `main@8a4d4f9da`，通过四条新 101-Todo 源码／隔离
+wheel × File／默认 SQLite CLI 生命周期，含 sum=45、原完成时间、四份 receipt、
+一次 debit、重启、反例与 replay。最终 wheel 与受影响源文件一致。真实 disposable
+PostgreSQL 16.15 再次通过 391 个 store 和 11 个 service 用例，零 skip。
+TypeScript typecheck、Ruff 与 maintainability ratchet 通过；这些检查不验收
+PostgreSQL 源码／wheel host journey 或 installed-host adoption。
+
+五组新的交错、无 profiler 默认 SQLite 对照使用不变的 101-Todo fixture、完整
+反例／replay 生命周期及同样继承的 bytecode 条件，无并发重型测试。CPU 按校准
+Mach timebase `125/3` 换算；daemon CPU／写入减初始 setup baseline：
+
+| 观察，未说明时为中位数 | Main | 提案 |
+| --- | ---: | ---: |
+| 生命周期墙钟（范围） | 13.894 秒（12.686–16.481） | 14.974 秒（14.131–15.344） |
+| Fixture setup／最终 teardown | 2.347／0.062 秒 | 2.299／0.062 秒 |
+| CLI child＋setup 后已观测 daemon CPU | 7.086 秒 | 7.403 秒 |
+| Setup 后已观测 daemon disk／logical writes | 8,884,224／13,795,328 B | 10,076,160／15,130,624 B |
+| Daemon 边界 physical footprint | 141,032,832 B | 150,520,728 B |
+| CLI 最大 resident size | 71,467,008 B | 71,696,384 B |
+
+四组候选更慢，墙钟范围重叠。大响应写入回归已修复，但完整生命周期收益仍
+**未取得资格**。最终 daemon 退出、未采样 provenance／restart helper、harness CPU、
+连续系统峰值、模型成本与人工注意力仍不在上述观察中。原事务 Task 为独立 exact-head
+评审及剩余 CPU／写入归因保持开放。此前 premerge peer-boundary 与 mypy 失败保留
+为验证 hold，直到 exact-final 检查证明其已消除。I3 至少保留一个 minor release；
+M1/#8011、完整 R0/V10/R1、D2/D5/D6/D3、context/model/split-install、
+adoption/full-cost 缺口及全部冻结失败继续保留。
+
+### 2026-11-08 — 旧格式投影类型与剩余 native read 成本
+
+独立评审发现，组合读取保留了来源优先级，却丢失所选投影类型。当 canonical 与
+旧 asset 输入共享同一字典时，即使既有优先级选中旧 asset，对象身份仍使其走
+user-summary 路径，旧字符串计数变为 null；只有 `next` 的输入绕过缺少 Todo ID
+的拒绝。
+
+生产代码 `4c3ed5d39` 让既有选择器同时返回来源和原投影类型；display／inventory
+调用方仍使用同一选中来源，没有新增词汇、持久字段或 authority。
+最后静态校验补充了可变长度 source-candidate tuple 注解，执行 bytecode 不变；
+该类型失败保留，修正后的 mypy 仅剩 main 既有 annotation hold。13 个新用例以原
+独立选择器的完整 summary 为对照，覆盖双 role、共享／复制输入、canonical 优先级
+及真实 guard 选择／拒绝；前一 head 六个失败，修复后全过。首版测试错误假定旧计数
+为数值，且未绑定 guard；其失败保留，最终 oracle 遵循原字符串值和绑定 Agent／Turn
+路径。聚焦 suite 96 个通过。源码与隔离 wheel 独立保留旧计数并拒绝缺少 ID；四条新
+101-Todo 源码／wheel × File／SQLite 生命周期保留产物、原完成时间、四份 receipt、
+一次 debit、重启、反例及 replay。真实 disposable PostgreSQL 再次通过 store391、
+service11，零 skip，服务已停止。
+
+对前五组成本数据归因后，剩余增量指向 guard、writeback、spend 和 settled replay
+中的重复 native read。另一组插桩完整生命周期观察到八次新增 native `todo.read`，
+每次增加 147,456 个已观测 daemon disk-write 字节，共 1,179,648 字节；插桩耗时不
+进入资格比较。对真实 native snapshot owner 的独立探针观察到每个 snapshot 四个
+只读 SQLite connection，同样增加 147,456 个 process-counter 字节。交错 identity
+read 使用一个只读 connection、36,864 字节，provider revision 和数据库内容 digest
+不变。这定位了 read lifecycle 成本，不代表物理设备写入，也不支持删除 identity、
+revision、WAL、lease 或 recovery 检查。
+
+Python `invalid-vision` profile 主要是 import，两边调用数相同；其 wall 权重不能
+归因成对 CPU 差异，也不支持另做 import migration。下一个既有验收步骤是研究原
+SQLite read／connection lifecycle，通过 typed owner 保留新鲜 incarnation 与
+revision 校验；provider 编辑先按普通流程准备 Task scope／ownership。前一修正
+成本表仍对应 `2c9d6360e`，不是本次兼容性修正，不新增提速声明。原 Task、独立
+exact-head 评审、完整路径／完整成本、host／model／adoption 验收继续开放；I3、
+M1/#8011、R0/V10/R1、D2/D5/D6/D3、context／split-install 及全部冻结失败保留。
+
+### 2026-11-07：已选 SQLite snapshot 的读取生命周期
+
+既有 `AuthorityStore` 增加可选的 storage-only identity／head 成对读取，由原
+canonical snapshot owner 消费。`SqliteAuthorityStore` 仅在 `existingOnly` store
+提供该方法；身份和完整已验证 head 使用同一个同步只读事务，不跨调用保留连接、
+head 或 provider authority。普通 SQLite、File、PostgreSQL 及未提供可选方法的
+custom store 保留原 identity／load 顺序和失败优先级。不新增持久状态、wire 词表、
+capability、selector 或 Python 规则 owner。
+
+Provider 选择仍校验已配置 incarnation；snapshot 准入在读取 head 后仍独立重开
+pathname。Revision、cursor、完整 read-model digest、stale continuation、WAL、
+lease 和 receipt／replay 检查保留。读取 head 后真实替换数据库目录会被拒绝，且
+不返回部分行。私有 mutation 取消最终 incarnation 检查后，同一公开 snapshot
+oracle 失败。
+
+Runtime commit `61f7c3c33` 通过相关 TypeScript 873 用例与类型检查、四条完整
+source／wheel File／SQLite 101-Todo 生命周期，以及真实隔离 PostgreSQL 16.15
+store391／service11，零 skip。生命周期保留 sum45、原完成时间、四种回执、一次
+debit、重启和 refusal／replay；23 个变更 production 文件与 wheel 逐字节一致。
+Native before／head 诊断保持完整响应与数据库 hash 相同，只读连接从四次降到
+三次，每个 snapshot 的 observed daemon disk-counter 字节从 147,456 降到
+110,592。这些计数不代表物理设备写入，插桩诊断耗时不进入性能资格。
+
+新一轮五组交错、无插桩的默认 SQLite 完整生命周期，对照同一 101-Todo fixture
+在 main `8a4d4f9da`、前一版本 `c40d8ec31` 和 runtime `61f7c3c33` 的表现，环境为
+CPython3.13.5／Node26.0.0／已合格 SQLite3.53.1。十五条生命周期均保留同一独立
+验证成果与原结算。
+
+| 已观测指标，中位数（所示范围） | Main | 前一版本 | 成对读取 |
+| --- | --- | --- | --- |
+| 生命周期墙钟 | 14.945 秒（12.664–16.597） | 14.924 秒（14.570–19.232） | 14.871 秒（14.412–16.775） |
+| setup 后 CLI＋采样 daemon CPU | 7.084 秒 | 7.388 秒 | 7.292 秒 |
+| setup 后 daemon disk-counter 字节 | 8,896,512 | 10,076,160 | 8,314,880 |
+| setup 后 daemon logical-write counter 字节 | 13,897,728 | 15,618,048 | 12,840,960 |
+| Fixture setup／最终 teardown 墙钟 | 2.373／0.060 秒 | 2.387／0.062 秒 | 2.336／0.062 秒 |
+
+五组中候选两次慢于 main、两次慢于前一版本，墙钟范围重叠。已观测写入减少，
+但 CPU 中位数仍高于 main，完整收益未合格。CPU 使用已验证 Mach timebase125／3，
+扣除每个 daemon 的 setup 基线；未采样最终退出、部分 restart helper、provenance
+和 harness CPU。CLI RSS 与 daemon 边界 footprint 分开观察，不代表连续全系统
+峰值。对照期间没有重型验证；model cost、人工注意力和 installed-host adoption
+仍未测。新结果不替换或重标任何历史 campaign。下一步先独立评审并归因完整 CLI
+剩余 CPU 成本，再选择优化，保留新鲜读取栅栏。
+
+标准 premerge 六项直接检查及 19 项选中检查中的 18 项通过；peer hard-cut scanner
+在 main 与候选上仍因同一未改动 benchmark README 失败。原 Task 的独立 exact-head
+评审、匹配完整路径／完整边际成本及 host／model／adoption 验收继续开放。保留至少
+一个 minor release 的 I3、M1／#8011、R0／V10／R1、D2／D5／D6／D3、context／
+split-install 及全部历史失败；连接数或验证通过均不证明完整最小化内核目标已完成。
+
+在最新 main `df67371c3` 上的集成 `ce0e41a26` 保持 23 个 PR production-source
+hash 不变。重新通过四条完整 source／wheel File／SQLite 生命周期、49 个 TS
+用例、类型检查和隔离 PostgreSQL391／11。保存上下文／旧格式 Python 检查为
+107 passed、14 skipped；要求显式 native Codex 的用例仍未合格。Main 已修复
+原 missing-return annotation，新的 kernel mypy 通过；历史失败保留。标准
+premerge 仍通过六项直接及 18／19 项选中检查，既有 peer scanner 失败保留。
+
+集成后的五组新默认 SQLite 无插桩对照保留同一 101-Todo 成果。Main／候选
+生命周期墙钟中位数为 14.631／14.633 秒（范围 14.260–16.869／14.122–14.941），
+setup 后已观测 CLI＋daemon CPU 为 7.038／7.080 秒，daemon disk-counter 为
+8,880,128／8,290,304 字节，logical-write counter 为 14,966,784／14,282,752 字节。
+Fixture setup 中位数 2.362／2.346 秒、最终 teardown 0.062／0.058 秒仍分开。
+两次候选更慢，范围重叠；上文采样缺口仍适用，写入计数下降不证明完整提速、
+边际成本或采纳收益。先补齐剩余成本覆盖，并确认可重复的 CPU 退化，再选后续
+实现；不能假定应继续优化读取或 import。
+
+### 完整成本覆盖与当前 main 事务检查点
+
+既有提案在 `23227ee5` 整合 main `0c28f6004`，23 个 PR production-source hash
+不变。重新通过 Python59、TypeScript63、类型／mypy、四条完整 source／wheel
+File／SQLite 101-Todo 生命周期及隔离 PostgreSQL16.15 store391／service11，
+这些运行零 skip。成果、原完成时间、回执、debit、重启和 refusal／replay 保留。
+标准 premerge 保留既有 peer scanner 失败（六项直接和18／19项选中通过）。
+第一轮 PostgreSQL 因 checkout 缺 `pg` 依赖失败，保留该失败，并单列环境补齐后的
+成功验证。
+
+当前集成的五组新默认 SQLite 无插桩对照保持同一 fixture／成果。Main／候选墙钟
+中位数为14.255／14.382秒（范围13.971–14.887／13.428–14.684）；setup 后采样
+CLI＋daemon CPU 为6.873／7.141秒；已观测 daemon disk counter 为
+8,904,704／8,306,688B，logical-write counter 为14,491,648／13,443,072B。
+Setup2.314／2.187秒、teardown0.061／0.057秒分开。三次候选更慢，范围重叠；
+写入计数减少仍不证明整体或完整边际成本收益。
+
+另一次被动退出观测扩展了记账范围。Python self／waited-child usage 覆盖
+harness、provenance／verifier 和 CLI 子进程；最初归属 harness 的 daemon 已计入
+waited-child，只额外加上后来的 orphan daemon。以独立的 production locator PID
+要求两条 daemon 退出记录，移除任一记录会触发 coverage oracle 失败。Main 的两个
+daemon 在最后采样后又消耗0.147／0.045秒 CPU，候选为0.149／0.046秒；尾部接近，
+不能解释采样 CPU 差异。退出回调覆盖受控 shutdown／cache-retirement 路径；观测
+写出、回调后的 native 工作、orphan native 子进程、物理设备写入和连续系统峰值
+仍未覆盖。该插桩对照仅用于覆盖诊断，不是延迟资格，也不替换历史指标。
+
+另一组插桩完整对照记录每个 RPC 的已校准进程 CPU：`todo.read` 从18增至26次，
+额外消耗0.172秒采样 Node CPU，下一步应研究原 Todo／provider 读取事务。插桩耗时
+不认证性能，也不支持删除 current-source、incarnation、revision、WAL、lease 或
+recovery 校验。先表征同一准入请求内完整复用的机会，再实施；这些观察不支持盲目
+迁移 import 或跨请求缓存权威。原 Task／vision、独立 exact-head 评审、
+I3／minor-release、M1／#8011、R0／V10／R1、D2／D5／D6／D3、context／model／
+split-install、PostgreSQL host／wheel、完整成本／采纳缺口和全部冻结失败保留。
+
+### Refresh 摘要事务检查点
+
+在整合 main `87a153d4d` 的 runtime `68fae1d0`，完整生命周期调用追踪定位到同一
+refresh 资格检查分别执行两次原生 User／Agent 摘要请求。现有 Python 适配器把两份
+请求交给原 TypeScript Todo 事务；该 owner 逐项校验来源和独立输入，仅在引用匹配
+时共享完整 provider 物化。独立 metadata、clock／actor 绑定，以及 source／identity／
+revision／WAL、lease、receipt／recovery 检查保留；supplied source 或已结束请求
+scope 的引用沿用 standalone 路径。跨请求不缓存权威。既有 CLI／读回直接使用此
+内部改善，不新增产品操作或配置。
+
+同一 101-Todo 的 source／wheel File／SQLite 生命周期保持 sum45、原完成时间、
+四份回执、一次 debit、重启、拒绝／重放和结算读回。递归移除 scope 的响应变异在
+真实 SQLite CLI 的独立 scope oracle 处失败；隔离 daemon 已停止。插桩生命周期的
+`todo.read` 从26到24，每个 refresh 摘要对从两次 RPC 到一次；这是机制诊断，
+不能作为延迟结果。当前113 Python／63 TypeScript、类型／mypy和真实隔离
+PostgreSQL16.15 store391／service11通过，合格运行零 skip，两个 server 均停止。
+24个 PR 生产文件与隔离 wheel 一致。漏传必需参数的首次失败、缺少 service 环境
+变量的首次 skip 均保留为失败／未合格尝试。标准 premerge通过六项直接及18／19
+项选中检查，保留未改动的 peer hard-cut scanner 失败。公开边界子检查通过；
+独立完整 local check 仍暴露其它 registered Goal 的 authority 错误。
+
+后续 main 整合前，以 main `b78246ff7`、旧提案 `94c99e28a` 和 runtime `fc032cbf5`
+各五条相同默认 SQLite source 生命周期作交错无插桩比较。每组 fixture driver 使用
+该组精确 CLI 解释器；15条 prequota PID-set检查均保留同一已预热 daemon。更早的
+并行验证负载、解释器不匹配对照仅作为诊断保留，未放松 runtime 隔离。
+
+| 观察中位数 | Main | 旧提案 | Refresh 提案 |
+| --- | ---: | ---: | ---: |
+| 生命周期墙钟，秒 | 22.092 | 23.620 | 22.033 |
+| Setup 后计时子进程＋采样 daemon CPU，秒 | 14.756 | 15.353 | 14.907 |
+| 采样 daemon disk counter，字节 | 8,888,320 | 8,310,784 | 8,093,696 |
+| 采样 daemon logical-write counter，字节 | 13,946,880 | 13,840,384 | 13,107,200 |
+| 已观察 daemon lifetime peak，字节 | 141,508,280 | 139,887,008 | 138,510,608 |
+
+墙钟范围为21.898–24.716／22.615–24.863／21.824–24.767秒；setup中位数
+2.336／2.404／2.392秒、最终teardown0.062／0.062／0.058秒分开。五次 refresh
+候选均比旧提案快，但三次比 main 慢、范围重叠。计时子进程 CPU 包含独立 verifier；
+完整 exit／helper／harness、provenance、model、attention 成本未覆盖；disk counter
+和采样 lifetime peak 不等于物理设备写入或连续系统峰值。完整收益仍未合格。这些
+观察不认证之后的 main 整合，也不替换历史／冻结失败；整合后的生产 hash 相同，
+已重新运行四条 source／wheel File／SQLite 生命周期。
+
+原完整声明和所有历史／冻结失败保留。I3至少一个 minor release、M1／#8011、
+R0／V10／R1、D2／D5／D6／D3、context／model／split-install、PostgreSQL host／
+wheel、完整成本／采纳及独立 exact-head评审仍开放；不包含合入main或installed-host
+升级。后续实现必须依据完整成本比较，保留所有新鲜性／权限栅栏。
+
+### 2026-11-08 — Source／wheel 匹配全进程成本覆盖 native 退出
+
+原提案 #8302 与 target main `21013c0c1` 整合为 `9e147ddf2`，24 个 PR
+production-source hash 不变。每 arm 的 1840 个 packaged tracked source 与新建
+隔离 wheel 相同；五个未变的 source-only 文件仍在 package-data pattern 外：
+Canary baseline、三份 Claude plugin／config 文件及 shadow-drain test process。
+这验证 packaged-source parity，不宣称 source／wheel inventory 或 fingerprint
+完全相同。
+
+冻结的默认 SQLite 对照完成每发行形态五组交替配对，共 20 条完整 101-Todo
+生命周期，环境为 macOS27 arm64、CPython3.13.5／Node26.0.0。Fixture 初始化、
+CLI 与 verifier 使用精确 arm 的解释器／package；先加载实际 package 再加载
+checkout fixture helper，在模块 import 前建立 temporary／process 隔离。首次
+wheel 准备在 authority 初始化前拒绝 source-loaded fixture provenance；失败准备
+单独保留。两个 wheel 均先通过原 owner 的 Chat build。全部匹配流程的 prequota
+PID 集合保留正确来源的预热 daemon；受控重启创建第二个独立记账 daemon。
+Bytecode 关闭，每条 CLI 是新进程；匹配运行不与 build／validator 重叠，结果出来
+后不扩充冻结数量。
+
+全部 20 条独立保留相同 sum45 产物、原完成时间、四份 committed receipt、一次
+debit、required scopes、changed-evidence refusal、completion／writeback／spend／
+terminal replay、受控重启及 settled-Turn execution refusal。相同的被动 OS waiter
+观察两个 native daemon 的真实退出。External `wait4` 捕获 harness 及其 waited
+subtree；直接回收的 daemon waiter 已计入，只额外计 orphan native subtree 和
+已观测 orphan-waiter CPU，避免双计并覆盖此前采样遗漏的 native 退出 CPU。
+
+| 发行形态 | Whole harness 墙钟中位数（范围），秒，main → candidate | 已观测 process CPU 中位数，秒 | 完整 managed-daemon CPU 中位数，秒 |
+| --- | --- | --- | --- |
+| Source | 25.904（25.589–26.629）→26.477（25.603–26.643） | 17.489 →17.749 | 1.782 →1.887 |
+| Wheel | 26.248（25.670–28.200）→26.489（26.135–27.437） | 17.984 →18.341 | 1.787 →1.932 |
+
+Source setup／lifecycle／teardown 中位数为 main2.602／22.581／0.062 秒、
+candidate2.669／22.807／0.058；wheel 为 2.712／22.568／0.062 和
+2.651／22.878／0.062。Whole wall 从 harness 启动测到 OS 退出，包含三阶段外
+的 readback 与 observer 工作；各阶段中位数无需等于 whole 中位数。Source 五组中
+候选四次墙钟更慢，wheel 五组中两次；两个发行形态均有 4/5 组候选已观测 CPU
+更高。墙钟范围重叠，不宣称显著改善。五个样本的 nearest-rank empirical p95
+等于最大值：source26.629→26.643 秒、wheel28.200→27.437；不是稳定总体分位数。
+
+另一个独立插桩 wheel pair 保留所有 lifecycle／provenance／exit oracle，观察
+RPC367→344、JSON 参数字节 3,506,215→1,874,964。它诊断 transport 机制，不验收
+速度。该 pair 的 managed-daemon CPU 为 1.864／1.896 秒，约占已观测 process CPU
+的 9.5%／10.0%。其他 Node helper／probe 与 Python 启动、本地处理一同位于 CLI
+waited subtree，各自贡献尚未归因；不能将全部剩余 CPU 称为 Python 启动。下一步
+先归因该 subtree 的主要成本，再通过原 typed owner 选择有限改动并复验相同成果／
+恢复检查。原 Task 为此工作及独立 exact-head 评审保持开放；RPC 减少或测试通过
+不证明完整路径收益。
+
+当前 main 集成通过 99 个聚焦 Python、83 个 TypeScript 用例（TS 零 skip）及
+control-plane typing。此前真实 PostgreSQL16.15 store391／service11 资格属于
+未变的 production source，不是当前集成 head 的新运行。当前 head 的 File 完整
+CLI 与 PostgreSQL host／wheel journey 仍未合格。Observer 发布结果后的 CPU 尾部、
+物理设备写入、连续系统峰值、环境／build 成本、model／attention 和 installed
+adoption 仍是 unknown 或在本次范围外；未观测尾部不记为零。历史失败与冻结
+campaign 不替换、不重标签，完整边际／长程收益仍未合格。保留至少一个 minor
+release 的 I3、M1/#8011、完整 R0/V10/R1、D2/D5/D6/D3、context／model／
+split-install、full-cost／adoption 及完整 freshness、identity／revision／WAL／
+lease／receipt／recovery 栅栏。本轮不合入 main、不升级 host。
+
+### 2026-11-08 — CLI CPU 归因与新鲜源码扫描的路径构造
+
+一个独立 wheel 归因 pair 对照 main `21013c0c1` 与提案 `24ca29f4e`，保留完整
+101-Todo 生命周期及原 source／package、scope、预热 PID、产物、原完成时间、
+四份 receipt、一次 debit、refusal／replay／restart 和 native 退出 oracle。每 arm
+记录 22 个 Python console 进程、三个独立 Node helper／probe、两个 managed
+daemon 的真实退出。Helper 是两个 version probe 和一个 setup helper，均在
+所属调用方读回前退出。PATH 解析的 Node 保留精确 executable／argv；Python
+console CPU profile 使用 `process_time`，不以该插桩 pair 验收速度。
+
+| 诊断 CPU，秒，main → proposal | 观测 |
+| --- | --- |
+| Profile dump 前采样的 Python CLI self | 20.447 →20.099 |
+| Python profile exclusive total | 18.230 →17.922 |
+| Import machinery cumulative | 14.505 →14.403 |
+| Compilation exclusive | 7.488 →7.464 |
+| 完整 managed-daemon subtree | 1.780 →1.890 |
+| 三个独立 Node helper／probe subtree | 0.286 →0.281 |
+
+Import cumulative 含嵌套 compilation，不能与 compile exclusive 或 self sample
+相加。模块加载可能发生在操作内部，尚未独立识别解释器启动。固定的
+bytecode-disabled 条件使加载／编译突出，helper 贡献有限；解释器／wrapper／
+profiler 开销及发布尾部仍使这些值不能作为无插桩成本分解。它们不解释或推翻
+此前冻结 pair 的 CPU 增量，不证明提速，也不验收正常 bytecode 的 installed adoption。
+
+同一 profile 定位原 filesystem adapter 的 source-scan 路径处理。Runtime
+`a57fd3ef7` 每目录只构造一次 POSIX 相对目录前缀，免去每候选文件额外的相对
+`Path` 构造。源码选择、行排序、文件元数据、`Path.stat` 及其平台错误策略保留；
+完整 source hash 与 freshness／identity、revision／WAL／lease／receipt／recovery
+栅栏不变。这是有限的同域 refactor，不新增 capability、provider、持久字段、
+词汇或 authority cache；原生 TypeScript owner 继续持有原规则。
+
+不可变 parent 与新 scanner 在同一真实源码树返回完全相同的 404 个 metadata
+tuple。64 个聚焦 Python 用例及 kernel mypy／Ruff 通过。Before／head 的真实
+`runtime.ping` 在 disposable package 中均在所属 JSON 文件变化后切换 fingerprint
+与 PID；故意漏掉该 JSON source 的 mutation 在同一独立 runtime oracle 上失败，
+所有自有 probe runtime 已停止。八条 before／head × source／wheel × File／SQLite
+完整 CLI 生命周期保留原产物、完成时间、scope、四份 receipt、一次 debit、
+refusal／replay 及两个 native 退出。这验收正确性与已执行真实路径，不验收性能。
+
+新建单体 wheel 与 1840 个 packaged tracked source 相同；原 24 个 production
+文件中仅 `effect_runtime.py` 改动，仍保留相同五个 source-only omission。独立
+import probe 首次从 checkout 工作目录加载了源码，其失败准备保留；修正后的
+核验使用非 checkout 工作目录、清空 `PYTHONPATH`，并在比较字节前断言模块属于
+隔离安装。Lifecycle harness 始终保留自己的独立 package-root 检查。首次在错误
+目录执行 Chat build 命令也保留为准备失败，随后 dashboard owner 的 build 验证
+bundle。
+
+更大加载改动仍是下一步的独立决策：先在既有 quota／context 与 refresh dispatch
+owner 对照真实 normal／disabled bytecode，再移动必需依赖。路径 allocation
+变化仅是局部中间结果，不新增 whole-path／边际成本收益声明。当前 PostgreSQL
+host／wheel、model／attention、连续峰值、物理设备写入、installed adoption 和
+完整长程资格仍开放；未变的 PostgreSQL store／service owner 保留此前真实资格，
+本轮不宣称新 PG 运行。保留全部冻结失败、既有 peer hard-cut validation hold、
+至少一个 minor release 的 I3、M1/#8011、完整 R0/V10/R1、D2/D5/D6/D3 及
+context／model／split-install／full-cost／adoption 验收。原 Task 与独立 exact-head
+评审继续开放，本轮不合入 main、不升级 installed host。
+
+### 2026-11-08 — 正常 bytecode 生命周期及观测限制
+
+仅执行一对 before/head wheel，复用完整 101-Todo SQLite 生命周期：源码为
+`24ca29f4eb2afe0bbf27df00002abd005febf256` /
+`1a4d9d8f92491db5913cfa59061bcd58c677868d`，打包 runtime 字节为
+`9e147ddf2085b080eba0cd2d7888ec896b270333` /
+`a57fd3ef771013c80add55821321e98e577836e6`，目标 main 仍为
+`21013c0c113445b71a30f6ce06ab61455b56f1f2`。本 checkpoint 仅改双语 RFC，
+生产提案保留并等待独立评审。
+
+两端均新建 wheel 安装，使用相同 CPython 3.13.5、依赖版本及既有 fixture helper
+的全新逐字节相同副本。安装与 fixture 初始 pyc 均为零。运行前的来源核验使用
+`-B`、非 checkout 工作目录及清空的 `PYTHONPATH`，先确认导入模块属于隔离安装，
+再核对全部 1840 个 packaged tracked source 哈希；保留相同五个 source-only
+omission。测量进程使用默认 bytecode，清除 write-disable、cache-prefix 与
+importtime 变量，读回 `sys.dont_write_bytecode=False`、`sys.pycache_prefix=None`。
+导入 fixture 前即隔离 data／临时目录。解释器 stdlib 与 OS 文件缓存共享，不属于
+本次隔离声明。
+
+| 缓存阶段，两端路径集合完全相同 | 全部 installed pyc | LoopX pyc |
+| --- | ---: | ---: |
+| 安装完成 | 0 | 0 |
+| Driver 导入 fixture 前 | 1 | 0 |
+| Fixture/setup 完成 | 317 | 223 |
+| Bootstrap 完成 | 358 | 264 |
+| Prequota 完成 | 433 | 339 |
+| Guard 与 required reads 完成 | 665 | 571 |
+| Settled replay 与 teardown 完成 | 699 | 605 |
+
+Driver 首个 pyc 来自 virtualenv support。两端全新 fixture 副本在 setup 各生成
+五个 pyc；最终 605 个 LoopX pyc header 全部匹配解释器 magic 及源码 timestamp／
+size。这是缓存有效性与阶段观测，不是单次 guard 的模块数量，也未测出默认模式
+的 compile／import CPU。
+
+两端原生命周期均成功退出：sum45 artifact 及 digest、原 completion time、
+required scopes、四个 committed receipt、一个 debit、prequota 不变的 warm
+PID 集合、受控重启、evidence replacement refusal，以及 completion／writeback／
+spend／terminal／settled-Turn replay 均通过。每端保留全部 22 个 console 的
+command／phase／wrapper 退出记录、三个 exact-argv Node helper 退出及两个 managed
+daemon 退出。Waited descendants 只计算一次，仅把 orphan daemon subtree 与已观察
+的 waiter CPU 加入 outer waited subtree。
+
+**实际 console PID 观测子检查失败。** 首个 observer 把 macOS
+`proc_listchildpids` 返回的 PID 数量误作字节数，记录为 0/22。独立 disposable
+child probe 复现并修正 API 解释后，才执行尚未开始的 head。Head 记录 21/22，
+bootstrap 仍落在有界采样窗口之外。Wrapper PID／argv／exit 记录完整，但实际
+PID 覆盖不完整；两次运行后的子检查失败都保留，不重跑任一生命周期。使用 host
+不兼容 Python 3.9 的初步 parse 也失败，执行用 3.13 的语法验证通过。修复与证据
+缺口保留在原 Task 的恢复记录中。
+
+| 单对原始观测，before → head | 数值 |
+| --- | ---: |
+| Whole harness wall | 24.044 → 25.180 s |
+| 包含 orphan additions 的 observed process CPU | 10.698 → 10.724 s |
+| OS time 文件中的四舍五入 console waited-subtree CPU | 6.020 → 5.980 s |
+| 完整 managed-daemon subtree CPU | 1.900 → 1.920 s |
+| 三个 Node helper subtree | 0.273 → 0.291 s |
+| Setup / 最终 teardown wall | 5.503 / 0.062 → 3.338 / 0.054 s |
+
+Observer 修正使两端的有界采样等待不同，head bootstrap 另有较大 wall 延迟。
+Fixture、verifier、observer 与 readback 工作仍计入 whole harness。这些观测不能
+验收提速、回退或 paired CPU 差异，不能解释既有冻结成本实验，也不能与
+bytecode-disabled profile 相减后声称 compile saving。Console waited CPU 包含
+本地处理及 descendants，不能统称 Python startup。冻结样本不重跑、不扩充、不
+重标签；publication／exit tail、物理写入、连续系统峰值、build／setup environment
+成本、model／attention 与 installed adoption 仍 unknown。
+
+这回答了有限的默认缓存正确性问题，但保留成本／归因缺口。继续保留既有 typed
+transaction 与 source-scan 提案。下一段应检查既有 quota／context／refresh
+caller 的必需依赖闭包，再选一个完整可回退的加载改动并验证 normal-default 语义
+一致性。有效缓存本身不证明应移动必需 import 或移除 fresh read；不为补 PID
+观测重复本 pair。原 Task、独立 exact-head review／readiness、peer hard-cut hold
+及全部 I3/minor-release、M1/#8011、完整 R0/V10/R1、D2/D5/D6/D3、
+context／model／split-install、PostgreSQL host／wheel、full-cost／adoption 要求
+继续开放；本轮不合入 main、不升级 host。
+
+### 2026-11-08 — 反馈校验不加载写入适配器
+
+初始 runtime `2c5212fdb15035c26c3e158420d67197d45715f2` 将 `loopx.feedback` 中
+两个既有 retained-state 写入适配器改为按需加载。适配器不可用时，纯反馈校验
+仍可执行；parent 会在模块导入时失败。Reward mutation 在 registry 读取或
+写入前解析两个适配器，原 guard 与 writer 调用位置仍查找当前模块 binding。
+保留适配器对象 identity、调用中途 patch 行为、先 index 后 state 的锁顺序、
+TypeScript guard owner、凭证拒绝及 partial-write handling。本地兼容映射、
+模块 `__getattr__`／`__dir__` 与 computed `__all__` 保留全部 50 个原 star-export
+名称，包括后面的 append／render 函数。不新增 capability、provider、持久词汇、
+规则 owner 或跨请求 authority cache。
+
+两个相关组分别通过 291 个反馈策略及 48 个适配器／写入／恢复用例。独立的
+适配器不可用用例在 parent 上失败；head 保留纯校验，并在 reward mutation 前
+拒绝缺失 writer。聚焦 mypy／Ruff 通过。Production semantic advisory 未发现
+支持范围内的新 carrier；显式纳入测试文件超出该 scanner 支持的 `loopx/` 范围。
+测试中的 refusal 字符串仍是本地 fixture。
+
+重建单体 wheel 先断言隔离安装的模块所有权，再在非 checkout 工作目录、清空
+`PYTHONPATH` 后核对全部 1840 个 packaged tracked source。相同五个 source-only
+omission 保留；相对冻结 runtime candidate，仅 `effect_runtime.py` 和
+`feedback.py` 字节变化。首次 wheel 准备因缺少 Chat bundle 失败后，既有 dashboard
+Chat build 提供所需 bundle。四条新的 candidate source／wheel × File／SQLite
+101-Todo CLI 生命周期使用默认 bytecode，全部通过原 artifact、completion time、
+scope、四份 receipt、一次 debit、restart、refusal 与 replay oracle。每条的两个
+managed native daemon 均退出。这是新 runtime 正确性检查，不是新增 matched
+cost 样本。
+
+正常缓存 profile 仅检查已结算 synthetic recovery dry-run 的加载依赖。其
+410-module 闭包及嵌套 import／compile timing 不能证明默认 provider 性能、fresh
+authority 行为或生命周期成本。初始 profile 文件名遮蔽 stdlib，在 CLI 前失败，
+仍保留为准备失败。冻结样本及上一轮归因 pair 不重跑、不扩充、不重标签。
+不新增 whole-path 收益、PostgreSQL host／wheel、model／attention 或 installed
+adoption 资格。保留 peer hard-cut hold、全部历史失败、至少一个 minor release
+的 I3、M1/#8011、完整 R0/V10/R1、D2/D5/D6/D3 及
+context／model／split-install／full-cost／adoption 验收。原 Task 与独立 exact-head
+评审／readiness 继续开放；下一段加载决策仍属于既有 quota／context／refresh
+caller。本轮不合入 main，不升级 installed host。
+
+提交准备期间，维护者在 `481436a56b47220c7c43bd6e272c1fa59d5038fe` 合入
+#8302，该 head 未包含本次反馈改动。两个尚未提交远端的反馈／checkpoint commit
+移到基于目标 main `0ed909880` 的干净后续分支，反馈源码及聚焦测试字节相同。
+后续 wheel 先验证安装所有权，再匹配 1841 个 packaged tracked source，保留
+相同五个 omission。新的 source／wheel × File／SQLite 生命周期全部通过四组
+原 oracle，每条两个 native 均退出。在此变化的集成基线上，48 个写入／恢复及
+265 个共享反馈策略用例、mypy／Ruff 通过。这些检查验收后续提案的变化基线，
+初始运行保留为历史证据，不重跑或新增性能样本。后续提案仍需独立 exact-head
+评审／readiness，原 Task 的完整验收继续开放。
+
 ## 附录 B：决策日志
 
 | 日期 | 决策 | 负责人 / 批准 | 备选 | 变更的规范章节 |
@@ -1417,4 +2068,42 @@ lineage、pause/gates 与 pending intents。新增更多 leaf RPC 或有损裁�
 
 ## 附录 E：事故与评审经验
 
-暂无。
+### 生成式 Todo 指针的读取兼容性（非规范性）
+
+归档摘要和单条 Todo 活跃字段省略指针由既有 Todo 投影 owner 生成。实际观察到的
+严格 `machine_region.py` reader 与 `8d314af49` 一致：它拒绝没有可识别 Todo
+元数据的归档摘要注释，但已能通过有效的 `todo_id` 元数据接受生成的单条省略行。
+两者共享 `loopx:todo-archive-pointer` 前缀不能证明 reader 漂移；只有精确安装
+reader 确实拒绝该条生成行时，才能将单条省略故障归因于它。归档摘要 reader 修复
+已通过 [#7834](https://github.com/loopx-project/loopx/pull/7834) 进入 `main`。
+受影响的安装 reader 需要装配资格验证，不能据此重复源码修复或删除活跃投影元数据。
+
+作者在 `97cc1e0c4` 上，以相同合成 source 和真实 File/SQLite store，在 Python
+3.13、3.14 与 Node 26 下验证。旧 reader 的语法与 `8d314af49` 一致。旧快照、当前
+源码及其构建 wheel 的 36 场景只覆盖普通、归档摘要和外来叙述行，未测试单条字段
+省略。它们得到 20 个预期成功、16 个预期拒绝：4 个旧 reader 归档摘要失败和
+12 个外来叙述失败。4 个旧 reader 失败均通过当前源码按原 Turn 身份恢复
+并重放；canonical work 保持不变，quota 扣费为零。另外 8 个 source/wheel console
+场景以合成 Session 身份完成 native capture 回读；fixture 准备失败仍保留为失败，
+已提交 capture 的恢复未重跑准入。既有 region、projection 和 SQLite archive 回归
+通过（83 个场景）。
+
+评审资格验证在 runtime 基线 `ebb39f4db` 上，通过真实安装快照、源码和隔离 wheel
+的 console 入口，在 File/SQLite、Python 3.13.5 与 Node 26 下补齐单条省略对照。
+18 个场景得到 10 个成功和 8 个预期拒绝：旧 reader 拒绝 2 个归档摘要，三个发行
+形态均拒绝共 6 个外来叙述场景，6 个单条省略场景全部成功。10 个成功场景执行了
+实际发出的 native read 命令并重放原 Turn；2 个旧 reader 归档摘要失败均按同一
+身份通过源码恢复／重放。source 和 canonical work 均未改变，quota 扣费为零。
+83 个既有回归再次通过；打包 runtime 资源与源码字节一致。fixture 准备失败仍保留；
+一次初始 process-exit 等待未确认，因此保留证据目录并另查 serving retirement，
+不声称 process-exit 资格通过。
+
+36 场景矩阵耗时 135.6 秒；这是观察成本，不是速度或长程收益资格。完整 model、
+service CPU 与人工成本未测量。真实安装宿主的升级及回读仍未验证。I3 至少保留一个
+minor release。这些证据不关闭完整 R0/V10、M1/#8011、R1、context/model 或拆分安装，
+也不晋升 D2/D5/D6/D3。使用既有 self-repair lookup 中的
+`marked_todo_archive_pointer_reader_drift`，组合查询
+`quota_unexpected_collection_error non-generated content inside marked Todo region`。
+精简 Codex App 输出可能只有错误码；只读
+`loopx --format json quota status --goal-id <goal-id> --verbose` 提供详细症状。
+据此区分已交付修复和安装 reader 漂移；保留外来内容拒绝，不重写活跃状态。

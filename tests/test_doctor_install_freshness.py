@@ -41,8 +41,12 @@ class _FakeDistribution:
         assert name == "INSTALLER"
         return "pip"
 
-    def locate_file(self, _name: str) -> Path:
-        return self._root
+    def locate_file(self, name: str) -> Path:
+        if not name:
+            return self._root
+        item = self.files[0]
+        assert name == item.as_posix()
+        return item.locate()
 
 
 def _git(root: Path, *args: str) -> str:
