@@ -34,10 +34,11 @@ from .command_validation import (
     TaskValidator,
     build_loopx_turn_command_validator,
     normalize_host_argv,
+    host_request_schema_mismatch,
     normalize_reward_memory_reflection_validation,
     reward_memory_reflection_digest,
 )
-from ..quota.turn_envelope import LOOPX_TURN_HOST_REQUEST_SCHEMA, turn_plan_host_source
+from ..quota.turn_envelope import turn_plan_host_source
 from .driver import (
     COMPLETE_TURN_PLAN_SCHEMA_VERSION,
     selected_turn_todo, turn_host_lineage,
@@ -1649,22 +1650,13 @@ def run_loopx_turn_once(
         )
         if needs_host and goal_admission is not None:
             goal_admission.require_current()
-        if needs_host and argv is not None:
-            required_schema = request["schema_version"]
-            declared_schema = (
-                LOOPX_TURN_HOST_REQUEST_SCHEMA
-                if host_adapter_request_schema is None
-                else host_adapter_request_schema
+        if needs_host and argv is not None and (reason := host_request_schema_mismatch(
+            request["schema_version"], host_adapter_request_schema,
+        )) is not None:
+            return execution_payload(
+                plan, {"status": "unavailable", "host": host_projection, "reason": reason},
+                execute=True, replayed=False, effects=empty_effects,
             )
-            if declared_schema != required_schema:
-                return execution_payload(
-                    plan,
-                    {"status": "unavailable", "host": host_projection, "reason": (
-                        f"Generic CLI adapter must support {required_schema}. "
-                        f"Use a compatible adapter and pass --host-adapter-request-schema {required_schema}."
-                    )},
-                    execute=True, replayed=False, effects=empty_effects,
-                )
         capture = stage_turn_decision_capture(
             journal["plan"] if journal is not None else plan, journal_path=journal_path,
             decision=decision_capture_payload, existing_journal=journal is not None,

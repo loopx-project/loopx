@@ -197,8 +197,6 @@ def selected_turn_todo(envelope: Mapping[str, Any]) -> dict[str, Any]:
     Only Python's original scalar codec remains here. Pure source edits retain
     unknown fields and exact numbers without another JSON value decoder.
     """
-    from ..quota.cli_projection import _apply_context_projection_changes
-
     orchestration = _wire_mapping(envelope.get("task_orchestration_contract"))
     source = {"selected_todo": _wire_mapping(_wire_mapping(envelope.get("action")).get("selected_todo")),
               "task_orchestration_contract": orchestration}
@@ -275,8 +273,6 @@ def compose_turn_decision(
     """Transport complete source facts to the existing typed composition owner."""
     resolution = resolve_scheduler_execution_context(scheduler_execution_context)
     args = render_scheduler_execution_args(scheduler_execution_context=resolution) if resolution.ok and resolution.context is not None else ""
-    from .cli_projection import _apply_context_projection_changes
-
     source = dict(payload)
     result = _turn_envelope_result("compose_complete", payload=source,
         scheduler_execution_args=args, source_edits=True)

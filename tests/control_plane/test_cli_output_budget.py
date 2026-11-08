@@ -34,6 +34,7 @@ from loopx.rollout_event_log import rollout_event_log_path
 from tests.control_plane.cli_output_fixture import (
     budget_fixture_path,
     read_cli_context_for_oracle,
+    read_pinned_cli_body,
     measure_cli_context_for_oracle,
     stable_budget_fixture_root as _stable_budget_fixture_root,
 )
@@ -520,7 +521,16 @@ def _assert_turn_plan_writeback_routes(
     measurement: dict, registry_path: Path, runtime: Path
 ) -> None:
     # Budget compaction must not discard or redirect the writeback target.
-    action = _measured_payload(measurement)["turn_envelope"]["writeback"]["next_cli_actions"][0]
+    plan = _measured_payload(measurement)
+    assert not any(plan["effects"].values())
+    if plan["schema_version"] == "loopx_turn_plan_v0":
+        # A frozen caller also measures historical main under its original
+        # contract; v0 did not declare the v1 inspection marker or carrier.
+        action = plan["turn_envelope"]["writeback"]["next_cli_actions"][0]
+    else:
+        assert plan["schema_version"] == "loopx_turn_plan_v1"
+        assert plan["boundary"]["inspection_only"] is True
+        action = plan["work_contract"]["interaction_contract"]["cli_channel"]["next_cli_actions"][0]
     argv = shlex.split(action)
     assert argv.count("--registry") == argv.count("--runtime-root") == 1
     # Windows drive-rooted aliases are canonicalized by the runtime owner.
@@ -555,6 +565,11 @@ def _mode_variant_commands(
         "--agent-scope",
         "Public CLI output qualification.",
     ]
+    from loopx.control_plane.quota import turn_envelope
+
+    current_host_schema = getattr(turn_envelope, "COMPLETE_TURN_HOST_REQUEST_SCHEMA", None)
+    host_version_args = (["--host-adapter-request-schema", current_host_schema]
+                         if current_host_schema is not None else [])
     quota = _surface_commands(
         project=project, runtime=runtime, registry_path=registry_path,
         state_file=state_file, output_format=output_format,
@@ -620,7 +635,7 @@ def _mode_variant_commands(
             AGENT_IDS[0],
             "--project",
             str(project),
-            "--host-adapter-request-schema", "loopx_turn_host_request_v1",
+            *host_version_args,
             "--host-command-json",
             '["python3","-c","raise SystemExit(9)"]',
             "--no-global-sync",
@@ -802,6 +817,46 @@ def test_real_cli_output_stays_inside_baseline_and_growth_contracts(
         for scenario in SCENARIOS
     }
     _assert_scenario_matrix(scenarios)
+
+
+@pytest.mark.parametrize("scenario", [SCENARIOS[0], SCENARIOS[2]], ids=["small", "multi-agent"])
+def test_host_ready_turn_plan_preserves_current_controls(tmp_path: Path, scenario: Scenario) -> None:
+    with _stable_budget_fixture_root(tmp_path / scenario.name) as root:
+        project, runtime, registry_path, state_file = _write_fixture(root, scenario)
+        import_fixture_authority(registry_path, GOAL_ID)
+        command = _surface_commands(project=project, runtime=runtime, registry_path=registry_path,
+                                    state_file=state_file, output_format="json")["loopx_turn_plan"]
+        before = state_file.read_bytes()
+        code, text = _invoke_cli(command)
+        assert code == 0, text
+        payload = json.loads(text)
+        assert payload["route"]["kind"] == "ready_for_host"
+        assert payload["boundary"]["inspection_only"] is True
+        assert not any(payload["effects"].values()) and state_file.read_bytes() == before
+        if os.name != "posix":
+            assert payload["work_contract"]["contract_binding"]
+            return
+        assert_cli_output_baseline(CLI_OUTPUT_BUDGET_BY_ID["loopx_turn_plan"], scenario=scenario.name,
+            output_format="json", text=text, measurement=measure_cli_output(text, output_format="json"))
+        detail = payload["detail_ref"]
+        original = json.loads(Path(detail["path"]).read_bytes())
+        plan = payload["work_contract"]
+        for field in ("selected_todo", "goal_boundary", "scheduler_hint", "handoff_readiness",
+                      "action_portfolio", "planning_horizon"):
+            assert plan.get(field) == original.get(field)
+        channel = "agent_channel"
+        context = plan["interaction_contract"][channel]
+        expected = original["interaction_contract"][channel]
+        assert context["required_reads"] == expected["required_reads"]
+        for field in ("selected_todo_ref", "selected_todo_authority", "user_todos",
+                      "unavailable_context", "failures"):
+            assert context["work_context"].get(field) == expected["work_context"].get(field)
+        assert "sources" not in context["work_context"]
+        assert "complete" not in context["work_context"]
+        selector = "/interaction_contract/agent_channel/work_context/sources"
+        body, _, _ = read_pinned_cli_body(detail["command"] + " --select " + selector)
+        assert json.loads(body)["selections"] == [{"pointer": selector,
+            "value": expected["work_context"]["sources"]}]
 
 
 def test_diagnose_keeps_selected_reads_once_and_out_of_the_goal_overview(
@@ -1202,7 +1257,19 @@ def test_quota_cli_keeps_complete_vision_rules_with_reachable_duplicate_refs(
 def test_crowded_turn_plan_budget_preserves_executable_vision_authoring(
     tmp_path: Path,
     include_agent_vision: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from loopx.cli_commands import turn
+
+    build = turn.build_loopx_turn_plan
+    originals = []
+
+    def record_source(*args, **kwargs):
+        plan = build(*args, **kwargs)
+        originals.append(plan["work_contract"])
+        return plan
+
+    monkeypatch.setattr(turn, "build_loopx_turn_plan", record_source)
     with _stable_budget_fixture_root(tmp_path / "turn-plan-vision") as stable_root:
         project, runtime, registry_path, state_file = _write_fixture(
             stable_root,
@@ -1217,11 +1284,46 @@ def test_crowded_turn_plan_budget_preserves_executable_vision_authoring(
             state_file=state_file,
             output_format="json",
         )["loopx_turn_plan"]
-        exit_code, text = _invoke_cli(command, read_context=True)
+        before = state_file.read_bytes()
+        exit_code, text = _invoke_cli(command)
+        assert exit_code == 0, text
+        payload = _json_payload(text)
+        assert payload["boundary"]["inspection_only"] is True
+        assert not any(payload["effects"].values()) and state_file.read_bytes() == before
+        [source] = originals
+        if os.name == "posix":
+            detail = payload["detail_ref"]
+            assert json.loads(Path(detail["path"]).read_bytes()) == source
+            assert payload["work_contract"]["replan_action_packet"] == source["replan_action_packet"]
+            assert payload["work_contract"]["goal_boundary"] == source["goal_boundary"]
+            # The later read must remain bound to this preview when live facts change.
+            state_file.write_text("# Different Goal after the inspection\n", encoding="utf-8")
+            selector = "/interaction_contract/agent_channel/work_context"
+            reader = shlex.split(detail["command"])
+            rc, page_text = _invoke_cli(["--format", "json", *reader[reader.index("quota"):], "--select", selector])
+            page = json.loads(page_text)
+            assert rc == 0 and page["eof"], page
+            [selected] = json.loads(page["content"])["selections"]
+            assert selected == {"pointer": selector,
+                "value": source["interaction_contract"]["agent_channel"]["work_context"]}
+            assert "sources" not in payload["work_contract"]["interaction_contract"]["agent_channel"]["work_context"]
+            assert "contract_binding" not in payload["work_contract"]
+            if not include_agent_vision:
+                state_file.write_bytes(before)
+                # An insecure existing transport must not receive private data.
+                transport = runtime / "context-delivery"
+                transport.chmod(0o755)
+                captures = list(transport.iterdir())
+                fallback_code, fallback_text = _invoke_cli(command)
+                assert fallback_code == 0, fallback_text
+                fallback = _json_payload(fallback_text)
+                assert "detail_ref" not in fallback and fallback["work_contract"] == originals[-1]
+                assert fallback["boundary"]["inspection_only"] is True
+                assert list(transport.iterdir()) == captures and state_file.read_bytes() == before
+        else:
+            assert payload["work_contract"] == source
 
-    assert exit_code == 0, text
-    payload = _json_payload(text)
-    writeback = payload["turn_envelope"]["replan_action_packet"][
+    writeback = payload["work_contract"]["replan_action_packet"][
         "writeback_contract"
     ]
     assert "path_delta.evidence_refs" in writeback["required_fields"]
@@ -1288,7 +1390,7 @@ def test_native_stride_projection_rejects_each_missing_decision_field(
     payload = _json_payload(text)
 
     def envelope(value):
-        return value["turn_envelope"] if surface == "loopx_turn_plan" else value
+        return value["work_contract"] if surface == "loopx_turn_plan" else value
 
     def row(value):
         return {
@@ -1652,12 +1754,14 @@ def _assert_collection_growth_and_bootstrap_duplication(
             assert 0 < len(context["evidence"]) <= 24
         elif fixed_semantic_growth:
             assert spec.surface_id == "loopx_turn_plan"
-            small_packet = _measured_payload(small[spec.surface_id]["json"])[
-                "turn_envelope"
-            ].get("replan_action_packet")
-            crowded_packet = _measured_payload(crowded[spec.surface_id]["json"])[
-                "turn_envelope"
-            ]["replan_action_packet"]
+            def replan_packet(measurement):
+                plan = _measured_payload(measurement)
+                if plan["schema_version"] == "loopx_turn_plan_v0":
+                    return plan["turn_envelope"].get("replan_action_packet")
+                assert plan["schema_version"] == "loopx_turn_plan_v1"
+                return plan["work_contract"].get("replan_action_packet")
+            small_packet = replan_packet(small[spec.surface_id]["json"])
+            crowded_packet = replan_packet(crowded[spec.surface_id]["json"])
             small_writeback = (
                 small_packet.get("writeback_contract")
                 if isinstance(small_packet, dict)

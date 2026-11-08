@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import hashlib
+import shlex
 import json
 import shutil
 import sys
@@ -59,6 +61,27 @@ def _receipt_row(
     output_contract_version: str | None = None,
 ) -> dict:
     payload = measurement.get("resolved_payload", measurement.get("payload"))
+    plan, material, detail_cost = payload, None, None
+    if isinstance(plan, dict) and plan.get("schema_version") == "loopx_turn_plan_v1":
+        if "detail_ref" in plan:
+            from tests.control_plane.cli_output_fixture import read_pinned_cli_body
+            body, calls, reader_bytes = read_pinned_cli_body(plan["detail_ref"]["command"])
+            plan = {**plan, "work_contract": json.loads(body)}
+            detail_cost = {"reader_calls": calls, "reader_stdout_utf8_bytes": reader_bytes,
+                           "body_utf8_bytes": len(body.encode("utf-8"))}
+        sources = plan["work_contract"]["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+        for row in sources:
+            content = row.get("content", {})
+            if row.get("source") == "goal_state" and content.get("full_source") is True:
+                revision = "sha256:" + hashlib.sha256(content["text"].encode("utf-8")).hexdigest()
+                assert revision == content["revision"] and row["ordering"] == "before_work"
+                material = {"command": row["command"], "revision": revision, "ordering": row["ordering"]}
+    elif isinstance(plan, dict) and plan.get("schema_version") == "loopx_turn_plan_v0":
+        for row in plan["turn_envelope"]["required_reads"]:
+            command = shlex.split(row.get("command", ""))
+            if row.get("source") == "goal_state" and row.get("ordering") == "before_work" and command[:2] == ["cat", "--"] and len(command) == 3:
+                material = {"command": row["command"], "ordering": row["ordering"],
+                    "revision": "sha256:" + hashlib.sha256(Path(command[2]).read_bytes()).hexdigest()}
     return {
         "row_id": row_id,
         "surface_id": surface_id,
@@ -83,6 +106,8 @@ def _receipt_row(
         ),
         "markdown_headings": semantics.markdown_headings(text),
         "markdown_anchor": markdown_anchor,
+        "turn_plan_controls": semantics.turn_plan_control_observation(plan, goal_state=material),
+        **({"inspection_source_read": detail_cost} if detail_cost is not None else {}),
         "action_signature_sha256": (
             semantics.action_signature_semantic_sha256(payload)
             if isinstance(payload, dict)
@@ -323,6 +348,7 @@ def _variant_rows(
                     scenario="small",
                     output_format=output_format,
                     qualification_policy="explicit_opt_in_cold_path",
+                    output_contract_version=getattr(variant, "output_contract_version", None),
                     semantic_json_keys=variant.semantic_json_keys,
                     markdown_anchor=variant.markdown_anchor,
                     measurement=measurement,
