@@ -410,6 +410,43 @@ resource policy in the study manifest before launching a new comparison.
 Use explicit `--feedback best-only` to retain strict-improvement publication, or
 `--feedback blind` as an evaluator-feedback-free control. Harbor is unchanged.
 
+### Match a local probe to an accepted native submission
+
+Native heartbeat workers with `--execution-observation local_probe` expose
+`loopx-bind-native-candidate`. When the comparison could change the next
+decision, retain the exact submission archive in the research directory.
+Use `sforge-submit --retain-archive DIR --json` only if the installed client
+advertises both options. On those clients, an accepted result can also be
+read with `sforge-submit --result ID --json --no-wait`.
+
+```sh
+loopx-bind-native-candidate --observation probe.json --snapshot candidate/manifest.json \
+  --result native-result.json --archive submission.tar.gz \
+  --generated-file 'result.json=probe-results/result.json'
+```
+
+The snapshot manifest records `input_revision`, the relative
+`execution_observation` path and a `files` list of submitted relative paths
+and SHA-256 digests. Each file must match a pin in the original probe's
+adjacent `.candidate.json` or a separately retained output of that probe.
+Name each such output explicitly with `--generated-file`, omitting that
+option when the probe already pins every submitted file. Keep the probe's
+additional validation fixtures in its own manifest.
+
+Supply the original completed native response with its source receipt. The
+command checks the uploaded archive hash and compares the complete set of
+file paths and bytes without unpacking files onto disk. It supports up to 32
+submitted files in an ordinary gzip tar, with compressed and expanded limits
+of 64 MiB each. An absent receipt, unsupported archive or disagreement gives
+a nonzero exit without a candidate reference. When both scopes are proven,
+attach the returned `candidate_ref` to the local and native measurements
+and retain their separate input revisions, evaluator references and evidence.
+The command performs no network request or evaluation.
+
+For offline diagnosis with the same retained artifacts, use
+`python -m benchmark.runtime.sforge_candidate_binding` from the pinned runner.
+
+
 For native archive submission, start `python -m benchmark.edgebench.serve` and use the runner
 without `--feedback` to select the defaults. Explicit
 `--feedback native --submission-cooldown 120 --eval-interval 300` restores the
