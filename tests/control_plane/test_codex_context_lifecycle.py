@@ -94,10 +94,17 @@ def test_native_journal_projects_one_host_execution_request(tmp_path, monkeypatc
     ) == {
         **request, "readback_only": True,
     }
+    ready_capture = tmp_path / "ready.json"
+    ready_bytes = b'{"execution_preparation":{"state":"ready"}}'
+    ready_capture.write_bytes(ready_bytes)
+    ready_capture.chmod(0o600)
+    ready_digest = hashlib.sha256(ready_bytes).hexdigest()
     receipt = {
         "event": "host_execution_prepared",
         "todo_id": "todo_fixture",
         "turn_instance_id": "turn-fixture",
+        "capture_path": str(ready_capture),
+        "capture_sha256": ready_digest,
         "claim_operation_id": f"todo-claim:codex-capture:{source_sha256}",
     }
     state_before_child = (tmp_path / "session.json").read_bytes()
@@ -114,6 +121,7 @@ def test_native_journal_projects_one_host_execution_request(tmp_path, monkeypatc
         **request,
         "readback_only": True,
         "claim_operation_id": f"todo-claim:codex-capture:{source_sha256}",
+        "ready_capture": {"path": str(ready_capture), "sha256": ready_digest},
     }
     assert context.native_execution_preparation_request(
         str(tmp_path), {**event, "hook_event_name": "SessionStart"},
@@ -121,8 +129,11 @@ def test_native_journal_projects_one_host_execution_request(tmp_path, monkeypatc
         **request,
         "readback_only": True,
         "claim_operation_id": f"todo-claim:codex-capture:{source_sha256}",
+        "ready_capture": {"path": str(ready_capture), "sha256": ready_digest},
     }
     deliver(tmp_path, event, read_pages(tmp_path, wire))
+    assert context.native_execution_preparation_request(str(tmp_path), eligible)["readback_only"] is True
+    deliver(tmp_path, event, capture_pages(str(ready_capture), ready_digest))
     assert context.native_execution_preparation_request(str(tmp_path), eligible) is None
     assert context.native_execution_preparation_request(
         str(tmp_path), {**event, "hook_event_name": "SessionStart"},

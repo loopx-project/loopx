@@ -403,17 +403,21 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
                 if name == "PostToolUse":
                     checkpoint_native_read(read_state, updated, event,
                         [page for page in pages if "read_sections" not in page])
-                    if same and any(page.get("ok") is True for page in pages):
-                        previous = updated.get("host_execution_preparation")
-                        if (
-                            isinstance(previous, dict)
-                            and previous.get("source_sha256") == (recovery or {}).get("sha256")
-                            and previous.get("delivery_confirmed") is not True
-                        ):
-                            updated["host_execution_preparation"] = {
-                                **previous,
-                                "delivery_confirmed": True,
-                            }
+                    previous = updated.get("host_execution_preparation")
+                    ready = previous.get("ready_capture") if isinstance(previous, dict) else None
+                    ready_digest = ready.get("sha256") if isinstance(ready, dict) else None
+                    if same and isinstance(ready_digest, str) and any(
+                        page.get("ok") is True
+                        and ready_digest in (page.get("sha256"), page.get("source_sha256"))
+                        for page in pages
+                    ):
+                        # These bytes were checked against the recorded ready
+                        # capture. An earlier guard read or Hook stdout does not
+                        # show that this recovery path reached the caller.
+                        updated["host_execution_preparation"] = {
+                            **previous,
+                            "ready_read_observed": True,
+                        }
                 if updated != state:
                     _save(root, updated)
                 saved = updated.get("recovery")
@@ -486,7 +490,7 @@ def native_execution_preparation_request(
                 if previous.get("state") in {"attempted", "ready"}:
                     if (
                         event.get("hook_event_name") != "SessionStart"
-                        and previous.get("delivery_confirmed") is True
+                        and previous.get("ready_read_observed") is True
                     ):
                         return None
                     readback = {**action, "readback_only": True}
@@ -574,32 +578,6 @@ def record_native_execution_preparation(
             **({"ready_capture": ready_capture} if ready_capture is not None else {}),
         }
         _save(root, state)
-
-
-def record_native_execution_preparation_delivered(
-    directory: str | None,
-    event: dict[str, Any],
-    *,
-    source_sha256: str,
-) -> None:
-    """Mark a ready or terminal preparation receipt delivered for this source."""
-
-    if directory is None or not native_context_event_eligible(event):
-        return
-    with _locked(directory) as root:
-        state = _state(root)
-        previous = state.get("host_execution_preparation")
-        if (
-            state.get("session_id") == event.get("session_id")
-            and state.get("cwd") == event.get("cwd")
-            and isinstance(previous, dict)
-            and previous.get("source_sha256") == source_sha256
-        ):
-            state["host_execution_preparation"] = {
-                **previous,
-                "delivery_confirmed": True,
-            }
-            _save(root, state)
 
 
 def _context_pages(value: object) -> list[dict[str, Any]]:

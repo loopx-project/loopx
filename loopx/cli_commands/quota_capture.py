@@ -939,7 +939,7 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
         from ..control_plane.turn_driver.codex_context import (
             CONTEXT_LIFECYCLE_HOOKS, codex_context_directory, codex_context_hook,
             native_context_event_eligible, native_execution_preparation_request,
-            record_native_execution_preparation, record_native_execution_preparation_delivered,
+            record_native_execution_preparation,
         )
         from ..control_plane.turn_driver.codex_execution_preparation import (
             LegacyNativePreparationCapture,
@@ -1014,11 +1014,6 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
                                     receipt["context"]["recovery_command"] = context_capture_read_command(
                                         source, digest, reader_argv=current_loopx_cli_argv())
                             preparation_context = codex_execution_preparation_context(receipt)
-                            record_native_execution_preparation_delivered(
-                                directory,
-                                event,
-                                source_sha256=request["source_sha256"],
-                            )
                 except LegacyNativePreparationCapture as error:
                     preparation_context = str(error)
                 except (OSError, RuntimeError, subprocess.SubprocessError, ValueError, TypeError, RecursionError):
