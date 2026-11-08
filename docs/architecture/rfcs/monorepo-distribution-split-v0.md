@@ -790,6 +790,35 @@ Approval needs a reviewed decision, not implementation progress or silence.
   exact expiry remains a release-owner decision. M1 is open. No module-count,
   loading-performance, split-package or R1 managed-Turn benefit is claimed.
 
+### 2026-11-04 — M1 public status owner migration
+
+- **Delta:** the complete `ChatStatusRequestMixin` and `goal_read_runtime_root`
+  implementation moves to `loopx.chat.status_api`. Chat HTTP and Todo detail
+  import that owner directly. The characterization prerequisite
+  [#8001](https://github.com/loopx-project/loopx/pull/8001) is already merged.
+- **Direct migration:** the historical top-level `loopx.chat_status_api` module is
+  removed rather than retained as an alias or warning shim. The repository callers
+  and published-surface audit found no external importer; all active callers and
+  tests now use `loopx.chat.status_api`. This intentional compatibility exemption
+  applies only to this internal-only relocation and creates no general precedent
+  for removing a supported public import.
+- **Authority boundary:** retarget both exact owner-path entries in
+  `tests/architecture/test_source_session_registry_denial.py`, leaving every
+  denial assertion and the `_discovery_registry` exception unchanged. Real HTTP
+  coverage permits lifecycle-only registry discovery but refuses full status
+  before collector execution. Moving the presentation owner grants no new
+  runtime, source, provider or execution authority.
+- **Evidence:** owner tests now require the canonical import and absence of the
+  top-level shim. Existing HTTP, File/SQLite source routing, source loss/recovery
+  and delivery-review tests protect the original behavior. Absolute-import-
+  resolved AST comparison covers the complete owner; the denial oracle differs
+  only in its two owner paths.
+- **Remaining:** this is one public-owner M1 slice, not completion of the wider
+  public Chat migration, D3, split distributions or R1 managed minimal. The
+  removed internal-only top-level module is one representational cleanup, not
+  evidence of loading-performance or long-horizon benefit. Source and isolated-
+  wheel qualification do not establish an upgrade of an existing installed host.
+
 ### 2026-11-04 — Capability discovery selected loading
 
 - **Baseline:** `79b781865`. `capability list` / `show` and command help now
@@ -2567,6 +2596,230 @@ R0/V10/R1, D2/D5/D6/D3, context/model/split-install, PostgreSQL host/wheel and
 full-cost/adoption requirements remain open. No main merge or host upgrade is
 included.
 
+### 2026-11-08 — Default caller loading and immutable recovery
+
+A complete source-checkout/default-SQLite lifecycle at
+`a02be126957953b7a61796e3b99fcfe578eb5174`, with Python 3.13.5 and normal
+bytecode settings, records imports from 22 actual console processes. The
+unchanged synthetic 101-Todo workflow preserves its independently verified
+sum-45 artifact, original completion time and write scopes, four receipts, one
+debit, restart, evidence-replacement refusal and settlement replay. Both owned
+native daemons exit. This is current-source correctness and loading evidence;
+it is not another paired cost sample or installed-distribution qualification.
+
+The fresh guard loads 505 LoopX modules; actual refresh writeback loads 432.
+Explicit-reference context recovery loads 71 on its initial selected read and
+69 on subsequent pages, with no capability modules. A separate recovery probe
+makes every capability import unavailable and reconstructs the original
+60,888-byte capture exactly across two pages. An altered capture still fails
+its digest check, and a copied reference with public file permissions fails
+its private-file check. The first observer incorrectly required a console-path
+continuation; accepting the observed exact interpreter/module prefix resumes
+the same pinned offset. Preserve that observer failure and the copied-reference
+preparation refusal. The probe does not establish new authority-write costs.
+
+The successful import trace locates a remaining composition boundary:
+`cli_runtime` imports `periodic_report.post_writeback_hook` before refresh
+validation; even the default-disabled report path loads its report-source, profile and
+preset construction dependencies. Loaded modules alone do not establish
+requiredness or cost. The next bounded loading change should separate this
+existing provider's subscription resolution from report-source/profile/preset
+construction,
+preserve live machine-default and Goal-override resolution, module exports and
+patch points, and retain all hook/replay/authority checks. Characterize both
+disabled and enabled real writeback before changing that boundary. The already
+isolated immutable reader does not justify a broad context-reader migration.
+
+The feedback and lexical-scope proposals remain separate review dependencies;
+this checkpoint includes neither proposal in its measured source. Existing
+File/wheel/PostgreSQL evidence retains its earlier source boundary. Independent
+review/readiness, I3 for at least one minor release, M1/#8011, full R0/V10/R1,
+D2/D5/D6/D3, context/model/split-install, PostgreSQL host/wheel, full costs and
+adoption remain open. All frozen failures and samples are retained; no speedup,
+complete kernel acceptance, main merge or host upgrade is established.
+
+### 2026-11-08 — Feedback validation without mutation-adapter loading
+
+Initial runtime `2c5212fdb15035c26c3e158420d67197d45715f2` makes the two existing
+retained-state mutation adapters in `loopx.feedback` load on demand. Pure
+feedback validation now works when those adapters are unavailable; the parent
+fails at module import. Reward mutation resolves both adapters before registry
+reads or writes, while the original guard and writer call sites still look up
+the current module binding. Adapter object identity, mid-call patch behavior,
+index-before-state lock ordering, TypeScript guard ownership, credential refusal
+and partial-write handling remain. A local compatibility map, module `__getattr__`
+and `__dir__`, and a computed `__all__` preserve all 50 original star-export
+names, including the later append/render functions. There is no new capability,
+provider, persisted vocabulary, decision owner or cross-request authority cache.
+
+The two relevant groups pass 291 feedback-policy and 48 adapter/write/recovery
+cases. The independent unavailable-adapter tests fail on the parent before the
+change; head preserves pure validation and rejects a missing writer before
+reward mutation. Focused mypy and Ruff pass. The production semantic advisory
+finds no supported new carriers; explicit test-file inclusion is outside that
+scanner's supported `loopx/` scope. Test refusal strings remain local fixtures.
+
+The rebuilt monolithic wheel first passes isolated installed-module ownership,
+then matches all 1,840 packaged tracked sources outside the checkout with
+`PYTHONPATH` cleared. The five source-only omissions remain; relative to the
+frozen runtime candidate, only `effect_runtime.py` and `feedback.py` bytes change.
+The existing dashboard Chat build supplies the required bundle after the first
+wheel preparation failed for its absence. Four new candidate source/wheel ×
+File/SQLite 101-Todo CLI lifecycles use default bytecode and pass the original
+artifact, completion-time, scope, four-receipt, one-debit, restart, refusal and
+replay oracles. Both managed native daemons exit in every case. These are new
+runtime correctness checks, not additional matched cost samples.
+
+A normal-cache profile of an already settled synthetic recovery dry-run is
+used only to inspect loading dependencies. Its 410-module closure and nested
+import/compile timings cannot establish default-provider performance, fresh
+authority behavior or lifecycle cost. The initial stdlib-shadowing profile
+filename failed before CLI execution and remains a preparation failure. No
+frozen sample or preceding attribution pair is repeated, expanded or relabeled.
+No new whole-path benefit, PostgreSQL host/wheel, model/attention or installed
+adoption qualification is claimed. Preserve the peer hard-cut hold and all
+earlier failures, I3 for at least one minor release, M1/#8011, full R0/V10/R1,
+D2/D5/D6/D3 and context/model/split-install/full-cost/adoption acceptance.
+The original task and independent exact-head review/readiness remain open;
+the next loading decision stays with the existing quota/context/refresh callers.
+No main merge or installed-host upgrade is included.
+
+During submission preparation, a maintainer merges #8302 at
+`481436a56b47220c7c43bd6e272c1fa59d5038fe`; that head excludes this feedback
+change. The two unsubmitted feedback/checkpoint commits move to a clean successor
+based on target main `0ed909880`, retaining identical feedback and focused-test
+bytes. The successor wheel matches 1,841 packaged tracked sources, with the same
+five omissions and installed ownership checked first. Its fresh source/wheel ×
+File/SQLite lifecycles pass all four original oracle sets and both native exits
+per case. On this changed integration baseline, 48 write/recovery and 265 shared
+feedback-policy cases, mypy and Ruff pass. These checks qualify the successor's
+changed baseline; the initial runs remain historical evidence. No performance
+sample is repeated or added. The successor still requires independent exact-head
+review/readiness; the original task's complete acceptance remains open.
+
+### 2026-11-08 — Declaration codecs preserve selected-owner loading
+
+The inherited TypeScript CI failures reproduce on target main `94366314f0`.
+Cold handler loading reaches lease execution through the interaction/acceptance
+and outcome owners, because work declarations import `normalizeWriteScopes`
+from the full acquire runtime. Runtime `b0c42af8f` moves the existing lexical
+scope/value functions to `work_items/write_scope_codec.ts` and keeps their old
+exports. Coercion, raw request spellings, character classes, the 160-character
+limit and rejection behavior remain. Lease IO, admission, repository/workspace
+identity and source/revision/WAL/receipt fences stay with their existing owners.
+The digest guard also registers the existing quota action-wildcard matcher;
+its visible 64-hex rejection is unchanged.
+
+Both failing CI cases now pass; 19 loading/digest cases pass on Node 22.22.3.
+The related Node 26 groups pass 60 and 70 cases; the first group's missing-PG
+skip is subsequently exercised on an isolated PostgreSQL 16.15 server. Its
+store/workspace groups pass 391/32 cases and the separate service suite passes
+11 with no skips. Initial missing service environment and reused-incarnation
+failures remain recorded; the corrected service uses its own fresh database.
+Sixteen old/head scope-value/refusal comparisons and original export identities
+pass, as does TypeScript typing. Four new source/wheel × File/SQLite 101-Todo
+CLI lifecycles preserve the original artifact, completion time, scopes, four
+receipts, one debit, restart/refusal/replay and both native exits. The wheel
+matches 1,842 packaged tracked sources after installed-root verification; the
+same five source-only omissions remain. These qualify this runtime's correctness,
+not complete cost or installed benefit. All earlier frozen failures, peer
+hard-cut evidence, I3/minor-release, M1/#8011, full R0/V10/R1, D2/D5/D6/D3 and
+context/model/split-install/PostgreSQL-host/full-cost/adoption gaps remain open.
+The original task and independent review/readiness remain open; no main merge
+or installed-host upgrade is included.
+
+### 2026-11-08 — Report construction loading at Turn composition
+
+The existing `periodic-report` Python provider and CLI Turn adapter now resolve
+report source, preset, stage projection and request exports on demand. At runtime
+revision `7858d96e83ef98174cc43870e283f8f0e6f40c0b`, disabled subscriptions do
+not import those construction providers. The capability package already had lazy
+exports; this change fixes its concrete composition callers. Subscription
+validation remains with the same owner, including its cadence-to-profile schedule
+validator. Goal overrides, live machine defaults, configuration warnings, original
+export identities and patch points, hook profile digest/policy version, source
+selection, receipt replay and authority are retained. It adds no capability,
+configuration, UI, persisted vocabulary or decision owner.
+
+Against baseline `c263f7c78353fcaa914f23475d4d99d07eab7c01`, eleven identical
+synthetic configuration cases preserve hook output, trigger decisions and complete
+configuration error messages. The cold-process refusal oracle fails before the
+change when disabled composition imports the report source. Eight focused cases
+now cover absence, disabled inheritance, overrides, invalid disabled configuration,
+effect-free reads and export/patch compatibility. An initial stronger prohibition
+also rejected the canonical profile schedule validator; that failed probe is
+retained, and this slice preserves the validator rather than bypassing it.
+
+Source and separately built wheel File/default-SQLite console journeys pass the
+original complete 101-Todo lifecycle: unchanged fixture/artifact, four receipts,
+one debit, source/lease/refusal/restart/replay readback and two owned native exits
+per journey. Installed package ownership was verified before comparing 1,920
+present tracked entries; seventeen source-only or documentation/media omissions
+remain explicit. Wheel test-dependency and frontend-build preparation failures
+remain recorded. Isolated PostgreSQL 16 store/service suites pass 391/11 cases
+with zero skips; the initial service run's missing environment declaration remains
+a skipped run. This does not qualify PostgreSQL host/wheel journeys. Report suites
+pass 100 cases. The broader digest inventory check has one identical baseline/head
+failure on an unchanged Todo selector; that check remains failed.
+
+A separate report-composition probe used CPython 3.13.5 on macOS arm64, normal
+bytecode in both arms, an uncounted prewarm and eight alternating pairs per
+disabled/enabled case. Disabled median wall/CPU observations were 0.255/0.111 s
+before and 0.246/0.107 s after; enabled observations were 0.331/0.117 s and
+0.321/0.113 s. Loaded LoopX modules fell from 196 to 179/182. These small,
+concurrent-test observations do not establish material speedup, sustained tail
+latency or complete CLI/Node/model/attention cost benefit. The earlier frozen
+20-cost, attribution and normal-bytecode campaigns were not repeated, enlarged or
+relabeled. The independently reversible delta is off-state construction isolation.
+Exact-head review, CI/readiness and explicit protected merge authority still govern
+adoption. Preserve I3 for at least one minor release, M1/#8011, full R0/V10/R1,
+D2/D5/D6/D3, context/model/split-install, full-cost/adoption gaps and all historical
+failures. The existing runtime-composition work continues through these boundaries.
+
+### 2026-11-08 — Synthetic Host UTF-8 recovery qualification
+
+The Windows CPython 3.11 CI arm of #8360 fails six existing original-task
+revalidation cases. Its synthetic Python Host inherits a locale decoder for a
+pipe, while the existing generic Host transport sends UTF-8 JSON. A disposable
+File-provider counterprobe changes only that Host decoder: CP1252 produces
+`host_failure` without `task_failure`; UTF-8 reaches the independent artifact
+validator and produces `validation_failed` at `task_postcondition`, with
+`revalidate_cached_result`. The source macOS arm independently passes all 12
+existing revalidation cases. These observations locate a fixture mismatch;
+they do not justify widening production failure classification.
+
+Fixture commit `a4ce613585fdb329ba3600f0ede768864214ed84`, over main
+`4e949f405528fd8087f0623526c62f890c1ce982`, explicitly configures its stdin as
+UTF-8 before reading the request. One new File/SQLite regression first sets
+only the generated Host's decoder to CP1252, sends a Unicode brief and requires
+the rejected artifact to reach task validation. After repairing the artifact,
+revalidation must accept it with the original turn key and exactly one Host
+invocation. The same regression fails with the immutable baseline Host on the
+same CPython 3.13.5/Node 22.22.3 environment, and passes with the correction.
+No transport, production owner, persisted state or protocol vocabulary changes.
+
+On macOS arm64 with Node 22.22.3, CPython 3.11.15 source and a newly installed,
+isolated monolithic wheel each pass the new two provider cases plus all 12
+existing original-task recovery cases. Wheel imports are verified outside the
+checkout before loading the source-owned fixtures; all 1,920 present packaged
+tracked runtime entries match the source bytes. The same 17 source-only
+exclusions remain: canary baseline, host plugin/config, fault-test helper and
+documentation/media. This qualifies the existing File/SQLite
+synthetic Host recovery path, including retained MCP disconnection and lock
+timeout recovery cases, not model adoption, split installation or native
+Windows. The failed original Windows arm remains historical evidence until a
+new exact-head Windows run passes. The independent Frontstage manifest request
+still returns HTTP 504 after its bounded retry.
+
+The original task stays open. Preserve I3 for at least one minor release,
+M1/#8011, full R0/V10/R1, D2/D5/D6/D3, context/model/split-install,
+PostgreSQL host/wheel, whole-path/full marginal-cost/adoption requirements and
+all historical and frozen failures. No cost campaign is repeated or relabeled,
+and this fixture qualification establishes no performance benefit. The report
+loading proposal #8360 retains its independent review and CI gates; the next
+step is exact-head review of this correction and native Windows readback. No
+main merge or installed-host upgrade is included.
+
 ## Appendix B: Decision log
 
 | Date | Decision | Owner / approval | Alternatives | Normative sections changed |
@@ -2652,3 +2905,82 @@ inside marked Todo region`. Thin Codex App output may expose only the error code
 read-only `loopx --format json quota status --goal-id <goal-id> --verbose` supplies
 the detailed symptom. Distinguish a shipped repair from installed-reader drift
 without weakening foreign-content rejection or rewriting active state.
+
+### 2026-11-08 — Combined loading proposal and nullable staged reads
+
+The declaration-codec proposal now integrates target main `efd49352c`, the
+feedback-loading component from #8339 and the equivalent anchored-clock repair
+already on main. Component approvals and checks remain evidence for their old
+heads; the combined proposal still needs its own review and validation.
+
+A real precision-preserving `quota replan-view --replan-stage explore` read
+fails when the staged view contains only strings, booleans and null. The
+existing edit encoder compacts the whole root into an empty property path,
+which its Python transport rejects. Restricting that compact replacement to
+nested records preserves the property-path contract and existing numeric/source
+lineage. The independent root-path oracle fails before the change and passes
+afterward; the real read now returns the original context/hash and an absent
+Explore basis. No decision owner, vocabulary, provider or authority is added.
+
+The integrated source and packaged wheel research-record checks retain the
+original negative paragraph, two original history rows, Goal isolation and
+exports; the packaged conversation scenario also passes. The earlier CI timeout
+is not reproduced locally, so its platform/timing cause remains unknown rather
+than being declared repaired. Four fresh source/wheel × File/SQLite 101-Todo
+correctness episodes preserve the original fixture/artifact, scopes, completion
+time, four receipts, one debit, refusal/restart/replay and two owned native exits.
+An initial driver used `python` while the source console selected `python3`,
+producing two distinct runtime fingerprints and failing the warmup/exit oracle.
+That failure is retained; the subsequent cases use each console's actual
+interpreter. They do not repeat or relabel any frozen cost sample.
+
+An isolated PostgreSQL 16 server passes 391 store and 11 service cases without
+skips. The installed wheel matches 1,921 tracked package entries byte for byte;
+17 tracked documentation/media/testing or source-only entries are omitted, and
+general distribution coverage beyond the exercised callers is not inferred.
+Whole-path cost benefit, installed adoption, PostgreSQL host/wheel and all
+I3/minor-release, M1/#8011, full R0/V10/R1, D2/D5/D6/D3,
+context/model/split-install and historical failure qualifications remain open.
+The next useful boundary remains report subscription/construction loading after
+the combined proposal's review; the original task stays open.
+
+### 2026-11-08 — Integrated loading and recovery qualification
+
+The combined proposal adopts the existing feedback/declaration-codec repair
+from #8346, report construction isolation from #8360 and UTF-8 synthetic Host
+fixture repair from #8365 over target main `fe36f31fd`. Runtime qualification
+uses `251d7eaeff4581d3436340f68c5b6cd8c8ebf1ad`. The existing lexical
+`write_scope_codec.ts` already removes the observed dependency on full lease
+admission; an additional interaction decoder layer is unnecessary. Error and
+vocabulary owners, declared scope spellings and retained receipts stay intact.
+
+On Node 22.22.3, the loading/digest checks and adjacent work-requirement,
+lease and effect-program regressions pass (60 cases), as does the control-plane
+typecheck. Selected-owner load failure still rejects without fallback. Four
+fresh source/wheel × File/SQLite 101-Todo console correctness episodes preserve
+the prior immutable fixture/artifact fingerprints, scopes, original completion
+time, four receipts, one debit, refusal/restart/replay and two owned native exits
+each. All 1,921 present tracked wheel entries match source bytes; seventeen
+source-only, documentation and media omissions are unchanged.
+
+Real PostgreSQL 16.15 store/service suites pass (391/11, zero skips) on an
+isolated disposable server that was stopped afterward. The first service run
+omitted its dedicated environment variable and skipped one case; that result
+remains a failure of qualification, separate from the corrected run.
+
+A browser-fixture interruption check also depended on the shared five-second
+completion window and checked the request ledger before its asynchronous receipt
+returned. The scenario now holds only the correction's exact Session/Turn stream,
+checks that it is still active and waits for the matching interrupt response.
+The original ten-second interrupted-message assertion remains intact. A delayed
+receipt probe fails the original scenario; removing only the stream hold from the
+candidate reproduces that message timeout, while the complete candidate passes.
+This is synthetic browser qualification, not proof of a native-runtime defect or
+an installed repair. Completion priority and stale-Turn guards remain unchanged;
+the combined head still requires packaged validation, CI and independent review.
+
+These episodes qualify integration correctness. Whole-path and full marginal
+cost and adoption remain unqualified. Preserve I3 for at least one minor
+release, M1/#8011, full R0/V10/R1, D2/D5/D6/D3, context/model/split-install,
+PostgreSQL host/wheel and every frozen failure. The original task remains open;
+this checkpoint does not authorize merge or declare the minimal kernel complete.

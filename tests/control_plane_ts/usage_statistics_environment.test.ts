@@ -1,12 +1,65 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { mkdir, mkdtemp, readFile, rm, symlink } from "node:fs/promises";
-import { platform, tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { realpathSync } from "node:fs";
+import { homedir, platform, tmpdir } from "node:os";
+import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { configure, inspect, observe } from "../../loopx/control_plane/runtime/usage_statistics.ts";
 import type { Context } from "../../loopx/control_plane/runtime/usage_statistics.ts";
 import { temporaryUsageEnvironment } from "../../loopx/control_plane/runtime/usage_statistics_environment.ts";
+
+/**
+ * A fixture base that an INDEPENDENTLY written path rule — the documented
+ * temporary-root list, restated here on purpose — calls persistent. The rule
+ * must not consult the classifier under test: a regressed classifier that
+ * rejects every path would otherwise turn these scenarios into silent skips
+ * instead of the failed assertions that catch the regression. When no
+ * candidate base passes the independent rule (a checkout or worktree under a
+ * temporary root is a legitimate contributor layout) the tests skip with that
+ * stated reason — and there the classifier's all-temporary answer is the
+ * correct behavior, because it also weighs its own module location.
+ */
+const independentlyTemporary = (value: string): boolean => {
+  const windows = platform() === "win32";
+  const home = homedir();
+  const roots = [tmpdir(), process.env.TMPDIR, process.env.TEMP, process.env.TMP,
+    ...(windows ? [join(process.env.SystemRoot || process.env.WINDIR || "C:\\Windows", "Temp"),
+      join(process.env.LOCALAPPDATA || join(home, "AppData", "Local"), "Temp")]
+      : ["/tmp", "/var/tmp", "/private/tmp", "/private/var/tmp",
+        ...(platform() === "darwin" ? ["/var/folders", "/private/var/folders"] : [])])];
+  const physical = (path: string): string => {
+    let parent = resolve(path);
+    const missing: string[] = [];
+    while (true) {
+      try { return join(realpathSync(parent), ...missing); }
+      catch { missing.unshift(parent.slice(dirname(parent).length).replace(/^[/\\]+/, ""));
+        const next = dirname(parent);
+        if (next === parent) return resolve(path);
+        parent = next; }
+    }
+  };
+  const normalize = (path: string) => windows ? path.toLowerCase() : path;
+  const directories = [...new Set(roots.filter(root => !!root && isAbsolute(root))
+    .map(physical).filter(root => root !== parse(root).root).map(normalize))];
+  const candidate = normalize(physical(value));
+  return directories.some(root => {
+    const child = relative(root, candidate);
+    return child === "" || (!isAbsolute(child) && child !== ".." && !child.startsWith(".." + sep));
+  });
+};
+
+const persistentFixtureBase = (): string => {
+  // The classifier also weighs its own module location: a LoopX running from
+  // a throwaway checkout suppresses everywhere, so no persistent-route
+  // scenario can be constructed there. That dimension is encoded here with
+  // the same independent rule (the test file stands in for the module), so a
+  // temp-root checkout skips for the documented reason while a classifier
+  // regression on a persistent checkout still fails the assertions.
+  if (independentlyTemporary(fileURLToPath(import.meta.url))) return "";
+  return [homedir(), resolve(".")].find(base => !independentlyTemporary(join(base, "usage-ping.json"))) ?? "";
+};
 
 test("temporary machine routes suppress every HTTP channel even with enabled/copied state", async t => {
   const requests: Array<{ path: string; schema: string }> = [];
@@ -54,8 +107,9 @@ test("temporary machine routes suppress every HTTP channel even with enabled/cop
 });
 
 test("persistent machine routes retain notice-before-default-on without an enable flag", async t => {
-  await mkdir(resolve(".local"), { recursive: true });
-  const root = await mkdtemp(join(resolve(".local"), "usage-persistent-"));
+  const base = persistentFixtureBase();
+  if (!base) return t.skip("no candidate base classifies as persistent on this host");
+  const root = await mkdtemp(join(base, "loopx-usage-persistent-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const path = join(root, "usage-ping.json");
   const ctx: Context = { env: { HOME: root, LOOPX_USAGE_PING_ENDPOINT: "http://127.0.0.1:1/v1/ping" },
@@ -76,9 +130,11 @@ test("persistent machine routes retain notice-before-default-on without an enabl
 });
 
 test("temporary roots, filesystem aliases and path-component boundaries are local eligibility facts", async t => {
+  const base = persistentFixtureBase();
+  if (!base) return t.skip("no candidate base classifies as persistent on this host");
   const root = await mkdtemp(join(tmpdir(), "loopx-usage-paths-"));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const persistent = resolve(".local", "usage-policy-persistent");
+  const persistent = join(base, "usage-policy-persistent");
   for (const key of ["HOME", "USERPROFILE", "CODEX_HOME", "XDG_STATE_HOME", "XDG_DATA_HOME", "XDG_CONFIG_HOME"]) {
     assert.equal(temporaryUsageEnvironment(join(persistent, "usage-ping.json"), { HOME: persistent, [key]: join(root, "home") }), true, key);
   }
@@ -89,8 +145,7 @@ test("temporary roots, filesystem aliases and path-component boundaries are loca
   }
   assert.equal(temporaryUsageEnvironment(join(persistent, "tests", "usage-ping.json"), { HOME: persistent }), false,
     "a test-like name or a normal process temp directory must not suppress a persistent installation");
-  await mkdir(resolve(".local"), { recursive: true });
-  const links = await mkdtemp(join(resolve(".local"), "usage-alias-"));
+  const links = await mkdtemp(join(base, "loopx-usage-alias-"));
   t.after(() => rm(links, { recursive: true, force: true }));
   await mkdir(join(root, "physical"));
   const alias = join(links, "alias");
