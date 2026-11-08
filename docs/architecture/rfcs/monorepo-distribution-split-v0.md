@@ -3108,3 +3108,24 @@ This reconciles shipped loading with the remaining reviewed source boundary;
 it does not close the original task, installed-host, PostgreSQL host/wheel,
 full-cost/adoption or any other retained acceptance. No frozen campaign is rerun
 or relabeled, and this lane performs no main merge.
+
+### 2026-11-09 — Reconcile the M0 ratchet after the merged status move
+
+The exact #8372 qualification head's CI fails its kernel-static prerequisite:
+merged #8011 moved `chat_status_api.py` into `chat/status_api.py`, reducing the
+root from 128 modules to 127, while the fixture still pins 128. The downstream
+Stage 2C, checks and aggregate pytest jobs reject their skipped/failed inputs;
+those results do not establish new runtime failures or passes.
+
+The existing M0 fixture now records measured main `520a1ab47` and lowers its pin
+to 127. Its schema, entrypoint allowlist, exact-count rule and over-budget
+rejection remain intact. The same seven kernel-static checks pass on CPython
+3.13 and 3.11. In the same isolated source tree, an added unapproved 128th root
+module still fails; removing only that synthetic module restores the pass.
+The original CI and local 127-versus-128 failures remain retained evidence.
+
+This repairs the validation handoff for an already merged module relocation;
+it neither moves another runtime owner nor changes a production limit. Pages,
+the separate report packet-contract gap, full CI/review/readiness and every
+original installed-host, PostgreSQL host/wheel, full-cost/adoption and frozen
+qualification remain separate. The complete original task stays open.

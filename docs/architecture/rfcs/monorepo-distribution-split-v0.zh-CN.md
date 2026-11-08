@@ -2416,3 +2416,20 @@ packaged 浏览器场景。wheel 仍有 1,921 项字节匹配与十七项既有�
 本次对齐已交付的加载与剩余待评审 source 边界，不关闭原 Task、installed-host、
 PostgreSQL host/wheel、full-cost/adoption 或任何其他保留验收；不重跑或重标签
 冻结 campaign，本 lane 未执行 main 合入。
+
+### 2026-11-09 — 对齐已合入 status 迁移后的 M0 ratchet
+
+#8372 的准确资格 head 在 CI 的 kernel-static 前置检查失败：已合入 #8011
+将 `chat_status_api.py` 移入 `chat/status_api.py`，顶层模块数从 128 降至 127，
+fixture 却仍固定为 128。下游 Stage 2C、checks 与汇总 pytest 因前置被跳过或失败
+而拒绝；这些结果不能证明新的 runtime 失败或通过。
+
+现有 M0 fixture 将测量基线记录为 main `520a1ab47`，并把 pin 降至 127。
+schema、入口 allowlist、精确计数规则与超额拒绝保持。相同七项 kernel-static
+检查在 CPython 3.13 和 3.11 通过；同一个隔离源码树增加未批准的第 128 个顶层
+模块仍失败，仅移除该合成模块后恢复通过。原 CI 与本地 127/128 失败继续保留。
+
+本次修复已经合入的模块迁移的验证交接，不迁移另一个 runtime owner，也不改生产
+上限。Pages、独立 report packet-contract 缺口、完整 CI/review/readiness，以及
+全部原 installed-host、PostgreSQL host/wheel、full-cost/adoption 和冻结资格继续
+分别保留；原完整 Task 保持开放。
