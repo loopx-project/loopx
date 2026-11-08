@@ -3437,6 +3437,17 @@ read-proof optimization, not proof that D2 passed.
 Snapshot pagination #4922 has merged and still must be qualified at its accepted
 head. None of these PR statuses grants cutover or changes the selected profile.
 
+**2026-11-08 measured closure of the 1 MiB budget rows.** The formal
+matched-1m re-measure ran at head `a9485073f` (containing the merged #4931
+read-proof reuse; #5251 also merged), with the capacity measurement entrypoint
+repaired by #8256 (merged 2026-11-08) after quota context-capture navigation
+had silently broken the cold-CLI arm. Both previously failed rows now pass:
+receipt p95 26.44/27.65 ms and scan-100 p95 60.85/69.62 ms at 10k/100k against
+the 50/250 ms budgets, no depth degradation, ledger 13 passed / 0 failed /
+11 missing (evidence on #4224). This closes those budget rows, not D2: the
+soak failed at 9d22.85h (reported on #4224) and the recovery, consumer-lag
+and OS/runtime matrices remain missing.
+
 **Current implementation sequence.** L1–L9 above are domain ownership, not
 a remaining PR count. The old seven-row plan is replaced by the
 [reconciled inventory](ledger/shared-goal-authority-state-provider-v0/2026-09-24-default-cutover-reconciliation.md): integrate open caller work,
