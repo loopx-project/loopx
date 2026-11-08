@@ -24,10 +24,12 @@ def verified_context_selection(state: dict[str, Any], page: dict[str, Any]) -> d
     reference_file = page.get("reference_file")
     selected = None
     observation = None
+    selection_paths = None
     if isinstance(reference_file, str):
         _, metadata = read_context_read_reference(reference_file)
         selected = metadata.get("selection")
         observation = metadata.get("observed_read")
+        selection_paths = metadata.get("selection_paths")
         if not isinstance(selected, dict) or selected.get("list_fields") is not False:
             return None
         path, source_digest = metadata["path"], metadata["sha256"]
@@ -65,7 +67,8 @@ def verified_context_selection(state: dict[str, Any], page: dict[str, Any]) -> d
             initial_read=initial_read, list_fields=False,
             list_depth=selected.get("list_depth") if selected else None,
             expected_sha256=view_digest, preserve_selection_order=selected is not None and not initial_read,
-            present_goal_narrative=bool(selected and selected.get("present_goal_narrative") is True))
+            present_goal_narrative=bool(selected and selected.get("present_goal_narrative") is True),
+            selection_paths=selection_paths)
         if selected_raw is None:
             return None
         raw = selected_raw
