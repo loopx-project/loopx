@@ -129,6 +129,110 @@ def test_cleanup_concurrency_cannot_replace_current_qualification() -> None:
     assert qualification != cleanup
 
 
+@pytest.mark.parametrize("action", ["opened", "reopened", "edited", "synchronize", "closed"])
+def test_diff_refresh_uses_trusted_code_and_its_own_minimal_write_scope(action: str) -> None:
+    policy = workflow("ci-maintenance")
+    job = policy["jobs"]["refresh-pr-diff"]
+    context = event("pull_request_target")
+    context["github"].event.action = action
+    assert action in policy[True]["pull_request_target"]["types"]
+    assert expression(job["if"], context) is (action != "closed")
+    assert policy["permissions"] == {"contents": "read"}
+    assert job["permissions"] == {"contents": "read", "pull-requests": "write"}
+    assert job["timeout-minutes"] <= 2
+    assert all(step["uses"].startswith("actions/github-script@") for step in job["steps"])
+
+
+def _run_diff_refresh(mode: str, branch: str = "main") -> dict:
+    script = workflow("ci-maintenance")["jobs"]["refresh-pr-diff"]["steps"][0]["with"]["script"]
+    harness = r'''
+let input = ''; for await (const chunk of process.stdin) input += chunk;
+const {script, mode, branch} = JSON.parse(input);
+const oldBase = 'a'.repeat(40), head = 'b'.repeat(40), target = 'c'.repeat(40), newer = 'd'.repeat(40);
+const pr = {state:'open', head:{sha:head,ref:'work',repo:{id:2}},
+  base:{sha:oldBase,ref:branch,repo:{id:1}}, changed_files:9,additions:30,deletions:12};
+const expected = structuredClone(pr);
+if (mode === 'closed') pr.state = 'closed';
+if (mode === 'fresh') pr.base.sha = target;
+if (mode === 'old_event_head') expected.head.sha = newer;
+if (mode === 'old_event_source') expected.head.repo.id = 3;
+if (mode === 'old_event_base') expected.base.ref = 'other';
+if (mode === 'missing_source') pr.head.repo = null;
+if (mode === 'same_repo') {pr.head.repo.id = 1; expected.head.repo.id = 1;}
+let reads = 0, branchReads = 0;
+const updates = [], notes = [];
+const context = {repo:{owner:'owner',repo:'fixture'}, payload:{number:17,pull_request:expected}};
+const github = {rest:{pulls:{get:async()=>{
+  reads++;
+  if (reads === 2) {
+    if (mode === 'head_before_write') pr.head.sha = newer;
+    if (mode === 'source_before_write') pr.head.repo.id = 3;
+    if (mode === 'base_before_write') pr.base.ref = 'other';
+    if (mode === 'refreshed_before_write') pr.base.sha = target;
+  }
+  return {data:structuredClone(pr)};
+}, update:async params=>{
+  updates.push(params);
+  if (mode === 'failed_api') throw new Error('provider rejected update');
+  if (mode !== 'not_applied') pr.base.sha = mode === 'target_moves' ? newer : target;
+  if (mode === 'head_during_write') pr.head.sha = newer;
+  if (mode === 'base_during_write') pr.base.ref = 'other';
+  pr.changed_files = 2; pr.additions = 3; pr.deletions = 1;
+}}, repos:{getBranch:async params=>{
+  if (params.branch !== branch) throw new Error('unverified target');
+  branchReads++;
+  return {data:{commit:{sha:mode === 'target_moves' && branchReads > 1 ? newer : target}}};
+}}}};
+let error = null;
+try {await new (Object.getPrototypeOf(async function(){}).constructor)('github','context','core',script)
+  (github,context,{info:message=>notes.push(message)});} catch(e) {error=e.message;}
+process.stdout.write(JSON.stringify({updates,notes,error,pr}));
+'''
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", harness],
+        input=json.dumps({"script": script, "mode": mode, "branch": branch}),
+        text=True, capture_output=True, check=True, timeout=10,
+    )
+    return json.loads(result.stdout)
+
+
+@pytest.mark.parametrize("branch", ["main", "release/stable"])
+@pytest.mark.parametrize("mode", ["stale", "same_repo", "target_moves"])
+def test_stale_diff_refresh_preserves_the_exact_source_and_actual_target(mode: str, branch: str) -> None:
+    observed = _run_diff_refresh(mode, branch)
+    assert observed["error"] is None
+    assert observed["updates"] == [{"owner": "owner", "repo": "fixture", "pull_number": 17, "base": branch}]
+    assert observed["pr"]["head"] == {
+        "sha": "b" * 40, "ref": "work", "repo": {"id": 1 if mode == "same_repo" else 2},
+    }
+    assert observed["pr"]["base"]["ref"] == branch
+    assert any("9 -> 2 files" in note and "+30/-12 -> +3/-1" in note for note in observed["notes"])
+
+
+@pytest.mark.parametrize("mode", [
+    "fresh", "closed", "old_event_head", "old_event_source", "old_event_base", "missing_source",
+    "head_before_write", "source_before_write", "base_before_write", "refreshed_before_write",
+])
+def test_diff_refresh_does_not_write_after_identity_or_snapshot_drift(mode: str) -> None:
+    observed = _run_diff_refresh(mode)
+    assert observed["updates"] == []
+    assert observed["error"] is None
+
+
+@pytest.mark.parametrize("mode", ["head_during_write", "base_during_write", "not_applied", "failed_api"])
+def test_diff_refresh_requires_readback_and_never_retries_a_moved_revision(mode: str) -> None:
+    observed = _run_diff_refresh(mode)
+    assert len(observed["updates"]) == 1
+    assert not any("Refreshed #" in note for note in observed["notes"])
+    if mode == "not_applied":
+        assert "did not refresh" in observed["error"]
+    elif mode == "failed_api":
+        assert "provider rejected update" in observed["error"]
+    else:
+        assert observed["error"] is None
+        assert any("newer revision" in note for note in observed["notes"])
+
+
 @pytest.mark.parametrize("mode", ["delayed", "never", "changed"])
 def test_obsolete_run_cancellation_waits_for_verified_completion(mode: str) -> None:
     script = workflow("ci-maintenance")["jobs"]["cancel-obsolete-pr"]["steps"][0]["with"]["script"]
