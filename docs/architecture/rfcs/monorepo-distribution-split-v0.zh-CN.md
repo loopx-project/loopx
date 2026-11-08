@@ -1719,6 +1719,40 @@ Fixture setup 中位数 2.362／2.346 秒、最终 teardown 0.062／0.058 秒仍
 边际成本或采纳收益。先补齐剩余成本覆盖，并确认可重复的 CPU 退化，再选后续
 实现；不能假定应继续优化读取或 import。
 
+### 完整成本覆盖与当前 main 事务检查点
+
+既有提案在 `23227ee5` 整合 main `0c28f6004`，23 个 PR production-source hash
+不变。重新通过 Python59、TypeScript63、类型／mypy、四条完整 source／wheel
+File／SQLite 101-Todo 生命周期及隔离 PostgreSQL16.15 store391／service11，
+这些运行零 skip。成果、原完成时间、回执、debit、重启和 refusal／replay 保留。
+标准 premerge 保留既有 peer scanner 失败（六项直接和18／19项选中通过）。
+第一轮 PostgreSQL 因 checkout 缺 `pg` 依赖失败，保留该失败，并单列环境补齐后的
+成功验证。
+
+当前集成的五组新默认 SQLite 无插桩对照保持同一 fixture／成果。Main／候选墙钟
+中位数为14.255／14.382秒（范围13.971–14.887／13.428–14.684）；setup 后采样
+CLI＋daemon CPU 为6.873／7.141秒；已观测 daemon disk counter 为
+8,904,704／8,306,688B，logical-write counter 为14,491,648／13,443,072B。
+Setup2.314／2.187秒、teardown0.061／0.057秒分开。三次候选更慢，范围重叠；
+写入计数减少仍不证明整体或完整边际成本收益。
+
+另一次被动退出观测扩展了记账范围。Python self／waited-child usage 覆盖
+harness、provenance／verifier 和 CLI 子进程；最初归属 harness 的 daemon 已计入
+waited-child，只额外加上后来的 orphan daemon。以独立的 production locator PID
+要求两条 daemon 退出记录，移除任一记录会触发 coverage oracle 失败。Main 的两个
+daemon 在最后采样后又消耗0.147／0.045秒 CPU，候选为0.149／0.046秒；尾部接近，
+不能解释采样 CPU 差异。退出回调覆盖受控 shutdown／cache-retirement 路径；观测
+写出、回调后的 native 工作、orphan native 子进程、物理设备写入和连续系统峰值
+仍未覆盖。该插桩对照仅用于覆盖诊断，不是延迟资格，也不替换历史指标。
+
+另一组插桩完整对照记录每个 RPC 的已校准进程 CPU：`todo.read` 从18增至26次，
+额外消耗0.172秒采样 Node CPU，下一步应研究原 Todo／provider 读取事务。插桩耗时
+不认证性能，也不支持删除 current-source、incarnation、revision、WAL、lease 或
+recovery 校验。先表征同一准入请求内完整复用的机会，再实施；这些观察不支持盲目
+迁移 import 或跨请求缓存权威。原 Task／vision、独立 exact-head 评审、
+I3／minor-release、M1／#8011、R0／V10／R1、D2／D5／D6／D3、context／model／
+split-install、PostgreSQL host／wheel、完整成本／采纳缺口和全部冻结失败保留。
+
 ## 附录 B：决策日志
 
 | 日期 | 决策 | 负责人 / 批准 | 备选 | 变更的规范章节 |
