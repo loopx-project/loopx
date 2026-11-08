@@ -16,10 +16,11 @@ import shutil
 import shlex
 import sqlite3
 import subprocess
+import tempfile
 import time
 import tomllib
 from pathlib import Path
-from contextlib import nullcontext, redirect_stdout, redirect_stderr
+from contextlib import contextmanager, nullcontext, redirect_stdout, redirect_stderr
 from typing import Any
 
 from loopx.control_plane.turn_driver.codex_stdio import StdioNativeGoalTransport, native_checkpoint_reader
@@ -102,6 +103,85 @@ def native_interrupted_turn(env: dict[str, str], session_id: str, *,
         return {"session_id": session_id, "turn_id": tail["id"],
                 "visible_history_sha256": hashlib.sha256(encoded).hexdigest(),
                 "turn_count": len(turns)}
+
+
+def _native_store_components(home: Path) -> list[dict[str, str]]:
+    members = []
+    for entry in sorted(home.iterdir()):
+        if entry.name in {"sessions", "archived_sessions", "session_index.jsonl"} or re.fullmatch(
+            r"(?:state|thread_history)_[0-9]+\.sqlite", entry.name
+        ):
+            members.append({"id": "native_" + entry.name.replace(".", "_"), "source_path": str(entry)})
+    if not any(m["id"].startswith("native_state_") for m in members):
+        raise ValueError("native checkpoint session index is unavailable")
+    return members
+
+
+@contextmanager
+def _idle_native_reader(env: dict[str, str], *, timeout: float, deadline: float):
+    """Native history reads may update their index; keep those writes off source."""
+    home = Path(env['CODEX_HOME'])
+    with tempfile.TemporaryDirectory(prefix='loopx-idle-native-read-') as directory:
+        observer = Path(directory)
+        sources = [home / 'config.toml', *(Path(m['source_path']) for m in _native_store_components(home))]
+        for source in sources:
+            selected = [source, *source.rglob('*')] if source.is_dir() else [source]
+            if any(p.is_symlink() or not (p.is_file() or p.is_dir()) for p in selected):
+                raise ValueError('Native idle observation requires physical native-store members')
+            target = observer / source.name
+            if source.is_dir():
+                shutil.copytree(source, target)
+            else:
+                shutil.copy2(source, target)
+                for suffix in ('-wal', '-journal') if source.suffix == '.sqlite' else ():
+                    companion = Path(str(source) + suffix)
+                    if companion.exists():
+                        if companion.is_symlink() or not companion.is_file():
+                            raise ValueError('Native idle SQLite companion must be physical')
+                        shutil.copy2(companion, str(target) + suffix)
+        with native_checkpoint_reader({**env, 'CODEX_HOME': str(observer)},
+                                      timeout=timeout, deadline=deadline) as reader:
+            yield reader
+
+
+def native_idle_turn(env: dict[str, str], session_id: str, *, process_started_at: float,
+                     timeout: float = 30) -> dict[str, Any]:
+    """Observe a stable completed history predating an uncertain Host launch.
+
+    The caller separately proves the original namespace stopped, seals its
+    source, and explicitly requests a finite handoff. This read neither retries
+    the failed Host nor turns its failure into a completed native Turn.
+    """
+    if (not session_id or any(type(v) not in (int, float) or not math.isfinite(v)
+            for v in (process_started_at, timeout)) or timeout <= 0):
+        raise ValueError("Native idle readback requires its original process boundary")
+    deadline = time.monotonic() + timeout
+    with _idle_native_reader(env, timeout=timeout, deadline=deadline) as transport:
+        def request(method, params):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("Native idle readback window closed")
+            transport.response_timeout_sec = remaining
+            return transport.request(method, params)
+        _native_thread_readback(request, env, session_id)
+        turns = _complete_history(request, session_id)
+        for turn in turns:
+            start, end = turn.get("startedAt"), turn.get("completedAt")
+            if (any(type(v) not in (int, float) or not math.isfinite(v) for v in (start, end))
+                    or not start <= end < math.floor(process_started_at)
+                    or any(item.get("status") in {"inProgress", "running", "pending"}
+                           for item in turn.get("items", []))):
+                raise ValueError("Native history is not idle before the original Host")
+        tail = turns[-1]
+        if tail.get("error") is not None:
+            raise ValueError("Native idle cursor retains an error")
+        encoded = json.dumps(turns, sort_keys=True, separators=(",", ":")).encode()
+        if json.dumps(_complete_history(request, session_id), sort_keys=True,
+                      separators=(",", ":")).encode() != encoded:
+            raise ValueError("Native idle history advanced during readback")
+        return {"session_id": session_id, "turn_id": tail["id"], "status": "completed",
+                "completed_at": tail["completedAt"], "turn_count": len(turns),
+                "visible_history_sha256": hashlib.sha256(encoded).hexdigest()}
 
 
 def native_failed_turn(env: dict[str, str], session_id: str, *, failure_kind: str,
@@ -321,14 +401,7 @@ def native_session_checkpoint(env: dict[str, str], session_id: str, *, timeout: 
                     turn["id"] == required_completed_turn_id and turn["status"] == "completed"
                     for turn in turns[len(original):]):
                 raise ValueError("native capture lost its completed continuation cursor")
-    members = []
-    for entry in sorted(home.iterdir()):
-        if entry.name in {"sessions", "archived_sessions", "session_index.jsonl"} or re.fullmatch(
-            r"(?:state|thread_history)_[0-9]+\.sqlite", entry.name
-        ):
-            members.append({"id": "native_" + entry.name.replace(".", "_"), "source_path": str(entry)})
-    if not any(m["id"].startswith("native_state_") for m in members):
-        raise ValueError("native checkpoint session index is unavailable")
+    members = _native_store_components(home)
     encoded = json.dumps(turns, sort_keys=True, separators=(",", ":")).encode()
     return {"components": members, "metadata": {
         "session_id": session_id, "turn_ids": ids,
