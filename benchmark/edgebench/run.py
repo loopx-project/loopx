@@ -135,6 +135,12 @@ def main(argv=None):
     parser.add_argument("--native-goal-continue", action="store_true",
                         help="Opt-in: when a native Goal declares completion with budget left, start "
                              "continuation Goals until the budget edge (native-goal worker only)")
+    parser.add_argument("--native-readiness-total-seconds", type=float,
+                        help="Opt-in fresh native receiver setup budget, at most 75s and clipped to "
+                             "the existing outer allowance; only read-only account timeouts retry")
+    parser.add_argument("--native-readiness-attempt-seconds", type=float,
+                        help="Per-attempt cap for explicit native readiness setup, at most 25s; "
+                             "omitted keeps 25s (not a model retry)")
     # Preserve the existing unique abbreviation after adding --managed-run-json.
     parser.add_argument("--model", "--m", required=True)
     parser.add_argument("--effort", choices=REASONING_EFFORTS, required=True)
@@ -214,6 +220,16 @@ def main(argv=None):
     api_key = os.environ.get("OPENAI_API_KEY") if api_base_url else None
     if api_base_url and not api_key:
         parser.error("OPENAI_BASE_URL requires OPENAI_API_KEY; no login fallback")
+    from benchmark.runtime.codex_readiness import native_readiness_budget
+    try:
+        readiness_budget = native_readiness_budget(
+            args.native_readiness_total_seconds, args.native_readiness_attempt_seconds)
+    except ValueError as error:
+        parser.error(str(error))
+    if readiness_budget is not None and (
+        args.worker in {"official", "single"} or api_base_url or args.restore_checkpoint is not None
+    ):
+        parser.error("Native readiness budget requires a fresh native Goal or heartbeat worker")
     args.timeout = _task_default(args.task, "timeout_seconds", args.timeout, DEFAULT_TIMEOUT_SECONDS)
     args.eval_interval = (0 if args.feedback == "native" and args.eval_interval is None else
                          _task_default(args.task, "eval_interval_seconds", args.eval_interval, 300))
@@ -418,6 +434,9 @@ def main(argv=None):
                             if args.execution_observation is not None else {}),
                          **({"provider_request_admission": True} if args.provider_request_admission else {}),
                          native_goal_continue=args.native_goal_continue,
+                         **({"native_readiness_total_seconds": readiness_budget[0],
+                             "native_readiness_attempt_seconds": readiness_budget[1]}
+                            if readiness_budget is not None else {}),
                          replan_after_turns=args.replan_after_turns,
                          replan_after_todos=args.replan_after_todos,
                          planning_horizon_goal=args.planning_horizon_goal,
