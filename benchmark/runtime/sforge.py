@@ -22,6 +22,7 @@ from benchmark.edgebench.feedback_hook import FEEDBACK_PAYLOAD
 
 from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution, codex_settings, native_child_instructions, prepare_codex_home
 from .codex_offline import CodexOffline, MODEL_CATALOG_REMOTE, stage_portable_python
+from .codex_readiness import native_readiness_budget
 from .harbor import (
     BenchmarkCodex, _CONTROL, _CODEX_HOME, _PYTHON, _SCHEDULER_STATE, _SRC,
 )
@@ -98,6 +99,8 @@ class SForgeWorker(CodexAgent):
                  native_child_limit: int | None = None,
                  provider_request_admission: bool = False,
                  native_goal_continue: bool = False,
+                 native_readiness_total_seconds: float | None = None,
+                 native_readiness_attempt_seconds: float | None = None,
                  replan_after_turns: int | None = None,
                  replan_after_todos: int | None = None,
                  stride_strategy: str | None = None,
@@ -108,6 +111,12 @@ class SForgeWorker(CodexAgent):
         super().__init__(config)
         if profile not in PROFILES:
             raise ValueError("Unknown benchmark worker profile")
+        self.native_readiness_budget = native_readiness_budget(
+            native_readiness_total_seconds, native_readiness_attempt_seconds)
+        if self.native_readiness_budget is not None and (
+            profile in {"official", "single"} or config.agent_api_base_url or warm_start is not None
+        ):
+            raise ValueError("Native readiness budget requires a fresh native Goal or heartbeat worker")
         if not isinstance(turn_envelope, bool) or (
             turn_envelope and profile not in {"heartbeat-resume", "heartbeat-explore"}
         ):
@@ -452,6 +461,9 @@ class SForgeWorker(CodexAgent):
             **(self.runtime._turn_envelope_receipt() if self.runtime is not None else {}),
             **({"provider_request_admission": "on"} if self.provider_request_admission else {}),
             **({"native_goal_continue": True} if self.native_goal_continue else {}),
+            **({"native_readiness_budget": dict(zip(("total_seconds", "attempt_seconds"),
+                                                    self.native_readiness_budget))}
+               if self.native_readiness_budget is not None else {}),
             "outer_resume": self.resume_cmd is not None,
             "explore_graph": self.profile == "heartbeat-explore",
             "explore_harness": self.profile == "heartbeat-explore",
@@ -561,8 +573,11 @@ class SForgeWorker(CodexAgent):
         # their own admission path; no observer runs on every heartbeat wake.
         readiness = ""
         if not self._config.agent_api_base_url:
+            readiness_options = (f" --total-seconds {self.native_readiness_budget[0]}"
+                                 f" --attempt-seconds {self.native_readiness_budget[1]}"
+                                 if self.native_readiness_budget is not None else "")
             readiness = (f"env {exports} {shlex.quote(f'{_PYTHON}/bin/python3')} "
-                         "-m benchmark.runtime.codex_readiness; ")
+                         f"-m benchmark.runtime.codex_readiness{readiness_options}; ")
         return self._execution_command(
             f"set -eu; {readiness}{clock}"
             f"export LOOPX_PHASE_DEADLINE_EPOCH=$(cat {deadline}); "
