@@ -128,16 +128,24 @@ function matchesProfile(row: ExploreMeasurementFeedback, profile: WorkYardstickP
   return Object.entries(profile).every(([key, value]) => row[key as keyof WorkYardstickProfile] === value);
 }
 
-function measuredSearchComparison(feedback: ExploreMeasurementFeedback[], decision: WorkYardstickDecision) {
-  const pairFor = (profile: WorkYardstickProfile) => measuredPair(feedback.find(row => matchesProfile(row, profile)));
+function measuredSearchComparison(
+  scopedFindings: readonly JsonObject[],
+  decision: WorkYardstickDecision,
+  cited: ReadonlySet<string>,
+) {
+  const pairFor = (profile: WorkYardstickProfile, candidates?: ReadonlySet<string>) => {
+    const feedback = projectExploreMeasurementFeedback(scopedFindings, (row, measurement) =>
+      (row.work_yardstick !== undefined || cited.has(measurement.evidence_ref))
+      && (!candidates || candidates.has(measurement.candidate_ref)));
+    return measuredPair(feedback.find(row => matchesProfile(row, profile)));
+  };
   const goal = pairFor(decision.authoritative);
   if (!goal) return null;
-  const screen = decision.proxy && pairFor(decision.proxy);
-  // Both comparisons have two distinct candidates. Order is append/declaration
-  // order, so join the unordered pair instead of assuming execution chronology.
-  const goalCandidates = [goal.previous_best.candidate_ref, goal.latest.candidate_ref];
-  const proxy = screen && goalCandidates.includes(screen.previous_best.candidate_ref)
-    && goalCandidates.includes(screen.latest.candidate_ref) ? screen : null;
+  // Both comparisons have two distinct candidates. Scope the proxy lookup to
+  // the two goal candidates so a rejected sibling proxy false-positive or a
+  // later proxy-only screening row cannot displace their paired comparison.
+  const goalCandidates = new Set([goal.previous_best.candidate_ref, goal.latest.candidate_ref]);
+  const proxy = decision.proxy && pairFor(decision.proxy, goalCandidates);
   const reversed = !!(goal.preferred_candidate_ref && proxy?.preferred_candidate_ref
     && goal.preferred_candidate_ref !== proxy.preferred_candidate_ref);
   const opening = goal.preferred_candidate_ref === null
@@ -187,9 +195,7 @@ export function projectWorkYardstickCue(params: JsonObject): JsonObject | null {
     return belongsToWork(row, params) && target !== undefined && target.summary === decision.target.summary
       && target.scope === decision.target.scope && target.acceptance_ref === decision.target.acceptance_ref;
   });
-  const scopedFeedback = projectExploreMeasurementFeedback(scopedFindings, (row, measurement) =>
-    row.work_yardstick !== undefined || cited.has(measurement.evidence_ref));
-  const searchComparison = measuredSearchComparison(scopedFeedback, decision);
+  const searchComparison = measuredSearchComparison(scopedFindings, decision, cited);
   return {source_finding_id: source.finding_id, node_id: source.node_id, binding: capture.binding, ...decision,
     measurement_feedback: feedback,
     ...(searchComparison ? {search_comparison: searchComparison} : {}),

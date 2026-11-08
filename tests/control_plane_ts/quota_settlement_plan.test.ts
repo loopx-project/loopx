@@ -63,6 +63,10 @@ test("ordinary completion is conditional on deliverable acceptance, not Turn acc
   assert.match(plan.steps[1].precondition, /--agent-vision-json/);
   assert.match(plan.steps[1].precondition, /path_delta.*evidence_refs/);
   assert.match(plan.steps[1].precondition, /acceptance_summary/);
+  assert.match(plan.steps[1].precondition, /typed progress flags only when this Turn's evidence supports/);
+  assert.match(plan.steps[1].precondition, /--progress-coverage-scope-id from verified scope coverage/);
+  assert.match(plan.steps[1].precondition, /terminal closeout follows spend/);
+  assert.doesNotMatch(plan.steps[1].command_template!, /--progress-coverage-scope-id/);
   assert.match(plan.steps[2].precondition, /declared completion validation/);
   assert.match(plan.steps[3].precondition, /matching writeback and quota spend receipts/);
   assert.equal(plan.steps[3].conditional, true);
@@ -130,8 +134,10 @@ test("semantic feedback checkpoint is an exact variant of the current writeback,
     assert.equal(plan.steps[1].semantic_closeout_command_template, checkpoint);
     if (delivery_boundary === "in_flight_continuation") {
       assert.match(plan.steps[1].precondition,
-        /^validation succeeded; Choose one: command_template for ordinary in_flight_continuation without new decision evidence; semantic_closeout_command_template for new decision evidence, route change or Todo completion/);
+        /Use command_template for ordinary in_flight_continuation without new decision evidence/);
     }
+    assert.match(plan.steps[1].precondition,
+      /Use semantic_closeout_command_template with --agent-vision-json for new decision evidence, route change or Todo completion/);
     assert.deepEqual(plan.steps[1].vision_authoring, visionAuthoringContract());
     const serialized = settlementPlanPayload(plan).ordered_steps as Record<string, unknown>[];
     assert.equal(serialized[1].semantic_closeout_command_template, checkpoint);

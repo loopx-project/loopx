@@ -106,8 +106,12 @@ def test_generated_heartbeat_known_choice_uses_one_current_guard(tmp_path, provi
         assert not channel["cli_channel"].get("selection_required", False)
         assert _heartbeat_receipt_count(runtime, TURN_ID) == 1
     else:
-        assert rc != 0, result
-        assert not result["interaction_contract"]["agent_channel"]["delivery_allowed"], json.dumps(result)
+        assert rc != 0 and result["error_code"] == "quota_action_selection_rejected", result
+        from loopx.control_plane.turn_driver.decision_capture import read_context_capture_file
+
+        detail = result["captured_decision"]
+        refused = read_context_capture_file(detail["path"], detail["sha256"], private=True)[2]
+        assert not refused["interaction_contract"]["agent_channel"]["delivery_allowed"], refused
         assert _heartbeat_receipt_count(runtime, TURN_ID) == 0
     assert _spend_run_count(runtime) == 0
 

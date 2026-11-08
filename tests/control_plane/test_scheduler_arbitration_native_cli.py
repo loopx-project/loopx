@@ -76,7 +76,7 @@ def make_scheduler_fixture(
         handoff_mode="soft_claim", leases=[],
     ), state_path=state, provider=provider)
     context = ["--host-surface", "codex_app"] if scenario == "invalid_context" else ["--codex-app"]
-    guard = ["quota", "should-run", *context, "--goal-id", GOAL, "--agent-id", AGENT,
+    guard = ["quota", "should-run", "--context-delivery", "off", *context, "--goal-id", GOAL, "--agent-id", AGENT,
              "--turn-instance-id", TURN, ]
     return {"project": project, "runtime": runtime, "registry": registry,
             "state": state, "guard": guard}
@@ -226,7 +226,10 @@ def test_deadline_clamp_generated_ack_commits_and_replays(
 
     try:
         host_rrule(30)
-        packet = call_scheduler_cli(fixture, *fixture["guard"])
+        packet = call_scheduler_cli(
+            fixture, *fixture["guard"], "--include-detail", "agent-todos",
+            "--include-detail", "user-todos", "--include-detail", "scheduler",
+        )
         authority = scheduler_authority_snapshot(fixture)
         # Establish valid earlier ACKs through the native commit owner. Only
         # the synthetic projection clock moves; the monitor facts stay fixed.
@@ -320,7 +323,10 @@ def test_elapsed_quiet_backoff_reads_host_and_resets_for_native_work(
     try:
         # The reset profile includes full monitor facts; a compact display is
         # deliberately insufficient to seed the same historical decision.
-        packet = call_scheduler_cli(fixture, *fixture["guard"], "--include-detail", "agent-todos")
+        packet = call_scheduler_cli(
+            fixture, *fixture["guard"], "--include-detail", "agent-todos",
+            "--include-detail", "scheduler",
+        )
         authority = scheduler_authority_snapshot(fixture)
         # Seed only this disposable history through the real commit owner.
         # All subsequent CLI processes use their real clock and host reader.

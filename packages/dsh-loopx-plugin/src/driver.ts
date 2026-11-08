@@ -1095,6 +1095,9 @@ export class LoopXContinuationDriver {
         signal,
         attempts: 3,
         retryDelaysMs: this.retryDelaysMs,
+        // The Driver reads the raw admission contract. The child-local opt-out
+        // also works with supported LoopX releases that predate the CLI flag.
+        env: { ...process.env, LOOPX_CONTEXT_DELIVERY: 'off' },
         validate: payload => payload.goal_id === binding.goalId
           && typeof payload.ok === 'boolean'
           && typeof payload.should_run === 'boolean',
