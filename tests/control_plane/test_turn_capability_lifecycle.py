@@ -67,6 +67,34 @@ def test_invalid_or_duplicate_context_registration_never_reinvokes_provider(
     assert calls == ["read"]
 
 
+@pytest.mark.parametrize("field", ["work_contract", "source_decision_hash"])
+@pytest.mark.parametrize("location", ["readback", "context_fields", "result_fields"])
+def test_optional_context_cannot_contribute_core_work_source(field, location) -> None:
+    calls = []
+    slot = field if location == "readback" else "fixture_readback"
+
+    def produce():
+        calls.append("read")
+        result = {"readback": {slot: {}}, "context_fields": {},
+                  "instructions": [], "result_fields": {}}
+        if location != "readback":
+            result[location] = {field: ("optional advice" if location == "context_fields"
+                                       else {"type": "string", "maxLength": 240})}
+        return result
+
+    envelope = {"goal_id": "fixture", "agent_id": "fixture", "boundary": {"write_scope": []}}
+    payload = {"turn_envelope": envelope}
+    dispatch_turn_context_hooks(payload, (TurnContextHookRegistration(
+        "fixture.context", "fixture", (slot,), produce,
+    ),))
+    assert calls == ([] if location == "readback" else ["read"])
+    assert payload["turn_envelope"] == envelope
+    assert payload["turn_context_hook_failures"] == [
+        {"hook_id": "fixture.context", "error_code": "context_hook_failed"}]
+    assert "turn_context_contributions" not in payload
+    assert project_turn_context(payload) == {}
+
+
 @pytest.mark.parametrize("serialized", [True, 3, "invalid", {"fixture": "invalid"}])
 def test_invalid_recovered_context_is_omitted_without_gating_work(serialized) -> None:
     assert project_turn_context({"turn_context_contributions": serialized}) == {}
