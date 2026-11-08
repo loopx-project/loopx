@@ -2382,8 +2382,8 @@ def _app_projection_journey(fixture):
 def _drain_app_projection(transport, predicate):
     deadline = time.monotonic() + 10
     while not predicate():
-        transport.reconcile()
         assert time.monotonic() < deadline, transport.health()
+        transport.reconcile()
         time.sleep(.02)
 
 
@@ -2615,6 +2615,9 @@ def test_app_long_return_keeps_all_parts_and_does_not_repeat_identical_parts(ord
     text = ("A repeated output paragraph with its complete evidence.\n" * 4000) + "UNIQUE FINAL END"
     store.append_message(original["session_id"], role="agent", text=text,
         turn_id=turns[-1], message_id="synthetic-long-result")
+    # Discover the committed result immediately. This case exercises delivery,
+    # including recovery of repeated parts, independently of scan cadence.
+    transport._web_projection_scan_at = 0
     try:
         _drain_app_projection(transport, lambda: any("UNIQUE FINAL END" in t for _, t in provider.writes[before:]))
         # Each canonical character survives transport splitting; an identical

@@ -22,6 +22,7 @@ DIRECT_LOADER_ALLOWLIST = {
     "loopx/bootstrap.py",
     "loopx/capabilities/manager_context/__init__.py",
     "loopx/capabilities/manager_context/roundtrip.py",
+    "loopx/capabilities/issue_fix/correction_settlement.py",
     "loopx/capabilities/native_chat/project_context.py",
     "loopx/claude_goal_mode/scripts/connect.py",
     "loopx/cli_runtime.py",
@@ -53,6 +54,7 @@ METADATA_READER_FUNCTIONS = {
     "loopx/runtime.py": {"_archive_source_goal_refs"},
     "loopx/capabilities/native_chat/project_context.py": {"coordination_runtime_root"},
     "loopx/control_plane/goals/source_session_recreation.py": {"_canonical_runtime_root"},
+    "loopx/capabilities/issue_fix/correction_settlement.py": {"_require_origin_registry"},
 }
 
 

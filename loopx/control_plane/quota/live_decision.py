@@ -574,6 +574,29 @@ def _receipt_bound_recovery_required(
     return wait_kind not in ("", "monitor_changed", "todo_done")
 
 
+def _project_unbound_work_fields(payload: dict[str, Any]) -> None:
+    interaction = payload.get("interaction_contract")
+    cli = interaction.get("cli_channel") if isinstance(interaction, dict) else None
+    if not isinstance(cli, dict) or cli.get("turn_binding_required") is not True:
+        return
+
+    # Reconcile the legacy work fields after hooks and recovery have chosen
+    # the final interaction. The selected work stays visible but unadmitted.
+    reason = cli["spend_policy"]
+    payload["normal_delivery_allowed"] = False
+    payload["recommended_action"] = cli["next_cli_actions"][0]
+    payload.pop("agent_lane_next_action", None)
+    obligation = payload.get("execution_obligation")
+    if isinstance(obligation, dict):
+        obligation.update(must_attempt_work=False, delivery_allowed=False, reason=reason)
+    lane = payload.get("work_lane_contract")
+    if isinstance(lane, dict):
+        lane.update(must_attempt_work=False, action=payload["recommended_action"])
+    recommendation = payload.get("heartbeat_recommendation")
+    if isinstance(recommendation, dict):
+        recommendation["spend_policy"] = reason
+
+
 def build_live_quota_should_run_decision(
     status_payload: dict[str, Any],
     *,
@@ -841,6 +864,7 @@ def build_live_quota_should_run_decision(
         payload["capability_hook_dispatch"] = {
             key: value for key, value in hook_dispatch.items() if key != "projections"
         }
+    _project_unbound_work_fields(payload)
     interaction = payload.get("interaction_contract")
     if isinstance(interaction, dict) and goal_id and agent_id:
         scope = {

@@ -11,6 +11,10 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from tests.control_plane.cli_output_fixture import read_cli_context_for_oracle  # noqa: E402
 sys.path.insert(0, str(REPO_ROOT / "tests" / "control_plane"))
 from canonical_authority_fixture import initialize_canonical_source_fixture  # noqa: E402
 
@@ -36,7 +40,8 @@ def run_cli(*args: str, registry_path: Path, runtime: Path) -> dict:
         capture_output=True,
         text=True,
     )
-    return json.loads(result.stdout)
+    body, _ = read_cli_context_for_oracle(result.stdout)
+    return json.loads(body)
 
 
 def write_fixture(

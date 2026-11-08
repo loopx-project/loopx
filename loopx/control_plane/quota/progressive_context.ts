@@ -485,6 +485,10 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
   include("interaction_contract", "user_channel");
   for (const field of ["primary_action", "delivery_allowed", "must_attempt", "quiet_noop_allowed"])
     include("interaction_contract", "agent_channel", field);
+  const turnBindingRequired = object(interaction.cli_channel)?.turn_binding_required === true;
+  if (turnBindingRequired)
+    for (const field of ["turn_binding_required", "next_cli_actions", "spend_allowed_now", "spend_after_validation", "spend_policy"])
+      include("interaction_contract", "cli_channel", field);
   include("interaction_contract", "agent_channel", "required_reads");
   const work = ["interaction_contract", "agent_channel", "work_context"];
   include(...work, "instruction");
@@ -619,9 +623,10 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
     && settlementSteps?.length === 2 && settlementSteps[0]?.kind === "durable_writeback" && settlementSteps[1]?.kind === "quota_spend"
     && settlementSteps.every(step => typeof step?.command_template === "string" && step.command_template.length > 0)
     && isDeepStrictEqual(cli?.next_cli_actions, settlementSteps.map(step => step?.command_template));
-  for (const field of ["execution_preparation", "next_cli_actions", "spend_allowed_now", "spend_after_validation", "spend_policy",
-    "quota_spend_source", "delivery_workspace_causality", "vision_continuation_audit"])
-    if (field !== "next_cli_actions" || !repeatsSettlement) include("interaction_contract", "cli_channel", field);
+  if (!turnBindingRequired)
+    for (const field of ["execution_preparation", "next_cli_actions", "spend_allowed_now", "spend_after_validation", "spend_policy",
+      "quota_spend_source", "delivery_workspace_causality", "vision_continuation_audit"])
+      if (field !== "next_cli_actions" || !repeatsSettlement) include("interaction_contract", "cli_channel", field);
   // Explicit selection clears next_cli_actions. Deliver the owner's discovery
   // and same-Turn binding recipe alongside its non-exhaustive suggestions.
   if (cli?.selection_required === true) {

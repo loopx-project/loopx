@@ -19,6 +19,10 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from tests.control_plane.cli_output_fixture import read_cli_context_for_oracle  # noqa: E402
 GOAL_ID = "focus-wait-owner-blocker"
 USER_TODO = "Provide new owner evidence, a clean baseline, or external eval before delivery resumes."
 
@@ -143,7 +147,8 @@ def run_cli(registry: Path, runtime_root: Path, *args: str) -> dict:
         text=True,
         capture_output=True,
     )
-    return json.loads(result.stdout)
+    body, _ = read_cli_context_for_oracle(result.stdout)
+    return json.loads(body)
 
 
 def main() -> int:

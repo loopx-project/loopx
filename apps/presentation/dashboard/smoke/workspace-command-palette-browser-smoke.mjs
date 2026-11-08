@@ -73,8 +73,11 @@ try {
       assert.equal(await launcher.evaluate(element => element === document.activeElement), true);
       await launcher.click();
       await dialogFor(page).waitFor({state: 'visible'});
-      await dialogFor(page).getByRole('combobox').fill('map legacy');
-      await page.keyboard.press('Enter');
+      const todoSearch = dialogFor(page).getByRole('combobox');
+      await todoSearch.fill('map legacy');
+      await dialogFor(page).getByRole('option', {selected: true}).waitFor({state: 'visible'});
+      assert.equal(await dialogFor(page).getByRole('option').count(), 1);
+      await todoSearch.press('Enter');
       await dialogFor(page).waitFor({state: 'hidden'});
       await page.waitForURL(/todo=showcase-map-columns/);
       await page.locator('[data-context-drawer]').waitFor({state: 'visible'});

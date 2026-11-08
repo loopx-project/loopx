@@ -437,15 +437,17 @@ def test_native_selection_observer_rejects_unverified_or_discovery_only_reads(tm
 @pytest.mark.parametrize("selection", ["fields", "index", "initial"])
 def test_selected_read_survives_unwritable_reference_metadata(tmp_path, monkeypatch, selection):
     import errno
-    from loopx.cli_commands import quota_capture
+    from loopx.cli_commands import quota_context_reader
 
     payload, machine, model = fixture(tmp_path)
     before = Path(machine["path"]).read_bytes()
+    blocked_paths = []
 
-    def unavailable(*args, **kwargs):
+    def unavailable(path, *args, **kwargs):
+        blocked_paths.append(path)
         raise OSError(errno.ENOSPC, "synthetic metadata unavailable")
 
-    monkeypatch.setattr(quota_capture, "write_context_read_reference", unavailable)
+    monkeypatch.setattr(quota_context_reader, "write_context_read_reference", unavailable)
     options = {"fields": {"select": ["/selected_todo", "/criterion"]},
                "index": {"list_fields": True}, "initial": {"initial_read": True}}[selection]
     page = read(model["command"], max_page_output_bytes=3500, page_bytes=3000, **options)
@@ -467,6 +469,7 @@ def test_selected_read_survives_unwritable_reference_metadata(tmp_path, monkeypa
         assert {item["pointer"] for item in values[0]["fields"]} == {"/" + key for key in payload}
     else:
         assert next(item["value"] for item in values if item["pointer"] == "/goal_boundary") == payload["goal_boundary"]
+    assert blocked_paths == [Path(machine["path"])]
     assert Path(machine["path"]).read_bytes() == before
 
 

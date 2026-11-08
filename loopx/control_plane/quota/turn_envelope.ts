@@ -602,6 +602,7 @@ function replanReadCommands(payload: JsonObject, path = payload.replan_read_path
   const packet = object(payload.replan_action_packet);
   if (typeof path !== "string" || !path.trim() || path.includes("\0") || payload.ok !== true ||
       payload.effective_action === EffectiveAction.GOVERNED_CAPABILITY_INTENT ||
+      object(object(payload.interaction_contract).cli_channel).turn_binding_required === true ||
       !packet.obligation_id || packet.settlement_only === true) return null;
   // Retain the renderer's executable across reads. A different ambient LoopX
   // may not understand this captured contract. Legacy captures keep their route.
@@ -1191,11 +1192,12 @@ function actionProjection(payload: JsonObject, deferSettlement = true, precision
   const interaction = object(payload.interaction_contract);
   const agentChannel = object(interaction.agent_channel);
   const cliChannel = object(interaction.cli_channel);
+  const turnBindingRequired = cliChannel.turn_binding_required === true;
   const capabilityIntent = payload.effective_action === EffectiveAction.GOVERNED_CAPABILITY_INTENT
     ? projectPendingCapabilityIntent(payload.pending_capability_intent) : null;
   // A governed capability action has already won the live decision. Stale
   // replan/host-reentry projections must not replace its exact command.
-  const replanPacket = capabilityIntent ? null : replanActionPacket(payload);
+  const replanPacket = capabilityIntent || turnBindingRequired ? null : replanActionPacket(payload);
   const replanSettlementOnly = object(payload.replan_action_packet).settlement_only === true;
   const recommendedAction = replanPacket
     ? replanSettlementOnly
@@ -1271,6 +1273,9 @@ function actionProjection(payload: JsonObject, deferSettlement = true, precision
     });
     writeback.selection_command_ref =
       "full_decision.interaction_contract.cli_channel.selection_command";
+  } else if (turnBindingRequired) {
+    writeback.turn_binding_required = true;
+    writeback.next_cli_actions = cliChannel.next_cli_actions;
   } else {
     // Original-Turn identities often follow an absolute runtime path. Cutting
     // a closeout command into display text can erase its binding or execute flag.
@@ -1680,7 +1685,11 @@ export function turnEnvelopeRoute(envelope: JsonObject, historicalText?: JsonObj
   // Size diagnostics grant no authority and do not veto a valid contract.
   const action = object(envelope.action);
   if (envelope.should_run === true) {
-    if (action.must_attempt !== true) return "blocked";
+    // An unbound native Goal Turn can require its binding command before
+    // work. That obligation cannot route a host launch, including a replan.
+    if (action.must_attempt !== true || object(envelope.writeback).turn_binding_required === true) {
+      return "blocked";
+    }
     const name = scalarString(historicalText ? historicalText.effective_action : envelope.effective_action || "", "route effective action");
     const route = Object.hasOwn(TURN_ACTION_ROUTES, name)
       ? TURN_ACTION_ROUTES[name as keyof typeof TURN_ACTION_ROUTES] : "ready_for_host";
