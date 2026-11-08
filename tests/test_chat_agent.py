@@ -23,9 +23,10 @@ import pytest
 
 
 @pytest.mark.parametrize("surface", ["turn", "session"])
-@pytest.mark.parametrize("failure", ["transient-space", "full-at-close", "permission", "stop", "identity-space"])
+@pytest.mark.parametrize("failure", ["transient-space", "full-at-close", "permission", "stop", "identity-space", "journal-space"])
 def test_progress_storage_failure_does_not_replay_or_discard_work(tmp_path, monkeypatch, surface, failure):
     from loopx.chat_store import ChatSessionStore
+    import loopx.chat_store as chat_store
 
     store = ChatSessionStore(tmp_path / "runtime")
     sid = store.create_session(goal_id="fixture", agent_id="codex",
@@ -35,6 +36,7 @@ def test_progress_storage_failure_does_not_replay_or_discard_work(tmp_path, monk
     runtime = chat_runtime.ChatRuntimeController(store=store, codex_bin="unused")
     target = store._turn_path(sid, first["turn_id"]) if surface == "turn" else store._session_path(sid)
     replace, initialize = os.replace, chat_runtime._TurnEventBuffer.__init__
+    append = chat_store._append_jsonl_rows
     pressure, calls, write_failures = [], [], []
 
     def replace_with_pressure(source, destination):
@@ -51,6 +53,11 @@ def test_progress_storage_failure_does_not_replay_or_discard_work(tmp_path, monk
 
     def initialize_immediately(self, **kwargs):
         initialize(self, **kwargs, metadata_checkpoint_interval_sec=0)
+
+    def append_with_pressure(path, rows):
+        if failure == "journal-space" and pressure and path == store._event_path(sid, first["turn_id"]):
+            raise OSError(errno.ENOSPC, "Synthetic storage failure")
+        return append(path, rows)
 
     class Adapter:
         upstream_thread_id = "saved-thread"
@@ -89,6 +96,7 @@ def test_progress_storage_failure_does_not_replay_or_discard_work(tmp_path, monk
 
     adapter = Adapter()
     monkeypatch.setattr(os, "replace", replace_with_pressure)
+    monkeypatch.setattr(chat_store, "_append_jsonl_rows", append_with_pressure)
     monkeypatch.setattr(chat_runtime._TurnEventBuffer, "__init__", initialize_immediately)
     monkeypatch.setattr(runtime, "_ensure_adapter", lambda *args, **kwargs: adapter)
     try:

@@ -207,6 +207,9 @@ class _TurnEventBuffer:
             if force or exc.errno != errno.ENOSPC:
                 raise
             # An ancillary progress snapshot must not abandon a live provider.
+            # Continue only after its primary event journal is durable; a full
+            # journal must not accumulate an unbounded in-memory backlog.
+            self.store.flush_events(self.session_id, self.turn_id)
             # Keep it dirty for the next normal checkpoint, without a hot retry
             # or another model invocation. Start/close still require persistence.
             self.last_checkpoint_at = now
