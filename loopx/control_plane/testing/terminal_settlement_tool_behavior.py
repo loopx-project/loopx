@@ -995,6 +995,15 @@ def _execute_terminal_cli(
     return output, kind
 
 
+def _protected_terminal_fixture(state: _QualificationState) -> dict[str, tuple[Any, ...]]:
+    root = state.fixture.project_root.parent
+    scratch = str(state.fixture.project_root.relative_to(root) / ".scratch")
+    return {
+        path: value for path, value in snapshot_disposable_fixture(root).items()
+        if path != scratch and not path.startswith(scratch + "/")
+    }
+
+
 def _execute_terminal_workspace(
     command: str, state: _QualificationState, workspace_shell: VisionShellHost | None, resources: ExitStack,
 ) -> tuple[str, str, VisionShellHost | None]:
@@ -1011,9 +1020,18 @@ def _execute_terminal_workspace(
             )
             resources.callback(workspace_shell.close)
         state.workspace_shell_executed = True
+        before = _protected_terminal_fixture(state)
         output, exit_code = workspace_shell.execute(command)
         if exit_code:
-            raise _TerminalToolViolation("workspace_authoring_failed")
+            if _protected_terminal_fixture(state) != before:
+                raise _TerminalToolViolation("workspace_authoring_failed")
+            # The native exec host returns failed draft commands to the model.
+            # Correction consumes this same budget and grants no CLI effect.
+            output = json.dumps({
+                "error_code": "shell_nonzero", "exit_code": exit_code,
+                "output": output[:4096], "truncated": len(output) > 4096,
+            })
+            return output, "shell_nonzero", workspace_shell
         kind = "workspace_authoring"
     return output, kind, workspace_shell
 
@@ -1161,6 +1179,9 @@ class DoubaoTerminalSettlementToolBehaviorActor:
                     "kind": kind if failure_code is None else failure_code,
                     "command_digest": digest_text(tool_call.command),
                 }
+                if kind == "shell_nonzero" and failure_code is None:
+                    step_receipt["error_code"] = "shell_nonzero"
+                    step_receipt["exit_code"] = json.loads(output)["exit_code"]
                 if failure_code is not None:
                     step_receipt["redacted_command_shape"] = _redacted_command_shape(
                         tool_call.command

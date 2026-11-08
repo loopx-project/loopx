@@ -497,6 +497,102 @@ def test_terminal_corrects_rejected_vision_within_original_budget(tmp_path: Path
     assert (tmp_path / "actor/project/fixture/settlement-proof.json").read_bytes() == fixture.proof_target.read_bytes()
 
 
+@pytest.mark.skipif(not shell_isolation_available(), reason="Draft authoring requires native OS isolation")
+@pytest.mark.parametrize("failed_drafts", [1, 7])
+def test_terminal_shell_error_can_be_corrected_without_resetting_budget(
+    tmp_path: Path, failed_drafts: int,
+) -> None:
+    fixture = _build_fixture(tmp_path / "oracle")
+    private_output = "synthetic-private-draft-output"
+    vision = {
+        "schema_version": "goal_vision_replan_contract_v0",
+        "state": "vision_closed",
+        "vision_patch": {"acceptance_summary": "Original proof and Todo validation were checked."},
+        "path_delta": {
+            "outcome": "no_change", "prior_assumption": "Delivery needed validation.",
+            "observed_reality": "The proof and original Todo validation were checked.",
+            "retained": ["Validated delivery"], "evidence_refs": ["fixture-settlement-proof"],
+        },
+    }
+
+    def corrected_draft(request):
+        feedback = json.loads(request["messages"][-1]["content"])
+        assert feedback["error_code"] == "shell_nonzero"
+        assert feedback["exit_code"] == 7
+        assert private_output in feedback["output"]
+        return ScriptedExecToolAction(
+            command="cat > .scratch/vision.json <<'JSON'\n" + json.dumps(vision) + "\nJSON",
+        )
+
+    def writeback(request):
+        return ScriptedExecToolAction(
+            command=_writeback_action(request).command + " --agent-vision-json .scratch/vision.json",
+        )
+
+    transport = ScriptedDoubaoExecTransport([
+        ScriptedExecToolAction(command=fixture.quota_guard_command),
+        ScriptedExecToolAction(command="cat fixture/settlement-proof.json"),
+        partial(_completion_action, kind="validation"),
+        *([ScriptedExecToolAction(command=(
+            "python3 -c " + shlex.quote(
+                "from pathlib import Path; Path('.scratch/partial.json').write_text('{'); "
+                f"print({private_output!r}); raise SystemExit(7)"
+            )
+        ))] * failed_drafts),
+        corrected_draft, writeback, _spend_action, _completion_action,
+    ])
+    receipt = DoubaoTerminalSettlementToolBehaviorActor(
+        api_key="test-only-placeholder", transport=transport,
+    ).qualify(qualification_id="terminal-shell-correction", fixture_root=tmp_path / "actor")
+
+    assert receipt["qualification_passed"] is (failed_drafts == 1), receipt
+    assert receipt["tool_call_count"] == (8 if failed_drafts == 1 else 10)
+    assert receipt["observed_tool_sequence"].count("shell_nonzero") == failed_drafts
+    assert receipt["settlement_receipt_steps"] == (
+        ["validation", "durable_writeback", "quota_spend", "terminal_closeout"]
+        if failed_drafts == 1 else ["validation"]
+    )
+    assert receipt["failure_code"] == (None if failed_drafts == 1 else "tool_call_budget_exhausted")
+    assert private_output not in json.dumps(receipt)
+    assert (tmp_path / "actor/project/fixture/settlement-proof.json").read_bytes() == fixture.proof_target.read_bytes()
+
+
+@pytest.mark.skipif(not shell_isolation_available(), reason="Draft authoring requires native OS isolation")
+@pytest.mark.parametrize("protected_target", ["proof", "registry"])
+def test_terminal_shell_error_with_protected_mutation_stops_before_writeback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, protected_target: str,
+) -> None:
+    from loopx.control_plane.testing.vision_shell_host import VisionShellHost
+
+    fixture = _build_fixture(tmp_path / "oracle")
+    execute = VisionShellHost.execute
+
+    def faulty_host(shell, command):
+        output, exit_code = execute(shell, command)
+        # Simulate a broken isolation host, not an authorized draft mutation.
+        target = (shell.project / "fixture/settlement-proof.json"
+                  if protected_target == "proof" else shell.fixture_root / "runtime/registry.global.json")
+        target.write_text("synthetic-protected-mutation\n")
+        return output, exit_code
+
+    monkeypatch.setattr(VisionShellHost, "execute", faulty_host)
+    transport = ScriptedDoubaoExecTransport([
+        ScriptedExecToolAction(command=fixture.quota_guard_command),
+        ScriptedExecToolAction(command="cat fixture/settlement-proof.json"),
+        partial(_completion_action, kind="validation"),
+        ScriptedExecToolAction(command="python3 -c 'raise SystemExit(7)'"),
+        _writeback_action, _spend_action, _completion_action,
+    ])
+    receipt = DoubaoTerminalSettlementToolBehaviorActor(
+        api_key="test-only-placeholder", transport=transport,
+    ).qualify(qualification_id="terminal-mutated-shell-failure", fixture_root=tmp_path / "actor")
+
+    assert receipt["qualification_passed"] is False
+    assert receipt["failure_code"] == "workspace_authoring_failed"
+    assert receipt["tool_call_count"] == len(transport.requests) == 4
+    assert receipt["settlement_receipt_steps"] == ["validation"]
+
+
 def test_terminal_input_rejections_do_not_reset_the_call_budget(tmp_path: Path) -> None:
     fixture = _build_fixture(tmp_path / "oracle")
 
