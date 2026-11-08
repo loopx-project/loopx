@@ -1800,6 +1800,65 @@ R0／V10／R1、D2／D5／D6／D3、context／model／split-install、PostgreSQL
 wheel、完整成本／采纳及独立 exact-head评审仍开放；不包含合入main或installed-host
 升级。后续实现必须依据完整成本比较，保留所有新鲜性／权限栅栏。
 
+### 2026-11-08 — Source／wheel 匹配全进程成本覆盖 native 退出
+
+原提案 #8302 与 target main `21013c0c1` 整合为 `9e147ddf2`，24 个 PR
+production-source hash 不变。每 arm 的 1840 个 packaged tracked source 与新建
+隔离 wheel 相同；五个未变的 source-only 文件仍在 package-data pattern 外：
+Canary baseline、三份 Claude plugin／config 文件及 shadow-drain test process。
+这验证 packaged-source parity，不宣称 source／wheel inventory 或 fingerprint
+完全相同。
+
+冻结的默认 SQLite 对照完成每发行形态五组交替配对，共 20 条完整 101-Todo
+生命周期，环境为 macOS27 arm64、CPython3.13.5／Node26.0.0。Fixture 初始化、
+CLI 与 verifier 使用精确 arm 的解释器／package；先加载实际 package 再加载
+checkout fixture helper，在模块 import 前建立 temporary／process 隔离。首次
+wheel 准备在 authority 初始化前拒绝 source-loaded fixture provenance；失败准备
+单独保留。两个 wheel 均先通过原 owner 的 Chat build。全部匹配流程的 prequota
+PID 集合保留正确来源的预热 daemon；受控重启创建第二个独立记账 daemon。
+Bytecode 关闭，每条 CLI 是新进程；匹配运行不与 build／validator 重叠，结果出来
+后不扩充冻结数量。
+
+全部 20 条独立保留相同 sum45 产物、原完成时间、四份 committed receipt、一次
+debit、required scopes、changed-evidence refusal、completion／writeback／spend／
+terminal replay、受控重启及 settled-Turn execution refusal。相同的被动 OS waiter
+观察两个 native daemon 的真实退出。External `wait4` 捕获 harness 及其 waited
+subtree；直接回收的 daemon waiter 已计入，只额外计 orphan native subtree 和
+已观测 orphan-waiter CPU，避免双计并覆盖此前采样遗漏的 native 退出 CPU。
+
+| 发行形态 | Whole harness 墙钟中位数（范围），秒，main → candidate | 已观测 process CPU 中位数，秒 | 完整 managed-daemon CPU 中位数，秒 |
+| --- | --- | --- | --- |
+| Source | 25.904（25.589–26.629）→26.477（25.603–26.643） | 17.489 →17.749 | 1.782 →1.887 |
+| Wheel | 26.248（25.670–28.200）→26.489（26.135–27.437） | 17.984 →18.341 | 1.787 →1.932 |
+
+Source setup／lifecycle／teardown 中位数为 main2.602／22.581／0.062 秒、
+candidate2.669／22.807／0.058；wheel 为 2.712／22.568／0.062 和
+2.651／22.878／0.062。Whole wall 从 harness 启动测到 OS 退出，包含三阶段外
+的 readback 与 observer 工作；各阶段中位数无需等于 whole 中位数。Source 五组中
+候选四次墙钟更慢，wheel 五组中两次；两个发行形态均有 4/5 组候选已观测 CPU
+更高。墙钟范围重叠，不宣称显著改善。五个样本的 nearest-rank empirical p95
+等于最大值：source26.629→26.643 秒、wheel28.200→27.437；不是稳定总体分位数。
+
+另一个独立插桩 wheel pair 保留所有 lifecycle／provenance／exit oracle，观察
+RPC367→344、JSON 参数字节 3,506,215→1,874,964。它诊断 transport 机制，不验收
+速度。该 pair 的 managed-daemon CPU 为 1.864／1.896 秒，约占已观测 process CPU
+的 9.5%／10.0%。其他 Node helper／probe 与 Python 启动、本地处理一同位于 CLI
+waited subtree，各自贡献尚未归因；不能将全部剩余 CPU 称为 Python 启动。下一步
+先归因该 subtree 的主要成本，再通过原 typed owner 选择有限改动并复验相同成果／
+恢复检查。原 Task 为此工作及独立 exact-head 评审保持开放；RPC 减少或测试通过
+不证明完整路径收益。
+
+当前 main 集成通过 99 个聚焦 Python、83 个 TypeScript 用例（TS 零 skip）及
+control-plane typing。此前真实 PostgreSQL16.15 store391／service11 资格属于
+未变的 production source，不是当前集成 head 的新运行。当前 head 的 File 完整
+CLI 与 PostgreSQL host／wheel journey 仍未合格。Observer 发布结果后的 CPU 尾部、
+物理设备写入、连续系统峰值、环境／build 成本、model／attention 和 installed
+adoption 仍是 unknown 或在本次范围外；未观测尾部不记为零。历史失败与冻结
+campaign 不替换、不重标签，完整边际／长程收益仍未合格。保留至少一个 minor
+release 的 I3、M1/#8011、完整 R0/V10/R1、D2/D5/D6/D3、context／model／
+split-install、full-cost／adoption 及完整 freshness、identity／revision／WAL／
+lease／receipt／recovery 栅栏。本轮不合入 main、不升级 host。
+
 ## 附录 B：决策日志
 
 | 日期 | 决策 | 负责人 / 批准 | 备选 | 变更的规范章节 |

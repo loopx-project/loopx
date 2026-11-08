@@ -2333,6 +2333,79 @@ independent exact-head review remain open. No main merge or installed-host
 upgrade is included. Further implementation must follow the complete cost
 comparison and preserve every current freshness/authority fence.
 
+### 2026-11-08 — Matched source/wheel process cost through native exit
+
+The original proposal #8302 is integrated with target main `21013c0c1` as
+`9e147ddf2`. All24 PR production-source hashes remain unchanged. Each arm's
+1840 packaged tracked sources match its rebuilt isolated wheel; five unchanged
+source-only files remain outside package-data patterns: the Canary baseline,
+three Claude plugin/config files and the shadow-drain test process. This checks
+packaged-source parity, not identical source/wheel inventories or fingerprints.
+
+The frozen default-SQLite comparison completes five alternating pairs per
+distribution,20 complete101-Todo lifecycles, on macOS27 arm64,
+CPython3.13.5/Node26.0.0. Fixture initialization, CLI and verifier use the exact
+arm interpreter/package. Package loading precedes checkout fixture helpers;
+temporary/process isolation precedes module imports. An initial wheel preparation
+refused source-loaded fixture provenance before authority initialization; that
+failed preparation remains separate. Both wheels required the existing verified
+Chat build before construction. Every matched prequota PID-set check retains
+the correctly sourced prewarmed daemon; controlled restart creates a second,
+separately accounted daemon. Bytecode is disabled and each CLI is a new process.
+No builds or validators overlap the matched runs, and the frozen count is not
+expanded after results.
+
+All20 episodes independently retain the same sum45 artifact, original completion
+time, four committed receipts and one debit, required scopes, changed-evidence
+refusal, completion/writeback/spend/terminal replay, controlled restart and
+settled-Turn execution refusal. Identical passive OS waiters observe both native
+daemons through real exit. External `wait4` captures the harness and its waited
+subtree; directly reaped daemon waiters are already included, so only orphan
+native subtrees and observed orphan-waiter CPU are added. This avoids double
+counting and includes native exit CPU that earlier sampled comparisons omitted.
+
+| Distribution | Whole harness wall median (range), seconds, main → candidate | Observed process CPU median, seconds | Complete managed-daemon CPU median, seconds |
+| --- | --- | --- | --- |
+| Source | 25.904 (25.589–26.629) →26.477 (25.603–26.643) | 17.489 →17.749 | 1.782 →1.887 |
+| Wheel | 26.248 (25.670–28.200) →26.489 (26.135–27.437) | 17.984 →18.341 | 1.787 →1.932 |
+
+Source setup/lifecycle/teardown medians are2.602/22.581/0.062 seconds on main
+and2.669/22.807/0.058 on candidate; wheel medians are2.712/22.568/0.062 and
+2.651/22.878/0.062. Whole wall measures harness start through OS exit, including
+readback and observer work outside these three phases; their medians need not
+sum to its median. Candidate wall is slower in4/5 source pairs and2/5 wheel
+pairs; observed CPU is higher in4/5 pairs for each distribution. Wall ranges
+overlap, and no significant wall improvement is claimed. Nearest-rank empirical
+p95 from five observations equals the maximum: source26.629→26.643 seconds,
+wheel28.200→27.437; these are not stable population percentiles.
+
+A separate instrumented wheel pair preserves all lifecycle/provenance/exit
+oracles and traces367→344 RPCs with3,506,215→1,874,964 JSON parameter bytes.
+It diagnoses the transport mechanism and does not qualify speed. Managed-daemon
+CPU is1.864/1.896 seconds, about9.5%/10.0% of observed process CPU in that pair.
+Other Node helpers/probes remain inside the CLI waited subtree together with
+Python startup and local processing; their individual contributions are
+unresolved. Calling the entire remaining CPU Python startup would misattribute
+the evidence. Further work must first attribute this subtree's material costs,
+then select a bounded change through the existing typed owner and repeat the
+same outcome/recovery checks. The original task remains open for this work and
+independent exact-head review; fewer RPCs or passing tests do not establish
+whole-path benefit.
+
+Current-main integration passes99 focused Python and83 TypeScript cases, zero
+TypeScript skips, and control-plane typing. The earlier real PostgreSQL16.15
+store391/service11 qualification belongs to unchanged production sources; it is
+not a new run at this integrated head. Current-head File whole-CLI and
+PostgreSQL host/wheel journeys remain unqualified. Observer CPU after result
+publication, physical-device writes, continuous system peak, environment/build
+cost, model/attention and installed adoption remain unknown or outside this
+comparison; missing tails are not zero. Earlier failures and frozen campaigns
+are neither replaced nor relabeled. Full marginal/long-horizon benefit remains
+unqualified. Keep I3 for at least one minor release, M1/#8011, full R0/V10/R1,
+D2/D5/D6/D3, context/model/split-install, full-cost/adoption and all freshness,
+identity/revision/WAL/lease/receipt/recovery fences. No main merge or host
+upgrade is included.
+
 ## Appendix B: Decision log
 
 | Date | Decision | Owner / approval | Alternatives | Normative sections changed |
