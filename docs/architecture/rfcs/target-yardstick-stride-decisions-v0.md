@@ -188,6 +188,12 @@ an obligation to satisfy Stride v2. Replans retain their existing v2 contract.
 An absent attachment preserves the current decision; an explicit `proxy: null`
 chooses direct evaluation while historical profiles remain readable.
 
+A current decision can reuse explicitly cited measurements from earlier
+findings by the same agent on the linked question. Each profile keeps its own
+input and evaluator revisions, and cross-profile comparison still requires the
+same candidate pair. Findings with their own Yardstick decision retain their
+original work and target scope.
+
 ### 5.3 Co-discovery: invest in a pair
 
 The model compares the incumbent pair, direct evaluation and a small relevant

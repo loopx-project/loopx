@@ -184,13 +184,22 @@ export function projectWorkYardstickCue(params: JsonObject): JsonObject | null {
     row.node_id === source.node_id && profiles.some(p => matchesProfile(row, p)));
   // An earlier target can share the same evaluator profile and work identity.
   // Filter source findings before ranking so its best cannot displace a legal pair.
+  const cited = new Set(counter);
   const scopedFindings = findings.filter(row => {
+    if (row.node_id !== source.node_id) return false;
+    // A decision can cite the agent's earlier measurements on this linked
+    // question without changing their provenance or assigning earlier work.
+    if (row.work_yardstick === undefined) {
+      return cited.size > 0 && row.agent_id === capture.binding.agent_id && Array.isArray(row.evidence_refs)
+        && row.evidence_refs.some(ref => typeof ref === "string" && cited.has(ref));
+    }
     const target = (row.work_yardstick as WorkYardstickCapture | undefined)?.decision?.target;
-    return row.node_id === source.node_id && belongsToWork(row, params) && target !== undefined
-      && target.summary === decision.target.summary && target.scope === decision.target.scope
-      && target.acceptance_ref === decision.target.acceptance_ref;
+    return belongsToWork(row, params) && target !== undefined && target.summary === decision.target.summary
+      && target.scope === decision.target.scope && target.acceptance_ref === decision.target.acceptance_ref;
   });
-  const searchComparison = measuredSearchComparison(projectExploreMeasurementFeedback(scopedFindings), decision);
+  const scopedFeedback = projectExploreMeasurementFeedback(scopedFindings, (row, measurement) =>
+    row.work_yardstick !== undefined || cited.has(measurement.evidence_ref));
+  const searchComparison = measuredSearchComparison(scopedFeedback, decision);
   return {source_finding_id: source.finding_id, node_id: source.node_id, binding: capture.binding, ...decision,
     measurement_feedback: feedback,
     ...(searchComparison ? {search_comparison: searchComparison} : {}),

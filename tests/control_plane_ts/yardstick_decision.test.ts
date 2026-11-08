@@ -102,6 +102,40 @@ test("goal and proxy join the same two candidates regardless of declared order a
   }
 });
 
+test("a current decision can reuse explicitly cited measurements written before its separate outcome", () => {
+  const preview = {...proxy, input_revision: "preview-inputs-v2"};
+  const cited = ["result:preview-a", "result:preview-b"];
+  const declared = {...decision, proxy: preview, counterevidence_refs: cited};
+  const source = {...finding, recorded_order: 2, work_yardstick: {decision: declared, binding},
+    evidence_refs: [...cited, "result:goal-a", "result:goal-b"], measurements: [
+      {...authoritative, value: 20, candidate_ref: "candidate:a", evidence_ref: "result:goal-a"},
+      {...authoritative, value: 14, candidate_ref: "candidate:b", evidence_ref: "result:goal-b"},
+    ]};
+  const recorded = {finding_id: "recorded-preview", node_id: source.node_id, agent_id: binding.agent_id,
+    recorded_order: 1, last_updated_at: "2026-01-01T00:00:00Z",
+    evidence_refs: [...cited, "result:preview-uncited"], measurements: [
+      {...preview, value: 6, candidate_ref: "candidate:a", evidence_ref: cited[0]!},
+      {...preview, value: 8, candidate_ref: "candidate:b", evidence_ref: cited[1]!},
+      {...preview, value: 99, candidate_ref: "candidate:uncited", evidence_ref: "result:preview-uncited"},
+    ]};
+  const project = (row = recorded, current = source) => projectWorkYardstickCue({...binding, enabled: true,
+    findings: [current, row], measurement_feedback: projectExploreMeasurementFeedback([current, row])})!.search_comparison;
+  const comparison = project();
+  assert.equal(comparison.goal.preferred_candidate_ref, "candidate:a");
+  assert.equal(comparison.proxy?.preferred_candidate_ref, "candidate:b");
+  assert.equal(comparison.proxy_order_reversed, true);
+
+  assert.equal(project({...recorded, agent_id: "peer"}).proxy, undefined);
+  assert.equal(project({...recorded, node_id: "different-question"}).proxy, undefined);
+  const differentInputs = recorded.measurements.map(row => ({...row, input_revision: "different-preview-inputs"}));
+  assert.equal(project({...recorded, measurements: differentInputs}).proxy, undefined);
+  const partial = {...source, work_yardstick: {binding, decision: {...declared, counterevidence_refs: [cited[0]!]}}};
+  assert.equal(project(recorded, partial).proxy, undefined);
+  const differentTarget = {...recorded, work_yardstick: {binding, decision: {...declared,
+    target: {...declared.target, acceptance_ref: "acceptance:another-target"}}}};
+  assert.equal(project(differentTarget).proxy, undefined);
+});
+
 test("only strictly older committed replay preserves a stale predecessor as history", () => {
   const params = {enabled: true, decision, binding, findings: [finding]};
   assert.deepEqual(validateWorkYardstickContinuation({...params,
