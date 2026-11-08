@@ -785,6 +785,8 @@ complete native input's actually included sections. Digests remain in the journa
 they are not repeated in model-facing index rows. A list, partial page, EOF without
 earlier coverage, failed/damaged output, subagent hook or unrelated capture cannot
 acknowledge a section. Selected reads never establish a full retained-input baseline.
+The native hook still verifies each page's bytes. It skips computing section
+digests when the terminal range is absent from both the batch and the journal.
 Changed content remains unread; compaction or a different Goal/Agent/scope retires
 the old epoch's observations. Stateless hosts make no such observation claim and
 keep the complete current source available. These observations do not establish
@@ -1105,7 +1107,9 @@ Codex App SSH Goal（`--runtime-profile codex_app_ssh_goal`），以及现有 Co
 私有原生 journal 的 `consumed_pointers` 与 `confirmed_read_sections` 只记录经过字节核对、
 连续完整交付的选读视图，或完整原生输入中实际包含的部分；摘要留在 journal，不反复展示给模型。
 目录、部分页、仅 EOF、失败／篡改输出、子 Agent hook、无关捕获都不构成读取确认；选读不建立全量
-模型保留基线。内容变化继续标为未读；压缩、Goal／Agent／scope 变化使旧 epoch 观测失效。
+模型保留基线。
+原生 hook 仍逐页核对字节；当本批和 journal 都没有末尾范围时，跳过正文字段的摘要计算。
+内容变化继续标为未读；压缩、Goal／Agent／scope 变化使旧 epoch 观测失效。
 无状态宿主不声称观测确认，完整当前来源始终可达；这些记录不证明理解、后续保留、执行权限或计费下降。
 
 受支持的 Codex 声明尚未完成原生连续性初始化时（包括尚未提供会话 id），
