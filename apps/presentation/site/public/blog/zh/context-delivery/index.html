@@ -6,8 +6,8 @@
 <meta property="og:type" content="article"><meta property="og:site_name" content="LoopX"><meta property="og:locale" content="zh_CN"><meta property="og:title" content="Agent 读上下文，也需要一套“查书”的方法"><meta property="og:description" content="从一个语音任务理解渐进式读取、JSON Pointer、精确共享、compaction 周期内的结构化差分，以及失效后的完整恢复。"><meta property="og:url" content="https://loopx-project.github.io/loopx/blog/zh/context-delivery/"><meta name="twitter:card" content="summary"><link rel="icon" href="data:,"><link rel="stylesheet" href="../../blog.css">
 </head><body><a class="skip-link" href="#main">跳至正文</a>
 <header class="site-header"><a class="brand" href="../../../?lang=zh"><span class="product-mark" aria-hidden="true"><i></i><i></i></span>LoopX</a><nav aria-label="主导航"><a href="../">Blog</a><a href="../../../docs/book/">文档</a></nav><div class="header-actions"><a class="language" href="../../context-delivery/" lang="en" hreflang="en">EN</a><a class="github" href="https://github.com/loopx-project/loopx">GitHub ↗</a></div></header>
-<main id="main"><div class="article-heading"><a class="back" href="../">← 全部文章</a><p class="eyebrow">Context delivery</p><h1>Agent 读上下文，也需要一套“查书”的方法</h1><p class="lead">从一个语音任务理解渐进式读取、JSON Pointer、精确共享、compaction 周期内的结构化差分，以及失效后的完整恢复。</p><div class="byline"><a href="https://github.com/loopx-project/loopx">LoopX</a><span>·</span><time datetime="2026-11-01">2026 年 11 月 1 日</time><span>·</span><span>11 月 3 日更新实证</span></div></div>
-<div class="article-layout"><aside class="toc"><details><summary>本文目录</summary><nav aria-label="本文目录"><a href="#example">用“管家读语音”串起一次工作</a><a href="#known-paths">知道位置，直接一次读齐</a><a href="#discover">不知道结构，查相关目录，再往下读</a><a href="#requirements">要求先看见，证明它的材料再展开</a><a href="#sharing">同一份交付里的相同记录，保留一个完整位置</a><a href="#cycle">下一轮继续，交付这次改变了什么</a><a href="#native-path">开启后，默认交付的是一个读取入口</a><a href="#recovery">压缩或读取失败，恢复上下文，也保留原工作</a><a href="#evidence">这些数据说明了什么</a><a href="#ablation-evidence">真实模型与多题消融实证</a><a href="#reproduce">用同一份材料动手读一遍</a></nav></details></aside><article class="prose"><p>Agent 做长任务，资料会越来越多：原目标、后来追加的约束、试过的方案、失败的实验、当前做到哪里。每次继续都把整份材料再塞一遍，重复会不断累积；只留一段摘要，又可能找不回决定所依赖的原话。</p>
+<main id="main"><div class="article-heading"><a class="back" href="../">← 全部文章</a><p class="eyebrow">Context delivery</p><h1>Agent 读上下文，也需要一套“查书”的方法</h1><p class="lead">从一个语音任务理解渐进式读取、JSON Pointer、精确共享、compaction 周期内的结构化差分，以及失效后的完整恢复。</p><div class="byline"><a href="https://github.com/loopx-project/loopx">LoopX</a><span>·</span><time datetime="2026-11-01">2026 年 11 月 1 日</time><span>·</span><span>11 月 9 日更新实证</span></div></div>
+<div class="article-layout"><aside class="toc"><details><summary>本文目录</summary><nav aria-label="本文目录"><a href="#example">用“管家读语音”串起一次工作</a><a href="#known-paths">知道位置，直接一次读齐</a><a href="#discover">不知道结构，查相关目录，再往下读</a><a href="#requirements">要求先看见，证明它的材料再展开</a><a href="#sharing">同一份交付里的相同记录，保留一个完整位置</a><a href="#cycle">下一轮继续，交付这次改变了什么</a><a href="#native-path">开启后，默认交付的是一个读取入口</a><a href="#recovery">压缩或读取失败，恢复上下文，也保留原工作</a><a href="#evidence">这些数据说明了什么</a><a href="#ablation-evidence">真实模型与多题消融实证</a><a href="#multitask-context-byte-ratios">八题四臂 Context ON 字节比例</a><a href="#reproduce">用同一份材料动手读一遍</a></nav></details></aside><article class="prose"><p>Agent 做长任务，资料会越来越多：原目标、后来追加的约束、试过的方案、失败的实验、当前做到哪里。每次继续都把整份材料再塞一遍，重复会不断累积；只留一段摘要，又可能找不回决定所依赖的原话。</p>
 <p>LoopX 的 context delivery 把这件事拆开做：<strong>完整资料保存下来，当前决定需要的事实先读，支持材料沿问题展开；同一个有效 compaction 周期内，再精确复用没有变化的结构。</strong></p>
 <p>本文以已发布的 <a href="https://github.com/loopx-project/loopx/tree/v2.2.0">LoopX 2.2.0</a> Codex 原生路径为准。受支持的 POSIX Codex App／SSH 会话与新的 benchmark heartbeat 默认开启 context delivery；已有关闭设置继续生效，也可以显式关闭。开启后完整内容先保存，Agent 收到当前读取入口。具体发布与验证范围见 <a href="https://github.com/loopx-project/loopx/releases/tag/v2.2.0">2.2.0 版本说明</a>；下文的合成测量仍保留原始实验版本与条件。</p>
 <p>可以把它想成查一本厚书：capture 是完整保存的那本书，目录告诉我们章节在哪，JSON Pointer 是书内地址。渐进式读取决定这一刻翻到多深；差分决定下一轮哪些内容可以沿用。</p>
@@ -266,6 +266,96 @@ loopx --format json quota context-read \
 </tbody>
 </table></div>
 <p>这组双轨实证说明：<strong>控制包裁剪率（−74.25% / −38.54%）不能直接等同于整轮模型 Token 节省（未缓存 −12.07%、总输入 −7.46%），更不能掩盖前 2 小时早窗的前置建索引开销（4.05×）和跨题反例。</strong> Context Delivery 的真实价值在于长周期（如 10h–18h）内延缓上下文膨胀、配合 Stride 将省下的注意力转化为后程有效实验（参见 <a href="../edgebench-feedback-and-memory/#later-common-windows">EdgeBench 后程突破与五臂归因</a>）。</p>
+<h3 id="multitask-context-byte-ratios">跨 8 组最新四臂 Context ON 18h 轨迹的多题控制面字节比例（Progressive vs. Delta）</h3>
+<p>为进一步把<strong>渐进式读取（Progressive Projection）</strong>与<strong>周期内差分交付（Differential Delivery）</strong>两项机制在真实长程运行中的独立收益拆开，我们对最新四臂对照中的 <strong>8 组 <code>Context ON</code> 18h 完整轨迹（<code>N = 213</code> 次模型侧唤醒，含 <code>101</code> 次新会话/压缩后基线首读与 <code>112</code> 次同周期 <code>Delta</code> 续跑）</strong>进行了逐轮控制包字节核算：</p>
+<figure class="diagram"><p class="diagram-label">八题四臂 Context ON 控制面字节比例（N = 213 唤醒，112 周期内 Delta）</p><a href="../../images/context-delivery/multitask-byte-ratios-zh.svg" target="_blank" rel="noopener" aria-label="打开完整尺寸的八题 Progressive 与 Delta 控制面字节比例图"><img src="../../images/context-delivery/multitask-byte-ratios-zh.svg" alt="八题四臂 Context ON 18h 轨迹控制面字节比例：Progressive 占 33.4% (-66.6%)，同周期 Delta 占 35.8% (-64.2%)，Prog+Delta 首屏占 3.0% / 5.0%" width="1220" height="520" loading="lazy" style="width:100%;height:auto;border-radius:10px;margin:8px 0 12px 0"></a><figcaption>左图（A）：8 道核心题目各自的 Progressive 必要投影占比（蓝）、同周期 Delta 载荷占比（青）与 Prog+Delta 首屏正文占比（紫）。右图（B）：8 题 213 次唤醒的累计控制面字节从 22.41 MB 阶梯式裁剪至 7.48 MB（Progressive）、4.49 MB（同周期 Delta）与 0.37 MB / 0.63 MB（首屏正文/含封装）。点击查看原图。</figcaption></figure>
+<div class="table-scroll" role="region" tabindex="0" aria-label="八题四臂 Context ON 控制面字节比例对照表"><table>
+<thead>
+<tr>
+<th>题目（四臂 Context ON 18h）</th>
+<th style="text-align:right">唤醒数（基线 / Δ）</th>
+<th style="text-align:right">Full 全量包</th>
+<th style="text-align:right">Progressive 必要视图（占比）</th>
+<th style="text-align:right">同周期 Delta 载荷（占同轮 Full）</th>
+<th style="text-align:right">Prog+Delta 首屏（正文 / 含封装）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Grid 路径优化（<code>on_stride</code>）</td>
+<td style="text-align:right">29（15 / 14）</td>
+<td style="text-align:right">4,405,651 B</td>
+<td style="text-align:right">1,166,467 B（<strong>26.5%</strong>, −73.5%）</td>
+<td style="text-align:right">474,016 B（<strong>20.7%</strong>, −79.3%）</td>
+<td style="text-align:right">41,878 / 76,650 B（<strong>1.8% / 3.3%</strong>）</td>
+</tr>
+<tr>
+<td>VLIW 调度优化（<code>on_stride</code>）</td>
+<td style="text-align:right">14（5 / 9）</td>
+<td style="text-align:right">1,297,500 B</td>
+<td style="text-align:right">505,826 B（<strong>39.0%</strong>, −61.0%）</td>
+<td style="text-align:right">382,664 B（<strong>45.2%</strong>, −54.8%）</td>
+<td style="text-align:right">30,860 / 50,152 B（<strong>3.6% / 5.9%</strong>）</td>
+</tr>
+<tr>
+<td>FFmpeg 编码加速（<code>on_stride</code>）</td>
+<td style="text-align:right">26（12 / 14）</td>
+<td style="text-align:right">2,924,522 B</td>
+<td style="text-align:right">874,104 B（<strong>29.9%</strong>, −70.1%）</td>
+<td style="text-align:right">759,787 B（<strong>47.1%</strong>, −52.9%）</td>
+<td style="text-align:right">43,807 / 75,305 B（<strong>2.7% / 4.7%</strong>）</td>
+</tr>
+<tr>
+<td>OpenTTD 路网规划（<code>on_stride</code>）</td>
+<td style="text-align:right">31（19 / 12）</td>
+<td style="text-align:right">3,288,042 B</td>
+<td style="text-align:right">1,050,623 B（<strong>32.0%</strong>, −68.0%）</td>
+<td style="text-align:right">436,053 B（<strong>30.8%</strong>, −69.2%）</td>
+<td style="text-align:right">36,753 / 64,619 B（<strong>2.6% / 4.6%</strong>）</td>
+</tr>
+<tr>
+<td>Ad Placement 广告拍卖（<code>on_stride</code>）</td>
+<td style="text-align:right">29（12 / 17）</td>
+<td style="text-align:right">3,115,820 B</td>
+<td style="text-align:right">1,019,704 B（<strong>32.7%</strong>, −67.3%）</td>
+<td style="text-align:right">708,828 B（<strong>39.4%</strong>, −60.6%）</td>
+<td style="text-align:right">64,174 / 102,437 B（<strong>3.6% / 5.7%</strong>）</td>
+</tr>
+<tr>
+<td>Borden 震源反演（<code>on_stride</code>）</td>
+<td style="text-align:right">28（11 / 17）</td>
+<td style="text-align:right">2,855,664 B</td>
+<td style="text-align:right">1,001,254 B（<strong>35.1%</strong>, −64.9%）</td>
+<td style="text-align:right">625,709 B（<strong>34.4%</strong>, −65.6%）</td>
+<td style="text-align:right">50,602 / 90,024 B（<strong>2.8% / 4.9%</strong>）</td>
+</tr>
+<tr>
+<td>Rust 工作区重构（<code>on_stride</code>）</td>
+<td style="text-align:right">15（4 / 11）</td>
+<td style="text-align:right">1,173,832 B</td>
+<td style="text-align:right">439,814 B（<strong>37.5%</strong>, −62.5%）</td>
+<td style="text-align:right">363,310 B（<strong>42.1%</strong>, −57.9%）</td>
+<td style="text-align:right">40,956 / 64,251 B（<strong>4.7% / 7.4%</strong>）</td>
+</tr>
+<tr>
+<td>ANN 向量检索（<code>on_stride</code>）</td>
+<td style="text-align:right">41（23 / 18）</td>
+<td style="text-align:right">3,347,659 B</td>
+<td style="text-align:right">1,228,159 B（<strong>36.7%</strong>, −63.3%）</td>
+<td style="text-align:right">737,968 B（<strong>38.6%</strong>, −61.4%）</td>
+<td style="text-align:right">65,419 / 107,112 B（<strong>3.4% / 5.6%</strong>）</td>
+</tr>
+<tr>
+<td><strong>8 题合计（加权总体）</strong></td>
+<td style="text-align:right"><strong>213（101 / 112）</strong></td>
+<td style="text-align:right"><strong>22,408,690 B（100%）</strong></td>
+<td style="text-align:right"><strong>7,479,469 B（33.4%, −66.6%）</strong></td>
+<td style="text-align:right"><strong>4,488,335 B（35.8%, −64.2%）</strong></td>
+<td style="text-align:right"><strong>374,449 / 630,550 B（3.0% / 5.0%）</strong></td>
+</tr>
+</tbody>
+</table></div>
+<p>可以看到两层正交且稳定的字节压缩效应：（1）<strong>Progressive 渐进式投影（<code>required-context.json</code>）</strong>在全部 213 次唤醒上将完整决策包从 <code>22.41 MB</code> 压至 <code>7.48 MB</code>（均值 <strong><code>33.4%</code>，净减 <code>−66.6%</code></strong>，各题稳定在 <code>26.5%–39.0%</code>），折叠掉未选中候选与历史长尾详情；（2）<strong>Delta 周期内差分（<code>delivery.json</code>）</strong>在 112 次同周期续跑唤醒上，将对应的 <code>12.53 MB</code> 全量包压至 <code>4.49 MB</code>（均值 <strong><code>35.8%</code>，净减 <code>−64.2%</code></strong>，各题 <code>20.7%–47.1%</code>）；（3）<strong>两者叠加的 <code>--initial-read</code> 首屏入口</strong>仅占原包的 <strong><code>3.0%</code>（含 CLI JSON 封装为 <code>5.0%</code>，即净减 <code>−97.0% / −95.0%</code>）</strong>。此外，最新合入的 <strong>C1 控制器/执行器投影统一（<a href="https://github.com/loopx-project/loopx/pull/8266">#8266</a> / <a href="https://github.com/loopx-project/loopx/pull/8304">#8304</a>）</strong>进一步使稳态单轮控制面材料再降 <strong><code>26.7%</code></strong>（<code>69.9 KB → 51.3 KB</code>），写回后二次投影耗时从 <code>57.1ms</code> 降至 <code>3.3ms</code>。</p>
 <p>2.2.0 已交付完整来源、文件入口、批量选择、目录深度、适用验收分层、精确共享、周期差分与恢复。更广的候选、偏好、Explore 按决策阶段统一交付及全入口一致性仍有未完成部分。在「设置 → 本机 → 能力 → 差分上下文 → Codex」可以关闭，已有 off 会保留；单次命令或新 benchmark trial 可用 <code>--context-delivery off</code>。Trial 不继承本机开关，已有冻结 trial 不被重写。默认策略下，普通 CLI、不支持的宿主和非 heartbeat benchmark 保留原完整路径；显式请求不支持的 on 会明确拒绝，hooks 不可用时使用完整交付。保存配置、实际安装与模型采用分别核验。</p>
 <h2 id="reproduce">用同一份材料动手读一遍</h2>
 <p><a href="../../context-delivery/example.py">example.py</a> 完整生成这个合成语音任务，调用现有 reader、渐进投影与差分 owner，逐项核对选择值、目录地址、全部 10 条要求、共享引用与完整恢复。程序不注册 Goal，不做准入或结算，也不调用模型或语音服务。</p>

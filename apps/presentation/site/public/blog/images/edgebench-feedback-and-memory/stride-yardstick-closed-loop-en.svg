@@ -1,0 +1,680 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+  "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg xmlns:xlink="http://www.w3.org/1999/xlink" width="939.463849pt" height="388.794062pt" viewBox="0 0 939.463849 388.794062" xmlns="http://www.w3.org/2000/svg" version="1.1">
+ <metadata>
+  <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+   <cc:Work>
+    <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
+    <dc:date>2026-11-09T03:30:27.341527</dc:date>
+    <dc:format>image/svg+xml</dc:format>
+    <dc:creator>
+     <cc:Agent>
+      <dc:title>Matplotlib v3.11.2, https://matplotlib.org/</dc:title>
+     </cc:Agent>
+    </dc:creator>
+   </cc:Work>
+  </rdf:RDF>
+ </metadata>
+ <defs>
+  <style type="text/css">*{stroke-linejoin: round; stroke-linecap: butt}</style>
+ </defs>
+ <g id="figure_1">
+  <g id="patch_1">
+   <path d="M 0 388.794062 
+L 939.463849 388.794062 
+L 939.463849 0 
+L 0 0 
+z
+" style="fill: #ffffff"/>
+  </g>
+  <g id="axes_1">
+   <g id="patch_2">
+    <path d="M 131.323937 349.87375 
+L 424.225662 349.87375 
+L 424.225662 44.488 
+L 131.323937 44.488 
+z
+" style="fill: #f8fafc"/>
+   </g>
+   <g id="patch_3">
+    <path d="M 131.323937 90.308147 
+L 161.740655 90.308147 
+L 161.740655 58.36917 
+L 131.323937 58.36917 
+z
+" clip-path="url(#pfe23f510ef)" style="fill: #16a34a; opacity: 0.9"/>
+   </g>
+   <g id="patch_4">
+    <path d="M 131.323937 151.729255 
+L 354.943138 151.729255 
+L 354.943138 119.790279 
+L 131.323937 119.790279 
+z
+" clip-path="url(#pfe23f510ef)" style="fill: #16a34a; opacity: 0.9"/>
+   </g>
+   <g id="patch_5">
+    <path d="M 131.323937 213.150363 
+L 243.978447 213.150363 
+L 243.978447 181.211387 
+L 131.323937 181.211387 
+z
+" clip-path="url(#pfe23f510ef)" style="fill: #16a34a; opacity: 0.9"/>
+   </g>
+   <g id="patch_6">
+    <path d="M 131.323937 274.571471 
+L 176.385741 274.571471 
+L 176.385741 242.632495 
+L 131.323937 242.632495 
+z
+" clip-path="url(#pfe23f510ef)" style="fill: #16a34a; opacity: 0.9"/>
+   </g>
+   <g id="patch_7">
+    <path d="M 131.323937 335.99258 
+L 330.159146 335.99258 
+L 330.159146 304.053603 
+L 131.323937 304.053603 
+z
+" clip-path="url(#pfe23f510ef)" style="fill: #16a34a; opacity: 0.9"/>
+   </g>
+   <g id="patch_8">
+    <path d="M 161.740655 90.308147 
+L 161.740655 90.308147 
+L 161.740655 58.36917 
+L 161.740655 58.36917 
+z
+" clip-path="url(#pfe23f510ef)" style="fill: #3b82f6; opacity: 0.85"/>
+   </g>
+   <g id="patch_9">
+    <path d="M 354.943138 151.729255 
+L 412.960211 151.729255 
+L 412.960211 119.790279 
+L 354.943138 119.790279 
+z
+" clip-path="url(#pfe23f510ef)" style="fill: #3b82f6; opacity: 0.85"/>
+   </g>
+   <g id="patch_10">
+    <path d="M 243.978447 213.150363 
+L 409.580575 213.150363 
+L 409.580575 181.211387 
+L 243.978447 181.211387 
+z
+" clip-path="url(#pfe23f510ef)" style="fill: #3b82f6; opacity: 0.85"/>
+   </g>
+   <g id="patch_11">
+    <path d="M 176.385741 274.571471 
+L 384.796583 274.571471 
+L 384.796583 242.632495 
+L 176.385741 242.632495 
+z
+" clip-path="url(#pfe23f510ef)" style="fill: #3b82f6; opacity: 0.85"/>
+   </g>
+   <g id="patch_12">
+    <path d="M 330.159146 335.99258 
+L 412.960211 335.99258 
+L 412.960211 304.053603 
+L 330.159146 304.053603 
+z
+" clip-path="url(#pfe23f510ef)" style="fill: #3b82f6; opacity: 0.85"/>
+   </g>
+   <g id="patch_13">
+    <path d="M 161.740655 90.308147 
+L 412.960211 90.308147 
+L 412.960211 58.36917 
+L 161.740655 58.36917 
+z
+" clip-path="url(#pfe23f510ef)" style="fill: #dc2626; opacity: 0.82"/>
+   </g>
+   <g id="patch_14">
+    <path d="M 412.960211 151.729255 
+L 412.960211 151.729255 
+L 412.960211 119.790279 
+L 412.960211 119.790279 
+z
+" clip-path="url(#pfe23f510ef)" style="fill: #dc2626; opacity: 0.82"/>
+   </g>
+   <g id="patch_15">
+    <path d="M 409.580575 213.150363 
+L 412.960211 213.150363 
+L 412.960211 181.211387 
+L 409.580575 181.211387 
+z
+" clip-path="url(#pfe23f510ef)" style="fill: #dc2626; opacity: 0.82"/>
+   </g>
+   <g id="patch_16">
+    <path d="M 384.796583 274.571471 
+L 412.960211 274.571471 
+L 412.960211 242.632495 
+L 384.796583 242.632495 
+z
+" clip-path="url(#pfe23f510ef)" style="fill: #dc2626; opacity: 0.82"/>
+   </g>
+   <g id="patch_17">
+    <path d="M 412.960211 335.99258 
+L 412.960211 335.99258 
+L 412.960211 304.053603 
+L 412.960211 304.053603 
+z
+" clip-path="url(#pfe23f510ef)" style="fill: #dc2626; opacity: 0.82"/>
+   </g>
+   <g id="matplotlib.axis_1">
+    <g id="xtick_1">
+     <g id="line2d_1">
+      <path d="M 131.323937 349.87375 
+L 131.323937 44.488 
+" clip-path="url(#pfe23f510ef)" style="fill: none; stroke-dasharray: 0.8,1.32; stroke-dashoffset: 0; stroke: #94a3b8; stroke-opacity: 0.45; stroke-width: 0.8"/>
+     </g>
+     <g id="line2d_2">
+      <defs>
+       <path id="mf020007641" d="M 0 0 
+L 0 3.5 
+" style="stroke: #000000; stroke-width: 0.8"/>
+      </defs>
+      <g>
+       <use xlink:href="#mf020007641" x="131.323937" y="349.87375" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_1">
+      <text style="font-size: 10px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: middle" x="131.323937" y="365.47375" transform="rotate(-0 131.323937 365.47375)">0</text>
+     </g>
+    </g>
+    <g id="xtick_2">
+     <g id="line2d_3">
+      <path d="M 187.651192 349.87375 
+L 187.651192 44.488 
+" clip-path="url(#pfe23f510ef)" style="fill: none; stroke-dasharray: 0.8,1.32; stroke-dashoffset: 0; stroke: #94a3b8; stroke-opacity: 0.45; stroke-width: 0.8"/>
+     </g>
+     <g id="line2d_4">
+      <g>
+       <use xlink:href="#mf020007641" x="187.651192" y="349.87375" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_2">
+      <text style="font-size: 10px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: middle" x="187.651192" y="365.47375" transform="rotate(-0 187.651192 365.47375)">20</text>
+     </g>
+    </g>
+    <g id="xtick_3">
+     <g id="line2d_5">
+      <path d="M 243.978447 349.87375 
+L 243.978447 44.488 
+" clip-path="url(#pfe23f510ef)" style="fill: none; stroke-dasharray: 0.8,1.32; stroke-dashoffset: 0; stroke: #94a3b8; stroke-opacity: 0.45; stroke-width: 0.8"/>
+     </g>
+     <g id="line2d_6">
+      <g>
+       <use xlink:href="#mf020007641" x="243.978447" y="349.87375" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_3">
+      <text style="font-size: 10px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: middle" x="243.978447" y="365.47375" transform="rotate(-0 243.978447 365.47375)">40</text>
+     </g>
+    </g>
+    <g id="xtick_4">
+     <g id="line2d_7">
+      <path d="M 300.305701 349.87375 
+L 300.305701 44.488 
+" clip-path="url(#pfe23f510ef)" style="fill: none; stroke-dasharray: 0.8,1.32; stroke-dashoffset: 0; stroke: #94a3b8; stroke-opacity: 0.45; stroke-width: 0.8"/>
+     </g>
+     <g id="line2d_8">
+      <g>
+       <use xlink:href="#mf020007641" x="300.305701" y="349.87375" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_4">
+      <text style="font-size: 10px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: middle" x="300.305701" y="365.47375" transform="rotate(-0 300.305701 365.47375)">60</text>
+     </g>
+    </g>
+    <g id="xtick_5">
+     <g id="line2d_9">
+      <path d="M 356.632956 349.87375 
+L 356.632956 44.488 
+" clip-path="url(#pfe23f510ef)" style="fill: none; stroke-dasharray: 0.8,1.32; stroke-dashoffset: 0; stroke: #94a3b8; stroke-opacity: 0.45; stroke-width: 0.8"/>
+     </g>
+     <g id="line2d_10">
+      <g>
+       <use xlink:href="#mf020007641" x="356.632956" y="349.87375" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_5">
+      <text style="font-size: 10px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: middle" x="356.632956" y="365.47375" transform="rotate(-0 356.632956 365.47375)">80</text>
+     </g>
+    </g>
+    <g id="xtick_6">
+     <g id="line2d_11">
+      <path d="M 412.960211 349.87375 
+L 412.960211 44.488 
+" clip-path="url(#pfe23f510ef)" style="fill: none; stroke-dasharray: 0.8,1.32; stroke-dashoffset: 0; stroke: #94a3b8; stroke-opacity: 0.45; stroke-width: 0.8"/>
+     </g>
+     <g id="line2d_12">
+      <g>
+       <use xlink:href="#mf020007641" x="412.960211" y="349.87375" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_6">
+      <text style="font-size: 10px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: middle" x="412.960211" y="365.47375" transform="rotate(-0 412.960211 365.47375)">100</text>
+     </g>
+    </g>
+    <g id="text_7">
+     <text style="font-weight: 700; font-size: 10px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: middle; fill: #1e293b" x="277.7748" y="379.47375" transform="rotate(-0 277.7748 379.47375)">Share of Decision Transitions (%)</text>
+    </g>
+   </g>
+   <g id="matplotlib.axis_2">
+    <g id="ytick_1">
+     <g id="line2d_13">
+      <defs>
+       <path id="m1622974265" d="M 0 0 
+L -3.5 0 
+" style="stroke: #000000; stroke-width: 0.8"/>
+      </defs>
+      <g>
+       <use xlink:href="#m1622974265" x="131.323937" y="74.338659" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_8">
+      <text style="font-size: 8.6px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; fill: #1e293b" transform="translate(60.384281 72.876659)">Stride v1 (N=37)</text>
+      <text style="font-size: 8.6px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; fill: #1e293b" transform="translate(35.933406 84.916659)">89.2% shrink collapse</text>
+     </g>
+    </g>
+    <g id="ytick_2">
+     <g id="line2d_14">
+      <g>
+       <use xlink:href="#m1622974265" x="131.323937" y="135.759767" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_9">
+      <text style="font-size: 8.6px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; fill: #1e293b" transform="translate(54.94075 133.988032)">v2 · grow (N=34)</text>
+      <text style="font-size: 8.6px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; fill: #1e293b" transform="translate(44.8465 146.647501)">supported_progress</text>
+     </g>
+    </g>
+    <g id="ytick_3">
+     <g id="line2d_15">
+      <g>
+       <use xlink:href="#m1622974265" x="131.323937" y="197.180875" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_10">
+      <text style="font-size: 8.6px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; fill: #1e293b" transform="translate(49.514688 195.469609)">v2 · verify (N=165)</text>
+      <text style="font-size: 8.6px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; fill: #1e293b" transform="translate(42.634688 208.008141)">discriminating guard</text>
+     </g>
+    </g>
+    <g id="ytick_4">
+     <g id="line2d_16">
+      <g>
+       <use xlink:href="#m1622974265" x="131.323937" y="258.601983" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_11">
+      <text style="font-size: 8.6px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; fill: #1e293b" transform="translate(49.118281 257.139983)">v2 · switch (N=50)</text>
+      <text style="font-size: 8.6px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; fill: #1e293b" transform="translate(42.392813 269.179983)">cross-family escape</text>
+     </g>
+    </g>
+    <g id="ytick_5">
+     <g id="line2d_17">
+      <g>
+       <use xlink:href="#m1622974265" x="131.323937" y="320.023091" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_12">
+      <text style="font-size: 8.6px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; fill: #1e293b" transform="translate(7.2 318.561091)">Latest Four-Arm Context ON</text>
+      <text style="font-size: 8.6px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; fill: #1e293b" transform="translate(10.950406 330.601091)">(8 runs N=25, 17 transitions)</text>
+     </g>
+    </g>
+   </g>
+   <g id="patch_18">
+    <path d="M 131.323937 349.87375 
+L 131.323937 44.488 
+" style="fill: none; stroke: #cbd5e1; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_19">
+    <path d="M 131.323937 349.87375 
+L 424.225662 349.87375 
+" style="fill: none; stroke: #cbd5e1; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="text_13">
+    <text style="font-weight: 700; font-size: 8.2px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: middle; fill: #ffffff" x="287.350433" y="77.290659" transform="rotate(-0 287.350433 77.290659)">89.2%</text>
+   </g>
+   <g id="text_14">
+    <text style="font-weight: 700; font-size: 8.2px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: middle; fill: #ffffff" x="243.133538" y="138.711767" transform="rotate(-0 243.133538 138.711767)">79.4%</text>
+   </g>
+   <g id="text_15">
+    <text style="font-weight: 700; font-size: 8.2px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: middle; fill: #ffffff" x="383.951675" y="138.711767" transform="rotate(-0 383.951675 138.711767)">20.6%</text>
+   </g>
+   <g id="text_16">
+    <text style="font-weight: 700; font-size: 8.2px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: middle; fill: #ffffff" x="187.651192" y="200.132875" transform="rotate(-0 187.651192 200.132875)">40.0%</text>
+   </g>
+   <g id="text_17">
+    <text style="font-weight: 700; font-size: 8.2px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: middle; fill: #ffffff" x="326.779511" y="200.132875" transform="rotate(-0 326.779511 200.132875)">58.8%</text>
+   </g>
+   <g id="text_18">
+    <text style="font-weight: 700; font-size: 8.2px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: middle; fill: #ffffff" x="153.854839" y="261.553983" transform="rotate(-0 153.854839 261.553983)">16.0%</text>
+   </g>
+   <g id="text_19">
+    <text style="font-weight: 700; font-size: 8.2px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: middle; fill: #ffffff" x="280.591162" y="261.553983" transform="rotate(-0 280.591162 261.553983)">74.0%</text>
+   </g>
+   <g id="text_20">
+    <text style="font-weight: 700; font-size: 8.2px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: middle; fill: #ffffff" x="230.741542" y="322.975091" transform="rotate(-0 230.741542 322.975091)">70.6%</text>
+   </g>
+   <g id="text_21">
+    <text style="font-weight: 700; font-size: 8.2px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: middle; fill: #ffffff" x="371.559679" y="322.975091" transform="rotate(-0 371.559679 322.975091)">29.4%</text>
+   </g>
+   <g id="text_22">
+    <text style="font-weight: 700; font-size: 10.8px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: middle; fill: #0f172a" x="277.7748" y="16.488" transform="rotate(-0 277.7748 16.488)">A. Stride v2 Action → Next-Step Gain &amp; Four-Arm Context ON Audit</text>
+   </g>
+   <g id="legend_1">
+    <g id="patch_20">
+     <path d="M 112.920581 37.534142 
+L 442.629018 37.534142 
+Q 444.189018 37.534142 444.189018 35.974142 
+L 444.189018 24.492299 
+Q 444.189018 22.932299 442.629018 22.932299 
+L 112.920581 22.932299 
+Q 111.360581 22.932299 111.360581 24.492299 
+L 111.360581 35.974142 
+Q 111.360581 37.534142 112.920581 37.534142 
+z
+" style="fill: #ffffff; opacity: 0.8; stroke: #e2e8f0; stroke-linejoin: miter"/>
+    </g>
+    <g id="patch_21">
+     <path d="M 114.480581 32.760299 
+L 130.080581 32.760299 
+L 130.080581 27.300299 
+L 114.480581 27.300299 
+z
+" style="fill: #16a34a; opacity: 0.9"/>
+    </g>
+    <g id="text_23">
+     <text style="font-size: 7.8px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: start" x="136.320581" y="32.760299" transform="rotate(-0 136.320581 32.760299)">Next-step improved</text>
+    </g>
+    <g id="patch_22">
+     <path d="M 224.833518 32.760299 
+L 240.433518 32.760299 
+L 240.433518 27.300299 
+L 224.833518 27.300299 
+z
+" style="fill: #3b82f6; opacity: 0.85"/>
+    </g>
+    <g id="text_24">
+     <text style="font-size: 7.8px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: start" x="246.673518" y="32.760299" transform="rotate(-0 246.673518 32.760299)">Flat guard (best kept)</text>
+    </g>
+    <g id="patch_23">
+     <path d="M 340.880456 32.760299 
+L 356.480456 32.760299 
+L 356.480456 27.300299 
+L 340.880456 27.300299 
+z
+" style="fill: #dc2626; opacity: 0.82"/>
+    </g>
+    <g id="text_25">
+     <text style="font-size: 7.8px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: start" x="362.720456" y="32.760299" transform="rotate(-0 362.720456 32.760299)">Regressed / v1 shrink</text>
+    </g>
+   </g>
+  </g>
+  <g id="axes_2">
+   <g id="patch_24">
+    <path d="M 574.194753 349.87375 
+L 867.096477 349.87375 
+L 867.096477 44.488 
+L 574.194753 44.488 
+z
+" style="fill: #f8fafc"/>
+   </g>
+   <g id="patch_25">
+    <path d="M 574.194753 89.216216 
+L 766.499885 89.216216 
+L 766.499885 58.36917 
+L 574.194753 58.36917 
+z
+" clip-path="url(#pb49282cb81)" style="fill: #f59e0b; opacity: 0.9"/>
+   </g>
+   <g id="patch_26">
+    <path d="M 574.194753 150.910307 
+L 776.195942 150.910307 
+L 776.195942 120.063261 
+L 574.194753 120.063261 
+z
+" clip-path="url(#pb49282cb81)" style="fill: #64748b; opacity: 0.9"/>
+   </g>
+   <g id="patch_27">
+    <path d="M 574.194753 212.604398 
+L 574.194753 212.604398 
+L 574.194753 181.757352 
+L 574.194753 181.757352 
+z
+" clip-path="url(#pb49282cb81)" style="fill: #dc2626; opacity: 0.9"/>
+   </g>
+   <g id="patch_28">
+    <path d="M 574.194753 274.298489 
+L 776.195942 274.298489 
+L 776.195942 243.451443 
+L 574.194753 243.451443 
+z
+" clip-path="url(#pb49282cb81)" style="fill: #0d9488; opacity: 0.9"/>
+   </g>
+   <g id="patch_29">
+    <path d="M 574.194753 335.99258 
+L 776.195942 335.99258 
+L 776.195942 305.145534 
+L 574.194753 305.145534 
+z
+" clip-path="url(#pb49282cb81)" style="fill: #2563eb; opacity: 0.9"/>
+   </g>
+   <g id="matplotlib.axis_3">
+    <g id="xtick_7">
+     <g id="line2d_18">
+      <path d="M 574.194753 349.87375 
+L 574.194753 44.488 
+" clip-path="url(#pb49282cb81)" style="fill: none; stroke-dasharray: 0.8,1.32; stroke-dashoffset: 0; stroke: #94a3b8; stroke-opacity: 0.45; stroke-width: 0.8"/>
+     </g>
+     <g id="line2d_19">
+      <g>
+       <use xlink:href="#mf020007641" x="574.194753" y="349.87375" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_26">
+      <text style="font-size: 10px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: middle" x="574.194753" y="365.47375" transform="rotate(-0 574.194753 365.47375)">0</text>
+     </g>
+    </g>
+    <g id="xtick_8">
+     <g id="line2d_20">
+      <path d="M 614.59499 349.87375 
+L 614.59499 44.488 
+" clip-path="url(#pb49282cb81)" style="fill: none; stroke-dasharray: 0.8,1.32; stroke-dashoffset: 0; stroke: #94a3b8; stroke-opacity: 0.45; stroke-width: 0.8"/>
+     </g>
+     <g id="line2d_21">
+      <g>
+       <use xlink:href="#mf020007641" x="614.59499" y="349.87375" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_27">
+      <text style="font-size: 10px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: middle" x="614.59499" y="365.47375" transform="rotate(-0 614.59499 365.47375)">20</text>
+     </g>
+    </g>
+    <g id="xtick_9">
+     <g id="line2d_22">
+      <path d="M 654.995228 349.87375 
+L 654.995228 44.488 
+" clip-path="url(#pb49282cb81)" style="fill: none; stroke-dasharray: 0.8,1.32; stroke-dashoffset: 0; stroke: #94a3b8; stroke-opacity: 0.45; stroke-width: 0.8"/>
+     </g>
+     <g id="line2d_23">
+      <g>
+       <use xlink:href="#mf020007641" x="654.995228" y="349.87375" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_28">
+      <text style="font-size: 10px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: middle" x="654.995228" y="365.47375" transform="rotate(-0 654.995228 365.47375)">40</text>
+     </g>
+    </g>
+    <g id="xtick_10">
+     <g id="line2d_24">
+      <path d="M 695.395466 349.87375 
+L 695.395466 44.488 
+" clip-path="url(#pb49282cb81)" style="fill: none; stroke-dasharray: 0.8,1.32; stroke-dashoffset: 0; stroke: #94a3b8; stroke-opacity: 0.45; stroke-width: 0.8"/>
+     </g>
+     <g id="line2d_25">
+      <g>
+       <use xlink:href="#mf020007641" x="695.395466" y="349.87375" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_29">
+      <text style="font-size: 10px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: middle" x="695.395466" y="365.47375" transform="rotate(-0 695.395466 365.47375)">60</text>
+     </g>
+    </g>
+    <g id="xtick_11">
+     <g id="line2d_26">
+      <path d="M 735.795704 349.87375 
+L 735.795704 44.488 
+" clip-path="url(#pb49282cb81)" style="fill: none; stroke-dasharray: 0.8,1.32; stroke-dashoffset: 0; stroke: #94a3b8; stroke-opacity: 0.45; stroke-width: 0.8"/>
+     </g>
+     <g id="line2d_27">
+      <g>
+       <use xlink:href="#mf020007641" x="735.795704" y="349.87375" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_30">
+      <text style="font-size: 10px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: middle" x="735.795704" y="365.47375" transform="rotate(-0 735.795704 365.47375)">80</text>
+     </g>
+    </g>
+    <g id="xtick_12">
+     <g id="line2d_28">
+      <path d="M 776.195942 349.87375 
+L 776.195942 44.488 
+" clip-path="url(#pb49282cb81)" style="fill: none; stroke-dasharray: 0.8,1.32; stroke-dashoffset: 0; stroke: #94a3b8; stroke-opacity: 0.45; stroke-width: 0.8"/>
+     </g>
+     <g id="line2d_29">
+      <g>
+       <use xlink:href="#mf020007641" x="776.195942" y="349.87375" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_31">
+      <text style="font-size: 10px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: middle" x="776.195942" y="365.47375" transform="rotate(-0 776.195942 365.47375)">100</text>
+     </g>
+    </g>
+    <g id="xtick_13">
+     <g id="line2d_30">
+      <path d="M 816.596179 349.87375 
+L 816.596179 44.488 
+" clip-path="url(#pb49282cb81)" style="fill: none; stroke-dasharray: 0.8,1.32; stroke-dashoffset: 0; stroke: #94a3b8; stroke-opacity: 0.45; stroke-width: 0.8"/>
+     </g>
+     <g id="line2d_31">
+      <g>
+       <use xlink:href="#mf020007641" x="816.596179" y="349.87375" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_32">
+      <text style="font-size: 10px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: middle" x="816.596179" y="365.47375" transform="rotate(-0 816.596179 365.47375)">120</text>
+     </g>
+    </g>
+    <g id="xtick_14">
+     <g id="line2d_32">
+      <path d="M 856.996417 349.87375 
+L 856.996417 44.488 
+" clip-path="url(#pb49282cb81)" style="fill: none; stroke-dasharray: 0.8,1.32; stroke-dashoffset: 0; stroke: #94a3b8; stroke-opacity: 0.45; stroke-width: 0.8"/>
+     </g>
+     <g id="line2d_33">
+      <g>
+       <use xlink:href="#mf020007641" x="856.996417" y="349.87375" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_33">
+      <text style="font-size: 10px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: middle" x="856.996417" y="365.47375" transform="rotate(-0 856.996417 365.47375)">140</text>
+     </g>
+    </g>
+    <g id="text_34">
+     <text style="font-weight: 700; font-size: 10px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: middle; fill: #1e293b" x="720.645615" y="379.47375" transform="rotate(-0 720.645615 379.47375)">Agreement / Survival Rate (%)</text>
+    </g>
+   </g>
+   <g id="matplotlib.axis_4">
+    <g id="ytick_6">
+     <g id="line2d_34">
+      <g>
+       <use xlink:href="#m1622974265" x="574.194753" y="73.792693" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_35">
+      <text style="font-size: 8.6px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; fill: #1e293b" transform="translate(464.942096 72.020959)">Grid Apparent Agreement</text>
+      <text style="font-size: 8.6px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; fill: #1e293b" transform="translate(455.691721 84.680428)">(20/21 confounded by time)</text>
+     </g>
+    </g>
+    <g id="ytick_7">
+     <g id="line2d_35">
+      <g>
+       <use xlink:href="#m1622974265" x="574.194753" y="135.486784" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_36">
+      <text style="font-size: 8.6px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; fill: #1e293b" transform="translate(443.037628 134.024784)">Naive Later-Submission Guess</text>
+      <text style="font-size: 8.6px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; fill: #1e293b" transform="translate(462.441378 146.064784)">(later_submission = 21/21)</text>
+     </g>
+    </g>
+    <g id="ytick_8">
+     <g id="line2d_36">
+      <g>
+       <use xlink:href="#m1622974265" x="574.194753" y="197.180875" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_37">
+      <text style="font-size: 8.6px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; fill: #1e293b" transform="translate(458.318753 195.409141)">Same-Parent Sibling Order</text>
+      <text style="font-size: 8.6px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; fill: #1e293b" transform="translate(453.635784 208.068609)">(Official Grid v11/v12 → 0/2)</text>
+     </g>
+    </g>
+    <g id="ytick_9">
+     <g id="line2d_37">
+      <g>
+       <use xlink:href="#m1622974265" x="574.194753" y="258.874966" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_38">
+      <text style="font-size: 8.6px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; fill: #1e293b" transform="translate(458.243503 257.412966)">Ad r11 64-Case Fresh Gate</text>
+      <text style="font-size: 8.6px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; fill: #1e293b" transform="translate(442.150753 269.452966)">(blocked v28 -77K, kept 77.63)</text>
+     </g>
+    </g>
+    <g id="ytick_10">
+     <g id="line2d_38">
+      <g>
+       <use xlink:href="#m1622974265" x="574.194753" y="320.569057" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_39">
+      <text style="font-size: 8.6px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; fill: #1e293b" transform="translate(445.457721 319.107057)">Grid / Ad TLE Cliff Calibration</text>
+      <text style="font-size: 8.6px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; fill: #1e293b" transform="translate(463.005753 331.147057)">(pass rate after T=X gate)</text>
+     </g>
+    </g>
+   </g>
+   <g id="patch_30">
+    <path d="M 574.194753 349.87375 
+L 574.194753 44.488 
+" style="fill: none; stroke: #cbd5e1; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_31">
+    <path d="M 574.194753 349.87375 
+L 867.096477 349.87375 
+" style="fill: none; stroke: #cbd5e1; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="text_40">
+    <text style="font-weight: 700; font-size: 8.2px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #0f172a" x="770.539908" y="76.744693" transform="rotate(-0 770.539908 76.744693)">95.2% (20/21)</text>
+   </g>
+   <g id="text_41">
+    <text style="font-weight: 700; font-size: 8.2px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #0f172a" x="780.235965" y="138.438784" transform="rotate(-0 780.235965 138.438784)">100.0% (21/21 confounded)</text>
+   </g>
+   <g id="text_42">
+    <text style="font-weight: 700; font-size: 8.2px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #0f172a" x="578.234776" y="199.936203" transform="rotate(-0 578.234776 199.936203)">0.0% (both reversed, fixed #8380)</text>
+   </g>
+   <g id="text_43">
+    <text style="font-weight: 700; font-size: 8.2px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #0f172a" x="780.235965" y="261.531638" transform="rotate(-0 780.235965 261.531638)">100% negative gate protection</text>
+   </g>
+   <g id="text_44">
+    <text style="font-weight: 700; font-size: 8.2px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #0f172a" x="780.235965" y="323.521057" transform="rotate(-0 780.235965 323.521057)">100% TLE cliff eliminated</text>
+   </g>
+   <g id="text_45">
+    <text style="font-weight: 700; font-size: 10.6px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: middle; fill: #0f172a" x="720.645615" y="16.488" transform="rotate(-0 720.645615 16.488)">B. Yardstick Trajectory Audit: Time Confounding vs. Sibling Reversal (#8101/#8380)</text>
+   </g>
+  </g>
+ </g>
+ <defs>
+  <clipPath id="pfe23f510ef">
+   <rect x="131.323937" y="44.488" width="292.901724" height="305.38575"/>
+  </clipPath>
+  <clipPath id="pb49282cb81">
+   <rect x="574.194753" y="44.488" width="292.901724" height="305.38575"/>
+  </clipPath>
+ </defs>
+</svg>
