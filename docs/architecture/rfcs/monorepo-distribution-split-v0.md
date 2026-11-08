@@ -2479,6 +2479,94 @@ R0/V10/R1, D2/D5/D6/D3 and context/model/split-install/full-cost/adoption accept
 The original task and independent exact-head review remain open; no main merge
 or installed-host upgrade is included.
 
+### 2026-11-08 — Normal-bytecode lifecycle and observation limits
+
+One before/head wheel pair exercises the same complete 101-Todo SQLite
+lifecycle at `24ca29f4eb2afe0bbf27df00002abd005febf256` /
+`1a4d9d8f92491db5913cfa59061bcd58c677868d`; packaged runtime bytes are
+`9e147ddf2085b080eba0cd2d7888ec896b270333` /
+`a57fd3ef771013c80add55821321e98e577836e6`. Target main remains
+`21013c0c113445b71a30f6ce06ab61455b56f1f2`. This checkpoint changes only the
+paired RFC; the production proposal is retained for independent review.
+
+Both arms use newly installed wheels, the same CPython 3.13.5 and dependency
+versions, and fresh byte-identical copies of the existing fixture helpers.
+Installation and fixtures start with zero pyc files. Pre-run provenance checks
+use `-B`, a non-checkout working directory and cleared `PYTHONPATH`; imported
+module ownership is checked before all 1,840 packaged tracked source hashes.
+The same five source-only omissions remain. Measured processes use default
+bytecode, with write-disable, cache-prefix and importtime variables unset;
+`sys.dont_write_bytecode=False` and `sys.pycache_prefix=None` are read back.
+Data and temporary directories are isolated before fixture imports. Interpreter
+stdlib and OS file caches are shared and are outside the isolation claim.
+
+| Cache stage, identical path sets in both arms | All installed pyc | LoopX pyc |
+| --- | ---: | ---: |
+| Installation complete | 0 | 0 |
+| Driver before fixture import | 1 | 0 |
+| Fixture/setup complete | 317 | 223 |
+| Bootstrap complete | 358 | 264 |
+| Prequota complete | 433 | 339 |
+| Guard and required reads complete | 665 | 571 |
+| Settled replay and teardown complete | 699 | 605 |
+
+The driver's first pyc belongs to virtualenv support. Five fixture pyc files
+appear during setup in each fresh fixture copy. All 605 final LoopX pyc headers
+match the interpreter magic and their source timestamp/size. These are cache
+validity and phase observations, not a count of modules loaded by one guard or
+a measurement of default-mode compilation/import CPU.
+
+Both original lifecycle runs exit successfully. Artifact sum45 and its digest,
+original completion time, required scopes, four committed receipts, one debit,
+unchanged prequota warm PID set, controlled restart, evidence-replacement
+refusals and completion/writeback/spend/terminal/settled-Turn replay pass. Each
+arm retains all 22 console command/phase/wrapper exit records, three exact-argv
+Node helper exits and both managed daemon exits. Waited descendants are counted
+once; only orphan daemon subtrees and their observed waiter CPU are added to
+the outer waited subtree.
+
+**The actual console-PID observation subcheck failed.** The first observer
+incorrectly interpreted macOS `proc_listchildpids`' PID count as a byte count,
+recording 0/22 actual console PIDs. An independent disposable child probe
+reproduced and corrected that API interpretation before the unstarted head
+arm. Head captures 21/22 actual console PIDs; bootstrap is still outside the
+bounded sampling window. Wrapper PID/argv/exit records remain complete, but
+actual-PID coverage is incomplete. Both failed post-run subchecks are retained;
+neither lifecycle is rerun. A preliminary parse with the host's incompatible
+Python 3.9 also fails; syntax validation with the executing 3.13 interpreter
+passes. The fix and evidence gap remain in the original task's recovery record.
+
+| Single-pair raw observation, before → head | Value |
+| --- | ---: |
+| Whole harness wall | 24.044 → 25.180 s |
+| Observed process CPU including orphan additions | 10.698 → 10.724 s |
+| Rounded console waited-subtree CPU from OS time files | 6.020 → 5.980 s |
+| Complete managed-daemon subtree CPU | 1.900 → 1.920 s |
+| Three Node helper subtrees | 0.273 → 0.291 s |
+| Setup / final teardown wall | 5.503 / 0.062 → 3.338 / 0.054 s |
+
+The observer correction changes bounded sampling waits between arms, and the
+head bootstrap has a large wall delay. Fixture, verifier, observer and readback
+work remain in the whole-harness total. These observations cannot qualify a
+speedup, regression or paired CPU difference, explain the earlier frozen cost
+campaign, or be subtracted from the bytecode-disabled profile as a compilation
+saving. Console waited CPU also includes local work and descendants; it is not
+Python startup alone. No frozen sample is repeated, expanded or relabeled.
+Publication/exit tails, physical writes, continuous system peaks, build/setup
+environment cost, model/attention and installed adoption remain unknown.
+
+This closes the finite default-cache correctness question while preserving the
+cost/attribution gap. Retain the existing typed transaction and source-scan
+proposal. The next bounded work should inspect the required dependency closure
+at the existing quota/context/refresh callers, then select a complete reversible
+loading change with normal-default semantic parity. Valid caches alone do not
+justify moving a required import or removing a fresh read; do not repeat this
+pair to recover PID observations. The original task, independent exact-head
+review/readiness, peer hard-cut hold and all I3/minor-release, M1/#8011, full
+R0/V10/R1, D2/D5/D6/D3, context/model/split-install, PostgreSQL host/wheel and
+full-cost/adoption requirements remain open. No main merge or host upgrade is
+included.
+
 ## Appendix B: Decision log
 
 | Date | Decision | Owner / approval | Alternatives | Normative sections changed |
