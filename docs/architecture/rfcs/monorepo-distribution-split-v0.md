@@ -2567,6 +2567,54 @@ R0/V10/R1, D2/D5/D6/D3, context/model/split-install, PostgreSQL host/wheel and
 full-cost/adoption requirements remain open. No main merge or host upgrade is
 included.
 
+### 2026-11-08 — Report construction loading at Turn composition
+
+The existing `periodic-report` Python provider and CLI Turn adapter now resolve
+report source, preset, stage projection and request exports on demand. At runtime
+revision `7858d96e83ef98174cc43870e283f8f0e6f40c0b`, disabled subscriptions do
+not import those construction providers. The capability package already had lazy
+exports; this change fixes its concrete composition callers. Subscription
+validation remains with the same owner, including its cadence-to-profile schedule
+validator. Goal overrides, live machine defaults, configuration warnings, original
+export identities and patch points, hook profile digest/policy version, source
+selection, receipt replay and authority are retained. It adds no capability,
+configuration, UI, persisted vocabulary or decision owner.
+
+Against baseline `c263f7c78353fcaa914f23475d4d99d07eab7c01`, eleven identical
+synthetic configuration cases preserve hook output, trigger decisions and complete
+configuration error messages. The cold-process refusal oracle fails before the
+change when disabled composition imports the report source. Eight focused cases
+now cover absence, disabled inheritance, overrides, invalid disabled configuration,
+effect-free reads and export/patch compatibility. An initial stronger prohibition
+also rejected the canonical profile schedule validator; that failed probe is
+retained, and this slice preserves the validator rather than bypassing it.
+
+Source and separately built wheel File/default-SQLite console journeys pass the
+original complete 101-Todo lifecycle: unchanged fixture/artifact, four receipts,
+one debit, source/lease/refusal/restart/replay readback and two owned native exits
+per journey. Installed package ownership was verified before comparing 1,920
+present tracked entries; seventeen source-only or documentation/media omissions
+remain explicit. Wheel test-dependency and frontend-build preparation failures
+remain recorded. Isolated PostgreSQL 16 store/service suites pass 391/11 cases
+with zero skips; the initial service run's missing environment declaration remains
+a skipped run. This does not qualify PostgreSQL host/wheel journeys. Report suites
+pass 100 cases. The broader digest inventory check has one identical baseline/head
+failure on an unchanged Todo selector; that check remains failed.
+
+A separate report-composition probe used CPython 3.13.5 on macOS arm64, normal
+bytecode in both arms, an uncounted prewarm and eight alternating pairs per
+disabled/enabled case. Disabled median wall/CPU observations were 0.255/0.111 s
+before and 0.246/0.107 s after; enabled observations were 0.331/0.117 s and
+0.321/0.113 s. Loaded LoopX modules fell from 196 to 179/182. These small,
+concurrent-test observations do not establish material speedup, sustained tail
+latency or complete CLI/Node/model/attention cost benefit. The earlier frozen
+20-cost, attribution and normal-bytecode campaigns were not repeated, enlarged or
+relabeled. The independently reversible delta is off-state construction isolation.
+Exact-head review, CI/readiness and explicit protected merge authority still govern
+adoption. Preserve I3 for at least one minor release, M1/#8011, full R0/V10/R1,
+D2/D5/D6/D3, context/model/split-install, full-cost/adoption gaps and all historical
+failures. The existing runtime-composition work continues through these boundaries.
+
 ## Appendix B: Decision log
 
 | Date | Decision | Owner / approval | Alternatives | Normative sections changed |
