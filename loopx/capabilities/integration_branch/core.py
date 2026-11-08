@@ -9,15 +9,39 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from ...extensions.process_runtime import retire_owned_process
+
 PLAN_SCHEMA_VERSION = "loopx_integration_branch_plan_v0"
 STATUS_SCHEMA_VERSION = "loopx_integration_branch_status_v0"
 SYNC_SCHEMA_VERSION = "loopx_integration_branch_sync_v0"
 DEFAULT_PLAN_PATH = Path(".loopx/integration-branch.json")
 ZERO_SHA = "0" * 40
 
+# A hook or CLI command must not wait forever on a Git helper. A stale
+# index lock, an fsmonitor hook or a checkout on a network mount can
+# otherwise hold the integration-branch operation open.
+GIT_READ_TIMEOUT_SECONDS = 10.0
+
 
 class IntegrationBranchError(ValueError):
     """A fail-closed integration-branch contract error."""
+
+
+def _retire_owned_read(process: subprocess.Popen[str]) -> None:
+    """Retire the read's own process group and drop its pipes within a deadline.
+
+    The shared runtime bounds termination, Windows ``taskkill`` and pipe
+    closure under one budget. Git starts helpers -- fsmonitor hooks, pagers --
+    inside the session it runs in, so killing the leader alone leaves them
+    behind; a pipe a descendant still holds must not extend the caller's wait.
+    """
+
+    try:
+        retire_owned_process(process, process_tree_owned=True)
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
+        # The answer is already unavailable; cleanup must not replace it with
+        # a traceback. The read's own timeout or cancellation stays the result.
+        pass
 
 
 def _git(
@@ -25,14 +49,46 @@ def _git(
     *args: str,
     check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(
-        ["git", "-C", str(repo), *args],
-        check=False,
-        capture_output=True,
-        text=True, encoding="utf-8", errors="replace",
+    """Run one Git read, or refuse when it cannot answer inside its budget.
+
+    An unanswered read is not an empty repository. Callers resolve refs,
+    inventory worktrees and read remote state through this one entry point;
+    raising here makes those paths fail closed instead of acting on state they
+    never observed.
+    """
+
+    argv = ["git", "-C", str(repo), *args]
+    process = subprocess.Popen(
+        argv,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        start_new_session=os.name == "posix",
     )
+    try:
+        stdout, stderr = process.communicate(timeout=GIT_READ_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        _retire_owned_read(process)
+        raise IntegrationBranchError(
+            "git "
+            + " ".join(args)
+            + f" did not answer within {GIT_READ_TIMEOUT_SECONDS:g} seconds"
+        ) from None
+    except BaseException:
+        # A terminal cancellation reaches this process, not the session the
+        # read owns. Retire that session before the cancellation propagates.
+        _retire_owned_read(process)
+        raise
+    result = subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
     if check and result.returncode != 0:
-        detail = result.stderr.strip() or result.stdout.strip() or "git command failed"
+        detail = (
+            (result.stderr or "").strip()
+            or (result.stdout or "").strip()
+            or "git command failed"
+        )
         raise IntegrationBranchError(detail)
     return result
 
