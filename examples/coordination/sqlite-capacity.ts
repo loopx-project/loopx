@@ -148,10 +148,18 @@ async function measureAxis(count: number): Promise<CapacityAxis> {
   let phase = "setup", managedRuntimeUsed = false;
   const stopRuntime = () => {
     if (!managedRuntimeUsed) return;
+    // Cleanup deletes the runtime's whole temporary namespace, so the stop is
+    // anchored to observed process exit: a shutdown receipt alone let the
+    // runtime's exit-time lock retirement mkdir the axis directory back after
+    // cleanup_verified was already recorded. Reuse the disposable-owner stop
+    // interface and require its result to prove the exit before any delete.
     const child = spawnSync(options.python!, ["-c",
-      "from loopx.control_plane.effect_runtime import effect_runtime_result; effect_runtime_result('runtime.shutdown', {}, retry_safe=False)"],
+      "import json; from loopx.control_plane.effect_runtime import restart_effect_runtime; "
+      + "print(json.dumps(restart_effect_runtime(wait_for_exit=True)))"],
     {cwd: repository, env: environment, encoding: "utf8", timeout: 30000});
     assert.equal(child.status, 0, "isolated Effect runtime shutdown failed");
+    assert.equal((JSON.parse(child.stdout) as Record<string, unknown>).stopped, true,
+      "isolated Effect runtime did not exit before cleanup");
     managedRuntimeUsed = false;
   };
   const cli = (args: string[], samples: number[]) => {
@@ -407,7 +415,10 @@ async function measureAxis(count: number): Promise<CapacityAxis> {
   } catch (error) {
     axis.failure = `${phase}: ${error instanceof Error ? `${error.name}: ${error.message.slice(0, 600)}` : "unknown failure"}`;
   } finally {
-    try { stopRuntime(); } catch { axis.status = "failed"; axis.failure = "isolated_runtime_cleanup_failed"; }
+    // A stop that cannot prove observed process exit fails the axis, but the
+    // first recorded failure (the measurement error) keeps precedence.
+    try { stopRuntime(); }
+    catch { axis.status = "failed"; if (!axis.failure) axis.failure = "isolated_runtime_cleanup_failed"; }
     axis.resource_peak_rss_bytes = process.resourceUsage().maxRSS * 1024;
     // A just-stopped managed runtime can leave a grandchild briefly holding the
     // temp root (for example its working directory), which makes an immediate

@@ -33,6 +33,20 @@ test("reader commands split exactly as shlex.join quotes them", () => {
   assert.throws(() => splitShellCommand("python3 --reference-file '/tmp/space dir/x"));
 });
 
+test("cleanup is anchored to observed runtime exit and keeps the first failure", async () => {
+  // The stop lives in the runner script itself: a shutdown receipt alone let
+  // the retiring runtime's delayed lock mkdir recreate the axis directories
+  // after cleanup_verified was recorded. The stop must reuse the disposable
+  // owner's observed-exit interface, check its result, and never let a stop
+  // failure overwrite the first recorded measurement error.
+  const source = await readFile(
+    fileURLToPath(new URL("../../examples/coordination/sqlite-capacity.ts", import.meta.url)), "utf8");
+  assert.match(source, /restart_effect_runtime\(wait_for_exit=True\)/);
+  assert.doesNotMatch(source, /runtime\.shutdown/);
+  assert.match(source, /\.stopped, true,\s*\n?\s*"isolated Effect runtime did not exit before cleanup"/);
+  assert.match(source, /if \(!axis\.failure\) axis\.failure = "isolated_runtime_cleanup_failed"/);
+});
+
 function axis(count: number, payloadBytes = 65536): CapacityAxis {
   const sample = (n: number) => ({n, p50_ms: 1, p95_ms: 2, p99_ms: 3});
   return {target_commits: count, completed_commits: count, projection_json_bytes: payloadBytes,
