@@ -52,4 +52,3 @@ def collect_related_result_review(core: Any, row: dict[str, Any], original: dict
                     "message", "origin", "command", "status", "turn_id", "delivery_verified", "context_recovery")},
             "turn": reviewed, "steering_observed": any(event.get("kind") == "turn.steered" for event in events)})
     return None
-
