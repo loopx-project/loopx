@@ -130,8 +130,10 @@ test("semantic feedback checkpoint is an exact variant of the current writeback,
     assert.equal(plan.steps[1].semantic_closeout_command_template, checkpoint);
     if (delivery_boundary === "in_flight_continuation") {
       assert.match(plan.steps[1].precondition,
-        /^validation succeeded; Choose one: command_template for ordinary in_flight_continuation without new decision evidence; semantic_closeout_command_template for new decision evidence, route change or Todo completion/);
+        /Use command_template for ordinary in_flight_continuation without new decision evidence/);
     }
+    assert.match(plan.steps[1].precondition,
+      /Use semantic_closeout_command_template with --agent-vision-json for new decision evidence, route change or Todo completion/);
     assert.deepEqual(plan.steps[1].vision_authoring, visionAuthoringContract());
     const serialized = settlementPlanPayload(plan).ordered_steps as Record<string, unknown>[];
     assert.equal(serialized[1].semantic_closeout_command_template, checkpoint);
