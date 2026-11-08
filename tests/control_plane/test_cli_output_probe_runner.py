@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 import runpy
 import re
 import shlex
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,6 +22,52 @@ RUNNER = (
     Path(__file__).resolve().parents[2]
     / "examples/control_plane/cli-output-probe-runner.py"
 )
+
+
+def test_runner_imports_frozen_support_with_an_older_checkout(tmp_path: Path) -> None:
+    workload = tmp_path / "workload"
+    workload.mkdir()
+    runner = workload / RUNNER.name
+    shutil.copyfile(RUNNER, runner)
+    shutil.copyfile(cli_output_fixture.__file__, workload / "cli_output_fixture.py")
+
+    historical = tmp_path / "historical"
+    legacy_tests = historical / "tests" / "control_plane"
+    legacy_tests.mkdir(parents=True)
+    for package in (legacy_tests, legacy_tests.parent):
+        (package / "__init__.py").touch()
+    (legacy_tests / "cli_output_fixture.py").write_text(
+        "# Older checkout with no current observation helper.\n", encoding="utf-8"
+    )
+    probe_source = workload / "probe.py"
+    probe_source.write_text(
+        "from pathlib import Path\n"
+        "from tests.control_plane.cli_output_fixture import measure_cli_context_for_oracle\n"
+        "assert Path(measure_cli_context_for_oracle.__code__.co_filename) == "
+        "Path(__file__).with_name('cli_output_fixture.py')\n"
+        "print('frozen fixture support loaded')\n"
+        "raise SystemExit(0)\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable, str(runner),
+            "--test-source", str(probe_source),
+            "--semantics-source", str(workload / "unused_semantics.py"),
+            "--fixture-root", str(workload / "unused_fixture"),
+            "--receipt", str(workload / "unused_receipt.json"),
+        ],
+        cwd=workload,
+        env={
+            **os.environ,
+            "PYTHONPATH": os.pathsep.join((str(historical), str(RUNNER.parents[2]))),
+            "LOOPX_USAGE_PING": "0",
+        },
+        capture_output=True, text=True, encoding="utf-8", timeout=30, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "frozen fixture support loaded"
 
 
 @pytest.fixture
@@ -87,7 +136,7 @@ def test_runner_uses_the_pytest_scenario_alias_without_rewriting_stdout(
     assert rows[0]["row_id"] == "surface/loopx_turn_plan/crowded/json"
     assert rows[0]["chars"] == len(emitted[0])
     assert (
-        "$.turn_envelope.replan_action_packet.writeback_contract.vision_authoring"
+        "$.work_contract.replan_action_packet.writeback_contract.vision_authoring"
         in (rows[0]["json_shape_paths"])
     )
 
@@ -231,3 +280,29 @@ def test_public_quota_reader_preserves_long_goal_and_is_read_only(tmp_path, prov
     with pytest.raises(AssertionError):
         cli_output_fixture.read_cli_context_for_oracle(navigation)
     assert events.read_bytes() == before
+
+
+def test_complete_plan_receipt_checks_original_goal_bytes(tmp_path):
+    receipt_row = runpy.run_path(str(RUNNER))["_receipt_row"]
+    with probe._stable_budget_fixture_root(tmp_path) as root:
+        project, runtime, registry, state = probe._write_fixture(root, probe.SCENARIOS[0])
+        from loopx.control_plane.testing.canary_harness import import_fixture_authority
+        import_fixture_authority(registry, probe.GOAL_ID)
+        command = probe._mode_variant_commands(project=project, runtime=runtime,
+            registry_path=registry, state_file=state, output_format="json")["loopx_turn_plan_transaction_detail"]
+        code, text = probe._invoke_cli(command)
+        assert code == 0, text
+        kwargs = dict(semantics=cli_output_semantics,
+            row_id="variant/loopx_turn_plan_transaction_detail/small/json",
+            surface_id="loopx_turn_plan", scenario="small", output_format="json",
+            qualification_policy="explicit_opt_in_cold_path", semantic_json_keys=("work_contract",),
+            markdown_anchor="", text=text)
+        measure = probe.measure_cli_output(text, output_format="json")
+        observation = receipt_row(**kwargs, measurement=measure)
+        assert observation["turn_plan_controls"]["plan_version"] == "loopx_turn_plan_v1"
+        source = measure["payload"]["work_contract"]
+        goal = next(row for row in source["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+                    if row["source"] == "goal_state")
+        goal["content"]["text"] += "\nChanged acceptance or stop condition\n"
+        with pytest.raises(AssertionError):
+            receipt_row(**kwargs, measurement=measure)

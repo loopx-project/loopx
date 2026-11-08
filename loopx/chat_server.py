@@ -1727,7 +1727,8 @@ class ChatRequestHandler(
             SSH_HOST_CATALOG_PATH: self._ssh_hosts,
         }
         if path in get_dispatch:
-            return get_dispatch[path]()
+            with effect_runtime_request_scope():
+                return get_dispatch[path]()
         if self._dispatch_goal_result_read(path):
             return
         setup_parts = path.strip("/").split("/")

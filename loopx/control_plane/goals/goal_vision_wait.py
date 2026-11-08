@@ -79,6 +79,20 @@ def build_goal_vision_wait_state(
     """
 
     summary = agent_todo_summary if isinstance(agent_todo_summary, dict) else {}
+    from ..todos.summary_item import quota_vision_wait_basis
+    basis = quota_vision_wait_basis(summary, source_items, agent_id) if lineage_source_items is None else None
+    if basis is not None:
+        result = effect_runtime_result("goal.vision_wait.project", {
+            "agent_todo_summary": {"vision_wait_states": summary.get("vision_wait_states"),
+                "current_agent_blocker_items": basis["current_agent_blocker_items"]},
+            "agent_id": agent_id, "acceptance_gaps": acceptance_gaps or [],
+            "selectable_advancement_count": selectable_advancement_count, "wait_basis": basis,
+        }, large_local_snapshot=True)
+        if result is not None and (not isinstance(result, dict)
+                or result.get("schema_version") != GOAL_VISION_WAIT_STATE_SCHEMA_VERSION
+                or result.get("state") != "waiting"):
+            raise RuntimeError("TypeScript vision wait state shape mismatch")
+        return result
     planning_input = summary
     if source_items is not None:
         planning_input = {

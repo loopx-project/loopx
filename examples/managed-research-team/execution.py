@@ -55,8 +55,9 @@ def host_arguments(root: Path, actor: str, revision: str, *, host: str, attempt:
         "mcp_env": ["LOOPX_RESEARCH_DEMO_ROOT", *(["DEEPSEEK_API_KEY"] if coordinator or actor == "cloud-analyst" else [])],
         "tool_names": selected_tools,
     }))
-    return ["--host", "generic-cli", "--iteration-context", "fresh", "--host-command-json",
-            json.dumps([sys.executable, "-m", "loopx_ark_turn.cli", "--config", str(profile)])]
+    return ["--host", "generic-cli", "--iteration-context", "fresh",
+            "--host-adapter-request-schema", "loopx_turn_host_request_v1",
+            "--host-command-json", json.dumps([sys.executable, "-m", "loopx_ark_turn.cli", "--config", str(profile)])]
 
 
 def configure_delegations(root: Path) -> Path:

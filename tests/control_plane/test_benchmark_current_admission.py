@@ -48,6 +48,9 @@ def _environment(tmp_path, monkeypatch, provider, *, replan=False):
             'objective: "Plan one concrete task from the current objective."\n---\n\n'
             "# Active Goal State\n\n## Objective\n\nPlan one concrete task.\n\n"
             "## Agent Todo\n\n## Completed Work Archive\n")
+        registry = json.loads(source.read_text())
+        registry["goals"][0]["status"] = "active"
+        source.write_text(json.dumps(registry))
     elif replan == "todo":
         fixture._configure_selected_todo_replan_fixture(project, source)
     elif replan:
@@ -165,23 +168,48 @@ def test_initial_benchmark_planner_can_launch_without_a_prior_heartbeat_receipt(
     source_code = r'''
 import json, os, subprocess, sys
 from pathlib import Path
+print(json.dumps({"type":"thread.started","thread_id":"initial-planning-session"}),flush=True)
 packet = json.loads(sys.stdin.read().split("Host-supplied planning checkpoint:\n",1)[1])
 assert packet["runnable_todo_ids"] == []
-command = [os.environ["LOOPX_CLI"],"--format","json","--registry",os.environ["LOOPX_REGISTRY"],
-    "--runtime-root",os.environ["LOOPX_RUNTIME_ROOT"],"todo","add","--goal-id",os.environ["LOOPX_GOAL_ID"],
-    "--role","agent","--claimed-by",os.environ["LOOPX_AGENT_ID"],"--text","[P1] Validate the planned inputs.",
-    "--task-class","advancement_task","--action-kind","validate","--execute"]
-added = json.loads(subprocess.run(command,check=True,capture_output=True,text=True).stdout)
+base = [os.environ["LOOPX_CLI"], "--format", "json", "--registry", os.environ["LOOPX_REGISTRY"],
+    "--runtime-root", os.environ["LOOPX_RUNTIME_ROOT"]]
+goal = ["--goal-id", os.environ["LOOPX_GOAL_ID"]]
+agent = ["--agent-id", os.environ["LOOPX_AGENT_ID"]]
+
+def cli(*args):
+    result = subprocess.run([*base, *args], capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout or result.stderr
+    return json.loads(result.stdout)
+
+def refine(document, revision, operation):
+    path = Path("requirements.json").resolve()
+    path.write_text(json.dumps(document))
+    cli("goal-acceptance", "refine", *goal, *agent, "--document", str(path),
+        "--expected-provider-revision", revision, "--operation-id", operation, "--execute")
+
+outcome = "verify-inputs"
+refine({"outcome_id": outcome, "owner_agent_id": os.environ["LOOPX_AGENT_ID"],
+    "objective": "Validate the planned inputs.",
+    "requirements": [{"id": "preserve-inputs", "description": "Read the inputs without changing them."}],
+    "source": {"ref": "benchmark-task", "summary": "Validate the planned inputs."}},
+    packet["goal_acceptance"]["provider_revision"], "declare-planned-inputs")
+added = cli("todo", "add", *goal, "--role", "agent", "--claimed-by", os.environ["LOOPX_AGENT_ID"],
+    "--text", "[P1] Validate the planned inputs.", "--task-class", "advancement_task",
+    "--action-kind", "validate", "--execute")
+current = cli("goal-acceptance", "inspect", *goal, *agent)
+refine({"outcome_id": outcome, "todo_ids": [added["todo_id"]]},
+    current["provider_revision"], "link-planned-inputs")
 result = {"input_digest":packet["input_digest"],"status":"ready","todo_ids":[added["todo_id"]]}
 Path(sys.argv[sys.argv.index("--output-last-message")+1]).write_text(json.dumps(result))
 Path("initial-plan.json").write_text(json.dumps(result))
-print(json.dumps({"type":"thread.started","thread_id":"initial-planning-session"}),flush=True)
 '''
     env["CODEX_BIN"] = str(write_python_host_fixture(project / "initial-planner", f"#!{sys.executable}\n"+source_code))
     result = worker.run_once(env)
-    assert result["ok"] and result["planning"]["state_readback_verified"] is True, result
+    assert result["ok"], (Path(env["LOOPX_WAKE_LOG_DIR"]) / result["turn_id"] / "stderr.log").read_text()
+    assert result["planning"]["state_readback_verified"] is True
     planned = json.loads((project / "initial-plan.json").read_text())
     assert len(planned["todo_ids"]) == 1 and result["planning"]["todo_ids"] == planned["todo_ids"]
+    assert result["planning"]["goal_requirements_readback"]["linked_todo_ids"] == planned["todo_ids"]
     assert not fixture._heartbeat_receipt_events(runtime, result["turn_id"])
     assert fixture._spend_run_count(runtime) == 0
 
@@ -216,10 +244,13 @@ def test_operational_cli_and_launch_defer_scans_but_explicit_check_blocks_privat
         assert json.loads(capsys.readouterr().out)["contract"]["ok"] is True
         args = [*base, "quota", "should-run", "--goal-id", fixture.GOAL_ID,
             "--agent-id", fixture.AGENT_ID, "--runtime-profile", "generic_cli",
-            "--turn-instance-id", "private-workspace-turn", ]
+            "--context-delivery", "off", "--turn-instance-id", "private-workspace-turn",
+            "--todo-id", fixture.TODO_ID,
+            "--available-capability", "shell", "--available-capability", "filesystem_write"]
         assert main(args) == 0
         original = json.loads(capsys.readouterr().out)
         events = fixture._heartbeat_receipt_events(runtime, "private-workspace-turn")
+        assert events and original["heartbeat_receipt"]["event_id"] == events[-1]["event_id"]
         for held in (None, original):
             current = turn_decision.current_heartbeat_host_launch_decision(
                 registry_path=source, runtime_root=runtime, project=project,

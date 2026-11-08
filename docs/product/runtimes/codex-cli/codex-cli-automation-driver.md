@@ -21,8 +21,8 @@ the Codex CLI adapter policy and the current parity gap.
 
 `loopx turn plan` and `loopx turn run-once` now provide the host-neutral driver
 for explicit `isolated-headless` work. The built-in `codex-cli` host and the
-typed `generic-cli` adapter route both consume a live TurnEnvelope. A material
-result commits only after independent task validation, durable state writeback,
+typed `generic-cli` adapter both consume the checked complete source for a new
+Turn. A material result commits only after independent task validation, durable state writeback,
 one quota spend, and a final scheduler check.
 
 The Codex host keeps its resume id in private local runtime state keyed by goal,
@@ -88,7 +88,8 @@ loopx turn run-once \
 
 `plan` is read-only. `run-once` composes a live decision, one host attempt,
 typed closeout, independent validation, writeback, spend, and scheduler final
-check. Use `--host generic-cli --host-adapter-command-json ...` for Trae or
+check. Use `--host generic-cli --host-adapter-request-schema loopx_turn_host_request_v1`
+and `--host-adapter-command-json ...` for a compatible Trae or
 another CLI after its wrapper implements the typed stdin/stdout contract in the
 host-neutral protocol.
 

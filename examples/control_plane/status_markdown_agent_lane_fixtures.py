@@ -2,20 +2,24 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from loopx.cli_commands.status import (
     _status_collection_limit_for_agent_lane,
     _trim_run_history_for_status_display,
     attach_agent_lane_next_actions,
 )
+from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.todos.quota_summary import (
     compact_agent_lane_todos_for_status_display,
 )
 from loopx.review_packet import build_review_packet
 from loopx.presentation.renderers.status_markdown import render_status_markdown
 from loopx.status import project_asset_todo_summary
+from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority
 
 
-def assert_status_agent_lane_next_action_projection() -> None:
+def assert_status_agent_lane_next_action_projection(root: Path) -> None:
     goal_id = "agent-lane-status-fixture"
     primary_action = "[P0] Continue the primary controller benchmark route."
     stale_run_action = "[P0] Monitor the primary controller route before changing Next Action."
@@ -29,6 +33,9 @@ def assert_status_agent_lane_next_action_projection() -> None:
         "index": 2,
         "role": "agent",
         "status": "open",
+        "done": False,
+        "archive_state": "active",
+        "source_section": "Agent Todo",
         "priority": "P0",
         "task_class": "advancement_task",
         "action_kind": "codex_cli_tui_continuation",
@@ -42,11 +49,25 @@ def assert_status_agent_lane_next_action_projection() -> None:
         "index": 1,
         "role": "agent",
         "status": "open",
+        "done": False,
+        "archive_state": "active",
+        "source_section": "Agent Todo",
         "priority": "P0",
         "task_class": "advancement_task",
         "claimed_by": "codex-main-control",
         "text": primary_action,
     }
+    runtime = root / "runtime"
+    state_path = root / "ACTIVE_GOAL_STATE.md"
+    state_path.write_text("# Status lane fixture\n", encoding="utf-8")
+    initialize_canonical_authority(
+        runtime,
+        goal_id,
+        build_todo_runtime_shadow_projection(
+            goal_id=goal_id, todos=[primary_todo, side_todo], handoff_mode="soft_claim", leases=[],
+        ),
+        state_path=state_path,
+    )
     agent_todos = {
         "schema_version": "todo_summary_v0",
         "open_count": 2,
@@ -74,7 +95,7 @@ def assert_status_agent_lane_next_action_projection() -> None:
     payload = {
         "ok": True,
         "registry": "./fixtures/registry.json",
-        "runtime_root": "./fixtures/runtime",
+        "runtime_root": str(runtime),
         "goal_count": 1,
         "run_count": 1,
         "contract": {"ok": True, "summary": {"errors": 0, "warnings": 0, "checks": 0}},

@@ -308,30 +308,36 @@ function emptySummary(role: string): JsonObject {
 export async function selectTodoReadFields(input: JsonObject): Promise<JsonObject> {
   const fields = requireJsonObject(input.fields, "Todo source fields"), evaluations = requireJsonObject(input.field_evaluations, "Todo source evaluations");
   if (!Array.isArray(input.roles) || input.roles.some(role => role !== "user" && role !== "agent")) throw new EffectRuntimeRequestError("Todo read roles must be user or agent");
-  const summaries: JsonObject = {}, todos: unknown[] = [];
+  const summaries: JsonObject = {}, selectedEvaluations: JsonObject = {}, todos: unknown[] = [];
   let unfiltered = 0, uncapped = 0;
   for (const role of input.roles as string[]) {
     const key = `${role}_todos`, raw = object(fields[key]), items = Array.isArray(raw.items) ? raw.items : [];
     unfiltered += items.length;
     let summary = emptySummary(role);
+    let visibleEvaluations: unknown[] = [];
     if (items.length) {
       const projected = await projectTodoReadGroup({...input, items, lineage: [], lineage_facts: [], role,
         source_section: raw.source_section || summary.source_section, evaluated: true,
         evaluations: evaluations[key], item_limit: input.limit ?? null, full_selection: true,
         selection: {role, status: input.status ?? null, todo_id: input.todo_id ?? null, agent_id: input.agent_id ?? null}});
       if (projected.rejection) return projected;
-      if ((projected.items as unknown[]).length) summary = requireJsonObject(projected.summary, "selected Todo summary");
+      if ((projected.items as unknown[]).length) {
+        summary = requireJsonObject(projected.summary, "selected Todo summary");
+        visibleEvaluations = projected.visible_evaluations as unknown[];
+      }
     }
     if (raw.goal_acceptance_contract && typeof raw.goal_acceptance_contract === "object") {
       summary.goal_acceptance_contract = raw.goal_acceptance_contract;
     }
     if (input.limit != null) summary = compactTodoReadSummary(summary, role, Number(input.limit));
     summaries[key] = summary;
+    selectedEvaluations[key] = visibleEvaluations.slice(0, (summary.items as unknown[]).length);
     todos.push(...summary.items as unknown[]);
     uncapped += Number(summary.total_count || 0);
   }
   return {schema_version: TODO_READ_RESULT, projection: {source: input.source_name!, summaries, todos,
-    unfiltered_count: unfiltered, uncapped_todo_count: uncapped}};
+    unfiltered_count: unfiltered, uncapped_todo_count: uncapped},
+    ...(input.include_source_evaluations === true ? {field_evaluations: selectedEvaluations} : {})};
 }
 
 export async function projectSourceTodoFields(input: JsonObject): Promise<JsonObject> {
@@ -381,8 +387,12 @@ export async function projectSourceTodoFields(input: JsonObject): Promise<JsonOb
 
 export async function readTodo(value: unknown, observedAt = new Date().toISOString()): Promise<JsonObject> {
   const input = requireJsonObject(value, "Todo read request");
-  if (input.schema_version !== TODO_READ_REQUEST || !["group", "fields", "canonical_fields", "select", "source_fields", "query", "historical_fields", "completion_evidence"].includes(text(input.kind))) {
+  if (input.schema_version !== TODO_READ_REQUEST || !["group", "fields", "canonical_fields", "select", "source_fields", "query", "historical_fields", "completion_evidence", "quota_projection"].includes(text(input.kind))) {
     throw new EffectRuntimeRequestError("Todo read request schema mismatch");
+  }
+  if (input.kind === "quota_projection") {
+    const {readCanonicalQuotaProjection} = await import("./read_transaction.ts");
+    return readCanonicalQuotaProjection(input);
   }
   if (input.kind === "completion_evidence") {
     const {readCompletionEvidence} = await import("./read_transaction.ts");

@@ -8,6 +8,7 @@ import pytest
 
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+from loopx.control_plane.testing.canary_harness import write_fixture_registry
 
 
 @pytest.fixture(params=[
@@ -288,6 +289,9 @@ def test_retired_policy_requires_release_and_reviewed_migration_before_execution
     from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
 
     registry = runtime.parent / "registry.json"
+    write_fixture_registry(project=registry.parent, runtime_root=runtime, registry_path=registry,
+        goal_id="mode-goal", domain="software", adapter_kind="generic_project_goal_v0",
+        state_file=str(state), registered_agents=["agent-a", "agent-b"], quota_allowed_slots=None)
     todo = add_goal_todo(registry_path=registry, goal_id="mode-goal", role="agent",
                          text="Preserve imported ownership", claimed_by="agent-a",
                          task_class="advancement_task", note="Retain original metadata")
@@ -328,6 +332,14 @@ def test_retired_policy_requires_release_and_reviewed_migration_before_execution
     assert inspected["active"] is False
     assert inspected["executor_constraint"]["reason"] == "handoff_mode_retired"
     assert inspected["lease"] == lease
+    code, guard = cli("should-run", "--agent-id", "agent-a", "--runtime-profile", "generic_cli",
+                      "--context-delivery", "off", family="quota")
+    assert code == 0 and guard["status_health_ok"] is True, guard
+    assert guard["should_run"] is False and guard["normal_delivery_allowed"] is False
+    preparation = guard["execution_preparation"]
+    assert preparation["reason_code"] == "handoff_mode_retired"
+    assert preparation["handoff_mode"] == "legacy" and "claim" not in preparation
+    assert read() == before
     for args in [
         ("todo", "claim", "--agent-id", "agent-a", "--claimed-by", "agent-a"),
         ("todo", "update", "--agent-id", "agent-a", "--note", "Unreviewed work"),

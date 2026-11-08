@@ -5,7 +5,8 @@ from pathlib import Path
 import re
 
 from loopx.extensions.turn_host import (
-    build_result, exact_goal_ref, extract_turn_authority, parse_model_json, render_prompt,
+    assert_turn_host_request_version,
+    build_result, exact_goal_ref, extract_turn_authority, extract_turn_work_identity, parse_model_json, render_prompt,
     validate_loopx_turn_host_result,
 )
 from loopx.file_lock import exclusive_file_lock, LockAcquisitionPolicy, write_json_atomic
@@ -24,15 +25,15 @@ MEMORY_BOUNDARY = (
 
 
 def work_identity(request: dict) -> dict:
-    if request.get("schema_version") != "loopx_turn_host_request_v0":
-        raise AdapterError("invalid_request_schema")
-    extract_turn_authority(request)
+    try:
+        assert_turn_host_request_version(request)
+    except ValueError as exc:
+        raise AdapterError("invalid_request_schema") from exc
+    work = extract_turn_work_identity(request)
     if request.get("session", {}).get("context_policy", {}).get("mode") != "fresh":
         raise AdapterError("fresh_iteration_context_required")
-    envelope = request["turn_envelope"]
-    identity = {"KEY": request.get("turn_key"), "GOAL_ID": envelope.get("goal_id"),
-                "AGENT_ID": envelope.get("agent_id"),
-                "TODO_ID": envelope.get("action", {}).get("selected_todo", {}).get("todo_id")}
+    identity = {"KEY": request.get("turn_key"), "GOAL_ID": work.get("goal_id"),
+                "AGENT_ID": work.get("agent_id"), "TODO_ID": work.get("todo_id")}
     if any(not isinstance(text, str) or not text or "\0" in text for text in identity.values()):
         raise AdapterError("signed_work_identity_required")
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", identity["KEY"]):
@@ -134,7 +135,7 @@ async def generate(session, tools, request: dict, config: Config) -> dict:
     if candidate is None:
         raise AdapterError("typed_candidate_required")
     result = build_result(request, candidate, host_name="MemT Nano")
-    plan = {"transaction": {"turn_key": request["turn_key"]}, "turn_envelope": request["turn_envelope"]}
+    plan = {**request, "transaction": {"turn_key": request["turn_key"]}}
     if not validate_loopx_turn_host_result(plan, result)["ok"]:
         raise AdapterError("invalid_typed_candidate")
     return result

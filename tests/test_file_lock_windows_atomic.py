@@ -6,12 +6,13 @@ import errno
 import json
 import os
 from pathlib import Path
-import threading
 import time
 from types import SimpleNamespace
 
 import pytest
 import loopx.file_lock as locks
+from loopx.control_plane.collaboration import inbox
+from loopx.control_plane.runtime.file_paths import windows_extended_path
 
 pytestmark = pytest.mark.skipif(os.name != 'nt', reason='Windows file sharing boundary')
 
@@ -37,27 +38,22 @@ def reader_without_delete_share(path):
 @contextmanager
 def transient_reader(path, monkeypatch):
     attempts = []
-    first_attempt = threading.Event()
     replace = os.replace
-    def observed_replace(source,destination):
-        if Path(destination) == path:
-            attempts.append(time.monotonic())
-            first_attempt.set()
-        return replace(source,destination)
     with reader_without_delete_share(path) as close:
-        def release():
-            first_attempt.wait(2)
-            time.sleep(0.1)
-            close()
-        worker = threading.Thread(target=release)
-        worker.start()
-        monkeypatch.setattr(locks.os,'replace',observed_replace)
-        try:
+
+        def observed_replace(source, destination):
+            if Path(destination) != path:
+                return replace(source, destination)
+            attempts.append(time.monotonic())
+            try:
+                return replace(source, destination)
+            finally:
+                # Hold the real read handle through the first replacement.
+                close()
+
+        with monkeypatch.context() as patch:
+            patch.setattr(locks.os, "replace", observed_replace)
             yield attempts
-        finally:
-            first_attempt.set()
-            worker.join(3)
-            assert not worker.is_alive()
 
 def test_transient_reader_allows_atomic_holder_replace(tmp_path,monkeypatch):
     path = tmp_path / "holder.json"
@@ -67,6 +63,18 @@ def test_transient_reader_allows_atomic_holder_replace(tmp_path,monkeypatch):
     assert len(attempts)>=2
     assert json.loads(path.read_text())=={'sequence':1}
     assert not list(tmp_path.glob('*.tmp'))
+
+
+def test_transient_reader_allows_atomic_delegation_record_replace(tmp_path, monkeypatch):
+    path = windows_extended_path(tmp_path / "delegation.json")
+    inbox._write(path, {"status": "turn_returned"})
+
+    with transient_reader(path, monkeypatch) as attempts:
+        inbox._write(path, {"status": "accepted"})
+
+    assert len(attempts) >= 2
+    assert inbox._read(path) == {"status": "accepted"}
+    assert not list(path.parent.glob("*.tmp"))
 
 def test_transient_reader_preserves_real_kernel_lock_body(tmp_path,monkeypatch):
     target=tmp_path/'state.json'

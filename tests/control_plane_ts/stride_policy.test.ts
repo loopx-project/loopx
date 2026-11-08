@@ -447,6 +447,23 @@ test("shared replan guidance retains stride-off isolation and bounded enabled au
   assert.ok(Number(((prepared.agent_vision as Record<string, unknown>).vision_budget as Record<string, unknown>).total_usage) < 1800);
 });
 
+test("fresh Vision authoring advertises the stride decision its validator requires", () => {
+  for (const kind of ["required_agent_vision_missing", "vision_acceptance_gap"]) {
+    for (const strategy of ["off", "evidence_conditioned_v1"]) {
+      const obligation = {obligation_id: proposal.reference_obligation_id, triggers: [{kind}],
+        replan_context: {stride_strategy: strategy, context_id: contextId}};
+      const requirements = projectReplanSemantics({operation: "requirements", obligation});
+      const fields = (requirements.writeback_contract as {required_fields: string[]}).required_fields;
+      const {stride_decision, ...vision} = packet;
+      const without = projectReplanSemantics({operation: "qualify", obligation, agent_vision: vision});
+      const withDecision = projectReplanSemantics({operation: "qualify", obligation,
+        agent_vision: {...vision, stride_decision}});
+      assert.equal(fields.includes("agent_vision.stride_decision"), without.reason_code === "stride_decision_required", kind);
+      assert.equal(withDecision.accepted, true, kind);
+    }
+  }
+});
+
 test("all decision codecs reject non-string reference identities without coercion", () => {
   const {minimum_evidence: _, ...probe} = proposal.next_probe;
   const fixed = {...proposal, schema_version: "stride_decision_v1", next_probe: probe};
