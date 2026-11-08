@@ -578,7 +578,8 @@ def prepare_decision_capture(args: argparse.Namespace) -> Path | None:
         assert requested is not None  # root is absent; exactly one destination was checked above.
         directory = Path(requested).expanduser().absolute()
         if getattr(args, "prepared_capture_reference", False):
-            # The next selection creates a sibling under this physical parent.
+            # Bind the physical parent before admission: the saved selection
+            # uses it as an output root, which must not be a symlink.
             directory = Path(os.path.realpath(directory.parent, strict=True)) / directory.name
         # A new directory per invocation prevents overwriting a prior observation,
         # including a prior invocation in the same Turn. Existing symlinks fail too.

@@ -970,9 +970,13 @@ function projectReplanView(request: JsonObject, payload: JsonObject, precision?:
     retain(follow, originalFollow, [["recorded_progress_count", "observation_count"]]);
   } else retain(follow, originalFollow, followFields);
   const explore = jsonObject(context.explore_basis) ?? {};
+  const decisionValueReview = jsonObject(jsonObject(packet.stride_control)?.decision_value_review);
   const review = retain({...common,
     core_goal: core,
     planning_guidance: packet.planning_guidance ?? [],
+    // The staged writer only carries authoring rules. Deliver the captured
+    // decision advice here so it can inform the choice before writeback.
+    ...(decisionValueReview ? {decision_value_review: decisionValueReview} : {}),
     ...(acceptanceIndex ? {acceptance_index: acceptanceIndex} : {}),
     triggers: obligation.triggers,
     decision_followthrough: Object.keys(follow).length ? follow : null,
