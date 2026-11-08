@@ -2370,3 +2370,30 @@ attribution 与 normal-bytecode campaign 保持不变。PostgreSQL host factory 
 原完整验收以及 I3/minor-release、M1/#8011、完整 R0/V10/R1、D2/D5/D6/D3、
 context/model/split-install、installed-host、full-cost/adoption 与全部历史失败缺口。
 exact-head review、CI/readiness 和 maintainer merge authority 仍是独立门。
+
+### 2026-11-09 — 报告与 canonical-source 完整 caller 组合资格
+
+原 #8360 提案在目标 main `aee777008` 上组合报告构造隔离、#8372 的标量比较与
+#8374 的完整已验证 source-basis 复用。运行时代码资格基于
+`8b4df2fac966933e200ba15bb36b2f7afb9a194a`，保留原提案祖先。沿用报告与 typed Todo
+owner，保持配置验证、完整 canonical read、source/revision/lease 保护及
+receipt/refusal/replay 语义；未新增 decoder、authority cache 或 provider。
+
+source/wheel × File/SQLite 四条新的完整 101-Todo CLI lifecycle 保留原
+fixture/artifact 指纹、scope、完成时间、四份 receipt、一次 debit，以及各两次
+可观察的正常 native exit。wheel 中现存 1,921 个 tracked 条目与源码逐字节一致；
+十七项既有 source-only、文档和媒体遗漏保持。Node 22.22.3、CPython 3.13.5 下，
+控制面 typecheck 和 105 项相邻 TypeScript 检查通过。真实隔离 PostgreSQL 16.15
+store/service 通过（391/11，零 skip），自有服务随后停止。
+
+隔离 wheel 的 packaged 浏览器在合成 upstream 下通过 `typed-actions`、
+`conversation-activity` 和 `conversation-history-recovery`，保留原准确中断断言、
+完成优先及 Turn 隔离。扩展报告 caller 检查得到 70 项通过、一项失败：日历
+capability-action 测试预期的 `turn_envelope` 缺失。不可变目标 main `aee777008`
+上的同一用例以同样错误失败；保留为未解决验证缺口，不重标签为通过。初始相对解释器、
+installed-package provenance 与缺少浏览器的准备失败，与已验证运行分别保留。
+
+组合边界验证集成正确性，不代表 whole-path、完整边际成本或 adoption 收益。
+冻结 cost、attribution、normal-bytecode campaign、原全部验收缺口和历史失败保持。
+#8372/#8374 暂时仍是开放独立提案，待后续协调；组合不代表已合入。
+exact-head review、CI/readiness 与 maintainer 明确合入授权继续必需；原 Task 保持开放。

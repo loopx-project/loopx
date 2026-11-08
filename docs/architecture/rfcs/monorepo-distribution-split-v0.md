@@ -3049,3 +3049,39 @@ original acceptance and I3/minor-release, M1/#8011, full R0/V10/R1, D2/D5/D6/D3,
 context/model/split-install, installed-host, full-cost/adoption and historical
 failure gap. Exact-head review, CI/readiness and maintainer merge authority remain
 separate gates.
+
+### 2026-11-09 — Combined report and canonical-source caller qualification
+
+The original #8360 proposal now combines report construction isolation with
+the scalar comparison from #8372 and complete validated source-basis reuse from
+#8374 over target main `aee777008`. Runtime qualification uses
+`8b4df2fac966933e200ba15bb36b2f7afb9a194a` and preserves the original proposal's
+ancestry. The same existing report and typed Todo owners retain configuration
+validation, complete canonical reads, source/revision/lease protection and
+receipt/refusal/replay semantics; no decoder, authority cache or provider is added.
+
+Four fresh 101-Todo source/wheel × File/SQLite complete CLI lifecycles retain
+the original fixture/artifact fingerprints, scopes and completion time, four
+receipts, one debit and two observed normal native exits each. All 1,921 present
+tracked wheel entries match source bytes; seventeen existing source-only,
+documentation and media omissions remain. On Node 22.22.3 and CPython 3.13.5,
+the control-plane typecheck and 105 adjacent TypeScript cases pass. Real isolated
+PostgreSQL 16.15 store/service checks pass (391/11, zero skips), and the owned
+server is stopped afterward.
+
+The isolated wheel's packaged browser passes `typed-actions`,
+`conversation-activity` and `conversation-history-recovery` with synthetic
+upstream data. The original exact interruption assertion and completion/Turn
+isolation remain. Extended report caller checks return 70 passes and one failure:
+the calendar capability-action test expects a missing `turn_envelope`. The same
+test fails identically on immutable target main `aee777008`; this is retained
+as an unresolved validation gap, not relabeled as passing. Initial relative
+interpreter, installed-package provenance and missing-browser preparation
+failures are retained separately from the qualified runs.
+
+This combined boundary qualifies integration correctness, not whole-path or
+full marginal-cost/adoption benefit. Frozen cost, attribution, normal-bytecode
+campaigns, every original acceptance gap and historical failure remain intact.
+#8372/#8374 remain separate open proposals pending reconciliation; combination
+is not merge. Exact-head review, CI/readiness and explicit maintainer merge
+authority remain required. The original task stays open.
