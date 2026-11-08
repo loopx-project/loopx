@@ -488,14 +488,51 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
   include("interaction_contract", "agent_channel", "required_reads");
   const work = ["interaction_contract", "agent_channel", "work_context"];
   include(...work, "instruction");
+  const channel = object(interaction.agent_channel);
+  const sources = object(channel?.work_context)?.sources;
+  const sourceRows = Array.isArray(sources) ? sources.map((source, index) => ({source, index})) : [];
+  const selectedTodo = object(context.selected_todo);
+  const identityAgent = object(context.agent_identity)?.agent_id;
+  const agentId = context.agent_id ?? identityAgent;
+  // Deliver the opted-in decision cue before work, while the candidate or
+  // test can still change. The template and evidence stay on their owner read.
+  const cueStart = pointers.length;
+  if (context.effective_action === EffectiveAction.NORMAL_RUN && context.normal_delivery_allowed === true
+      && typeof selectedTodo?.todo_id === "string" && typeof context.goal_id === "string" && typeof agentId === "string"
+      && (identityAgent === undefined || identityAgent === agentId)) {
+    for (const {source, index} of sourceRows) {
+      const row = object(source), view = object(row?.content), graph = object(view?.graph);
+      if (row?.kind !== "explore_turn_context" || row.capability_id !== "explore"
+          || view?.ok !== true || view.graph_enabled !== true || view.goal_id !== context.goal_id
+          || view.agent_id !== agentId || (view.todo_id !== undefined && view.todo_id !== selectedTodo.todo_id)
+          || typeof object(graph?.work_yardstick_capture)?.guidance !== "string") continue;
+      const graphPath = [...work, "sources", index, "content", "graph"];
+      include(...graphPath, "work_yardstick_capture", "guidance");
+      const measurements = graph?.work_measurements;
+      if (Array.isArray(measurements)) {
+        const current = measurements.findIndex(card => object(card)?.todo_id === selectedTodo.todo_id);
+        if (current >= 0) include(...graphPath, "work_measurements", current);
+      }
+      const cues = graph?.work_yardsticks;
+      if (Array.isArray(cues)) {
+        const current = cues.findIndex(cue => object(cue)?.todo_id === selectedTodo.todo_id);
+        if (current >= 0) include(...graphPath, "work_yardsticks", current);
+      }
+      break;
+    }
+  }
+  // Place the cue after the run decision, before variable-size Goal and work
+  // fields. This also works when the full selection falls back to plain paging.
+  const decisionEnd = pointers.indexOf("/normal_delivery_allowed");
+  if (decisionEnd >= 0 && pointers.length > cueStart) {
+    const cuePointers = pointers.splice(cueStart);
+    pointers.splice(decisionEnd + 1, 0, ...cuePointers);
+  }
   // If the full starting selection needs paging, put the current decision and
   // its read obligations in one independently readable opening. The rest is
   // still required under the original ordering and authority.
   const opening = pointers.splice(0);
   include(...work, "user_todos");
-  const channel = object(interaction.agent_channel);
-  const sources = object(channel?.work_context)?.sources;
-  const sourceRows = Array.isArray(sources) ? sources.map((source, index) => ({source, index})) : [];
   // A complete scoped preference can be larger than a reader page. Visit
   // current narrative sources first, with their availability and provenance,
   // before selecting other sources' metadata: complete-parent coalescing keeps
