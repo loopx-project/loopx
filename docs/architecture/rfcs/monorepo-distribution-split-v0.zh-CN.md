@@ -2396,3 +2396,23 @@ installed-package provenance 与缺少浏览器的准备失败，与已验证运
 冻结 cost、attribution、normal-bytecode campaign、原全部验收缺口和历史失败保持。
 #8372/#8374 暂时仍是开放独立提案，待后续协调；组合不代表已合入。
 exact-head review、CI/readiness 与 maintainer 明确合入授权继续必需；原 Task 保持开放。
+
+### 2026-11-09 — 对齐已合入加载与剩余 source 提案
+
+发布前观察到 #8360 已以 `e37a1d691` 合入，#8011 也已进入目标 main `520a1ab47`。
+剩余 source 细化沿原 #8372 提案继续，保留 `cbda59c6e` 祖先并纳入 #8374 的
+完整 basis 修改；不重建已经合入的报告提案。
+
+在该 main 上，运行时代码 `4e72980bee91c7bbfcedb2eb481b8573113340b3` 的新验证
+通过 Python82、TypeScript105、typecheck、真实隔离 PostgreSQL store/service
+（391/11）、source/wheel × File/SQLite 四条完整 101-Todo lifecycle，以及三个
+packaged 浏览器场景。wheel 仍有 1,921 项字节匹配与十七项既有遗漏。
+该 runtime revision 的 standard premerge 通过六项 direct 与十九项 selected 检查。
+扩展报告检查仍为 70 项通过、一项失败，不可变 `520a1ab47` 复现同一个
+`turn_envelope` 断言失败。这项 packet-contract 验证缺口与 exact-head review、
+必需 CI/readiness、maintainer 合入授权共同保持为限制。初始 collection、环境和
+中断的临时运行继续保留各自原始资格限制。
+
+本次对齐已交付的加载与剩余待评审 source 边界，不关闭原 Task、installed-host、
+PostgreSQL host/wheel、full-cost/adoption 或任何其他保留验收；不重跑或重标签
+冻结 campaign，本 lane 未执行 main 合入。

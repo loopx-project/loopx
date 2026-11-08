@@ -3084,3 +3084,27 @@ campaigns, every original acceptance gap and historical failure remain intact.
 #8372/#8374 remain separate open proposals pending reconciliation; combination
 is not merge. Exact-head review, CI/readiness and explicit maintainer merge
 authority remain required. The original task stays open.
+
+### 2026-11-09 — Reconcile merged loading and the remaining source proposal
+
+Before publication, #8360 was observed merged as `e37a1d691`; #8011 is also in
+target main `520a1ab47`. The remaining source refinements now continue through
+the original #8372 proposal, preserving its `cbda59c6e` ancestry and incorporating
+#8374's complete-basis change. The merged report proposal is not recreated.
+
+Fresh runtime qualification at `4e72980bee91c7bbfcedb2eb481b8573113340b3` over
+that main passes 82 focused Python cases, 105 TypeScript cases, typecheck,
+real isolated PostgreSQL store/service (391/11), four complete 101-Todo
+source/wheel × File/SQLite lifecycles and the three packaged browser scenarios.
+Wheel ownership remains 1,921 matching entries and seventeen existing omissions.
+The standard premerge at that runtime revision passes six direct and nineteen
+selected checks. The expanded report family remains 70 passed/one failed;
+immutable `520a1ab47` reproduces the same `turn_envelope` assertion failure.
+That unresolved packet-contract qualification remains a hold alongside exact-head
+review, required CI/readiness and maintainer merge authority. Initial collection,
+environment and interrupted interim runs retain their original limits.
+
+This reconciles shipped loading with the remaining reviewed source boundary;
+it does not close the original task, installed-host, PostgreSQL host/wheel,
+full-cost/adoption or any other retained acceptance. No frozen campaign is rerun
+or relabeled, and this lane performs no main merge.
