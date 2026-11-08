@@ -81,7 +81,11 @@ def route(owner: NativeAccounts) -> dict:
 
 def consumer_token(value: dict, consumer: str) -> str:
     token = value.get("steward_token" if consumer == "steward" else "token")
-    if not isinstance(token, str) or not token or consumer == "steward" and token == value.get("token"):
+    if not isinstance(token, str) or not token or (
+        consumer == "steward" and (
+            token == value.get("token") or any(not 33 <= ord(char) <= 126 for char in token)
+        )
+    ):
         raise HostError("api_relay_upgrade_required")
     return token
 

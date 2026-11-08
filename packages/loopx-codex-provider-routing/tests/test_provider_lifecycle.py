@@ -230,9 +230,11 @@ def test_installed_doctor_separates_steward_readiness_from_worker_health(owner, 
         assert all(row["ready"] for row in both["consumer_readiness"].values())
         assert both["relay"] == both["consumer_readiness"]["worker"]
         assert both["message_delivery_verified"] is False
-        code, reused = doctor({"steward_token": worker_token})
-        assert code == 1 and reused["consumer_readiness"]["steward"]["state"] == "unavailable"
-        assert reused["consumer_readiness"]["worker"]["ready"]
+        for invalid in (worker_token, "invalid\r\nheader"):
+            code, unusable = doctor({"steward_token": invalid})
+            assert code == 1
+            assert unusable["consumer_readiness"]["steward"]["state"] == "unavailable"
+            assert unusable["consumer_readiness"]["worker"]["ready"]
         code, optional = doctor({})
         assert code == 0 and optional["consumer_readiness"]["steward"]["state"] == "not_configured"
         with server._admission_lock:
@@ -247,11 +249,12 @@ def test_installed_doctor_separates_steward_readiness_from_worker_health(owner, 
         thread.join(5)
 
 
-def test_reconcile_refuses_shared_steward_credential_before_drain(owner, monkeypatch):
+@pytest.mark.parametrize("invalid", ["shared", "", "invalid\r\nheader"])
+def test_reconcile_refuses_invalid_steward_credential_before_drain(owner, monkeypatch, invalid):
     life = importlib.import_module("loopx_codex_provider_routing.relay_lifecycle")
     monkeypatch.setattr(life, "runtime", lambda *_: pytest.fail("No relay may be drained"))
     with pytest.raises(life.HostError, match="api_relay_upgrade_required"):
-        life.reconcile(owner, {"token": "shared", "steward_token": "shared"}, consumer="steward")
+        life.reconcile(owner, {"token": "shared", "steward_token": invalid}, consumer="steward")
 
 
 def test_installed_doctor_does_not_combine_different_relay_instances(owner, monkeypatch):
