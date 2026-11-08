@@ -4,7 +4,7 @@ import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { optionalNonEmptyString, requireStringArray } from "../runtime_decode.ts";
 import { compactPythonWhitespace, stripPythonWhitespace } from "../coordination/todo_agents.ts";
-import { normalizeWriteScopes } from "../work_items/task_lease_acquire.ts";
+import { normalizeWriteScopes } from "../work_items/write_scope_codec.ts";
 import { isAbsolute, resolve, sep } from "node:path";
 
 /** Goal scope projection preserves existing relative scopes. Absolute grants

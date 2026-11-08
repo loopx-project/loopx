@@ -2042,6 +2042,31 @@ caller。本轮不合入 main，不升级 installed host。
 初始运行保留为历史证据，不重跑或新增性能样本。后续提案仍需独立 exact-head
 评审／readiness，原 Task 的完整验收继续开放。
 
+### 2026-11-08 — 声明 codec 保留按需加载 owner
+
+继承的 TypeScript CI 失败在目标 main `94366314f0` 复现。冷启动 handler 经由
+interaction／acceptance、outcome owner 加载 lease 执行，因为 work declaration
+从完整 acquire runtime 导入 `normalizeWriteScopes`。Runtime `b0c42af8f` 将既有
+scope／value 词法函数移到 `work_items/write_scope_codec.ts`，保留原导出。
+Coercion、原请求拼写、字符类、160 字符限制及拒绝行为不变。Lease IO、admission、
+repository／workspace identity 和 source／revision／WAL／receipt 栅栏仍由原
+owner 持有。Digest guard 登记既有 quota action 通配 matcher，可见 64-hex
+模式的拒绝保持。
+
+两个失败 CI 用例通过；Node 22.22.3 的 19 个加载／digest 用例通过，Node 26
+相关组通过 60 及 70 个用例。首组缺 PG 的 skip 随后由隔离 PostgreSQL 16.15
+覆盖：store／workspace 组通过 391／32 个，独立 service suite 通过 11 个、零
+skip。缺少 service 环境变量及复用 incarnation 的初始失败保留，修正后的 service
+使用自己的新数据库。16 个 old／head scope 值／拒绝比较及原导出 identity、
+TypeScript typing 通过。四条新的 source／wheel × File／SQLite 101-Todo CLI
+生命周期保留原 artifact、completion time、scope、四份 receipt、一次 debit、
+restart／refusal／replay 及两个 native 退出。Wheel 先验证安装根，再匹配 1842
+个 packaged tracked source；相同五个 source-only omission 保留。这验收当前
+runtime 正确性，不验收完整成本或 installed benefit。全部历史冻结失败、peer
+hard-cut 证据、I3／minor-release、M1/#8011、完整 R0/V10/R1、D2/D5/D6/D3 和
+context／model／split-install／PostgreSQL-host／full-cost／adoption 缺口保持开放。
+原 Task、独立评审／readiness 继续开放，本轮不合入 main、不升级 installed host。
+
 ## 附录 B：决策日志
 
 | 日期 | 决策 | 负责人 / 批准 | 备选 | 变更的规范章节 |
@@ -2107,3 +2132,33 @@ minor release。这些证据不关闭完整 R0/V10、M1/#8011、R1、context/mod
 精简 Codex App 输出可能只有错误码；只读
 `loopx --format json quota status --goal-id <goal-id> --verbose` 提供详细症状。
 据此区分已交付修复和安装 reader 漂移；保留外来内容拒绝，不重写活跃状态。
+
+### 2026-11-08 — 加载提案集成与可空 staged 读取
+
+声明 codec 提案现已整合目标 main `efd49352c`、#8339 的反馈加载组件，以及 main
+已有的等价固定时钟修复。组件的批准及检查仍只证明各自旧 head，组合提案需要自己的
+评审与验证。
+
+真实的保留数值精度的 `quota replan-view --replan-stage explore` 读取，在 staged
+视图仅含 string、boolean 和 null 时失败。既有 edit encoder 将整个 root 压缩为
+空 property path，Python transport 随后拒绝。将该紧凑替换限定到嵌套 record，
+保留 property-path 契约及既有 number／source lineage。独立 root-path oracle 在
+修改前失败、修改后通过；真实读取恢复原 context／hash 和缺省 Explore basis。
+不新增规则 owner、词汇、provider 或 authority。
+
+集成后的 source 与 packaged wheel 研究记录场景保留原负结果段落、两条原始历史、
+Goal 隔离及导出；packaged 对话场景也通过。此前 CI 超时在本地未复现，其平台／时序
+原因仍未知，不宣称已经修复。四条新的 source／wheel × File／SQLite 101-Todo
+正确性流程保留原 fixture／artifact、scope、completion time、四份 receipt、一次
+debit、refusal／restart／replay 和两个自有 native 退出。初始 driver 使用 `python`，
+source console 实际选择 `python3`，产生不同 runtime fingerprint，导致 warmup／
+exit oracle 失败。保留该失败；后续用例采用各 console 的实际解释器，不重跑或重标签
+任何冻结成本样本。
+
+隔离 PostgreSQL 16 的 store／service 分别通过 391／11 个用例，零 skip。
+已安装 wheel 的 1921 个 tracked package entry 字节一致；17 个 tracked 文档／媒体／
+测试或 source-only entry 未打包，不据此推断已执行 caller 之外的通用发行覆盖。
+Whole-path 成本收益、installed adoption、PostgreSQL host／wheel，以及全部
+I3／minor-release、M1/#8011、完整 R0/V10/R1、D2/D5/D6/D3、
+context／model／split-install 与历史失败资格继续开放。组合提案评审之后，下一段
+有用边界仍是报告订阅／构造加载；原 Task 保持开放。
