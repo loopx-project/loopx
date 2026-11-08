@@ -61,27 +61,44 @@ def test_native_journal_projects_one_host_execution_request(tmp_path, monkeypatc
         "heartbeat_receipt": {"turn_instance_id": "turn-fixture"},
     }
     _, wire = project(tmp_path, payload=payload)
-    request = context.native_execution_preparation_request(
-        str(tmp_path), {**event, "hook_event_name": "PostToolUse"},
-    )
+    source_sha256 = wire["recovery"]["sha256"]
+    eligible = {**event, "hook_event_name": "PostToolUse"}
+    request = context.native_execution_preparation_request(str(tmp_path), eligible)
     assert request == {
         "goal_id": "fixture",
         "agent_id": "agent",
         "todo_id": "todo_fixture",
-        "claim_args": payload["execution_preparation"]["claim"]["cli_args"],
+        "claim_args": [
+            *payload["execution_preparation"]["claim"]["cli_args"],
+            "--claim-operation-id",
+            f"todo-claim:codex-capture:{source_sha256}",
+        ],
         "authority_route": {
             "registry_path": str(tmp_path / "registry.json"),
             "runtime_root": str(tmp_path / "runtime"),
         },
         "turn_instance_id": "turn-fixture",
-        "source_sha256": wire["recovery"]["sha256"],
+        "claim_source_sha256": source_sha256,
+        "source_sha256": source_sha256,
     }
     child_event = {**event, "hook_event_name": "PostToolUse", "agent_id": "child"}
     assert context.native_execution_preparation_request(str(tmp_path), child_event) is None
+    assert context.native_execution_preparation_request(
+        str(tmp_path), eligible, readback_for="0" * 64,
+    ) is None
+    assert context.native_execution_preparation_request(str(tmp_path), eligible) == {
+        **request, "readback_only": True,
+    }
+    assert context.native_execution_preparation_request(
+        str(tmp_path), {**event, "hook_event_name": "SessionStart"},
+    ) == {
+        **request, "readback_only": True,
+    }
     receipt = {
         "event": "host_execution_prepared",
         "todo_id": "todo_fixture",
         "turn_instance_id": "turn-fixture",
+        "claim_operation_id": f"todo-claim:codex-capture:{source_sha256}",
     }
     state_before_child = (tmp_path / "session.json").read_bytes()
     context.record_native_execution_preparation(
@@ -93,12 +110,38 @@ def test_native_journal_projects_one_host_execution_request(tmp_path, monkeypatc
         str(tmp_path), event,
         source_sha256=request["source_sha256"], receipt=receipt,
     )
-    assert context.native_execution_preparation_request(
-        str(tmp_path), {**event, "hook_event_name": "PostToolUse"},
-    ) is None
+    assert context.native_execution_preparation_request(str(tmp_path), eligible) == {
+        **request,
+        "readback_only": True,
+        "claim_operation_id": f"todo-claim:codex-capture:{source_sha256}",
+    }
     assert context.native_execution_preparation_request(
         str(tmp_path), {**event, "hook_event_name": "SessionStart"},
-    )["todo_id"] == "todo_fixture"
+    ) == {
+        **request,
+        "readback_only": True,
+        "claim_operation_id": f"todo-claim:codex-capture:{source_sha256}",
+    }
+    deliver(tmp_path, event, read_pages(tmp_path, wire))
+    assert context.native_execution_preparation_request(str(tmp_path), eligible) is None
+    assert context.native_execution_preparation_request(
+        str(tmp_path), {**event, "hook_event_name": "SessionStart"},
+    )["readback_only"] is True
+    payload["heartbeat_receipt"] = {"turn_instance_id": "next-turn"}
+    _, next_wire = project(tmp_path, capture_id="next", payload=payload)
+    next_sha256 = next_wire["recovery"]["sha256"]
+    assert next_sha256 != source_sha256
+    assert context.native_execution_preparation_request(str(tmp_path), eligible) == {
+        **request,
+        "claim_args": [
+            *payload["execution_preparation"]["claim"]["cli_args"],
+            "--claim-operation-id",
+            f"todo-claim:codex-capture:{next_sha256}",
+        ],
+        "turn_instance_id": "next-turn",
+        "claim_source_sha256": next_sha256,
+        "source_sha256": next_sha256,
+    }
 
 
 def test_shared_root_read_does_not_create_unknown_session_or_follow_alias(tmp_path, monkeypatch):

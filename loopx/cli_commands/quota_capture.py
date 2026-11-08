@@ -460,7 +460,7 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
             continuity_generation=getattr(args, "_context_delivery_generation", None),
             progressive_enabled=activation["progressive_enabled"], selection_command_args_template=transport,
             captured_decision_path=str(path) if args.initial_read and activation["progressive_enabled"] else None,
-            hook_session=hook_session)
+            hook_session=hook_session, saved_capture=True)
         projected = prepared.delivery
         initial_read_plan = prepared.initial_read_plan
         native_prepared = True
@@ -939,11 +939,12 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
         from ..control_plane.turn_driver.codex_context import (
             CONTEXT_LIFECYCLE_HOOKS, codex_context_directory, codex_context_hook,
             native_context_event_eligible, native_execution_preparation_request,
-            record_native_execution_preparation,
+            record_native_execution_preparation, record_native_execution_preparation_delivered,
         )
         from ..control_plane.turn_driver.codex_execution_preparation import (
             LegacyNativePreparationCapture,
             codex_execution_preparation_context,
+            codex_execution_preparation_readback_context,
             execute_codex_execution_preparation,
         )
 
@@ -961,14 +962,18 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
                 directory = codex_context_directory(directory=args.codex_context_dir,
                     root=getattr(args, "codex_context_root", None), session=event.get("session_id"), create=True)
                 payload = codex_context_hook(directory, event)
+                request = None
                 preparation_context = ""
                 try:
-                    request = native_execution_preparation_request(directory, event)
+                    workspace = Path(event.get("cwd") or "")
+                    if workspace.is_absolute() and workspace.resolve() == Path.cwd().resolve():
+                        request = native_execution_preparation_request(directory, event)
                     if request is not None:
-                        workspace = Path(event.get("cwd") or "")
-                        if workspace.is_absolute() and workspace.resolve() == Path.cwd().resolve():
-                            if "claim_source_sha256" not in request:
-                                raise LegacyNativePreparationCapture()
+                        if "claim_source_sha256" not in request:
+                            raise LegacyNativePreparationCapture()
+                        if request.get("readback_only") is True:
+                            preparation_context = codex_execution_preparation_readback_context(request) or ""
+                        else:
                             capture = (
                                 Path(tempfile.mkdtemp(prefix="prepared-", dir=directory)) / "ready"
                                 if request.get("turn_instance_id") else None
@@ -995,6 +1000,7 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
                                 # pinned full recovery even if native projection
                                 # fails. It never rereads authority or admits work.
                                 digest = receipt.pop("capture_sha256")
+                                receipt.pop("capture_path", None)
                                 receipt["context"] = project_saved_context_capture(argparse.Namespace(**{
                                     **vars(args), "quota_command": "context-project",
                                     "capture_file": str(source),
@@ -1008,13 +1014,22 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
                                     receipt["context"]["recovery_command"] = context_capture_read_command(
                                         source, digest, reader_argv=current_loopx_cli_argv())
                             preparation_context = codex_execution_preparation_context(receipt)
+                            record_native_execution_preparation_delivered(
+                                directory,
+                                event,
+                                source_sha256=request["source_sha256"],
+                            )
                 except LegacyNativePreparationCapture as error:
                     preparation_context = str(error)
                 except (OSError, RuntimeError, subprocess.SubprocessError, ValueError, TypeError, RecursionError):
-                    # Preserve the original explicit action and any context
-                    # recovery output when Host-side preparation cannot prove
-                    # its postcondition.
-                    pass
+                    # Reconcile only the attempted source. A concurrent guard
+                    # can replace recovery, so it must never be reserved here.
+                    if request is not None and request.get("turn_instance_id"):
+                        readback = native_execution_preparation_request(
+                            directory, event, readback_for=request["source_sha256"],
+                        )
+                        if readback is not None:
+                            preparation_context = codex_execution_preparation_readback_context(readback) or ""
                 if preparation_context:
                     existing = payload.get("hookSpecificOutput")
                     existing_context = str(existing.get("additionalContext") or "") if isinstance(existing, dict) else ""
