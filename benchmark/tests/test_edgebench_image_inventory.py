@@ -30,12 +30,18 @@ def test_inventory_keeps_image_revisions_and_legacy_receipts_separate(tmp_path, 
     record(second, "new-task", task_sha="d" * 64, image_id=old_image, size=100)
     record(first, "ignored", task="other", image_id=new_image, size=200)
     record(first, "unreadable").write_text("{")
+    cyclic = record(first, "cyclic")
+    cyclic.unlink()
+    cyclic.symlink_to(cyclic.name)
+    escape = record(first, "escape")
+    escape.unlink()
+    escape.symlink_to(record(tmp_path / "outside", "outside", task_sha="e" * 64))
 
     main(["--log-dir", str(first), "--log-dir", str(second), "--log-dir", str(first), "--task", "case"])
     output = capsys.readouterr().out
     assert "never export this" not in output
     result = json.loads(output)
-    assert result["unreadable_receipts"] == 1
+    assert result["unreadable_receipts"] == 2
     original, revised = result["cases"]
     assert original["task_sha256"] == "c" * 64
     assert original["receipts_with_preflight"] == 3

@@ -20,18 +20,23 @@ def _size(value):
 def inventory(log_dirs, *, task=None):
     """Reduce selected run roots without reading submissions or contacting Docker."""
     receipts = set()
+    unresolved_receipts = set()
     for log_dir in log_dirs:
         root = log_dir.resolve(strict=True)
         if not root.is_dir():
             raise ValueError(f"Expected an EdgeBench log directory: {root}")
         for path in root.glob("runs/*/*/runtime-receipt.json"):
             if task is None or path.parent.name == task:
-                receipt = path.resolve()
+                try:
+                    receipt = path.resolve()
+                except (OSError, RuntimeError):
+                    unresolved_receipts.add(path)
+                    continue
                 if receipt.is_relative_to(root):
                     receipts.add(receipt)
 
     cases = {}
-    unreadable = 0
+    unreadable = len(unresolved_receipts)
     for path in receipts:
         try:
             receipt = json.loads(path.read_bytes())
