@@ -198,10 +198,13 @@ def _failed_session_retry(original, tmp_path, *, historical=False):
     return plan, common, calls, sources, actions, journal, artifact
 
 
-@pytest.mark.parametrize("historical", [False, True])
+@pytest.mark.parametrize(("historical", "refresh_source"), [(False, False), (False, True), (True, False)])
 def test_failed_session_retry_delivers_original_source_and_settles_once(
-    complete_host_request, tmp_path, historical,
+    complete_host_request, tmp_path, historical, refresh_source,
 ):
+    from loopx.control_plane.capability_hooks import TurnContextHookRegistration, dispatch_turn_context_hooks
+    from loopx.control_plane.quota.turn_envelope import compose_turn_decision
+    from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
     from loopx.control_plane.turn_driver.executor import run_loopx_turn_once, inspect_loopx_turn_journal
     from loopx.control_plane.turn_driver.journal_store import load_loopx_turn_plan_from_journal
 
@@ -209,6 +212,24 @@ def test_failed_session_retry_delivers_original_source_and_settles_once(
         complete_host_request, tmp_path, historical=historical)
     contract = complete_host_request[1]
     before = deepcopy(contract)
+    observed_advice = []
+    if refresh_source:
+        def contribute(candidate, text):
+            dispatch_turn_context_hooks(candidate, (TurnContextHookRegistration(
+                "fixture.context", "fixture", ("fixture_readback",),
+                lambda: {"context_fields": {"fixture_context": text}, "instructions": [],
+                         "result_fields": {}, "readback": {"fixture_readback": text}},
+            ),))
+
+        contribute(plan, "Advice for the original source.")
+        run_host = common["host_runner"]
+
+        def observe_host(request):
+            observed_advice.append(request.get("fixture_context"))
+            return run_host(request)
+
+        common["host_runner"] = observe_host
+
     failed = run_loopx_turn_once(plan, **common)
     assert failed["status"] == "failed" and not artifact.exists()
     assert calls == dict(host=1, writeback=0, spend=0, scheduler=0)
@@ -225,10 +246,23 @@ def test_failed_session_retry_delivers_original_source_and_settles_once(
         retry_failed=True, session_binding_resolver=common["session_binding_resolver"])
     assert inspected["recovery_decision"]["can_continue"] is True
     assert journal.read_bytes() == original_journal
-    recovered = run_loopx_turn_once(saved, retry_failed=True, **common)
+    retry_plan = saved
+    if refresh_source:
+        changed = {key: deepcopy(value) for key, value in contract.items()
+                   if key not in {"schema_version", "contract_binding"}}
+        changed["selected_todo"]["required_capabilities"] = ["filesystem_read", "network"]
+        refreshed = compose_turn_decision(changed)
+        assert refreshed["contract_binding"]["content_hash"] != contract["contract_binding"]["content_hash"]
+        retry_plan = build_loopx_turn_plan(refreshed, host="generic-cli",
+            execution_mode="isolated-headless", turn_instance_id="failed-session-source")
+        assert retry_plan["transaction"]["turn_key"] == saved["transaction"]["turn_key"]
+        contribute(retry_plan, "Advice for the refreshed source.")
+    recovered = run_loopx_turn_once(retry_plan, retry_failed=True, **common)
     assert recovered["status"] == "committed"
     assert actions == ["start_new", "resume"]
     expected = plan["turn_envelope"] if historical else contract
+    if refresh_source:
+        assert observed_advice == ["Advice for the original source."] * 2
     assert sources == [expected, expected]
     assert run_loopx_turn_once(saved, **common)["replayed"] is True
     assert calls == dict(host=2, writeback=1, spend=1, scheduler=1)
