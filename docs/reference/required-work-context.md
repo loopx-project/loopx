@@ -1373,8 +1373,8 @@ pointer 从原始摘要绑定的 capture 批量读取详情。提供已有 `--ca
 
 ### Bounded settlement results / 有界结算结果
 
-A ready native Codex App heartbeat can publish a combined settlement plan for
-its admitted Todo. Execute the displayed writeback command, which runs the owed
+A ready Codex App heartbeat with a native session can publish a combined settlement
+plan for its admitted Todo. Execute the displayed writeback command, which runs the owed
 quota spend and returns the exact receipts. After a partial failure, use the
 returned `settlement_owed` command for the original Turn. Read the result's
 supporting snapshot only when needed. Raw delivery, manual plans and other
@@ -1405,7 +1405,7 @@ output option; a delivery failure does not prove that the effect failed to commi
 Never rerun admission or change the original Turn/effect identity to recover
 output. This transport change alone does not prove model retention or savings.
 
-原生 Codex App heartbeat 的当前 Todo 已准入且就绪时，可能收到合并结算计划。
+Codex App heartbeat 有原生会话，且当前 Todo 已准入并就绪时，可能收到合并结算计划。
 执行计划给出的写回命令。该命令会执行尚欠的扣额，并返回原回执。部分失败时，
 沿返回的 `settlement_owed` 命令恢复原 Turn。结果中的支持快照按需读取。
 原始投递、手动计划和其他运行模式继续使用原结算命令。
