@@ -2376,6 +2376,17 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     const {decision, projection} = completeHostSource(request);
     return {goal_id: decision.goal_id ?? null, ...projection};
   }
+  if (operation === "capability_automation_source") {
+    // Optional provider participation needs checked identity and capability
+    // gates, not the signed action document or its work context.
+    const host = Object.hasOwn(request, "complete_host_request") || Object.hasOwn(request, "envelope");
+    const checked = host ? completeHostSource(request) : null;
+    const payload = checked?.decision ?? requireJsonObject(request.payload, "quota payload");
+    const projection = checked?.projection ?? turnActionProjection(payload, replanReadPrecision(payload, request.source_number_tokens));
+    assertSupportedQuotaPacket(projection);
+    return {goal_id: payload.goal_id ?? null, agent_id: projection.agent_id ?? null,
+      boundary: {capabilities: object(projection.boundary).capabilities ?? null}};
+  }
   if (operation === "host_context_binding") {
     const decision = requireCompleteTurnDecision(request.payload, request.source_number_tokens);
     const header = requireCompleteHostHeader(request, decision);

@@ -435,12 +435,12 @@ capture 字节改变后拒绝读取，不产生新 admission 或 spend。
 同源 File／SQLite 与长路径证据支持展示预算重新定标，原失败、全部行数／增长／权限
 限制继续保留。这是接受新增内联成本，不是效率收益、installed 采用或 C1 关闭。
 
-能力接缝仍有活跃的签名投影调用方：`capability_context.ts::contextSource` 与
-`reward_memory.py::reward_memory_automation_enabled` 并非仅供历史读取。退役须一起
-迁移当前能力注册、回读和原版本恢复。提议的共享能力命名空间保护将 `work_contract`
-与 `source_decision_hash` 同时保留给核心，覆盖注册、上下文及可选结果字段；拒绝可选
-贡献后，原 Host 来源仍须可用。main 与 C1 均复用同一个既有规则 owner，这不证明
-C1 已减少规则 owner 的数量。
+Reward Memory 在原生 quota 与完整 Host 路径注册召回与反思时，只读一次已有类型约束
+的能力事实，不再为判定参与资格读取整份 action signature。交付仍受已验证的 Goal/Agent
+绑定、provider 策略和原 Host 来源约束。`capability_context.ts::contextSource` 仍按当前
+工作和结算为原生 quota 的贡献绑定签名；退役这条活跃路径时须同时保留注册、回读和原版本
+恢复。共享能力命名空间保护将 `work_contract` 与 `source_decision_hash` 保留给核心，
+覆盖注册、上下文及可选结果字段；贡献被拒绝后，原 Host 来源仍可用。
 
 失败会话重试也是活跃 reader。本提案中的
 `session_recovery.py::assess_failed_turn_retry_request` 为 v1 请求向绑定回调交付

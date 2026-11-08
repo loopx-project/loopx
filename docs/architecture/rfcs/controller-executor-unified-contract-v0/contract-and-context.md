@@ -592,15 +592,16 @@ evidence justify revised presentation allowances, preserving the original
 failures and all line/growth/authority limits. This accepts additional inline
 cost, not an efficiency win, installed adoption or C1 closure.
 
-The capability seam still has live signature-projection callers:
-`capability_context.ts::contextSource` and
-`reward_memory.py::reward_memory_automation_enabled` are not historical-only
-readers. Their retirement requires migrating current capability registration,
-readback and original-version recovery together. The proposed shared capability
-namespace guard reserves `work_contract` and `source_decision_hash` across
-registration, context and optional result fields; rejected optional contributions
-must leave the original Host source usable. This uses one existing rule owner on
-both main and C1, rather than proving that C1 reduced the number of rule owners.
+Reward Memory participation now reads the typed capability facts once when it
+registers recall and reflection on the native quota and complete Host routes. It
+no longer requests an action signature to decide participation. The verified
+Goal/Agent binding, provider policy and original Host source still gate delivery.
+`capability_context.ts::contextSource` still signs native quota contributions
+against the current work and settlement; retirement of that live branch must
+preserve registration, readback and original-version recovery together. The
+shared capability namespace guard reserves `work_contract` and
+`source_decision_hash` across registration, context and optional result fields;
+rejected contributions leave the original Host source usable.
 
 Failed-session retry is also a live reader. In this proposal,
 `session_recovery.py::assess_failed_turn_retry_request` gives the binding callback
