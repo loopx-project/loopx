@@ -60,6 +60,26 @@ def test_automatic_api_handoff_then_recovered_subscription_adoption(setup):
     assert state["calls"].count("switch") == 2
 
 
+def test_exhausted_api_pool_returns_to_a_recovered_subscription(setup):
+    provider, state = setup
+    provider.configure(expected_revision=0, enabled=True, slots=["a", "b"], api_fallback=True)
+    assert provider.tick(refresh=True)["active_slot"] == "openai-api"
+
+    key = provider.api_keys().status()["keys"][0]
+    provider.api_keys().record(key["id"], status=429, code="insufficient_quota",
+                               model="selected-model", headers={"retry-after": "3600"})
+    state["now"] = 1301  # Past the account-switch cooldown but not the key cooldown.
+    blocked = provider.tick(refresh=True)
+    assert blocked["active_slot"] == "openai-api"
+    assert blocked["action"] == "all_unavailable"
+    assert state["calls"].count("switch") == 1, "No fallback may claim readiness while every key is exhausted"
+
+    state["b_used"] = 10
+    recovered = provider.tick(refresh=True)
+    assert recovered["active_slot"] == "b" and recovered["api_active"] is False
+    assert state["calls"].count("switch") == 2
+
+
 def test_available_or_unknown_subscription_never_starts_a_paid_handoff(setup):
     provider, state = setup
     provider.configure(expected_revision=0, enabled=True, slots=["a", "b"], api_fallback=True)

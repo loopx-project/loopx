@@ -205,7 +205,13 @@ export function decide(input: {
     ? [input.manual_slot].find(slot => slot !== input.active && allowed.includes(slot))
     : candidates.sort((a, b) => b.remaining - a.remaining)[0]?.slot;
   if (target) return output("switch", target);
-  if (!input.manual_slot && onApi) return output(input.policy.api_fallback ? "api_active" : "api_disabled_active", null, input.now + 60);
+  if (!input.manual_slot && onApi) {
+    if (input.policy.api_fallback !== true) return output("api_disabled_active", null, input.now + 60);
+    // No subscription was selectable above. Keep an actually callable API
+    // route active, but do not claim availability when every key is cooling or
+    // exhausted; the normal all-unavailable wait owns that state.
+    if (input.api?.ready === true) return output("api_active", null, input.now + 60);
+  }
   // A failed/stale subscription read is not permission to incur API costs.
   // Every authorized subscription must have fresh, measured exhaustion.
   if (!input.manual_slot && input.policy.api_fallback === true && input.api?.ready

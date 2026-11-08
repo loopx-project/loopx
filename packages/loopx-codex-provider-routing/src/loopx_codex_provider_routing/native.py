@@ -456,8 +456,11 @@ class NativeAccounts:
                 # destination. Candidates stay strictly inside the allowlist.
                 api = None
                 if state["policy"].get("api_fallback") or native.get("api_slot"):
+                    # A saved key pool is not proof that a request can proceed:
+                    # authentication, rate-limit, and billing exhaustion all
+                    # remove keys from the current candidate set.
                     ready = bool(state["policy"].get("api_fallback") and native.get("api_fallback_supported")
-                                 and self.api_keys().status()["keys"])
+                                 and self.api_keys().candidates(""))
                     api = {"slot": native.get("api_slot") or "openai-api", "ready": ready}
                 slots = list(dict.fromkeys([native["active_slot"], *state["policy"]["slots"]]))
                 slots = [slot for slot in slots if slot != native.get("api_slot")]
