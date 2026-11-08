@@ -961,18 +961,22 @@ class ChatRuntimeController:
                 and session.get("manager_context_version") == MANAGER_CONTEXT_VERSION
                 and session.get("upstream_mode") == "chat" and not manager_profile_changed
                 and not settings_changed and not quota_route and model_allocation is None and not quota_fallback)
-            stored_messages = history_restore.capture(strict=bool(same_working_route
-                and (working_provider or session.get("parked_native_working"))))
+            cold_working = (current is None and answer_fallback and native_account_epoch is not None
+                and session.get("answer_review") is not True and bool(session.get("native_working_checkpoint")))
+            checkpoint_available = working_provider or cold_working or session.get("parked_native_working")
+            stored_messages = history_restore.capture(strict=bool(same_working_route and checkpoint_available))
             history = history_restore.messages(stored_messages)
             legacy_manager_context = history_restore.manager_migration(refresh=(manager_profile_changed
                 or model_allocation is not None or quota_fallback or answer_fallback))
             legacy_provider_context = history_restore.provider_migration(stored_messages)
-            if (same_working_route and (working_provider or session.get("parked_native_working"))
+            if (same_working_route and checkpoint_available
                     and not legacy_provider_context and not legacy_project_context):
                 affinity = history_restore.working_affinity(
                     work_dir=work_dir, codex_home=selected_codex_home, runtime=manager_runtime,
                     account_epoch=native_account_epoch)
                 if answer_fallback:
+                    if cold_working:
+                        working_provider = history_restore.cold_working_provider(affinity=affinity)
                     parked_working = history_restore.park_working_context(
                         stored_messages, provider=working_provider, affinity=affinity)
                     if parked_working is not None:
@@ -1128,6 +1132,11 @@ class ChatRuntimeController:
                     upstream_mode=("chat" if selected_agent == "codex" else "default") if quota_route
                         else codex_context.managed_upstream_mode(session),
                 )
+                if (isinstance(adapter, CodexAppServerAdapter) and manager_runtime is not None
+                        and native_account_epoch is not None and not recovery.get("metadata_review")
+                        and not recovery.get("answer_review") and not recovery.get("read_only_review")):
+                    history_restore.remember_working_checkpoint(adapter, work_dir=work_dir, codex_home=selected_codex_home,
+                        runtime=manager_runtime, account_epoch=native_account_epoch)
         except Exception:
             with self.lock:
                 owns_adapter = self.adapters.get(session_id) is adapter

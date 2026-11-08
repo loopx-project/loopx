@@ -18,15 +18,24 @@ from loopx.extensions.lark.conversation_identity import identity_ref
 
 @pytest.mark.parametrize("fault", [None, "stop", "source-changed", "unknown-native", "no-capacity", "native-changed",
     "review-action", "post-enqueue-crash", "image-view", "checkpoint-live", "checkpoint-cold",
+    "checkpoint-before-review", "checkpoint-before-review-account-change",
     "checkpoint-injection-unknown", "checkpoint-empty", "checkpoint-settings-change"])
 def test_restarted_codex_steward_gets_one_original_read_only_answer(steward, monkeypatch, fault):
     from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter
     from loopx.chat_agent import CodexChatAgentError
     from loopx.extensions.lark.private_conversations import LarkPrivateConversations
+    from test_chat_manager_model_adoption import configure
 
     store, runtime, provider, transport, binding, capture, workspace = steward
     fake = Path(runtime.codex_bin)
     checkpoint = bool(fault and fault.startswith("checkpoint-"))
+    cold_before_review = fault in {"checkpoint-before-review", "checkpoint-before-review-account-change"}
+    if cold_before_review:
+        from loopx.capabilities.native_chat import codex_auth
+        login_epoch = ["original-login"]
+        monkeypatch.setattr(codex_auth, "conversation_account_epoch",
+                            lambda *_args, **_kwargs: (login_epoch[0], "subscription"))
+        configure(runtime.coordination_runtime_root, model=None, effort=None, endpoint="antigravity", policy="flexible")
     original_thread = "working-thread" if checkpoint else "durable-thread"
     code = fake.read_text().replace('result = {"thread": {"id": "durable-thread"}}', '''result = {"thread": {"id": "durable-thread"}, "model": "gpt-6.1-sol"}
         permissions = request.get("params", {}).get("permissions")
@@ -105,8 +114,8 @@ def test_restarted_codex_steward_gets_one_original_read_only_answer(steward, mon
     monkeypatch.setattr(external_conversations, "datetime", Ahead)
     import loopx.chat_manager as manager_module
     import loopx.chat_runtime as runtime_module
-    from test_chat_manager_model_adoption import configure
-    configure(runtime.coordination_runtime_root, model=None, effort=None, endpoint="antigravity", policy="flexible")
+    if not cold_before_review:
+        configure(runtime.coordination_runtime_root, model=None, effort=None, endpoint="antigravity", policy="flexible")
     allocation = manager_module.manager_executor_allocation(runtime,
         endpoint_capabilities=[{"agent_id": "codex", "available": True}, {"agent_id": "antigravity", "available": False}])
     def route(*_args, **_kwargs):
@@ -145,6 +154,12 @@ def test_restarted_codex_steward_gets_one_original_read_only_answer(steward, mon
         provider.messages[event["message_id"]]["content"] = "Revised original source"
     restarted = LarkPrivateConversations(controller=runtime, runtime_root=store.root.parent,
         runner=provider, cli_bin="lark-cli")
+    review_trace_start = 0
+    if cold_before_review:
+        runtime.adapters.pop(original["session_id"]).close_session()
+        review_trace_start = len(capture.read_text().splitlines())
+        if fault == "checkpoint-before-review-account-change":
+            login_epoch[0] = "different-login"
     if fault == "post-enqueue-crash":
         enqueue = runtime.enqueue_turn
         def crash(**kwargs):
@@ -180,8 +195,9 @@ def test_restarted_codex_steward_gets_one_original_read_only_answer(steward, mon
         assert opened["config"]["features"]["apps"] is False
         assert opened["config"]["permissions"][opened["permissions"]]["network"]["enabled"] is False
         assert [t["name"] for t in opened["dynamicTools"]] == ["loopx_manager_read"]
-        assert not any(c["method"] == "thread/resume" for c in calls), "unknown old business must not be resumed"
-        assert not any(c["method"] in {"thread/inject_items", "thread/compact/start"} for c in calls)
+        review_calls = calls[review_trace_start:]
+        assert not any(c["method"] == "thread/resume" for c in review_calls), "unknown old business must not be resumed"
+        assert not any(c["method"] in {"thread/inject_items", "thread/compact/start"} for c in review_calls)
         if fault is None:
             assert any(item["text"] == history_marker for item in store.messages(original["session_id"]))
             review_inputs = [c["params"] for c in calls if c["method"] == "turn/start"]
@@ -189,7 +205,9 @@ def test_restarted_codex_steward_gets_one_original_read_only_answer(steward, mon
         writes = list(provider.writes)
         restarted.reconcile_request(path)
         assert provider.writes == writes
-        if checkpoint:
+        if fault == "checkpoint-before-review-account-change":
+            assert store.load_session(original["session_id"]).get("parked_native_working") is None
+        elif checkpoint:
             sid = original["session_id"]
             review_session = store.load_session(sid)
             parked = review_session["parked_native_working"]

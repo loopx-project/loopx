@@ -5,7 +5,7 @@ here; the Chat controller continues to own Session/Turn admission and effects.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import json
 import logging
@@ -60,13 +60,16 @@ class NativeHistoryRestoration:
     working_continuation: NativeWorkingContinuation | None = None
 
     def capture(self, *, strict: bool = False) -> list[dict[str, Any]]:
-        from ...chat_manager import steward_machine_defaults
         stored = self.controller.store.messages(self.session["session_id"], **({"strict": True} if strict else {}))
+        self.capture_scope()
+        return stored
+
+    def capture_scope(self) -> None:
+        from ...chat_manager import steward_machine_defaults
         self.binding_id = (self.session.get("steward_context") or self.session.get("project_context") or {}).get("binding_id")
         self.binding = (next((row for row in self.controller.project_contexts.conversation_bindings.read()["bindings"]
             if row["binding_id"] == self.binding_id), None) if self.binding_id else None)
         self.defaults = steward_machine_defaults(self.controller) if self.manager else None
-        return stored
 
     def messages(self, stored: list[dict[str, Any]]) -> list[dict[str, str]]:
         return [{"role": "assistant" if item.get("role") == "agent" else "user", "content": str(item.get("text") or "")}
@@ -84,6 +87,38 @@ class NativeHistoryRestoration:
             str(work_dir.resolve()), str(codex_home.resolve()), self.binding, self.defaults, account_epoch,
             manager_runtime_session_fields(runtime),
         ])
+
+    def remember_working_checkpoint(self, adapter: CodexAppServerAdapter, *, work_dir: Path, codex_home: Path,
+                                    runtime: Mapping[str, Any], account_epoch: tuple[str, str]) -> None:
+        """Retain the observed working identity before a future process exit."""
+        store, sid = self.controller.store, self.session["session_id"]
+        current = store.load_session(sid)
+        provider = adapter.session.native_model_provider
+        thread_id = adapter.upstream_thread_id
+        if (not provider or len(provider) > 128 or adapter.session.read_only_review or not current
+                or not current.get("steward_context") or current.get("answer_review")
+                or current.get("agent_id") != "codex" or current.get("upstream_mode") != "chat"
+                or current.get("status") not in {"ready", "busy"} or current.get("upstream_thread_id") != thread_id):
+            return
+        working = replace(self, session=current)
+        working.capture_scope()
+        if working.binding is None or working.binding != self.binding or working.defaults != self.defaults:
+            return
+        checkpoint = {"thread_id": thread_id, "provider": provider,
+            "affinity_sha256": working.working_affinity(work_dir=work_dir, codex_home=codex_home,
+                runtime=runtime, account_epoch=account_epoch)}
+        if current.get("native_working_checkpoint") != checkpoint:
+            store.update_session(sid, expected_statuses={current["status"]}, expected_upstream_thread_id=thread_id,
+                                 native_working_checkpoint=checkpoint)
+
+    def cold_working_provider(self, *, affinity: str) -> str | None:
+        checkpoint = self.session.get("native_working_checkpoint")
+        if (isinstance(checkpoint, dict) and checkpoint.get("thread_id") == self.session.get("upstream_thread_id")
+                and checkpoint.get("affinity_sha256") == affinity):
+            provider = checkpoint.get("provider")
+            if isinstance(provider, str) and 1 <= len(provider) <= 128:
+                return provider
+        return None
 
     def park_working_context(self, stored: list[dict[str, Any]], *, provider: str | None,
                              affinity: str) -> dict[str, Any] | None:
@@ -190,7 +225,8 @@ class NativeHistoryRestoration:
             latest = controller.store.load_session(sid)
             if (controller.closed.is_set() or latest is None or latest.get("status") == "closed"
                     or any(latest.get(key) != original.get(key) for key in
-                        ("active_turn_id", "upstream_thread_id", "parked_native_working", "channel_id", "agent_id", "codex_home",
+                        ("active_turn_id", "upstream_thread_id", "parked_native_working", "native_working_checkpoint",
+                         "channel_id", "agent_id", "codex_home",
                          "project_context", "steward_context", "requested_agent_model_id", "requested_agent_reasoning_effort"))
                     or self.accepted_turn_id is not None and (controller.store.load_turn(sid, self.accepted_turn_id) or {}).get("status") != "queued"):
                 self.invalidated = True

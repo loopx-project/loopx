@@ -487,7 +487,7 @@ class ChatSessionStore(ChatIngressStore):
                     "requested_agent_model_id", "requested_agent_reasoning_effort",
                     "goal_id",
                     "agent_id", "executor_endpoint_id", "adapter_kind", "manager_quota_block",
-                    "answer_review", "parked_native_working",
+                    "answer_review", "parked_native_working", "native_working_checkpoint",
                 }
                 unknown = set(changes) - allowed
                 if unknown:
@@ -495,6 +495,20 @@ class ChatSessionStore(ChatIngressStore):
                 if "answer_review" in changes and (type(changes["answer_review"]) is not bool
                         or changes["answer_review"] and payload.get("steward_context") is None):
                     raise ValueError("answer review requires a bound steward and a boolean adapter marker")
+                if "native_working_checkpoint" in changes:
+                    checkpoint = changes["native_working_checkpoint"]
+                    if (not isinstance(checkpoint, dict) or set(checkpoint) != {"thread_id", "provider", "affinity_sha256"}
+                            or payload.get("steward_context") is None or payload.get("answer_review")
+                            or payload.get("agent_id") != "codex" or payload.get("upstream_mode") != "chat"
+                            or payload.get("session_mode") != CHAT_SESSION_MODE_MANAGED
+                            or changes.get("agent_id", "codex") != "codex" or changes.get("upstream_mode", "chat") != "chat"
+                            or expected_upstream_thread_id is None or checkpoint["thread_id"] != expected_upstream_thread_id
+                            or changes.get("upstream_thread_id", expected_upstream_thread_id) != expected_upstream_thread_id
+                            or changes.get("answer_review") is True
+                            or not isinstance(checkpoint["provider"], str) or not 1 <= len(checkpoint["provider"]) <= 128
+                            or not isinstance(checkpoint["affinity_sha256"], str)
+                            or not BARE_SHA256_PATTERN.fullmatch(checkpoint["affinity_sha256"])):
+                        raise ValueError("working checkpoint requires the same bound native Codex thread")
                 if "parked_native_working" in changes:
                     parked = changes["parked_native_working"]
                     prior = payload.get("parked_native_working")
