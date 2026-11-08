@@ -232,7 +232,10 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
         # matched small/crowded output is 10,560/15,492 -> 10,560/21,856.
         # Keep 35*60 collection growth; 9,300 covers 9,196 fixed chars with
         # 104 headroom. Retain the earlier 5,400 failure, not a size reduction.
-        max_json_fixed_semantic_growth_chars=9_300,
+        # The validator's stride review citation limit and its two target
+        # fields add 136 fixed characters to crowded output. Preserve the
+        # measured 104 characters of headroom and the per-Todo allowance.
+        max_json_fixed_semantic_growth_chars=9_436,
     ),
     CliOutputBudgetSpec(
         surface_id="status",

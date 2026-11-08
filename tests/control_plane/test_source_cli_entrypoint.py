@@ -47,7 +47,10 @@ raise SystemExit(code)
     return subprocess.run(
         [sys.executable, "-c", script],
         cwd=REPO_ROOT,
-        env={**os.environ, "PYTHONPATH": str(REPO_ROOT), "LOOPX_USAGE_PING": "0", **(env or {})},
+        # This caller consumes machine JSON; keep the parent's model-facing
+        # context transport intact, with explicit native overrides still allowed.
+        env={**os.environ, "PYTHONPATH": str(REPO_ROOT), "LOOPX_USAGE_PING": "0",
+             "LOOPX_CONTEXT_DELIVERY": "off", **(env or {})},
         text=True,
         capture_output=True,
         check=False,
@@ -57,7 +60,7 @@ raise SystemExit(code)
 
 @pytest.mark.parametrize(
     "argv",
-    [["--version"], [], ["--help"], ["check", "--help"], ["status", "--help"],
+    [["--version"], ["version", "--format", "json"], [], ["--help"], ["check", "--help"], ["status", "--help"],
      ["diagnose", "--help"], ["review-packet", "--help"], ["quota", "--help"],
      ["todo", "--help"], ["delegation", "--help"], ["turn", "--help"],
      ["turn", "run-once", "--help"],
@@ -79,7 +82,7 @@ for owner in {UNRELATED_OWNERS!r}:
 
 @pytest.mark.parametrize(
     "argv",
-    [["version", "--format", "json"], ["status", "--unknown-option"],
+    [["status", "--unknown-option"],
      ["todo", "list"], ["quota", "unknown-command"], ["--format", "unknown", "status"],
      ["delegation", "inspect", "--unknown-option"], ["turn", "run-once", "--exec"],
      ["turn", "unknown-command"],
@@ -192,8 +195,9 @@ os.execv = replace_process
 
 
 @pytest.mark.parametrize("entry", ["module", "console"])
+@pytest.mark.parametrize("parent_context", ["on", "off"])
 def test_outer_controller_scope_preserves_reads_other_goals_and_recovery(
-    tmp_path: Path, entry: str,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entry: str, parent_context: str,
 ) -> None:
     from examples.control_plane.quota_plan_fixtures import (
         SCOPED_AGENT_ID, write_cli_fixture, write_codex_heartbeat_fixture,
@@ -203,6 +207,7 @@ def test_outer_controller_scope_preserves_reads_other_goals_and_recovery(
         load_scheduler_state,
     )
 
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", parent_context)
     registry, runtime, _project = write_cli_fixture(tmp_path / "fixture", scoped_agents=True)
     prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
     env = {"CODEX_HOME": str(tmp_path / "codex-home"), "CODEX_THREAD_ID": "",
@@ -280,6 +285,7 @@ def test_outer_controller_scope_preserves_reads_other_goals_and_recovery(
     assert json.loads(recovered.stdout)["scheduler_state_mutated"] is True
     assert load_scheduler_state(runtime, goal_id="needs-operator", agent_id=SCOPED_AGENT_ID,
                                 state_key=state_key) is not None
+    assert os.environ["LOOPX_CONTEXT_DELIVERY"] == parent_context
 
 
 def test_source_module_observes_usage_once_and_preserves_failure_result() -> None:
@@ -323,6 +329,8 @@ from pathlib import Path
 from loopx import usage_ping
 for key in ("CI", "DO_NOT_TRACK", "LOOPX_USAGE_PING", "LOOPX_USAGE_POLICY"):
     os.environ.pop(key, None)
+# Disposable telemetry state requires explicit qualification to numeric loopback.
+os.environ["LOOPX_USAGE_PING"] = "1"
 os.environ["LOOPX_USAGE_PING_ENDPOINT"] = "http://127.0.0.1:1/v1/ping"
 usage_ping.select_default_runtime_root = lambda: Path({str(state)!r})
 sent = []

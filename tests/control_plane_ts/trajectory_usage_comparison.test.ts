@@ -70,12 +70,12 @@ test('multiple calls in one request count once; duplicates do not count twice; m
   assert.equal(d.summarize().request_coverage?.status, 'verified');
 });
 
-test('a late return across another response is unassociated; zero observed matches is distinct from missing observations', () => {
+test('a late return across another response is unassociated and cannot measure a zero footprint', () => {
   const c = capture(); c.tools[1].line = 14;
   c.tools.sort((a,b) => a.line-b.line);
   const v = c.summarize().loopx_requests!;
   assert.equal(v.status, 'observed'); if (v.status !== 'observed') return;
-  assert.equal(v.recognized_requests, 0); assert.equal(v.input_fraction, 0); assert.equal(v.unmatched_calls, 1);
+  assert.equal(v.recognized_requests, 0); assert.equal(v.input_fraction, null); assert.equal(v.unmatched_calls, 1);
   assert.equal(c.summarize({tool_context: undefined}).loopx_requests, undefined);
   const mirrored = capture();
   for (const row of [...mirrored.events, ...mirrored.tools]) if (row.line >= 4) row.line += 2;
@@ -92,6 +92,34 @@ test('a late return across another response is unassociated; zero observed match
   assert.equal(compact.status, 'observed'); if (compact.status !== 'observed') return;
   assert.equal(compact.recognized_requests, 0, 'Automatic compaction is never a command-issuing inference');
   assert.equal(compact.unmatched_calls, 1);
+});
+
+test('unclassified calls with no matches withhold command deltas, including for saved zeros', () => {
+  const opaque = capture('opaque');
+  opaque.tools[0].argv = null;
+  const usage = opaque.summarize();
+  const footprint = usage.loopx_requests!;
+  assert.equal(footprint.status, 'observed'); if (footprint.status !== 'observed') return;
+  assert.equal(footprint.recognized_requests, 0);
+  assert.equal(footprint.unclassified_calls, 2);
+  assert.equal(footprint.tokens.input_tokens, 0, 'The saved sum still describes the empty recognized subset');
+  assert.equal(footprint.input_fraction, null);
+  assert.equal(footprint.uncached_input_fraction, null);
+  const left = pack('opaque', [100, 900]), right = pack('direct', [100, 100]);
+  for (const observed of [footprint, {...footprint, input_fraction: 0, uncached_input_fraction: 0}]) {
+    left.solver_usage!.projection = {...usage, loopx_requests: observed};
+    const compared = compareTrajectoryUsage(left, right);
+    assert.equal(compared.status, 'observed'); if (compared.status !== 'observed') return;
+    assert.equal(compared.left.commands.input, null);
+    assert.equal(compared.left.commands.fraction, null);
+    assert.equal(compared.left.commands.unclassified_calls, 2);
+    assert.equal(compared.delta.command_input, null);
+    assert.equal(compared.delta.command_uncached_percentage_points, null);
+    assert.equal(compared.delta.total_input, 800, 'The verified native totals still compare');
+  }
+  const empty = opaque.summarize({tool_context: []}).loopx_requests!;
+  assert.equal(empty.status, 'observed');
+  if (empty.status === 'observed') assert.equal(empty.input_fraction, 0, 'Zero is valid without unresolved calls');
 });
 
 test('comparison uses sums, preserves partial attribution, and reports a falling share with rising absolute input', () => {
@@ -142,7 +170,7 @@ test('four real native prefixes retain the Bench owner counts, missing text attr
   assert.equal(grid.left.input.unattributed_requests, 818); assert.equal(grid.right.input.unattributed_requests, 956);
   for (let i=0; i<packs.length; i++) {
     assert.equal(packs[i]!.solver_usage!.artifact_sha256, fixture.lineage[i].source_sha256);
-    assert.equal(packs[i]!.pack_id, fixture.lineage[i].candidate_pack_id);
+    assert.equal(packs[i]!.pack_id, fixture.lineage[i].registered_pack_id);
     assert.notEqual(packs[i]!.pack_id, fixture.lineage[i].original_pack_id, 'New frozen observation does not rewrite its original pack');
   }
 });

@@ -1,23 +1,19 @@
 """Pin a smaller initial selection to previously observed native tool output."""
 from __future__ import annotations
 
-import hashlib
 import os
 from pathlib import Path
 from typing import Any
 
-from .decision_capture import context_selection_bytes, write_context_read_reference
+from .decision_capture import write_initial_context_read_reference
 
 
 def observed_first_read_reference(directory: str, target: dict[str, Any], recovery: dict[str, Any],
                                   context: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any] | None:
-    """Write the typed delivery plan once. The host only renders original Python values."""
+    """Write the typed delivery plan once. The host renders it from the immutable source."""
     try:
-        selected = plan["selections"]
-        raw = context_selection_bytes(context, selected, list_fields=False, list_depth=None)
-        reference = write_context_read_reference(Path(recovery["path"]), recovery["sha256"], selection={
-            "select": [item["pointer"] for item in selected], "initial_read": False,
-            "list_fields": False, "list_depth": None, "sha256": hashlib.sha256(raw).hexdigest()},
+        reference, _ = write_initial_context_read_reference(Path(recovery["path"]), recovery["sha256"],
+            context, plan["selections"],
             observed_read={"directory": directory, "target": target, "fields": plan["reused"]})
         return {"path": str(reference), "pointer_bytes": sum(len(key.encode()) + 4 for key in plan["reused"])}
     except (OSError, ValueError):

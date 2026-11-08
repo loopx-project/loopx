@@ -1434,6 +1434,11 @@ export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
     return prepareBlockedWait(value);
   }
   const request = decodeRequest(value);
+  const spendPrecheck = jsonObject(value)?.spend_precheck;
+  if (spendPrecheck !== undefined && typeof spendPrecheck !== "boolean") {
+    throw new EffectRuntimeRequestError("spend_precheck must be a boolean");
+  }
+  if (spendPrecheck) request.include_record_bodies = true;
   const withOwner = request.borrow_source_admission
     ? withBorrowedQuotaAccountingOwner
     : withQuotaAccountingOwner;
@@ -1453,7 +1458,19 @@ export async function readQuotaSettlement(value: unknown): Promise<JsonObject> {
           "a stored Monitor poll may already have committed its observation; recover the exact monitor-poll before an unavailable closeout",
         );
       }
-      return result;
+      if (!spendPrecheck || result.found !== true) return result;
+      // Preview still needs a fresh full read. The earlier replay check needs
+      // only its receipts and whether a spend Run already needs receipt repair.
+      const settlement = requireJsonObject(result.settlement, "quota settlement bundle");
+      const outcome = requireJsonObject(settlement.result, "quota settlement result");
+      return {
+        schema_version: result.schema_version,
+        found: true,
+        identity: result.identity,
+        settlement: {...settlement, result: {...outcome, value: null}},
+        progress: result.progress,
+        spend_run_present: jsonObject(result.spend_run) !== null,
+      };
     },
   );
 }

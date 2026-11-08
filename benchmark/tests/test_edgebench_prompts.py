@@ -1,10 +1,12 @@
 from pathlib import Path
 from types import SimpleNamespace
+import asyncio
 import json
 import os
 import subprocess
 import sys
 import tempfile
+import time
 
 import pytest
 
@@ -193,9 +195,25 @@ def test_native_goal_transport_rejects_objective_outside_task_prompt(objective, 
             workspace_instructions="Resolved native policy.\n", task_objective=objective)
 
 
+@pytest.mark.parametrize("native_child_limit", [None, 3])
+def test_sforge_native_child_authorization_preserves_original_wrapper_validation(tmp_path, monkeypatch, native_child_limit):
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker
+
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/synthetic-credential")
+    with pytest.raises(ValueError, match="Workspace feedback instructions"):
+        SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
+            profile="heartbeat-resume", cwd=str(tmp_path),
+            feedback_prompt=" \tSynthetic task", workspace_instructions=" \t",
+            native_child_limit=native_child_limit)
+
+
 @pytest.mark.parametrize("profile", ["heartbeat-resume", "heartbeat-explore"])
+@pytest.mark.parametrize("native_child_limit", [None, 3])
 def test_native_research_objective_and_full_planning_input_survive_real_goal_bootstrap(
-        tmp_path, monkeypatch, profile):
+        tmp_path, monkeypatch, profile, native_child_limit):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
     from sforge.harness.config import SForgeConfig
@@ -243,13 +261,34 @@ def test_native_research_objective_and_full_planning_input_survive_real_goal_boo
     prompt = native_task_prompt(query, ["solution.py"], **options)
     worker = SForgeWorker(SForgeConfig(agent_model="fixture", agent_effort="xhigh"),
         profile=profile, cwd=str(project), feedback_prompt=prompt, workspace_instructions=policy,
-        task_objective=query)
+        task_objective=query, native_child_limit=native_child_limit)
+    from benchmark.runtime.codex import native_child_instructions
+    prompt = native_child_instructions(native_child_limit) + prompt
+    policy = native_child_instructions(native_child_limit) + policy
     worker.install_stop_hook(None, None, tmp_path, None)
     worker.environment = Environment()
     remote = control / "entry.md"
     try:
         command = worker.format_run_cmd(str(remote), internet=False)
         registry = json.loads(Path(harbor._REGISTRY).read_text())
+        spawn = registry["goals"][0]["spawn_policy"]
+        assert spawn["allowed"] is (native_child_limit is not None)
+        assert spawn["mode"] == ("multi_subagent" if native_child_limit else "default")
+        assert spawn["max_children"] == 3
+        assert registry["goals"][0]["coordination"]["registered_agents"] == ["benchmark-agent"]
+        delegation = asyncio.run(worker.runtime._loopx(worker.environment, [
+            "agent-context", "--goal-id", "benchmark-goal", "--agent-id", "benchmark-agent",
+            "--phase", "before_plan",
+        ], cwd=str(project)))
+        assert delegation["read_only"] is True
+        assert delegation["host_receipts_observed"] is False
+        context = delegation["agent_context"]
+        if native_child_limit is None:
+            assert context is None
+        else:
+            contribution = next(c for c in context["contributions"] if c["capability_id"] == "multi_subagent")
+            assert contribution["facts"]["max_children"] == 3
+            assert contribution["facts"]["capacity_contract"]["live_availability"] == "not_observed"
         state = Path(registry["goals"][0]["state_file"])
         if not state.is_absolute():
             state = project / state
@@ -280,6 +319,30 @@ def test_native_research_objective_and_full_planning_input_survive_real_goal_boo
         assert core["objective_source"] == "active_state" and core["acceptance_contract"] is None
         assert worker.format_run_cmd(str(remote), internet=False, resume=True) == command
         assert (project / "AGENTS.md").read_text().count(policy) == 1
+        if native_child_limit is not None:
+            before_registry = Path(harbor._REGISTRY).read_bytes()
+            before_state = state.read_bytes()
+            before_task = Path(harbor._TASK_DOC).read_bytes()
+            asyncio.run(worker.runtime._verify_phase_configuration(worker.environment, cwd=str(project)))
+            assert Path(harbor._REGISTRY).read_bytes() == before_registry
+            assert state.read_bytes() == before_state
+            # A receiver may not repair an incompatible retained Goal implicitly.
+            from dataclasses import replace
+            worker.runtime.execution = replace(worker.runtime.execution, native_child_limit=2)
+            with pytest.raises(RuntimeError, match="Native child authorization differs"):
+                asyncio.run(worker.runtime._prepare_phase(worker.environment, "Mismatched receiver input", cwd=str(project)))
+            assert Path(harbor._REGISTRY).read_bytes() == before_registry
+            assert state.read_bytes() == before_state
+            assert Path(harbor._TASK_DOC).read_bytes() == before_task
+            # The same read-before-write requirement applies to the ordinary
+            # warm receiver entrypoint after workspace restoration.
+            worker.prepared = False
+            worker.warm_start = SimpleNamespace(deadline_epoch=time.time() + 300)
+            with pytest.raises(RuntimeError, match="Native child authorization differs"):
+                worker.format_run_cmd(str(remote), internet=False)
+            assert Path(harbor._REGISTRY).read_bytes() == before_registry
+            assert state.read_bytes() == before_state
+            assert Path(harbor._TASK_DOC).read_bytes() == before_task
     finally:
         subprocess.run([sys.executable, "-c", "from loopx.control_plane.effect_runtime import "
             "effect_runtime_result; effect_runtime_result('runtime.shutdown',{},retry_safe=False)"],
@@ -472,18 +535,16 @@ def test_native_prompt_upload_is_readable_regardless_of_launcher_umask(tmp_path,
     assert remote.read_text() == prompt
 
 
-@pytest.mark.parametrize("source,covered", [
-    ("/task", True), ("/home/workspace", True),
-    ("/home/workspace/task/solver.py", False), ("/home/workspace/task-other", False),
-])
-def test_checkpoint_guidance_distinguishes_directory_from_file_coverage(source, covered):
-    from benchmark.edgebench.prompts import checkpoint_research_instructions
-    workspace = "/task" if source == "/task" else "/home/workspace/task"
-    text = checkpoint_research_instructions(
-        {"components": [{"id": "code", "source_path": source}]}, workspace)
-    assert ("includes this task workspace" in text) is covered
-    assert ("does not cover the whole task workspace" in text) is not covered
-    assert "negative results" in text and "workspace-relative references" in text
+@pytest.mark.parametrize("checkpoint", [False, True])
+def test_research_guidance_separates_candidate_inputs_and_capture(checkpoint):
+    from benchmark.edgebench.prompts import research_artifact_instructions
+    from benchmark.runtime.research_artifacts import RESEARCH_DIRECTORY
+    text = research_artifact_instructions(checkpoint=checkpoint)
+    assert RESEARCH_DIRECTORY in text
+    assert "outside the task workspace and submitted paths" in text
+    assert "negative results" in text and "runtime/build data" in text
     assert "external file does not preserve its bytes" in text
     assert "does not change submitted files" in text
-    assert source not in text  # Do not echo arbitrary private capture roots.
+    assert ("verified continuation restores" in text) is checkpoint
+    assert ("does not provide a resumable checkpoint" in text) is not checkpoint
+    assert "does not relocate or discard historical evidence" in text

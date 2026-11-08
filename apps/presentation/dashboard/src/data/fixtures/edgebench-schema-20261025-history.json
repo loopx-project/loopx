@@ -22,6 +22,12 @@
       "Native and local measurement scopes remain distinct. Cancelled or invalid runs do not qualify a scientific comparison."
     ],
     "redactions": [],
+    "trajectory_archive": {
+      "url": "https://huggingface.co/datasets/huangrt01/loopx-edgebench-research-checkpoints-20261015/resolve/a97e88f951deb6827d7051a59927860e9e4c4476/20261107-real-benchmark-trajectories/schemathesis_config_modernization.zip",
+      "sha256": "e892d3b9569d84c7fff8ce80c2a0ae9f9a801d5f745eb980bfc918835327b2ea",
+      "manifest_url": "https://huggingface.co/datasets/huangrt01/loopx-edgebench-research-checkpoints-20261015/blob/a97e88f951deb6827d7051a59927860e9e4c4476/20261107-real-benchmark-trajectories/manifest.json",
+      "redactions_url": "https://huggingface.co/datasets/huangrt01/loopx-edgebench-research-checkpoints-20261015/blob/a97e88f951deb6827d7051a59927860e9e4c4476/20261107-real-benchmark-trajectories/redactions.json"
+    },
     "boundary": "Display-state events only. No authority or credential store, raw session transcript, hidden evaluator, workspace or model weights are included."
   },
   "source_counts": {

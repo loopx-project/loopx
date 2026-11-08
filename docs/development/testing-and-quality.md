@@ -1848,6 +1848,22 @@ not shorten production commands or qualify long-path output under short-path cap
 独立的真实长路径命令完整性检查。这仅统一测量布局，不缩短生产命令，也不将
 长路径输出冒充短路径预算已通过。
 
+Exposing the validator's stride review citation limit adds 136 characters
+only to the crowded `turn plan` fixture. With the same scenario roots, the
+small/crowded outputs measure 10,553/21,849 before that projection and
+10,553/21,985 after it, on both the integration base and candidate. The
+11,432-character growth exceeded the former 11,400-character allowance.
+The fixed semantic allowance moves from 9,300 to 9,436, preserving 104
+characters of measured headroom, the per-Todo allowance, and the absolute
+character and line ceilings. The added field exposes the existing validator
+limit independently for previous-decision citations and Explore citations.
+
+同一夹具中，集成基线和候选版的 `turn plan` 输出一致。展示 Stride 评审引用上限后，
+小场景仍为 10,553 字符，拥挤场景从 21,849 增至 21,985 字符。实际增长 11,432
+字符，超过原 11,400 字符上限。仅将固定语义预算从 9,300 调到 9,436，保留 104
+字符余量、每条 Todo 的增长预算以及总字符数和行数限制。新增字段分别说明既有的前次
+决策引用上限和 Explore 引用上限。
+
 The PR-review packet's `semantic_alignment` rule consumes this evidence through
 the existing `validation_matrix` and `observable_semantics` rows. It does not
 add a separate budget receipt or approval gate. The result checker verifies

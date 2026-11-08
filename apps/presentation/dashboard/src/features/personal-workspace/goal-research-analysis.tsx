@@ -7,6 +7,8 @@ import {requestJson} from "../../data/chat";
 import {sourceReadApiUrl} from "../../data/local-status-query";
 import {ContextHelp} from "./context-help";
 import {ResearchSynthesis} from "./goal-research-synthesis";
+import {ResearchCaseStudy} from "./research-case-study";
+import type {TrajectoryCaseStudy} from "../../../../../../loopx/control_plane/capabilities/trajectory_case_study.js";
 import "./goal-research-analysis.css";
 
 // Transport views of the existing toolkit producer, not an assessment, score,
@@ -16,6 +18,8 @@ type Job = {status: string; attempt?: number; analysis_wall_seconds?: number | n
   config?: {model: string; effort: string; service_tier: string}; served_service_tier?: string | null;
   usage?: {input_tokens?: number; output_tokens?: number; reasoning_output_tokens?: number} | null};
 type Pack = ResearchProgressPack & {source_count: number; analysis_key: string; method_version: string;
+  case_study?: TrajectoryCaseStudy;
+  case_study_summary?: {title: string; language: TrajectoryOutputLanguage};
   display_request?: {schema_version: 'research_display_v1'; snapshot_key: string; source_id: string; source_namespace: string; eligible: number};
   result_attempt?: number;
   result_job?: Job;
@@ -346,6 +350,26 @@ export function ResearchReportSummary({analysis: a}: {analysis: Controller}) {
     onExpand={origin => {a.trigger.current = origin; a.show();}} onCitation={a.readCitation}/></div> : null;
 }
 
+export function ResearchCaseReading({analysis: a, onHistory}: {analysis: Controller; onHistory: () => void}) {
+  const packs = (a.snapshot?.catalog.packs ?? []).filter(p => p.case_study_summary);
+  const p = a.pack;
+  const firstStudy = packs[0]?.pack_id;
+  useEffect(() => {
+    if (!a.loading && !a.readError && p && !p.case_study && firstStudy) a.select(firstStudy);
+  }, [a.loading, a.readError, p?.pack_id, Boolean(p?.case_study), firstStudy]);
+  return <section className="research-case-reader" aria-label={a.zh ? "Case 深度解读" : "Case studies"}>
+    <header className="case-reader-toolbar"><label>{a.zh ? "解读版本" : "Study version"}
+      <select aria-label={a.zh ? "选择解读版本" : "Select study version"} value={p?.case_study ? p.pack_id : ""} onChange={e => a.select(e.target.value)}>
+        {!p?.case_study ? <option value="">{a.zh ? "选择已保存的解读" : "Choose a saved study"}</option> : null}
+        {packs.map(pack => <option key={pack.pack_id} value={pack.pack_id}>{pack.title}</option>)}
+      </select></label><button type="button" onClick={onHistory}>{a.zh ? "研究记录与分析" : "Research records and analysis"} ↗</button></header>
+    <AnalysisReadState analysis={a}/>
+    {p?.case_study ? <ResearchCaseStudy key={p.pack_id} study={p.case_study} zh={a.zh} historical={p.applicability !== "current"}
+      scope={p.scope} onCitation={a.readCitation}/> : !a.loading && !a.readError ? <p>{a.zh ? "选择一份解读，阅读问题背景、策略差异、关键转折与证据。" : "Choose a study to read its background, approaches, turning points and evidence."}</p> : null}
+    <ResearchCitationPanel analysis={a}/>
+  </section>;
+}
+
 function CitedToolText({text, zh}: {text: string; zh: boolean}) {
   // Decode only the saved direct shell-result envelope, never recursively
   // reinterpret arbitrary JSON or infer successful work from its text.
@@ -548,7 +572,8 @@ export function ResearchAnalysisPanel({analysis: a, onHistory}: {analysis: Contr
     : benefit?.unknown ? (zh ? "原目标收益的检验情况仍未知" : "Original-objective utility testing remains unknown")
       : benefit?.yes ? (zh ? "模型记录了收益检验；这不等于收益为正" : "The model identified a utility test; this does not imply positive utility")
         : (zh ? "此方法未覆盖原目标收益检验" : "This method does not cover original-objective utility testing");
-  const scope = p ? <>{p.episode_count} {zh ? "个研究片段" : "research episodes"} · {p.selection.exhaustive ? (zh ? "固定范围" : "Fixed scope") : (zh ? "定向抽样" : "Purposive sample")}</> : null;
+  const episodeLabel = result ? (zh ? "个研究片段" : "research episodes") : (zh ? "个输入片段" : "input episodes");
+  const scope = p ? <>{p.episode_count} {episodeLabel} · {p.selection.exhaustive ? (zh ? "固定范围" : "Fixed scope") : (zh ? "定向抽样" : "Purposive sample")}</> : null;
   const scopeHelp = p ? <ContextHelp label={zh ? "分析范围" : "Analysis scope"} icon={result?.synthesis ? Sparkles : undefined}>
     {result?.synthesis ? <p><strong>{zh ? "Agent 分析 · 未校准" : "Agent analysis · uncalibrated"}</strong></p> : null}
     <p>{p.selection.exhaustive ? (zh ? "覆盖此固定分析范围；不等于覆盖全部研究。" : "Covers this fixed analysis scope, not necessarily the whole research history.") : (zh ? "定向抽样，仅分析选定研究片段；范围外或未捕获的工作未纳入，不代表全程。" : "Purposive sample of selected episodes; work outside this scope or not captured is excluded. It does not represent the whole run.")}</p>
@@ -577,7 +602,8 @@ export function ResearchAnalysisPanel({analysis: a, onHistory}: {analysis: Contr
         {a.pending || a.recordedRunning ? <><p role="status">{a.pending ? <LoaderCircle size={15} aria-hidden className="analysis-spin"/> : null}{a.pending ? (zh ? "正在处理分析请求…" : "Processing analysis request…") : (zh ? "上次记录仍待分析结果；当前执行状态尚未核验。" : "The last receipt awaits a result; current execution is unverified.")}</p><button type="button" onClick={() => void a.cancel()} disabled={a.readOnly || a.cancelPending || currentJob?.cancel_requested}>{currentJob?.cancel_requested ? (zh ? "已请求取消" : "Cancellation requested") : a.cancelPending ? (zh ? "正在请求取消…" : "Requesting cancellation…") : (zh ? "取消分析" : "Cancel analysis")}</button></>
           : a.savedOriginal && !a.readOnly ? <button className="analysis-primary" type="button" disabled={!available} onClick={() => void a.execute(failed)}><Sparkles size={15} aria-hidden/>{zh ? "用中文分析所选范围" : "Analyze selected scope in English"}</button>
             : result ? <button type="button" onClick={() => void a.read().catch(() => undefined)}><RefreshCw size={14} aria-hidden/>{zh ? "刷新结果" : "Refresh result"}</button>
-            : a.readOnly ? <><p className={sourceAvailable ? undefined : "analysis-warning"}>{sourceAvailable ? (zh ? "此来源尚无已保存的分析。" : "This source has no saved analysis yet.") : reasonCopy(p.reason_code, zh)}</p><button type="button" onClick={() => void a.read().catch(() => undefined)}>{zh ? "刷新结果" : "Refresh result"}</button></>
+            : a.readOnly ? (a.loading || a.readError || a.snapshot?.originalReadError ? null
+              : <><p className={sourceAvailable ? undefined : "analysis-warning"}>{sourceAvailable ? (zh ? "此来源尚无已保存的分析。" : "This source has no saved analysis yet.") : reasonCopy(p.reason_code, zh)}</p><button type="button" onClick={() => void a.read().catch(() => undefined)}>{zh ? "刷新结果" : "Refresh result"}</button></>)
             : <button className="analysis-primary" type="button" disabled={!available} onClick={() => void a.execute(failed)}><Sparkles size={15} aria-hidden/>{failed ? (zh ? "重试分析" : "Retry analysis") : p.continuation ? analysisActionLabel(p, zh) : (zh ? "分析所选范围" : "Analyze selected scope")}</button>}
         {(!result || a.savedOriginal) && !a.readOnly && !a.pending && !a.recordedRunning ? <small>{a.requestPack?.continuation?.can_reuse ? (zh ? "复用已有判读，无需新模型调用。" : "Reuses existing judgments without a new model call.") : zh ? "使用本机 Codex 账户，单独产生分析用量；浏览不调用 Agent。" : "Uses the local Codex account with separate analysis usage. Browsing never invokes an Agent."}</small> : null}
       </div> : null}

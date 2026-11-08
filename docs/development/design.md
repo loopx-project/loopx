@@ -152,6 +152,21 @@ size empty summaries to their content rather than filling large decorative cards
 
 ### Research Workspace / 研究工作台
 
+Benchmark cases live in nested child Goals of their benchmark. The parent is
+the entry to the case portfolio; the child's Research view owns its reading,
+records and evidence. Use the existing source-scoped Goal hierarchy, not a
+parallel case container. A saved case study opens with the conclusion and then
+explains unfamiliar concepts, competing routes, turning points and uncertainty.
+Authors may combine prose, tables, charts and timelines in a case-specific order.
+The reader's purpose is understanding and independent judgment; exercises,
+mandatory notes and proposed actions are not prerequisites for reading.
+Sources and document scope stay accessible on demand; original records remain
+a separate view. The absence of a study keeps the ordinary research reader.
+
+Benchmark 的 case 是其嵌套子 Goal，研究在各 case 子 Goal 内展开。父 Goal 提供入口，
+子 Goal 保留自己的解读版本、研究记录与证据。先呈现结论，再解释领域、路线、转折与
+不确定性；按内容组合文字、表格、图形和时间线，不强迫做练习或记录笔记。
+
 A Goal's research is a first-level peer of Overview, Tasks, Chat and Files.
 Overview answers what is moving and what needs attention. The tab itself is
 the research entry; add an Overview shortcut only when it carries a useful
@@ -206,6 +221,11 @@ with their outcome, change and recorded status; retain stopped/retained evidence
 and expose earlier records in place. Counts and date spans describe the selected
 time range. Keep negative and tentative record counts visible when older rows
 are folded, and open each row's exact finding in the existing reader.
+
+In the loaded-record list, a node and its unambiguously linked finding share an
+entry after a complete read. Show the finding status beside the node's lifecycle
+status and retain each event, time and source when opened. Keep raw record
+counts, search and export independent of display grouping.
 
 Reading a question from a day or nearby-point group keeps that collection as
 navigation context. Offer a compact question selector and previous/next controls

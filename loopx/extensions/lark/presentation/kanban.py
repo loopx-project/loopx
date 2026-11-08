@@ -24,6 +24,12 @@ from ....presentation.projection_source_reconcile import (
     plan_projection_source_reconcile,
     validate_projection_source_reconcile_request,
 )
+from ....public_safe_text import (
+    HOME_RELATIVE_PATH_PATTERN,
+    PRESENTATION_LOCAL_PATH_PATTERNS,
+    SECRET_LIKE_SURFACE_PATTERN,
+    SINK_COMPOUND_CREDENTIAL_ASSIGNMENT_PATTERN,
+)
 from .. import cli_transport
 from ..private_json import write_private_json_atomic
 from . import issue_fix_surface
@@ -440,40 +446,117 @@ def _compact_text(value: Any, *, limit: int = TEXT_LIMIT) -> str:
     return text[: max(0, limit - 1)].rstrip() + "..."
 
 
-def _public_safe_text(value: Any, *, limit: int = TEXT_LIMIT) -> str:
-    text = _compact_text(value, limit=limit)
-    patterns = (
-        (re.compile(r"file://[^\s,;)]+", re.IGNORECASE), "[local-path-redacted]"),
-        (
-            re.compile(r"(?<![A-Za-z0-9_.-])(?:~|/(?:Users|private|var|tmp|Volumes))/[^\s,;)]+"),
-            "[local-path-redacted]",
-        ),
-        (
-            re.compile(
-                r"https?://[^\s,;)]*(?:feishu|larksuite|internal|corp|localhost|127\.0\.0\.1)[^\s,;)]*",
-                re.IGNORECASE,
-            ),
-            "[private-link-redacted]",
-        ),
-        (re.compile(r"\b(?:base|tbl|vew|rec)[A-Za-z0-9_-]{6,}\b"), "[external-id-redacted]"),
-        (
-            re.compile(
-                r"\b(?:PRIVATE_MATERIAL|PRIVATE_REF|SECRET_REF|CREDENTIAL_REF)[A-Za-z0-9_.:-]*\b",
-                re.IGNORECASE,
-            ),
-            "[private-ref-redacted]",
-        ),
+_ANSI_CONTROL_SEQUENCE_PATTERN = re.compile(
+    r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\)?)"
+)
+def _redact_credential_shapes(value: Any) -> str:
+    text = _ANSI_CONTROL_SEQUENCE_PATTERN.sub("", str(value or ""))
+    text = SECRET_LIKE_SURFACE_PATTERN.sub("[credential-redacted]", text)
+    return SINK_COMPOUND_CREDENTIAL_ASSIGNMENT_PATTERN.sub(
+        "[credential-redacted]", text
     )
-    for pattern, replacement in patterns:
+
+
+_SHARED_REDACTION_PATTERNS = (
+    (re.compile(r"file://[^\s,;)]+", re.IGNORECASE), "[local-path-redacted]"),
+    *((pattern, "[local-path-redacted]") for pattern in PRESENTATION_LOCAL_PATH_PATTERNS),
+    (HOME_RELATIVE_PATH_PATTERN, "[local-path-redacted]"),
+    (
+        re.compile(
+            r"https?://[^\s,;)]*(?:feishu|larksuite|internal|corp|localhost|127\.0\.0\.1)[^\s,;)]*",
+            re.IGNORECASE,
+        ),
+        "[private-link-redacted]",
+    ),
+    (re.compile(r"\b(?:base|tbl|vew|rec)[A-Za-z0-9_-]{6,}\b"), "[external-id-redacted]"),
+    (
+        re.compile(
+            r"\b(?:PRIVATE_MATERIAL|PRIVATE_REF|SECRET_REF|CREDENTIAL_REF)[A-Za-z0-9_.:-]*\b",
+            re.IGNORECASE,
+        ),
+        "[private-ref-redacted]",
+    ),
+)
+
+
+def _redact_non_credential_shapes(text: str) -> str:
+    for pattern, replacement in _SHARED_REDACTION_PATTERNS:
         text = pattern.sub(replacement, text)
-    return _compact_text(text, limit=limit)
+    return text
+
+
+def _redact_public_safe_shapes(value: Any) -> str:
+    """Apply the shared boundary without collapsing whitespace or truncating."""
+
+    return _redact_non_credential_shapes(_redact_credential_shapes(value))
+
+
+def _credential_safe_text(value: Any, *, limit: int = TEXT_LIMIT) -> str:
+    return _compact_text(_redact_credential_shapes(value), limit=limit)
+
+
+def _public_safe_text(value: Any, *, limit: int = TEXT_LIMIT) -> str:
+    text = _compact_text(_redact_credential_shapes(value), limit=limit)
+    return _compact_text(_redact_non_credential_shapes(text), limit=limit)
+
+
+_STRUCTURAL_ID_KEYS = frozenset({"id", "record_id", "record_ids"})
+_STRUCTURAL_RECORD_ID_PATTERN = re.compile(r"^rec[A-Za-z0-9_-]{6,}$")
+
+
+def _public_safe_value(value: Any, *, preserve_external_id: bool = False) -> Any:
+    if isinstance(value, str):
+        if preserve_external_id and _STRUCTURAL_RECORD_ID_PATTERN.fullmatch(value):
+            return value
+        return _public_safe_text(value)
+    if isinstance(value, dict):
+        return {
+            _public_safe_text(str(key)): _public_safe_value(
+                item,
+                preserve_external_id=str(key).lower() in _STRUCTURAL_ID_KEYS,
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [
+            _public_safe_value(item, preserve_external_id=preserve_external_id)
+            for item in value
+        ]
+    if isinstance(value, tuple):
+        return tuple(
+            _public_safe_value(item, preserve_external_id=preserve_external_id)
+            for item in value
+        )
+    return value
 
 
 def _public_safe_lark_values(values: dict[str, Any]) -> dict[str, Any]:
-    return {
-        key: _public_safe_text(value) if isinstance(value, str) else value
-        for key, value in values.items()
-    }
+    credential_safe = _credential_safe_lark_values(values)
+    return {key: _public_safe_value(value) for key, value in credential_safe.items()}
+
+
+def _credential_safe_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return _redact_credential_shapes(value)
+    if isinstance(value, dict):
+        return {
+            _redact_credential_shapes(key): _credential_safe_value(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_credential_safe_value(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_credential_safe_value(item) for item in value)
+    return value
+
+
+def _credential_safe_lark_values(values: dict[str, Any]) -> dict[str, Any]:
+    return {key: _credential_safe_value(value) for key, value in values.items()}
+
+
+def _sink_safe_lark_values(values: dict[str, Any], *, public_safe: bool) -> dict[str, Any]:
+    values = _credential_safe_lark_values(values)
+    return _public_safe_lark_values(values) if public_safe else values
 
 
 def now_lark_datetime(now: datetime | None = None) -> str:
@@ -706,6 +789,7 @@ def build_record_upsert_command(
     record_id: str | None,
     values: dict[str, Any],
 ) -> list[str]:
+    safe_values = _credential_safe_lark_values(values)
     args = [
         config.cli_bin,
         "base",
@@ -719,7 +803,7 @@ def build_record_upsert_command(
     ]
     if record_id:
         args.extend(["--record-id", record_id])
-    args.extend(["--json", _record_json_args(values)])
+    args.extend(["--json", _record_json_args(safe_values)])
     return args
 
 
@@ -1819,6 +1903,7 @@ def _lark_record_from_projection_block(
         }
     )
     values.update(issue_fix_surface.issue_fix_record_values(block, compact_text=_compact_text))
+    values = _credential_safe_lark_values(values)
     return _public_safe_lark_values(values) if public_safe else values
 
 
@@ -2039,6 +2124,7 @@ def sync_loopx_todos_to_lark_kanban(
     state_file: Path | None = None,
     include_done: bool = False,
     limit: int = 50,
+    sink_visibility: str = SINK_VISIBILITY_SHARED,
     execute: bool = False,
     runner: cli_transport.CommandRunner = cli_transport.default_subprocess_runner,
 ) -> dict[str, Any]:
@@ -2048,6 +2134,10 @@ def sync_loopx_todos_to_lark_kanban(
     from ....control_plane.todos.todo_semantics import todo_priority_label
     from ....control_plane.todos.path_resolution import resolve_todo_state_path
     from ....control_plane.todos.active_state_editing import section_bounds, todo_blocks
+
+    if sink_visibility not in SINK_VISIBILITIES:
+        raise ValueError(f"sink_visibility must be one of {sorted(SINK_VISIBILITIES)}")
+    public_safe = sink_visibility == SINK_VISIBILITY_SHARED
 
     resolved_project, resolved_state_file = resolve_todo_state_path(
         registry_path=registry_path,
@@ -2111,6 +2201,8 @@ def sync_loopx_todos_to_lark_kanban(
                 "execute": execute,
                 "goal_id": goal_id,
                 "agent_id": agent_id,
+                "sink_visibility": sink_visibility,
+                "public_safe_redaction": public_safe,
                 "base_token": config.base_token,
                 "table_id": config.table_id,
                 "view_id": config.view_id,
@@ -2153,6 +2245,8 @@ def sync_loopx_todos_to_lark_kanban(
             state_file=resolved_state_file,
             priority=todo_priority_label(block, text_mode="prefix") or "P2",
         )
+        if public_safe:
+            values = _public_safe_lark_values(values)
         result = cli_transport.run_command(
             build_record_upsert_command(config, record_id=record_map.get(key), values=values),
             execute=execute,
@@ -2188,6 +2282,7 @@ def sync_loopx_todos_to_lark_kanban(
                 row,
                 goal_id=row_goal_id,
                 source_id=outcome_source_id,
+                public_safe=public_safe,
             )
             result = cli_transport.run_command(
                 build_record_upsert_command(
@@ -2230,6 +2325,8 @@ def sync_loopx_todos_to_lark_kanban(
         "execute": execute,
         "goal_id": goal_id,
         "agent_id": agent_id,
+        "sink_visibility": sink_visibility,
+        "public_safe_redaction": public_safe,
         "base_token": config.base_token,
         "table_id": config.table_id,
         "view_id": config.view_id,
@@ -2356,7 +2453,7 @@ def _lark_record_from_todo_block(
         scope_text = str(scope or "")
     evidence = str(block.get("evidence") or block.get("reason") or block.get("note") or "")
     text = str(block.get("text") or "")
-    return {
+    values = {
         "Task": text,
         "Status": lark_status,
         "Claim": claim,
@@ -2377,17 +2474,23 @@ def _lark_record_from_todo_block(
         "Last Error": "",
         "Last Result Code": None,
     }
+    return _credential_safe_lark_values(values)
 
 
 def seed_lark_kanban_task(
     config: LarkKanbanConfig,
     *,
     task: dict[str, Any],
+    sink_visibility: str = SINK_VISIBILITY_SHARED,
     execute: bool = False,
     runner: cli_transport.CommandRunner = cli_transport.default_subprocess_runner,
 ) -> dict[str, Any]:
+    if sink_visibility not in SINK_VISIBILITIES:
+        raise ValueError(f"sink_visibility must be one of {sorted(SINK_VISIBILITIES)}")
+    public_safe = sink_visibility == SINK_VISIBILITY_SHARED
+    safe_task = _sink_safe_lark_values(task, public_safe=public_safe)
     result = cli_transport.run_command(
-        build_record_upsert_command(config, record_id=None, values=task),
+        build_record_upsert_command(config, record_id=None, values=safe_task),
         execute=execute,
         runner=runner,
     )
@@ -2397,7 +2500,9 @@ def seed_lark_kanban_task(
         "schema_version": LARK_KANBAN_SCHEMA_VERSION,
         "record_id": record_id,
         "command": result,
-        "task": task,
+        "sink_visibility": sink_visibility,
+        "public_safe_redaction": public_safe,
+        "task": safe_task,
     }
 
 
@@ -2405,15 +2510,19 @@ def seed_lark_kanban_records(
     config: LarkKanbanConfig,
     *,
     records: list[dict[str, Any]],
+    sink_visibility: str = SINK_VISIBILITY_SHARED,
     execute: bool = False,
     runner: cli_transport.CommandRunner = cli_transport.default_subprocess_runner,
 ) -> dict[str, Any]:
+    if sink_visibility not in SINK_VISIBILITIES:
+        raise ValueError(f"sink_visibility must be one of {sorted(SINK_VISIBILITIES)}")
     results: list[dict[str, Any]] = []
     ok = True
     for record in records:
         result = seed_lark_kanban_task(
             config,
             task=record,
+            sink_visibility=sink_visibility,
             execute=execute,
             runner=runner,
         )
@@ -2425,9 +2534,12 @@ def seed_lark_kanban_records(
         "ok": ok,
         "schema_version": LARK_KANBAN_SCHEMA_VERSION,
         "record_count": len(records),
+        "sink_visibility": sink_visibility,
+        "public_safe_redaction": sink_visibility == SINK_VISIBILITY_SHARED,
         "created_record_ids": [item.get("record_id") for item in results],
         "records": results,
     }
+
 
 def lark_kanban_heartbeat(
     config: LarkKanbanConfig,
@@ -2435,6 +2547,7 @@ def lark_kanban_heartbeat(
     agent_id: str = DEFAULT_AGENT_ID,
     fixture: dict[str, Any] | None = None,
     worker_command: str | None = None,
+    sink_visibility: str = SINK_VISIBILITY_SHARED,
     execute_lark: bool = False,
     execute_worker: bool = False,
     complete_on_success: bool = False,
@@ -2443,6 +2556,9 @@ def lark_kanban_heartbeat(
     now: datetime | None = None,
     worker_timeout_seconds: float = 600.0,
 ) -> dict[str, Any]:
+    if sink_visibility not in SINK_VISIBILITIES:
+        raise ValueError(f"sink_visibility must be one of {sorted(SINK_VISIBILITIES)}")
+    public_safe = sink_visibility == SINK_VISIBILITY_SHARED
     commands: list[dict[str, Any]] = []
     if fixture is None:
         list_result = cli_transport.run_command(
@@ -2490,6 +2606,7 @@ def lark_kanban_heartbeat(
         "Last Heartbeat": timestamp,
         "Run History": append_history(task.get("Run History"), f"{timestamp} {agent_id}: claimed"),
     }
+    claim_values = _sink_safe_lark_values(claim_values, public_safe=public_safe)
     claim_result = cli_transport.run_command(
         build_record_upsert_command(config, record_id=record_id, values=claim_values),
         execute=execute_lark,
@@ -2506,6 +2623,7 @@ def lark_kanban_heartbeat(
             selected_task=task,
         )
     command = (worker_command if worker_command is not None else str(task.get("Worker Command") or "")).strip()
+    safe_command = _redact_credential_shapes(command)
     if not command:
         worker = {
             "attempted": False,
@@ -2523,10 +2641,10 @@ def lark_kanban_heartbeat(
             "executed": False,
             "ok": True,
             "reason": "execute_worker_not_set",
-            "command": command,
+            "command": safe_command,
         }
         final_status = STATUS_CLAIMED
-        evidence = f"dry-run worker command: {command}"
+        evidence = f"dry-run worker command: {safe_command}"
         result_code = None
     elif not allowed_worker_command(command, allowed_command_prefixes or []):
         worker = {
@@ -2534,7 +2652,7 @@ def lark_kanban_heartbeat(
             "executed": False,
             "ok": False,
             "reason": "worker_command_prefix_not_allowed",
-            "command": command,
+            "command": safe_command,
             "allowed_prefixes": allowed_command_prefixes or [],
         }
         final_status = STATUS_BLOCKED
@@ -2555,15 +2673,15 @@ def lark_kanban_heartbeat(
             "executed": True,
             "ok": bool(worker_result.get("ok")),
             "reason": "completed" if worker_result.get("ok") else "failed",
-            "command": command,
+            "command": safe_command,
             "returncode": worker_result.get("returncode"),
-            "stdout": _compact_text(worker_result.get("stdout"), limit=cli_transport.OUTPUT_LIMIT),
-            "stderr": _compact_text(worker_result.get("stderr"), limit=cli_transport.OUTPUT_LIMIT),
+            "stdout": _credential_safe_text(worker_result.get("stdout"), limit=cli_transport.OUTPUT_LIMIT),
+            "stderr": _credential_safe_text(worker_result.get("stderr"), limit=cli_transport.OUTPUT_LIMIT),
         }
         final_status = STATUS_DONE if worker_result.get("ok") and complete_on_success else STATUS_REVIEW
         if not worker_result.get("ok"):
             final_status = STATUS_BLOCKED
-        evidence = _compact_text(
+        evidence = _credential_safe_text(
             worker.get("stdout") or worker.get("stderr") or worker.get("reason"),
             limit=cli_transport.OUTPUT_LIMIT,
         )
@@ -2575,13 +2693,14 @@ def lark_kanban_heartbeat(
         "Last Heartbeat": timestamp,
         "Evidence": evidence,
         "Last Result Code": result_code,
-        "Last Error": "" if worker.get("ok") else _compact_text(worker.get("stderr") or worker.get("reason")),
+        "Last Error": "" if worker.get("ok") else _credential_safe_text(worker.get("stderr") or worker.get("reason")),
         "Run History": append_history(
             claim_values["Run History"],
             f"{timestamp} {agent_id}: worker {worker.get('reason')} -> {final_status}",
         ),
         "Handoff": _handoff_for_status(final_status, agent_id=agent_id),
     }
+    finish_values = _sink_safe_lark_values(finish_values, public_safe=public_safe)
     finish_result = cli_transport.run_command(
         build_record_upsert_command(config, record_id=record_id, values=finish_values),
         execute=execute_lark,

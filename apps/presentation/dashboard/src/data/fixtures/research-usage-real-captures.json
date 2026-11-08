@@ -1,6 +1,6 @@
 {
   "schema_version": "research_usage_display_fixture_v1",
-  "boundary": "Frozen display projections of four registered first-nine-hour solver captures. No raw prompts, tool arguments, trajectories, scoring internals or billing data. Descriptive observations, not live execution, matched-study qualification or causal benefit.",
+  "boundary": "Frozen native HTTP readbacks of four registered successor versions of first-nine-hour solver captures. The original owner registered these exact IDs and preserved its existing default. This fixture selects four captures for display; it does not reproduce the entire live catalog. No raw prompts, tool arguments, trajectories, scoring internals or billing data. Descriptive observations, not matched-study qualification or causal benefit.",
   "methods": {
     "request_counters": "codex_request_reconciliation_v1",
     "command_association": "codex_ordered_loopx_requests_v1",
@@ -9,30 +9,30 @@
   "lineage": [
     {
       "original_pack_id": "68e433daa1b2f13318f683164004afc799e604fc4fdc7e0ba1cb1bc7e2c24307",
-      "candidate_pack_id": "691b0e483bdfb23ba3076ee69053008662de2bc04bee6c18f8af657c95704f71",
+      "registered_pack_id": "b62f232a035b5e4a2638d6d263d19c6d9855714152182ff6c529e8080a09a0eb",
       "source_sha256": "78a399ae364790c30481e448276c9dddb57b00ee1ddc61300110d45673243be8"
     },
     {
       "original_pack_id": "247d226ac836938e63281ced05ad04c4e5326883e81a2ea6846aa4f48c0086dc",
-      "candidate_pack_id": "7402d72472caa8c3f956643ceeead684691a36d3ae5f0d7438cfb11b838a841f",
+      "registered_pack_id": "7da33d179fdfecbeed503422e375beaae2f26972d3f510dec2a4681a14b85397",
       "source_sha256": "a6a0acf70df5dde067ee06de20a5c3f28fde9f245714b2dfca206cfe5e7e0e25"
     },
     {
       "original_pack_id": "c3e4fb9bfd4f00360d96ba06f0a606d86ee0caa30ec4778144d7fb9cd5f8a469",
-      "candidate_pack_id": "9dd0a7e3457f190f19140db65fdc2e79c341bd12d84daa2d20bada99ebdece78",
+      "registered_pack_id": "50431e7827df714d18c26bba99e0eebcfd9a08025fe08b7dadc03d16b7a70b73",
       "source_sha256": "c94b4715cf57c45b9a680bb803c79601f0424eb9b166cf63ee38044fa26ce37f"
     },
     {
       "original_pack_id": "e36bf9c8c69f798822272755892ce040bf425fd248a1c241db4b2515265a2c87",
-      "candidate_pack_id": "0879d189427e61688e2ff28b0ffd5949f149f62f2297a2f39ca3cc5335bcb709",
+      "registered_pack_id": "03d6ae56a332acc6496683268124ed41cd9c7746d404ddb6729874ab4d7bdd4a",
       "source_sha256": "00c024cd300a8521a8246410c6459c75610b217b6a1317314a4796ac086ab2e1"
     }
   ],
   "packs": [
     {
       "ok": true,
-      "pack_id": "691b0e483bdfb23ba3076ee69053008662de2bc04bee6c18f8af657c95704f71",
-      "title": "Codec · context-on · 前 9 小时控制开销",
+      "pack_id": "b62f232a035b5e4a2638d6d263d19c6d9855714152182ff6c529e8080a09a0eb",
+      "title": "Codec · context-on · 前 9 小时控制开销 · 请求关联",
       "scope": {
         "goal_id": "benchmark-goal",
         "case_id": "Codec",
@@ -2051,12 +2051,53 @@
       ],
       "job": null,
       "result": null,
-      "applicability": "current"
+      "applicability": "current",
+      "continuation": {
+        "base_analysis_key": "0172207e4029bbe2df136fd0baa500d0dba8e388038056f33e370f8e8ae724f7",
+        "base_scope": {
+          "goal_id": "benchmark-goal",
+          "case_id": "Codec",
+          "run_id": "codec-sol-xhigh-03-explore-on-fourarm-r12-a2",
+          "revision": "b2b95bb60725ea9d43a1308947bc34de33ff6946",
+          "window": "First 9 hours from solver start, native receipt time [start,end), all captured responses."
+        },
+        "current_scope": {
+          "goal_id": "benchmark-goal",
+          "case_id": "Codec",
+          "run_id": "codec-sol-xhigh-03-explore-on-fourarm-r12-a2",
+          "revision": "b2b95bb60725ea9d43a1308947bc34de33ff6946",
+          "window": "First 9 hours from solver start, native receipt time [start,end), all captured responses."
+        },
+        "sources": {
+          "added": [],
+          "revised": [],
+          "removed": []
+        },
+        "episodes": {
+          "added": [],
+          "revised": [],
+          "removed": []
+        },
+        "can_reuse": false,
+        "configuration_changed": false,
+        "objective_changed": false,
+        "reassessed_episode_ids": [
+          "observed-control"
+        ],
+        "new_pair_count": 0,
+        "removed_pair_count": 0,
+        "compared_pair_count": null,
+        "verdict_changes": [],
+        "base_pack_id": "68e433daa1b2f13318f683164004afc799e604fc4fdc7e0ba1cb1bc7e2c24307",
+        "base_title": "Codec · context-on · 前 9 小时控制开销",
+        "base_available": false,
+        "base_episode_count": 1
+      }
     },
     {
       "ok": true,
-      "pack_id": "7402d72472caa8c3f956643ceeead684691a36d3ae5f0d7438cfb11b838a841f",
-      "title": "Codec · context-off · 前 9 小时控制开销",
+      "pack_id": "7da33d179fdfecbeed503422e375beaae2f26972d3f510dec2a4681a14b85397",
+      "title": "Codec · context-off · 前 9 小时控制开销 · 请求关联",
       "scope": {
         "goal_id": "benchmark-goal",
         "case_id": "Codec",
@@ -3021,12 +3062,53 @@
       ],
       "job": null,
       "result": null,
-      "applicability": "current"
+      "applicability": "current",
+      "continuation": {
+        "base_analysis_key": "2e3a1001ffa8e893a0a77b08f12dd5e487b4ea31bf4ba253c7c045134e085483",
+        "base_scope": {
+          "goal_id": "benchmark-goal",
+          "case_id": "Codec",
+          "run_id": "codec-sol-xhigh-03-explore-off-fourarm-r12-a2",
+          "revision": "b2b95bb60725ea9d43a1308947bc34de33ff6946",
+          "window": "First 9 hours from solver start, native receipt time [start,end), all captured responses."
+        },
+        "current_scope": {
+          "goal_id": "benchmark-goal",
+          "case_id": "Codec",
+          "run_id": "codec-sol-xhigh-03-explore-off-fourarm-r12-a2",
+          "revision": "b2b95bb60725ea9d43a1308947bc34de33ff6946",
+          "window": "First 9 hours from solver start, native receipt time [start,end), all captured responses."
+        },
+        "sources": {
+          "added": [],
+          "revised": [],
+          "removed": []
+        },
+        "episodes": {
+          "added": [],
+          "revised": [],
+          "removed": []
+        },
+        "can_reuse": false,
+        "configuration_changed": false,
+        "objective_changed": false,
+        "reassessed_episode_ids": [
+          "observed-control"
+        ],
+        "new_pair_count": 0,
+        "removed_pair_count": 0,
+        "compared_pair_count": null,
+        "verdict_changes": [],
+        "base_pack_id": "247d226ac836938e63281ced05ad04c4e5326883e81a2ea6846aa4f48c0086dc",
+        "base_title": "Codec · context-off · 前 9 小时控制开销",
+        "base_available": false,
+        "base_episode_count": 1
+      }
     },
     {
       "ok": true,
-      "pack_id": "9dd0a7e3457f190f19140db65fdc2e79c341bd12d84daa2d20bada99ebdece78",
-      "title": "Grid · context-on · 前 9 小时控制开销",
+      "pack_id": "50431e7827df714d18c26bba99e0eebcfd9a08025fe08b7dadc03d16b7a70b73",
+      "title": "Grid · context-on · 前 9 小时控制开销 · 请求关联",
       "scope": {
         "goal_id": "benchmark-goal",
         "case_id": "Grid",
@@ -4594,12 +4676,53 @@
       ],
       "job": null,
       "result": null,
-      "applicability": "current"
+      "applicability": "current",
+      "continuation": {
+        "base_analysis_key": "17799648ca9ed556072036467c282a917e91e43bb6e48e0e2cac2c91d0d3ff5f",
+        "base_scope": {
+          "goal_id": "benchmark-goal",
+          "case_id": "Grid",
+          "run_id": "grid-sol-xhigh-stride-context-on-20261104-18h-r10-auth01",
+          "revision": "603a75e5f197a0c2cf2cd575fbdfc168a8c6be7b",
+          "window": "First 9 hours from solver start, native receipt time [start,end), all captured responses."
+        },
+        "current_scope": {
+          "goal_id": "benchmark-goal",
+          "case_id": "Grid",
+          "run_id": "grid-sol-xhigh-stride-context-on-20261104-18h-r10-auth01",
+          "revision": "603a75e5f197a0c2cf2cd575fbdfc168a8c6be7b",
+          "window": "First 9 hours from solver start, native receipt time [start,end), all captured responses."
+        },
+        "sources": {
+          "added": [],
+          "revised": [],
+          "removed": []
+        },
+        "episodes": {
+          "added": [],
+          "revised": [],
+          "removed": []
+        },
+        "can_reuse": false,
+        "configuration_changed": false,
+        "objective_changed": false,
+        "reassessed_episode_ids": [
+          "observed-control"
+        ],
+        "new_pair_count": 0,
+        "removed_pair_count": 0,
+        "compared_pair_count": null,
+        "verdict_changes": [],
+        "base_pack_id": "c3e4fb9bfd4f00360d96ba06f0a606d86ee0caa30ec4778144d7fb9cd5f8a469",
+        "base_title": "Grid · context-on · 前 9 小时控制开销",
+        "base_available": false,
+        "base_episode_count": 1
+      }
     },
     {
       "ok": true,
-      "pack_id": "0879d189427e61688e2ff28b0ffd5949f149f62f2297a2f39ca3cc5335bcb709",
-      "title": "Grid · context-off · 前 9 小时控制开销",
+      "pack_id": "03d6ae56a332acc6496683268124ed41cd9c7746d404ddb6729874ab4d7bdd4a",
+      "title": "Grid · context-off · 前 9 小时控制开销 · 请求关联",
       "scope": {
         "goal_id": "benchmark-goal",
         "case_id": "Grid",
@@ -5117,12 +5240,53 @@
       ],
       "job": null,
       "result": null,
-      "applicability": "current"
+      "applicability": "current",
+      "continuation": {
+        "base_analysis_key": "7418b7d7b9adad1a9d68e08a79973874a73151e6408a6913010f4c78fe71826e",
+        "base_scope": {
+          "goal_id": "benchmark-goal",
+          "case_id": "Grid",
+          "run_id": "grid-sol-xhigh-stride-context-off-20261104-18h-r10-auth01",
+          "revision": "603a75e5f197a0c2cf2cd575fbdfc168a8c6be7b",
+          "window": "First 9 hours from solver start, native receipt time [start,end), all captured responses."
+        },
+        "current_scope": {
+          "goal_id": "benchmark-goal",
+          "case_id": "Grid",
+          "run_id": "grid-sol-xhigh-stride-context-off-20261104-18h-r10-auth01",
+          "revision": "603a75e5f197a0c2cf2cd575fbdfc168a8c6be7b",
+          "window": "First 9 hours from solver start, native receipt time [start,end), all captured responses."
+        },
+        "sources": {
+          "added": [],
+          "revised": [],
+          "removed": []
+        },
+        "episodes": {
+          "added": [],
+          "revised": [],
+          "removed": []
+        },
+        "can_reuse": false,
+        "configuration_changed": false,
+        "objective_changed": false,
+        "reassessed_episode_ids": [
+          "observed-control"
+        ],
+        "new_pair_count": 0,
+        "removed_pair_count": 0,
+        "compared_pair_count": null,
+        "verdict_changes": [],
+        "base_pack_id": "e36bf9c8c69f798822272755892ce040bf425fd248a1c241db4b2515265a2c87",
+        "base_title": "Grid · context-off · 前 9 小时控制开销",
+        "base_available": false,
+        "base_episode_count": 1
+      }
     }
   ],
   "readback_identities": {
     "original": {
-      "691b0e483bdfb23ba3076ee69053008662de2bc04bee6c18f8af657c95704f71": {
+      "b62f232a035b5e4a2638d6d263d19c6d9855714152182ff6c529e8080a09a0eb": {
         "analysis_key": "0172207e4029bbe2df136fd0baa500d0dba8e388038056f33e370f8e8ae724f7",
         "method_version": "research-episodes-synthesis-v2",
         "config": {
@@ -5137,7 +5301,7 @@
         "reason_code": null,
         "applicability": "current"
       },
-      "7402d72472caa8c3f956643ceeead684691a36d3ae5f0d7438cfb11b838a841f": {
+      "7da33d179fdfecbeed503422e375beaae2f26972d3f510dec2a4681a14b85397": {
         "analysis_key": "2e3a1001ffa8e893a0a77b08f12dd5e487b4ea31bf4ba253c7c045134e085483",
         "method_version": "research-episodes-synthesis-v2",
         "config": {
@@ -5152,7 +5316,7 @@
         "reason_code": null,
         "applicability": "current"
       },
-      "9dd0a7e3457f190f19140db65fdc2e79c341bd12d84daa2d20bada99ebdece78": {
+      "50431e7827df714d18c26bba99e0eebcfd9a08025fe08b7dadc03d16b7a70b73": {
         "analysis_key": "17799648ca9ed556072036467c282a917e91e43bb6e48e0e2cac2c91d0d3ff5f",
         "method_version": "research-episodes-synthesis-v2",
         "config": {
@@ -5167,7 +5331,7 @@
         "reason_code": null,
         "applicability": "current"
       },
-      "0879d189427e61688e2ff28b0ffd5949f149f62f2297a2f39ca3cc5335bcb709": {
+      "03d6ae56a332acc6496683268124ed41cd9c7746d404ddb6729874ab4d7bdd4a": {
         "analysis_key": "7418b7d7b9adad1a9d68e08a79973874a73151e6408a6913010f4c78fe71826e",
         "method_version": "research-episodes-synthesis-v2",
         "config": {
@@ -5184,7 +5348,7 @@
       }
     },
     "zh": {
-      "691b0e483bdfb23ba3076ee69053008662de2bc04bee6c18f8af657c95704f71": {
+      "b62f232a035b5e4a2638d6d263d19c6d9855714152182ff6c529e8080a09a0eb": {
         "analysis_key": "dc82b17cbc9f0032414998510e322cbdbd00f36dfcbc59e6f51fc0c4d1a3b61c",
         "method_version": "research-episodes-synthesis-v2",
         "config": {
@@ -5200,7 +5364,7 @@
         "reason_code": null,
         "applicability": "current"
       },
-      "7402d72472caa8c3f956643ceeead684691a36d3ae5f0d7438cfb11b838a841f": {
+      "7da33d179fdfecbeed503422e375beaae2f26972d3f510dec2a4681a14b85397": {
         "analysis_key": "10819e336b9fd9cd0fcd7db5897caa2d2586c766f918df412218b6c231c5240f",
         "method_version": "research-episodes-synthesis-v2",
         "config": {
@@ -5216,7 +5380,7 @@
         "reason_code": null,
         "applicability": "current"
       },
-      "9dd0a7e3457f190f19140db65fdc2e79c341bd12d84daa2d20bada99ebdece78": {
+      "50431e7827df714d18c26bba99e0eebcfd9a08025fe08b7dadc03d16b7a70b73": {
         "analysis_key": "4392e2af58152e176f9849a5bc4cdbbfb11ff12fa5a146f4dd4f3c6d8788708a",
         "method_version": "research-episodes-synthesis-v2",
         "config": {
@@ -5232,7 +5396,7 @@
         "reason_code": null,
         "applicability": "current"
       },
-      "0879d189427e61688e2ff28b0ffd5949f149f62f2297a2f39ca3cc5335bcb709": {
+      "03d6ae56a332acc6496683268124ed41cd9c7746d404ddb6729874ab4d7bdd4a": {
         "analysis_key": "e30ecaab927a3bca4fb3e2c42c1f444907022e14a0f8b078d058835a212b7391",
         "method_version": "research-episodes-synthesis-v2",
         "config": {
@@ -5250,7 +5414,7 @@
       }
     },
     "en": {
-      "691b0e483bdfb23ba3076ee69053008662de2bc04bee6c18f8af657c95704f71": {
+      "b62f232a035b5e4a2638d6d263d19c6d9855714152182ff6c529e8080a09a0eb": {
         "analysis_key": "e8163948fa0876d8a9be623c2d7a9de1c81785745b016f3b86281d90b28de486",
         "method_version": "research-episodes-synthesis-v2",
         "config": {
@@ -5266,7 +5430,7 @@
         "reason_code": null,
         "applicability": "current"
       },
-      "7402d72472caa8c3f956643ceeead684691a36d3ae5f0d7438cfb11b838a841f": {
+      "7da33d179fdfecbeed503422e375beaae2f26972d3f510dec2a4681a14b85397": {
         "analysis_key": "f91b908be05fe07f96dac887ae6fd53438c61e76af2f5d6bb199fa2cd20fb500",
         "method_version": "research-episodes-synthesis-v2",
         "config": {
@@ -5282,7 +5446,7 @@
         "reason_code": null,
         "applicability": "current"
       },
-      "9dd0a7e3457f190f19140db65fdc2e79c341bd12d84daa2d20bada99ebdece78": {
+      "50431e7827df714d18c26bba99e0eebcfd9a08025fe08b7dadc03d16b7a70b73": {
         "analysis_key": "3c80c648fed4881d30820900fab4cc34ab052d99dccc7d6d0505cf99eb60dbd7",
         "method_version": "research-episodes-synthesis-v2",
         "config": {
@@ -5298,7 +5462,7 @@
         "reason_code": null,
         "applicability": "current"
       },
-      "0879d189427e61688e2ff28b0ffd5949f149f62f2297a2f39ca3cc5335bcb709": {
+      "03d6ae56a332acc6496683268124ed41cd9c7746d404ddb6729874ab4d7bdd4a": {
         "analysis_key": "551bfe777e1c9da60a6a384daf0792e9d19c335a68b8e3e8508a31c3a20f1a18",
         "method_version": "research-episodes-synthesis-v2",
         "config": {
@@ -5317,17 +5481,17 @@
     }
   },
   "owner_goal_id": "edgebench-research-20261004",
-  "default_pack_id": "0879d189427e61688e2ff28b0ffd5949f149f62f2297a2f39ca3cc5335bcb709",
+  "default_pack_id": "03d6ae56a332acc6496683268124ed41cd9c7746d404ddb6729874ab4d7bdd4a",
   "comparisons": {
-    "691b0e483bdfb23ba3076ee69053008662de2bc04bee6c18f8af657c95704f71:7402d72472caa8c3f956643ceeead684691a36d3ae5f0d7438cfb11b838a841f": {
+    "b62f232a035b5e4a2638d6d263d19c6d9855714152182ff6c529e8080a09a0eb:7da33d179fdfecbeed503422e375beaae2f26972d3f510dec2a4681a14b85397": {
       "ok": true,
       "comparison": {
         "method": "trajectory_usage_comparison_v1",
         "status": "observed",
         "qualification": "descriptive_only",
         "left": {
-          "pack_id": "691b0e483bdfb23ba3076ee69053008662de2bc04bee6c18f8af657c95704f71",
-          "title": "Codec · context-on · 前 9 小时控制开销",
+          "pack_id": "b62f232a035b5e4a2638d6d263d19c6d9855714152182ff6c529e8080a09a0eb",
+          "title": "Codec · context-on · 前 9 小时控制开销 · 请求关联",
           "total": {
             "input": 184098417,
             "cached": 180875264,
@@ -5376,8 +5540,8 @@
           }
         },
         "right": {
-          "pack_id": "7402d72472caa8c3f956643ceeead684691a36d3ae5f0d7438cfb11b838a841f",
-          "title": "Codec · context-off · 前 9 小时控制开销",
+          "pack_id": "7da33d179fdfecbeed503422e375beaae2f26972d3f510dec2a4681a14b85397",
+          "title": "Codec · context-off · 前 9 小时控制开销 · 请求关联",
           "total": {
             "input": 95917713,
             "cached": 94701952,
@@ -5433,10 +5597,11 @@
           "input_tokens": null,
           "input_percentage_points": null,
           "command_input": 4796570,
-          "command_percentage_points": -0.1718845900336559,
           "command_cached": 3388032,
           "command_uncached": 1408538,
-          "command_output": 4699
+          "command_output": 4699,
+          "command_percentage_points": -0.1718845900336559,
+          "command_uncached_percentage_points": 39.01105566635043
         },
         "input_share_down_absolute_up": null,
         "command_share_down_absolute_up": true,
@@ -5444,7 +5609,7 @@
         "command_method_comparable": true
       }
     },
-    "691b0e483bdfb23ba3076ee69053008662de2bc04bee6c18f8af657c95704f71:9dd0a7e3457f190f19140db65fdc2e79c341bd12d84daa2d20bada99ebdece78": {
+    "b62f232a035b5e4a2638d6d263d19c6d9855714152182ff6c529e8080a09a0eb:50431e7827df714d18c26bba99e0eebcfd9a08025fe08b7dadc03d16b7a70b73": {
       "ok": true,
       "comparison": {
         "method": "trajectory_usage_comparison_v1",
@@ -5452,7 +5617,7 @@
         "reason": "capture_scope_mismatch"
       }
     },
-    "691b0e483bdfb23ba3076ee69053008662de2bc04bee6c18f8af657c95704f71:0879d189427e61688e2ff28b0ffd5949f149f62f2297a2f39ca3cc5335bcb709": {
+    "b62f232a035b5e4a2638d6d263d19c6d9855714152182ff6c529e8080a09a0eb:03d6ae56a332acc6496683268124ed41cd9c7746d404ddb6729874ab4d7bdd4a": {
       "ok": true,
       "comparison": {
         "method": "trajectory_usage_comparison_v1",
@@ -5460,15 +5625,15 @@
         "reason": "capture_scope_mismatch"
       }
     },
-    "7402d72472caa8c3f956643ceeead684691a36d3ae5f0d7438cfb11b838a841f:691b0e483bdfb23ba3076ee69053008662de2bc04bee6c18f8af657c95704f71": {
+    "7da33d179fdfecbeed503422e375beaae2f26972d3f510dec2a4681a14b85397:b62f232a035b5e4a2638d6d263d19c6d9855714152182ff6c529e8080a09a0eb": {
       "ok": true,
       "comparison": {
         "method": "trajectory_usage_comparison_v1",
         "status": "observed",
         "qualification": "descriptive_only",
         "left": {
-          "pack_id": "7402d72472caa8c3f956643ceeead684691a36d3ae5f0d7438cfb11b838a841f",
-          "title": "Codec · context-off · 前 9 小时控制开销",
+          "pack_id": "7da33d179fdfecbeed503422e375beaae2f26972d3f510dec2a4681a14b85397",
+          "title": "Codec · context-off · 前 9 小时控制开销 · 请求关联",
           "total": {
             "input": 95917713,
             "cached": 94701952,
@@ -5517,8 +5682,8 @@
           }
         },
         "right": {
-          "pack_id": "691b0e483bdfb23ba3076ee69053008662de2bc04bee6c18f8af657c95704f71",
-          "title": "Codec · context-on · 前 9 小时控制开销",
+          "pack_id": "b62f232a035b5e4a2638d6d263d19c6d9855714152182ff6c529e8080a09a0eb",
+          "title": "Codec · context-on · 前 9 小时控制开销 · 请求关联",
           "total": {
             "input": 184098417,
             "cached": 180875264,
@@ -5574,10 +5739,11 @@
           "input_tokens": null,
           "input_percentage_points": null,
           "command_input": -4796570,
-          "command_percentage_points": 0.1718845900336559,
           "command_cached": -3388032,
           "command_uncached": -1408538,
-          "command_output": -4699
+          "command_output": -4699,
+          "command_percentage_points": 0.1718845900336559,
+          "command_uncached_percentage_points": -39.01105566635043
         },
         "input_share_down_absolute_up": null,
         "command_share_down_absolute_up": false,
@@ -5585,7 +5751,7 @@
         "command_method_comparable": true
       }
     },
-    "7402d72472caa8c3f956643ceeead684691a36d3ae5f0d7438cfb11b838a841f:9dd0a7e3457f190f19140db65fdc2e79c341bd12d84daa2d20bada99ebdece78": {
+    "7da33d179fdfecbeed503422e375beaae2f26972d3f510dec2a4681a14b85397:50431e7827df714d18c26bba99e0eebcfd9a08025fe08b7dadc03d16b7a70b73": {
       "ok": true,
       "comparison": {
         "method": "trajectory_usage_comparison_v1",
@@ -5593,7 +5759,7 @@
         "reason": "capture_scope_mismatch"
       }
     },
-    "7402d72472caa8c3f956643ceeead684691a36d3ae5f0d7438cfb11b838a841f:0879d189427e61688e2ff28b0ffd5949f149f62f2297a2f39ca3cc5335bcb709": {
+    "7da33d179fdfecbeed503422e375beaae2f26972d3f510dec2a4681a14b85397:03d6ae56a332acc6496683268124ed41cd9c7746d404ddb6729874ab4d7bdd4a": {
       "ok": true,
       "comparison": {
         "method": "trajectory_usage_comparison_v1",
@@ -5601,7 +5767,7 @@
         "reason": "capture_scope_mismatch"
       }
     },
-    "9dd0a7e3457f190f19140db65fdc2e79c341bd12d84daa2d20bada99ebdece78:691b0e483bdfb23ba3076ee69053008662de2bc04bee6c18f8af657c95704f71": {
+    "50431e7827df714d18c26bba99e0eebcfd9a08025fe08b7dadc03d16b7a70b73:b62f232a035b5e4a2638d6d263d19c6d9855714152182ff6c529e8080a09a0eb": {
       "ok": true,
       "comparison": {
         "method": "trajectory_usage_comparison_v1",
@@ -5609,7 +5775,7 @@
         "reason": "capture_scope_mismatch"
       }
     },
-    "9dd0a7e3457f190f19140db65fdc2e79c341bd12d84daa2d20bada99ebdece78:7402d72472caa8c3f956643ceeead684691a36d3ae5f0d7438cfb11b838a841f": {
+    "50431e7827df714d18c26bba99e0eebcfd9a08025fe08b7dadc03d16b7a70b73:7da33d179fdfecbeed503422e375beaae2f26972d3f510dec2a4681a14b85397": {
       "ok": true,
       "comparison": {
         "method": "trajectory_usage_comparison_v1",
@@ -5617,15 +5783,15 @@
         "reason": "capture_scope_mismatch"
       }
     },
-    "9dd0a7e3457f190f19140db65fdc2e79c341bd12d84daa2d20bada99ebdece78:0879d189427e61688e2ff28b0ffd5949f149f62f2297a2f39ca3cc5335bcb709": {
+    "50431e7827df714d18c26bba99e0eebcfd9a08025fe08b7dadc03d16b7a70b73:03d6ae56a332acc6496683268124ed41cd9c7746d404ddb6729874ab4d7bdd4a": {
       "ok": true,
       "comparison": {
         "method": "trajectory_usage_comparison_v1",
         "status": "observed",
         "qualification": "descriptive_only",
         "left": {
-          "pack_id": "9dd0a7e3457f190f19140db65fdc2e79c341bd12d84daa2d20bada99ebdece78",
-          "title": "Grid · context-on · 前 9 小时控制开销",
+          "pack_id": "50431e7827df714d18c26bba99e0eebcfd9a08025fe08b7dadc03d16b7a70b73",
+          "title": "Grid · context-on · 前 9 小时控制开销 · 请求关联",
           "total": {
             "input": 142056707,
             "cached": 140057984,
@@ -5674,8 +5840,8 @@
           }
         },
         "right": {
-          "pack_id": "0879d189427e61688e2ff28b0ffd5949f149f62f2297a2f39ca3cc5335bcb709",
-          "title": "Grid · context-off · 前 9 小时控制开销",
+          "pack_id": "03d6ae56a332acc6496683268124ed41cd9c7746d404ddb6729874ab4d7bdd4a",
+          "title": "Grid · context-off · 前 9 小时控制开销 · 请求关联",
           "total": {
             "input": 162277188,
             "cached": 160540672,
@@ -5731,10 +5897,11 @@
           "input_tokens": null,
           "input_percentage_points": null,
           "command_input": 10385582,
-          "command_percentage_points": 7.34362753891773,
           "command_cached": 9950208,
           "command_uncached": 435374,
-          "command_output": 32218
+          "command_output": 32218,
+          "command_percentage_points": 7.34362753891773,
+          "command_uncached_percentage_points": 21.69406044164581
         },
         "input_share_down_absolute_up": null,
         "command_share_down_absolute_up": false,
@@ -5742,7 +5909,7 @@
         "command_method_comparable": true
       }
     },
-    "0879d189427e61688e2ff28b0ffd5949f149f62f2297a2f39ca3cc5335bcb709:691b0e483bdfb23ba3076ee69053008662de2bc04bee6c18f8af657c95704f71": {
+    "03d6ae56a332acc6496683268124ed41cd9c7746d404ddb6729874ab4d7bdd4a:b62f232a035b5e4a2638d6d263d19c6d9855714152182ff6c529e8080a09a0eb": {
       "ok": true,
       "comparison": {
         "method": "trajectory_usage_comparison_v1",
@@ -5750,7 +5917,7 @@
         "reason": "capture_scope_mismatch"
       }
     },
-    "0879d189427e61688e2ff28b0ffd5949f149f62f2297a2f39ca3cc5335bcb709:7402d72472caa8c3f956643ceeead684691a36d3ae5f0d7438cfb11b838a841f": {
+    "03d6ae56a332acc6496683268124ed41cd9c7746d404ddb6729874ab4d7bdd4a:7da33d179fdfecbeed503422e375beaae2f26972d3f510dec2a4681a14b85397": {
       "ok": true,
       "comparison": {
         "method": "trajectory_usage_comparison_v1",
@@ -5758,15 +5925,15 @@
         "reason": "capture_scope_mismatch"
       }
     },
-    "0879d189427e61688e2ff28b0ffd5949f149f62f2297a2f39ca3cc5335bcb709:9dd0a7e3457f190f19140db65fdc2e79c341bd12d84daa2d20bada99ebdece78": {
+    "03d6ae56a332acc6496683268124ed41cd9c7746d404ddb6729874ab4d7bdd4a:50431e7827df714d18c26bba99e0eebcfd9a08025fe08b7dadc03d16b7a70b73": {
       "ok": true,
       "comparison": {
         "method": "trajectory_usage_comparison_v1",
         "status": "observed",
         "qualification": "descriptive_only",
         "left": {
-          "pack_id": "0879d189427e61688e2ff28b0ffd5949f149f62f2297a2f39ca3cc5335bcb709",
-          "title": "Grid · context-off · 前 9 小时控制开销",
+          "pack_id": "03d6ae56a332acc6496683268124ed41cd9c7746d404ddb6729874ab4d7bdd4a",
+          "title": "Grid · context-off · 前 9 小时控制开销 · 请求关联",
           "total": {
             "input": 162277188,
             "cached": 160540672,
@@ -5815,8 +5982,8 @@
           }
         },
         "right": {
-          "pack_id": "9dd0a7e3457f190f19140db65fdc2e79c341bd12d84daa2d20bada99ebdece78",
-          "title": "Grid · context-on · 前 9 小时控制开销",
+          "pack_id": "50431e7827df714d18c26bba99e0eebcfd9a08025fe08b7dadc03d16b7a70b73",
+          "title": "Grid · context-on · 前 9 小时控制开销 · 请求关联",
           "total": {
             "input": 142056707,
             "cached": 140057984,
@@ -5872,10 +6039,11 @@
           "input_tokens": null,
           "input_percentage_points": null,
           "command_input": -10385582,
-          "command_percentage_points": -7.34362753891773,
           "command_cached": -9950208,
           "command_uncached": -435374,
-          "command_output": -32218
+          "command_output": -32218,
+          "command_percentage_points": -7.34362753891773,
+          "command_uncached_percentage_points": -21.69406044164581
         },
         "input_share_down_absolute_up": null,
         "command_share_down_absolute_up": false,

@@ -19,6 +19,7 @@ from loopx.control_plane.testing.model_tool_behavior import (
     ScriptedExecToolAction,
 )
 from loopx.control_plane.testing.terminal_settlement_tool_behavior import (
+    TERMINAL_SETTLEMENT_TOOL_BEHAVIOR_MAX_CALLS,
     TERMINAL_SETTLEMENT_FIXTURE_TODO_ID,
     DoubaoTerminalSettlementToolBehaviorActor,
     _build_fixture,
@@ -130,6 +131,12 @@ def _reentry_quota_action(request: Mapping[str, Any]) -> ScriptedExecToolAction:
     return ScriptedExecToolAction(command=command)
 
 
+def _reentry_quota_read(request: Mapping[str, Any]) -> ScriptedExecToolAction:
+    quota = json.loads(request["messages"][-1]["content"])
+    assert quota["schema_version"] == "context_capture_navigation_v1"
+    return ScriptedExecToolAction(command=quota["recovery"]["command"] + " --select /should_run")
+
+
 @pytest.mark.parametrize("cat_options", ["", "-- "])
 @pytest.mark.parametrize("batch_read", [False, True])
 @pytest.mark.parametrize("ordinary_completion", [False, True])
@@ -182,6 +189,7 @@ def test_real_tool_loop_settles_final_todo_after_spend(
         "terminal_closeout",
     ]
     assert receipt["terminal_order_observed"] is True
+    assert receipt["tool_call_limit"] == TERMINAL_SETTLEMENT_TOOL_BEHAVIOR_MAX_CALLS
     assert receipt["selected_todo_id"] == TERMINAL_SETTLEMENT_FIXTURE_TODO_ID
     assert receipt["decision"] == "execute"
     assert receipt["boundary"] == {
@@ -202,6 +210,8 @@ def test_real_tool_loop_settles_final_todo_after_spend(
     assert "the host validates that tool result" in system_prompt
     assert "validation step's command_condition" in system_prompt
     assert "distinct from the final --no-follow-up closeout after spend" in system_prompt
+    assert "run it before authoring any durable_writeback input" in system_prompt
+    assert "one tool call under the shell's existing `.scratch/` directory" in system_prompt
     assert "A receipt without command templates does not replace that plan" in system_prompt
     assert first["messages"][1] == {"role": "user", "content": fixture.task_body}
     assert TERMINAL_SETTLEMENT_FIXTURE_TODO_ID not in fixture.task_body
@@ -772,14 +782,20 @@ def test_batch_read_failure_cannot_admit_terminal_writeback(
     assert len(transport.requests) == 2
 
 
+@pytest.mark.parametrize("progressive", [False, True])
 def test_real_rejection_loop_settles_projected_todos_then_stops(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, progressive: bool,
 ) -> None:
+    if progressive:
+        monkeypatch.delenv("LOOPX_CONTEXT_DELIVERY", raising=False)
+    else:
+        monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", "off")
     transport = ScriptedDoubaoExecTransport(
         [
             _reentry_todo_action(0),
             _reentry_todo_action(1),
             _reentry_quota_action,
+            *([_reentry_quota_read] if progressive else []),
             ScriptedAssistantAction(content="Terminal lifecycle is settled."),
         ]
     )
@@ -794,8 +810,8 @@ def test_real_rejection_loop_settles_projected_todos_then_stops(
 
     assert receipt["qualification_passed"] is True, json.dumps(receipt, sort_keys=True)
     assert receipt["failure_code"] is None
-    assert receipt["provider_call_count"] == 4
-    assert receipt["tool_call_count"] == 3
+    assert receipt["provider_call_count"] == 4 + progressive
+    assert receipt["tool_call_count"] == 3 + progressive
     assert receipt["projected_todo_count"] == 2
     assert receipt["settled_todo_count"] == 2
     assert receipt["completion_identity_preserved"] is True
@@ -805,6 +821,7 @@ def test_real_rejection_loop_settles_projected_todos_then_stops(
         "todo_lifecycle_settlement",
         "todo_lifecycle_settlement",
         "terminal_quota_reentry",
+        *(["context_read"] if progressive else []),
     ]
     transition = _latest_reentry_transition(transport.requests[0])
     assert len(transition["triggers"]) == 2

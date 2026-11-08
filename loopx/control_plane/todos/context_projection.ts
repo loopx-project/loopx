@@ -24,6 +24,19 @@ const CONTEXT_FIELDS = [
 
 /** Select before redaction; never convert nested scopes or booleans to prose. */
 export function projectTodoContextPage(input: JsonObject): JsonObject {
+  if (input.summary_display_views !== undefined) {
+    if (Object.keys(input).length !== 1) throw new EffectRuntimeRequestError("summary display views cannot be combined with other views");
+    const source = requireJsonObject(input.summary_display_views, "summary display views");
+    if (Object.keys(source).some(key => key !== "source" && key !== "handoff_gates")) {
+      throw new EffectRuntimeRequestError("invalid summary display views fields");
+    }
+    requireJsonObject(source.source, "summary source");
+    return {
+      summary: projectTodoSummaryDisplay(source),
+      planning: projectTodoSummaryDisplay({source: source.source, include_terminal: false}),
+      terminal: projectTodoSummaryDisplay({source: source.source, include_terminal: true}),
+    };
+  }
   if (input.summary_display !== undefined) {
     if (Object.keys(input).length !== 1) throw new EffectRuntimeRequestError("summary display cannot be combined with other views");
     return {items: projectTodoSummaryDisplay(requireJsonObject(input.summary_display, "summary display"))};
@@ -188,14 +201,14 @@ const SUMMARY_FIELDS = [
   "route_key", "completed_at", "updated_at", "completion_turn_key", "superseded_by", "handoff_note",
 ];
 
-const SUMMARY_SOURCES = [
+export const SUMMARY_SOURCES = [
   "active_next_action_items", "active_next_action_executable_items", "first_open_items", "backlog_items", "unclaimed_priority_open_items",
   "claimed_open_items", "claimed_advancement_open_items", "claimed_monitor_open_items", "monitor_open_items", "current_agent_claimed_open_items",
   "current_agent_claimed_advancement_items", "current_agent_claimed_monitor_items", "blocker_items", "resume_blocked_items", "monitor_blocked_resume_candidates",
   "current_agent_monitor_blocked_resume_candidates", "unclaimed_monitor_blocked_resume_candidates", "items",
 ];
 
-const PLANNING_SOURCES = ["items", "deferred_items", "blocker_items", "monitor_open_items"];
+export const PLANNING_SOURCES = ["items", "deferred_items", "blocker_items", "monitor_open_items"];
 
 function compactSummaryRecord(item: JsonObject, body: unknown): JsonObject {
   const row: JsonObject = {index: item.index ?? null, text: body};

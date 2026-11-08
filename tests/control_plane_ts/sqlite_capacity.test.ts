@@ -6,11 +6,45 @@ import {tmpdir} from "node:os";
 import {performance} from "node:perf_hooks";
 import {fileURLToPath} from "node:url";
 import test from "node:test";
-import {capacityLedger, latency, sameCapacityScan, type CapacityAxis} from "../../examples/coordination/sqlite-capacity-report.ts";
+import {capacityLedger, latency, sameCapacityScan, splitShellCommand,
+  type CapacityAxis} from "../../examples/coordination/sqlite-capacity-report.ts";
 
 test("latency has explicit nearest-rank tails and rejects absent or invalid samples", () => {
   assert.deepEqual(latency([5, 1, 4, 2, 3]), {n: 5, p50_ms: 3, p95_ms: 5, p99_ms: 5});
   for (const samples of [[], [NaN], [Infinity], [-1]]) assert.throws(() => latency(samples));
+});
+
+test("reader commands split exactly as shlex.join quotes them", () => {
+  assert.deepEqual(splitShellCommand("python3 -m loopx.cli --format json quota context-read --offset 0"),
+    ["python3", "-m", "loopx.cli", "--format", "json", "quota", "context-read", "--offset", "0"]);
+  // shlex.join single-quotes a path containing spaces: it stays one argument.
+  assert.deepEqual(splitShellCommand(
+    `python3 -m loopx.cli quota context-read --reference-file '${"/tmp/space dir/capacity.reader.json"}' --offset 0`),
+    ["python3", "-m", "loopx.cli", "quota", "context-read", "--reference-file",
+      "/tmp/space dir/capacity.reader.json", "--offset", "0"]);
+  // An apostrophe inside the path uses the POSIX '"'"' escape sequence.
+  assert.deepEqual(splitShellCommand(
+    `python3 -m loopx.cli quota context-read --reference-file '/tmp/loop'"'"'x y/capacity.reader.json' --offset 0`),
+    ["python3", "-m", "loopx.cli", "quota", "context-read", "--reference-file",
+      "/tmp/loop'x y/capacity.reader.json", "--offset", "0"]);
+  // Double-quoted arguments and escaped quotes inside them survive too.
+  assert.deepEqual(splitShellCommand(`python3 "a b" "say \\"hi\\"" c`), ["python3", "a b", 'say "hi"', "c"]);
+  // A mis-quoted command fails loudly instead of splitting a reference path.
+  assert.throws(() => splitShellCommand("python3 --reference-file '/tmp/space dir/x"));
+});
+
+test("cleanup is anchored to observed runtime exit and keeps the first failure", async () => {
+  // The stop lives in the runner script itself: a shutdown receipt alone let
+  // the retiring runtime's delayed lock mkdir recreate the axis directories
+  // after cleanup_verified was recorded. The stop must reuse the disposable
+  // owner's observed-exit interface, check its result, and never let a stop
+  // failure overwrite the first recorded measurement error.
+  const source = await readFile(
+    fileURLToPath(new URL("../../examples/coordination/sqlite-capacity.ts", import.meta.url)), "utf8");
+  assert.match(source, /restart_effect_runtime\(wait_for_exit=True\)/);
+  assert.doesNotMatch(source, /runtime\.shutdown/);
+  assert.match(source, /\.stopped, true,\s*\n?\s*"isolated Effect runtime did not exit before cleanup"/);
+  assert.match(source, /if \(!axis\.failure\) axis\.failure = "isolated_runtime_cleanup_failed"/);
 });
 
 function axis(count: number, payloadBytes = 65536): CapacityAxis {

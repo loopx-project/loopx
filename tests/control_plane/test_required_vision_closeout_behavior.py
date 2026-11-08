@@ -184,6 +184,10 @@ def test_projected_module_readers_complete_native_shell_closeout(
                for message in transport.requests[-1]["messages"]
                if message["role"] == "tool" and message["content"].startswith("{")]
     assert [value["stage"] for value in outputs if "stage" in value] == ["review", "writeback"]
+    writer = next(value for value in outputs if value.get("stage") == "writeback")
+    assert "agent_vision.stride_decision" in writer["writeback_contract"]["required_fields"]
+    assert "fields" in writer["writeback_contract"]["vision_authoring"]
+    assert "refresh-state" in shlex.split(writer["writeback"]["next_cli_actions"][0])
     packet = _packet(transport.requests[-1])
     reader = packet["autonomous_replan_obligation"]["context_read"]
     assert shlex.split(reader)[1:3] == ["-m", "loopx.entrypoint"]

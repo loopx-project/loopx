@@ -694,7 +694,9 @@ function packet(): JsonObject {
       agent_channel: {delivery_allowed: true, must_attempt: true, work_context: context()},
       cli_channel: {spend_policy: "after_validation", settlement_plan: {identity: {turn: "turn-a"}, ordered_steps: [
         {kind: "validation", owner: "agent", precondition: long, command_template: "validate-a", command_condition: "todo_complete"},
-        {kind: "writeback", owner: "agent", precondition: long, command_template: "writeback-a", optional_attachments: [{capability_id: "explore", guidance: long, required: false}]},
+        {kind: "writeback", owner: "agent", precondition: long, command_template: "writeback-a",
+          optional_attachments: [{capability_id: "explore", guidance: long, required: false,
+            optional_execution_observation_example: {execution_observation: {evidence_refs: "finding"}}}]},
       ]}}}};
 }
 const packetFull = (value: JsonObject, capture_id = "capture-a", surface = "quota_packet") =>
@@ -829,6 +831,8 @@ test("whole packet reuses complete projections; live controls and unknown fields
   ] as [(string | number)[], unknown][]) assert.deepEqual(inline(delta, path), value, JSON.stringify(path));
   const recovered = restoreContextDelivery({delivery: delta, baseline, current: packetFull(current, "capture-b")});
   assert.equal(recovered.mode, "delta"); assert.deepEqual(recovered.context, current);
+  assert.equal(inline(delta, ["interaction_contract", "cli_channel", "settlement_plan", "ordered_steps",
+    1, "optional_attachments", 0, "optional_execution_observation_example"]), undefined);
   assert.ok(JSON.stringify(delta).length < JSON.stringify(current).length / 3);
   assert.equal(inline(delta, ["planning_horizon"]), undefined);
   // A forged wire can reconstruct correctly yet omit an unchanged live gate.

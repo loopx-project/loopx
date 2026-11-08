@@ -9,6 +9,7 @@ import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 import {goalAcceptanceTodoDigest} from "./acceptance_work_basis.ts";
 import {projectRelations, todoRef} from "../work_items/planning_relations.ts";
 import {normalizeTodoResumeWhen, TODO_RESUME_NORMALIZE_REQUEST_SCHEMA_VERSION} from "../todos/resume_condition.ts";
+import {appendTodoExploreReferences} from "../todos/work_requirements.ts";
 
 export const GOAL_OUTCOMES_SCHEMA = "loopx_goal_outcomes_v0";
 export const OUTCOME_CONTEXT_NAVIGATION_SCHEMA = "outcome_context_navigation_v1";
@@ -126,7 +127,7 @@ function outcomeBytes(state: OutcomeState): {declaration: number; review: number
 }
 
 export function refineGoalOutcome(head: JsonObject, goalId: string, goalRef: WireExactGoalRef | null,
-  actor: string | null, value: unknown): OutcomeState {
+  actor: string | null, value: unknown, reviewedWorkUpdate?: unknown): OutcomeState {
   let previous = readState(head, goalId);
   const lifecycle = readGoalAcceptanceLifecycle(head, goalId);
   requireValue(!lifecycle || lifecycle.state === "active" && goalRef && sameExactGoalRef(lifecycle.goal_ref, goalRef), "outcome Goal lifetime is unavailable or changed");
@@ -144,6 +145,8 @@ export function refineGoalOutcome(head: JsonObject, goalId: string, goalRef: Wir
   }
   const patch = canonicalAuthorityObject(value, "outcome refinement");
   keys(patch, ["outcome_id"], ["source", "owner_agent_id", "objective", "requirements", "todo_ids", "review"]);
+  requireValue(reviewedWorkUpdate === undefined || patch.review !== undefined,
+    "a reviewed work update requires a newly authored complete review");
   const outcomeId = id(patch.outcome_id, "outcome id");
   const old = previous?.outcomes.find(o => o.id === outcomeId);
   const owner = id(patch.owner_agent_id === undefined ? old?.owner_agent_id : patch.owner_agent_id, "outcome Agent");
@@ -181,7 +184,24 @@ export function refineGoalOutcome(head: JsonObject, goalId: string, goalRef: Wir
   if (patch.review !== undefined) {
     const items = reviewItems(patch.review);
     requireValue(items.length === outcome.requirements.length && items.every(row => reqs.has(row.id)), "review must address every retained requirement exactly once");
-    outcome.review = {basis_digest: reviewBasis(outcome, todos), items};
+    let reviewedTodos = todos;
+    if (reviewedWorkUpdate !== undefined) {
+      // The host transports only the explicit same-batch additive effect. Hash
+      // its exact prospective work state, never bless a later arbitrary head.
+      // Until the Todo owner commits that effect this review remains stale.
+      const update = canonicalAuthorityObject(reviewedWorkUpdate, "reviewed work update");
+      keys(update, ["todo_id", "append_explore_result_node_refs"]);
+      const todoId = id(update.todo_id, "reviewed Todo id"), todo = todos.get(todoId);
+      requireValue(actor !== null && todo && todo.role === "agent" && todo.claimed_by === actor,
+        "reviewed work must be the caller's Todo");
+      requireValue(Array.isArray(update.append_explore_result_node_refs) && update.append_explore_result_node_refs.length === 1,
+        "reviewed work must name exactly one additive result link");
+      const prospectiveTodo = {...todo, ...appendTodoExploreReferences(todo, update.append_explore_result_node_refs)};
+      // A batch may review another outcome while delivering this Todo's result.
+      // Validate the complete intent first; only linked work enters this basis.
+      if (outcome.todo_ids.includes(todoId)) reviewedTodos = new Map(todos).set(todoId, prospectiveTodo);
+    }
+    outcome.review = {basis_digest: reviewBasis(outcome, reviewedTodos), items};
   }
   // Refinement changes one outcome, not the positions of unrelated requirements
   // in canonical snapshots and their derived full/delta context.
@@ -236,6 +256,19 @@ export function projectGoalOutcomes(head: JsonObject, goalId: string, acceptance
             .filter(field => work.get(key)?.[field] !== undefined).map(field => [field, work.get(key)![field]]))}))}),
       work: o.todo_ids.map(key => ({todo_id: key, status: work.get(key)?.status ?? "missing"}))})),
     execution_authority_granted: false, goal_completion_assessed: false}, acceptance);
+}
+
+/** Structural first-plan readback, not evidence of comprehension or acceptance.
+ * This projection shares the exact canonical declaration/lifetime observation.
+ * Hosts check returned Todo ids against it without inventing semantic criteria. */
+export function outcomePlanningReadback(acceptance: JsonObject, agentId: string): JsonObject {
+  const declaration = acceptance.outcome_requirements as JsonObject | undefined;
+  const current = declaration?.current_lifetime === true;
+  const outcomes = current ? (declaration!.outcomes as JsonObject[])
+    .filter(outcome => outcome.owner_agent_id === agentId) : [];
+  return {agent_id: agentId, declaration_current: current && outcomes.length > 0,
+    outcome_ids: outcomes.map(outcome => outcome.id),
+    linked_todo_ids: [...new Set(outcomes.flatMap(outcome => outcome.todo_ids as string[]))]};
 }
 
 /** Suggest reading order from registered relationships, never reading obligations.
@@ -350,11 +383,15 @@ export function observeOutcomeRequirements(declaration: JsonObject, acceptance: 
   oracleObservations: JsonObject[] = []): JsonObject {
   const current = declaration.current_lifetime === true;
   const allCriteria = (acceptance.criteria ?? []) as JsonObject[], tasks = (acceptance.tasks ?? []) as JsonObject[];
+  const goalScope = (acceptance.scope as JsonObject | undefined)?.kind === "goal";
+  const criteriaForOutcome = (outcomeId: string): JsonObject[] =>
+    acceptance.outcome_id === outcomeId || (acceptance.outcome_id === undefined && !goalScope)
+      ? allCriteria : [];
   const outcomes = (declaration.outcomes as (Outcome & {basis_digest?: string; review_basis_current: boolean; work: {todo_id: string; status: string}[]})[]).map(o => ({...o,
     requirements: o.requirements.map(r => {
-      const criteria = acceptance.outcome_id === undefined || acceptance.outcome_id === o.id ? allCriteria : [];
+      const criteria = criteriaForOutcome(o.id);
       const criterion = criteria.find(c => c.id === r.id && c.description === r.description);
-      const covered = o.todo_ids.length > 0 && o.todo_ids.every(key => tasks.some(t => t.todo_id === key && t.state === "ready" && (t.criterion_ids as string[]).includes(r.id)));
+      const covered = goalScope || o.todo_ids.length > 0 && o.todo_ids.every(key => tasks.some(t => t.todo_id === key && t.state === "ready" && (t.criterion_ids as string[]).includes(r.id)));
       const oracle = criterion?.oracle as JsonObject | undefined;
       const receipt = acceptance.verification as JsonObject | null | undefined;
       const ownResult = (receipt?.results as JsonObject[] | undefined)?.find(result => result.criterion_id === r.id);
@@ -372,8 +409,8 @@ export function observeOutcomeRequirements(declaration: JsonObject, acceptance: 
   const uncovered = current ? outcomes.flatMap(outcome => {
     const unmet = outcome.requirements.filter(r => !r.planning_satisfied).map(r => r.id);
     if (!unmet.length || outcome.work.some(w => !["done", "missing"].includes(String(w.status)))) return [];
-    const criteria = acceptance.outcome_id === undefined || acceptance.outcome_id === outcome.id ? allCriteria
-      .filter(criterion => outcome.requirements.some(requirement => requirement.id === criterion.id)) : [];
+    const criteria = criteriaForOutcome(outcome.id)
+      .filter(criterion => outcome.requirements.some(requirement => requirement.id === criterion.id));
     const receipt = acceptance.verification as JsonObject | null | undefined;
     const basis = {outcome_id: outcome.id, basis_digest: outcome.basis_digest ?? null, work: outcome.work,
       requirements: outcome.requirements.map(({id, status, planning_satisfied, agent_review}) => ({id, status, planning_satisfied,

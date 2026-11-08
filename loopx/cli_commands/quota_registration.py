@@ -239,7 +239,7 @@ def register_quota_command(
              "context-config renders native configuration for the exact Goal/Agent; no host configuration, trust, guard or spend are changed.")
     quota_parser.add_argument("--capture-sha256", help="For context-read/context-project: exact SHA-256 supplied with the capture reference.")
     quota_parser.add_argument("--initial-read", action="store_true",
-        help="For JSON context-read or enabled native context-project: read current controls, task text and source navigation from a recognized capture. "
+        help="For JSON context-read or enabled context-project: read current controls, task text and source navigation from a recognized capture. "
              "Detailed criteria and operation contracts remain required before dependent work. Start at offset zero; follow next_command for continuation.")
     quota_parser.add_argument("--select", action="append",
         help="For context-read or enabled native JSON context-project: repeat an exact RFC 6901 JSON pointer to read a batch from the original capture. "
@@ -254,11 +254,14 @@ def register_quota_command(
         help="For selected context-read continuations: exact derived-view digest from the preceding page.")
     quota_parser.add_argument("--offset", type=int, default=0, help="For context-read: byte offset returned by the previous page.")
     quota_parser.add_argument("--page-bytes", type=int,
-        help="For context-read: maximum UTF-8 content bytes per page (JSON default: 64000 under a 64000-byte stdout budget; Markdown: 4096). "
+        help="For context-read or an attached native JSON context-project page: maximum UTF-8 content bytes per page. "
+             "The ordinary reader defaults to 64000 in JSON and 4096 in Markdown. "
+             "The serialized stdout limit includes JSON framing and navigation. "
              "Larger pages require a sufficient --max-page-output-bytes within the capture limit; "
              "use only with known sufficient direct and retained-history output budgets.")
     quota_parser.add_argument("--max-page-output-bytes", type=int,
-        help="For JSON context-read, enabled native should-run/context-project, or Turn-bound JSON spend-slot: optional positive output byte limit. "
+        help="For JSON context-read, native should-run/context-project, progressive context-project --initial-read, "
+             "or Turn-bound JSON spend-slot: optional positive output byte limit. "
              "Reader pages shrink at UTF-8 boundaries; oversized settlement diagnostics remain complete in a private immutable result with reader references. "
              "An insufficient metadata budget returns an error; this option does not enable native context continuity.")
     quota_parser.add_argument(

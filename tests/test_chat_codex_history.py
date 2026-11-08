@@ -234,7 +234,8 @@ def test_completed_work_readback_requires_stable_correlated_settled_inventory(fa
 
 @pytest.mark.parametrize("fault", [None, "unknown-later", "live", "live-effect", "foreign", "duplicate",
     "moving-items", "moving-turns", "untyped", "unknown-item", "no-final"])
-def test_completed_result_review_reads_evidence_without_proving_replay_safety(fault):
+@pytest.mark.parametrize("allow_untyped", [False, True])
+def test_completed_result_review_reads_evidence_without_proving_replay_safety(fault, allow_untyped):
     from loopx.chat import CHAT_REVIEW_OPEN_TAG, CHAT_REVIEW_CLOSE_TAG
     from loopx.capabilities.native_chat.codex_adapter import completed_result_review_readback
     import json
@@ -274,10 +275,15 @@ def test_completed_result_review_reads_evidence_without_proving_replay_safety(fa
     native = SimpleNamespace(thread_id="native", work_dir=Path("/synthetic/workspace"),
         response_timeout_sec=1, _control_items=items)
     proof = completed_result_review_readback(native, "original",
-        known_turn_ids=set() if fault == "unknown-later" else {"later"})
-    if fault is None:
+        known_turn_ids=set() if fault == "unknown-later" else {"later"}, allow_untyped=allow_untyped)
+    if fault is None or fault == "untyped" and allow_untyped:
         assert proof["read_only_review"] is True and proof["completed_result_review"] is True
-        assert proof["unfinished_work"] == work and proof["visible_response"] == final
+        if fault == "untyped":
+            assert proof["unfinished_work"] is None and proof["untyped_result_review"] is True
+            assert proof["response"]["message"] == proof["visible_response"] == "No structured declaration"
+            assert not proof["response"].get("unfinished_work")
+        else:
+            assert proof["unfinished_work"] == work and proof["visible_response"] == final
         assert proof["thread_id"] == "native" and proof["turn_id"] == "original"
         assert len(proof["native_inventory_sha256"]) == 64
         assert "all_effects_settled" not in proof and "completed_work" not in proof

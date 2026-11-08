@@ -470,6 +470,18 @@ effect 日志不变与原捕获被改写后的拒绝验证。分别计量导航�
 冒充完整决策或模型成本收益；生产默认不变。两端各自导入已固定的产品版本，并共用
 同一份冻结的当前调用夹具，避免将夹具修订误计为产品输出变化。
 
+When a normal Turn still needs explicit selection or an ordinary claim, the
+progressive view can point to the captured write scope through
+`goal_boundary.write_scope_pointer`. Read that pointer using the same
+capture's supporting-source reference if the choice depends on write scope.
+Stop and approval rules remain inline. The claim checks scope atomically, and
+the ready decision supplies the complete current scope before delivery.
+
+正常 Turn 仍需选择任务或普通认领时，渐进视图可用
+`goal_boundary.write_scope_pointer` 指向原捕获中的写入范围。选择依赖写入范围时，
+按同一捕获给出的源引用读取该指针。停止和审批规则继续内联。认领会原子校验范围，
+进入可执行阶段后从当前决策读取完整写入范围。
+
 Ordinary CLI reads require canonical authority. Both differential arms explicitly
 back up and import the same complete synthetic source before measuring; fixture
 setup is outside the measured commands. On base `887d66551` and the read-retirement

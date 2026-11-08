@@ -138,7 +138,7 @@ def test_unattributed_legacy_vision_is_not_assigned_to_a_retained_peer():
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("retired", [False, True])
 def test_status_keeps_current_acceptance_when_recent_history_changes(tmp_path, provider, retired):
-    from canonical_authority_fixture import promoted_create_fixture
+    from tests.control_plane.canonical_authority_fixture import promoted_create_fixture
     from loopx.state_refresh import refresh_state_run
 
     registry, runtime, state = promoted_create_fixture(
@@ -282,7 +282,7 @@ def collect_fixture(
         )
     )
     from loopx.state_refresh import refresh_state_run
-    from canonical_authority_fixture import initialize_canonical_source_fixture
+    from tests.control_plane.canonical_authority_fixture import initialize_canonical_source_fixture
 
     initialize_canonical_source_fixture(runtime, "acceptance-demo", state_path=state, provider="sqlite")
     refresh_state_run(

@@ -46,6 +46,11 @@ test("stable context ids bind phase, scope, content and policy revision", () => 
     assert.notEqual(id(original), id(projectAgentContext({ ...input, ...patch }, [provider])));
   }
   assert.notEqual(id(original), id(projectAgentContext(input, [{ ...provider, revision: "v2" }])));
+  for (const patch of [{ guidance: ["Inspect contradictory evidence."] }, { facts: { observed: 1 } }]) {
+    assert.notEqual(id(original), id(projectAgentContext(input, [{ ...provider,
+      produce: () => ({ ...provider.produce({} as any, {}), ...patch }),
+    }])));
+  }
 });
 
 test("provider failures, forged control fields and oversize context are isolated", () => {
@@ -168,20 +173,27 @@ test("maximum delegation directory stays within provider budget", () => {
     executor_kind: "managed", readiness: "ready",
     execution_profile: "fixture-provider/fixture-model@max",
   }));
-  const packet = evaluateSubagentContext({ phase: "before_plan", scope,
-    orchestration: { ...policy, max_children: 6 }, observations: {
-      delegation_context: {
-        schema_version: "loopx_delegation_context_v0", configuration_state: "ready",
-        observed_at: "2026-09-19T04:20:00+00:00", authorized_count: 6,
-        projected_count: 6, routes,
-      },
-    } })!;
-  assert.deepEqual(packet.failures, []);
-  const delegation = (packet.contributions as any[])[0].facts.delegation_context;
-  assert.ok(delegation.projected_count >= 1 && delegation.projected_count <= 6);
-  assert.equal(delegation.routes.length, delegation.projected_count);
-  assert.equal(delegation.routes_truncated, delegation.projected_count < 6 || undefined);
-  assert.ok(Buffer.byteLength(JSON.stringify(packet.contributions[0])) <= 2048);
+  const model_config = { model: "m".repeat(160), reasoning_effort: "medium" };
+  for (const phase of ["before_plan", "before_delegate"]) {
+    const packet = evaluateSubagentContext({ phase, scope,
+      orchestration: { ...policy, max_children: 6, model_config }, observations: {
+        ...(phase === "before_delegate" ? { child_count: 6 } : {}),
+        delegation_context: {
+          schema_version: "loopx_delegation_context_v0", configuration_state: "ready",
+          observed_at: "2026-09-19T04:20:00+00:00", authorized_count: 6,
+          projected_count: 6, routes,
+        },
+      } })!;
+    assert.deepEqual(packet.failures, []);
+    const [contribution] = packet.contributions as Record<string, any>[];
+    const delegation = contribution.facts.delegation_context;
+    assert.deepEqual(contribution.facts.model_preference, model_config);
+    assert.ok(delegation.projected_count >= 2 && delegation.projected_count <= 6);
+    assert.equal(delegation.routes.length, delegation.projected_count);
+    assert.equal(delegation.routes_truncated, delegation.projected_count < 6 || undefined);
+    assert.ok(Buffer.byteLength(JSON.stringify(contribution)) <= 2048);
+    assert.ok(Buffer.byteLength(JSON.stringify(packet)) <= 3072);
+  }
 });
 
 test("planning progressively discloses probe scope without crowding out a second route", () => {
@@ -228,8 +240,11 @@ test("coordinator participation guidance survives all bounded lifecycle projecti
     } })!;
     assert.deepEqual(packet.failures, []);
     const [contribution] = packet.contributions as Record<string, any>[];
-    assert.equal(contribution.revision, "v6");
+    assert.equal(contribution.revision, "v8");
     assert.equal(packet.authority, "guidance_only");
+    if (phase === "after_delegate_result") {
+      assert.match(contribution.guidance.join(" "), /stop same-Turn spawn\/followup retries/);
+    }
     assert.ok(Buffer.byteLength(JSON.stringify(contribution)) <= 2048);
     assert.ok(Buffer.byteLength(JSON.stringify(packet)) <= 3072);
   }
@@ -358,14 +373,76 @@ const blocked = (phase = "before_plan") => ({
   reason_code: "delegation_context_unavailable",
 });
 
-test("delegation facts reproduce the pinned Python projection byte for byte, context_id included", (t) => {
+test("delegation facts preserve the pinned migration contract across guidance revisions", (t) => {
   for (const [name, scenario] of Object.entries<any>(fixture.scenarios)) {
     t.mock.timers.enable({ apis: ["Date"], now: Date.parse(scenario.observed_at) });
     const packet = evaluateGoalAgentContext({ phase: scenario.phase, scope: fixture.scope,
       orchestration: scenario.orchestration, observations: {}, delegation_facts: scenario.delegation_facts });
-    assert.equal(JSON.stringify(packet), JSON.stringify(scenario.expected_context), name);
+    // The fixture preserves the pre-migration observation, not a permanent
+    // wording freeze. Guidance/revision are deliberately versioned; context id
+    // content binding is covered separately above.
+    const factsOnly = (value: any) => ({ ...value, contributions: value.contributions.map(
+      ({ guidance, revision, context_id, ...observation }: any) => observation,
+    ) });
+    assert.deepEqual(factsOnly(packet), factsOnly(scenario.expected_context), name);
     t.mock.timers.reset();
   }
+});
+
+test("native guidance keeps binding preflight scoped even when delegation is unavailable", () => {
+  for (const delegation_facts of [undefined, { config_error: "unavailable" }, delegationFacts([])]) {
+    const packet = evaluateGoalAgentContext({ phase: "before_delegate", scope: fixture.scope,
+      orchestration: { ...policy, model_config: null }, observations: {}, delegation_facts })!;
+    assert.equal(packet.authority, "guidance_only");
+    assert.deepEqual(packet.failures, []);
+    const [{ guidance, facts }] = packet.contributions as Record<string, any>[];
+    assert.match(guidance.join(" "), /authorized host-native tools directly/);
+    assert.match(guidance.join(" "), /Only bound delegation needs its entrypoint and runtime\/profile\/budget preflight/);
+    assert.match(guidance.join(" "), /never silently substitute runtime\/model/i);
+    assert.equal(facts.capacity_contract.live_availability, "not_observed");
+    if (facts.delegation_context) {
+      assert.equal(facts.delegation_context.execution_scope, "bound_delegation");
+      assert.equal(facts.delegation_context.preflight, "required");
+      assert.deepEqual(facts.delegation_context.routes, []);
+    }
+  }
+});
+
+test("return context keeps native capacity stops and receipt sources with a long model preference", () => {
+  const model_config = { model: "m".repeat(160), reasoning_effort: "medium" };
+  const items = ["prepared", "running", "turn_returned", "accepted", "rejected", "stopped", "unavailable"]
+    .map(status => ({ status, recovery_required: status === "stopped", private_result: "raw child material" }));
+  const packet = evaluateGoalAgentContext({ phase: "after_delegate_result", scope: fixture.scope,
+    orchestration: { ...policy, model_config }, delegation_facts: delegationFacts([binding(0)], {
+      operation_inventory: { items, has_more: true },
+    }), observations: {
+      native_host_capacity: {
+        schema_version: "native_subagent_capacity_observation_v0", operation: "followup",
+        outcome: "agent_thread_limit_reached", child_count: 2,
+      },
+      native_child_activity: {
+        schema_version: "native_subagent_activity_v0", entrypoint_scope: "host_native_child_tools",
+        observation: "coordinator_reported", configured_limit: 2, attempted_count: 3,
+        launched_count: 2, capacity_rejected_count: 1, parent_accepted_count: 1,
+        retry_same_turn: false,
+      },
+    } })!;
+  assert.deepEqual(packet.failures, []);
+  const [contribution] = packet.contributions as Record<string, any>[];
+  const guidance = contribution.guidance.join(" ");
+  assert.match(guidance, /Missing\/rejected receipts can't prove completion/);
+  assert.match(guidance, /Opinions aren't independent evidence/);
+  assert.deepEqual(contribution.facts.model_preference, model_config);
+  assert.equal(contribution.facts.native_host_capacity.retry_same_turn, false);
+  assert.equal(contribution.facts.native_child_activity.host_attested, false);
+  assert.equal(contribution.facts.native_child_activity.parent_accepted_count, 1);
+  assert.equal(contribution.facts.receipt_observation, "not_supplied");
+  assert.equal(contribution.facts.delegation_receipts.operation_receipts.observed, 7);
+  assert.equal(contribution.facts.delegation_receipts.operation_receipts.accepted, 1);
+  assert.equal(contribution.facts.delegation_context, undefined);
+  assert.ok(!JSON.stringify(packet).includes("raw child material"));
+  assert.ok(Buffer.byteLength(JSON.stringify(contribution)) <= 2048);
+  assert.ok(Buffer.byteLength(JSON.stringify(packet)) <= 3072);
 });
 
 test("ready routes derive readiness once from the executor fact and join one probe per host argv", () => {

@@ -240,20 +240,16 @@ export const goalMastheadScenario = {
       await quiet.close();
       throw error;
     }
-    // The canonical producer retains 21 open decisions and bounds its overview
-    // to three. Pass its payload through the shipped parser
-    // and adapter, rather than manufacturing a complete three-item queue.
+    // The canonical producer supplies 21 open rows and a three-row overview.
+    // Use the real rows and counts for both complete and partial coverage.
     const fixtureEnv = { ...process.env, LOOPX_USAGE_PING: "0" };
     if (!["LOOPX_TEST_PYTHON", "LOOPX_PYTHON_BIN", "LOOPX_PYTHON"].some(key => process.env[key])) fixtureEnv.PYTHONPATH = repoRoot;
-    const native = JSON.parse(execFileSync(resolveTestPython(), [
-      resolve(repoRoot, "examples/personal-workspace-browser/goal-attention-fixture.py"),
-    ], { cwd: repoRoot, env: fixtureEnv, encoding: "utf8", timeout: 30_000 }));
     const nativeCase = (...args) => JSON.parse(execFileSync(resolveTestPython(), [
       resolve(repoRoot, "examples/personal-workspace-browser/goal-attention-fixture.py"), ...args,
     ], { cwd: repoRoot, env: fixtureEnv, encoding: "utf8", timeout: 30_000 }));
+    const native = nativeCase();
     const mixed = nativeCase("--mixed");
     const complete = nativeCase("--full");
-    const mixedComplete = nativeCase("--mixed", "--full");
     const optionalComplete = nativeCase("--optional", "--full");
     // Exercise source -> parser -> adapter -> digest -> packaged rendering.
     // Counts are removed from a real producer payload, not a prebuilt UI model.
@@ -307,6 +303,7 @@ export const goalMastheadScenario = {
       } finally { coverageEntries.push(...await ui.close()); }
     }
     for (const locale of ["zh-CN", "en"]) for (const mode of ["mixed", "bounded", "optional", "complete", "mixed-complete", "empty", "unknown"]) {
+      const partial = !["complete", "mixed-complete", "optional"].includes(mode);
       const ui = await openWorkspacePage(browser, url, {
         collectCoverage,
         viewport: { width: locale === "en" ? 390 : 1512, height: 982 },
@@ -317,13 +314,19 @@ export const goalMastheadScenario = {
           api.transformStatus = (fixture) => {
             previous(fixture);
             const queue = fixture.attention_queue.items.find(item => item.goal_id === goalId);
-            const source = mode === "mixed" ? mixed : mode === "complete" ? complete
-              : mode === "mixed-complete" ? mixedComplete : mode === "optional" ? optionalComplete : native;
+            const source = mode === "mixed" || mode === "mixed-complete" ? mixed
+              : mode === "complete" ? complete : mode === "optional" ? optionalComplete : native;
             Object.assign(queue, structuredClone(source));
-            if (mode === "empty") {
-              queue.user_todos.items = [];
-              queue.project_asset.user_todos.items = [];
+            // A complete top-level queue wins even if the overview is bounded.
+            // For a partial queue retain only the producer's three listed IDs.
+            if (mode === "mixed" || mode === "unknown") {
+              const listed = new Set(queue.project_asset.user_todos.items.map(todo => todo.todo_id));
+              queue.user_todos.items = queue.user_todos.items.filter(todo => listed.has(todo.todo_id));
             }
+            if (mode === "bounded" || mode === "empty") {
+              queue.user_todos.items = [];
+            }
+            if (mode === "empty") queue.project_asset.user_todos.items = [];
             if (mode === "unknown") {
               delete queue.user_todos.open_count;
               delete queue.project_asset.user_todos.open;
@@ -336,13 +339,15 @@ export const goalMastheadScenario = {
         await openGoal(ui.page, title);
         const needs = await vital(ui.page, locale === "en" ? "Needs you" : "等你决定");
         const expected = mode === "complete" ? "21" : mode === "mixed-complete" ? "1" : mode === "optional" ? "0" : "—";
-        assert.equal(needs.value, expected, "Only complete classified rows qualify a blocking total; open User Todo totals do not classify hidden rows");
-        const partial = !["complete", "mixed-complete", "optional"].includes(mode);
+        assert.equal(needs.value, expected, `${locale} ${mode}: only complete classified rows qualify a blocking total`);
         const coverageHelp = partial ? await readVitalHelp(ui.page, needs.cell) : "";
         if (partial) assert.match(coverageHelp, locale === "en" ? /oldest unknown/ : /最早时间未知/);
         const listed = ["complete", "mixed-complete", "optional"].includes(mode) ? 21 : mode === "empty" ? 0 : 3;
         if (partial) assert.match(coverageHelp, new RegExp(`${listed} ${locale === "en" ? "listed" : "项"}`));
-        if (mode === "optional") assert.match(needs.sub, locale === "en" ? /21 optional/ : /21 项可选/);
+        if (mode === "optional" || mode === "mixed-complete") {
+          const optional = mode === "optional" ? 21 : 20;
+          assert.match(needs.sub, new RegExp(`${optional} ${locale === "en" ? "optional" : "项可选"}`));
+        }
         if (mode === "unknown") assert.doesNotMatch(needs.sub, /Nothing waiting|暂无等待/);
         await ui.page.getByRole("navigation", { name: /^(Goal 视图|Goal view)$/ }).getByRole("button", { name: /^(概览|Overview)$/ }).click();
         const rail = ui.page.locator(".goal-overview-attention");

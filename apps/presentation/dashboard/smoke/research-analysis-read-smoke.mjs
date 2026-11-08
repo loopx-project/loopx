@@ -5,8 +5,51 @@ import {mkdtemp, mkdir, readFile, writeFile, rm} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {resolve} from "node:path";
 import {createInterface} from "node:readline";
+import {createElement} from "react";
+import {renderToStaticMarkup} from "react-dom/server";
 import {resolveTestPython} from "../../../../scripts/test-python.mjs";
-import {readAnalysisSnapshot} from "../src/features/personal-workspace/goal-research-analysis.tsx";
+import {readAnalysisSnapshot, ResearchAnalysisPanel} from "../src/features/personal-workspace/goal-research-analysis.tsx";
+import {ResearchCaseStudy} from "../src/features/personal-workspace/research-case-study.tsx";
+import {fetchExploreResults} from "../src/data/chat.ts";
+import {GoalResearchWorkbench} from "../src/features/personal-workspace/goal-research-workbench.tsx";
+
+// The persisted directory can organize explicitly linked physical sources.
+// Navigation must not turn organization into shared evidence or execution.
+const caseFixture = JSON.parse(await readFile(resolve('src/data/fixtures/case-study-child.json'), 'utf8'));
+const study = caseFixture.analyses[0].case_study;
+const renderedStudy = renderToStaticMarkup(createElement(ResearchCaseStudy, {
+  study, zh: false, historical: true, scope: caseFixture.analyses[0].input.scope, onCitation: () => {throw Error('read executed a citation');},
+}));
+assert.ok(renderedStudy.includes(study.title));
+assert.ok(renderedStudy.includes('Showing the saved Chinese original.'));
+assert.ok(renderedStudy.includes('not current results'));
+assert.ok(renderedStudy.includes('unknown'), 'Missing values do not become zero');
+for (const section of study.sections) assert.ok(renderedStudy.includes(section.title));
+const goals = [
+  {goalId:'parent',title:'Benchmark'},
+  {goalId:'child',parentGoalId:'parent',title:'Local case'},
+  {goalId:'foreign',parentGoalId:'parent',title:'Foreign case',sourceAccess:{namespace:'other',label:'Other',readOnly:true}},
+];
+const navigate = goalId => renderToStaticMarkup(createElement(GoalResearchWorkbench, {
+  goalId, goals, zh: false, active: true, refreshRevision: 0,
+  statusNotice: createElement("p", null, "Loading status"), onSelectGoal: () => {throw Error('read navigated');},
+}));
+assert.ok(navigate('parent').includes('Local case'));
+assert.ok(navigate('parent').includes('Foreign case'));
+assert.ok(navigate('child').includes('Benchmark'));
+assert.ok(navigate('foreign').includes('Benchmark'), 'Explicit directory links retain their local parent');
+
+// Transport uses the workspace view; immutable findings still identify the native Goal.
+const sourceFetch = globalThis.fetch, sourceWindow = globalThis.window;
+try {
+  globalThis.window = {location: {href: "http://127.0.0.1:12345/chat/"}};
+  globalThis.fetch = async input => {
+    assert.equal(new URL(input, window.location.href).searchParams.get("goal_id"), "view-a");
+    return Response.json({ok: true, goal_id: "native", total: 0, items: [], next_cursor: null});
+  };
+  assert.equal((await fetchExploreResults("view-a", undefined, undefined, "native")).goal_id, "native");
+  await assert.rejects(fetchExploreResults("view-a"), /mismatch/);
+} finally { globalThis.fetch = sourceFetch; globalThis.window = sourceWindow; }
 
 // A language-specific cache miss must not hide the same registered pack's
 // older, unspecified-language result or turn a read into model execution.
@@ -85,6 +128,25 @@ try {
   assert.equal(value.pack.result, null, "An original read failure does not erase the current-language state");
   failOriginal = false;
   assert.deepEqual((await read()).originalPack, original, "The ordinary read retries recovery without execution");
+
+  // A failed/in-flight observation is unknown; only a successful empty read
+  // supports the absence message. Keep the existing read retry as recovery.
+  for (const zh of [true, false]) {
+    const empty = {...pack, availability: "available", selection: {exhaustive: false}, episode_count: 0};
+    const controller = {zh, pack: empty, requestPack: empty, location: {open: true}, panel: {current: null},
+      readOnly: true, loading: false, snapshot: {catalog: {}}, read: async () => {}, close: () => {}};
+    const noSaved = zh ? "此来源尚无已保存的分析。" : "This source has no saved analysis yet.";
+    const render = state => renderToStaticMarkup(createElement(ResearchAnalysisPanel, {analysis: {...controller, ...state}}));
+    assert.ok(render({}).includes(noSaved), "A successful empty source retains its ordinary absence state");
+    for (const state of [{loading: true}, {readError: "Source unavailable"}, {snapshot: {catalog: {}, originalReadError: "Original unavailable"}}]) {
+      const html = render(state);
+      assert.ok(!html.includes(noSaved), "An incomplete source read must not claim that no saved analysis exists");
+      if (!state.loading) {
+        assert.ok(html.includes('role="alert"'));
+        assert.ok(html.includes(zh ? 'aria-label="重试读取"' : 'aria-label="Retry reading"'));
+      }
+    }
+  }
 
   for (const options of [{current: () => false}, {signal: AbortSignal.abort()}]) {
     reset("zh");

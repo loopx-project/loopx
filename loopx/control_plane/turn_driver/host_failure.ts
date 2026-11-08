@@ -45,3 +45,32 @@ export function normalizeHostFailure(value: unknown, integerAttempt?: string | n
     fail("host failure record contains unsupported fields");
   return expected;
 }
+
+/** The same retry rule for an explicit Turn retry and an outer Host phase.
+ * This decides failure eligibility only, never session, budget or launch authority.
+ */
+export function hostFailureRetryCheck(failure: JsonObject, retryFailed: boolean): JsonObject | null {
+  // Both callers normalize with their existing transport owner first. Journal
+  // decoding may retain a large integral attempt as its exact decimal string.
+  if (!retryFailed) return {kind: "host_retry_policy", outcome: "failed",
+    reason: "failed_retry_not_requested"};
+  if (failure.retryable === true) {
+    const retry = failure.retry as JsonObject;
+    return Number(failure.attempt) >= Number(retry.max_attempts)
+      ? {kind: "host_retry_policy", outcome: "failed", reason: "host_retry_budget_exhausted"}
+      : {kind: "host_retry_policy", outcome: "passed"};
+  }
+  // Preserve the Journal's explicit-repair behavior. Output exhaustion has no
+  // proved whole-Turn remainder, so even an explicit blind replay is refused.
+  return failure.kind === "output_budget_exhausted"
+    ? {kind: "host_retry_policy", outcome: "failed", reason: "host_retry_not_available"}
+    : null;
+}
+
+export function hostFailureRetryRequest(params: JsonObject): JsonObject {
+  if (typeof params.retry_failed !== "boolean" || Object.keys(params).some(
+    key => !["failure", "retry_failed"].includes(key)))
+    throw new EffectRuntimeRequestError("Host retry requires an explicit retry intent");
+  const check = hostFailureRetryCheck(normalizeHostFailure(params.failure), params.retry_failed);
+  return {allowed: check === null || check.outcome === "passed", check};
+}

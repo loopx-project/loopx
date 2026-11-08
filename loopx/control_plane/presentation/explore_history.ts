@@ -4,6 +4,7 @@
  */
 import {normalizeExploreExecutionObservation} from "../capabilities/explore_execution_observation.ts";
 import {normalizeExploreMeasurements, projectExploreMeasurementFeedback, type ExploreMeasurement} from "../capabilities/explore_measurements.ts";
+import {normalizeWorkYardstickCapture, type WorkYardstickCapture} from "../work_items/yardstick_decision.ts";
 import type {JsonObject} from "../runtime_decode.ts";
 export type ExploreHistoryEvent = {
   schema_version: string; event_id: string; goal_id: string; event_kind: string;
@@ -13,6 +14,7 @@ export type ExploreHistoryEvent = {
   agent_id: string; run_id: string; evidence_refs: string[]; supersedes: string; confidence: number | null;
   execution_observation?: JsonObject;
   measurements?: ExploreMeasurement[];
+  work_yardstick?: WorkYardstickCapture;
 };
 export type ExploreHistoryPage = {goal_id: string; items: ExploreHistoryEvent[]; total: number; next_cursor: string | null};
 export type ExploreHistoryNode = {id: string; latest: ExploreHistoryEvent; updates: ExploreHistoryEvent[]; findings: ExploreHistoryEvent[]; revisions: ExploreHistoryEvent[]};
@@ -66,17 +68,16 @@ export function parseExploreHistoryPage(input: unknown, goalId: string): Explore
       ...(raw.execution_observation === undefined ? {} : {
         execution_observation: normalizeExploreExecutionObservation({observation: raw.execution_observation}),
       }),
+      ...(raw.work_yardstick === undefined ? {} : {work_yardstick: normalizeWorkYardstickCapture({
+        capture: raw.work_yardstick, goal_id: goalId, agent_id: raw.agent_id ?? "", evidence_refs: raw.evidence_refs ?? [],
+      })}),
       ...(raw.measurements === undefined ? {} : {measurements: normalizeExploreMeasurements(raw.measurements)}),
     } as ExploreHistoryEvent;
   });
   return {goal_id: goalId, items, total: page.total as number, next_cursor: page.next_cursor as string | null};
 }
 
-export function projectExploreHistory(events: readonly ExploreHistoryEvent[], goalId: string) {
-  const unique = new Map<string, ExploreHistoryEvent>();
-  const nodes = new Map<string, ExploreHistoryNode>();
-  const edges = new Map<string, ExploreHistoryEvent>();
-  const findings = new Map<string, ExploreHistoryEvent>();
+export function mergeExploreHistoryEvents(unique: Map<string, ExploreHistoryEvent>, events: readonly ExploreHistoryEvent[], goalId: string) {
   for (const event of events) {
     if (event.goal_id !== goalId) throw new Error("Explore history Goal mismatch");
     const previous = unique.get(event.event_id);
@@ -85,6 +86,16 @@ export function projectExploreHistory(events: readonly ExploreHistoryEvent[], go
       continue;
     }
     unique.set(event.event_id, event);
+  }
+}
+
+export function projectExploreHistory(events: readonly ExploreHistoryEvent[], goalId: string) {
+  const unique = new Map<string, ExploreHistoryEvent>();
+  mergeExploreHistoryEvents(unique, events, goalId);
+  const nodes = new Map<string, ExploreHistoryNode>();
+  const edges = new Map<string, ExploreHistoryEvent>();
+  const findings = new Map<string, ExploreHistoryEvent>();
+  for (const event of unique.values()) {
     if (event.event_kind === "node") {
       const node = nodes.get(event.result_id);
       if (node) {node.latest = event; node.updates.push(event);}

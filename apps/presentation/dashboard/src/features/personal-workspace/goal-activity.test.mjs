@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { goalExecution, goalObservationGaps, goalWorkKind, presentGoalActivity, taskSessionStatus } from "../../../node_modules/.cache/loopx-goal-activity/goal-activity.js";
+import { goalExecution, goalObservationGaps, goalWorkKind, observedLiveTurnClock, presentGoalActivity, taskSessionStatus } from "../../../node_modules/.cache/loopx-goal-activity/goal-activity.js";
 
 // One Goal's session facts, mixed by mode. `updated_at` stands for the time the
 // owner last recorded anything for that session.
@@ -184,3 +184,15 @@ for (const [scenario, activeTurnId, status, done, hasResult, expected] of [
 }
 
 console.log("Goal and task execution read-model invariants passed");
+
+const liveHost = {completeness: "complete", threads: [{
+  hostSurface: "codex-app", state: "turn_open", lastEventAt: recent, turnStartedAt: minutesAgo(8),
+}]};
+const liveGoal = {activationState: "active", state: "已安排", hostThreadActivity: liveHost,
+  execution: goalExecution([], "goal-a", liveHost, now)};
+assert.deepEqual(observedLiveTurnClock(liveGoal, now), {lastActivityAt: recent, startedAt: minutesAgo(8)});
+assert.equal(observedLiveTurnClock(liveGoal, now + 16 * 60_000), null, "An old open observation cannot keep a card live");
+assert.equal(observedLiveTurnClock({...liveGoal, activationState: "stopped"}, now), null);
+assert.equal(observedLiveTurnClock({...liveGoal, execution: claim}, now), null, "A claim does not begin execution");
+assert.deepEqual(observedLiveTurnClock({...liveGoal, hostThreadActivity: undefined}, now),
+  {lastActivityAt: recent, startedAt: null}, "A session age cannot substitute for a current turn start");

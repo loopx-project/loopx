@@ -9,6 +9,29 @@ outcome objective; subordinate outcomes never replace root continuation, budget
 or stop criteria, including in open-ended research. A local success or plateau
 is not campaign completion. Existing legitimate stops/waits still apply.
 
+## Direct corrections to success criteria
+
+Distinguish a changed purpose from a changed acceptance criterion. When the user
+clarifies how success is judged, refine the matching outcome before work that
+depends on that interpretation. Use the standalone refinement below when the
+change cannot wait for a delivery milestone. Read its complete result, reconcile
+affected Todos and decisions, and obtain current guard context as required;
+do not postpone this until completion or substitute a chat acknowledgement,
+peer message, report or Vision summary. None of those changes canonical acceptance.
+Ordinary progress, wording polish and implementation choices that leave the
+criteria unchanged need no requirement write.
+
+Keep the original objective if the purpose is unchanged. Preserve unaffected
+requirements and actual authorization, budget and stop conditions. If the user
+rejects an Agent-added assumption, remove it from the plan without treating it
+as a retained user commitment. If the correction conflicts with an actually
+persisted requirement or configured check, the additive refinement cannot retire
+it: explicitly reconcile that contract through its owning update path, retaining
+provenance, before claiming alignment. Do not append a contradictory requirement
+and mark both met, or silently edit an authoritative file. Ask only when a
+consequential meaning or authority is genuinely missing, not merely because the
+user gave a correction.
+
 ## Current operating objective
 
 When recorded explicit user direction makes the Goal objective obsolete, prepare
@@ -117,6 +140,17 @@ For changed requirements or reviews, add this envelope to the **existing**
 `refresh-state` writeback using `--goal-outcome-update-json update.json`. Retain
 its ordinary routing, Turn, checkpoint and delivery arguments. This does not
 replace them.
+
+If that same writeback includes an explicit Explore result for work linked to
+the reviewed outcome, a newly authored complete review binds the exact additive
+result link expected from this batch. A valid result for separate same-Agent
+work leaves this outcome's basis and work links unchanged; both still use the
+existing ownership and intent validation.
+It remains stale until the Todo owner commits the link; failed delivery replays
+the original digest. Other work/evidence changes still require review. Do not
+repeat an unchanged review solely to acknowledge a successfully delivered
+same-batch link. Separately submitted and legacy completed reviews are not
+automatically rebound, and independent checks retain their authority.
 
 An enabled due Stride review binds the delivered context, which includes outcome
 facts. When this milestone changes those facts, apply the refinement first with

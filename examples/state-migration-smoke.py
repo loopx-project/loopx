@@ -12,6 +12,10 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from tests.control_plane.cli_output_fixture import read_cli_context_for_oracle  # noqa: E402
 OLD_GOAL_ID = "goal-harness-meta"
 NEW_GOAL_ID = "loopx-meta"
 OTHER_GOAL_ID = "agent-harness-side-bypass"
@@ -26,7 +30,8 @@ def run_loopx(*args: str, cwd: Path, env: dict[str, str]) -> dict:
         capture_output=True,
         text=True,
     )
-    return json.loads(result.stdout)
+    body, _ = read_cli_context_for_oracle(result.stdout)
+    return json.loads(body)
 
 
 def write_json(path: Path, payload: dict) -> None:

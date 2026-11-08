@@ -6,6 +6,7 @@ and pagination are production code; execution state is never restored and
 model dispatch is never called. Explicit fixture paths support regressions.
 """
 import argparse
+from contextlib import suppress
 import hashlib
 import json
 from pathlib import Path
@@ -104,9 +105,14 @@ def main():
             for index, analysis in enumerate(capture.get("analyses", [])):
                 source_root = root / f"analysis-{capture['goal_id']}-{index}"
                 input_path = materialize_analysis(source_root, analysis)
+                case_study_path = None
+                if "case_study" in analysis:
+                    case_study_path = source_root / "case-study.json"
+                    case_study_path.write_text(json.dumps(analysis["case_study"], ensure_ascii=False), encoding="utf-8")
                 scope = dict(runtime_root=runtime, owner_goal_id=capture["goal_id"])
                 registered = register_pack(**scope, input_path=input_path, source_root=source_root, title=analysis["title"],
                                            config=analysis.get("config", fixture_config),
+                                           case_study_json=case_study_path,
                                            usage_jsonl=analysis.get("usage_jsonl"),
                                            usage_session_id=analysis.get("usage_session_id"),
                                            include_incomplete_usage=analysis.get("include_incomplete_usage", False),
@@ -182,6 +188,10 @@ def main():
 
             def do_POST(self):
                 metrics["mutation_attempts"] += 1
+                # Drain bounded request bodies before closing the connection.
+                self.connection.settimeout(5.0)
+                with suppress(ValueError):
+                    self._read_json()
                 self._send_error("The research display fixture is read-only.", status=405)
 
             do_PUT = do_POST

@@ -824,6 +824,372 @@ Approval needs a reviewed decision, not implementation progress or silence.
   installation, R1 managed minimal or D1–D7. No preset, frontend operation,
   permission or persisted state changes; protected execution keeps its owner.
 
+### 2026-11-07 — Caller process-transport loading proposal
+
+- **Baseline and boundary:** `7f521ff4505fa916a98a7401032922189eef414a`
+  loads `extensions.process_runtime` during the pure Turn-decision import.
+  Doctor Git, contract scanning, caller validation and Host bridge transport
+  now resolve their existing reexports on use. The original function objects,
+  signatures, direct/from/star imports, discovery, caller patch points,
+  preloaded-owner bindings and reload behavior remain available. This uses the
+  existing lazy-export pattern; the export-name set is local compatibility
+  metadata, not a shared state vocabulary. Python retains platform transport;
+  TypeScript retains decisions, deadlines, authority and receipts. No provider,
+  capability, default or process algorithm is added.
+- **Executable evidence:** the four cold-caller oracles fail on the immutable
+  baseline. Focused compatibility checks and the existing architecture oracle
+  pass on the proposal; the Turn-preview unselected-module guard is retained.
+  Real isolated Git, validation and bridge tests cover timeout, cancellation,
+  exited-leader descendants, stdin policy, framing and unconfirmed cleanup.
+  A newly built monolithic wheel repeats compatibility and real-process checks
+  outside the checkout. Complete public discovery/star name sets and transport
+  signatures match the baseline. This is source/wheel proposal evidence, not an
+  upgrade or adoption result.
+- **Measured scope:** pure Turn-decision import loads 337 LoopX modules instead
+  of 338. Pure import and help start no processes or connections; supported help
+  and unknown-command output/exit status remain identical. Shared synthetic
+  SQLite fixtures exercise accepted and rejected registered Turn plans: both
+  revisions start two Node processes and thirteen Git probes, with 62/61
+  connection observations respectively. Their complete returned envelopes match
+  except the source-decision digest from fresh observations. Registered plans
+  still select process transport; the entire preview dependency closure is not
+  qualified as cold. One removed import does not establish latency, RSS,
+  complete-cost, managed-Turn or long-horizon benefit.
+- **Remaining and rollback:** retain I3 for at least one minor release. D2, D5,
+  D6, I3, D3 and full R0/V10/M1/R1/context/model/install acceptance remain open.
+  Canary passes its six direct checks and 17 of 18 selected checks.
+  `first-connect-contract-smoke.py` fails with `KeyError: should_run` on both
+  baseline and proposal; its inline-field assumption needs separate repair.
+  This failure and existing broader lint/browser failures remain open.
+  The completed author proposal may enter normal review with disclosed
+  holds; protected runtime merge still requires maintainer authorization.
+  Revert this caller loading change to restore eager binding without state
+  migration; no unrelated language rewrite is required.
+
+### 2026-11-06 — History reader selected loading
+
+- **Baseline and boundary:** `22b0f6c25`. Ordinary `history` reads and help use
+  the existing registrar/handler through the shared CLI grammar and guard.
+  Maintenance actions, rejected parser requests and a preloaded full CLI retain
+  the original route, including handler/renderer patch points. History algorithms,
+  evidence windows, public imports and the TS owner remain unchanged. This is a
+  reversible R0 reader slice in the monolithic distribution; I3 still requires
+  at least one minor release for public moves.
+- **Real-path evidence:** 27 actual-console cases per baseline/candidate source
+  and installed-wheel environment preserve stdout/stderr/exit codes, UTC order,
+  Agent filtering, limits, empty/unknown inputs and current/stale evidence reads.
+  Four additional installed/source facade probes preserve patched handlers and
+  renderers. The preloaded-handler oracle failed before its correction; final
+  history/parser selection passes 26 tests. Existing durable history, artifact
+  and evidence oracles are retained. Required native services use disposable
+  process and data namespaces, with authenticated exit readback.
+- **Matched measurement:** Apple M4 Pro, 48 GiB, macOS 27 arm64, Python 3.13.5,
+  Node 26.0.0; matched Python dependencies and source-pair Node dependencies.
+  Each of four workloads has 30 interleaved baseline/candidate pairs, precompiled
+  bytecode and fresh Python processes with warm native-service reuse. The final
+  sampling takes 229 seconds; all three rounds total 698 seconds, below the
+  frozen 20-minute sampling bound. Setup, validation and tracing are separate.
+  Earlier environment/refinement observations retain their original scope.
+
+| Workload | Median / p95 elapsed ms, base → candidate | Median CPU ms | Median CLI peak RSS MiB |
+| --- | --- | --- | --- |
+| Source help | 1552 / 1862 → 204 / 349 | 670 → 100 | 91.4 → 31.3 |
+| Source Agent read | 1603 / 1833 → 417 / 482 | 665 → 150 | 91.9 → 34.4 |
+| Wheel help | 1621 / 2053 → 220 / 375 | 695 → 100 | 91.8 → 31.0 |
+| Wheel Agent read | 1648 / 1825 → 414 / 462 | 725 → 150 | 92.2 → 34.6 |
+
+- **Loading and effects:** source/wheel help loads 155 rather than 1157 LoopX
+  modules; registered reads load 208 rather than 1158, evidence reads 210 rather
+  than 1159. Python audit read-open observations decrease from 1290 to 246 for
+  source help and 1311 to 723 for its cold native read; wheel observations are
+  1291 → 247 and 1710 → 723. Help has zero observed writes/processes/connections.
+  Cold registered reads retain six write-opens, two process starts and one
+  connection, with 252/355 client IPC bytes sent/received. Evidence reads retain
+  one write-open, two connections and 1377/804 IPC bytes. These required effects
+  are not optional activation. A serving runtime can work without Node on PATH;
+  cold absence retains the existing failure. Output bytes match. Timing includes
+  interpreter and process invocation; descendant CPU/RSS/I/O, full model and
+  attention costs remain unknown.
+- **Holds and remaining work:** measured help p95 remains above the proposed
+  200 ms target; D6 is not adopted. Source-session loader inventory and Turn
+  preview import checks fail identically on the untouched baseline. Their failures
+  are retained as qualification holds. This does not close full R0/V10, M1,
+  split installation, R1/context/host qualification or open design decisions.
+  Revert the loader slice for rollback; no state migration is involved.
+
+### 2026-11-06 — Selected version loading and matched costs
+
+The independent proposal `8a79d8602e699e51452ca1f43dc9b9527c81aa1b` at baseline
+`5a58635028fbef1316dc66531daf5fdb655e9b13` selects the existing version registrar
+and handler through `cli_runtime`. It reuses the canonical global grammar,
+format precedence, usage hooks and controller guard. Rejected parsing retains
+full-CLI fallback and diagnostics; explicitly bound package or full-CLI exports
+retain their registrar/handler patch points without triggering lazy exports
+on ordinary queries. Public imports, identity and types remain
+unchanged. No capability, provider, package, permission, preset or TypeScript
+decision owner is added. The separate DSH/helper and negative cost proposal is
+[#8185](https://github.com/loopx-project/loopx/pull/8185); its E7/E8 observations
+are distinct from this version-path comparison and are not a dependency.
+
+The initial `55e3ef45a` comparison retains 120 ordinary-query observations
+(source median 1.546 → 0.059 seconds; wheel 1.554 → 0.072). A later independent
+case finds that it ignores a patched package-facade handler, returning 0 instead
+of 37. Its passing premerge did not cover that branch. The failure and original
+inputs/data remain retained; they do not qualify facade compatibility. The
+proposal repairs both package registrar and handler adoption, then freezes the
+new exact-head comparison below.
+
+- **Real caller:** source and freshly installed monolithic wheels at both
+  immutable revisions exercise the actual `loopx` console. All 27 cases per
+  distribution have identical stdout, stderr and exit status, including
+  global/local/repeated formats, explicit paths, help, unknown/abbreviated
+  options, missing/empty values and fallback. Independent unknown-command/
+  option cases reject with exit 2 and no result. Version works with Node absent
+  in all four variants; outer-controller read behavior and full-CLI patch points
+  remain compatible.
+- **Loading census:** separate parent instrumentation records 1,157 → 10
+  LoopX modules in both distributions, with the candidate contained in the
+  baseline set. Source read-opens are 1,286 → 28 and wheel 1,289 → 29.
+  Each version capture has zero write-opens, subprocesses, observed local IPC
+  connections and covered socket bytes. Stdout remains 81 bytes; stderr is empty.
+- **Frozen comparison:** all four environments have verified provenance,
+  CPython 3.13.5 and identical 57 dependency versions. Stdlib, dependencies and
+  all 1,421 LoopX sources have valid timestamp bytecode in owned cache prefixes;
+  post-measurement/profile source/header inventories have no missing/invalid
+  caches and match the preflight. Every sample has fresh Python and disables
+  bytecode writes; disk cache is uncontrolled. No broker/warm-broker comparison
+  is made. Order is source then wheel, AB on even pairs and BA on odd pairs.
+  Both corrected groups complete 30 pairs: 120 accepted observations in 62.246
+  seconds. Including the first study, aggregate sampling is 166.191 seconds,
+  below the unchanged 1,200-second cap. All observations are retained.
+
+| Distribution | Baseline seconds, median / p95 | Proposal seconds, median / p95 | CPU seconds, median (base → proposal) | RSS MiB, median (base → proposal) | Median paired proposal minus baseline, seconds |
+| --- | --- | --- | --- | --- | --- |
+| Source | 0.980 / 1.056 | 0.055 / 0.075 | 0.520 → 0.037 | 90.17 → 16.81 | -0.9242 |
+| Monolithic wheel | 0.948 / 1.147 | 0.056 / 0.077 | 0.511 → 0.038 | 89.89 → 16.60 | -0.8993 |
+
+p95 uses nearest rank; paired differences and differences of arm medians are
+distinct statistics. Median latency falls about 94% in both source and wheel
+on this macOS arm64 environment; CPU and target RSS also fall. One-minute host
+load ranges from 8.25 to 9.06. This qualifies a material version-query
+improvement under frozen conditions, without adopting portable D6 budgets or
+claiming real managed-Turn/long-horizon savings. Usage covers the target and
+waited descendants; no child is launched in the census. Native detail and
+complete authoring/model/maintenance costs remain unknown.
+
+The heartbeat-to-final-freeze interval is about 2,404 seconds, including
+overlapping recovery, initial study, correction, dependency/build/install,
+test, cache and parity work; overlapping phases cannot be summed. Cache
+preparation is recorded separately. Corrected console/facade parity takes
+82.759 seconds, instrumentation 2.539 and four parent profiles 4.155. Earlier
+parity/instrumentation/profile costs of 136.239 / 3.830 / 7.089 seconds remain
+retained. Cross-study timing levels are not treated as a code comparison.
+Existing `performance-diagnosis` recipes show export loading and full parser
+construction in baseline sampled stacks; weights remain separate from repeated
+latency. Monolithic packaging is verified, without split-install or installed
+host-upgrade qualification.
+
+Seven selected-loading cases fail on the baseline and pass on the proposal.
+The package registrar/handler case passes on the baseline, fails on the initial
+candidate and passes on the correction; canonical diagnostic and full-CLI
+patch-point cases pass in both baseline and proposal. All 161 entrypoint cases and
+focused lint pass. Owner-scoped mypy with `--follow-imports=skip` fails with
+33 identical diagnostics at base/proposal after line normalization; this is
+neither a pass nor the full configured type check. Adoption requires final-head
+validation, independent review and merge readiness. I3's minimum one minor
+release window remains in force; no D3/expiry decision is made. R0's wider census,
+R1/minimal, D2/D5/D6, hard-lease/context/model and split-install acceptance remain
+open. The bounded refactor reuses its existing parser/handler; larger runtime
+and package changes retain their accepted owners.
+
+### 2026-11-06 — Discovery integration and the next executable boundary
+
+- **Integrated:** [#8012](https://github.com/loopx-project/loopx/pull/8012)
+  merged the proposed head `58442be4d` as `83f569178` on November 4. On the
+  independently prepared `main` revision `62e234c93`, all 23 discovery and
+  protected-dispatch cases pass. Replay with
+  `uv run --extra test python -m pytest -q tests/test_cli_entrypoint.py -k 'capability_discovery or capability_non_discovery'`.
+  This verifies current source integration; the earlier installed-wheel and
+  paired performance evidence remains bound to its original revision and
+  environment. No installed host or new wheel is qualified by this replay.
+- **Resolved prerequisite:** [#8054](https://github.com/loopx-project/loopx/pull/8054)
+  (`886f2cdff`) removed capture I/O from the settlement plan's cold import.
+  `uv run --extra test python -m pytest -q tests/architecture/test_control_plane_import_boundaries.py::test_settlement_plan_import_does_not_load_native_capture_io`
+  passes on `62e234c93`. The November 4 failure remains historical evidence;
+  the later fix removes that specific import blocker. The broader suite and
+  configured mypy were not rerun on this revision, so their earlier results
+  do not become a current passing qualification.
+- **Next source slice:** characterize the existing `generic-cli` managed Turn
+  path with SQLite authority and optional task hooks disabled, as a candidate
+  for the selected D2/D5 composition. Reuse the Turn, host selector and typed
+  authority owners. Existing CLI interruption and successor-replay tests in
+  `tests/test_loopx_turn_driver.py` locate integration seams; they do not
+  establish a minimal preset. The next slice must name the actual dependency
+  closure and exercise an isolated task-producing host process, interruption,
+  restart and independently validated result readback with original identities
+  and no repeated confirmed effects. A deterministic local host can qualify
+  its synthetic transport boundary, not a model host or complete V4 journey.
+- **Remaining:** full R0/V10, M1/I3/D3, the separate status proposal #8011,
+  split installation and R1 remain open. D2/D5 are still owner decisions;
+  this candidate changes no preset, default, execution authority or release
+  commitment. Further directory moves are not the next execution evidence.
+
+### 2026-11-06 — Proposed generic-cli/SQLite composition and recovery evidence
+
+This is a D2/D5 candidate and source characterization, not an approved preset.
+It reuses the existing Turn, host selection, authority and settlement owners.
+
+| Dimension | Candidate / observed boundary |
+| --- | --- |
+| Installation | Current monolithic `loopx` source checkout; Python 3.13.5 and Node 26.0.0 on macOS arm64. Test extras prepare the experiment, not a minimal install. No split distribution or installed host is qualified |
+| Host | Existing `generic-cli`, `isolated-headless`, JSON stdio via `--host-adapter-command-json`; one local deterministic task-producing process and a separate trusted argv validator. No model session or workspace/IM service is needed by this fixture |
+| Authority | Canonical SQLite through the existing TypeScript effect runtime and its local RPC transport; existing Turn journal, validation and settlement. The test scaffold seeds a `soft_claim` shadow; this evidence cannot alone qualify normal hard-lease V2 parity |
+| Required logical core | Bootstrap/selected CLI, TurnEnvelope and host admission, current authority/stop/budget/claim rules, journal/recovery, process supervision, independent validation and result/settlement readback. Their owners remain shared with standard |
+| Optional activation | No task-memory or other optional hook is enabled in the fixture; no model jobs or external operations. Imported settings/policy helpers are not proof of activation or permission to remove them |
+| Identity and recovery | Resume the original journal with `--resume-turn-key`; a fresh `--turn-instance-id` is intentionally refused on that path. Cached confirmed host work is reused; unconfirmed work and other interruption points remain separately governed |
+
+- **Actual task and recovery:** a real host process writes the squared integers
+  zero through seven; an independent process checks the expected literal array.
+  Both the ordinary path and an OS `SIGKILL` of the owned CLI after its typed host
+  result was persisted end with one host invocation, one writeback and one debit
+  per isolated SQLite fixture. The interrupted path has no debit before restart;
+  restart validates the cached result without invoking the host again. A further
+  committed replay reports no repeated host/writeback/debit/scheduler effect.
+  The artifact bytes match across both paths. No active project state was faulted.
+- **Actual loading:** at product revision `62e234c93`, the ordinary Python path
+  loads 538 LoopX modules across 21 capability namespaces, without `loopx.cli`
+  or the `loopx.chat` tree. A second drill uses an isolated existing-runtime
+  broker and a transparent Node module-load observer: its bootstrap, execution
+  and recovery load 231 TypeScript files and eight JSON files under
+  `control_plane`. These are observed closures, not approved core membership.
+  The private broker's identity, shutdown acknowledgement and process exit were
+  verified; shared services were not stopped.
+- **Costs and limits:** parent-side tracing distinguishes required local RPC
+  from external network connections; none of the latter is observed. The
+  ordinary invocation observes 34 Git subprocesses, one Node version probe, one
+  Node host supervisor and one Python validator; the supervisor launches the
+  task host. Child/broker CPU and RSS, full wire/context bytes and model-host
+  costs remain unmeasured. These small instrumented drills are not repeated
+  matched performance samples, a D6 budget or long-horizon benefit evidence.
+- **Independent regression evidence:** the six SQLite cases of
+  `test_managed_start_interruption_preserves_reservation_and_attempt`, plus
+  `test_turn_run_once_cli_rejects_unproven_host_claim_before_writeback` and
+  `test_turn_run_once_cli_replays_declared_successor_after_interruption` pass in
+  `tests/test_loopx_turn_driver.py`. Probe setup refusals remain separate from
+  product failures: an overbroad network observer, an incorrect host-request
+  schema and conflicting resume flags were corrected without changing production
+  code or relaxing authority; failed observations were retained.
+- **Next owner change:** `loopx/cli_commands/turn_run_once.py` imports DSH host
+  builders before selecting the host, although their call sites are under
+  `args.host == "dsh"`. The generic path therefore loads
+  `turn_dsh_host` and `dsh_goal_mode.turn_host_adapter` despite selecting neither.
+  Characterize the existing exports/patch points, then defer those builders at
+  their owning seam and recheck generic/DSH/Codex behavior and default-off parity.
+  Namespace counts alone do not justify deleting shared policy helpers.
+- **Remaining:** opt-in minimal selection, complete D2/D5 adoption, hard-lease
+  and context V2/V5 parity, interruption during unconfirmed host work, model-host
+  V4, full V10 and split-install qualification remain open. No new engine,
+  provider, default, authority field or runtime self-merge is introduced.
+
+### 2026-11-07 — Heartbeat pre-quota selected loading
+
+- **Baseline and owner:** `79665b97a`. The heartbeat builder already emits
+  `heartbeat-prequota` when external evidence polling is available. Its selected
+  parser reuses the existing heartbeat registrar; dispatch uses the existing
+  heartbeat transport module. The complete facade passes its original runner,
+  renderer and global-registry resolver patch points. Explicit/implicit routing,
+  aliases, format, timeout, exception, degraded-return and controller semantics
+  remain characterized; reconciliation/hook ordering and typed owners are unchanged.
+- **Source and package evidence:** 50 new transport/loading/real-backend cases;
+  22 cases on each of four independently verified source/wheel consoles; 16
+  configured/degraded File/SQLite console scenarios with replay, retained opaque
+  work and zero quota debit. Dropping `continue_to_quota` is rejected by the same
+  public-console oracle on both real stores. The existing acknowledgement smoke
+  now exercises both CLI facades. The full source selection initially has 378
+  passes and two route-test failures reproduced on the immutable baseline. The
+  fixture now reads the original digest-bound progressive capture without
+  re-admission; its complete affected file then passes all 17 cases. No failure
+  was waived. Focused lint, configured mypy and the code canary pass.
+- **Matched local cost:** macOS 27.0 arm64, Python 3.13.5, Node 26.0.0; identical
+  dependencies and synthetic stores, precompiled bytecode, fresh Python processes,
+  warm filesystem caches and reused isolated Node services. Thirty alternating
+  base/head pairs for each workload/distribution yield 360 samples in 339 seconds;
+  study setup/validation takes 260 seconds separately. This shared development
+  host was not an idle-machine experiment. Values below are wall median/p95 in
+  seconds and median process RSS in MiB, including interpreter startup.
+
+| Workload / distribution | Base median / p95 | Candidate median / p95 | Base → candidate RSS |
+| --- | --- | --- | --- |
+| `source/prequota-help` | 1.433 / 1.889 | 0.172 / 0.226 | 91.5 → 24.7 |
+| `source/prequota-file-off` | 1.494 / 1.927 | 0.545 / 0.667 | 92.0 → 47.0 |
+| `source/prequota-sqlite-off` | 1.547 / 1.977 | 0.507 / 0.640 | 91.9 → 46.3 |
+| `wheel/prequota-help` | 1.555 / 1.967 | 0.170 / 0.210 | 91.7 → 24.5 |
+| `wheel/prequota-file-off` | 1.545 / 2.155 | 0.536 / 0.650 | 91.7 → 46.7 |
+| `wheel/prequota-sqlite-off` | 1.397 / 1.866 | 0.531 / 0.667 | 92.0 → 46.9 |
+
+- **Closure and complete-cost limits:** help loads 29 LoopX modules instead of
+  1,158; default-off execution loads 277 instead of 1,160. Python open observations
+  fall from 1,292–1,312 to 81–395. Opened-file size sums are footprints, not actual
+  read bytes. Median user/system process CPU is 0.04/0.02 seconds for candidate
+  help and 0.13–0.14/0.065–0.08 for execution, versus 0.40–0.42/0.16–0.185 at base.
+  Output remains 737 bytes for help and 827 for JSON execution. A separate SQLite
+  loopback profile observes 1,362 sent and 668 received bytes on each revision,
+  two Node starts for version/server discovery with a cold service and none with
+  a reused service. Its single instrumented cold/warm observations do not isolate
+  Node readiness or service CPU; those costs remain unqualified. The initial IPC
+  probe assumed Unix sockets and failed; loopback instrumentation corrected the
+  probe without changing product behavior. Help p95 of 0.226/0.210 seconds exceeds
+  the proposed 0.200-second target; that D6 proposal is not promoted or relabeled.
+- **Remaining:** this is one R0/V1/V3/V10 caller proposal, preserving I3 for at
+  least one minor release. Full R0/V10, M1/#8011, R1, context/model and split-install
+  qualification, installed-host recovery, adoption and complete task costs remain
+  open. The bounded Python change adapts transport; it adds no decision owner,
+  preset, provider or authority rule. Required final-head review/CI remains a
+  delivery gate distinct from these local observations.
+### 2026-11-07 — Registry inspection selected loading
+
+- **Baseline and boundary:** `ac6296225`. `registry` and `registry-boundary`
+  use the existing selected CLI route. Their shared registrar and transport
+  adapter stay in `cli_runtime`; the explicit full CLI reuses them through
+  `support_control`, retaining its inspection and renderer patch points.
+  Registry parsing, classification and Git decisions keep their existing owner.
+  Python adapts the CLI here; no new decision owner, provider or dispatcher
+  framework is introduced. Existing imports and I3's minimum one-minor-release
+  compatibility window remain intact.
+- **Compatibility evidence:** 197 source CLI and support-ownership cases pass,
+  including 26 new inspection/result/rejection/patch-point cases and two help
+  cases. An independent full-CLI loading exclusion fails on the immutable base
+  and passes on the candidate through the same public entrypoint. Twenty
+  successful and rejected requests preserve output, status and exception
+  semantics across source and independently installed monolithic-wheel consoles.
+  Help and read paths also work with Node absent and exclude the unselected
+  Chat, Dashboard and benchmark execution modules. Both revisions pass the real
+  Git registry-boundary smoke in disposable temporary directories; the earlier
+  run under `.local` failed because that ancestor intentionally selects a private
+  registry classification. The failure is retained as fixture-placement evidence.
+- **Cost qualification:** 30 interleaved base/head pairs for each of four
+  help/read workloads on both source and wheel yield 480 samples in 416.7s;
+  study setup/compatibility/profiling takes another 278.1s, excluding earlier
+  environment/wheel preparation and tests. On macOS arm64/Python 3.13.5 with
+  identical dependencies, precompiled bytecode and warm filesystem caches,
+  fresh-console help medians fall from 1.536–1.609s to 0.100–0.103s; registry
+  reads from 1.584–1.631s to 0.301–0.310s, and boundary reads from 1.542–1.612s
+  to 0.222–0.225s. Median RSS falls from about 91–92 MiB to 16–30 MiB.
+  Both help closures fall from 1,158 to 9 LoopX modules; registry/boundary reads
+  fall to 148/44. The PR records per-workload median/p95, CPU, separate audit
+  open counts and unchanged output bytes. No Node starts/IPC or Python-audit
+  socket events are observed; boundary reads keep their three Git queries.
+  Warm-cache block I/O is zero, while exact bytes read and native activity
+  outside the audit remain unknown. These results qualify local CLI cost
+  reductions, not portable D6 limits, full preparation/model costs or adoption.
+- **Validation and remaining work:** changed-file lint passes. The CI lint scope
+  still fails on the baseline-existing F841, whose repair is already proposed
+  separately; this result is not waived. Source and wheel evidence does not
+  upgrade an installed host. M1/#8011, full R0/V10, R1's real managed Turn,
+  context/model composition, split installation, adoption and complete costs
+  remain open. No D2/D5/D6/D3, default or authority decision changes. The related
+  bounded refactor shares the existing grammar and inspection adapter; larger
+  support/control extraction remains outside this slice.
 ### 2026-11-06 — Selected Turn host loading seam
 
 Following the generic-cli/SQLite candidate in
@@ -1084,6 +1450,1122 @@ comparison before adopting a performance change. This checkpoint creates no
 new owner, budget, preset or default. R0's complete census, R1/minimal,
 D2/D5/D6, I3/D3, hard-lease/context/model and split-install acceptance remain
 open; independent exact-head review and required validation govern adoption.
+### 2026-11-07 — Governed CLI composition cost and archived closeout boundary
+
+The complete small-state CLI sequence is compared on main
+`8e86f173f08bd55eb833d8cdf42360f93bf989fe` and a private experimental overlay of
+#8240 at `4df990c9e66465171f980176fba4e3602d41f826` plus #8243 at
+`668bed2f03a274f273d39c187121a1a4ede67165`. Only their seven production Python
+paths enter the candidate. The independently installed monolithic wheels have
+verified source bytes for 1,836 runtime resources each, 1,998 total files and
+approximately 8.91 MiB compressed. All environments use CPython 3.13.5,
+Node 26.0.0, real Node-owned SQLite 3.53.1 and the same 57 dependency versions
+on macOS arm64. This overlay is an author experiment; it changes neither the
+installed host nor a shipped preset, authority provider or public runtime.
+
+Inputs, code/resource/wheel hashes, workload, cache policy, instrumentation,
+serial pair order, sampling and interpretation are frozen before sampling.
+Each CLI invocation has fresh Python, an empty owned bytecode-cache prefix and
+bytecode writes disabled. Each episode starts its own cold Node service at
+prequota and reuses it for subsequent phases; compile-cache and temporary roots
+are independent. Disk cache and concurrent host load remain uncontrolled.
+Pairs alternate baseline/candidate order. The 1,500-second cap includes fixture
+setup, execution, teardown and sampling orchestration. Pilot, negative-case,
+packaging and instrumented-census costs are recorded separately.
+
+Each fixture uses ordinary hard-lease claim/admission, a separate Git worktree,
+complete contiguous native initial reads, an independently verified JSON sum
+artifact (`45`), Todo completion, fresh evidence-linked Vision/writeback, one
+spend, terminal result/readback and exact completion/writeback/spend/terminal
+retries. Global synchronization and external sinks are explicitly suppressed;
+standard fanout is outside this experiment. The small state has one active
+Todo; large state adds 100 completed background Todos with substantial text.
+Large-state failures remain failures and do not become accepted cost samples.
+
+All 60 planned observations finish in **1,164.996 seconds**, within the unchanged
+cap: 52 small-state episodes complete and eight large-state episodes retain the
+same terminal failure. Code, script and freeze inventories remain unchanged.
+Small-state groups have 8/6/6/6 serial interleaved pairs; large groups have one
+pair each and qualify only the observed compatibility failure.
+
+| Small-state path | Pairs | Baseline seconds, median / p95 | Candidate seconds, median / p95 | Median paired difference, seconds | Exploratory 95% percentile interval |
+| --- | --- | --- | --- | --- | --- |
+| Source / Sqlite | 8 | 16.942 / 17.173 | 14.986 / 15.399 | -1.806 | -2.156 to -1.669 |
+| Source / File | 6 | 16.751 / 17.036 | 14.725 / 14.917 | -2.086 | -2.159 to -1.875 |
+| Wheel / Sqlite | 6 | 17.066 / 22.878 | 15.169 / 19.378 | -1.932 | -5.246 to 2.348 |
+| Wheel / File | 6 | 16.689 / 17.454 | 14.801 / 15.195 | -1.917 | -2.491 to -1.553 |
+
+The p95 uses nearest rank and is the observed maximum at these sample sizes;
+it is not a tail bound. The interval uses 10,000 fixed-seed paired resamples.
+Differences of arm medians and median paired differences are distinct. Arm
+medians improve approximately 11–12%; wheel/SQLite's interval crosses zero and
+retains both directions of tail variation. This is scoped evidence for the
+small-state path, not a universal latency threshold or long-horizon benefit.
+
+| Small-state path | Target plus waited descendants CPU seconds, median (base → candidate) | Maximum per-invocation target/waited RSS MiB, median (base → candidate) | Owned broker CPU seconds, median (base → candidate) | Broker end RSS MiB, median (base → candidate) |
+| --- | --- | --- | --- | --- |
+| Source / Sqlite | 10.536 → 9.190 | 126.60 → 90.02 | 0.767 → 0.775 | 126.59 → 125.28 |
+| Source / File | 10.507 → 9.101 | 127.77 → 87.15 | 0.716 → 0.702 | 126.77 → 126.70 |
+| Wheel / Sqlite | 10.782 → 9.289 | 134.83 → 91.51 | 0.799 → 0.797 | 125.77 → 126.91 |
+| Wheel / File | 10.606 → 9.348 | 132.01 → 88.21 | 0.729 → 0.723 | 127.97 → 127.77 |
+
+RSS is the maximum of individual CLI invocation peaks, not a concurrent
+process-tree total. Broker counters exclude retirement and use Darwin's
+calibrated timebase. Default SQLite target/waited CPU falls about 13–14%; broker
+CPU/RSS have no consistent improvement. Source/SQLite prequota median falls
+3.425 → 1.468 seconds; guard remains 1.845 → 1.863 seconds and becomes the
+largest candidate phase. Wheel/SQLite prequota is 3.463 → 1.581 seconds, while
+guard is 1.844 → 2.033 seconds. The gain is concentrated in fresh Python
+prequota loading, not faster authority execution.
+
+Setup and retirement medians across groups are 2.15–2.29 and 0.36–0.40 seconds.
+Including setup, teardown and driver overhead, source/SQLite median is
+20.238 → 18.146 seconds and wheel/SQLite 20.393 → 19.793 seconds. Independently
+building/installing the two wheels costs 43.881 seconds. Setup, validation,
+recovery and census may overlap and must not be summed. Preparatory authoring,
+complete native/thread/process-tree I/O, model tokens, model/human costs and
+long-horizon outcomes remain incompletely measured. Kernel-observed broker disk
+writes stay at roughly 5.85 MiB per SQLite episode and 220 KiB per File episode;
+those counters are not total filesystem traffic.
+
+Across all 60 observations the artifact bytes, original bindings, complete
+settlement obligations, one writeback and one debit agree. Required native
+initial bodies are 23,498–24,442 bytes for small states; `bytes / 4` is only a
+rough token proxy, not tokenizer output or proof of model retention. The
+candidate's extra 85 source / 165 wheel bytes are path/reference presentation;
+normalized settlement obligations compare clause for clause without deletion.
+
+With 101 Todos, ordinary completion automatically archives the selected Todo
+at its original early presentation position, together with 90 background
+Todos. Validation, writeback and one spend commit, but the later original-Turn
+`todo complete --no-follow-up` rejects with `todo_archived`. All four
+source/wheel × File/SQLite pairs reproduce this on both arms. No failed episode
+is counted as accepted or used to claim a complete large-state speedup. The
+existing `todo_terminal_lifecycle.ts` and `todo_archive_selection.ts` owners
+must reconcile archival with original-receipt closeout. Related #5677 already
+owns freshness/terminal recovery; its published 0/1/4-history matrix does not
+qualify this automatic-archive case. Preserve fresh archived-Todo, changed
+actor/lease/evidence and duplicate-effect refusals when extending that owner.
+
+A separate census over all eight source/wheel × File/SQLite variants preserves
+invalid Vision/workspace refusals. Four additional failure checks per variant
+cover missing Node admission, missing provider, mismatched capture digest and
+released-claim completion: no writeback/debit commits. Prequota's soft failure
+continues to quota; it does not grant admission. These checks take 69.559 seconds;
+the instrumented census takes 90.358 seconds, with overlap between phases.
+Every sampled/census broker has observed shutdown and OS exit; pilot's initial
+wrong-source retirement/pending wait remains in history and was subsequently
+resolved in its owned namespaces.
+
+Excluding the census's two extra refusals, complete-episode RPCs are 271 → 270
+in every variant; spend alone is 83 → 82. Observed receive traffic is
+999,060–1,004,527 → 966,984–972,825 bytes; send traffic is
+1,025,077–1,037,023 → 1,026,956–1,040,098 bytes. Extra send bytes reflect the
+longer candidate paths. Parent read-opens are 13,532–13,561 → 11,700–11,728;
+write-opens 285 → 284. Instrumented prequota module graphs are source
+1,404 → 480 and wheel 1,403 → 479, including instrumentation imports; these
+are not uninstrumented loading budgets. Cold Node/readiness takes 0.217–0.249
+seconds and version probing 0.026–0.032 seconds in the census. Single census
+timings do not establish a repeated latency gain; socket coverage and open
+counts do not include all native/broker I/O.
+
+**Evidence-conditioned next action:** carry the archive case to the existing
+terminal/freshness owner and #5677 integration before qualifying the full
+large-state lifecycle. Preserve the original operation/read/receipt identity
+and every refusal boundary; do not change archive policy merely to pass this
+workload. Then characterize the remaining `quota should-run` parser/loading and
+shared projection caller before selecting another performance change. The
+small-state data support continued exact-head review of #8240/#8243, not merge
+or installed-host adoption. Retain I3 for at least one minor release and keep
+M1/#8011, full R0/V10/R1, D2/D5/D6/D3, context/model/split-install, actual adoption
+and complete-cost acceptance open. No new budget, preset, provider or authority
+is introduced.
+
+For a source replay, fetch the exact PR heads and apply only the production
+`loopx/` diffs from their recorded merge bases (`79665b97a0a453380da02e15b1b62eee895147df`
+and `97cc1e0c40e766c73193b8077526a7f565dc561b`) to an isolated archive of the
+baseline. `uv sync --extra test` supplies the console. Build the two monolithic
+wheels independently with `uv build --wheel`; validate the Chat bundle through
+its existing owner before building. Reuse the source fixtures in
+`tests/control_plane/test_quota_settlement_cli.py`: author the synthetic Goal
+and background Todos before `_initialize_fixture_authority`, select File or
+SQLite and `hard_lease`, and use ordinary claim for execution. Declare the
+artifact write scope in both the Todo and Goal boundary, and use the existing
+Git-fixture helper plus a distinct worktree. Scope every command below to that
+fixture's registry/runtime and worktree; the guard supplies the full read and
+recovery commands. Keep the same Goal, Agent, Todo, Turn and claim operation:
+
+```text
+loopx heartbeat-prompt --thin --codex-app --goal-id <fixture-goal> --agent-id <fixture-agent>
+loopx heartbeat-prequota -g <fixture-goal> -a <fixture-agent>
+loopx todo claim --goal-id <fixture-goal> --todo-id <fixture-todo> --agent-id <fixture-agent> --claimed-by <fixture-agent> --claim-operation-id <fixture-claim>
+loopx quota should-run --goal-id <fixture-goal> --agent-id <fixture-agent> --todo-id <fixture-todo> --turn-instance-id <fixture-turn> --codex-app --context-delivery on
+# Execute first_read_command and every emitted contiguous next_command.
+# Produce {"sum_0_through_9":45}; verify it independently before completion.
+loopx todo complete --goal-id <fixture-goal> --agent-id <fixture-agent> --todo-id <fixture-todo> --turn-instance-id <fixture-turn> --claim-operation-id <fixture-claim> --evidence artifact:verified-sum
+loopx refresh-state --goal-id <fixture-goal> --agent-id <fixture-agent> --todo-id <fixture-todo> --turn-instance-id <fixture-turn> --classification synthetic_cli_cost_artifact --delivery-boundary semantic_closeout --delivery-batch-scale single_surface --delivery-outcome outcome_progress --agent-vision-json <fixture-vision> --delivery-workspace-path <fixture-worktree> --no-global-sync --suppress-external-sinks
+loopx quota spend-slot --goal-id <fixture-goal> --agent-id <fixture-agent> --todo-id <fixture-todo> --turn-instance-id <fixture-turn> --slots 1 --source heartbeat --execute
+loopx todo complete --goal-id <fixture-goal> --agent-id <fixture-agent> --todo-id <fixture-todo> --turn-instance-id <fixture-turn> --claim-operation-id <fixture-claim> --evidence artifact:verified-sum --no-follow-up
+loopx todo list --goal-id <fixture-goal> --todo-id <fixture-todo> --include-archived
+```
+
+Declare the fixture's observed shell, filesystem-write, network and evidence-poll
+capabilities on admission/writeback/spend; use the actual installed console for
+generated reader commands. Repeat completion, writeback, spend and terminal with
+unchanged arguments. Missing Node uses an isolated PATH, missing provider an
+empty disposable runtime, stale source a mismatched capture digest, and stale
+claim a normally released lease. These cases must refuse before writeback/debit;
+invalid Vision/workspace also remain refusals. The temporary measurement harness
+and raw captures stay private; this recipe describes the repeated workload and
+its oracles, not a distributed benchmark runner or public reproduction receipt.
+
+### 2026-11-07 — Original-Turn closeout survives automatic Todo archival
+
+The complete CLI comparison in #8257 exposed a lifecycle failure with 101
+synthetic Todos. Fresh source-console reproductions on `4a33eb4b5` retain
+`todo_archived` on both File and default SQLite after ordinary completion,
+durable writeback and one quota debit. The frozen comparison remains unchanged;
+these failed episodes are not accepted latency samples.
+
+The proposed repair stays in `todo_terminal_lifecycle.ts`. Its existing
+same-Turn fence and exact ordinary-completion receipt verification also qualify
+an archived Todo's closeout before the active-only rejection. One local helper
+owns both active and archived parent checks. Original claim/lease, task digest,
+validation declaration/receipt and provider CAS checks remain in force; archive
+selection and retention thresholds are unchanged. This permits only the
+original completion's terminal phase, without reopening archived work.
+
+Real File/SQLite console fixtures now complete the large-state sequence and
+replay completion, writeback, quota spend and terminal closeout with one debit
+and an unchanged independently verified JSON result. The durable CLI regression
+uses a real validator and ordinary hard-lease claim: premature settlement,
+unrelated archived work, another actor, claim or Turn, and changed completion
+intent are refused. Terminal closeout retains the original passed validation
+receipt, first completion time and archive state without rerunning the validator.
+Existing provider conformance retains source/digest, validation, lease and replay
+checks; an isolated real PostgreSQL suite qualifies its shared owner separately.
+
+The author proposal also integrates main `abf144202` (#8161), whose explicit
+Goal-scoped checks do not gate local Todo completion. The archive regression
+covers a failed Goal commitment alongside the local validator: ordinary and
+terminal completion still preserve the original receipt and one debit, never
+rerun the Goal checker, and leave the overall check failed. This is author-side
+integration coverage; it does not replace independent review or reviewed-repair
+wheel qualification.
+
+Independent review of #8264 at `12627eff8` found that changing only `--evidence`
+could replace the archived Todo's accepted artifact while returning the old
+validation receipt. All four File/SQLite × Goal-check fixtures reproduce this
+failure on that head. The revision integrates target main `10f66ec5e` and rejects
+different supplied evidence before archived closeout. Its new archived-closeout
+receipt also retains the accepted evidence, so a changed retry cannot bypass the
+check through receipt recovery. Omitted or empty evidence with a valid completion
+note keeps the original value; the CLI's completion-note requirement still applies.
+Historical fingerprints and older receipts remain compatible; active
+completion behavior is unchanged. The regression checks canonical evidence,
+original validation and completion time, and once-only validation/writeback/debit
+before and after terminal replay. The earlier reviewed head remains unaccepted.
+The revised `7ec8d19b9` received an independent
+[APPROVE review](https://github.com/loopx-project/loopx/pull/8264#pullrequestreview-5811807012)
+and #8264 merged as `172d80d63`.
+
+Qualification against target main `32167518b` now covers both the source console
+and a freshly built, isolated monolithic wheel. The Chat bundle was built and
+verified through its existing owner before wheel construction. All four
+File/SQLite × source/wheel episodes contain 101 synthetic Todos and use the real
+console, ordinary hard-lease claim and an independently verified JSON artifact.
+After the single committed debit, the fixture stops only its own Effect processes;
+new console processes recover the original terminal result through a restarted
+runtime. Canonical readback retains the accepted evidence, first completion time
+and archived state. Completion, writeback, debit and terminal retries retain four
+committed receipts and one debit; changed evidence is refused before terminal
+commit and on replay. The final original-Turn guard reports no runnable work or
+execution attempt. Wheel console/import provenance is checked separately from
+the source fixture authoring environment.
+
+| Distribution / provider | Complete episode | Initial guard | Result |
+| --- | ---: | ---: | --- |
+| Source / File | 22.682 s | 2.148 s | Original result recovered; one debit |
+| Source / SQLite | 22.220 s | 2.219 s | Original result recovered; one debit |
+| Wheel / File | 20.929 s | 2.020 s | Original result recovered; one debit |
+| Wheel / SQLite | 24.205 s | 2.787 s | Original result recovered; one debit |
+
+These are single correctness episodes, including negative/replay checks and
+controlled process stops, on macOS with Python 3.13.5 and Node 26.0.0. They do
+not rerun the frozen paired cost study or establish a latency improvement.
+The original eight large-state failures and the earlier uncertainty remain
+historical evidence. Three isolated parser inputs also confirm source/wheel
+acceptance of an emitted archive pointer while unexpected prose and mismatched
+region markers remain refusals. The older reader's pointer failure is preserved;
+this comparison neither changes the grammar owner nor upgrades an installed host.
+
+This qualifies the repaired large-state source/wheel closeout and controlled
+Effect restart boundary. The remaining guard loading/shared-projection cost
+profile and complete comparison stay with the existing work. Abrupt-interruption
+and model-host V4 recovery, split installation, full R0/V10/R1, M1/#8011,
+D2/D5/D6/D3, context/model, actual adoption and complete-cost benefit remain
+open. I3 remains at least one minor release.
+
+### 2026-11-07 — Guard loading and settled-replay diagnosis
+
+Source-console diagnosis at `6c10e61ad` reuses the real 101-Todo hard-lease
+episode above, with isolated File/SQLite authority and owned Effect processes.
+Five additional episodes preserve accepted evidence, original completion time,
+four committed receipts and one debit through controlled restart; changed
+evidence and renewed execution of the settled Turn remain refusals. Only guard
+and immutable-context reads are profiled. These are single diagnostic
+observations, including profiler overhead, rather than paired performance runs.
+
+| Bytecode condition / provider | Profiled guard | Import cumulative | Traced runtime requests | Request elapsed sum | Loaded LoopX modules |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Bytecode disabled / SQLite | 3.012 s | 2.281 s | 89 | 0.370 s | 503 |
+| Bytecode disabled / File | 1.972 s | 1.255 s | 89 | 0.344 s | 503 |
+| Normal inherited bytecode / SQLite | 1.584 s | 0.845 s | 89 | 0.394 s | 503 |
+| Normal inherited bytecode / File | 1.465 s | 0.772 s | 89 | 0.342 s | 503 |
+
+The disabled-bytecode observations include 0.634 / 0.555 seconds in source
+compilation for SQLite / File; neither normal-bytecode observation invokes
+source compilation. Import, loader-read and compilation values are nested and
+must not be added. Bytecode conditions explain part of startup cost while the
+loaded graph remains unchanged. They do not correct or supersede the frozen
+comparison's failures. In a fifth normal-bytecode SQLite episode, the guard
+loads 503 modules with 89 traced requests, while the immutable context reader
+loads 68 modules with one traced request: profiled elapsed times are 2.140 /
+0.246 seconds, and request elapsed sums are 0.389 / 0.067 seconds respectively.
+This characterizes different required operations, not interchangeable paths.
+
+Runtime request elapsed includes Python transport, shared runtime work and
+provider work. It is an upper bound on the provider contribution within those
+traced requests, not a separate database measurement or complete service CPU.
+The source snapshot takes approximately 0.048–0.050 seconds in the four guard
+observations. The next cost investigation therefore prioritizes the loaded
+decision/status graph over a new provider or fingerprint optimization. Moving
+`quota_context` imports alone cannot eliminate work that the later status
+collector still requires; quota already omits presentation projections, and
+the immutable context reader already has its selected loading path.
+
+Real File/SQLite Monitor episodes also qualify the settled and closed replay
+identity when an independent sibling becomes due. Each original Turn retains
+one poll and zero debits, without dispatching its sibling. Through the public
+`configure-goal --quota-compute 0` entrypoint, pause still takes precedence and
+returns `quota_skip`. The initial probe changed legacy `status` fields instead
+of the typed activation or quota owner; its failed pause expectation is a
+fixture error, retained separately from the corrected checks.
+
+| Provider / replay phase | Profiled replay | Import cumulative | Traced runtime requests | Request elapsed sum | Loaded LoopX modules |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| SQLite / settled | 1.135 s | 0.666 s | 68 | 0.150 s | 486 |
+| SQLite / closed | 1.149 s | 0.726 s | 62 | 0.157 s | 486 |
+| File / settled | 1.113 s | 0.713 s | 68 | 0.143 s | 486 |
+| File / closed | 1.128 s | 0.691 s | 62 | 0.149 s | 486 |
+
+The bounded next step stays with the existing quota/status and typed replay
+owners: identify which live facts and imports each decision actually needs,
+then remove unused loading or redundant shared requests with public-facade
+parity. A receipt-only early return is not yet qualified: current pause, scoped
+gates, independent pending intents, actor/lease/source checks and archived or
+closed lineage must survive. Any implementation still needs the same real
+source/wheel lifecycle and matched, unprofiled default-SQLite comparison;
+supported-backend correctness/recovery and required PostgreSQL qualification
+remain in force when affected. This diagnosis changes no production behavior,
+preset, budget, provider, authority or installed host. All earlier acceptance,
+adoption and complete-cost gaps remain open.
+
+### 2026-11-07 — Guard cost candidate selection and context transport composition
+
+An isolated source-console counterfactual defers three Monitor adapter imports
+until their functions are invoked. The 101-Todo SQLite lifecycle still retains
+the original artifact, completion time, four receipts and one debit. The guard
+loads 502 rather than 503 modules and still makes 89 traced runtime calls;
+only `todos.external_wait_contract` disappears. Monitor history lookup and
+quota accounting admission execute on the guard path, so their dependencies
+remain necessary. This rejects that import deferral as the next cost-reduction
+slice; the temporary wrapper is not a production or compatibility qualification.
+
+The existing context-transport candidates are separate from loading reduction:
+[#8286](https://github.com/loopx-project/loopx/pull/8286) at `efce6cb9c` skips
+inactive Anti-Entropy validation, and
+[#8290](https://github.com/loopx-project/loopx/pull/8290) at `9537687be` omits the
+governing source from status-only context validation. A temporary combined
+overlay against runtime base `32167518b` was exercised through four complete
+File/SQLite × base/overlay source-console episodes with 101 Todos. Accepted
+evidence, first completion time, controlled Effect restart, four committed
+receipts and one debit remain intact; evidence replacement and settled-Turn
+execution remain refusals. The combined source also passes 91 focused Python
+cases and 20 TypeScript cases with zero skips. The applied paths are restored
+after qualification; this creates no competing implementation or merge.
+
+| Provider | Traced guard calls, base → overlay | JSON parameter bytes, base → overlay | Loaded modules, base → overlay |
+| --- | ---: | ---: | ---: |
+| SQLite | 89 → 87 | 1,904,862 → 1,772,448 (−6.95%) | 503 → 503 |
+| File | 89 → 87 | 1,903,569 → 1,771,587 (−6.93%) | 503 → 503 |
+
+These single instrumented observations count the UTF-8 JSON parameters passed
+to the shared runtime. They exclude transport headers, retries, responses,
+startup and service CPU; they are not total wire bytes or a latency comparison.
+The SQLite status-only validation inputs total 134,868 bytes on base; the one
+remaining input is 2,045 bytes in the overlay. Immutable context and settlement
+owners remain in place. This independently confirms a bounded transport delta,
+without qualifying either candidate's merge, a combined wheel, installed-host
+adoption or complete task benefit. The frozen cost studies remain unchanged.
+
+The largest remaining guard parameter producers are `todo.context.page`
+(789,198 bytes across nine calls), `todo.quota_planning.project` (390,361 bytes)
+and `goal.vision_wait.project` (185,559 bytes), identical in the SQLite base and
+overlay. The next bounded investigation targets reuse of the canonical Todo
+source in those existing typed projection owners, before implementing one
+coherent source-read transaction. It must preserve source/provider revisions,
+actor/lease fences, complete exact reads, archive/replay lineage, pause/gates
+and pending intents. More leaf RPCs or lossy source-field pruning do not qualify
+the transaction cutover. Existing Goal-route work in #8123 and its unresolved
+performance holds remain separate. Full source/wheel correctness and a matched,
+unprofiled default-SQLite whole-path comparison are still required for a new
+implementation; all earlier milestone, adoption and complete-cost gaps remain.
+
+### 2026-11-07 — Reuse complete Todo display sources within a managed request
+
+The existing `todo.context.page` owner can compose summary, planning and retained
+terminal display views from one complete supplied source. The quota preparation
+caller explicitly requests the Agent source's three views and passes retained
+terminal rows to its frontier consumer. User-source and general display callers
+keep their requested single view. Source selection and each display rule retain
+their existing owners. The orchestration fallback reuses an independent copy of
+the already selected summary instead of requesting it again.
+
+Inside an already revision-pinned logical request, exact source JSON and request
+options bound the transport memo. Changed source facts and later requests
+revalidate; mutable callers receive independent decoded values. Large opt-in
+inputs keep the original per-view transport, and incomplete bundles fail before
+memo admission. The batch input threshold does not predict response size or
+promise inline transport. An explicit multi-view request can use the existing
+private response snapshot when the combined output exceeds the socket limit.
+
+Independent review of the initial proposal found that the generic transport
+expanded single-view calls into three views. An 8,000-row delivery-response
+caller retained the same final output but materialized about 11.18 MB of unused
+combined response instead of its roughly 3.73 MB single-view socket response.
+That performance failure is retained. The corrected caller-owned composition
+removes the implicit expansion; matching single-view and complete governed
+source/wheel qualification are recorded with the revision being proposed.
+
+The initial proposal against `main@32167518b3` passed six synthetic source and isolated-wheel
+101-Todo File/SQLite governed CLI lifecycles. They retained the verified artifact,
+original completion time, four settlement receipts, one debit, Effect restart
+recovery and rejected evidence replacement. A dropped write-scope response
+mutation fails at the independent public-guard scope check. Frozen display
+fixtures and focused source-isolation tests also cover the existing three views.
+One profiled SQLite guard reduced JSON parameter bytes from about 1.900 MB to
+1.556 MB and calls from 89 to 87; loaded modules remained 503. These counts are
+diagnostic and do not qualify complete wire cost, latency or long-horizon benefit.
+
+
+The corrected single-call comparison uses the same synthetic source on
+`main@dee549663`, the reviewed defective head and the repaired source. All three
+produce the same final delivery response. The repaired request parameters and serialized response
+bytes match main exactly; its nonempty response snapshot bytes are
+zero for both row counts. Five warm calls per arm gave the following exploratory
+medians, including the display and delivery-response projections:
+
+| Rows | Main seconds | Defective proposal seconds | Repair seconds | Defective response snapshot bytes | Repair snapshot bytes |
+| --- | --- | --- | --- | --- | --- |
+| 8,000 | 0.159 | 0.636 | 0.161 | 9,480,165 | 0 |
+| 15,000 | 0.284 | 1.344 | 0.286 | 17,775,165 | 0 |
+
+This reproduces and removes the single-view regression. It does not qualify the
+complete CLI, daemon CPU/memory, full marginal cost or long-horizon benefit.
+
+
+The repaired source and isolated wheel pass six 101-Todo File/SQLite governed
+CLI lifecycles with the verified artifact, original completion time, four
+receipts, one debit, restart and refusal/replay checks. A recursive dropped-scope
+response mutation fails at the independent public guard oracle. The isolated
+PostgreSQL 16.15 suites pass 390 store and 11 service cases with zero skipped.
+
+Three interleaved unprofiled default-SQLite whole-CLI pairs have median wall time
+12.24 seconds on main and 12.71 seconds on the repair. Two candidate runs are
+slower; ranges overlap. A separate profiled guard reduces parameter bytes from
+1,899,603 to 1,546,162 and calls from 90 to 87, with 503 modules unchanged.
+These observations do not establish a whole-path performance benefit. Daemon
+CPU/memory, total wire/file writes, complete marginal cost and adoption remain
+unqualified; the provider-first transaction remains the next accepted boundary.
+
+This is a reversible display-transport increment, not the complete provider-first
+Todo projection transaction. Provider reads, revisions, lease/actor fences and
+state writes retain their existing owners. The remaining canonical-source
+transaction, matched complete-cost qualification and affected backend acceptance
+stay open. I3 remains at least one minor release; M1/#8011, full R0/V10/R1,
+D2/D5/D6/D3, context/model/split-install, adoption and all frozen failures remain.
+
+#### Provider-first transaction requirements before the next proposal
+
+The following records the prerequisite gap at the display-only revision. The
+next checkpoint reports the canonical transaction proposal and its measured
+limits; it does not turn these earlier observations into a historical pass.
+
+The next implementation must compose the existing provider-admitted
+`canonicalTodoCollection` and projection owners. The native snapshot owner binds
+Goal, store incarnation, provider revision, cursor and query to complete rows,
+leases, read-model validation and acceptance guards. A continuation is a position
+within that read, not a reusable current-head handle; a changed snapshot restarts
+the complete read. Displaying a retained source does not obtain fresh authority.
+
+`quota_selection.py` still sends a complete summary source alongside encoded
+selection rows and source-row facts. Its request also includes the clock,
+actor/profile, capabilities, closure evidence, route/handoff facts and resume
+inputs. Move canonical row materialization into the existing typed owner before
+collapsing that transport. Preserve the Python-value codec where strict integer,
+boolean or text distinctions remain observable. Provider rows cannot substitute
+for independent caller evidence or pending intent; all-done counts alone cannot
+reconstruct a closure declaration.
+
+`goal_vision_wait` separately consumes complete lineage, scoped blockers, acceptance gaps and resume facts. The combined transaction must preserve each
+causal obligation, including when two obligations share a witness. Full notes,
+write scopes, archive/settled identity and source provenance remain part of its
+parity oracle.
+
+The real PostgreSQL integration case connects the existing native snapshot read
+to all three display views, checks unchanged provider/source data, observes a
+new provider revision after a separate commit, and refuses a stale continuation.
+This qualifies a composition prerequisite. The combined guard transaction,
+PostgreSQL source/wheel host journey and complete-cost benefit remain open.
+
+### 2026-11-07 — Canonical Todo transaction proposal and observed lifecycle cost
+
+The proposal materializes canonical selection and resume rows in the existing
+TypeScript owners after binding actor/profile/clock inputs. `todo.read` composes
+the Agent source's explicitly requested summary, planning and retained-terminal
+views, the User summary, quota selection and the existing Vision-wait basis.
+Within that quota request, matching native references share one complete
+provider read. Complete field digests, store incarnation, provider revision,
+cursor and the original query/selection replay recipe bind the source. A later
+request reads again; this is not a cache of provider authority.
+
+The actual governed CLI query now retains its source recipe through quota
+preparation. Previously, the full query response lost the ephemeral origin
+even though status had preserved it. Both query and selection paths now carry
+the complete provenance into the same typed transaction. Provider outages keep
+their original diagnostic code/payload, and stale references fail before
+projection. Source fields, Python scalar facts and owner-declared Todo source
+lanes cannot be overwritten through reference metadata. Independent caller
+metadata remains complete; callers that transform provider rows use the full
+supplied-source codec. Strict integer/float/bool and list/tuple distinctions,
+legacy fnmatch facts, lane/ordinal precedence and distant microsecond clocks
+retain their observable semantics. No Todo-id lookup restores lost provenance.
+
+The existing Vision-wait owner retains causal obligations and shared witnesses.
+Prepared basis reuse requires the same actor, complete terminal rows and logical
+request identity; independent lineage callers keep their existing path. A
+standalone display still requests one view. Complete notes, evidence, write
+scopes, archive/replay identity and independent closure/pending intent remain
+in the parity boundary. Existing source-lane constants are exported for native
+provenance validation; no new lane vocabulary, persisted state or authority is
+introduced.
+
+Production code at `66ff8bf48`, compared with `main@e2371c476`, passes four
+101-Todo source/isolated-wheel × File/default-SQLite CLI lifecycles. A separate
+verifier accepts sum=45; original completion time, four receipts, one debit,
+Effect restart, invalid Vision/workspace refusal, evidence-replacement refusal
+and settled replay remain intact. The wheel's affected sources match the source
+checkout. The final focused suites pass 132 Python and 86 TypeScript cases;
+the broader real CLI suite passed 244 cases before the final diagnostic/lane
+corrections, which the focused suites cover. Real disposable PostgreSQL 16.15
+passes 391 store and 11 service cases with zero skips, including two-role native
+quota composition, one complete provider load, unchanged data and stale-source
+refusal. This does not qualify a PostgreSQL source/wheel host journey.
+
+Five interleaved, unprofiled source CLI pairs use the same 101-Todo fixture and
+default SQLite provider. Each runs provenance, bootstrap, claim, guard, required
+context reads, artifact verification, completion, negative cases, writeback,
+spend, restart and terminal/refusal replay. Fixture setup and final teardown are
+reported separately. Normal bytecode conditions are inherited equally. The
+candidate is slower in three pairs and wall-time ranges overlap:
+
+| Observation, median unless stated | Main | Proposal |
+| --- | ---: | ---: |
+| Lifecycle wall time (range) | 14.093 s (13.765–14.933) | 14.145 s (13.461–15.190) |
+| Fixture setup / final teardown | 2.403 / 0.062 s | 2.338 / 0.062 s |
+| CLI child CPU + observed daemon CPU (historical, invalid unit conversion) | 5.511 s | 5.757 s |
+| Daemon boundary physical footprint | 140,787,912 B | 146,456,920 B |
+| CLI maximum resident size | 70,746,112 B | 70,221,824 B |
+| Observed daemon disk / logical writes | 9,048,064 / 14,090,240 B | 10,227,712 / 15,646,720 B |
+| CLI output / required context bytes | 177,595 / 21,168 B | 179,482 / 21,257 B |
+
+The CPU row above used an invalid Mach-clock conversion and must not be used
+as CPU evidence. Three independent CPU-bound child calibrations show that this
+macOS arm64 runtime reports daemon usage in Mach ticks: multiply by the measured
+timebase `125/3` before converting nanoseconds to seconds. The original raw
+observations remain unchanged. Correcting the five historical pairs gives
+7.071→7.469 seconds of combined observed CPU including setup daemon work.
+Subtracting each initial daemon baseline gives 6.706→7.107 seconds for the CLI
+episode; corresponding daemon disk/logical writes are
+8,892,416/13,783,040→10,072,064/15,355,904 bytes. These corrected observations
+still do not demonstrate a whole-path benefit.
+
+Daemon CPU/writes are cumulative process observations at CLI boundaries,
+excluding final exit work. CLI CPU excludes the unsampled provenance process
+and harness work. CLI RSS and daemon footprint are separate observations, not a
+continuous full-system peak. These bounds do not measure complete model cost,
+human attention or installed-host/long-horizon benefit.
+
+A separate instrumented pair observes the following communication delta; its
+elapsed time is excluded from the wall-time comparison:
+
+| Diagnostic | Main | Proposal |
+| --- | ---: | ---: |
+| Guard RPCs / JSON parameter bytes | 90 / 1,903,233 | 84 / 837,940 |
+| Full episode socket sent / received bytes | 3,537,350 / 6,380,604 | 1,948,250 / 6,388,112 |
+| Loaded guard LoopX modules | 503 | 503 |
+
+Both guard role sources use the native transaction. Fewer request bytes and
+calls demonstrate transport adoption, while received bytes, observed writes
+and CPU do not improve together. Whole-path acceleration or complete marginal
+cost benefit is therefore **not qualified**. The next decision remains with
+this transaction's original acceptance: independent review and attribution of
+the remaining lifecycle costs before proposing further optimization. These
+negative results do not justify another leaf-RPC migration or a new provider.
+
+The proposal was rebased onto `main@e58ba30bc`. A final scope-fit check found that
+the read transport's provenance binding exceeded the decision-function budget.
+That complete binding and selected-row evaluation restoration were extracted
+into a local helper; 24 focused parity cases and the maintainability ratchet
+pass. The cost table remains the observation at `66ff8bf48`, before this helper
+extraction, and is not an exact-final-head cost qualification. TypeScript
+typecheck and Ruff pass. Mypy retains main's existing missing return annotation in
+`decision_capture.py`; the standard premerge also retains main's peer-boundary
+scanner failure on unchanged benchmark documentation. Neither is a passing
+skip. Required exact-head review, validation/readiness and maintainer merge
+authorization remain separate; there is no merge or installed-host upgrade.
+The original task stays open for benefit and remaining acceptance. Retain I3
+for at least one minor release, M1/#8011, full R0/V10/R1, D2/D5/D6/D3,
+context/model/split-install, adoption/full-cost gaps and every frozen failure.
+
+### 2026-11-08 — Complete quota response transport and calibrated cost
+
+Independent review reproduced a remaining regression at `e7db1711f`: an
+8,000-row composed quota result serialized 13,080,176 bytes and caused
+13,080,177 bytes of synchronous response-snapshot writes. Main's separate
+views stayed below that response threshold. The existing Todo read adapter now
+uses lossless gzip for quota results above the shared 8 MiB inline budget and
+within the existing complete-frame budget. It returns the existing result-piece
+envelope with encoding and decoded extent, keeping base64 pieces within the
+socket budget. Larger reads retain their existing paging. The Python adapter
+checks complete digest/identity, bounded decoded size, exact extent and one
+complete gzip member; unknown encoding, truncation and trailing data fail.
+The original response-budget value is shared with the server rather than
+duplicated. No provider cache, persisted state, rule owner or authority changes.
+
+The same 8,000-row diagnostic now emits 561,291 wire bytes with zero response
+snapshot bytes. Complete results match the previous independent summary,
+planning and terminal views; unknown fields and Unicode remain intact. A
+single diagnostic elapsed time is not acceleration evidence. Twelve transport
+cases plus the existing 24 parity cases pass; two native File/SQLite 8,000-row
+quota cases preserve both role sources, complete views and provider data/revision
+with no response snapshots. Twenty-two TypeScript context/quota cases and eight
+real receipt/replan/reentry cases pass. The earlier over-specific test oracle
+failed because display owners intentionally expose different fields; the final
+oracle compares their complete independent outputs rather than changing them.
+
+Production `2c9d6360e`, based on `main@8a4d4f9da`, passes four fresh 101-Todo
+source/isolated-wheel × File/default-SQLite CLI lifecycles, including sum=45,
+original completion time, four receipts, one debit, restart and negative/replay
+cases. The final wheel matches the affected source files. Real disposable
+PostgreSQL 16.15 again passes 391 store and 11 service cases, zero skips.
+TypeScript typecheck, Ruff and the maintainability ratchet pass. These checks
+do not qualify a PostgreSQL source/wheel host journey or installed-host adoption.
+
+Five new interleaved unprofiled default-SQLite pairs use the unchanged 101-Todo
+fixture, full negative/replay lifecycle and inherited bytecode conditions. No
+heavy tests run concurrently. CPU uses the calibrated Mach timebase `125/3`;
+daemon CPU/writes subtract the initial setup baseline:
+
+| Observation, median unless stated | Main | Proposal |
+| --- | ---: | ---: |
+| Lifecycle wall time (range) | 13.894 s (12.686–16.481) | 14.974 s (14.131–15.344) |
+| Fixture setup / final teardown | 2.347 / 0.062 s | 2.299 / 0.062 s |
+| CLI child + observed daemon CPU after setup | 7.086 s | 7.403 s |
+| Observed daemon disk / logical writes after setup | 8,884,224 / 13,795,328 B | 10,076,160 / 15,130,624 B |
+| Daemon boundary physical footprint | 141,032,832 B | 150,520,728 B |
+| CLI maximum resident size | 71,467,008 B | 71,696,384 B |
+
+Four candidate runs are slower and wall ranges overlap. The large-response
+write regression is repaired, but complete lifecycle benefit remains
+**unqualified**. Final daemon exit, unsampled provenance/restart helpers,
+harness CPU, continuous system peak, model cost and human attention remain
+outside these observations. The original transaction task stays open for
+independent exact-head review and attribution of the remaining CPU/write cost.
+Earlier premerge peer-boundary and mypy failures remain validation holds until
+an exact final check proves otherwise. Retain I3 for at least one minor release,
+M1/#8011, full R0/V10/R1, D2/D5/D6/D3, context/model/split-install,
+adoption/full-cost gaps and all frozen failures.
+
+### 2026-11-08 — Legacy projection kind and remaining native read cost
+
+Independent review found that source precedence survived composition but its
+projection kind did not. When canonical and legacy asset inputs referenced the
+same dictionary, object identity selected the user-summary path even when the
+existing precedence rule had chosen the legacy asset. Legacy string counts
+became null; a `next`-only input bypassed the missing-Todo-ID refusal.
+
+Production `4c3ed5d39` makes the existing selector return both source and its
+existing projection kind. Every display/inventory caller still uses the same
+selected source. No new vocabulary, persisted field or authority is introduced.
+Final static validation required an explicit variadic source-candidate tuple
+annotation. Its execution bytecode remains identical; the typing failure is
+retained and the corrected mypy run leaves only main's existing annotation hold.
+Thirteen new cases compare complete summaries with the independent original
+selector for both roles, shared/copy inputs, canonical precedence and actual
+guard selection/refusal. Six fail at the preceding head; all pass after repair.
+The first test draft assumed numeric legacy counts and an unbound guard; its
+failures are retained, and the final oracle preserves the original string
+values and bound Agent/Turn path. The focused suite passes 96 cases. Source and
+isolated wheel independently preserve legacy counts and refuse missing IDs;
+four fresh 101-Todo source/wheel × File/SQLite lifecycles preserve the artifact,
+completion time, four receipts, one debit, restart and negative/replay checks.
+Real disposable PostgreSQL again passes 391 store and 11 service cases with
+zero skips; its server is stopped.
+
+Attribution of the preceding five paired cost runs points to repeated native
+reads during guard, writeback, spend and settled replay. A separate instrumented
+complete lifecycle observes eight additional native `todo.read` calls, each
+adding 147,456 observed daemon disk-write bytes: 1,179,648 bytes in total.
+Instrumented elapsed times are excluded from qualification. A standalone probe
+of the exact native snapshot owner records four read-only SQLite connections
+per snapshot and the same 147,456-byte process-counter increment. Alternating
+identity reads use one read-only connection and 36,864 bytes; provider revision
+and database content digest remain unchanged. These observations locate read
+lifecycle cost; they do not identify physical-device writes or justify removing
+identity, revision, WAL, lease or recovery checks.
+
+The Python `invalid-vision` profile is dominated by imports with the same call
+counts in both arms. Its wall weights do not attribute the paired CPU difference
+or justify another import migration. The next accepted work is a bounded study
+of the existing SQLite read/connection lifecycle, preserving fresh incarnation
+and revision checks through the typed owners. Provider edits require their
+ordinary task scope/ownership preparation. The previous corrected cost table
+remains at `2c9d6360e`, not this compatibility repair; no fresh speedup claim is
+made. Keep the original task, independent exact-head review, whole-path/full-cost
+and host/model/adoption acceptance open, with I3, M1/#8011, R0/V10/R1,
+D2/D5/D6/D3, context/split-install and all frozen failures retained.
+
+### 2026-11-07: selected SQLite snapshot read lifecycle
+
+The existing `AuthorityStore` now offers an optional storage-only paired
+identity/head read, consumed by the existing canonical snapshot owner.
+`SqliteAuthorityStore` exposes it only for `existingOnly` stores. Identity and
+the complete proven head share one synchronous read transaction; no connection,
+head or provider authority is retained between calls. General SQLite stores,
+File, PostgreSQL and custom stores without the optional method retain the
+original identity/load ordering and failure precedence. No persisted state,
+wire vocabulary, capability, selector or Python rule owner is added.
+
+Provider selection still validates the configured incarnation, and snapshot
+admission still independently reopens the pathname after loading the head.
+Revision, cursor, full read-model digest, stale continuation, WAL, lease and
+receipt/replay checks remain. A real directory replacement after the head read
+is refused without partial rows. Suppressing the final incarnation check in a
+private mutation makes that same public snapshot oracle fail.
+
+Runtime commit `61f7c3c33` passes 873 related TypeScript cases and type checking,
+four complete source/wheel File/SQLite 101-Todo lifecycles, and isolated real
+PostgreSQL 16.15 store391/service11, with no skips. The lifecycles preserve sum45,
+original completion time, four receipts, one debit, restart and refusal/replay;
+all 23 changed production files match the wheel. Native before/head diagnostics
+retain identical complete response and database hashes, reducing read-only
+connections from four to three and observed daemon disk-counter bytes from
+147,456 to 110,592 per snapshot. Those counters do not measure physical-device
+writes, and the instrumented diagnostic does not qualify elapsed performance.
+
+Five new interleaved, unprofiled complete default-SQLite groups compare the
+same 101-Todo fixture at main `8a4d4f9da`, prior `c40d8ec31` and runtime
+`61f7c3c33`, on CPython3.13.5 / Node26.0.0 / qualified SQLite3.53.1. All fifteen
+lifecycles preserve the same independently verified outcome and settlement.
+
+| Observed metric, median (range where shown) | Main | Prior | Paired read |
+| --- | --- | --- | --- |
+| Lifecycle wall time | 14.945 s (12.664–16.597) | 14.924 s (14.570–19.232) | 14.871 s (14.412–16.775) |
+| CLI + sampled daemon CPU after setup | 7.084 s | 7.388 s | 7.292 s |
+| Daemon disk-counter bytes after setup | 8,896,512 | 10,076,160 | 8,314,880 |
+| Daemon logical-write counter bytes after setup | 13,897,728 | 15,618,048 | 12,840,960 |
+| Fixture setup / final teardown wall time | 2.373 / 0.060 s | 2.387 / 0.062 s | 2.336 / 0.062 s |
+
+Two of five candidate episodes are slower than main and two slower than the
+prior head; the wall-time ranges overlap. Reduced observed writes do not remove
+the higher median CPU than main or qualify overall benefit. CPU uses the
+verified Mach timebase125/3, subtracting each daemon's setup baseline. Sampling
+excludes final daemon exit, unsampled restart helpers, provenance and harness
+CPU. CLI RSS and daemon boundary footprint are separate observations, not a
+continuous whole-system peak. No heavy validation ran during these groups;
+model cost, human attention and installed-host adoption remain unmeasured.
+These new observations do not replace or relabel any historical campaign.
+The next route is independent review and attribution of the remaining complete
+CLI CPU cost before another optimization, retaining the fresh read fences.
+
+The standard premerge passes six direct checks and 18 of 19 selected checks.
+The peer hard-cut scanner still fails on the same unchanged benchmark README
+at both main and candidate. The original task remains open for independent
+exact-head review, matched whole-path/full marginal costs and host/model/adoption
+acceptance. Preserve I3 for a minor release, M1/#8011, R0/V10/R1, D2/D5/D6/D3,
+context/split-install and every prior failure; neither connection counts nor
+passing validation establishes the complete minimal-kernel outcome.
+
+Latest-main integration qualification at `ce0e41a26` over `df67371c3` retains
+the same 23 PR production-source hashes. Fresh source/wheel File/SQLite four
+complete lifecycles, 49 TypeScript cases, types and isolated PostgreSQL391/11
+pass. The saved-context/legacy Python checks report 107 passed and 14 skipped;
+those explicit native Codex cases remain unqualified. The inherited missing
+return annotation is repaired on main and fresh kernel mypy passes; retain its
+historical failure. Standard premerge still passes six direct and 18/19
+selected checks, with the existing peer scanner failure.
+
+Five fresh unprofiled default-SQLite pairs at this integration preserve the same
+101-Todo outcome. Main/candidate lifecycle wall medians are 14.631/14.633 s
+(ranges14.260–16.869/14.122–14.941); observed CLI plus daemon CPU after setup is
+7.038/7.080 s; daemon disk-counter bytes are 8,880,128/8,290,304 and logical-write
+counter bytes14,966,784/14,282,752. Fixture setup medians2.362/2.346 s and final
+teardown0.062/0.058 s remain separate. Two candidates are slower and ranges
+overlap. The same sampling exclusions above apply; reduced write counters do
+not qualify a complete speedup or marginal-cost/adoption benefit. Complete the
+remaining cost coverage and establish any repeatable CPU regression before
+choosing further implementation; do not assume that another read/import
+optimization is justified.
+
+### Complete-cost coverage and current-main transaction checkpoint
+
+The existing proposal is integrated at `23227ee5` with main `0c28f6004`.
+Its 23 PR production-source hashes remain unchanged. Fresh checks pass 59
+focused Python and 63 TypeScript cases, typing/mypy, four complete source/wheel
+File/SQLite 101-Todo lifecycles and isolated PostgreSQL16.15 store391/service11,
+with no skips in those runs. The same artifact, original completion time,
+receipts, debit, restart and refusals/replay are preserved. Standard premerge
+retains the existing peer scanner failure (six direct and18/19 selected pass).
+The first PostgreSQL attempt lacked the checkout's `pg` dependency; its failure
+is retained separately from the successful installed-environment run.
+
+Five new unprofiled default-SQLite pairs at this current integration preserve
+the identical fixture/outcome. Main/candidate wall medians are14.255/14.382s
+(ranges13.971–14.887/13.428–14.684); sampled CLI+daemon CPU after setup is
+6.873/7.141s; observed daemon disk counters8,904,704/8,306,688B and logical-write
+counters14,491,648/13,443,072B. Setup2.314/2.187s and teardown0.061/0.057s remain
+separate. Three candidate episodes are slower and ranges overlap. Reduced
+write counters still do not qualify overall or complete marginal-cost benefit.
+
+A separate passive exit-observation pair expands the accounting boundary.
+Python self/waited-child usage covers the harness, provenance/verifier and CLI
+children; the initial owned daemon is already in waited-child usage, so only
+the later orphan daemon is added. Independent production locator PIDs require
+both daemon exit records; dropping one record fails the coverage oracle.
+Main daemon CPU after its last samples is0.147/0.045s; candidate0.149/0.046s.
+The nearly equal tails do not explain the sampled CPU difference. These exit
+callbacks cover the controlled shutdown/cache-retirement path, while observer
+emission, native post-callback work, orphan native children, physical-device
+writes and continuous system peaks remain outside this accounting. This
+instrumented pair is a coverage diagnostic, not a latency qualification or a
+replacement for any historical metric.
+
+A second instrumented complete pair records per-RPC calibrated process CPU.
+`todo.read` increases from18 to26 calls and adds0.172s sampled Node CPU; this
+locates the next investigation in the existing Todo/provider read transaction.
+Its timings cannot certify performance or justify removing current-source,
+incarnation, revision, WAL, lease or recovery checks. Characterize a cohesive
+reuse opportunity within one admitted request before further implementation;
+do not infer an import migration or cross-request authority cache from these
+observations. Original Task/vision, independent exact-head review,
+I3/minor-release, M1/#8011, R0/V10/R1, D2/D5/D6/D3, context/model/split-install,
+PostgreSQL host/wheel, full-cost/adoption gaps and all frozen failures remain.
+
+### Refresh summary transaction checkpoint
+
+At runtime `68fae1d0` integrated with main `87a153d4d`, a complete-lifecycle caller trace
+locates two independent native User/Agent summary requests inside one refresh
+qualification. The existing Python adapter now passes the pair through the
+existing TypeScript Todo transaction. That owner validates the source and each
+request, sharing complete provider materialization when their references match.
+Independent metadata, clock/actor binding and all source/identity/revision/WAL,
+lease, receipt/recovery checks remain; supplied sources or references from a closed request scope retain
+the standalone path. No authority is cached across requests. This is an internal
+existing CLI/readback improvement with no new product operation or configuration.
+
+The same 101-Todo source/wheel File/SQLite lifecycles preserve sum45, original
+completion time, four receipts, one debit, restart, refusal/replay and settlement
+readback. A recursive dropped-scope response mutation fails the independent
+scope oracle in the real SQLite CLI; its disposable daemon is stopped. The
+instrumented lifecycle reduces todo.read26 to24 and each refresh summary pair
+from two RPCs to one; that is a mechanism diagnostic, not a latency result.
+Current113 Python/63 TypeScript, typing/mypy and isolated real PostgreSQL16.15
+store391/service11 pass, zero skips in the qualified runs; both servers stopped.
+All24 PR production files match the isolated wheel. The first missing argument
+and first service-env skip are retained as failed/unqualified attempts. Standard
+premerge passes six direct and18/19 selected checks, retaining the unchanged
+peer hard-cut scanner failure. The public-boundary subcheck is clean; separate
+complete local checks still expose unrelated registered-Goal authority errors.
+
+Five matched, interleaved, unprofiled default-SQLite source episodes per arm
+compare main `b78246ff7`, the prior proposal `94c99e28a` and runtime
+`fc032cbf5`, before the later main integration. Each fixture driver uses that
+arm's exact CLI interpreter; all15 prequota PID-set checks preserve the same
+prewarmed daemon. The earlier overlapping-validator and mismatched-interpreter
+campaigns are retained only as diagnostics. Runtime isolation is preserved.
+
+| Observation median | Main | Prior proposal | Refresh proposal |
+| --- | ---: | ---: | ---: |
+| Lifecycle wall, seconds | 22.092 | 23.620 | 22.033 |
+| Timed child + sampled daemon CPU after setup, seconds | 14.756 | 15.353 | 14.907 |
+| Sampled daemon disk counter, bytes | 8,888,320 | 8,310,784 | 8,093,696 |
+| Sampled daemon logical-write counter, bytes | 13,946,880 | 13,840,384 | 13,107,200 |
+| Observed daemon lifetime peak, bytes | 141,508,280 | 139,887,008 | 138,510,608 |
+
+Wall ranges are21.898–24.716 /22.615–24.863 /21.824–24.767s;
+setup medians2.336/2.404/2.392s and final teardown0.062/0.062/0.058s are
+separate. All five refresh candidates are faster than the prior proposal, but
+three are slower than main and ranges overlap. Timed child CPU includes the
+independent verifier. These counters exclude complete exit/helper/harness,
+provenance, model and attention costs; disk counters and sampled lifetime peaks
+are not physical-device writes or continuous system peaks. The complete benefit
+remains unqualified. These observations do not qualify the later main integration,
+or replace historical/frozen failures. The integrated production hashes remain
+identical, and its four source/wheel File/SQLite lifecycles were rerun.
+
+
+The original full declaration and every historical/frozen failure remain. I3
+for at least one minor release, M1/#8011, R0/V10/R1, D2/D5/D6/D3,
+context/model/split-install, PostgreSQL host/wheel, full-cost/adoption and
+independent exact-head review remain open. No main merge or installed-host
+upgrade is included. Further implementation must follow the complete cost
+comparison and preserve every current freshness/authority fence.
+
+### 2026-11-08 — Matched source/wheel process cost through native exit
+
+The original proposal #8302 is integrated with target main `21013c0c1` as
+`9e147ddf2`. All24 PR production-source hashes remain unchanged. Each arm's
+1840 packaged tracked sources match its rebuilt isolated wheel; five unchanged
+source-only files remain outside package-data patterns: the Canary baseline,
+three Claude plugin/config files and the shadow-drain test process. This checks
+packaged-source parity, not identical source/wheel inventories or fingerprints.
+
+The frozen default-SQLite comparison completes five alternating pairs per
+distribution,20 complete101-Todo lifecycles, on macOS27 arm64,
+CPython3.13.5/Node26.0.0. Fixture initialization, CLI and verifier use the exact
+arm interpreter/package. Package loading precedes checkout fixture helpers;
+temporary/process isolation precedes module imports. An initial wheel preparation
+refused source-loaded fixture provenance before authority initialization; that
+failed preparation remains separate. Both wheels required the existing verified
+Chat build before construction. Every matched prequota PID-set check retains
+the correctly sourced prewarmed daemon; controlled restart creates a second,
+separately accounted daemon. Bytecode is disabled and each CLI is a new process.
+No builds or validators overlap the matched runs, and the frozen count is not
+expanded after results.
+
+All20 episodes independently retain the same sum45 artifact, original completion
+time, four committed receipts and one debit, required scopes, changed-evidence
+refusal, completion/writeback/spend/terminal replay, controlled restart and
+settled-Turn execution refusal. Identical passive OS waiters observe both native
+daemons through real exit. External `wait4` captures the harness and its waited
+subtree; directly reaped daemon waiters are already included, so only orphan
+native subtrees and observed orphan-waiter CPU are added. This avoids double
+counting and includes native exit CPU that earlier sampled comparisons omitted.
+
+| Distribution | Whole harness wall median (range), seconds, main → candidate | Observed process CPU median, seconds | Complete managed-daemon CPU median, seconds |
+| --- | --- | --- | --- |
+| Source | 25.904 (25.589–26.629) →26.477 (25.603–26.643) | 17.489 →17.749 | 1.782 →1.887 |
+| Wheel | 26.248 (25.670–28.200) →26.489 (26.135–27.437) | 17.984 →18.341 | 1.787 →1.932 |
+
+Source setup/lifecycle/teardown medians are2.602/22.581/0.062 seconds on main
+and2.669/22.807/0.058 on candidate; wheel medians are2.712/22.568/0.062 and
+2.651/22.878/0.062. Whole wall measures harness start through OS exit, including
+readback and observer work outside these three phases; their medians need not
+sum to its median. Candidate wall is slower in4/5 source pairs and2/5 wheel
+pairs; observed CPU is higher in4/5 pairs for each distribution. Wall ranges
+overlap, and no significant wall improvement is claimed. Nearest-rank empirical
+p95 from five observations equals the maximum: source26.629→26.643 seconds,
+wheel28.200→27.437; these are not stable population percentiles.
+
+A separate instrumented wheel pair preserves all lifecycle/provenance/exit
+oracles and traces367→344 RPCs with3,506,215→1,874,964 JSON parameter bytes.
+It diagnoses the transport mechanism and does not qualify speed. Managed-daemon
+CPU is1.864/1.896 seconds, about9.5%/10.0% of observed process CPU in that pair.
+Other Node helpers/probes remain inside the CLI waited subtree together with
+Python startup and local processing; their individual contributions are
+unresolved. Calling the entire remaining CPU Python startup would misattribute
+the evidence. Further work must first attribute this subtree's material costs,
+then select a bounded change through the existing typed owner and repeat the
+same outcome/recovery checks. The original task remains open for this work and
+independent exact-head review; fewer RPCs or passing tests do not establish
+whole-path benefit.
+
+Current-main integration passes99 focused Python and83 TypeScript cases, zero
+TypeScript skips, and control-plane typing. The earlier real PostgreSQL16.15
+store391/service11 qualification belongs to unchanged production sources; it is
+not a new run at this integrated head. Current-head File whole-CLI and
+PostgreSQL host/wheel journeys remain unqualified. Observer CPU after result
+publication, physical-device writes, continuous system peak, environment/build
+cost, model/attention and installed adoption remain unknown or outside this
+comparison; missing tails are not zero. Earlier failures and frozen campaigns
+are neither replaced nor relabeled. Full marginal/long-horizon benefit remains
+unqualified. Keep I3 for at least one minor release, M1/#8011, full R0/V10/R1,
+D2/D5/D6/D3, context/model/split-install, full-cost/adoption and all freshness,
+identity/revision/WAL/lease/receipt/recovery fences. No main merge or host
+upgrade is included.
+
+### 2026-11-08 — CLI CPU attribution and fresh source-scan path construction
+
+One separate wheel attribution pair compares main `21013c0c1` and proposal
+`24ca29f4e`, retaining the complete101-Todo lifecycle and every prior
+source/package, scope, warm-PID, artifact, original completion-time, four-receipt,
+one-debit, refusal/replay/restart and native-exit oracle. Each arm records22
+Python console processes, three independent Node helpers/probes and two managed
+daemons through actual exit. The helpers are two version probes and one setup
+helper; all their exits precede the associated caller's readback. PATH-resolved
+Node programs keep their exact executable and arguments. Python console CPU
+profiles use `process_time`; no timing qualification is inferred from this
+instrumented pair.
+
+| Diagnostic CPU, seconds, main → proposal | Observation |
+| --- | --- |
+| Python CLI self, sampled before profile dump | 20.447 →20.099 |
+| Python profile exclusive total | 18.230 →17.922 |
+| Import machinery cumulative | 14.505 →14.403 |
+| Compilation exclusive | 7.488 →7.464 |
+| Complete managed-daemon subtree | 1.780 →1.890 |
+| Three independent Node helper/probe subtrees | 0.286 →0.281 |
+
+Import cumulative time includes nested compilation and must not be added to
+the exclusive compilation total or the self sample. Module loading may happen
+inside an operation; this does not separately identify interpreter startup.
+The fixed bytecode-disabled condition makes loading/compilation prominent, while
+the helper contribution is bounded. Python interpreter/wrapper/profiler overhead
+and publication tails prevent treating these figures as an unprofiled cost
+decomposition. They do not explain or reverse the earlier frozen pair's CPU
+increase, establish speedup, or qualify normal-bytecode installed adoption.
+
+The same profiles locate source-scan path handling in the existing filesystem
+adapter. Runtime `a57fd3ef7` computes the POSIX relative-directory prefix once
+per directory instead of constructing an additional relative `Path` for every
+candidate file. Source selection, sorted rows, file metadata, `Path.stat` and its
+platform error policy remain; full-source hashing and every freshness/identity,
+revision/WAL/lease/receipt/recovery fence are unchanged. This bounded companion
+refactor adds no capability, provider, persisted field, vocabulary or authority
+cache. The native TypeScript owners retain their existing rules.
+
+The immutable parent and new scanner produce the exact same404 metadata tuples
+over the same real source tree.64 focused Python cases and kernel mypy/Ruff
+pass. Before/head real `runtime.ping` calls over disposable copied packages
+both rotate fingerprint and PID after an owned JSON file changes. A deliberate
+omitted-JSON-source mutation fails that same independent runtime oracle; all
+owned probe runtimes are stopped. Eight before/head × source/wheel × File/SQLite
+complete CLI lifecycles retain the original artifact, completion time, scopes,
+four receipts, one debit, refusals/replays and both native exits. These qualify
+correctness and the exercised real path, not performance.
+
+The rebuilt monolithic wheel matches1840 packaged tracked sources; only the
+existing `effect_runtime.py` changes among the original24 production files.
+The same five source-only omissions remain. One independent import probe first
+ran in a checkout working directory and loaded source; its failed preparation
+is retained. Corrected qualification uses a non-checkout working directory,
+clears `PYTHONPATH` and requires the module to belong to the isolated installation
+before comparing bytes. The lifecycle harness retains its own independent
+package-root checks. The initial wrong-directory Chat build command also remains
+a preparation failure; the dashboard owner's build then verifies the bundle.
+
+Wider loading changes remain a separate next decision: compare real normal and
+disabled bytecode behavior at the existing quota/context and refresh dispatch
+owners before moving required dependencies. The path-allocation delta is an
+interim local reduction with no whole-path/marginal-cost benefit claim. Current
+PostgreSQL host/wheel, model/attention, continuous peak, physical-device writes,
+installed adoption and full long-horizon qualification remain open. Unchanged
+PostgreSQL store/service owners retain their earlier real qualification; no new
+PostgreSQL run is claimed here. Preserve all frozen failures, the existing peer
+hard-cut validation hold, I3 for at least one minor release, M1/#8011, full
+R0/V10/R1, D2/D5/D6/D3 and context/model/split-install/full-cost/adoption acceptance.
+The original task and independent exact-head review remain open; no main merge
+or installed-host upgrade is included.
+
+### 2026-11-08 — Normal-bytecode lifecycle and observation limits
+
+One before/head wheel pair exercises the same complete 101-Todo SQLite
+lifecycle at `24ca29f4eb2afe0bbf27df00002abd005febf256` /
+`1a4d9d8f92491db5913cfa59061bcd58c677868d`; packaged runtime bytes are
+`9e147ddf2085b080eba0cd2d7888ec896b270333` /
+`a57fd3ef771013c80add55821321e98e577836e6`. Target main remains
+`21013c0c113445b71a30f6ce06ab61455b56f1f2`. This checkpoint changes only the
+paired RFC; the production proposal is retained for independent review.
+
+Both arms use newly installed wheels, the same CPython 3.13.5 and dependency
+versions, and fresh byte-identical copies of the existing fixture helpers.
+Installation and fixtures start with zero pyc files. Pre-run provenance checks
+use `-B`, a non-checkout working directory and cleared `PYTHONPATH`; imported
+module ownership is checked before all 1,840 packaged tracked source hashes.
+The same five source-only omissions remain. Measured processes use default
+bytecode, with write-disable, cache-prefix and importtime variables unset;
+`sys.dont_write_bytecode=False` and `sys.pycache_prefix=None` are read back.
+Data and temporary directories are isolated before fixture imports. Interpreter
+stdlib and OS file caches are shared and are outside the isolation claim.
+
+| Cache stage, identical path sets in both arms | All installed pyc | LoopX pyc |
+| --- | ---: | ---: |
+| Installation complete | 0 | 0 |
+| Driver before fixture import | 1 | 0 |
+| Fixture/setup complete | 317 | 223 |
+| Bootstrap complete | 358 | 264 |
+| Prequota complete | 433 | 339 |
+| Guard and required reads complete | 665 | 571 |
+| Settled replay and teardown complete | 699 | 605 |
+
+The driver's first pyc belongs to virtualenv support. Five fixture pyc files
+appear during setup in each fresh fixture copy. All 605 final LoopX pyc headers
+match the interpreter magic and their source timestamp/size. These are cache
+validity and phase observations, not a count of modules loaded by one guard or
+a measurement of default-mode compilation/import CPU.
+
+Both original lifecycle runs exit successfully. Artifact sum45 and its digest,
+original completion time, required scopes, four committed receipts, one debit,
+unchanged prequota warm PID set, controlled restart, evidence-replacement
+refusals and completion/writeback/spend/terminal/settled-Turn replay pass. Each
+arm retains all 22 console command/phase/wrapper exit records, three exact-argv
+Node helper exits and both managed daemon exits. Waited descendants are counted
+once; only orphan daemon subtrees and their observed waiter CPU are added to
+the outer waited subtree.
+
+**The actual console-PID observation subcheck failed.** The first observer
+incorrectly interpreted macOS `proc_listchildpids`' PID count as a byte count,
+recording 0/22 actual console PIDs. An independent disposable child probe
+reproduced and corrected that API interpretation before the unstarted head
+arm. Head captures 21/22 actual console PIDs; bootstrap is still outside the
+bounded sampling window. Wrapper PID/argv/exit records remain complete, but
+actual-PID coverage is incomplete. Both failed post-run subchecks are retained;
+neither lifecycle is rerun. A preliminary parse with the host's incompatible
+Python 3.9 also fails; syntax validation with the executing 3.13 interpreter
+passes. The fix and evidence gap remain in the original task's recovery record.
+
+| Single-pair raw observation, before → head | Value |
+| --- | ---: |
+| Whole harness wall | 24.044 → 25.180 s |
+| Observed process CPU including orphan additions | 10.698 → 10.724 s |
+| Rounded console waited-subtree CPU from OS time files | 6.020 → 5.980 s |
+| Complete managed-daemon subtree CPU | 1.900 → 1.920 s |
+| Three Node helper subtrees | 0.273 → 0.291 s |
+| Setup / final teardown wall | 5.503 / 0.062 → 3.338 / 0.054 s |
+
+The observer correction changes bounded sampling waits between arms, and the
+head bootstrap has a large wall delay. Fixture, verifier, observer and readback
+work remain in the whole-harness total. These observations cannot qualify a
+speedup, regression or paired CPU difference, explain the earlier frozen cost
+campaign, or be subtracted from the bytecode-disabled profile as a compilation
+saving. Console waited CPU also includes local work and descendants; it is not
+Python startup alone. No frozen sample is repeated, expanded or relabeled.
+Publication/exit tails, physical writes, continuous system peaks, build/setup
+environment cost, model/attention and installed adoption remain unknown.
+
+This closes the finite default-cache correctness question while preserving the
+cost/attribution gap. Retain the existing typed transaction and source-scan
+proposal. The next bounded work should inspect the required dependency closure
+at the existing quota/context/refresh callers, then select a complete reversible
+loading change with normal-default semantic parity. Valid caches alone do not
+justify moving a required import or removing a fresh read; do not repeat this
+pair to recover PID observations. The original task, independent exact-head
+review/readiness, peer hard-cut hold and all I3/minor-release, M1/#8011, full
+R0/V10/R1, D2/D5/D6/D3, context/model/split-install, PostgreSQL host/wheel and
+full-cost/adoption requirements remain open. No main merge or host upgrade is
+included.
 
 ## Appendix B: Decision log
 
@@ -1101,6 +2583,7 @@ open; independent exact-head review and required validation govern adoption.
 | E4 | Selected CLI loading seam | `9cae3b28939f72fa4aadab5cfe49e19bcbdab372` | Linked entrypoint/CLI in Section 4 | Source-audited | No new timing claim |
 | E5 | DSH composition example | Pinned upstream commit | [`minimal.patch.yml`](https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/bundle/web-app/presets/minimal.patch.yml), [`standard.patch.yml`](https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/bundle/web-app/presets/standard.patch.yml), [`sdk-minimal`](https://github.com/deepseek-ai/deepseek-harness/blob/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/bundle/sdk-minimal/README.md) | Source-audited | Shared preset composition and a self-contained SDK bundle; not a LoopX host qualification or permission recommendation |
 | E6 | Pi core/context example | Pinned upstream commit | [`agent` core](https://github.com/badlogic/pi-mono/blob/f14813e96510a7cf7562a120e809c6a134af073d/packages/agent/README.md) | Source-audited | Agent/tool/event core with `transformContext`, `convertToLlm`, `prepareRequest` and `finishTurn` seams; no LoopX authority or performance claim |
+| E9 | Selected version loading and matched cost | `5a5863502` / `8a79d8602`; macOS arm64 / CPython 3.13.5 | Version checkpoint above; existing console/version and performance-diagnosis owners | Corrected two groups × 30 pairs; 120 observations; public-facade/parity/cache readback pass; material query improvement | Initial 120 observations and facade failure retained; public-safe aggregates; full Turn/minimal, split install, host upgrade and complete costs unqualified; E7/E8 remain with #8185 |
 | E7 | Bounded paired cost campaign | `a9485073f` / `86d9c542d`; named environment above | Paired cost checkpoint above; existing entrypoint/SQLite fixture and performance-diagnosis owners | 499 observations; source groups complete, wheel incomplete; cache attribution unqualified | Aggregate public-safe evidence only; no speedup, full V10, split-install or model-cost qualification |
 | E8 | Matched-bytecode representative comparison | `546c08c0d` / `0df5ad792`; named environment above | Matched-bytecode checkpoint above; same CLI/SQLite and performance-diagnosis owners | Six groups × 30 pairs; 360 observations; parity/rejection and cache readback pass; no demonstrated material benefit | Aggregate public-safe evidence only; later integration, full V10, minimal, split install and model costs unqualified |
 

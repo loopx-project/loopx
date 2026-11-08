@@ -34,6 +34,17 @@ HISTORY_RESTORE_BATCH_BYTES = 128 * 1024
 _READ_ONLY_ITEM_TYPES = frozenset({"reasoning", "webSearch", "imageView", "contextCompaction"})
 
 
+def _history_digest(value: Any) -> str:
+    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True)
+class NativeWorkingContinuation:
+    thread_id: str
+    provider: str
+    suffix: list[dict[str, str]]
+
+
 @dataclass
 class NativeHistoryRestoration:
     """Live guards for unpublished model preparation, not a new work queue."""
@@ -46,10 +57,11 @@ class NativeHistoryRestoration:
     manager: bool
     invalidated: bool = False
     checked: bool = False
+    working_continuation: NativeWorkingContinuation | None = None
 
-    def capture(self) -> list[dict[str, Any]]:
+    def capture(self, *, strict: bool = False) -> list[dict[str, Any]]:
         from ...chat_manager import steward_machine_defaults
-        stored = self.controller.store.messages(self.session["session_id"])
+        stored = self.controller.store.messages(self.session["session_id"], **({"strict": True} if strict else {}))
         self.binding_id = (self.session.get("steward_context") or self.session.get("project_context") or {}).get("binding_id")
         self.binding = (next((row for row in self.controller.project_contexts.conversation_bindings.read()["bindings"]
             if row["binding_id"] == self.binding_id), None) if self.binding_id else None)
@@ -60,6 +72,93 @@ class NativeHistoryRestoration:
         return [{"role": "assistant" if item.get("role") == "agent" else "user", "content": str(item.get("text") or "")}
             for item in stored if item.get("role") in {"user", "agent"}
             and (self.accepted_turn_id is None or item.get("turn_id") != self.accepted_turn_id)]
+
+    def working_affinity(self, *, work_dir: Path, codex_home: Path, runtime: Mapping[str, Any],
+                         account_epoch: tuple[str, str] | None) -> str:
+        """Bind continuation to the working host, source grant and model settings."""
+        from ..manager_runtime import manager_runtime_session_fields
+        fields = ("channel_id", "upstream_mode", "steward_context", "manager_context_version", "agent_id", "agent_model_id",
+                  "codex_chat_configuration", "requested_agent_model_id", "requested_agent_reasoning_effort")
+        return _history_digest([
+            {key: self.session.get(key) for key in fields},
+            str(work_dir.resolve()), str(codex_home.resolve()), self.binding, self.defaults, account_epoch,
+            manager_runtime_session_fields(runtime),
+        ])
+
+    def park_working_context(self, stored: list[dict[str, Any]], *, provider: str | None,
+                             affinity: str) -> dict[str, Any] | None:
+        """Keep the first working native identity across isolated reviews."""
+        if self.accepted_turn_id is None or self.binding is None:
+            return None
+        if self.session.get("answer_review") is True:
+            parked = self.session.get("parked_native_working")
+            if not isinstance(parked, dict) or parked.get("affinity_sha256") != affinity:
+                return None
+            reviews = parked.get("review_turn_ids") or []
+            if len(reviews) >= 32 or self.accepted_turn_id in reviews:
+                return None
+            return {**parked, "review_turn_ids": [*reviews, self.accepted_turn_id]}
+        if not provider:
+            return None
+        return {
+            "thread_id": self.session["upstream_thread_id"],
+            "provider": provider,
+            "affinity_sha256": affinity,
+            "prefix_count": len(stored),
+            "prefix_sha256": _history_digest(stored),
+            "review_turn_ids": [self.accepted_turn_id],
+        }
+
+    def _working_suffix(self, stored: list[dict[str, Any]], parked: Mapping[str, Any]) -> list[dict[str, str]] | None:
+        from ...chat_store import TERMINAL_TURN_STATES
+        count = parked["prefix_count"]
+        if count > len(stored) or _history_digest(stored[:count]) != parked["prefix_sha256"]:
+            return None
+        review_ids = set(parked["review_turn_ids"])
+        store, sid = self.controller.store, self.session["session_id"]
+        turns = {tid: store.load_turn(sid, tid) or {} for tid in review_ids}
+        if any(turn.get("status") not in TERMINAL_TURN_STATES for turn in turns.values()):
+            return None
+        suffix = []
+        seen: set[str] = set()
+        for index, message in enumerate(stored):
+            role, tid = message.get("role"), message.get("turn_id")
+            if role not in {"user", "agent"} or (self.accepted_turn_id is not None and tid == self.accepted_turn_id):
+                continue
+            if tid not in review_ids:
+                if index < count or role == "user" and tid and (store.load_turn(sid, tid) or {}).get("status") == "queued":
+                    continue
+                return None  # An unrelated visible result cannot be skipped.
+            turn = turns[tid]
+            if turn["status"] != "completed":
+                continue
+            # An isolated recovery's user message is a copy of the
+            # original request. Only its new, visible answer is a suffix.
+            if role == "user":
+                continue
+            text = message.get("text")
+            if not isinstance(text, str) or message.get("attachments") or tid in seen:
+                return None
+            if text != (turn.get("response") or {}).get("message"):
+                return None
+            seen.add(tid)
+            if text.strip():
+                suffix.append({"role": "assistant", "content": text})
+        if any(tid not in seen for tid, turn in turns.items()
+               if turn["status"] == "completed" and (turn.get("response") or {}).get("message")):
+            return None
+        return suffix
+
+    def restore_working_context(self, stored: list[dict[str, Any]], *, affinity: str) -> NativeWorkingContinuation | None:
+        parked = self.session.get("parked_native_working")
+        if (not isinstance(parked, dict) or self.binding is None or parked.get("affinity_sha256") != affinity
+                or parked.get("thread_id") == self.session.get("upstream_thread_id")):
+            return None
+        suffix = self._working_suffix(stored, parked)
+        if suffix is None:
+            return None
+        self.working_continuation = NativeWorkingContinuation(parked["thread_id"], parked["provider"], suffix)
+        return self.working_continuation
 
     def manager_migration(self, *, refresh: bool) -> bool:
         from ...chat_manager import MANAGER_CONTEXT_VERSION, is_manager_channel
@@ -91,7 +190,7 @@ class NativeHistoryRestoration:
             latest = controller.store.load_session(sid)
             if (controller.closed.is_set() or latest is None or latest.get("status") == "closed"
                     or any(latest.get(key) != original.get(key) for key in
-                        ("active_turn_id", "upstream_thread_id", "channel_id", "agent_id", "codex_home",
+                        ("active_turn_id", "upstream_thread_id", "parked_native_working", "channel_id", "agent_id", "codex_home",
                          "project_context", "steward_context", "requested_agent_model_id", "requested_agent_reasoning_effort"))
                     or self.accepted_turn_id is not None and (controller.store.load_turn(sid, self.accepted_turn_id) or {}).get("status") != "queued"):
                 self.invalidated = True
@@ -103,6 +202,16 @@ class NativeHistoryRestoration:
             if self.defaults is not None and steward_machine_defaults(controller) != self.defaults:
                 self.invalidated = True
                 raise CodexChatAgentError("Steward configuration changed during history restoration", error_code="manager_authorization_unavailable", gate=None)
+            if self.working_continuation is not None:
+                if any(latest.get(key) != original.get(key) for key in (
+                    "answer_review", "manager_context_version", "agent_model_id", "codex_chat_configuration",
+                )):
+                    self.invalidated = True
+                    raise CodexChatAgentError("Working route changed during native continuation", error_code="resume_failed", gate=None)
+                messages = controller.store.messages(sid, strict=True)
+                if self._working_suffix(messages, original["parked_native_working"]) != self.working_continuation.suffix:
+                    self.invalidated = True
+                    raise CodexChatAgentError("Review history changed during native continuation", error_code="resume_failed", gate=None)
             self.route_check()
 
     def finish(self) -> None:
@@ -387,7 +496,7 @@ def completed_work_readback(session: CodexChatAgentSession, turn_id: str, *,
 
 
 def completed_result_review_readback(session: CodexChatAgentSession, turn_id: str, *,
-                                     known_turn_ids: set[str]) -> dict[str, Any] | None:
+                                     known_turn_ids: set[str], allow_untyped: bool = False) -> dict[str, Any] | None:
     """Read a closed partial result, never certify its effects for execution.
 
     A failed command (including a signal exit) is evidence to inspect, not
@@ -434,13 +543,15 @@ def completed_result_review_readback(session: CodexChatAgentSession, turn_id: st
                 return None
         if users != 1 or len(finals) != 1:
             return None
-        work = parse_agent_response(finals[0], protected_paths=[session.work_dir]).get("unfinished_work")
-        if (work is None or turns() != inventory
+        response = parse_agent_response(finals[0], protected_paths=[session.work_dir])
+        work = response.get("unfinished_work")
+        if (work is None and not allow_untyped or turns() != inventory
                 or list(session._control_items("thread/items/list", {"turnId": turn_id}, deadline)) != items):
             return None
         return {"thread_id": session.thread_id, "turn_id": turn_id,
             "read_only_review": True, "completed_result_review": True,
             "unfinished_work": work, "visible_response": finals[0],
+            **({"untyped_result_review": True, "response": response} if work is None else {}),
             "native_inventory_sha256": hashlib.sha256(json.dumps([target, items],
                 sort_keys=True, separators=(",", ":")).encode()).hexdigest()}
     except (CodexChatAgentError, OSError, TypeError, ValueError):
@@ -545,6 +656,7 @@ class CodexAppServerAdapter:
                                    thread_ids: list[str], turn_id: str,
                                    read_only_review: bool = False,
                                    completed_result_review: bool = False,
+                                   allow_untyped_result_review: bool = False,
                                    known_turn_ids: set[str] | None = None,
                                    work_dir: Path | None = None,
                                    model_auth_home: Path | None = None) -> dict[str, Any] | None:
@@ -558,6 +670,8 @@ class CodexAppServerAdapter:
 
         if completed_result_review and not read_only_review:
             raise ValueError("a completed result observation permits only read-only review")
+        if allow_untyped_result_review and not (completed_result_review and read_only_review):
+            raise ValueError("untyped result evidence permits only a completed read-only review")
         process = subprocess.Popen([codex_bin, "app-server", "--listen", "stdio://"],
             cwd=str(codex_home), env={**os.environ, "CODEX_HOME": str(codex_home)},
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
@@ -574,7 +688,8 @@ class CodexAppServerAdapter:
                 native.thread_id = thread_id
                 native.response_timeout_sec = max(.01, deadline - time.monotonic())
                 if completed_result_review:
-                    proof = completed_result_review_readback(native, turn_id, known_turn_ids=known_turn_ids or set())
+                    proof = completed_result_review_readback(native, turn_id, known_turn_ids=known_turn_ids or set(),
+                        allow_untyped=allow_untyped_result_review)
                 else:
                     reader = interrupted_result_readback if read_only_review else failed_request_readback
                     proof = reader(native, turn_id)
@@ -651,7 +766,15 @@ class CodexAppServerAdapter:
         account_runtime_root: Path | None = None,
         account_consumer: str = "worker",
         history_check: Callable[[], None] | None = None,
+        working_continuation: NativeWorkingContinuation | None = None,
     ) -> "CodexAppServerAdapter":
+        if working_continuation is not None:
+            if resume_thread_id or history is not None or history_check is None:
+                raise ValueError("native working continuation requires one guarded history source")
+            if working_continuation.suffix:
+                history = working_continuation.suffix
+            else:
+                resume_thread_id = working_continuation.thread_id
         history_items = []
         # Migration restores the full visible conversation in native history.
         # The objective is repeated per Turn; putting the transcript there
@@ -665,9 +788,12 @@ class CodexAppServerAdapter:
                     "type": "message", "role": role,
                     "content": [{"type": "output_text" if role == "assistant" else "input_text", "text": text}],
                 })
-        retry_timeout = bool(resume_thread_id)
+        retry_timeout = bool(resume_thread_id) and working_continuation is None
         while True:
             try:
+                if working_continuation is not None:
+                    assert history_check is not None
+                    history_check()
                 session = CodexChatAgentSession.start(
                     codex_bin=codex_bin,
                     work_dir=work_dir,
@@ -692,6 +818,10 @@ class CodexAppServerAdapter:
                     dynamic_tools=dynamic_tools,
                     account_runtime_root=account_runtime_root,
                     account_consumer=account_consumer,
+                    **({
+                        "expected_native_provider": working_continuation.provider,
+                        **({"fork_thread_id": working_continuation.thread_id} if working_continuation.suffix else {}),
+                    } if working_continuation is not None else {}),
                 )
                 if not resume_thread_id:
                     try:
@@ -706,7 +836,7 @@ class CodexAppServerAdapter:
                         restore_deadline = time.monotonic() + hard_timeout_sec if hard_timeout_sec is not None else None
 
                         def check_restore() -> None:
-                            if history_check is not None and len(batches) > 1:
+                            if history_check is not None and (working_continuation is not None or len(batches) > 1):
                                 history_check()
                             if restore_deadline is not None and time.monotonic() >= restore_deadline:
                                 raise CodexChatTimeoutError("Native history restoration exceeded its Turn time budget.", error_code="response_timeout", gate=None)
@@ -797,7 +927,8 @@ def start_runtime_adapter(controller: ChatRuntimeController, *, work_dir: Path, 
         project_coordination: bool, loopx_tools: bool, codex_home_override: Path | None,
         read_only_review: bool, metadata_review_context: dict[str, object] | None,
         answer_review_context: dict[str, object] | None,
-        history_check: Callable[[], None] | None = None) -> CodexAppServerAdapter:
+        history_check: Callable[[], None] | None = None,
+        working_continuation: NativeWorkingContinuation | None = None) -> CodexAppServerAdapter:
     """Build the native adapter from already-authorized runtime arguments."""
     from ...chat_manager import MANAGER_AGENT_GOAL_ID
     from ..manager_context.inspection import READ_TOOL, CONTEXT_READ_TOOL
@@ -815,6 +946,7 @@ def start_runtime_adapter(controller: ChatRuntimeController, *, work_dir: Path, 
             "runtime_profile": "restricted"} if review_context else native_context),
         history=history,
         history_check=history_check,
+        working_continuation=working_continuation,
         resume_thread_id=resume_thread_id,
         startup_timeout_sec=controller.startup_timeout_sec,
         idle_timeout_sec=controller.idle_timeout_sec,
