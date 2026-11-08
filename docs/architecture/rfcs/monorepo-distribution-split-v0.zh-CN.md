@@ -2455,3 +2455,23 @@ typecheck 通过。本轮盘点中存在的 tracked wheel 条目全部与源码�
 收益或 installed-host 资格。初次 reader 选择和缺 bundle 的准备失败分别保留。
 Pages 仍有已知且在授权范围外的断链；新 exact-head CI、review/readiness、
 maintainer 合入权限、全部原验收与冻结 campaign 仍保持开放。
+
+
+### 2026-11-09 — native context 组合后的完整 CLI 验证
+
+保留的后续计划现在执行完整 101-Todo CLI lifecycle，补齐报告用例之外的真实路径。
+提案 `bb65769cc` 上源码和隔离 wheel × File/default-SQLite 四条路径均通过。
+下一目标 main 快照 `3b16b8491` 加入 native preparation/navigation 改动；
+组合 runtime `9baeafd8a` 重新构建 wheel 后，相同四条完整 lifecycle 也通过。
+
+每个 case 保留原 immutable 合成 fixture 与独立校验的 sum45 artifact、完整
+source/lease 拒绝、重放和恢复检查、四种 committed receipt、一次 debit、
+不变的完成时间和两个已观察到的正常 native exit。既有 scalar/source-basis
+owner 字节不变；本次盘点中存在的 tracked wheel 条目全部匹配该 runtime 源码。
+七项 progressive-context 合同用例与 typecheck 通过。初次旧 frontend bundle
+触发的 wheel 构建拒绝，与重新构建后包的验证分别保留。
+
+本次是记录中源码/包快照的组合正确性。不重跑或重标签冻结成本、attribution 和
+normal-bytecode campaign，不证明当前 browser/installed-host、PostgreSQL
+host/wheel 或完整边际成本/adoption 收益。新 exact-head CI、review/readiness、
+maintainer 合入权限和既有域外 Pages hold 分别保留。原任务及全部原验收保持开放。

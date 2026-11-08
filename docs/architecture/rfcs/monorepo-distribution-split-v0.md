@@ -3156,3 +3156,28 @@ full-cost/adoption benefit or installed-host qualification. Initial reader-choic
 and missing-bundle preparation failures remain separate evidence. Pages retains
 its known out-of-scope broken link; exact-head CI, review/readiness, maintainer
 merge authority and every original acceptance/frozen campaign remain open.
+
+
+### 2026-11-09 — Complete CLI qualification across native context integration
+
+The retained follow-through plan now runs through complete 101-Todo CLI
+lifecycles, rather than stopping at report cases. Source and isolated wheel ×
+File/default-SQLite pass at proposal `bb65769cc`. The next target-main snapshot
+`3b16b8491` adds native preparation/navigation changes; the combined runtime
+`9baeafd8a` passes the same four complete lifecycles with a newly rebuilt wheel.
+
+Every case retains the original immutable synthetic fixture and independently
+verified sum-45 artifact, complete source/lease/refusal/replay/recovery checks,
+four committed receipt kinds, one debit, unchanged completion time and two
+observed normal native exits. The existing scalar/source-basis owner bytes
+remain unchanged. All inventoried present tracked wheel entries match this
+runtime source. Seven progressive-context contract cases and its typecheck pass.
+The stale frontend bundle's initial wheel-build refusal remains separate from
+the rebuilt package's qualification.
+
+This is integration correctness for the recorded source/package snapshots.
+It does not rerun or relabel the frozen cost, attribution or normal-bytecode
+campaigns, qualify current browser/installed-host or PostgreSQL host/wheel
+behavior, or establish full marginal-cost/adoption benefit. Current exact-head
+CI, review/readiness, maintainer merge authority and the existing out-of-scope
+Pages hold remain separate. The original task and all original acceptance stay open.
