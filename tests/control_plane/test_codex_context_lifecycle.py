@@ -90,11 +90,23 @@ def test_native_journal_projects_one_host_execution_request(tmp_path, monkeypatc
     assert context.native_execution_preparation_request(str(tmp_path), eligible) == {
         **request, "readback_only": True,
     }
-    assert context.native_execution_preparation_request(str(tmp_path), eligible) is None
+    assert context.native_execution_preparation_request(
+        str(tmp_path), {**event, "hook_event_name": "SessionStart"},
+    ) == {
+        **request, "readback_only": True,
+    }
+    ready_capture = tmp_path / "ready.json"
+    ready_bytes = b'{"execution_preparation":{"state":"ready"}}'
+    ready_capture.write_bytes(ready_bytes)
+    ready_capture.chmod(0o600)
+    ready_digest = hashlib.sha256(ready_bytes).hexdigest()
     receipt = {
         "event": "host_execution_prepared",
         "todo_id": "todo_fixture",
         "turn_instance_id": "turn-fixture",
+        "capture_path": str(ready_capture),
+        "capture_sha256": ready_digest,
+        "claim_operation_id": f"todo-claim:codex-capture:{claim_source}",
     }
     state_before_child = (tmp_path / "session.json").read_bytes()
     context.record_native_execution_preparation(
@@ -106,21 +118,43 @@ def test_native_journal_projects_one_host_execution_request(tmp_path, monkeypatc
         str(tmp_path), event,
         source_sha256=request["source_sha256"], receipt=receipt,
     )
-    assert context.native_execution_preparation_request(
-        str(tmp_path), {**event, "hook_event_name": "PostToolUse"},
-    ) is None
+    assert context.native_execution_preparation_request(str(tmp_path), eligible) == {
+        **request,
+        "readback_only": True,
+        "claim_operation_id": f"todo-claim:codex-capture:{claim_source}",
+        "ready_capture": {"path": str(ready_capture), "sha256": ready_digest},
+    }
     assert context.native_execution_preparation_request(
         str(tmp_path), {**event, "hook_event_name": "SessionStart"},
-    )["todo_id"] == "todo_fixture"
+    ) == {
+        **request,
+        "readback_only": True,
+        "claim_operation_id": f"todo-claim:codex-capture:{claim_source}",
+        "ready_capture": {"path": str(ready_capture), "sha256": ready_digest},
+    }
+    deliver(tmp_path, event, read_pages(tmp_path, wire))
+    assert context.native_execution_preparation_request(str(tmp_path), eligible)["readback_only"] is True
+    deliver(tmp_path, event, capture_pages(str(ready_capture), ready_digest))
+    assert context.native_execution_preparation_request(str(tmp_path), eligible) is None
+    assert context.native_execution_preparation_request(
+        str(tmp_path), {**event, "hook_event_name": "SessionStart"},
+    )["readback_only"] is True
     payload["heartbeat_receipt"] = {"turn_instance_id": "next-turn"}
     next_claim_source = "2" * 64
     context.record_native_claim_source(payload, next_claim_source, directory=str(tmp_path), context_root=None)
     _, next_wire = project(tmp_path, capture_id=next_claim_source, payload=payload)
-    assert next_wire["recovery"]["sha256"] != request["source_sha256"]
+    next_sha256 = next_wire["recovery"]["sha256"]
+    assert next_sha256 != request["source_sha256"]
     assert context.native_execution_preparation_request(str(tmp_path), eligible) == {
-        **request, "turn_instance_id": "next-turn", "source_sha256": next_wire["recovery"]["sha256"],
+        **request,
+        "claim_args": [
+            *payload["execution_preparation"]["claim"]["cli_args"],
+            "--claim-operation-id",
+            f"todo-claim:codex-capture:{next_claim_source}",
+        ],
+        "turn_instance_id": "next-turn",
         "claim_source_sha256": next_claim_source,
-        "claim_args": [*request["claim_args"][:-1], f"todo-claim:codex-capture:{next_claim_source}"],
+        "source_sha256": next_sha256,
     }
 
 

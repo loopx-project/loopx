@@ -439,7 +439,7 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
             continuity_generation=getattr(args, "_context_delivery_generation", None),
             progressive_enabled=activation["progressive_enabled"], selection_command_args_template=transport,
             captured_decision_path=str(path) if args.initial_read and activation["progressive_enabled"] else None,
-            hook_session=hook_session)
+            hook_session=hook_session, saved_capture=True)
         projected = prepared.delivery
         initial_read_plan = prepared.initial_read_plan
         native_prepared = True
@@ -999,6 +999,7 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
                                 # pinned full recovery even if native projection
                                 # fails. It never rereads authority or admits work.
                                 digest = receipt.pop("capture_sha256")
+                                receipt.pop("capture_path", None)
                                 receipt["context"] = project_saved_context_capture(argparse.Namespace(**{
                                     **vars(args), "quota_command": "context-project",
                                     "capture_file": str(source),
