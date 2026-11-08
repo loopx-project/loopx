@@ -59,6 +59,7 @@ class LarkPrivateConversations:
         self.root = controller.store.root / "lark-private-deliveries"
         self._context_recovery_probe_at: dict[Path, float] = {}
         self._delivery_discovery = PrivateDeliveryDiscovery(self.root)
+        self._body_discovery = PrivateDeliveryDiscovery(self.root)
         self._web_projection_scan_at = 0.0
         self._web_projection_snapshots: dict[str, tuple[int, int]] = {}
         from .owner_attention import LarkOwnerAttention
@@ -1270,6 +1271,17 @@ class LarkPrivateConversations:
                     self._deliver(path, record, repair["phase"], repair["text"], inbox=inbox, edit_only=True)
             except (KeyError, ValueError, OSError):
                 return  # Unknown authority or provider effects stay pending.
+
+    def pending_body_paths(self) -> list[Path]:
+        """Find unsent bodies without waiting for historical recovery probes.
+
+        The existing pool reads the complete discovery separately. Keep this
+        metadata cache local to the scanner; it grants no admission or send.
+        """
+        paths = [path for path, row, _ in self._body_discovery.rows()
+                 if row["status"] != "delivered"]
+        return [*paths, *(path for path in sorted((self.root / "web-projections").glob("*.json"))
+                         if _read_json(path).get("status") == "pending")]
 
     @effect_runtime_request_scope()
     def pending_delivery_paths(self) -> list[Path]:
