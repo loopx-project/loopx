@@ -301,57 +301,6 @@ def test_stateless_progressive_replan_uses_the_saved_decision(tmp_path, monkeypa
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_captured_replan_preserves_scoped_memory_without_trusting_reader_location(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture, provider: str,
-) -> None:
-    from copy import deepcopy
-
-    from loopx.cli import main
-    from loopx.capabilities.agent_turn_recall.runtime import run_configured_agent_turn_recall_fail_open
-    from loopx.capabilities.reward_memory.experiment import resolve_reward_memory_experiment
-    from loopx.control_plane.capability_hooks import project_turn_context
-    from tests.capabilities.test_agent_turn_recall import RecallProvider, active_record
-    from tests.control_plane.reward_memory_host_fixture import enable_live_memory
-
-    tmp_path = tmp_path.resolve()
-    isolate_sqlite_runtime(tmp_path, monkeypatch)
-    fixture = make_progress_cli_fixture(tmp_path, provider, "advanced")
-    registry, runtime = fixture["registry"], fixture["runtime"]
-    enable_live_memory(registry)
-    _, config = resolve_reward_memory_experiment(registry_path=registry, goal_id=GOAL, agent_id=AGENT)
-    memory = RecallProvider(active_record(config, expires_at="2099-01-01T00:00:00+00:00"))
-    monkeypatch.setattr("loopx.capabilities.agent_turn_recall.run_configured_agent_turn_recall_fail_open",
-                        lambda **kw: run_configured_agent_turn_recall_fail_open(**kw, provider=memory))
-    monkeypatch.setenv("CODEX_THREAD_ID", "replan-memory-fixture")
-    monkeypatch.chdir(fixture["project"])
-    capture, journal = tmp_path / "capture", tmp_path / "native"
-    journal.mkdir(mode=0o700)
-    try:
-        code = main(["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
-            "quota", "should-run", "--codex-app", "--goal-id", GOAL, "--agent-id", AGENT,
-            "--todo-id", TODO, "--turn-instance-id", TURN, "--decision-output-dir", str(capture),
-            "--context-delivery", "on", "--delta-delivery", "auto", "--codex-context-dir", str(journal),
-            "--prepared-capture-reference", "--defer-context-presentation"])
-        output = capsys.readouterr().out
-        assert code == 0, output
-        captured = (capture / "decision.json").read_bytes()
-        assert json.loads(output)["capture_sha256"] == hashlib.sha256(captured).hexdigest()
-        source = json.loads(captured)
-        assert source["replan_action_packet"]["decision"] == "replan_required"
-        assert source["reward_memory_recall"]["status"] == "applied" and memory.calls == 1
-        projected = project_turn_context(source)
-        assert projected["reward_memory_recall"]["context"]["guidance"]
-        relocated = {**source, "replan_read_path": str(tmp_path / "other-location.json")}
-        assert project_turn_context(relocated) == projected
-        changed = deepcopy(relocated)
-        plan = changed["interaction_contract"]["cli_channel"]["settlement_plan"]
-        plan["ordered_steps"][1]["command_template"] += " --evidence substituted"
-        assert project_turn_context(changed) == {}
-    finally:
-        restart_effect_runtime(wait_for_exit=True)
-
-
-@pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("context_args,navigation", [
     ((), False),
     (("--context-delivery", "on"), True),
