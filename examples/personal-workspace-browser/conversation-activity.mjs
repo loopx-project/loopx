@@ -46,11 +46,11 @@ export const conversationActivityScenario = {
       const turn = await send("请检查当前任务状态，并说明下一步。");
       await page.getByRole("status", {name: "正在回复", exact: true}).waitFor();
       const pending = page.locator(".personal-message").filter({ has: page.getByRole("button", { name: "中断本轮", exact: true }) });
-      await page.clock.install();
-      await page.clock.fastForward(25000);
-      // Compare the same instant across views; clock.install alone keeps
-      // advancing and can cross a second boundary while navigation completes.
-      await page.clock.pauseAt(await page.evaluate(() => Date.now()));
+      const beforeIdle = await page.evaluate(() => Date.now());
+      await page.clock.install({ time: beforeIdle });
+      // Advance to a future instant and pause it in one step so navigation
+      // compares the same elapsed time without racing the running clock.
+      await page.clock.pauseAt(beforeIdle + 25_000);
       await pending.locator(".personal-message-quiet").waitFor();
       const elapsedBefore = await pending.locator(".personal-message-elapsed").textContent();
       await page.getByRole("navigation", { name: "管家视图" }).getByRole("button", { name: "总览", exact: true }).click();

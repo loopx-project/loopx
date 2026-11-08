@@ -7,7 +7,7 @@ import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { repoRoot, outputDir } from './fixture.mjs';
 import { openWorkspacePage } from './scenario-context.mjs';
-import { resolveTestPython } from '../../scripts/test-python.mjs';
+import { testPythonCommand } from '../../scripts/test-python.mjs';
 
 // Assets and preference IO use the real packaged handler. Unrelated Goal and
 // chat APIs use the existing synthetic workspace; no active runtime is touched.
@@ -20,8 +20,9 @@ print(json.dumps({'port':s.server_address[1]}),flush=True)
 s.serve_forever()
 `;
 async function start(root) {
-  const child = spawn(resolveTestPython({ repoRoot }), ['-u', '-c', serverCode, root], {
-    cwd: repoRoot, env: { ...process.env, PYTHONPATH: repoRoot }, stdio: ['ignore', 'pipe', 'pipe'],
+  const python = testPythonCommand(serverCode, { repoRoot });
+  const child = spawn(python.command, [...python.args, root], {
+    cwd: repoRoot, stdio: ['ignore', 'pipe', 'pipe'],
   });
   let stderr = '';
   child.stderr.on('data', data => { stderr += data; });
@@ -37,7 +38,19 @@ async function start(root) {
   } catch (error) { child.kill(); throw error; }
   finally { clearTimeout(timer); lines.close(); }
 }
-async function stop(service) { if (service.child.exitCode === null) { service.child.kill(); await once(service.child, 'exit'); } }
+async function stop(service, contexts) {
+  try {
+    // Detach routes before shutting down the backend they can still be reading.
+    await Promise.all(contexts.splice(0).map(context => context.close()));
+  } finally {
+    const child = service?.child;
+    if (child?.exitCode === null && child.signalCode === null) {
+      const exited = once(child, 'exit');
+      child.kill();
+      await exited;
+    }
+  }
+}
 const rows = page => page.locator('.personal-goal-list:not(.is-stopped) .personal-goal-row');
 const order = page => rows(page).evaluateAll(elements => elements.map(e => e.dataset.reorderGoal));
 async function expectOrder(page, expected) {
@@ -91,7 +104,7 @@ export async function runDurableGoalOrder(browser) {
     await expectOrder(first, moved);
     await first.screenshot({ path: resolve(outputDir, 'goal-order-before-restart.png'), animations: 'disabled' });
     const oldUrl = service.url;
-    await stop(service);
+    await stop(service, contexts);
     service = await start(root);
     assert.notEqual(service.url, oldUrl, 'Restart must use a different browser origin');
     const second = await open(service.url);
@@ -144,7 +157,7 @@ export async function runDurableGoalOrder(browser) {
     const existing = await stored();
     const staleCache = await open(service.url, initial);
     await expectOrder(staleCache, existing);
-    await stop(service);
+    await stop(service, contexts);
     const migrationRoot = join(root, 'migration');
     service = await start(migrationRoot);
     const migrated = await open(service.url, moved);
@@ -157,9 +170,8 @@ export async function runDurableGoalOrder(browser) {
     assert.deepEqual(JSON.parse(await readFile(migrationFile, 'utf8'))['/status.json'], moved);
     return 'Pointer/keyboard order survives refresh and real service restart on a different port; delayed reads, rapid moves, save failure/retry and legacy cache migration verified against the real private file store.';
   } finally {
-    for (const context of contexts) await context.close();
-    if (service) await stop(service);
-    await rm(root, { recursive: true, force: true });
+    try { await stop(service, contexts); }
+    finally { await rm(root, { recursive: true, force: true }); }
   }
 }
 async function pageReady(page) { await rows(page).nth(4).waitFor(); }

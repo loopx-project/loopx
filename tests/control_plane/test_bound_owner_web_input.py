@@ -292,7 +292,7 @@ def test_http_bound_steward_keeps_web_provenance_at_coordination_root(bound_chat
         external_source_policy(store.root.parent, session, turn)
 
 
-def test_http_web_handoff_reports_missing_provider_source_without_retargeting(bound_chat):
+def test_http_web_handoff_reports_missing_mirror_receipt_without_retargeting(bound_chat):
     from types import SimpleNamespace
     from loopx.capabilities.manager_context import acknowledge
     from loopx.capabilities.manager_context.roundtrip import drain, report, reply_status
@@ -333,7 +333,7 @@ def test_http_web_handoff_reports_missing_provider_source_without_retargeting(bo
     drain(canonical, runtime.registry_path, store, LarkManagerReturnTransport(server, canonical))
     delivery = reply_status(canonical, receipt)[0]
     assert delivery["status"] == "retry_pending"
-    assert delivery["error"] == "original_route_unavailable"
+    assert delivery["error"] == "initial_delivery_receipt_unavailable"
     returned = [row for row in store.messages(sid) if row.get("origin") == "manager_followup"]
     assert len(returned) == 1 and returned[0]["turn_id"] == turn["turn_id"]
     status, replay = post(session, {"message": message, "client_turn_id": "local-worker-request"})

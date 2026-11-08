@@ -1462,7 +1462,7 @@ def test_exact_instance_updates_keep_original_route_and_http_readback(tmp_path):
     assert drain(tmp_path, registry, ChatSessionStore(tmp_path), None) == 0
     snapshot = _http_snapshot(tmp_path, registry, session["session_id"])
     messages = [m for m in snapshot["messages"] if m.get("origin") == "manager_followup"]
-    assert [m["text"].split("\n\n")[-1] for m in messages] == ["Waiting for review.", "Review complete."]
+    assert [m["text"].split("\n\n", 1)[0] for m in messages] == ["Waiting for review.", "Review complete."]
     assert messages[-1]["return_delivery"]["result_key"] == update["result_key"]
     assert messages[-1]["return_delivery"]["status"] == "delivered"
     with pytest.raises((ValueError, FileNotFoundError)):
@@ -1574,7 +1574,7 @@ print(drain(root, Path(sys.argv[2]), ChatSessionStore(root), None,
     snapshot = _http_snapshot(tmp_path, registry, session["session_id"])
     returned = [m for m in snapshot["messages"] if m.get("origin") == "manager_followup"]
     assert len(returned) == 1
-    assert returned[0]["text"].endswith("Verified delivery findings.")
+    assert returned[0]["text"].split("\n\n", 1)[0] == "Verified delivery findings."
     assert returned[0]["return_delivery"]["status"] == "delivered"
     assert route_path.read_bytes() == original_route
     current_turn = store.load_turn(session["session_id"], original_turn["turn_id"])

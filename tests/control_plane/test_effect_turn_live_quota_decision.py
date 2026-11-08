@@ -1498,6 +1498,17 @@ def test_retained_selection_reentry_refreshes_provider_todos_before_replan(
         }
         for index in range(20)
     ]
+    # The refreshed list supplies the frontier. The real canonical owner
+    # independently validates delivery eligibility for the selected Todo.
+    runtime_root = tmp_path / "runtime"
+    state_path = tmp_path / "ACTIVE_GOAL_STATE.md"
+    state_path.write_text("# Goal\n\n## Agent Todo\n\n" + "".join(
+        f"- [ ] {item['text']}\n"
+        f"  <!-- loopx:todo todo_id={item['todo_id']} status=open "
+        f"task_class={item['task_class']} claimed_by={agent_id} -->\n"
+        for item in fresh_items
+    ))
+    initialize_canonical_source_fixture(runtime_root, GOAL_ID, state_path=state_path)
     from loopx.control_plane.testing.quota_fixtures import quota_todo_summary
 
     fresh_agent_todos = quota_todo_summary(
@@ -1509,9 +1520,12 @@ def test_retained_selection_reentry_refreshes_provider_todos_before_replan(
     reads: list[str] = []
 
     def fresh_todos(**_kwargs: object) -> dict[str, object]:
+        if _kwargs.get("role") == "user":
+            return {"ok": True, "source": "file_v0", "todos": []}
         reads.append("provider")
         return {
             "ok": True,
+            "source": "file_v0",
             "todos": fresh_items,
             "agent_todos": fresh_agent_todos,
             "user_todos": fresh_user_todos,
@@ -1529,7 +1543,7 @@ def test_retained_selection_reentry_refreshes_provider_todos_before_replan(
         include_scheduler_detail=False,
         codex_app_current_rrule=None,
         registry_path=tmp_path / "registry.json",
-        runtime_root=tmp_path / "runtime",
+        runtime_root=runtime_root,
         retained_action_selection_todo_id=selected_todo_id,
         turn_instance_id="turn-provider-frontier-reentry",
     )

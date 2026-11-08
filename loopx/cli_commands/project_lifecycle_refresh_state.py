@@ -982,8 +982,8 @@ def _settle_requested_refresh(payload, args, registry_path, goal_ref):
         return
     from .refresh_settlement import present_settled_refresh, settle_refreshed_turn
 
-    settle_refreshed_turn(payload, registry_path=registry_path,
-        runtime_root=resolve_runtime_root(load_registry(registry_path), args.runtime_root),
+    runtime_root = resolve_runtime_root(load_registry(registry_path), args.runtime_root)
+    settle_refreshed_turn(payload, registry_path=registry_path, runtime_root=runtime_root,
         goal_id=args.goal_id, agent_id=args.agent_id, todo_id=args.todo_id,
         replan_obligation_id=args.replan_obligation_id,
         turn_instance_id=args.turn_instance_id, goal_ref=goal_ref,
@@ -994,8 +994,7 @@ def _settle_requested_refresh(payload, args, registry_path, goal_ref):
     if getattr(args, "settlement_receipt", False):
         from ..control_plane.quota.error_codes import QuotaDecisionTransportError
         try:
-            view = present_settled_refresh(payload, runtime_root=resolve_runtime_root(
-                load_registry(registry_path), args.runtime_root))
+            view = present_settled_refresh(payload, runtime_root=runtime_root)
         except QuotaDecisionTransportError as exc:
             payload.update(ok=False, error=str(exc))
             return  # Exact committed receipts stay visible; never re-admit.

@@ -240,9 +240,8 @@ export const goalMastheadScenario = {
       await quiet.close();
       throw error;
     }
-    // The canonical producer retains 21 open decisions and bounds its overview
-    // to three. Pass its payload through the shipped parser
-    // and adapter, rather than manufacturing a complete three-item queue.
+    // The canonical producer supplies 21 open rows and a three-row overview.
+    // Use the real rows and counts for both complete and partial coverage.
     const fixtureEnv = { ...process.env, LOOPX_USAGE_PING: "0" };
     if (!["LOOPX_TEST_PYTHON", "LOOPX_PYTHON_BIN", "LOOPX_PYTHON"].some(key => process.env[key])) fixtureEnv.PYTHONPATH = repoRoot;
     const nativeCase = (...args) => JSON.parse(execFileSync(resolveTestPython(), [
@@ -315,16 +314,19 @@ export const goalMastheadScenario = {
           api.transformStatus = (fixture) => {
             previous(fixture);
             const queue = fixture.attention_queue.items.find(item => item.goal_id === goalId);
-            const source = mode === "mixed" || mode === "mixed-complete" ? mixed : mode === "complete" ? complete
-              : mode === "optional" ? optionalComplete : native;
+            const source = mode === "mixed" || mode === "mixed-complete" ? mixed
+              : mode === "complete" ? complete : mode === "optional" ? optionalComplete : native;
             Object.assign(queue, structuredClone(source));
-            // Workspace prefers the owner-facing group. Bound its rows as well
-            // for partial cases while retaining the producer's total.
-            if (partial) queue.user_todos.items = queue.project_asset.user_todos.items;
-            if (mode === "empty") {
-              queue.user_todos.items = [];
-              queue.project_asset.user_todos.items = [];
+            // A complete top-level queue wins even if the overview is bounded.
+            // For a partial queue retain only the producer's three listed IDs.
+            if (mode === "mixed" || mode === "unknown") {
+              const listed = new Set(queue.project_asset.user_todos.items.map(todo => todo.todo_id));
+              queue.user_todos.items = queue.user_todos.items.filter(todo => listed.has(todo.todo_id));
             }
+            if (mode === "bounded" || mode === "empty") {
+              queue.user_todos.items = [];
+            }
+            if (mode === "empty") queue.project_asset.user_todos.items = [];
             if (mode === "unknown") {
               delete queue.user_todos.open_count;
               delete queue.project_asset.user_todos.open;

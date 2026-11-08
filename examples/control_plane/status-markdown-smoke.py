@@ -1334,7 +1334,8 @@ def main() -> int:
     assert_project_asset_secret_scanner_boundaries()
     assert_promotion_readiness_full_scan_fallback()
     assert_promotion_readiness_warning_in_quota_guard()
-    assert_status_agent_lane_next_action_projection()
+    with tempfile.TemporaryDirectory(prefix="loopx-status-agent-lane-") as tmp:
+        assert_status_agent_lane_next_action_projection(Path(tmp))
     assert_status_agent_lane_todo_summary_display_compaction()
     assert_status_agent_member_selected_lane_claim_survives_truncated_claim_list()
     assert_status_agent_lane_vision_lookback_survives_display_trim()

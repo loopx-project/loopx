@@ -46,6 +46,31 @@ def quota_spend_source_for_execution_context(
     return DEFAULT_SLOT_SPEND_SOURCE
 
 
+def host_goal_turn_reentry_required(
+    payload: Mapping[str, Any],
+    scheduler_execution_context: (
+        Mapping[str, Any] | SchedulerExecutionContextResolution | None
+    ),
+    turn_instance_id: str | None,
+) -> bool:
+    if turn_instance_id is not None or (
+        scheduler_runtime_profile_for_execution_context(scheduler_execution_context)
+        not in VISIBLE_GOAL_SETTLEMENT_RUNTIME_PROFILES
+    ):
+        return False
+    selected_value = payload.get("selected_todo")
+    selected = selected_value if isinstance(selected_value, Mapping) else {}
+    replan_value = payload.get("replan_action_packet")
+    replan = replan_value if isinstance(replan_value, Mapping) else {}
+    replan_obligation_id = normalize_todo_replan_obligation_id(
+        replan.get("obligation_id")
+    )
+    return bool(
+        normalize_todo_id(selected.get("todo_id"))
+        or replan_obligation_id
+    )
+
+
 def host_goal_turn_reentry_action(
     payload: Mapping[str, Any],
     settlement_plan: Mapping[str, Any] | None,
@@ -55,36 +80,25 @@ def host_goal_turn_reentry_action(
     turn_instance_id: str | None,
     typed_quota_guard: str,
 ) -> str | None:
-    profile = scheduler_runtime_profile_for_execution_context(
-        scheduler_execution_context
-    )
-    selected_value = payload.get("selected_todo")
-    selected = selected_value if isinstance(selected_value, Mapping) else {}
-    replan_value = payload.get("replan_action_packet")
-    replan = replan_value if isinstance(replan_value, Mapping) else {}
-    replan_obligation_id = normalize_todo_replan_obligation_id(
-        replan.get("obligation_id")
-    )
-    has_settlement_binding = bool(
-        normalize_todo_id(selected.get("todo_id"))
-        or replan_obligation_id
-    )
-    requires_turn_reentry = profile in VISIBLE_GOAL_SETTLEMENT_RUNTIME_PROFILES
-    if (
-        requires_turn_reentry
-        and has_settlement_binding
-        and settlement_plan is None
-        and turn_instance_id is None
+    if settlement_plan is not None or not host_goal_turn_reentry_required(
+        payload, scheduler_execution_context, turn_instance_id
     ):
-        if profile is SchedulerRuntimeProfile.CODEX_APP_SSH_VISIBLE:
-            return f"{typed_quota_guard} --begin-turn"
-        # CLI/managed Goal hosts own their iteration identity, not an App
-        # heartbeat receipt. Re-enter before exposing any unbound settlement.
-        return (
-            f"{typed_quota_guard} --turn-instance-id "
-            "'<unique-work-iteration-id-reuse-on-retry>'"
-        )
-    return None
+        return None
+    return typed_quota_guard + host_goal_turn_start_args(scheduler_execution_context)
+
+
+def host_goal_turn_start_args(
+    scheduler_execution_context: (
+        Mapping[str, Any] | SchedulerExecutionContextResolution | None
+    ),
+) -> str:
+    profile = scheduler_runtime_profile_for_execution_context(scheduler_execution_context)
+    if profile is SchedulerRuntimeProfile.CODEX_APP_SSH_VISIBLE:
+        return " --begin-turn"
+    if profile not in VISIBLE_GOAL_SETTLEMENT_RUNTIME_PROFILES:
+        return ""
+    # CLI/managed Goal hosts own their iteration identity.
+    return " --turn-instance-id '<unique-work-iteration-id-reuse-on-retry>'"
 
 
 def build_quota_spend_action(

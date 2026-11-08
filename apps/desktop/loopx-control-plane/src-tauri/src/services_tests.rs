@@ -762,7 +762,7 @@ while True:
             executable: executable.to_string_lossy().into_owned(),
             identity: Some(identity),
         },
-        ServiceEndpoints::allocate(true).unwrap(),
+        ServiceEndpoints::allocate_recovery_fixture().unwrap(),
     )
 }
 

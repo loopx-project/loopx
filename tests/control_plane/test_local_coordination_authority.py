@@ -1124,7 +1124,7 @@ def test_todo_list_uses_provider_after_cutover_even_when_markdown_disagrees(
     state_file.unlink()
     result = list_goal_todos(registry_path=registry_path, goal_id="goal-a")
 
-    assert result["source"] == "file_authority"
+    assert result["source"] == "file_v0"
     assert [item["todo_id"] for item in result["todos"]] == ["todo_provider"]
     assert result["authority_read"]["legacy_fallback_used"] is False
 

@@ -1,4 +1,5 @@
-import {EXECUTION_HANDOFF_MODES} from "../coordination/handoff_mode_vocabulary.ts";
+import {HANDOFF_MODES} from "../coordination/handoff_mode_vocabulary.ts";
+import {HANDOFF_MODE_RETIRED_REASON, retiredHandoffModeRejection} from "../coordination/handoff_mode_policy.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {
@@ -55,7 +56,7 @@ export function projectExecutionPreparation(value: unknown): JsonObject {
   }
   const goalId = requireNonEmptyString(request.goal_id, "goal_id");
   const agentId = requireNonEmptyString(request.agent_id, "agent_id");
-  const handoffMode = requireStringLiteral(request.handoff_mode, EXECUTION_HANDOFF_MODES, "handoff_mode");
+  const handoffMode = requireStringLiteral(request.handoff_mode, HANDOFF_MODES, "handoff_mode");
   const authorityAvailable = requireBoolean(request.authority_available, "authority_available");
   const selected = requireJsonObject(request.selected_todo, "selected_todo");
   const todoId = requireNonEmptyString(selected.todo_id, "selected_todo.todo_id");
@@ -77,6 +78,11 @@ export function projectExecutionPreparation(value: unknown): JsonObject {
     return {...base, state: "authority_unavailable", delivery_allowed: false,
       reason_code: "canonical_authority_unavailable",
       reason: "Canonical Todo and lease authority is unavailable; do not start delivery work."};
+  }
+  const retired = retiredHandoffModeRejection(handoffMode);
+  if (retired) {
+    return {...base, state: "blocked_by_conflict", delivery_allowed: false,
+      reason_code: retired, reason: HANDOFF_MODE_RETIRED_REASON};
   }
   if (status !== "open") {
     return {...base, state: "blocked_by_conflict", delivery_allowed: false,
