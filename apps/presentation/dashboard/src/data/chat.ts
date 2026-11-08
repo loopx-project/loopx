@@ -657,6 +657,7 @@ export async function readTodoRequest(goalId: string, todoId: string, signal: Ab
   const result = z.object({
     ok: z.literal(true), goal_id: z.string(), todo_id: z.string(), text: z.string(),
     status: z.string(), archive_state: z.string(), updated_at: z.string().nullable(),
+    evidence: z.string().nullable().optional(), note: z.string().nullable().optional(),
     review_basis: todoUpdateSourceBasisSchema.optional(),
     source_access: z.object({namespace: z.string()}).optional(),
   }).parse(await requestJson<unknown>(url, {signal}));
