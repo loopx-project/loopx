@@ -475,6 +475,37 @@ def select_quota_todo_summary(
     return summary
 
 
+def select_quota_todo_summaries(
+    user_source: Any, agent_source: Any, *, agent_identity: dict[str, Any] | None,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Compose the refresh caller's two native summaries in one transaction.
+
+    Supplied and expired source references retain the standalone adapters.
+    The native owner still validates every source and independent request.
+    """
+    from .summary_item import _CanonicalTodoSummary
+
+    if isinstance(user_source, _CanonicalTodoSummary) and isinstance(agent_source, _CanonicalTodoSummary):
+        requests = [project_quota_planning(source, all_open_items=[],
+            source_open_count=source.get("open_count"), agent_identity=agent_identity,
+            filter_user_gate_blocks_agent=index == 0, available_capabilities=None,
+            summary_kind="user", request_only=True)
+            for index, source in enumerate((user_source, agent_source))]
+        if all("source_reference" in request["summary_request"] for request in requests):
+            from .goal_todo_projection import project_todo_read
+            from .quota_selection import _decode_quota_summary_wire
+
+            result = project_todo_read({"kind": "quota_projection", "requests": requests})
+            wires = result.get("quota_wires")
+            if not isinstance(wires, list) or len(wires) != 2:
+                raise RuntimeError("invalid complete quota summary response")
+            return (_decode_quota_summary_wire(wires[0], user_source),
+                    _decode_quota_summary_wire(wires[1], agent_source))
+    return (select_quota_todo_summary(user_source, None, agent_identity=agent_identity,
+                filter_user_gate_blocks_agent=True),
+            select_quota_todo_summary(agent_source, None, agent_identity=agent_identity))
+
+
 def select_quota_todo_contexts(
     user_canonical: Any, user_asset: Any, agent_canonical: Any, agent_asset: Any,
     *, agent_identity: dict[str, Any] | None, available_capabilities: Any,

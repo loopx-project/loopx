@@ -7,7 +7,7 @@ from loopx.control_plane.effect_runtime import effect_runtime_request_scope
 from loopx.control_plane.coordination.local_authority import LocalCoordinationAuthorityUnavailable, read_canonical_todos_if_promoted
 from loopx.control_plane.todos.goal_todo_projection import project_todo_read, todo_summaries_from_fields
 from loopx.control_plane.todos.quota_selection import project_quota_planning
-from loopx.control_plane.todos.quota_summary import select_quota_todo_contexts
+from loopx.control_plane.todos.quota_summary import select_quota_todo_contexts, select_quota_todo_summaries, select_quota_todo_summary
 from loopx.control_plane.todos.summary_item import canonical_todo_source_reference
 from loopx.control_plane.todos.list_readback import list_goal_todos
 from tests.control_plane import test_quota_settlement_cli as fixture
@@ -117,6 +117,58 @@ def test_supplied_tuple_source_retains_the_legacy_list_requirement():
         project_quota_planning(source, all_open_items=[], source_open_count=1,
             agent_identity={"agent_id": "agent-a"}, filter_user_gate_blocks_agent=False,
             available_capabilities=[], summary_kind="user")
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_refresh_summary_pair_preserves_independent_inputs_and_freshness(tmp_path, monkeypatch, provider):
+    from loopx.control_plane import effect_runtime as runtime_owner
+
+    project, runtime, _ = fixture._write_fixture(tmp_path, claimed=False)
+    fixture._initialize_fixture_authority(project, runtime, provider=provider)
+    identity = {"agent_id": fixture.AGENT_ID}
+    requests = []
+    dispatch = runtime_owner.effect_runtime_request
+    def observed(method, params, **kwargs):
+        if method == "todo.read" and params.get("kind") == "quota_projection":
+            requests.append(params)
+        return dispatch(method, params, **kwargs)
+    monkeypatch.setattr(runtime_owner, "effect_runtime_request", observed)
+    with effect_runtime_request_scope():
+        canonical = read_canonical_todos_if_promoted(runtime_root=runtime,
+            goal_id=fixture.GOAL_ID, include_summary=True)
+        fields = canonical["_todo_fields"]
+        user, agent = deepcopy(fields["user_todos"]), deepcopy(fields["agent_todos"])
+        proof = {"agent_id": fixture.AGENT_ID, "state": "waiting", "evidence": {"revision": 9007199254740993}}
+        agent["vision_wait_states"] = [proof]
+        expected = (select_quota_todo_summary(user, None, agent_identity=identity, filter_user_gate_blocks_agent=True),
+                    select_quota_todo_summary(agent, None, agent_identity=identity))
+        assert len(requests) == 2
+        requests.clear()
+        actual = select_quota_todo_summaries(user, agent, agent_identity=identity)
+        assert actual == expected
+        assert actual[1]["vision_wait_states"][0] is proof
+        assert len(requests) == 1 and len(requests[0]["requests"]) == 2
+        assert all("source_reference" in row["summary_request"] for row in requests[0]["requests"])
+        assert all(not row["summary_request"]["consume_display_views"] for row in requests[0]["requests"])
+        stale = deepcopy(agent)
+        stale.expected = {**stale.expected, "cursor": "foreign"}
+        with pytest.raises(ValueError, match="canonical source changed"):
+            select_quota_todo_summaries(user, stale, agent_identity=identity)
+        directory = runtime / "authority" / f"{provider}-v0"
+        retained = directory.with_name(directory.name + "-retained")
+        directory.rename(retained)
+        try:
+            with pytest.raises(LocalCoordinationAuthorityUnavailable) as original:
+                read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=fixture.GOAL_ID)
+            with pytest.raises(LocalCoordinationAuthorityUnavailable) as paired:
+                select_quota_todo_summaries(user, agent, agent_identity=identity)
+            assert paired.value.code == original.value.code
+            assert paired.value.payload == original.value.payload
+        finally:
+            retained.rename(directory)
+    expected = (select_quota_todo_summary(user, None, agent_identity=identity, filter_user_gate_blocks_agent=True),
+                select_quota_todo_summary(agent, None, agent_identity=identity))
+    assert select_quota_todo_summaries(user, agent, agent_identity=identity) == expected
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
