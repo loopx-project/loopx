@@ -266,6 +266,12 @@ def test_stateless_progressive_replan_uses_the_saved_decision(tmp_path, monkeypa
         assert writer["writeback"]["settlement_plan"]["identity"] == receipt["settlement_identity"]
         assert writer["required_outcome"] == source["replan_action_packet"]["required_outcome"]
 
+        explore_command = review_command.copy()
+        explore_command[explore_command.index("--replan-stage") + 1] = "explore"
+        explore = read_stage(explore_command)
+        assert explore["explore_basis"] is None
+        assert explore["source_hash"] == review["source_hash"]
+
         recovered_path = original.with_name("recovered.json")
         original.rename(recovered_path)
         saved = ("quota", "context-project", *scope, "--capture-file", str(recovered_path), "--initial-read")
