@@ -29,6 +29,73 @@ from ..control_plane.turn_driver.native_context_profile import (
 )
 
 
+def _capture_selection_transport_template(payload: dict[str, Any], args: argparse.Namespace, *,
+                                          capture_root: Path) -> str | None:
+    """Derive display argv without editing the captured decision."""
+    interaction = payload.get("interaction_contract")
+    cli = interaction.get("cli_channel") if isinstance(interaction, dict) else None
+    selection = cli.get("selection_command") if isinstance(cli, dict) else None
+    if not isinstance(selection, dict):
+        return None
+    presentation = {**payload, "interaction_contract": {**interaction,
+        "cli_channel": {**cli, "selection_command": dict(selection)}}}
+    bind_capture_selection_transport(presentation, args, capture_root=capture_root)
+    return presentation["interaction_contract"]["cli_channel"]["selection_command"].get("command_args_template")
+
+
+def bind_capture_selection_transport(payload: dict[str, Any], args: argparse.Namespace, *,
+                                     capture_root: Path | None = None) -> None:
+    """Retain caller display/capture options in the existing selection command.
+
+    Only transport argv is composed here; the typed quota owner still selects the
+    action and owns admission. Each selection invocation allocates a new capture.
+    """
+    root = getattr(args, "decision_output_root", None)
+    if root is None and capture_root is None:
+        return
+    interaction = payload.get("interaction_contract")
+    cli = interaction.get("cli_channel") if isinstance(interaction, dict) else None
+    selection = cli.get("selection_command") if isinstance(cli, dict) else None
+    if not isinstance(selection, dict):
+        return
+    template = selection.get("command_args_template")
+    if not isinstance(template, str):
+        return
+    words = shlex.split(template)
+    options: dict[str, str] = {}
+    # A saved guard already carries its capture root. Preserve it unless this
+    # caller explicitly selects another; otherwise use the validated cache.
+    if root is not None or "--decision-output-root" not in words:
+        selected_root = root if root is not None else capture_root
+        options["--decision-output-root"] = str(Path(selected_root).expanduser().absolute())
+    if getattr(args, "decision_handoff_socket", None):
+        options["--decision-handoff-socket"] = args.decision_handoff_socket
+    # Selection is part of the same Turn, including a caller's explicit opt-out.
+    if getattr(args, "context_delivery", None) is not None:
+        options["--context-delivery"] = args.context_delivery
+    if getattr(args, "delta_delivery", None) is not None:
+        options["--delta-delivery"] = args.delta_delivery
+    if getattr(args, "codex_context_dir", None):
+        options["--codex-context-dir"] = args.codex_context_dir
+    if getattr(args, "codex_context_root", None):
+        options["--codex-context-root"] = args.codex_context_root
+    if getattr(args, "max_page_output_bytes", None) is not None:
+        options["--max-page-output-bytes"] = str(args.max_page_output_bytes)
+    replaced = set(options)
+    if replaced & {"--codex-context-dir", "--codex-context-root"}:
+        replaced.update(("--codex-context-dir", "--codex-context-root"))
+    for option in replaced:
+        while option in words:
+            index = words.index(option)
+            del words[index:index + 2]
+    for option, value in options.items():
+        words.extend((option, value))
+    if getattr(args, "turn_envelope", False) and "--turn-envelope" not in words:
+        words.append("--turn-envelope")
+    selection["command_args_template"] = shlex.join(words)
+
+
+
 def _capture_page(path: Path, raw: bytes, digest: str, *, offset: int, size: int,
                   output_limit: int | None, instruction: bool,
                   presentation: dict[str, Any] | None = None,
