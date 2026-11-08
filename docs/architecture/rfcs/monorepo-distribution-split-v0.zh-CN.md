@@ -1993,6 +1993,35 @@ caller 的必需依赖闭包，再选一个完整可回退的加载改动并验�
 context／model／split-install、PostgreSQL host／wheel、full-cost／adoption 要求
 继续开放；本轮不合入 main、不升级 host。
 
+### 2026-11-08 — 默认调用方加载与不可变恢复
+
+在 `a02be126957953b7a61796e3b99fcfe578eb5174` 上，以 Python 3.13.5 和正常字节码
+设置执行完整的源码/default-SQLite 生命周期，记录 22 个实际控制台进程的加载。
+原合成 101-Todo 工作流保留独立验证的 sum=45 产物、原完成时间与写范围、四张
+receipt、一次 debit、重启、证据替换拒绝和结算回放；两个自有原生 daemon 均退出。
+这证明当前源码的实际正确性与加载事实，不是新的配对成本样本或安装分发资格。
+
+新鲜 guard 加载 505 个 LoopX 模块，实际 refresh 写回加载 432 个。显式 reader
+reference 的上下文恢复，首次选择读取加载 71 个、后续分页加载 69 个，均未加载
+capability 模块。另一个恢复探针拒绝所有 capability import，仍通过两页精确重建
+原 60,888 字节 capture。修改后的 capture 仍被摘要校验拒绝；复制后具有公开文件
+权限的 reference 被私有文件检查拒绝。首个 observer 错误要求控制台路径形式的
+续读命令；接受实际出现的精确解释器/module 前缀后，沿同一固定 offset 继续。
+保留 observer 失败和复制 reference 的准备拒绝。该探针不证明新的 authority 写成本。
+
+成功 import 的跟踪定位到剩余组合边界：`cli_runtime` 在 refresh 验证前加载
+`periodic_report.post_writeback_hook`；默认禁用报告的路径也加载报告 source、
+profile 和 preset 构造依赖。已加载模块本身不证明必需性或成本。下一项有界加载改动应在
+已有 provider 内分开订阅解析与报告 source/profile/preset 构造，保留实时机器默认值和 Goal
+覆盖解析、模块导出与 patch 点，以及全部 hook/replay/authority 检查。修改边界前，
+先刻画禁用与启用两种实际写回。已隔离的不可变 reader 不支持大范围迁移上下文读取。
+
+反馈与词法 scope 提案仍是各自的评审依赖，本检查点的测量源码未包含两项提案。
+既有 File/wheel/PostgreSQL 证据保留其原源码边界。独立评审/readiness、I3 至少一个
+minor release、M1/#8011、完整 R0/V10/R1、D2/D5/D6/D3、context/model/split-install、
+PostgreSQL host/wheel、完整成本与 adoption 仍未验收。保留全部冻结失败和样本；
+这里不证明加速、完整内核验收、main 合入或 host 升级。
+
 ### 2026-11-08 — 反馈校验不加载写入适配器
 
 初始 runtime `2c5212fdb15035c26c3e158420d67197d45715f2` 将 `loopx.feedback` 中

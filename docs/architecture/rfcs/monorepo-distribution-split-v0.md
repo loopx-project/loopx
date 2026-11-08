@@ -2567,6 +2567,48 @@ R0/V10/R1, D2/D5/D6/D3, context/model/split-install, PostgreSQL host/wheel and
 full-cost/adoption requirements remain open. No main merge or host upgrade is
 included.
 
+### 2026-11-08 — Default caller loading and immutable recovery
+
+A complete source-checkout/default-SQLite lifecycle at
+`a02be126957953b7a61796e3b99fcfe578eb5174`, with Python 3.13.5 and normal
+bytecode settings, records imports from 22 actual console processes. The
+unchanged synthetic 101-Todo workflow preserves its independently verified
+sum-45 artifact, original completion time and write scopes, four receipts, one
+debit, restart, evidence-replacement refusal and settlement replay. Both owned
+native daemons exit. This is current-source correctness and loading evidence;
+it is not another paired cost sample or installed-distribution qualification.
+
+The fresh guard loads 505 LoopX modules; actual refresh writeback loads 432.
+Explicit-reference context recovery loads 71 on its initial selected read and
+69 on subsequent pages, with no capability modules. A separate recovery probe
+makes every capability import unavailable and reconstructs the original
+60,888-byte capture exactly across two pages. An altered capture still fails
+its digest check, and a copied reference with public file permissions fails
+its private-file check. The first observer incorrectly required a console-path
+continuation; accepting the observed exact interpreter/module prefix resumes
+the same pinned offset. Preserve that observer failure and the copied-reference
+preparation refusal. The probe does not establish new authority-write costs.
+
+The successful import trace locates a remaining composition boundary:
+`cli_runtime` imports `periodic_report.post_writeback_hook` before refresh
+validation; even the default-disabled report path loads its report-source, profile and
+preset construction dependencies. Loaded modules alone do not establish
+requiredness or cost. The next bounded loading change should separate this
+existing provider's subscription resolution from report-source/profile/preset
+construction,
+preserve live machine-default and Goal-override resolution, module exports and
+patch points, and retain all hook/replay/authority checks. Characterize both
+disabled and enabled real writeback before changing that boundary. The already
+isolated immutable reader does not justify a broad context-reader migration.
+
+The feedback and lexical-scope proposals remain separate review dependencies;
+this checkpoint includes neither proposal in its measured source. Existing
+File/wheel/PostgreSQL evidence retains its earlier source boundary. Independent
+review/readiness, I3 for at least one minor release, M1/#8011, full R0/V10/R1,
+D2/D5/D6/D3, context/model/split-install, PostgreSQL host/wheel, full costs and
+adoption remain open. All frozen failures and samples are retained; no speedup,
+complete kernel acceptance, main merge or host upgrade is established.
+
 ### 2026-11-08 — Feedback validation without mutation-adapter loading
 
 Initial runtime `2c5212fdb15035c26c3e158420d67197d45715f2` makes the two existing
