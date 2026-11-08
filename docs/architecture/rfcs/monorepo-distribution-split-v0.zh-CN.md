@@ -2105,6 +2105,41 @@ Source 与独立构建 wheel 的 File/default-SQLite console 路径通过原始�
 R0/V10/R1、D2/D5/D6/D3、context/model/split-install、full-cost/adoption 缺口
 及所有历史失败均保持开放；既有 runtime composition 工作继续跨越这些边界。
 
+### 2026-11-08 — 合成 Host 的 UTF-8 恢复资格
+
+#8360 的 Windows CPython 3.11 CI arm 在六个既有原任务重验证用例中失败。
+合成 Python Host 对 pipe 继承 locale decoder，而原 generic Host transport
+发送 UTF-8 JSON。Disposable File-provider counterprobe 只改变该 Host decoder：
+CP1252 产生 `host_failure`，没有 `task_failure`；UTF-8 到达独立产物 validator，
+在 `task_postcondition` 产生 `validation_failed`，并提供
+`revalidate_cached_result`。源码 macOS arm 独立通过全部12个既有重验证用例。
+这些观察定位了 fixture mismatch，不支持扩大生产 failure classification。
+
+Fixture commit `a4ce613585fdb329ba3600f0ede768864214ed84` 基于 main
+`4e949f405528fd8087f0623526c62f890c1ce982`，在读取请求前显式将 stdin 配为
+UTF-8。新增 File／SQLite regression 先只把生成 Host 的 decoder 设为 CP1252，
+发送 Unicode brief，要求被拒绝的产物到达 task validation。修复产物后，重验证
+必须沿用原 turn key 并接受结果，Host invocation 始终为一次。同一 regression
+在相同 CPython3.13.5／Node22.22.3 环境中对不可变 baseline Host 失败，修正后
+通过。不改变 transport、生产 owner、持久状态或协议词汇。
+
+macOS arm64／Node22.22.3 下，CPython3.11.15 source 与新安装的隔离单体 wheel
+各通过新增两个 provider 用例及全部12个既有原任务恢复用例。先在 checkout 外
+验证 wheel import 归属，再加载 source-owned fixture；1920个实际 packaged
+tracked runtime entry 均与源码字节相同。原17个 source-only exclusion 保留：
+canary baseline、host plugin／config、fault-test helper 和 documentation／media。
+这验收既有 File／SQLite 合成 Host 恢复路径，包括保留的 MCP
+断连及 lock-timeout 恢复用例，不验收模型采纳、split installation 或原生 Windows。
+原失败 Windows arm 保留为历史证据，直到新 exact-head Windows run 通过。
+独立 Frontstage manifest 请求在有界重试后仍为 HTTP504。
+
+原任务保持开放。保留 I3 至少一个 minor release、M1/#8011、完整 R0/V10/R1、
+D2/D5/D6/D3、context/model/split-install、PostgreSQL host/wheel、whole-path／
+full marginal-cost／adoption 验收及全部历史／冻结失败。不重跑或重标签成本
+campaign，本 fixture 资格不证明性能收益。报告按需加载提案 #8360 保留独立
+review／CI gate；下一步为本修正的 exact-head 评审与原生 Windows 读回。不包含
+合入 main 或 installed-host 升级。
+
 ## 附录 B：决策日志
 
 | 日期 | 决策 | 负责人 / 批准 | 备选 | 变更的规范章节 |
