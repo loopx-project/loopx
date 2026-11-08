@@ -545,9 +545,11 @@ remains optional; default-off and exact-field first reads retain their prior
 semantics. Production File/SQLite reader qualification and actual model benefit
 are separate obligations.
 The initial measurement cue and an established pair's comparison reuse the same
-local choice guidance: expected accepted-outcome gain, remaining horizon and
-complete implementation, search and confirmation cost. A supported route may
-continue; a local gain alone does not select the best next investment. This
+local choice guidance at meaningful evidence or probe boundaries: expected
+accepted-outcome gain within accepted constraints, remaining horizon and complete
+implementation, search and confirmation cost, including model/control overhead.
+Unknowns remain unknown. A supported route may continue; without material change,
+continue the authorized slice. A local gain alone does not select the best next investment. This
 guidance adds no required comparison, evaluator call, decision attachment or
 review, and does not infer a profile from metric names or recent presentation
 order. A larger measurement index remains on demand rather than enlarging every
