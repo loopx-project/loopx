@@ -26,14 +26,19 @@ def inventory(log_dirs, *, task=None):
         if not root.is_dir():
             raise ValueError(f"Expected an EdgeBench log directory: {root}")
         for path in root.glob("runs/*/*/runtime-receipt.json"):
-            if task is None or path.parent.name == task:
-                try:
-                    receipt = path.resolve()
-                except (OSError, RuntimeError):
-                    unresolved_receipts.add(path)
-                    continue
-                if receipt.is_relative_to(root):
-                    receipts.add(receipt)
+            case_id = path.parent.name
+            if task is not None and case_id != task:
+                continue
+            try:
+                receipt = path.resolve()
+            except (OSError, RuntimeError):
+                unresolved_receipts.add(path)
+                continue
+            if not receipt.is_relative_to(root):
+                continue
+            parts = receipt.relative_to(root).parts
+            if len(parts) == 4 and parts[0] == "runs" and parts[2:] == (case_id, path.name):
+                receipts.add(receipt)
 
     cases = {}
     unreadable = len(unresolved_receipts)

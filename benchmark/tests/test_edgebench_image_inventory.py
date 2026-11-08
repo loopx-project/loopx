@@ -57,6 +57,32 @@ def test_inventory_keeps_image_revisions_and_legacy_receipts_separate(tmp_path, 
     ]
 
 
+def test_inventory_keeps_resolved_receipts_in_their_selected_case(tmp_path, capsys):
+    def write(relative, task):
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"task": task}))
+        return path
+
+    case_a = write("runs/first/case-a/runtime-receipt.json", "case-a")
+    case_b = write("runs/second/case-b/runtime-receipt.json", "case-b")
+    sidecar = write("runs/first/case-a/unrelated.json", "case-a")
+    misplaced = write("notes/case-a/runtime-receipt.json", "case-a")
+    for run, target in (("alias", case_a), ("foreign", case_b),
+                        ("sidecar", sidecar), ("misplaced", misplaced)):
+        path = tmp_path / "runs" / run / "case-a" / "runtime-receipt.json"
+        path.parent.mkdir(parents=True)
+        path.symlink_to(target)
+
+    args = ["--log-dir", str(tmp_path)]
+    for filters, expected in ((["--task", "case-a"], ["case-a"]), ([], ["case-a", "case-b"])):
+        main([*args, *filters])
+        result = json.loads(capsys.readouterr().out)
+        assert [row["task"] for row in result["cases"]] == expected
+        assert [row["receipts_without_preflight"] for row in result["cases"]] == [1] * len(expected)
+        assert result["unreadable_receipts"] == 0
+
+
 def test_preflight_looks_up_each_required_image_once_and_keeps_missing_image_gate(tmp_path):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
