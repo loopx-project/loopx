@@ -538,9 +538,16 @@ DELIVERY_STATUSES = set(_delivery_contract["delivery_statuses"])
 DELIVERY_ERRORS = set(_delivery_contract["delivery_errors"])
 
 
-def reply_status(root, row):
+def reply_status(root, row, *, include_result_key=None):
+    """Read current delivery state, optionally selecting result identities first.
+
+    The selector narrows IO only; retained results use the same validation and
+    unreadable-state handling. No result content or status is cached.
+    """
     result = []
     for path in result_paths(_root(root) / "replies" / row["request_id"]):
+        if include_result_key is not None and not include_result_key(path.stem):
+            continue
         phase = "decision" if path.stem == "decision" or path.stem.startswith("decision-") else "conclusion"
         state_path = path.with_name(path.stem + ".delivery.json")
         try:
