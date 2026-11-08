@@ -216,6 +216,11 @@ class SyntheticPrivateSource:
                                 "Verified results retain their source. Unconfirmed returns remain open for recovery."
                                 for part in range(6)))
                     result = {"populated": True, "messages": len(server.chat_store.messages(sid))}
+                elif command == "history":
+                    for index in range(450):
+                        server.chat_store.append_message(sid, role="agent",
+                            text="Original full body. " * 1000 if index == 201 else f"Paged bound row {index}")
+                    result = {"history_rows": len(server.chat_store.messages(sid))}
                 elif command == "inspect":
                     saved = server.chat_store.load_session(sid)
                     result = {"sessions": len(server.chat_store.list_sessions()), "original_thread": saved["upstream_thread_id"],
