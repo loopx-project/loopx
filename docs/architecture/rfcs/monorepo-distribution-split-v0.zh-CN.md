@@ -1753,6 +1753,53 @@ recovery 校验。先表征同一准入请求内完整复用的机会，再实�
 I3／minor-release、M1／#8011、R0／V10／R1、D2／D5／D6／D3、context／model／
 split-install、PostgreSQL host／wheel、完整成本／采纳缺口和全部冻结失败保留。
 
+### Refresh 摘要事务检查点
+
+在整合 main `87a153d4d` 的 runtime `68fae1d0`，完整生命周期调用追踪定位到同一
+refresh 资格检查分别执行两次原生 User／Agent 摘要请求。现有 Python 适配器把两份
+请求交给原 TypeScript Todo 事务；该 owner 逐项校验来源和独立输入，仅在引用匹配
+时共享完整 provider 物化。独立 metadata、clock／actor 绑定，以及 source／identity／
+revision／WAL、lease、receipt／recovery 检查保留；supplied source 或已结束请求
+scope 的引用沿用 standalone 路径。跨请求不缓存权威。既有 CLI／读回直接使用此
+内部改善，不新增产品操作或配置。
+
+同一 101-Todo 的 source／wheel File／SQLite 生命周期保持 sum45、原完成时间、
+四份回执、一次 debit、重启、拒绝／重放和结算读回。递归移除 scope 的响应变异在
+真实 SQLite CLI 的独立 scope oracle 处失败；隔离 daemon 已停止。插桩生命周期的
+`todo.read` 从26到24，每个 refresh 摘要对从两次 RPC 到一次；这是机制诊断，
+不能作为延迟结果。当前113 Python／63 TypeScript、类型／mypy和真实隔离
+PostgreSQL16.15 store391／service11通过，合格运行零 skip，两个 server 均停止。
+24个 PR 生产文件与隔离 wheel 一致。漏传必需参数的首次失败、缺少 service 环境
+变量的首次 skip 均保留为失败／未合格尝试。标准 premerge通过六项直接及18／19
+项选中检查，保留未改动的 peer hard-cut scanner 失败。公开边界子检查通过；
+独立完整 local check 仍暴露其它 registered Goal 的 authority 错误。
+
+后续 main 整合前，以 main `b78246ff7`、旧提案 `94c99e28a` 和 runtime `fc032cbf5`
+各五条相同默认 SQLite source 生命周期作交错无插桩比较。每组 fixture driver 使用
+该组精确 CLI 解释器；15条 prequota PID-set检查均保留同一已预热 daemon。更早的
+并行验证负载、解释器不匹配对照仅作为诊断保留，未放松 runtime 隔离。
+
+| 观察中位数 | Main | 旧提案 | Refresh 提案 |
+| --- | ---: | ---: | ---: |
+| 生命周期墙钟，秒 | 22.092 | 23.620 | 22.033 |
+| Setup 后计时子进程＋采样 daemon CPU，秒 | 14.756 | 15.353 | 14.907 |
+| 采样 daemon disk counter，字节 | 8,888,320 | 8,310,784 | 8,093,696 |
+| 采样 daemon logical-write counter，字节 | 13,946,880 | 13,840,384 | 13,107,200 |
+| 已观察 daemon lifetime peak，字节 | 141,508,280 | 139,887,008 | 138,510,608 |
+
+墙钟范围为21.898–24.716／22.615–24.863／21.824–24.767秒；setup中位数
+2.336／2.404／2.392秒、最终teardown0.062／0.062／0.058秒分开。五次 refresh
+候选均比旧提案快，但三次比 main 慢、范围重叠。计时子进程 CPU 包含独立 verifier；
+完整 exit／helper／harness、provenance、model、attention 成本未覆盖；disk counter
+和采样 lifetime peak 不等于物理设备写入或连续系统峰值。完整收益仍未合格。这些
+观察不认证之后的 main 整合，也不替换历史／冻结失败；整合后的生产 hash 相同，
+已重新运行四条 source／wheel File／SQLite 生命周期。
+
+原完整声明和所有历史／冻结失败保留。I3至少一个 minor release、M1／#8011、
+R0／V10／R1、D2／D5／D6／D3、context／model／split-install、PostgreSQL host／
+wheel、完整成本／采纳及独立 exact-head评审仍开放；不包含合入main或installed-host
+升级。后续实现必须依据完整成本比较，保留所有新鲜性／权限栅栏。
+
 ## 附录 B：决策日志
 
 | 日期 | 决策 | 负责人 / 批准 | 备选 | 变更的规范章节 |
