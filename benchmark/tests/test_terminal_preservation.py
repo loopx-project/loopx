@@ -190,9 +190,13 @@ def test_cli_preservation_requires_full_native_controller_before_trial(tmp_path,
 
 @pytest.mark.skipif(os.environ.get("LOOPX_EDGEBENCH_DOCKER_SMOKE") != "1",
                     reason="Requires isolated Docker and native HTTP checkpoint provider")
-@pytest.mark.parametrize("capture_failure", [False, True])
-@pytest.mark.parametrize("receipt_failure", [False, True])
-def test_real_failed_solver_preserves_tail_and_native_opportunity(controllers, writer, tmp_path, monkeypatch, capture_failure, receipt_failure):
+@pytest.mark.parametrize("capture_failure,receipt_failure,continued", [
+    (False, False, False), (False, True, False), (True, False, False), (True, True, False),
+    (False, False, True),
+])
+def test_real_failed_solver_preserves_tail_and_native_opportunity(
+    controllers, writer, tmp_path, monkeypatch, capture_failure, receipt_failure, continued,
+):
     from sforge.harness.backend.docker_backend import DockerContainerHandle
     from benchmark.runtime.sforge_backend import RecordingDockerBackend
     from benchmark.edgebench.checkpoint_supervisor import CheckpointSupervisor
@@ -224,7 +228,32 @@ Path('/logs/agent/wakes/latest/receipt.json').write_text('{"ok":false}')
 Path('/data/candidate').write_text('newer than the last graded candidate')
 '''
     assert container.exec_run(["python", "-c", script]).exit_code == 0
-    components = terminal_components({"components": []}, "/data")
+    phase_deadlines = ()
+    if continued:
+        from benchmark.tests.test_scheduler_phase_resume import _resume, _stopped
+        from pathlib import Path
+        import time
+
+        # Keep both actual scheduler-selected names, including the phase that
+        # failed after the second resume. The root alone has different evidence.
+        root = tmp_path / "scheduler-state.json"
+        _stopped(root)
+        phase_one = time.time() + 500
+        first_phase = _resume(root, phase_one)
+        _stopped(first_phase)
+        phase_two = time.time() + 600
+        second_phase = _resume(root, phase_two)
+        assert len({root, first_phase, second_phase}) == 3
+        control = Path("/opt/loopx-benchmark/control")
+        for path, content in [
+            (first_phase, {"resume_from": str(control / root.name), "phase": "prior"}),
+            (second_phase, {"resume_from": str(control / first_phase.name), "phase": "failed latest"}),
+            (tmp_path / "unselected-private.json", {"unselected": True}),
+        ]:
+            assert container.exec_run(["python", "-c", "from pathlib import Path; "
+                f"Path({str(control / path.name)!r}).write_text({json.dumps(content)!r})"]).exit_code == 0
+        phase_deadlines = (phase_one, phase_two)
+    components = terminal_components({"components": []}, "/data", scheduler_phase_deadlines=phase_deadlines)
     if capture_failure:
         components.append({"id": "missing", "source_path": "/missing-participant"})
     supervisor = CheckpointSupervisor(files[0], tmp_path / "terminal-points",
@@ -296,3 +325,9 @@ Path('/data/candidate').write_text('newer than the last graded candidate')
         assert native["opportunity"]["next_agent"] == 2
         assert native["opportunity"]["remaining_cooldown_seconds"] > 3500
         assert not list(point.rglob("auth.json"))
+        originals = json.loads((point / "components/terminal_scheduler").read_text())
+        assert originals == {"host_attempt": {"status": "failed"}}
+        captured_phases = sorted((point / "components").glob("terminal_scheduler_phase_*"))
+        assert [json.loads(path.read_text())["phase"] for path in captured_phases] == (
+            ["prior", "failed latest"] if continued else [])
+        assert not list(point.rglob("unselected-private.json"))

@@ -6,7 +6,7 @@ import hashlib
 import json
 import math
 import os
-from pathlib import Path
+from pathlib import Path, PurePath
 import re
 import shlex
 import sys
@@ -21,6 +21,15 @@ PHASE_WORK_RESERVE_SECONDS = 160
 def phase_work_reserve(mode: str) -> int:
     """Heartbeat cleanup must not consume the remaining solver allowance."""
     return 0 if mode == "heartbeat" else PHASE_WORK_RESERVE_SECONDS
+
+
+def phase_state_name(root: PurePath, phase_deadline: float) -> str:
+    """Name a scheduler phase by the finite clock that owns its allowance."""
+    if (isinstance(phase_deadline, bool) or not isinstance(phase_deadline, (int, float))
+            or not math.isfinite(phase_deadline) or phase_deadline <= 0):
+        raise ValueError("Scheduler phase clock must be finite and positive")
+    suffix = hashlib.sha256(float(phase_deadline).hex().encode()).hexdigest()[:20]
+    return f"{root.stem}.phase-{suffix}{root.suffix}"
 
 
 def _physical_state(path: Path) -> Path:
@@ -199,8 +208,8 @@ def resume_state_file(state_file: str, *, phase_deadline: float, agent_id: str,
         recovery = state.get("interruption_recovery") or state.get('failed_host_recovery')
         can_continue_stopped_phase = (isinstance(prior, dict) and prior.get("status") == "stopped"
                                       and prior.get("stop_exit_code") == BUDGET_EXHAUSTED_EXIT_CODE)
-        requested_suffix = hashlib.sha256(float(phase_deadline).hex().encode()).hexdigest()[:20]
-        same_phase = predecessor.name == f"{path.stem}.phase-{requested_suffix}{path.suffix}"
+        target = path.with_name(phase_state_name(path, phase_deadline))
+        same_phase = predecessor == target
         explicit_failed_phase = (retry_failed_state_sha256 is not None and not same_phase
             and hashlib.sha256(predecessor.read_bytes()).hexdigest() == retry_failed_state_sha256)
         if ((recovery is not None or state.get("resume_from"))
@@ -254,8 +263,6 @@ def resume_state_file(state_file: str, *, phase_deadline: float, agent_id: str,
         if recovered is not None:
             if failed_recovery and phase_deadline <= time.time():
                 raise ValueError('Explicit failed continuation exhausted its phase during qualification')
-            suffix = hashlib.sha256(float(phase_deadline).hex().encode()).hexdigest()[:20]
-            target = path.with_name(f"{path.stem}.phase-{suffix}{path.suffix}")
             recovered.update(source_state_sha256=hashlib.sha256(predecessor.read_bytes()).hexdigest(),
                              phase_deadline_epoch=phase_deadline)
             _create_resume_state(target, predecessor, recovered=recovered,
@@ -270,8 +277,6 @@ def resume_state_file(state_file: str, *, phase_deadline: float, agent_id: str,
             return str(predecessor)
         # Only the immutable phase clock names the new state. Todo/reset-token
         # changes cannot clear a failure already recorded in this new phase.
-        suffix = hashlib.sha256(float(phase_deadline).hex().encode()).hexdigest()[:20]
-        target = path.with_name(f"{path.stem}.phase-{suffix}{path.suffix}")
         if target.is_symlink():
             raise ValueError("Resumed scheduler state must not be a symlink")
         if target.exists():

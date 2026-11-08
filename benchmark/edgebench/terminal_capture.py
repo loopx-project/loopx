@@ -14,8 +14,10 @@ from loopx.file_lock import write_json_atomic
 from benchmark.runtime.layout import _CODEX_HOME, _CONTROL, _LOOPX_RUNTIME, _REGISTRY
 
 
-def terminal_components(declaration: dict, workspace: str) -> list[dict[str, str]]:
-    """Explicit full-capture participants, without the credential-bearing home."""
+def terminal_components(
+    declaration: dict, workspace: str, *, scheduler_phase_deadlines: tuple[float, ...] = (),
+) -> list[dict[str, str]]:
+    """Allowlisted capture, retaining any already-admitted in-place phases."""
     from benchmark.runtime.research_artifacts import validate_research_scope
 
     validate_research_scope(workspace, ["."])
@@ -39,6 +41,15 @@ def terminal_components(declaration: dict, workspace: str) -> list[dict[str, str
         ("terminal_native_history", f"{_CODEX_HOME}/thread_history_1.sqlite"),
         ("terminal_native_config", f"{_CODEX_HOME}/config.toml"),
     ))
+    # Do not archive the control directory. It can hold unrelated state and
+    # private transport material. The scheduler clock names each phase file.
+    from benchmark.runtime.scheduler import phase_state_name
+
+    root = PurePosixPath(_CONTROL, "scheduler-state.json")
+    components.extend({
+        "id": f"terminal_scheduler_phase_{index}",
+        "source_path": str(root.with_name(phase_state_name(root, deadline))),
+    } for index, deadline in enumerate(scheduler_phase_deadlines, start=1))
     # Let the shared transport reject aliases/overlaps before launch, rather
     # than silently dropping an explicit external research participant.
     from benchmark.edgebench.checkpoint_worker import _validate_request

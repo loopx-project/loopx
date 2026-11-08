@@ -1493,6 +1493,13 @@ Recovery settles process transport only. Preserved pending semantic replan
 attempts still require their original settlement owner; an interrupted replan
 is not silently declared complete or cleared to force dispatch.
 
+For a terminal capture after an in-place continuation, pass the admitted phase
+deadlines to `terminal_components(scheduler_phase_deadlines=...)` in predecessor
+order. The capture keeps the original scheduler state and those exact phase
+files, not the whole control directory. An absent or duplicate phase does not
+fall back to the original state. The stopped worker is still required for
+recovery and its pending Host witness.
+
 ### Explicitly continue after native account allowance is repaired
 
 A hard native quota failure is still held by default. Repair or replenish the
