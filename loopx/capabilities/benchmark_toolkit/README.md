@@ -973,7 +973,7 @@ running shard can therefore be merged again without an equal-time ambiguity.
 
 This command never stops workers, deletes artifacts, restarts an experiment,
 changes duration allowances or upgrades score qualification. Keep accepted
-grading alive until it drains. The provider/controller owns bounded retry after
+grading alive until it drains. The benchmark provider owns bounded retry after
 an unavailable writer; no scheduler or polling loop is installed. A terminal
 board row alone is not a release receipt. Read `board_readback_verified` and
 `slot_readback_verified`; new admission still needs its own resource checks.
