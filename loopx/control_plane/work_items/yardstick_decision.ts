@@ -183,12 +183,17 @@ export function projectWorkYardstickCue(params: JsonObject): JsonObject | null {
   // An earlier target can share the same evaluator profile and work identity.
   // Filter source findings before ranking so its best cannot displace a legal pair.
   const cited = new Set(counter);
+  const sourceOrder = source.recorded_order;
   const scopedFindings = findings.filter(row => {
     if (row.node_id !== source.node_id) return false;
     // A decision can cite the agent's earlier measurements on this linked
     // question without changing their provenance or assigning earlier work.
     if (row.work_yardstick === undefined) {
-      return cited.size > 0 && row.agent_id === capture.binding.agent_id && Array.isArray(row.evidence_refs)
+      const order = row.recorded_order;
+      // A repeated reference appended later cannot change the decision's evidence.
+      return cited.size > 0 && typeof sourceOrder === "number" && Number.isSafeInteger(sourceOrder)
+        && typeof order === "number" && Number.isSafeInteger(order) && order >= 0 && order < sourceOrder
+        && row.agent_id === capture.binding.agent_id && Array.isArray(row.evidence_refs)
         && row.evidence_refs.some(ref => typeof ref === "string" && cited.has(ref));
     }
     const target = (row.work_yardstick as WorkYardstickCapture | undefined)?.decision?.target;
