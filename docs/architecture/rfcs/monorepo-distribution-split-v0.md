@@ -3181,3 +3181,31 @@ campaigns, qualify current browser/installed-host or PostgreSQL host/wheel
 behavior, or establish full marginal-cost/adoption benefit. Current exact-head
 CI, review/readiness, maintainer merge authority and the existing out-of-scope
 Pages hold remain separate. The original task and all original acceptance stay open.
+
+### 2026-11-09 — Minimum supported Python CLI qualification
+
+CPython 3.11.15 now qualifies the complete 101-Todo source/isolated-wheel ×
+File/default-SQLite lifecycle at `15c937821`, extending the earlier 3.13
+qualification. Target main `a3b589610` subsequently changes context reading and
+settlement guidance; integration `220275f6a` repeats the four complete paths
+against that new input and a newly built wheel. Both groups preserve the same
+immutable fixture and independently verified sum45 artifact, original completion
+time, full source/lease/refusal/replay/recovery behavior, four committed receipts,
+one debit and two observed normal native exits per case.
+
+The earlier source and wheel each pass nine canonical-source cases; the current
+integration separately checks the merged report CLI caller in both distributions.
+Loaded wheel modules retain package provenance. Inventoried tracked entries
+present directly in the new wheel match source bytes; inventory counts are not
+used as a benefit comparison. Merge reconciliation retains the upstream module
+baseline and unchanged 127-module limit, explicit transaction-detail delivery,
+capability precedence and the original source-binding negative assertion.
+
+The private verifier's initial Python syntax failure and stale-bundle build
+refusal remain preparation failures, distinct from runtime qualification. The
+previous-head synthetic 200-item lens-switch CI budget failure remains a hold;
+these CLI checks do not qualify browser performance. No frozen cost, attribution
+or normal-bytecode campaign is rerun or relabeled. I3/minor-release, M1/#8011,
+full R0/V10/R1, D2/D5/D6/D3, context/model/split-install, PostgreSQL host/wheel,
+installed-host, full-cost/adoption and all historical gaps remain open. Exact-head
+review, required CI/readiness and maintainer merge authority still apply.

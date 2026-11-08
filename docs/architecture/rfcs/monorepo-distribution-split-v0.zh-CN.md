@@ -2475,3 +2475,26 @@ owner 字节不变；本次盘点中存在的 tracked wheel 条目全部匹配�
 normal-bytecode campaign，不证明当前 browser/installed-host、PostgreSQL
 host/wheel 或完整边际成本/adoption 收益。新 exact-head CI、review/readiness、
 maintainer 合入权限和既有域外 Pages hold 分别保留。原任务及全部原验收保持开放。
+
+### 2026-11-09 — 最低支持 Python 版本的完整 CLI 验证
+
+CPython 3.11.15 在 `15c937821` 上完成 101-Todo 源码/隔离 wheel ×
+File/default-SQLite 四条完整 lifecycle，补充此前的 3.13 资格。目标 main
+`a3b589610` 随后更新 context reader 与结算指引；组合 `220275f6a` 对这份新输入
+及重新构建的 wheel 再验证相同四条路径。两组均保留相同 immutable fixture、
+独立校验的 sum45 artifact、原完成时间、完整 source/lease 拒绝及重放/恢复行为，
+每个 case 四种 committed receipt、一次 debit 和两个已观察到的正常 native exit。
+
+前一组合的源码与 wheel 分别通过九项 canonical-source 用例；当前组合另在两个
+distribution 验证合并后的报告 CLI caller。已加载的 wheel 模块保持包来源；新 wheel
+中直接存在的已盘点 tracked 条目与源码字节一致，不以盘点数量作收益比较。冲突协调
+保留上游 module baseline、不变的 127 上限、显式 transaction detail、capability
+优先级及原 source-binding 篡改负例。
+
+私有 verifier 初次 Python 语法失败和旧 bundle 构建拒绝仍属于准备失败，与 runtime
+资格分别保留。前一 head 的合成 200 项 lens-switch CI 预算失败仍为 hold；本次 CLI
+检查不证明 browser 性能。不重跑或重标签冻结成本、attribution、normal-bytecode
+campaign。I3/minor-release、M1/#8011、完整 R0/V10/R1、D2/D5/D6/D3、
+context/model/split-install、PostgreSQL host/wheel、installed-host、完整成本/adoption
+及全部历史缺口保持开放。exact-head review、必需 CI/readiness 和 maintainer 合入
+权限仍分别适用。
