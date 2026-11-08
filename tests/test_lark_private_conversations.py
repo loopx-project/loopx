@@ -5783,6 +5783,7 @@ def test_private_recovery_backlog_uses_released_capacity_before_retry_delay(tmp_
     transport = LarkPrivateConversations.__new__(LarkPrivateConversations)
     transport.root = tmp_path
     transport._delivery_discovery = PrivateDeliveryDiscovery(tmp_path)
+    transport._body_discovery = PrivateDeliveryDiscovery(tmp_path)
     transport._context_recovery_probe_at = {}
     transport._web_projection_paths = lambda: []
     transport.reconcile_app_feedback = lambda: 0
@@ -5822,8 +5823,13 @@ def test_private_recovery_backlog_uses_released_capacity_before_retry_delay(tmp_
     monkeypatch.setattr(worker, "time", SimpleNamespace(monotonic=lambda: clock[0]))
 
     def drive(step, **_):
-        step()
-        assert full.wait(2)
+        # Historical discovery now hands its result back to the same scanner.
+        # Drive that real handoff before asserting the unchanged pool bound.
+        deadline = time.monotonic() + 2
+        while not full.is_set() and time.monotonic() < deadline:
+            step()
+            full.wait(.01)
+        assert full.is_set()
         clock[0] = 101
         step()  # No free capacity: do not put the remaining old requests off.
         paths.append(write("late"))
@@ -5863,6 +5869,7 @@ def test_current_body_uses_next_slot_before_unattempted_recovery_backlog(tmp_pat
     transport = LarkPrivateConversations.__new__(LarkPrivateConversations)
     transport.root = tmp_path
     transport._delivery_discovery = PrivateDeliveryDiscovery(tmp_path)
+    transport._body_discovery = PrivateDeliveryDiscovery(tmp_path)
     transport._context_recovery_probe_at = {}
     transport.core = SimpleNamespace(context_recovery_observer=lambda: lambda ref: True)
     transport.reconcile_app_feedback = lambda: 0
@@ -5894,9 +5901,14 @@ def test_current_body_uses_next_slot_before_unattempted_recovery_backlog(tmp_pat
         runtime_controller=None, private_conversations=transport)
 
     def drive(step, **_):
-        step()
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            step()
+            with changed:
+                if changed.wait_for(lambda: len(started) == slots, .01):
+                    break
         with changed:
-            assert changed.wait_for(lambda: len(started) == slots, 2)
+            assert len(started) == slots
         fresh.parent.mkdir(exist_ok=True)
         fresh.write_text(json.dumps({"status": "pending" if origin == "web" else "accepted"}))
         step()  # Retain the new discovery while every existing slot is held.
@@ -6088,3 +6100,122 @@ def test_completed_command_recovery_defers_app_probe_and_revocation_blocks_reply
         assert provider.writes == [] and store.list_sessions() == []
     finally:
         runtime.close()
+
+
+def test_original_reply_is_delivered_while_historical_recovery_discovery_waits(ordinary, monkeypatch):  # noqa: F811
+    from loopx.chat_store import _atomic_write_json, _read_json
+    from loopx.extensions.lark.goal_topic_runtime_service import LarkGoalTopicRuntimeService
+
+    store, runtime, provider, transport = connect(ordinary)
+    scanning, release, delivered = threading.Event(), threading.Event(), threading.Event()
+    old_ref = "0" * 24
+    old_path = transport.root / f"{old_ref}.json"
+    # This is only a synthetic historical discovery candidate, with no grant
+    # or Core request. Its blocked read must not delay a real original answer.
+    _atomic_write_json(old_path, {"status": "delivered", "request_ref": old_ref,
+        "session_id": "historical", "turn_id": "historical", "event": {}, "deliveries": {}})
+    observer = transport.core.context_recovery_observer
+
+    def recovery_observer():
+        original = observer()
+
+        def candidate(ref):
+            if ref == old_ref:
+                scanning.set()
+                assert release.wait(15)
+                return False
+            return original(ref)
+        return candidate
+
+    monkeypatch.setattr(transport.core, "context_recovery_observer", recovery_observer)
+    original_reconcile = transport.reconcile_request
+    target = [None]
+
+    def reconcile(path):
+        result = original_reconcile(path)
+        if path == target[0] and _read_json(path).get("status") == "delivered":
+            delivered.set()
+        return result
+
+    monkeypatch.setattr(transport, "reconcile_request", reconcile)
+    service = LarkGoalTopicRuntimeService(snapshot_provider=lambda: {}, runtime_root=transport.runtime_root,
+        runtime_controller=runtime, private_conversations=transport,
+        profile_poller=lambda _profile, stop: stop.wait(15))
+    service.start()
+    try:
+        assert scanning.wait(5)
+        event = provider.event("notes-app", "fresh-during-history-read", "Explain this original question")
+        target[0] = transport.root / f"{identity_ref(transport._binding('notes-app')['provider_ref'], event['message_id'])}.json"
+        assert service._admit_private("notes-app", event)["status"] == "durably_accepted"
+        request = next(row for row in transport.core.pending() if row.get("message") == event["content"])
+        assert target[0].stem == request["request_ref"]
+        turn = runtime.wait_for_turn(session_id=request["session_id"], turn_id=request["turn_id"], timeout_sec=5)
+        assert turn["status"] == "completed"
+        assert delivered.wait(4), "A historical read blocked the original reply worker"
+        assert not release.is_set()
+        record = _read_json(target[0])
+        terminal = record["deliveries"]["terminal"]
+        assert terminal["verified"] and terminal["text"] == turn["response"]["message"]
+        final = provider.messages[terminal["attempt"]["message_ref"]]
+        assert json.loads(final["body"]["content"])["zh_cn"]["content"][0][0]["text"] == turn["response"]["message"]
+        assert len(store.list_sessions()) == 1
+        packets = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
+        assert sum(packet["method"] == "turn/start" for packet in packets) == 1
+        assert _read_json(old_path)["status"] == "delivered"
+    finally:
+        release.set()
+        service.close()
+        if service._delivery_thread is not None:
+            service._delivery_thread.join(5)
+        runtime.close()
+
+
+def test_historical_discovery_uses_one_existing_slot_without_an_executor_backlog(tmp_path):
+    from loopx.extensions.lark.goal_topic_runtime_service import LarkGoalTopicRuntimeService
+
+    scanning, release_scan, full, release_bodies = (threading.Event() for _ in range(4))
+    calls, bodies = [], []
+    lock = threading.Lock()
+
+    class Pending:
+        def pending_body_paths(self):
+            return list(bodies)
+
+        def pending_delivery_paths(self):
+            scanning.set()
+            assert release_scan.wait(15)
+            return []
+
+        def reconcile_request(self, path):
+            with lock:
+                calls.append(path)
+                if len(calls) == 3:
+                    full.set()
+            assert release_bodies.wait(15)
+            return 0
+
+    service = LarkGoalTopicRuntimeService(snapshot_provider=lambda: {}, runtime_root=tmp_path,
+        runtime_controller=None, private_conversations=Pending())
+    service.start()
+    closer = None
+    try:
+        assert scanning.wait(5)
+        for index in range(9):
+            path = tmp_path / str(index)
+            path.write_text("durable original request")
+            bodies.append(path)
+        service._delivery_wakeup.set()
+        assert full.wait(4)
+        assert len(calls) == 3 and len(set(calls)) == 3  # One scan plus three replies, total four.
+        closer = threading.Thread(target=service.close)
+        closer.start()
+        assert service._closed.wait(1)
+    finally:
+        release_scan.set()
+        release_bodies.set()
+        service.close()
+        if closer is not None:
+            closer.join(5)
+        service._delivery_thread.join(5)
+    assert not service._delivery_thread.is_alive()
+    assert len(calls) == 3  # The other six durable requests were never submitted to the executor.
