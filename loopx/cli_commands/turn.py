@@ -220,10 +220,6 @@ def handle_turn_command(
             from ..capabilities.semantic_preference.agent_preferences import extend_turn_start_dispatch as extend_preferences
             turn_start_hook_dispatch = extend_preferences(turn_start_hook_dispatch, runtime_root=runtime_root,
                 registry_path=registry_path, goal_id=args.goal_id, agent_id=args.agent_id)
-            from ..capabilities.explore.turn_context import extend_turn_start_dispatch as extend_explore
-            turn_start_hook_dispatch = extend_explore(turn_start_hook_dispatch,
-                registry_path=registry_path, runtime_root=runtime_root,
-                goal_id=args.goal_id, agent_id=args.agent_id, todo_id=getattr(args, "todo_id", None))
             if delegated_context is not None:
                 # Invocation material shares normal capture/delivery. It is not a
                 # capability observation, another decision or a new read command.
@@ -240,6 +236,7 @@ def handle_turn_command(
                 runtime_root=runtime_root,
                 runtime_root_arg=runtime_root_arg,
                 turn_start_hook_dispatch=turn_start_hook_dispatch,
+                include_explore_context=True,
                 goal_ref=goal_ref,
                 request_subject=delegated_context.get("request_subject") if delegated_context else None,
             )

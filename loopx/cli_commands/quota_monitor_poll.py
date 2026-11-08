@@ -263,6 +263,8 @@ def record_automatic_heartbeat_stall(
         turn_instance_id=turn_id,
         interaction_projection_hooks=interaction_projection_hooks,
         turn_start_hook_dispatch=turn_start_hook_dispatch,
+        include_explore_context=True,
+        explore_context_todo_id=args.todo_id,
         goal_ref=goal_ref,
     )
     rebuilt["heartbeat_stall_writeback"] = {

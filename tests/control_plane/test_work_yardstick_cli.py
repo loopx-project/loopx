@@ -12,10 +12,13 @@ import pytest
 
 from benchmark.runtime.context_delivery import preflight_context_instruction
 from tests.control_plane.test_quota_settlement_cli import (
-    _heartbeat_receipt_count, _initialize_fixture_authority, _projected_cli_args,
+    _configure_read_only_todo, _heartbeat_receipt_count, _initialize_fixture_authority, _projected_cli_args,
     _spend_run_count, _write_fixture, _run_cli, GOAL_ID, AGENT_ID, TODO_ID,
 )
-from loopx.capabilities.explore.result_log import explore_result_log_path, load_explore_result_events
+from loopx.capabilities.explore.result_log import (
+    append_explore_result_event, build_explore_finding_event, build_explore_node_event,
+    explore_result_log_path, load_explore_result_events,
+)
 from loopx.capabilities.explore.turn_context import explore_turn_context
 from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
 from loopx.presentation.explore_results_api import _result_rows
@@ -41,8 +44,10 @@ def attachment():
         evidence_refs=["result:reversal"], work_yardstick_decision=decision())
 
 
-def setup(tmp_path, enabled=True, *, active=False, provider="sqlite", write_scope=None):
+def setup(tmp_path, enabled=True, *, active=False, provider="sqlite", write_scope=None, read_only=False):
     project, runtime, path = _write_fixture(tmp_path)
+    if read_only:
+        _configure_read_only_todo(project)
     config = json.loads(path.read_text())
     if active:
         config["goals"][0]["status"] = "active"
@@ -266,6 +271,112 @@ def test_first_work_reads_linked_measurements_without_a_yardstick_decision(tmp_p
     assert load_explore_result_events(explore_result_log_path(runtime, GOAL_ID)) == events_before
     assert saved.read_bytes() == original
     assert _heartbeat_receipt_count(runtime, turn[-1]) == _spend_run_count(runtime) == 1
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_receipt_reentry_keeps_the_selected_work_outside_the_global_context_window(tmp_path, provider, enabled, monkeypatch):
+    project, runtime, path = setup(tmp_path, enabled, active=True, provider=provider)
+    identity = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID]
+    todo_ids = [TODO_ID]
+    for index in range(4):
+        added = run(project, runtime, path, "todo", "add", "--goal-id", GOAL_ID,
+            "--role", "agent", "--claimed-by", AGENT_ID, "--priority", "P1",
+            "--text", f"Validate independent representation {index}",
+            "--task-class", "advancement_task", "--action-kind", "validate",
+            "--target-key", f"representation-{index}")
+        todo_ids.append(added["todo_id"])
+    log = explore_result_log_path(runtime, GOAL_ID)
+    for index, todo in enumerate(todo_ids):
+        node = f"question-{index}"
+        run(project, runtime, path, "todo", "update", *identity, "--todo-id", todo,
+            "--explore-result-node-ref", node)
+        append_explore_result_event(log, build_explore_node_event(goal_id=GOAL_ID,
+            agent_id=AGENT_ID, node_id=node, title=node, node_kind="question", status="exploring"))
+        evidence = f"result:representation-{index}"
+        append_explore_result_event(log, build_explore_finding_event(goal_id=GOAL_ID,
+            agent_id=AGENT_ID, node_id=node, finding_id=f"finding-{index}",
+            title=f"Observed representation {index}", status="confirmed", evidence_refs=[evidence],
+            measurements=[{**decision()["authoritative"], "value": index,
+                "candidate_ref": f"candidate:{index}", "evidence_ref": evidence}]))
+    global_view = run(project, runtime, path, "explore", "turn-context", *identity)
+    visible = {card["todo_id"] for card in global_view["graph"].get("work_measurements", [])}
+    target = next(todo for todo in todo_ids if todo not in visible)
+    events_before = load_explore_result_events(log)
+    turn_id = "selected-context-reentry"
+    turn = [*identity, "--turn-instance-id", turn_id]
+    command = ["quota", "should-run", "--codex-app", *turn,
+               "--context-delivery", "on", "--delta-delivery", "off"]
+
+    def capture(name, *options):
+        directory = tmp_path / name
+        run(project, runtime, path, *command, *options, "--decision-output-dir", str(directory))
+        saved = directory / "decision.json"
+        return saved, json.loads(saved.read_bytes())
+
+    _, discovery = capture("discovery")
+    assert discovery["interaction_contract"]["cli_channel"]["selection_required"]
+    assert discovery["interaction_contract"]["agent_channel"]["delivery_allowed"] is False
+    _, chosen = capture("chosen", "--todo-id", target)
+    receipts_after_selection = _heartbeat_receipt_count(runtime, turn_id)
+    saved, reentered = capture("reentered")
+    assert chosen["selected_todo"]["todo_id"] == reentered["selected_todo"]["todo_id"] == target
+    assert reentered["effective_action"] == "normal_run" and reentered["normal_delivery_allowed"]
+    assert reentered["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
+    assert chosen["heartbeat_receipt"]["settlement_identity"] == reentered["heartbeat_receipt"]["settlement_identity"]
+    sources = reentered["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+    view = next(source["content"] for source in sources if source.get("kind") == "explore_turn_context")
+    if enabled:
+        assert view["todo_id"] == target
+        assert [card["todo_id"] for card in view["graph"]["work_measurements"]] == [target]
+    else:
+        assert "todo_id" not in view and "work_measurements" not in view["graph"]
+        # The public CLI wraps the same view with invocation-routing metadata.
+        assert view == {key: value for key, value in global_view.items() if key != "source_runtime_route"}
+    opening = starting_page(project, runtime, path, turn, saved, monkeypatch)["content"]
+    assert ("/content/graph/work_measurements/0" in opening) is enabled
+    assert target in opening
+    assert load_explore_result_events(log) == events_before
+    assert _heartbeat_receipt_count(runtime, turn_id) == receipts_after_selection
+    assert _spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_receipt_settlement_does_not_require_a_closed_work_context(tmp_path, provider):
+    project, runtime, path = setup(tmp_path, active=True, provider=provider, read_only=True)
+    turn_id = "settlement-context-reentry"
+    turn = binding(turn_id)
+    guard = run(project, runtime, path, "quota", "should-run", "--codex-app", *turn)
+    original_identity = guard["heartbeat_receipt"]["settlement_identity"]
+
+    def reenter(expected):
+        counts = _heartbeat_receipt_count(runtime, turn_id), _spend_run_count(runtime)
+        replay = run(project, runtime, path, "quota", "should-run", "--codex-app",
+            "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", turn_id)
+        channel = replay["interaction_contract"]["agent_channel"]
+        assert replay["normal_delivery_allowed"] is False and channel["delivery_allowed"] is False
+        assert replay["effective_action"] == expected
+        assert replay["heartbeat_receipt"]["settlement_identity"] == original_identity
+        assert channel["work_context"]["complete"]
+        assert all(source.get("error_code") != "context_source_unavailable"
+                   for source in channel["work_context"].get("sources", []))
+        assert (_heartbeat_receipt_count(runtime, turn_id), _spend_run_count(runtime)) == counts
+
+    run(project, runtime, path, "todo", "complete", *turn, "--claimed-by", AGENT_ID,
+        "--evidence", "artifact:verified-synthetic-evidence")
+    reenter("unsettled_host_turn_recovery")
+    archived = run(project, runtime, path, "todo", "archive-completed", "--goal-id", GOAL_ID,
+        "--max-active-done", "0", "--execute")
+    assert archived["moved_count"] == 1
+    reenter("unsettled_host_turn_recovery")
+    run(project, runtime, path, "refresh-state", *turn,
+        "--classification", "validated_change", "--delivery-batch-scale", "single_surface",
+        "--delivery-outcome", "outcome_progress", "--no-global-sync", "--suppress-external-sinks")
+    reenter("unsettled_host_turn_recovery")
+    run(project, runtime, path, "quota", "spend-slot", *turn,
+        "--slots", "1", "--source", "heartbeat", "--execute")
+    reenter("heartbeat_settled_skip")
+    assert _heartbeat_receipt_count(runtime, turn_id) == _spend_run_count(runtime) == 1
 
 
 def test_measured_yardstick_restarts_comparison_when_the_acceptance_basis_changes(tmp_path):
