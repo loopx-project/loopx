@@ -287,8 +287,10 @@ serialized response.
 Read the top-level `content` and follow its `next_command` until that selection's
 `eof`. If the whole initial selection would need paging and its decision and
 read obligations fit in one page, the opening contains those controls and
-`navigation.remaining_read_command` points to the rest. Read it and follow
-its cursor before work. Both selections pin the same immutable capture.
+`navigation.remaining_read_command` points to the rest. The page's
+`read_instruction` directs the reader to that command even when the opening
+reports EOF. Follow it and its cursor before work. Both selections pin the same
+immutable capture.
 `navigation.first_read_command` replays the opening. Use
 `navigation.recovery.command` for other fields. If the response is lost, use the
 original digest-bound capture in the wake prompt. Recovery reuses the saved
@@ -303,8 +305,9 @@ decision and its original receipt.
 
 阅读顶层 `content`，按 `next_command` 续读到当前选区的 `eof`。首读内容需要分页且决策
 和读取义务能完整放在一页时，首屏先交付这些控制信息，并给出
-`navigation.remaining_read_command`。工作前沿这条命令及其游标读完余下的首读内容。
-两个选区绑定同一份不可变捕获。`navigation.first_read_command` 可重读首屏，其他字段沿
+`navigation.remaining_read_command`。即使首屏已到 EOF，页级 `read_instruction` 仍指向
+这条命令。工作前沿这条命令及其游标读完余下的首读内容。两个选区绑定同一份不可变捕获。
+`navigation.first_read_command` 可重读首屏，其他字段沿
 `navigation.recovery.command` 读取。结果丢失时，用唤醒正文中的原文件及摘要恢复，复用原决策和回执。
 
 When the existing acceptance owner supplies complete `outcome_context`

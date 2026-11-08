@@ -288,6 +288,10 @@ def _bounded_initial_page(navigation: dict[str, Any], plan: dict[str, Any], *,
             instruction=False, select=[], reference_file=opening, reader_argv=reader_argv)
         # An opening is useful only as a complete, independently readable
         # page. Keep the ordinary cursor when even the opening cannot fit.
+        page["read_instruction"] = (
+            "EOF ends the opening. Before work, read its content and follow navigation.remaining_read_command "
+            "and its next_command cursor through the remaining initial context. Both views pin the same capture. "
+            "EOF does not establish retention, authority or freshness.")
         page["navigation"] = navigation
         return page if len(_native_output_bytes(page)) <= output_bytes else None
     except (OSError, ValueError):
@@ -344,9 +348,7 @@ def project_saved_context_capture(args: argparse.Namespace, *, hook_session: str
         activation = native_context_activation(args)
         saved_page = bool(getattr(args, "initial_read", False) or getattr(args, "select", None))
         if saved_page and (args.format != "json" or not _context_page_output_enabled(args, activation) or args.offset != 0
-                or args.reference_file or args.selection_sha256
-                or (args.page_bytes is not None and not activation["enabled"])
-                or (args.initial_read and args.select)):
+                or args.reference_file or args.selection_sha256 or (args.initial_read and args.select)):
             raise ValueError("Use JSON context-project at offset zero with native delivery or progressive --initial-read. "
                 "Choose either --initial-read or --select. Use context-read for replay or continuation.")
         caller_output_limit = getattr(args, "max_page_output_bytes", None)
