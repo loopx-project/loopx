@@ -1740,39 +1740,44 @@ export function requireCompleteTurnDecision(value: unknown, numberTokens?: unkno
   return decision;
 }
 
+function requireCompleteHostHeader(request: JsonObject, decision: JsonObject): JsonObject {
+  // The versioned model wire has one complete source. The outer executor has
+  // already checked its private effect adapter; a standalone reader validates
+  // the source and original capture header without recreating that adapter.
+  const header = requireJsonObject(request.complete_host_request, "complete Host request");
+  if (header.schema_version !== "loopx_turn_host_request_v1" ||
+      Object.keys(object(request.envelope)).length !== 0 ||
+      typeof header.turn_key !== "string" || !ENVELOPED_SHA256_PATTERN.test(header.turn_key)) {
+    throw new EffectRuntimeRequestError("unsupported or invalid complete Host request");
+  }
+  if (Object.hasOwn(header, "source_decision_hash") && header.source_decision_hash !== decisionSourceHash(decision)) {
+    throw new EffectRuntimeRequestError("complete Host request differs from captured source");
+  }
+  const detail = Object.hasOwn(header, "detail_ref") ? requireJsonObject(header.detail_ref, "complete Host detail reference") : {};
+  const hasCapture = Object.hasOwn(detail, "captured_decision");
+  const captured = hasCapture ? requireJsonObject(detail.captured_decision, "complete Host captured decision") : {};
+  // A direct quota capture predates the Host journal and has no Turn key.
+  // Preserve its source observation rather than inventing a journal binding.
+  // A provided journal key keeps the existing exact-key rule.
+  const captureTurnMatches = Object.hasOwn(captured, "turn_key")
+    ? captured.turn_key === header.turn_key
+    : captured.turn_instance_id === (object(decision.heartbeat_receipt).turn_instance_id ?? null);
+  if (hasCapture && (typeof captured.path !== "string" || !captured.path.trim() || captured.path.includes("\0") ||
+      !captureTurnMatches ||
+      captured.goal_id !== decision.goal_id || captured.agent_id !== object(decision.agent_identity).agent_id ||
+      captured.source_hash_ref !== "$.source_decision_hash" || !Object.hasOwn(header, "source_decision_hash"))) {
+    throw new EffectRuntimeRequestError("complete Host request capture binding differs");
+  }
+  return header;
+}
+
 /** One checked source for model input and transport session identity. The
  * historical effect adapter may remain in the request during migration, but it
  * cannot redirect the complete contract to another Goal, Agent or work item. */
 export function completeHostSource(request: JsonObject): {decision: JsonObject; projection: JsonObject} {
   const decision = requireCompleteTurnDecision(request.payload, request.source_number_tokens);
-  // The versioned model wire has one complete source. The outer executor has
-  // already checked its private effect adapter; a standalone reader validates
-  // the source and original capture header without recreating that adapter.
   if (Object.hasOwn(request, "complete_host_request")) {
-    const header = requireJsonObject(request.complete_host_request, "complete Host request");
-    if (header.schema_version !== "loopx_turn_host_request_v1" ||
-        Object.keys(object(request.envelope)).length !== 0 ||
-        typeof header.turn_key !== "string" || !ENVELOPED_SHA256_PATTERN.test(header.turn_key)) {
-      throw new EffectRuntimeRequestError("unsupported or invalid complete Host request");
-    }
-    if (Object.hasOwn(header, "source_decision_hash") && header.source_decision_hash !== decisionSourceHash(decision)) {
-      throw new EffectRuntimeRequestError("complete Host request differs from captured source");
-    }
-    const detail = Object.hasOwn(header, "detail_ref") ? requireJsonObject(header.detail_ref, "complete Host detail reference") : {};
-    const hasCapture = Object.hasOwn(detail, "captured_decision");
-    const captured = hasCapture ? requireJsonObject(detail.captured_decision, "complete Host captured decision") : {};
-    // A direct quota capture predates the Host journal and has no Turn key.
-    // Preserve its source observation rather than inventing a journal binding.
-    // A provided journal key keeps the existing exact-key rule.
-    const captureTurnMatches = Object.hasOwn(captured, "turn_key")
-      ? captured.turn_key === header.turn_key
-      : captured.turn_instance_id === (object(decision.heartbeat_receipt).turn_instance_id ?? null);
-    if (hasCapture && (typeof captured.path !== "string" || !captured.path.trim() || captured.path.includes("\0") ||
-        !captureTurnMatches ||
-        captured.goal_id !== decision.goal_id || captured.agent_id !== object(decision.agent_identity).agent_id ||
-        captured.source_hash_ref !== "$.source_decision_hash" || !Object.hasOwn(header, "source_decision_hash"))) {
-      throw new EffectRuntimeRequestError("complete Host request capture binding differs");
-    }
+    requireCompleteHostHeader(request, decision);
     return {decision, projection: turnActionProjection(decision)};
   }
   const envelope = requireJsonObject(request.envelope, "complete Turn executor envelope");
@@ -2352,6 +2357,20 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
   if (operation === "plan_work") {
     const {decision, projection} = completeHostSource(request);
     return {goal_id: decision.goal_id ?? null, ...projection};
+  }
+  if (operation === "host_context_binding") {
+    const decision = requireCompleteTurnDecision(request.payload, request.source_number_tokens);
+    const header = requireCompleteHostHeader(request, decision);
+    if (!Object.hasOwn(header, "source_decision_hash")) {
+      throw new EffectRuntimeRequestError("complete Turn plan requires a source binding");
+    }
+    // Reader addresses are transport metadata. A recorded typed result may
+    // still need the previous basis to recover its optional result schema.
+    return {schema_version: header.schema_version, turn_key: header.turn_key,
+      source_decision_hash: decisionSourceHash(decision),
+      ...(request.recorded_capability_result === true ? {
+        recorded_projection: {goal_id: decision.goal_id ?? null, ...turnActionProjection(decision)},
+      } : {})};
   }
   if (operation === "replan_view") return replanView(request);
   if (operation === "context_select") return capturedDecisionSelection(request);
