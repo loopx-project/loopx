@@ -979,10 +979,13 @@ export const researchHistoryScenario = {
       assert.equal(await history.locator(".research-history-edges .is-grouping").count(),0);
       await page.screenshot({path:resolve(outputDir,'research-history-portfolio-graph.png'),animations:'disabled'});
       await history.getByRole('button',{name:'时间线',exact:true}).click();
+      const beforeRefreshAxis = await history.locator(".research-axis time").allTextContents();
+      assert(beforeRefreshAxis.length >= 2);
       unavailable=true;
       await history.getByRole('button',{name:'刷新记录',exact:true}).click();
       await history.getByRole('alert').waitFor();
       assert.match(await history.textContent(),/76 \/ 76/,'A failed refresh retains the complete real capture');
+      assert.deepEqual(await history.locator(".research-axis time").allTextContents(), beforeRefreshAxis, "A failed refresh retains the verified time scale");
       const readError = history.locator('.research-history-read-error');
       assert.match(await readError.innerText(), /刷新失败，当前记录已保留/);
       assert.equal(await readError.getByRole('tooltip').isVisible(), false, 'Technical failure detail stays secondary');
