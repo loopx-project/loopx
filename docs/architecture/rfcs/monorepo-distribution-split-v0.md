@@ -2567,6 +2567,37 @@ R0/V10/R1, D2/D5/D6/D3, context/model/split-install, PostgreSQL host/wheel and
 full-cost/adoption requirements remain open. No main merge or host upgrade is
 included.
 
+### 2026-11-08 — Declaration codecs preserve selected-owner loading
+
+The inherited TypeScript CI failures reproduce on target main `94366314f0`.
+Cold handler loading reaches lease execution through the interaction/acceptance
+and outcome owners, because work declarations import `normalizeWriteScopes`
+from the full acquire runtime. Runtime `b0c42af8f` moves the existing lexical
+scope/value functions to `work_items/write_scope_codec.ts` and keeps their old
+exports. Coercion, raw request spellings, character classes, the 160-character
+limit and rejection behavior remain. Lease IO, admission, repository/workspace
+identity and source/revision/WAL/receipt fences stay with their existing owners.
+The digest guard also registers the existing quota action-wildcard matcher;
+its visible 64-hex rejection is unchanged.
+
+Both failing CI cases now pass; 19 loading/digest cases pass on Node 22.22.3.
+The related Node 26 groups pass 60 and 70 cases; the first group's missing-PG
+skip is subsequently exercised on an isolated PostgreSQL 16.15 server. Its
+store/workspace groups pass 391/32 cases and the separate service suite passes
+11 with no skips. Initial missing service environment and reused-incarnation
+failures remain recorded; the corrected service uses its own fresh database.
+Sixteen old/head scope-value/refusal comparisons and original export identities
+pass, as does TypeScript typing. Four new source/wheel × File/SQLite 101-Todo
+CLI lifecycles preserve the original artifact, completion time, scopes, four
+receipts, one debit, restart/refusal/replay and both native exits. The wheel
+matches 1,842 packaged tracked sources after installed-root verification; the
+same five source-only omissions remain. These qualify this runtime's correctness,
+not complete cost or installed benefit. All earlier frozen failures, peer
+hard-cut evidence, I3/minor-release, M1/#8011, full R0/V10/R1, D2/D5/D6/D3 and
+context/model/split-install/PostgreSQL-host/full-cost/adoption gaps remain open.
+The original task and independent review/readiness remain open; no main merge
+or installed-host upgrade is included.
+
 ## Appendix B: Decision log
 
 | Date | Decision | Owner / approval | Alternatives | Normative sections changed |

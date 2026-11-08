@@ -1993,6 +1993,31 @@ caller 的必需依赖闭包，再选一个完整可回退的加载改动并验�
 context／model／split-install、PostgreSQL host／wheel、full-cost／adoption 要求
 继续开放；本轮不合入 main、不升级 host。
 
+### 2026-11-08 — 声明 codec 保留按需加载 owner
+
+继承的 TypeScript CI 失败在目标 main `94366314f0` 复现。冷启动 handler 经由
+interaction／acceptance、outcome owner 加载 lease 执行，因为 work declaration
+从完整 acquire runtime 导入 `normalizeWriteScopes`。Runtime `b0c42af8f` 将既有
+scope／value 词法函数移到 `work_items/write_scope_codec.ts`，保留原导出。
+Coercion、原请求拼写、字符类、160 字符限制及拒绝行为不变。Lease IO、admission、
+repository／workspace identity 和 source／revision／WAL／receipt 栅栏仍由原
+owner 持有。Digest guard 登记既有 quota action 通配 matcher，可见 64-hex
+模式的拒绝保持。
+
+两个失败 CI 用例通过；Node 22.22.3 的 19 个加载／digest 用例通过，Node 26
+相关组通过 60 及 70 个用例。首组缺 PG 的 skip 随后由隔离 PostgreSQL 16.15
+覆盖：store／workspace 组通过 391／32 个，独立 service suite 通过 11 个、零
+skip。缺少 service 环境变量及复用 incarnation 的初始失败保留，修正后的 service
+使用自己的新数据库。16 个 old／head scope 值／拒绝比较及原导出 identity、
+TypeScript typing 通过。四条新的 source／wheel × File／SQLite 101-Todo CLI
+生命周期保留原 artifact、completion time、scope、四份 receipt、一次 debit、
+restart／refusal／replay 及两个 native 退出。Wheel 先验证安装根，再匹配 1842
+个 packaged tracked source；相同五个 source-only omission 保留。这验收当前
+runtime 正确性，不验收完整成本或 installed benefit。全部历史冻结失败、peer
+hard-cut 证据、I3／minor-release、M1/#8011、完整 R0/V10/R1、D2/D5/D6/D3 和
+context／model／split-install／PostgreSQL-host／full-cost／adoption 缺口保持开放。
+原 Task、独立评审／readiness 继续开放，本轮不合入 main、不升级 installed host。
+
 ## 附录 B：决策日志
 
 | 日期 | 决策 | 负责人 / 批准 | 备选 | 变更的规范章节 |
