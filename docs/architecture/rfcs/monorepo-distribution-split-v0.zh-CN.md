@@ -2235,3 +2235,27 @@ Whole-path 成本收益、installed adoption、PostgreSQL host／wheel，以及�
 I3／minor-release、M1/#8011、完整 R0/V10/R1、D2/D5/D6/D3、
 context／model／split-install 与历史失败资格继续开放。组合提案评审之后，下一段
 有用边界仍是报告订阅／构造加载；原 Task 保持开放。
+
+### 2026-11-08 — 组合加载与恢复资格验证
+
+组合提案在目标 main `fe36f31fd` 上采用 #8346 已有的 feedback/声明 codec
+修复、#8360 的报告构造隔离和 #8365 的 UTF-8 合成 Host fixture 修复。
+运行时代码资格基于 `251d7eaeff4581d3436340f68c5b6cd8c8ebf1ad`。
+已有的词法 `write_scope_codec.ts` 已解除观察到的完整 lease 准入依赖，无需
+增加 interaction decoder 层。错误与词汇 owner、声明 scope 拼写和保留回执均保持。
+
+Node 22.22.3 上的加载/digest 与相邻 work-requirement、lease、effect-program
+回归全部通过（60 项），控制面类型检查通过。选中 owner 的加载失败仍拒绝执行，
+不会回退。四次新的源码/wheel × File/SQLite 101-Todo console 正确性路径均保留
+前次不可变 fixture/artifact 指纹、scope、原完成时间、四份回执、一次扣额、
+拒绝/重启/重放，以及每条路径两个自有 native 进程退出。wheel 中现存的 1,921 个
+tracked 条目逐字节匹配源码，十七项源码专用、文档和媒体遗漏保持不变。
+
+真实 PostgreSQL 16.15 store/service 在隔离临时服务上全部通过（391/11，零
+跳过），自有服务随后停止。首次 service 运行漏传专用环境变量，跳过一项；
+该次资格失败单独保留，与修正后的运行区分。
+
+这些路径验证组合正确性，whole-path 与完整边际成本、adoption 仍未取得资格。
+保留 I3 至少一个 minor release、M1/#8011、完整 R0/V10/R1、D2/D5/D6/D3、
+context/model/split-install、PostgreSQL host/wheel 以及每项冻结失败。
+原任务保持开放；本检查点不授权合入，也不宣告最小化内核完成。

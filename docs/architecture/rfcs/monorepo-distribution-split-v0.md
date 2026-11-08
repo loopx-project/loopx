@@ -2872,3 +2872,33 @@ I3/minor-release, M1/#8011, full R0/V10/R1, D2/D5/D6/D3,
 context/model/split-install and historical failure qualifications remain open.
 The next useful boundary remains report subscription/construction loading after
 the combined proposal's review; the original task stays open.
+
+### 2026-11-08 — Integrated loading and recovery qualification
+
+The combined proposal adopts the existing feedback/declaration-codec repair
+from #8346, report construction isolation from #8360 and UTF-8 synthetic Host
+fixture repair from #8365 over target main `fe36f31fd`. Runtime qualification
+uses `251d7eaeff4581d3436340f68c5b6cd8c8ebf1ad`. The existing lexical
+`write_scope_codec.ts` already removes the observed dependency on full lease
+admission; an additional interaction decoder layer is unnecessary. Error and
+vocabulary owners, declared scope spellings and retained receipts stay intact.
+
+On Node 22.22.3, the loading/digest checks and adjacent work-requirement,
+lease and effect-program regressions pass (60 cases), as does the control-plane
+typecheck. Selected-owner load failure still rejects without fallback. Four
+fresh source/wheel × File/SQLite 101-Todo console correctness episodes preserve
+the prior immutable fixture/artifact fingerprints, scopes, original completion
+time, four receipts, one debit, refusal/restart/replay and two owned native exits
+each. All 1,921 present tracked wheel entries match source bytes; seventeen
+source-only, documentation and media omissions are unchanged.
+
+Real PostgreSQL 16.15 store/service suites pass (391/11, zero skips) on an
+isolated disposable server that was stopped afterward. The first service run
+omitted its dedicated environment variable and skipped one case; that result
+remains a failure of qualification, separate from the corrected run.
+
+These episodes qualify integration correctness. Whole-path and full marginal
+cost and adoption remain unqualified. Preserve I3 for at least one minor
+release, M1/#8011, full R0/V10/R1, D2/D5/D6/D3, context/model/split-install,
+PostgreSQL host/wheel and every frozen failure. The original task remains open;
+this checkpoint does not authorize merge or declare the minimal kernel complete.
