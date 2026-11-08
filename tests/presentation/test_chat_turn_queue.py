@@ -5,6 +5,7 @@ import time
 
 import pytest
 
+from loopx.chat import CHAT_RESPONSE_EXAMPLE_SUFFIX
 from test_chat_ordinary_project import ordinary  # noqa: F401
 
 
@@ -440,8 +441,8 @@ def test_browser_queue_preserves_active_turn_then_delivers_fifo_once(ordinary): 
     packets = [json.loads(line) for line in capture.read_text().splitlines()]
     starts = [row for row in packets if row["method"] == "turn/start"]
     assert len(starts) == 3
-    assert starts[1]["params"]["input"][0]["text"].endswith(body["message"])
-    assert starts[2]["params"]["input"][0]["text"].endswith("Check the third source.")
+    assert starts[1]["params"]["input"][0]["text"].endswith(body["message"] + CHAT_RESPONSE_EXAMPLE_SUFFIX)
+    assert starts[2]["params"]["input"][0]["text"].endswith("Check the third source." + CHAT_RESPONSE_EXAMPLE_SUFFIX)
     assert [row["text"] for row in store.messages(sid) if row["role"] == "user"] == [
         "wait for steer", body["message"], "Check the third source.", "Complete this check.",
     ]

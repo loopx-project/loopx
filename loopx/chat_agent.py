@@ -17,7 +17,7 @@ from typing import Any, Callable, Iterator
 
 from .presentation.codex_activity import CodexActivitySteps
 from .chat import (
-    CHAT_AGENT_RESPONSE_SCHEMA_VERSION,
+    CHAT_RESPONSE_EXAMPLE_SUFFIX,
     CHAT_REVIEW_CLOSE_TAG,
     CHAT_REVIEW_OPEN_TAG,
     VisibleResponseStreamFilter,
@@ -506,16 +506,6 @@ def _turn_prompt(
         "Only select an explicitly cataloged binding that covers this request; registration and context delivery do not authorize execution. For a handoff array, select execution_binding_id only on the entry whose own binding covers its requested work. For consultation or unrelated/missing task bindings omit execution_binding_id. Never create a hidden Todo, change host settings or reuse a completed/stopped task to obtain launch. "
         if isinstance(choices, dict) and choices.get("bindings") else ""
     )
-    envelope = {
-        "schema_version": CHAT_AGENT_RESPONSE_SCHEMA_VERSION,
-        "message": "",
-        "proposals": [],
-        "protected_action": None,
-        "goal_draft": None,
-        "context_handoff": None,
-        "gate": None,
-        "unfinished_work": None,
-    }
     role = (
         "You are the execution agent for a confirmed LoopX Task. Work only from the project root. "
         "Execute the operator task now. Inspect the repository, edit files, and run focused validation as needed. "
@@ -661,9 +651,8 @@ def _turn_prompt(
             if context_summary.strip()
             else ""
         )
-        + f"Operator user message:\n{user_message}\n\n"
-        + "After the visible answer, append the envelope below. Use both tags verbatim, including when returning an existing report. Write nothing after the closing tag.\n"
-        f"{CHAT_REVIEW_OPEN_TAG}{json.dumps(envelope, ensure_ascii=False)}{CHAT_REVIEW_CLOSE_TAG}"
+        + f"Operator user message:\n{user_message}"
+        + CHAT_RESPONSE_EXAMPLE_SUFFIX
     )
 
 
