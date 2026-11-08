@@ -51,6 +51,7 @@ const packedStaticEntries = new Set([
   'package/lib/observer.js',
   'package/lib/types/cli.d.ts',
   'package/lib/types/client/LoopXGoalBar.d.ts',
+  'package/lib/types/client/dashboard.d.ts',
   'package/lib/types/client/index.d.ts',
   'package/lib/types/client/locale.d.ts',
   'package/lib/types/client/rpc.d.ts',
@@ -748,14 +749,19 @@ async function materializeServedClient(source) {
       locale: { register: () => () => undefined },
       slots: {
         inject(name, install) {
-          assert.equal(name, 'conversation.input.dock')
+          assert(
+            ['sidebar.panellist', 'main', 'conversation.input.dock'].includes(name),
+            `unexpected slot injection ${name}`,
+          )
           const dispose = install()
           if (typeof dispose === 'function') effects.push(dispose)
         },
         register(config, component) {
           assert.equal(typeof component, 'function')
-          slots.set(config.id, config)
-          return () => slots.delete(config.id)
+          const key = config.id ?? `main:${config.key}`
+          assert.equal(slots.has(key), false, `duplicate slot ${key}`)
+          slots.set(key, config)
+          return () => slots.delete(key)
         },
       },
       on: () => () => undefined,
@@ -763,9 +769,14 @@ async function materializeServedClient(source) {
     client.apply(ctx)
     const config = slots.get('loopx-goal')
     assert.equal(config.order, 15)
-    assert.deepEqual([...slots].sort((a, b) => a[1].order - b[1].order).map(([id]) => id), [
-      'goal', 'loopx-goal', 'queue',
-    ])
+    const sidebar = slots.get('loopx-dashboard')
+    assert.equal(sidebar.order, 7)
+    assert.equal(slots.get('main:loopx-dashboard').key, 'loopx-dashboard')
+    const dockOrder = [...slots.entries()]
+      .filter(([id]) => ['goal', 'loopx-goal', 'queue'].includes(id))
+      .sort((a, b) => a[1].order - b[1].order)
+      .map(([id]) => id)
+    assert.deepEqual(dockOrder, ['goal', 'loopx-goal', 'queue'])
     assert.equal(config.inject('session-one').rpcSessionId, 'session-one')
     assert.equal(config.inject('session-two').rpcSessionId, 'session-two')
     return {

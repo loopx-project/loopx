@@ -129,6 +129,11 @@ from file deltas and provider caching; it does not prove model retention or
 lower total cost. Partial reads and lost continuity cannot qualify this reuse.
 Explicit same-capture selections always recover the complete current value.
 
+An unchanged Goal narrative can also be referenced after an exact read of the
+same registered source in the current session and epoch. The current source
+revision and Turn controls still appear. A change to the narrative or its
+source, an incomplete read, or compaction restores the current text.
+
 ### Read and recover the right object
 
 Use the path, digest and command returned by the current response. A native

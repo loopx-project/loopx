@@ -39,6 +39,16 @@ def normalize_host_argv(value: Sequence[str]) -> list[str]:
     return _normalize_argv(value, label="host")
 
 
+def host_request_schema_mismatch(required_schema: str, declared_schema: str | None) -> str | None:
+    """Refuse incompatible generic adapters before capture or host admission."""
+    from ..quota.turn_envelope import LOOPX_TURN_HOST_REQUEST_SCHEMA
+
+    declared = LOOPX_TURN_HOST_REQUEST_SCHEMA if declared_schema is None else declared_schema
+    if declared == required_schema:
+        return None
+    return (f"Generic CLI adapter must support {required_schema}. "
+            f"Use a compatible adapter and pass --host-adapter-request-schema {required_schema}.")
+
 def reward_memory_reflection_digest(value: object) -> str:
     """Bind a validator attestation to the exact typed host reflection."""
 
