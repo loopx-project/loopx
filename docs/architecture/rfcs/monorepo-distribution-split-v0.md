@@ -2567,6 +2567,52 @@ R0/V10/R1, D2/D5/D6/D3, context/model/split-install, PostgreSQL host/wheel and
 full-cost/adoption requirements remain open. No main merge or host upgrade is
 included.
 
+### 2026-11-08 — Feedback validation without mutation-adapter loading
+
+Runtime `2c5212fdb15035c26c3e158420d67197d45715f2` makes the two existing
+retained-state mutation adapters in `loopx.feedback` load on demand. Pure
+feedback validation now works when those adapters are unavailable; the parent
+fails at module import. Reward mutation resolves both adapters before registry
+reads or writes, while the original guard and writer call sites still look up
+the current module binding. Adapter object identity, mid-call patch behavior,
+index-before-state lock ordering, TypeScript guard ownership, credential refusal
+and partial-write handling remain. A local compatibility map, module `__getattr__`
+and `__dir__`, and a computed `__all__` preserve all 50 original star-export
+names, including the later append/render functions. There is no new capability,
+provider, persisted vocabulary, decision owner or cross-request authority cache.
+
+The two relevant groups pass 291 feedback-policy and 48 adapter/write/recovery
+cases. The independent unavailable-adapter tests fail on the parent before the
+change; head preserves pure validation and rejects a missing writer before
+reward mutation. Focused mypy and Ruff pass. The production semantic advisory
+finds no supported new carriers; explicit test-file inclusion is outside that
+scanner's supported `loopx/` scope. Test refusal strings remain local fixtures.
+
+The rebuilt monolithic wheel first passes isolated installed-module ownership,
+then matches all 1,840 packaged tracked sources outside the checkout with
+`PYTHONPATH` cleared. The five source-only omissions remain; relative to the
+frozen runtime candidate, only `effect_runtime.py` and `feedback.py` bytes change.
+The existing dashboard Chat build supplies the required bundle after the first
+wheel preparation failed for its absence. Four new candidate source/wheel ×
+File/SQLite 101-Todo CLI lifecycles use default bytecode and pass the original
+artifact, completion-time, scope, four-receipt, one-debit, restart, refusal and
+replay oracles. Both managed native daemons exit in every case. These are new
+runtime correctness checks, not additional matched cost samples.
+
+A normal-cache profile of an already settled synthetic recovery dry-run is
+used only to inspect loading dependencies. Its 410-module closure and nested
+import/compile timings cannot establish default-provider performance, fresh
+authority behavior or lifecycle cost. The initial stdlib-shadowing profile
+filename failed before CLI execution and remains a preparation failure. No
+frozen sample or preceding attribution pair is repeated, expanded or relabeled.
+No new whole-path benefit, PostgreSQL host/wheel, model/attention or installed
+adoption qualification is claimed. Preserve the peer hard-cut hold and all
+earlier failures, I3 for at least one minor release, M1/#8011, full R0/V10/R1,
+D2/D5/D6/D3 and context/model/split-install/full-cost/adoption acceptance.
+The original task and independent exact-head review/readiness remain open;
+the next loading decision stays with the existing quota/context/refresh callers.
+No main merge or installed-host upgrade is included.
+
 ## Appendix B: Decision log
 
 | Date | Decision | Owner / approval | Alternatives | Normative sections changed |
