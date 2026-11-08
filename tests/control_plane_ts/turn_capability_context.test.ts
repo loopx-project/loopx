@@ -57,8 +57,10 @@ for (const change of ["goal", "agent", "authority", "readback", "instructions", 
   });
 }
 
-for (const field of ["write_scope", "primary_action", "turn_envelope", "result_contract", "work_evidence", "validation_evidence"]) {
+for (const field of ["write_scope", "primary_action", "turn_envelope", "work_contract", "source_decision_hash",
+  "result_contract", "work_evidence", "validation_evidence"]) {
   test(`capability cannot replace ${field}`, () => {
+    assert.throws(() => validateTurnContextRegistration({...registration, readback_slots: [field]}));
     assert.throws(() => validateTurnContextContribution({registration, source,
       result: {...result, context_fields: {[field]: "replacement"}}}));
     assert.throws(() => validateTurnContextContribution({registration, source,
