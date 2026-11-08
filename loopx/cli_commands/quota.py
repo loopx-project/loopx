@@ -258,10 +258,6 @@ def _dispatch_quota_turn_start_hooks(
         )
         dispatch = extend_cadence_turn_start_dispatch(dispatch, registry_path=registry_path,
             runtime_root=root, goal_id=args.goal_id, agent_id=args.agent_id)
-    if args.agent_id:
-        from ..capabilities.explore.turn_context import extend_turn_start_dispatch as extend_explore
-        dispatch = extend_explore(dispatch, registry_path=registry_path, runtime_root=root,
-            goal_id=args.goal_id, agent_id=args.agent_id, todo_id=args.todo_id)
     local_private_state_mutated = bool(dispatch.get("uncertain_local_effects")) or any(
         isinstance(result, Mapping)
         and result.get("local_private_state_mutated") is not False
@@ -298,15 +294,6 @@ def _prepare_quota_command_execution(
     )
     return goal_ref, turn_start_hook_dispatch, context
 
-
-def _attach_turn_start_hook_dispatch(
-    payload: dict[str, object],
-    dispatch: Mapping[str, object] | None,
-) -> None:
-    if dispatch and (dispatch.get("registered_count") or dispatch.get("failures")):
-        payload["turn_start_capability_hook_dispatch"] = {
-            key: value for key, value in dispatch.items() if key != "contexts"
-        }
 
 def _emit_bounded_settlement(payload, args, *, runtime_root, reader_argv, print_payload):
     """Preserve the committed receipt even when bounded result delivery fails."""
@@ -636,13 +623,14 @@ def handle_quota_command(
                 turn_instance_id=heartbeat_turn_id,
                 interaction_projection_hooks=interaction_projection_hooks,
                 turn_start_hook_dispatch=turn_start_hook_dispatch,
+                include_explore_context=True,
+                explore_context_todo_id=args.todo_id,
                 context_navigation=(
                     native_context_activation(args)["progressive_enabled"]
                     and not bool(getattr(args, "turn_envelope", False))
                 ),
                 goal_ref=goal_ref,
             )
-            _attach_turn_start_hook_dispatch(payload, turn_start_hook_dispatch)
             action_selection_preflight = (
                 _export("reconcile_requested_quota_action_selection")(
                     payload,

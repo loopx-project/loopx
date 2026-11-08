@@ -595,6 +595,8 @@ def build_live_quota_should_run_decision(
     interaction_projection_hooks: Sequence[InteractionProjectionHookRegistration]
     | None = None,
     turn_start_hook_dispatch: Mapping[str, Any] | None = None,
+    include_explore_context: bool = False,
+    explore_context_todo_id: str | None = None,
     context_navigation: bool = False,
     workspace_path: Path | None = None,
     goal_ref: Mapping[str, object] | None = None,
@@ -756,6 +758,20 @@ def build_live_quota_should_run_decision(
             turn_start_hook_dispatch, registry=registry_path, runtime_root=runtime_root,
             goal_id=goal_id, agent_id=agent_id,
         )
+    if include_explore_context and agent_id:
+        from ...capabilities.explore.turn_context import extend_turn_start_dispatch as extend_explore
+
+        # Scope this read only after the shared decision has resolved receipt
+        # reentry and explicit selection. Discovery keeps its unbound view;
+        # settlement has no open work whose evidence needs to be focused.
+        channel = (payload.get("interaction_contract") or {}).get("agent_channel") or {}
+        selected = payload.get("selected_todo") or {}
+        focus = (selected.get("todo_id") if payload.get("normal_delivery_allowed") is True
+                 and channel.get("delivery_allowed") is True and selected.get("status") == "open" else None)
+        turn_start_hook_dispatch = extend_explore(dict(turn_start_hook_dispatch or {}),
+            registry_path=registry_path, runtime_root=runtime_root,
+            goal_id=goal_id, agent_id=agent_id, todo_id=explore_context_todo_id,
+            selected_todo_id=focus)
     _project_turn_start_required_reads(
         payload,
         turn_start_hook_dispatch,

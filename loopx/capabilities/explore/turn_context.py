@@ -163,12 +163,20 @@ def extend_turn_start_dispatch(
     goal_id: str,
     agent_id: str | None,
     todo_id: str | None = None,
+    selected_todo_id: str | None = None,
 ) -> dict[str, Any] | None:
     if not agent_id:
         return dispatch
-    _, graph, gate = _policy(registry_path, goal_id, runtime_root)
+    goal, graph, gate = _policy(registry_path, goal_id, runtime_root)
     if not graph and not gate["enabled"]:
         return dispatch
+    if selected_todo_id is not None:
+        from ..todo_replan_cadence.machine_defaults import work_yardstick_enabled
+
+        # This optional policy's current-work card follows the resolved work
+        # identity. With the policy off, preserve the caller's original scope.
+        if work_yardstick_enabled(goal, runtime_root):
+            todo_id = selected_todo_id
 
     def produce() -> dict[str, Any]:
         return {
