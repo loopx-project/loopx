@@ -189,7 +189,7 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedEventId
         <div className="research-row-label"><strong>{copy.singles} · {groupedIds.size}</strong></div>
         <div className="research-unlinked-days">{dayGroups.map(group => <button type="button" key={group.day} data-research-day={group.day} aria-pressed={selectedDay === group.day}
           className={`${selectedDay === group.day ? "is-selected" : ""}${group.nodes.some(node => inPhase(timeline.nodes.get(node.id)!.first)) ? "" : " is-dimmed"}`}
-          onClick={event => onGroupSelect(group.day, event.currentTarget)}><time>{group.day || (zh ? "时间未知" : "Unknown time")}</time><strong>{group.nodes.length} {group.nodes.length === 1 ? copy.question : copy.questions}</strong></button>)}</div>
+          onClick={event => onGroupSelect(group.day, event.currentTarget)}><time>{group.day ? `${group.day} UTC` : (zh ? "时间未知" : "Unknown time")}</time><strong>{group.nodes.length} {group.nodes.length === 1 ? copy.question : copy.questions}</strong></button>)}</div>
       </> : null}
       {swarm.length ? <>
         <div className="research-row-label"><strong>{copy.singles} · {swarm.length}</strong></div>

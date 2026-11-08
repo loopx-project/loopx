@@ -2029,7 +2029,7 @@ def test_health_reads_source_controls_once_and_keeps_fresh_recovery(ordinary, mo
     "settled-command", "later-settled-command", "unsettled-command",
     "reservation-crash", "post-enqueue-crash", "queued-newer", "queued-items", "queued-input", "private-path", "still-incomplete", "cold-native", "dead-native", "foreign-native", "failed-effect",
     "review-live", "review-live-source", "review-live-stop", "review-live-revoked", "review-live-equivalent", "review-live-unknown",
-    "review-live-reservation-crash", "review-live-enqueue-crash"])
+    "review-live-reservation-crash", "review-live-enqueue-crash", "transient-observation"])
 def test_original_worker_continues_explicit_unfinished_project_work_once_after_restart(ordinary, monkeypatch, fault):  # noqa: F811
     """Reply-worker restart retains native ownership; native loss stays fenced."""
     from datetime import datetime, timedelta, timezone
@@ -2198,12 +2198,44 @@ def test_original_worker_continues_explicit_unfinished_project_work_once_after_r
             monkeypatch.setattr(runtime, "resume_session_queue", resume)
         selected = worker()
     artifact_before_recovery = artifact.read_bytes()
+    if fault == "transient-observation":
+        from loopx.extensions.lark import private_conversations
+
+        owner = runtime.adapters[original["session_id"]]
+        observe = owner.completed_work_observation
+        observations = 0
+        monotonic = private_conversations.time.monotonic
+        elapsed = 0
+        monkeypatch.setattr(private_conversations, "time", SimpleNamespace(
+            monotonic=lambda: monotonic() + elapsed, time=private_conversations.time.time))
+
+        def unavailable_once(**kwargs):
+            nonlocal observations
+            observations += 1
+            return None if observations == 1 else observe(**kwargs)
+
+        monkeypatch.setattr(owner, "completed_work_observation", unavailable_once)
+        selected.reconcile()
+        # An inconclusive inventory is not a reason to replace the original
+        # writable owner with a model review of its already delivered answer.
+        assert selected.core.read_request(ref)["turn_id"] == original["turn_id"]
+        assert runtime.adapters[original["session_id"]] is owner and owner.healthcheck()
+        assert artifact.read_bytes() == artifact_before_recovery
+        assert observations == 1
+        assert selected.core.quota_backlog_pending(selected.core.read_request(ref))
+        selected.reconcile()
+        assert observations == 1, "The original reply worker still respects its probe backoff"
+        elapsed = 61
+        clock += timedelta(seconds=61)
     selected.reconcile()
     continued = selected.core.read_request(ref)
-    reviewed = fault in {"cold-native", "failed-effect", "equivalent-later", "later-failed-effect", "unsettled-command"} or str(fault).startswith("review-live")
-    if fault in {"changed-source", "revoked", "stop", "unknown-native", "background", "later-user", "dead-native", "foreign-native"}:
+    reviewed = fault == "cold-native" or str(fault).startswith("review-live")
+    if fault in {"changed-source", "revoked", "stop", "unknown-native", "background", "later-user", "dead-native", "foreign-native",
+                 "failed-effect", "equivalent-later", "later-failed-effect", "unsettled-command"}:
         assert continued["turn_id"] == original["turn_id"] and not continued.get("context_recovery")
         assert artifact.read_bytes() == artifact_before_recovery
+        if fault in {"failed-effect", "equivalent-later", "later-failed-effect", "unsettled-command"}:
+            assert runtime.adapters[original["session_id"]].healthcheck()
     elif reviewed:
         assert continued["turn_id"] != original["turn_id"]
         assert continued["session_id"] == original["session_id"]

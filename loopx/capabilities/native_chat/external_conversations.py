@@ -152,13 +152,15 @@ class ChatExternalConversations:
         anchors = [event["payload"]["native_input"] for event in events
                    if event.get("kind") == "turn.started" and event.get("payload", {}).get("native_input")]
         session = self._original_native_session(session, anchors)
+        unfinished = turn.get("status") == "completed" and bool((turn.get("response") or {}).get("unfinished_work"))
         live_work_owner = False
-        if retained_review is not None:
+        if unfinished:
             from .codex_adapter import CodexAppServerAdapter
             with self.controller.lock:
                 adapter = self.controller.adapters.get(row["session_id"])
             live_work_owner = (isinstance(adapter, CodexAppServerAdapter) and not adapter.session.read_only_review
                 and adapter.upstream_thread_id == session["upstream_thread_id"])
+        if retained_review is not None:
             events += store.events_after(session["session_id"], retained_review["turn"]["turn_id"], None)
         # This only selects read-only result probes. Adoption still requires
         # the exact original anchor, native final, current source and typed rule.
@@ -168,7 +170,6 @@ class ChatExternalConversations:
         later_equivalent = None
         image_failure = turn.get("error_code") == "runtime_error" and bool(row.get("attachments"))
         runtime_failure = turn.get("error_code") in {"model_auth_unavailable", "resume_failed"}
-        unfinished = turn.get("status") == "completed" and bool((turn.get("response") or {}).get("unfinished_work"))
         if turn.get("error_code") == "manager_authorization_unavailable" or image_failure or runtime_failure:
             # Collect canonical facts only. The typed planner owns the exact
             # pre-dispatch sequence, retry budget and authority decision.
@@ -218,8 +219,8 @@ class ChatExternalConversations:
                     for item in (discovery_reads.source_controls() if discovery_reads is not None
                                  else self.source_controls())) if turn.get("error_code") == "antigravity_step_error" else None,
                 "native_input": anchors[0] if len(anchors) == 1 else None,
-                **({"retained_result_review": retained_review, "live_work_owner": live_work_owner}
-                   if retained_review is not None else {}),
+                **({"retained_result_review": retained_review} if retained_review is not None else {}),
+                **({"live_work_owner": live_work_owner} if unfinished else {}),
                 "response_literal_open": bool(open_literal),
                 "metadata_capacity": metadata_capacity,
                 "executor_configuration": steward_machine_defaults(self.controller) if metadata_capacity else None,

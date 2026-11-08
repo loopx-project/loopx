@@ -638,7 +638,7 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
       {selectedMembers?.length ? <div className="research-history-detail" ref={detail} role="region" aria-label={selectedGroup ? (zh ? "按日期收纳的未关联问题" : "Unlinked questions by date") : (zh ? "相邻研究项的全部记录" : "All records for nearby research items")} tabIndex={-1} onKeyDown={event => {if (event.key === "Escape") {event.stopPropagation(); closeReader();}}}>
         <div className="research-reader-content">
         <button type="button" className="research-reader-back" onClick={closeReader}><ArrowLeft size={14} aria-hidden/>{copy.all}</button>
-        <h3>{selectedGroup ? `${selectedGroup.day || copy.unknown} · ${zh ? "未关联问题" : "Unlinked questions"}` : (zh ? `相邻研究项 · ${selectedMembers.length}` : `Nearby research items · ${selectedMembers.length}`)}</h3>
+        <h3>{selectedGroup ? `${selectedGroup.day ? `${selectedGroup.day} UTC` : copy.unknown} · ${zh ? "未关联问题" : "Unlinked questions"}` : (zh ? `相邻研究项 · ${selectedMembers.length}` : `Nearby research items · ${selectedMembers.length}`)}</h3>
         {displayControl}
         <ol className="research-question-index">{selectedMembers.map(node => <li key={node.id} data-research-node={node.id}>
           <button type="button" onClick={() => {collectionOpener.current = opener.current; chooseQuestion(node, {nodes: selection.nodes, day: selection.day});}}>
