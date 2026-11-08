@@ -2524,3 +2524,23 @@ head 的 CI、review 和 merge readiness，本次资格不授予合入权。原�
 M1/#8011、完整 R0/V10/R1、D2/D5/D6/D3、context/model/split-install、
 PostgreSQL host/wheel、installed-host、完整成本和 adoption 缺口及全部冻结负面结果
 均保留。不宣称最小内核完成或完整路径收益。
+
+### 2026-11-09 — 在 quota 重建中复用新鲜 canonical 字段摘要
+
+提案接入 `main@c44eb156d`。完整 canonical 读取已为每个投影后的 Todo 字段
+返回摘要；quota 重建现在复用同一次新鲜进程内读取生成的摘要，避免再次对整个
+字段计算摘要。现有 selector 路径保留直接摘要比较。完整克隆、不可替换的 provider
+事实、来源修订、角色检查及调用方改动拒绝仍由原 TypeScript owner 负责。该摘要
+不来自调用方授权，也不跨请求保留；完整 supplied-source fallback 不变。没有新增
+协议、配置或 provider。
+
+当前源码与隔离 wheel 各通过 24 项完整来源用例；76 项相邻规划用例、23 项原生
+读取用例及 control-plane 类型检查通过。交换 user/agent 摘要会被拒绝，后续合法
+配对仍成功。同一反例在当前 main 基线上通过；隔离源码副本移除摘要拒绝后，File
+和 SQLite 两项均失败。所有已加载 LoopX 模块均核验所选源码或 wheel 来源。
+当前 main 与候选源码的 File/SQLite CLI 生命周期，以及候选 wheel 的 File/SQLite
+生命周期，均保留同一 101-Todo 夹具与 sum45 产物、原完成时间、拒绝／重放／重启、
+四类 committed 收据、一次扣额及每项两次正常原生退出。首次打包因 frontend bundle
+过期而拒绝；由现有 owner 重建后，新 wheel 构建通过。这些是正确性检查，不进行
+成本对照或重跑冻结实验。全部既有验收缺口与负向证据继续开放；新 head 仍需新鲜
+review、CI 与 merge readiness。

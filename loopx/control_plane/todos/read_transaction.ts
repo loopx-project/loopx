@@ -78,13 +78,13 @@ function validateCanonicalSource(canonical: JsonObject, expected: JsonObject): v
 
 /** Full-tree transport, with provider facts immutable. Independent additions and
  * the acceptance owner's observation do not acquire provider provenance. */
-function resolveCanonicalSource(fields: JsonObject, reference: JsonObject, expectedField?: string): JsonObject {
+function resolveCanonicalSource(fields: JsonObject, reference: JsonObject, expectedField?: string, fieldDigests?: JsonObject): JsonObject {
   if ((reference.field !== "agent_todos" && reference.field !== "user_todos") ||
       expectedField !== undefined && reference.field !== expectedField) {
     throw new EffectRuntimeRequestError("quota source field must name the consumed Todo role");
   }
   const field = requireJsonObject(fields[reference.field], "quota source field");
-  if (canonicalAuthoritySha256(field) !== reference.field_sha256) {
+  if ((fieldDigests?.[reference.field] ?? canonicalAuthoritySha256(field)) !== reference.field_sha256) {
     throw new EffectRuntimeRequestError("quota source projection no longer matches the original complete read");
   }
   const record = JSON.parse(JSON.stringify(field)) as JsonObject;
@@ -162,7 +162,11 @@ export async function readCanonicalQuotaProjection(input: JsonObject, dependenci
         validateCanonicalSource(canonical, expected);
         reads.set(key, projected);
       }
-      const source = {record: resolveCanonicalSource(requireJsonObject(projected.fields, "quota source fields"), reference),
+      // These digests were produced with these fields by the fresh read above;
+      // no caller-supplied digest or field survives between requests.
+      const fieldDigests = requireJsonObject(requireJsonObject(projected.source_projection,
+        "quota source projection").field_digests, "quota source field digests");
+      const source = {record: resolveCanonicalSource(requireJsonObject(projected.fields, "quota source fields"), reference, undefined, fieldDigests),
         python_values: reference.python_values ?? []};
       request = {...request, summary_request: {...summary, source}};
     }

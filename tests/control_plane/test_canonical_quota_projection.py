@@ -159,6 +159,15 @@ def test_refresh_summary_pair_preserves_independent_inputs_and_freshness(tmp_pat
         assert len(requests) == 1 and len(requests[0]["requests"]) == 2
         assert all("source_reference" in row["summary_request"] for row in requests[0]["requests"])
         assert all(not row["summary_request"]["consume_display_views"] for row in requests[0]["requests"])
+        # Each role must match its own freshly read full field, even when both
+        # requests share one provider read. A rejected pair cannot poison reuse.
+        invalid = deepcopy(requests[0])
+        references = [row["summary_request"]["source_reference"] for row in invalid["requests"]]
+        assert references[0]["field_sha256"] != references[1]["field_sha256"]
+        references[1]["field_sha256"] = references[0]["field_sha256"]
+        with pytest.raises(ValueError, match="original complete read"):
+            project_todo_read(invalid)
+        assert select_quota_todo_summaries(user, agent, agent_identity=identity) == expected
         stale = deepcopy(agent)
         stale.expected = {**stale.expected, "cursor": "foreign"}
         with pytest.raises(ValueError, match="canonical source changed"):

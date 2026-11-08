@@ -3243,3 +3243,29 @@ I3/minor-release, M1/#8011, full R0/V10/R1, D2/D5/D6/D3,
 context/model/split-install, PostgreSQL host/wheel, installed-host, complete-cost
 and adoption gaps, and all frozen negative results. No kernel completion or
 whole-path benefit is claimed.
+
+### 2026-11-09 — Reuse fresh canonical field digests in quota reconstruction
+
+The proposal incorporates `main@c44eb156d`. A complete canonical read already
+returns a digest for each projected Todo field. Quota reconstruction now uses
+that digest from the same fresh in-process read rather than hashing the entire
+field again. The existing selector path retains its direct hash comparison.
+Complete cloning, immutable provider facts, source revisions, role checks and
+caller-change rejection remain in the existing TypeScript owner. The digest is
+neither caller-provided authority nor retained across requests; supplied-source
+fallback is unchanged. No protocol, configuration or provider is added.
+
+The current source and isolated wheel each pass 24 complete-source cases; 76
+adjacent planning cases, 23 native read cases and control-plane typing pass.
+A swapped user/agent digest is rejected, followed by a successful valid pair.
+The same negative case passes on the current-main baseline; removing digest
+rejection in an isolated source copy makes both File and SQLite cases fail.
+Every loaded LoopX module is checked against its selected source or wheel.
+Current-main and candidate source File/SQLite CLI lifecycles, plus candidate
+wheel File/SQLite lifecycles, preserve the same 101-Todo fixture and sum45
+artifact, original completion time, refusals/replay/restart, four committed
+receipts, one debit and two normal native exits per case. The initially stale
+frontend bundle refused packaging; rebuilding through its existing owner makes
+the new wheel build pass. These are correctness checks, with no cost comparison
+or rerun of frozen campaigns. All earlier acceptance gaps and negative evidence
+remain open; the changed head needs fresh review, CI and merge readiness.
