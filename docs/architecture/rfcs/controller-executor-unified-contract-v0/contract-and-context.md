@@ -630,6 +630,16 @@ claim label alone is insufficient, and another execution's lease remains
 unavailable. Source checks precede the independent task argv; rejection and
 original-result recovery retain the original session and once-only effects.
 
+Complete Turn capability advice and its optional Host result fields bind to the
+checked source content hash and Turn key. Changing a selected Todo's required
+capabilities invalidates that advice even when the legacy action projection
+matches. Publishing the same decision under a capture address preserves the
+binding. On retry, Session resolution and Host input both read the journaled
+plan. A journal with an already validated result can still read its original
+bounded result schema under the historical binding. A new Host invocation
+requires the complete binding to deliver that advice. Ordinary quota and
+historical v0 retain their existing decoders.
+
 Modern Codex and structured Host instructions share the existing audit read
 rule: read a declared audit before judging Goal acceptance or proposing
 closeout, including when the Goal stays open. Notification policy does not grant

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import json
+from pathlib import Path
 
 import pytest
 
@@ -127,6 +128,146 @@ def test_private_plan_lineage_is_not_a_host_wire(complete_host_request):
     assert turn_host_lineage(plan) == turn_host_lineage(request)
     with pytest.raises(ValueError, match="host request schema"):
         complete_host_input(plan)
+
+
+@pytest.mark.parametrize("change", ["capability", "stop", "turn"])
+def test_complete_host_optional_context_requires_original_turn_source(
+    complete_host_request, tmp_path, change,
+):
+    from loopx.control_plane.capability_hooks import (
+        TurnContextHookRegistration, dispatch_turn_context_hooks,
+    )
+    from loopx.control_plane.quota.turn_envelope import compose_turn_decision
+
+    _, original = complete_host_request
+    source = deepcopy({key: value for key, value in original.items()
+                       if key not in {"schema_version", "contract_binding"}})
+    source["observations"] = [1.0, -0.0, 2**60 + 1]
+    contract = compose_turn_decision(source)
+    turn_id = "capability-source"
+    plan = build_loopx_turn_plan(contract, host="generic-cli",
+        execution_mode="isolated-headless", turn_instance_id=turn_id)
+    result = {"readback": {"fixture_readback": "observed"},
+        "context_fields": {"fixture_context": "Advisory context."},
+        "instructions": ["Use the associated observation."],
+        "result_fields": {"fixture_result": {"type": "string", "maxLength": 128}}}
+    dispatch_turn_context_hooks(plan, (TurnContextHookRegistration(
+        "fixture.context", "fixture", ("fixture_readback",), lambda: deepcopy(result),
+    ),))
+    initial = build_loopx_turn_host_request(plan)
+    captured = prepare_turn_decision_capture(plan, journal_path=tmp_path / "capability" / "journal.json",
+        decision=contract, existing_journal=False)
+    bound = build_loopx_turn_host_request(captured)
+    assert bound["detail_ref"]["captured_decision"]["turn_key"] == initial["turn_key"]
+    for request in (initial, bound):
+        assert request["fixture_context"] == result["context_fields"]["fixture_context"]
+        assert request["capability_instructions"] == result["instructions"]
+        assert request["capability_result_fields"] == result["result_fields"]
+
+    if change == "capability":
+        source["selected_todo"]["required_capabilities"] = ["filesystem_read", "network"]
+    elif change == "stop":
+        source["goal_boundary"]["stop_condition"] = "Stop before the fixture external action."
+    else:
+        turn_id = "another-capability-source"
+    candidate = compose_turn_decision(source)
+    changed = build_loopx_turn_plan(candidate, host="generic-cli",
+        execution_mode="isolated-headless", turn_instance_id=turn_id)
+    changed.update({key: deepcopy(plan[key])
+                    for key in ("fixture_readback", "turn_context_contributions")})
+    wire = build_loopx_turn_host_request(changed)
+    assert wire["work_contract"] == candidate
+    assert not {"fixture_context", "capability_instructions", "capability_result_fields"} & wire.keys()
+
+
+def test_recorded_complete_result_recovers_previous_optional_schema(complete_host_request, tmp_path):
+    from loopx.control_plane.capability_hooks import (
+        TurnContextHookRegistration, turn_context_source,
+    )
+    from loopx.control_plane.effect_runtime import effect_runtime_result
+    from loopx.control_plane.turn_driver.executor import (
+        run_loopx_turn_once, validate_loopx_turn_host_result,
+    )
+    from loopx.control_plane.turn_driver.host_candidate import build_result
+    from loopx.control_plane.turn_driver.journal_store import (
+        LOOPX_TURN_JOURNAL_SCHEMA_VERSION, load_loopx_turn_plan_from_journal, turn_journal_path,
+        write_turn_journal_checkpoint,
+    )
+
+    _, contract = complete_host_request
+    plan = build_loopx_turn_plan(contract, host="generic-cli",
+        execution_mode="isolated-headless", turn_instance_id="recorded-capability")
+    goal_id, turn_key = contract["goal_id"], plan["transaction"]["turn_key"]
+    runtime = Path(contract["runtime_root"])
+    journal = turn_journal_path(runtime, goal_id=goal_id, turn_key=turn_key)
+    plan = prepare_turn_decision_capture(plan, journal_path=journal,
+        decision=contract, existing_journal=False)
+    capture = Path(plan["detail_ref"]["captured_decision"]["path"])
+    original = capture.read_bytes()
+    result_fields = {"fixture_result": {"type": "string", "maxLength": 128}}
+    output = {"readback": {"fixture_readback": "observed"},
+        "context_fields": {"fixture_context": "Historical advice."},
+        "instructions": ["Use the original observation."], "result_fields": result_fields}
+    registration = TurnContextHookRegistration(
+        "fixture.context", "fixture", ("fixture_readback",), lambda: output,
+    )
+    # Reproduce the released writer's basis using the historical governing view.
+    contribution = effect_runtime_result("capability_hook.turn_context.validate", {
+        "registration": registration.contract(), "result": output, "source": turn_context_source(plan),
+    })
+    plan.update(contribution.pop("readback"), turn_context_contributions=[contribution])
+    request = build_loopx_turn_host_request(plan)
+    assert "fixture_context" not in request and "capability_result_fields" not in request
+    candidate = build_result({**request, "capability_result_fields": result_fields},
+        {"result_kind": "validated_progress", "classification": "recorded_fixture_progress",
+         "next_action": "Continue the original task.", "delivery_batch_scale": "implementation",
+         "delivery_outcome": "outcome_progress", "work_evidence": ["fixture:artifact"],
+         "validation_evidence": ["fixture:checked"], "fixture_result": "Observed evidence."})
+    assert candidate["fixture_result"] == "Observed evidence."
+    assert not validate_loopx_turn_host_result(plan, candidate)["ok"]
+    for patch in ({"source_decision_hash": "sha256:" + "0" * 64}, {"turn_envelope": {}}):
+        assert not validate_loopx_turn_host_result({**plan, **patch}, candidate, from_journal=True)["ok"]
+    started = {
+        "schema_version": LOOPX_TURN_JOURNAL_SCHEMA_VERSION, "status": "in_progress",
+        "goal_id": goal_id, "turn_key": turn_key, "plan": plan, "host_attempt_count": 1,
+        "completed_phases": [],
+    }
+    write_turn_journal_checkpoint(journal, started)
+    write_turn_journal_checkpoint(journal, {
+        **started, "completed_phases": candidate["completed_phases"], "host_result": candidate,
+    })
+    recovered = load_loopx_turn_plan_from_journal(runtime, goal_id=goal_id, turn_key=turn_key)
+    calls = []
+
+    def forbidden_host(_request):
+        pytest.fail("a recorded typed result must not invoke the Host")
+
+    def validate(_plan, result):
+        assert result["fixture_result"] == candidate["fixture_result"]
+        calls.append("validate")
+        return {"status": "progress", "validator_kind": "fixture",
+                "summary": "Result retained.", "exit_code": 10}
+
+    def writeback(result):
+        assert result["fixture_result"] == candidate["fixture_result"]
+        calls.append("writeback")
+        return {"ok": True, "appended": True}
+
+    def spend():
+        calls.append("spend")
+        return {"ok": True, "appended": True, "slots": 1}
+
+    options = dict(host_runner=forbidden_host, project=tmp_path, runtime_root=runtime,
+        goal_id=goal_id, timeout_seconds=10, execute=True, task_validator=validate,
+        writeback=writeback, spend=spend, scheduler=lambda _: {"completed": True},
+        require_decision_capture=True)
+    outcome = run_loopx_turn_once(recovered, **options)
+    assert outcome["status"] == "committed", outcome.get("reason") or outcome
+    assert calls == ["validate", "writeback", "spend"]
+    assert run_loopx_turn_once(recovered, **options)["replayed"] is True
+    assert calls == ["validate", "writeback", "spend"]
+    assert capture.read_bytes() == original
+    assert json.loads(journal.read_text())["plan"] == plan
 
 
 def test_complete_wire_rejects_downgrade_mixed_carriers_and_capture_drift(complete_host_request, tmp_path):

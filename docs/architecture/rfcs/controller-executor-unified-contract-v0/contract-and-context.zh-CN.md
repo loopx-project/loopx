@@ -462,6 +462,13 @@ capture 只使用完整来源。
 复用该 proof。claim 标签本身不足，不能借用另一次执行的 lease。来源检查先于独立
 Task argv；拒绝和原结果恢复保留原会话与一次性效果。
 
+完整 Turn 的 capability 建议及其可选 Host 结果字段绑定到经校验的来源内容哈希和
+Turn key。所选 Todo 的 required capabilities 一旦变化，即使旧 action 投影相同，
+建议也会失效。为同一决策发布 capture 地址时保留绑定。重试时，Session 解析和
+Host 输入都读取日志里的原计划。日志里已校验的结果仍能按
+历史绑定读取原有受限结果 schema。新调用 Host 时，建议须通过完整绑定校验。
+普通 quota 与历史 v0 继续使用各自已有的 decoder。
+
 现代 Codex 与结构化 Host 指令共用既有 audit 读取规则：在判断 Goal acceptance 或提出
 closeout 前读取已声明 audit，即使 Goal 保持开放。通知策略不授予或取消执行权；所供
 delivery、attempt、quiet-noop、execution 与 orchestration 约束仍须遵守。状态、quota
