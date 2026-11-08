@@ -3020,7 +3020,6 @@ I3/minor-release, M1/#8011, full R0/V10/R1, D2/D5/D6/D3,
 context/model/split-install, PostgreSQL host/wheel and historical failure gaps.
 Exact-head review, required CI/readiness and maintainer merge authority remain
 separate gates; no installed-host upgrade or Goal completion is claimed.
-
 ### 2026-11-09 — Reuse validated complete source-basis bytes
 
 The existing Python Todo compatibility transport now retains its validated
