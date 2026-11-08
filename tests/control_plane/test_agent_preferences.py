@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from loopx.control_plane.quota.turn_envelope import (
     assert_complete_turn_decision,
+    build_turn_envelope,
     prepare_context_delivery,
     quota_action_signature_document,
     read_turn_plan_work,
@@ -108,7 +109,8 @@ def test_inactive_preferences_are_silent_and_participating_hook_delivers_current
     plan = _detailed_plan(registry, runtime, scope)
     request = build_loopx_turn_host_request(plan)
     assert request["schema_version"] == "loopx_turn_host_request_v1"
-    assert request["work_contract"] == plan["work_contract"] and "turn_envelope" not in request
+    assert request["work_contract"] == plan["work_contract"]
+    assert "turn_envelope" not in plan and "turn_envelope" not in request
     preference_read = next(x for x in reads if x["kind"] == "agent_preferences")
     assert len(preference_read["command"]) > 360
     assert "semantic-preference agent read" in json.dumps(plan), plan
@@ -124,7 +126,8 @@ def test_inactive_preferences_are_silent_and_participating_hook_delivers_current
     assert "Ask designated-reviewer before merging." in render_prompt(authority)
     binding = dict(goal_id=GOAL_ID, agent_id=AGENT_ID, session_id="preferences", context_epoch="epoch-a")
     for surface, projection in [("work_context", context), ("complete_turn", quota),
-                                ("complete_turn", request["work_contract"])]:
+                                ("complete_turn", request["work_contract"]),
+                                ("turn_envelope", build_turn_envelope(quota))]:
         original = deepcopy(projection)
         full = prepare_context_delivery(projection, scope=binding, capture_id="first", surface=surface)
         warm = prepare_context_delivery(projection, scope=binding, capture_id="second", surface=surface,
@@ -223,8 +226,12 @@ def test_invalid_requests_and_corrupt_storage_do_not_become_empty_memory(tmp_pat
     assert unavailable["independent_work_policy"] == "preserve_existing_authority"
     assert authority["primary_action"] == healthy["primary_action"]
     assert failed_signature["boundary"] == healthy_signature["boundary"]
+    assert authority["goal_boundary"] == healthy["goal_boundary"]
     assert authority["interaction_contract"]["agent_channel"]["required_reads"] == []
     prompt = render_prompt(authority)
+    rendered = json.JSONDecoder().raw_decode(prompt.split("Turn request:\n", 1)[1])[0]
+    rendered_context = rendered["work_contract"]["interaction_contract"]["agent_channel"]["work_context"]
+    assert rendered_context["unavailable_context"] == unavailable
     assert "discard affected cached context" in prompt and "Independent work retains" in prompt
     assert "Use a reviewer." not in prompt and "{broken" not in prompt
     rc, quota_envelope = _run_cli(registry, runtime, "quota", "should-run", *scope, "--turn-envelope")
@@ -277,6 +284,10 @@ def test_shared_runtime_preserves_unconfigured_scope_projection(tmp_path, other_
         assert new.get("turn_start_capability_hook_dispatch") == old.get("turn_start_capability_hook_dispatch")
     # Compare the typed work projection after verifying both complete sources.
     assert read_turn_plan_work(after[1]) == read_turn_plan_work(before[1])
+    old_source, new_source = (projections[1]["work_contract"] for projections in (before, after))
+    assert quota_action_signature_document(new_source) == quota_action_signature_document(old_source)
+    assert new_source["interaction_contract"]["agent_channel"]["work_context"] == old_source[
+        "interaction_contract"]["agent_channel"]["work_context"]
     rc, empty = _run_cli(registry, runtime, "semantic-preference", "agent", "read", *scope)
     assert rc == 0 and empty["current"]["items"] == []
     assert len(list((runtime / "agent-preferences").iterdir())) == 1

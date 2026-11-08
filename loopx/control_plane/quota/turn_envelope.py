@@ -43,14 +43,15 @@ def _apply_context_projection_changes(
     try:
         for change in result["changes"]:
             path = change["path"]
-            if not isinstance(path, list) or not path:
-                raise ValueError("projection path must be nonempty")
+            if not isinstance(path, list):
+                raise ValueError("projection path must be a list")
+            if not path and "remove" in change:
+                raise ValueError("projection root cannot be removed")
             parent: Any = projected
             for key in path[:-1]:
                 parent = parent[key]
-            key = path[-1]
             if "remove" in change:
-                del parent[key]
+                del parent[path[-1]]
                 continue
             if "from" in change:
                 value: Any = source
@@ -58,6 +59,12 @@ def _apply_context_projection_changes(
                     value = value[part]
             else:
                 value = change["value"]
+            if not path:
+                if not isinstance(value, dict):
+                    raise ValueError("projection root must be an object")
+                projected = deepcopy(value)
+                continue
+            key = path[-1]
             if isinstance(parent, list) and key == len(parent):
                 parent.append(deepcopy(value))
             else:
@@ -353,11 +360,14 @@ def bind_turn_decision_capture(
     )
 
 
-def project_captured_replan_cli_view(payload: dict[str, Any]) -> dict[str, Any]:
-    """Stage replan reads without round-tripping unchanged source values."""
+def project_captured_replan_cli_view(
+    payload: dict[str, Any], *, captured_decision_path: str | None = None,
+) -> dict[str, Any]:
+    """Stage replan reads against the verified capture without rewriting its source."""
     if not isinstance(payload.get("replan_read_path"), str):
         return payload
-    result = _turn_envelope_result("replan_cli_view", payload=payload, source_edits=True)
+    result = _turn_envelope_result("replan_cli_view", payload=payload, source_edits=True,
+        **({"captured_decision_path": captured_decision_path} if captured_decision_path is not None else {}))
     return _apply_context_projection_changes(payload, result)
 
 

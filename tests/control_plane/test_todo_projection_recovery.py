@@ -107,7 +107,11 @@ def test_long_committed_todo_rebuilds_from_the_fresh_head_without_a_second_creat
     before = _read(runtime)
     record = before["todos"][0]
     assert record["text"] == text and record["title"] == title
-    assert text in state.read_text()
+    displayed = next(line for line in state.read_text().splitlines() if line.startswith("- [ ] " + text[:80]))
+    if provider == "sqlite":
+        assert displayed.endswith("...") and "retain the final obligation" not in displayed
+    else:
+        assert displayed == "- [ ] " + text
 
     # A stale compatibility view must be repaired from the canonical head,
     # not by editing the accepted Todo or repeating its committed mutation.
@@ -115,7 +119,11 @@ def test_long_committed_todo_rebuilds_from_the_fresh_head_without_a_second_creat
     code, delivered = _run(registry, before["provider_revision"], "--execute")
     assert code == 0 and delivered["status"] == "delivered", delivered
     rendered = state.read_text()
-    assert text in rendered and "Keep this narrative." in rendered
+    assert displayed in rendered and "Keep this narrative." in rendered
+    assert delivered["omitted_active_records"] == ([
+        {"todo_id": record["todo_id"], "role": "agent", "omitted_fields": ["text"],
+         "query": f"loopx todo list --goal-id goal-a --todo-id {record['todo_id']}"},
+    ] if provider == "sqlite" else [])
     assert delivered["parse_render_parity"] is True
     assert _read(runtime) == before
     code, replay = _run(registry, before["provider_revision"], "--execute")
@@ -360,12 +368,25 @@ def test_production_scale_rebuild_retains_order_and_requires_private_declaration
     assert code == 0, result
     assert result["todo_count"] == 464
     rendered = state.read_text()
-    for role, count in (("agent", 256), ("user", 208)):
-        positions = [
-            rendered.index(f"todo_id=todo_fixture_{role}_{index:03d} status=")
-            for index in range(count)
-        ]
-        assert positions == sorted(positions)
+    active, archived, _ = parse_todo_source(rendered)
+    assert not archived
+    all_rows = before["todos"]
+    assert len(all_rows) == 464
+    expected_by_role = {}
+    for role in ("agent", "user"):
+        rows = [row for row in all_rows if row["role"] == role]
+        if provider == "sqlite":
+            completed = [row["todo_id"] for row in rows if row["done"]]
+            # The fixture has one resume dependency on an early completed
+            # Agent Todo. Retain it beside the documented five-row tail.
+            visible_completed = set(completed[-5:]) | {"todo_fixture_agent_003"}
+            rows = [row for row in rows if not row["done"] or row["todo_id"] in visible_completed]
+        expected_by_role[role] = [row["todo_id"] for row in rows]
+        assert [row["todo_id"] for row in active[role]] == expected_by_role[role]
+    if provider == "sqlite":
+        omitted = 464 - sum(len(rows) for rows in expected_by_role.values())
+        assert omitted > 0
+        assert f"active_done_omitted={omitted}" in rendered
     assert _read(runtime) == before
     code, replay = _run(registry, before["provider_revision"], "--execute")
     assert code == 0 and replay["changed"] is False
@@ -381,7 +402,7 @@ def test_production_scale_rebuild_retains_order_and_requires_private_declaration
     active, archived, _ = parse_todo_source(state.read_text())
     parsed_ids = [row["todo_id"] for rows in (*active.values(), archived) for row in rows]
     assert "todo_example_only" not in parsed_ids
-    assert len(parsed_ids) == 464
+    assert parsed_ids == [todo_id for role in active for todo_id in expected_by_role[role]]
     assert _read(runtime) == before
 
     # A routine refresh must also drain the full source, including records well

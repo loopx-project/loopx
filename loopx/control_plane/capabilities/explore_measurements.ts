@@ -104,7 +104,10 @@ function comparisonKey(node: string, metric: ExploreMeasurement): string {
  * previous best includes earlier declared observations; order is not inferred.
  * Keep all matching evidence when computing best; presentation limits apply later.
  */
-export function projectExploreMeasurementFeedback(findings: readonly JsonObject[]): ExploreMeasurementFeedback[] {
+export function projectExploreMeasurementFeedback(
+  findings: readonly JsonObject[],
+  candidateRefs?: ReadonlySet<string>,
+): ExploreMeasurementFeedback[] {
   const groups = new Map<string, ExploreMeasurementFeedback>();
   const ordered = findings.filter(finding => finding.measurements !== undefined);
   // Canonical readers derive this ordinal from append order; it is not stored
@@ -124,6 +127,7 @@ export function projectExploreMeasurementFeedback(findings: readonly JsonObject[
     // source when its declared execution contradicts its measurements.
     if (executionMeasurementError(measurements, finding.execution_observation) !== null) continue;
     for (const measurement of measurements) {
+      if (candidateRefs && !candidateRefs.has(measurement.candidate_ref)) continue;
       const key = comparisonKey(node, measurement), prior = groups.get(key);
       const previous = prior?.best ?? null;
       const point = measurement.value === null ? null : {finding_id: id,

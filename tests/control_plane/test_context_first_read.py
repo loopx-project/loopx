@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from argparse import Namespace
+from copy import deepcopy
 import hashlib
 import json
 from pathlib import Path
@@ -359,6 +360,32 @@ def test_cli_initial_pages_prioritize_required_facts_and_keep_the_complete_index
         command = page["next_command"]
     assert restored == raw == Path(view["recovery"]["path"]).read_bytes()
     assert not registry.exists() and not runtime.exists()
+
+
+
+@pytest.mark.parametrize("bound", [False, True])
+def test_first_read_delivers_current_task_operation_with_its_continuation(tmp_path, decision, bound):
+    action = {"operation": "read_private_source", "target_ref": "fixture/private-source.json",
+              "future_constraint": {"allowed": False, "measurement": 2**60 + 1}}
+    commands = ["loopx quota should-run --goal-id example --agent-id worker"]
+    decision["interaction_contract"]["agent_channel"]["next_task_action"] = action
+    decision["interaction_contract"]["cli_channel"].update(
+        turn_binding_required=bound, next_cli_actions=commands)
+    original = deepcopy(decision)
+    view = native_context_capture_view(decision, tmp_path)
+    _page, values = read_selection(view["first_read_command"])
+
+    def delivered(pointer):
+        root = max((key for key in values if pointer == key or pointer.startswith(key + "/")), key=len)
+        value = values[root]
+        for key in pointer[len(root):].split("/")[1:]:
+            value = value[key]
+        return value
+
+    assert delivered("/interaction_contract/agent_channel/next_task_action") == action
+    assert delivered("/interaction_contract/cli_channel/next_cli_actions") == commands
+    assert json.loads(Path(view["recovery"]["path"]).read_bytes()) == original
+    assert decision == original
 
 
 def test_initial_read_coalesces_whole_contract_with_exact_values_and_unknown_obligations(tmp_path, decision):

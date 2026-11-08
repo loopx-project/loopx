@@ -150,7 +150,7 @@ def test_waiting_original_turn_preserves_other_todo_step_and_settles_once(
             handoff_mode="soft_claim", leases=[]), state_path=state, provider=provider)
     binding = ("--agent-id", fixture.AGENT_ID, "--todo-id", fixture.TODO_ID,
         "--turn-instance-id", "original-next-action-turn")
-    guard_args = ("quota", "should-run", "--goal-id", fixture.GOAL_ID, "--codex-app",
+    guard_args = ("quota", "should-run", "--context-delivery", "off", "--goal-id", fixture.GOAL_ID, "--codex-app",
          *binding)
     code, admitted = run(*guard_args)
     assert code == 0 and admitted["normal_delivery_allowed"], admitted
@@ -213,7 +213,7 @@ def test_waiting_original_turn_preserves_other_todo_step_and_settles_once(
     final = read_heartbeat_settlement(runtime, goal_id=fixture.GOAL_ID,
         agent_id=fixture.AGENT_ID, todo_id=fixture.TODO_ID, turn_instance_id=binding[-1])
     assert final is not None and final.writeback == writeback.writeback
-    code, next_guard = run("quota", "should-run", "--goal-id", fixture.GOAL_ID,
+    code, next_guard = run("quota", "should-run", "--context-delivery", "off", "--goal-id", fixture.GOAL_ID,
         "--agent-id", fixture.AGENT_ID, "--todo-id", fixture.ALTERNATIVE_TODO_ID,
         "--turn-instance-id", "fresh-alternative-turn", "--codex-app", )
     assert code == 0 and next_guard["normal_delivery_allowed"], next_guard
@@ -230,7 +230,7 @@ def test_todoless_replan_refuses_step_and_recovers_original_settlement(
 ) -> None:
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = fixture._write_fixture(tmp_path)
-    fixture._configure_autonomous_replan_fixture(project, runtime, registry)
+    fixture._configure_autonomous_replan_fixture(project, runtime, registry, stride_strategy="off")
     state = project / f".codex/goals/{fixture.GOAL_ID}/ACTIVE_GOAL_STATE.md"
 
     def run(*args: str) -> tuple[int, dict]:

@@ -581,6 +581,8 @@ def _configure_autonomous_replan_fixture(
     project: Path,
     runtime: Path,
     registry_path: Path,
+    *,
+    stride_strategy: str | None = None,
 ) -> None:
     state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     state_path.write_text(
@@ -605,6 +607,8 @@ def _configure_autonomous_replan_fixture(
     )
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
     registry["goals"][0]["status"] = "active"
+    if stride_strategy is not None:
+        registry["goals"][0].setdefault("execution_profile", {})["stride_strategy"] = stride_strategy
     registry_path.write_text(
         json.dumps(registry, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -651,6 +655,8 @@ def _configure_autonomous_replan_fixture(
 def _configure_selected_todo_replan_fixture(
     project: Path,
     registry_path: Path,
+    *,
+    stride_strategy: str | None = None,
 ) -> None:
     state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     todo_rows = "\n".join(
@@ -681,6 +687,8 @@ def _configure_selected_todo_replan_fixture(
     )
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
     registry["goals"][0]["status"] = "active"
+    if stride_strategy is not None:
+        registry["goals"][0].setdefault("execution_profile", {})["stride_strategy"] = stride_strategy
     registry_path.write_text(
         json.dumps(registry, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",

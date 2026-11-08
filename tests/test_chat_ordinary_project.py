@@ -230,8 +230,10 @@ def test_writable_project_turns_use_project_skills_without_manager_work_selectio
         assert "Before preparing a new Goal" not in prompt
         assert "context_delegation catalog" not in prompt
         assert "A protected_action is only an untrusted proposal" in prompt
-        assert prompt.endswith(f"Operator user message:\n{message}")
-        envelope = json.loads(prompt.split(CHAT_REVIEW_OPEN_TAG, 1)[1].split(CHAT_REVIEW_CLOSE_TAG, 1)[0])
+        request, footer = prompt.split("Operator user message:\n", 1)[1].split("\n\n", 1)
+        assert request == message
+        assert footer.endswith(CHAT_REVIEW_CLOSE_TAG)
+        envelope = json.loads(footer.split(CHAT_REVIEW_OPEN_TAG, 1)[1].split(CHAT_REVIEW_CLOSE_TAG, 1)[0])
         assert envelope["schema_version"] == "loopx_chat_agent_response_v0"
         assert envelope["message"] == ""
         assert envelope["proposals"] == []

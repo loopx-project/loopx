@@ -158,8 +158,15 @@ def test_authored_requirements_survive_capture_projection_and_host(tmp_path, mon
 
 
 @pytest.mark.parametrize('provider', ['file', 'sqlite'])
-@pytest.mark.parametrize('declaration', ['source_version', 'hash_codec', 'read_order'])
-def test_real_turn_refuses_unsupported_current_source_before_launch(tmp_path, monkeypatch, provider, declaration):
+@pytest.mark.parametrize(('declaration', 'diagnostic'), [
+    ('source_version', 'unsupported complete Turn decision version'),
+    ('hash_codec', 'unsupported complete Turn decision hash codec'),
+    ('content_hash', 'complete Turn decision content integrity mismatch'),
+    ('read_order', 'required read ordering'),
+])
+def test_real_turn_refuses_unsupported_current_source_before_launch(
+    tmp_path, monkeypatch, provider, declaration, diagnostic,
+):
     import contextlib
     import io
     import sys
@@ -180,6 +187,8 @@ def test_real_turn_refuses_unsupported_current_source_before_launch(tmp_path, mo
             packet['schema_version'] = 'unsupported_work_contract'
         elif declaration == 'hash_codec':
             packet['contract_binding']['hash_codec'] = 'unsupported_source_codec'
+        elif declaration == 'content_hash':
+            packet['contract_binding']['content_hash'] = 'sha256:' + '0' * 64
         else:
             packet['interaction_contract']['agent_channel'].setdefault('required_reads', []).append(
                 {'command': "cat -- 'required material.md'", 'ordering': 'after_spend'})
@@ -200,10 +209,7 @@ def test_real_turn_refuses_unsupported_current_source_before_launch(tmp_path, mo
     result = json.loads(output.getvalue())
     assert observed and code != 0, result
     assert not marker.exists()
-    expected = {'source_version': 'unsupported complete Turn decision version',
-                'hash_codec': 'unsupported complete Turn decision hash codec',
-                'read_order': 'required read ordering'}[declaration]
-    assert expected in result['error'], result
+    assert diagnostic in result['error'], result
     # Generic CLI error effects are unknown; the marker and ledger independently
     # prove this pre-dispatch refusal, without interpreting null as false.
     assert _spend_run_count(runtime) == 0

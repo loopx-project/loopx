@@ -188,9 +188,19 @@ with patch.object(turn_envelope, '_turn_envelope_result', fail):
             if entry == "numeric":
                 assert recovered["precision_fixture"] == {"exact_integer": 2**53 + 1, "exact_float": 1.0}
                 assert type(recovered["precision_fixture"]["exact_float"]) is float
-                assert recovered["agent_todo_summary"]["goal_acceptance_contract"]["precision_probe"] == 2**53 + 1
+                summary = recovered["agent_todo_summary"]
                 sources = recovered["interaction_contract"]["agent_channel"]["work_context"]["sources"]
-                assert sources[-1]["content"]["goal_acceptance_contract"]["precision_probe"] == 2**53 + 1
+                distinct = sources[-1]["content"]["goal_acceptance_contract"]
+                if "goal_acceptance_contract_ref" in summary:
+                    # Ordinary CLI compaction may share this exact copy. It
+                    # must still point to the distinct value, never the core.
+                    assert summary["goal_acceptance_contract_ref"] == (
+                        f"$.interaction_contract.agent_channel.work_context.sources[{len(sources) - 1}]"
+                        ".content.goal_acceptance_contract"
+                    )
+                else:
+                    assert summary["goal_acceptance_contract"] == distinct
+                assert distinct["precision_probe"] == 2**53 + 1
         else:
             # Explicit raw selectors and disabled transport keep their existing
             # content. They are not implicitly converted to a different view.

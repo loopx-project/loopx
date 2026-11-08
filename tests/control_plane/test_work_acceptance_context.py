@@ -317,13 +317,20 @@ def test_captured_acceptance_does_not_replace_current_work_admission(acceptance_
     # changed work, remove a wait or silently rebind the owner's checks.
     refusal_capture = tmp_path / "current-decision"
     code, current = run(*guard, "--todo-id", target, "--turn-instance-id", "current-delivery",
-        "--context-delivery", "off", "--decision-output-dir", str(refusal_capture))
+        "--decision-output-dir", str(refusal_capture), "--context-delivery", "on", "--delta-delivery", "auto")
     assert code == (0 if change == "checks_removed" else 1), current
     if code != 0:
         assert current["error_code"] == "quota_action_selection_rejected"
         assert current["heartbeat_receipt"]["status"] == "not_committed"
-    # The raw response is the current signed decision. Its capture is an
-    # observation, including when the response denies dispatch.
+        from loopx.control_plane.turn_driver.decision_capture import read_context_capture_file
+
+        detail = current["captured_decision"]
+        verified_path, _raw, current = read_context_capture_file(detail["path"], detail["sha256"], private=True)
+        assert verified_path.samefile(refusal_capture / "decision.json")
+    else:
+        current = read_cli_policy_payload(json.dumps(current), returncode=code)
+    # Validate the current signed decision against its captured observation,
+    # including when the response denies dispatch.
     from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
     assert_complete_turn_decision(current)
     assert current == json.loads((refusal_capture / "decision.json").read_bytes())
