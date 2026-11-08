@@ -7,7 +7,7 @@ from copy import deepcopy
 import pytest
 import test_quota_settlement_cli as cli
 
-from loopx.control_plane.quota.turn_envelope import build_turn_envelope
+from loopx.control_plane.quota.turn_envelope import build_turn_envelope, turn_plan_host_source
 from loopx.control_plane.work_items.interaction_contract import build_interaction_contract
 from loopx.control_plane.turn_driver.host_candidate import extract_turn_authority
 
@@ -104,10 +104,10 @@ def test_current_selection_and_settlement_override_goal_command(tmp_path, provid
     assert all(saved.read_bytes() == original for saved, original in captures)
     code, plan = cli._run_cli(registry, runtime, "turn", "plan", "--goal-id", cli.GOAL_ID,
                               "--agent-id", cli.AGENT_ID, *binding,
-                              "--turn-instance-id", "read-only-command-plan", cwd=project)
+                              "--turn-instance-id", "read-only-command-plan", "--include-transaction-detail", cwd=project)
     assert code == 0, plan
-    assert cli.TODO_ID in extract_turn_authority(plan)["primary_action"]
-    assert COMMAND not in json.dumps(plan["turn_envelope"]["contract_capsule"])
+    assert cli.TODO_ID in extract_turn_authority(turn_plan_host_source(plan))["primary_action"]
+    assert COMMAND not in extract_turn_authority(turn_plan_host_source(plan))["primary_action"]
 
 
 @pytest.mark.parametrize("mode", ["monitor_quiet_skip", "autonomous_replan", "agent_workspace_repair"])

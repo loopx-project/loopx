@@ -69,7 +69,10 @@ def test_unreadable_decision_is_not_a_new_request_or_a_terminal_ack(exchange):
     assert {item["request_id"] for item in page["items"]} == {rid, healthy}
     blocked = next(item for item in page["items"] if item["request_id"] == rid)
     assert blocked["inbox_state"] == "receipt_unavailable"
-    assert blocked["warnings"] == ["decision_unreadable_or_conflicting"]
+    assert blocked["warnings"] == [
+        "decision_unreadable_or_conflicting",
+        "conclusion_unreadable_or_conflicting",
+    ]
     assert not blocked.get("receiver_decision_recorded")
     path.write_bytes(original)
     assert [item["request_id"] for item in pending(root, "delivery", "receiver")["items"]] == [healthy]

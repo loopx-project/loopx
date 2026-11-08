@@ -169,7 +169,7 @@ def test_research_history_owner_ignores_foreign_pythonpath(
     captures = ROOT / "apps/presentation/dashboard/src/data/fixtures"
     names = ["edgebench-research-history.json", "edgebench-graph-checkpoint-history.json",
              "edgebench-ad-checkpoint-history.json"]
-    selected = [captures / name for name in names]
+    selected = [captures / "edgebench-grid-context-on-20261103-history.json"]
     if explicit:
         destination = tmp_path / "source captures '引用'"
         destination.mkdir()

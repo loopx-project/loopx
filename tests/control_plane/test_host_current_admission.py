@@ -67,13 +67,13 @@ def test_current_source_admission_preempts_stale_mirror_native_launch(
                 assert current["state"] == "blocked_health", current
                 observations.append(current)
         if host == "exec":
-            original_prompt = codex_cli._prompt
+            original_input = codex_cli.prepare_codex_cli_input
 
             def lose_state_before_prompt(request):
                 lose_state_after_selection()
-                return original_prompt(request)
+                return original_input(request)
 
-            monkeypatch.setattr(codex_cli, "_prompt", lose_state_before_prompt)
+            monkeypatch.setattr(codex_cli, "prepare_codex_cli_input", lose_state_before_prompt)
         else:
             original_start = codex_operation_host.CodexChatAgentSession.start
 
