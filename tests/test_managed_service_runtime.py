@@ -204,6 +204,18 @@ def test_core_only_activation_does_not_retarget_standalone_observer(managed_with
     assert all(label != path.stem for _, label in calls)
 
 
+def test_core_only_update_preserves_an_adopted_provider_binding(managed_with_observer, monkeypatch):
+    agents, target, _, calls, _, _, _, _ = managed_with_observer
+    align_managed_runtime(str(target))
+    calls.clear()
+    before = {p: p.read_bytes() for p in agents.glob("*.plist")}
+    monkeypatch.setattr(managed_runtime, "_provider_pinned", lambda _: False)
+    with pytest.raises(activation.RuntimeActivationDeferred, match="native_observer_provider_binding_required"):
+        align_managed_runtime(str(target))
+    assert not calls
+    assert {p: p.read_bytes() for p in before} == before
+
+
 def test_provider_activation_leaves_another_account_root_alone(managed_with_observer):
     agents, target, _, calls, _, _, _, path = managed_with_observer
     registry = agents.parent.parent / "registry"

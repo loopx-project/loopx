@@ -50,9 +50,11 @@ The supported direct `watch` job participates in the same handoff as Chat and
 Status. The handoff waits for accepted Chat and account work, starts the
 observer first, and verifies its lock and both loaded builds from the 0.15.5
 observer heartbeat before committing.
-It restores the previous job routes on failure. Core-only updates leave the
-independent watcher in place. Run the provider's separate relay reconciliation
-after the managed processes have adopted the same build.
+It restores the previous job routes on failure. Once the watcher has been
+adopted, a Core update without a pinned provider defers before replacing any
+service. Core-only updates still leave unbound standalone watchers in place.
+Run the provider's separate relay reconciliation after the managed processes
+have adopted the same build.
 
 `loopx-native-account-provider` reads this JSON protocol on stdin:
 

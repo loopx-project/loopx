@@ -30,6 +30,7 @@ from .. import runtime_activation as activation
 
 _OBSERVER_LABEL = "com.loopx.codex-native-accounts"
 _OBSERVER_MODULE = "loopx_codex_provider_routing.native"
+_RUNTIME_BINDING = {"schema_version": "loopx_managed_runtime_binding_v1"}
 
 
 def _literal_arguments(command: str) -> list[str]:
@@ -95,7 +96,7 @@ def _retarget(payload: dict, executable: str, python: str) -> dict:
         result.setdefault("EnvironmentVariables", {})["LOOPX_PYTHON"] = python
         result["EnvironmentVariables"].pop("PYTHONPATH", None)
         result["EnvironmentVariables"].pop("LOOPX_RELEASE_ROOT", None)
-    result["LoopXRuntimeBinding"] = {"schema_version": "loopx_managed_runtime_binding_v1"}
+    result["LoopXRuntimeBinding"] = _RUNTIME_BINDING.copy()
     return result
 
 
@@ -128,7 +129,7 @@ def has_runtime_binding() -> bool:
         payload = plistlib.loads(path.read_bytes())
         if not isinstance(payload, dict):
             raise ValueError("service_runtime_route_unverified")
-        if payload.get("LoopXRuntimeBinding") == {"schema_version": "loopx_managed_runtime_binding_v1"}:
+        if payload.get("LoopXRuntimeBinding") == _RUNTIME_BINDING:
             return True
     return False
 
@@ -201,7 +202,7 @@ def _retarget_observer(payload: dict, python: str, core: Path) -> dict:
     env = {key: value for key, value in env.items() if key != "PYTHONHOME"}
     env.update(PYTHONPATH=str(root), PYTHONSAFEPATH="1", PYTHONNOUSERSITE="1",
                LOOPX_PYTHON=python, LOOPX_RELEASE_ROOT=str(root))
-    return {**payload, "EnvironmentVariables": env,
+    return {**payload, "EnvironmentVariables": env, "LoopXRuntimeBinding": _RUNTIME_BINDING.copy(),
             "ProgramArguments": [python, *payload["ProgramArguments"][1:]]}
 
 
@@ -211,6 +212,23 @@ def _provider_pinned(python: str) -> bool:
     # adopt that observer. A venv's inherited system package does not qualify.
     bin_dir = Path(python).parent
     return (bin_dir.parent / "pyvenv.cfg").is_file() and (bin_dir / "loopx-native-account-provider").is_file()
+
+
+def _observer_source(path: Path, pinned: bool) -> tuple[bytes, dict] | None:
+    try:
+        if path.is_symlink():
+            raise ValueError("native_observer_route_unverified")
+        original = path.read_bytes()
+        payload = plistlib.loads(original)
+        if not isinstance(payload, dict):
+            raise ValueError("native_observer_route_unverified")
+    except (OSError, ValueError, plistlib.InvalidFileException) as exc:
+        if pinned:
+            raise ValueError("native_observer_route_unverified") from exc
+        return None
+    if pinned or payload.get("LoopXRuntimeBinding") == _RUNTIME_BINDING:
+        return original, payload
+    return None
 
 
 def _native_package(python: str):
@@ -500,13 +518,14 @@ def _align_managed_runtime(executable: str, journal: Path) -> dict:
     observer = journal.parent / f"{_OBSERVER_LABEL}.plist"
     observer_root = None
     native = expected_observer = None
-    if chat and observer.exists() and _provider_pinned(python):
-        if observer.is_symlink():
-            raise ValueError("native_observer_route_unverified")
-        original = observer.read_bytes()
-        payload = plistlib.loads(original)
+    pinned = _provider_pinned(python)
+    source = _observer_source(observer, pinned) if chat and observer.exists() else None
+    if source:
+        original, payload = source
         root = _observer_route(payload)
         if root.resolve() == _chat_account_root(plistlib.loads(chat[0].read_bytes())):
+            if not pinned:
+                raise activation.RuntimeActivationDeferred("native_observer_provider_binding_required", [_OBSERVER_LABEL])
             native = _native_package(python)
             expected_observer = native.observer_build_identity()
             loaded, pid = activation._managed_service_state(observer)
