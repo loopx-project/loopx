@@ -86,6 +86,10 @@ const DECLARED_UNFOLDABLE: Record<string, { count: number; reason: string }> = {
     count: 2,
     reason: "legacy patterns are carried by the contract record, not by this module",
   },
+  "control_plane/todos/quota_selection.ts": {
+    count: 1,
+    reason: "anchored wildcard matcher from a validated quota action pattern, not a digest matcher",
+  },
   "control_plane/todos/read_codec.ts": {
     count: 2,
     reason: "Todo reference boundaries and legacy task classification, not digest matchers",

@@ -85,20 +85,20 @@ function Timing({goal, timing, zh}: {goal: ResearchChildGoal; timing?: ResearchH
   return untimed ? (zh ? "记录时间未知" : "Record time unknown") : (zh ? "暂无时间记录" : "No dated records");
 }
 
-export function ResearchChildGoals({goals, directoryUrl, refreshRevision, active, zh, onSelect}: {
-  goals: ResearchChildGoal[]; directoryUrl?: string; refreshRevision: number; active: boolean; zh: boolean;
+export function ResearchChildGoals({goals, directoryUrl, refreshRevision, active, showTiming, zh, onSelect}: {
+  goals: ResearchChildGoal[]; directoryUrl?: string; refreshRevision: number; active: boolean; showTiming: boolean; zh: boolean;
   onSelect: (goalId: string) => void;
 }) {
-  const timing = useChildTiming(goals, directoryUrl, refreshRevision, active);
+  const timing = useChildTiming(goals, directoryUrl, refreshRevision, active && showTiming);
   return <>
     <div className="research-child-heading">
       <h2>{zh ? "子 Goal 研究" : "Research in child Goals"}</h2>
-      <span>{zh ? "北京时间" : "Beijing time (UTC+8)"}</span>
+      {showTiming ? <span>{zh ? "北京时间" : "Beijing time (UTC+8)"}</span> : null}
     </div>
     <div className="research-child-goals">{goals.map(goal => <button type="button" key={goal.goalId} onClick={() => onSelect(goal.goalId)}>
       <span className="research-child-body">
         <span>{goal.title}</span>
-        <span className="research-child-timing"><Timing goal={goal} timing={timing?.get(goal.goalId)} zh={zh}/></span>
+        {showTiming ? <span className="research-child-timing"><Timing goal={goal} timing={timing?.get(goal.goalId)} zh={zh}/></span> : null}
       </span>
       <span aria-hidden="true">↗</span>
     </button>)}</div>

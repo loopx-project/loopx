@@ -17,6 +17,44 @@ export interface CapacityScanInput {
   skipped_private_files: number;
 }
 
+/**
+ * Split a reader command emitted by the quota context-capture navigation the
+ * same way its generator quotes it. The producer builds commands with POSIX
+ * `shlex.join`, so a quoted path — including a temporary directory containing
+ * spaces or an apostrophe — is exactly one argument, never split on its own
+ * whitespace. Unbalanced quoting fails loudly instead of mis-parsing a
+ * reference path into several arguments.
+ */
+export function splitShellCommand(command: string): string[] {
+  const argv: string[] = [];
+  let current = "";
+  let started = false;
+  let quote: "'" | "\"" | null = null;
+  const characters = Array.from(command);
+  for (let index = 0; index < characters.length; index++) {
+    const character = characters[index]!;
+    if (quote === "'") {
+      if (character === "'") quote = null;
+      else current += character;
+    } else if (quote === "\"") {
+      if (character === "\"") quote = null;
+      else if (character === "\\" && index + 1 < characters.length &&
+        "\"\\$`".includes(characters[index + 1]!)) current += characters[++index]!;
+      else current += character;
+    } else if (character === "'" || character === "\"") {
+      quote = character; started = true;
+    } else if (character === " " || character === "\t") {
+      if (started || current !== "") argv.push(current);
+      current = ""; started = false;
+    } else {
+      current += character; started = true;
+    }
+  }
+  if (quote !== null) throw new Error(`unbalanced ${quote} in reader command`);
+  if (started || current !== "") argv.push(current);
+  return argv;
+}
+
 export function sameCapacityScan(left: CapacityScanInput | undefined, right: CapacityScanInput | undefined): boolean {
   return !!left && !!right && /^[a-f0-9]{64}$/.test(left.sha256) &&
     Number.isSafeInteger(left.files) && left.files > 0 &&

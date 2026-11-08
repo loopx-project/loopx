@@ -1,7 +1,7 @@
 # LoopX for DeepSeek Harness
 
-`dsh-loopx-plugin` is one independently versioned DSH package with three
-separate Loader rows:
+`dsh-loopx-plugin` is one independently versioned DSH package with four
+cooperating surfaces (three Loader rows and one Client panel):
 
 - the init row automatically installs or upgrades the LoopX CLI, installs the
   packaged workflow skills into `$DSH_AGENTS_HOME/skills` (default
@@ -15,6 +15,11 @@ separate Loader rows:
   `/api/loopx.goalbar` route required by DSH 0.1.5. Its web Client adds a compact
   GoalBar between DSH's native GoalBar and Queue dock rows, visible only for one
   exact live `(goalId, loopxAgentId)` binding.
+- the web Client also adds one global sidebar entry, **LoopX**, whose central
+  panel embeds the already-running personal workspace from
+  `loopx dashboard` on loopback. The panel is presentation only: it starts no
+  service, reads no LoopX state itself, and renders a recovery notice plus
+  retry when that loopback service is absent.
 
 Installing the plugin and starting DSH load and prepare these capabilities;
 neither creates a binding nor activates the Driver. The GoalBar
@@ -431,6 +436,35 @@ registry paths, credentials, and binding candidates. A source revision is only
 a change token, not authorization or a compare-and-swap guard. Installing the
 package grants no model tool authority, does not create or repair bindings, and
 does not change LoopX core state by itself.
+
+## Personal workspace panel
+
+The web Client registers one global sidebar entry, **LoopX**, and the matching
+central panel. The panel embeds the personal workspace served by
+`loopx dashboard` at its default loopback address
+(`http://127.0.0.1:8767/chat/`) in an iframe. Start the workspace first:
+
+```bash
+loopx dashboard          # default loopback address; opens the browser unless --no-open
+```
+
+The panel then shows the same workspace in DSH. It is navigation, not a second
+control plane: the iframe loads LoopX's own UI and LoopX remains the authority
+for Goals, Todos, quotas, and bindings. The iframe shares no state with the DSH
+Session, and the plugin adds no LoopX model tool, credential, or registry read
+for it.
+
+When the loopback service is absent, the panel keeps the frame mounted, states
+the recovery command, and offers **Retry**; starting `loopx dashboard` and
+retrying recovers without reloading DSH. Removing or disabling the plugin
+removes the sidebar entry and panel without changing LoopX state.
+
+Current limitation: the address is the dashboard's default loopback address.
+A workspace started with an explicit other `--port` is not discovered by the
+panel; keep the default port, or open that URL in DSH's own browser panel.
+Hosts that do not declare the global sidebar or keyed main slots (DSH releases
+before the 0.2.1 line) keep the GoalBar and skills but show no panel: the
+injection simply waits for a host that declares those slots.
 
 ## Automatic initialization and `/loopx-init` repair
 

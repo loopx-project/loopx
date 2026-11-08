@@ -657,6 +657,7 @@ export async function readTodoRequest(goalId: string, todoId: string, signal: Ab
   const result = z.object({
     ok: z.literal(true), goal_id: z.string(), todo_id: z.string(), text: z.string(),
     status: z.string(), archive_state: z.string(), updated_at: z.string().nullable(),
+    evidence: z.string().nullable().optional(), note: z.string().nullable().optional(),
     review_basis: todoUpdateSourceBasisSchema.optional(),
     source_access: z.object({namespace: z.string()}).optional(),
   }).parse(await requestJson<unknown>(url, {signal}));
@@ -1055,15 +1056,40 @@ const chatMessagePageSchema = z.object({
 // its pages and fresh source checks; caller cancellation still takes priority.
 const CHAT_HISTORY_READ_TIMEOUT_MS = 30_000;
 
+type ChatHistoryReadProgress = {
+  first: ChatSessionSnapshot;
+  messages: ChatVisibleMessage[];
+  cursors: Set<string>;
+  cursor: string;
+  total: number;
+  digest: string;
+};
+
+function sameHistorySource(actual: ChatSessionSummary, expected: ChatSessionSummary) {
+  return actual.session_id === expected.session_id &&
+    (["agent_id", "goal_id", "channel_id", "managed_agent_id", "goal_instance_id", "project_ref"] as const)
+      .every(key => (actual[key] ?? null) === (expected[key] ?? null)) &&
+    (actual.session_mode ?? "managed_runtime") === (expected.session_mode ?? "managed_runtime");
+}
+
 /** Hydrate one complete original prefix; partial pages never become a snapshot. */
 export async function fetchChatSessionHistory(session: ChatSessionSummary | string, signal?: AbortSignal, turnId?: string): Promise<ChatSessionSnapshot> {
+  return readChatSessionHistory(session, signal, turnId);
+}
+
+async function readChatSessionHistory(session: ChatSessionSummary | string, signal?: AbortSignal, turnId?: string,
+  progress?: ChatHistoryReadProgress, checkpoint?: (progress: ChatHistoryReadProgress) => void): Promise<ChatSessionSnapshot> {
   const sessionId = typeof session === "string" ? session : session.session_id;
   // A delegation has the original Session ID; pin its first verified page's
   // scope. History discovery callers keep validating against their own source.
   let expectedSession = typeof session === "string" ? undefined : session;
-  let first: ChatSessionSnapshot | undefined, cursor: string | null = null;
-  let total: number | undefined, digest: string | undefined;
-  const messages: ChatVisibleMessage[] = [], cursors = new Set<string>(), ids = new Set<string>();
+  // Recovery is derived browser memory, scoped again by current discovery. It
+  // grants no source authority and never exposes an incomplete transcript.
+  if (progress && expectedSession && !sameHistorySource(progress.first.session, expectedSession)) progress = undefined;
+  let first = progress?.first, cursor: string | null = progress?.cursor ?? null;
+  let total = progress?.total, digest = progress?.digest;
+  const messages = [...(progress?.messages ?? [])], cursors = new Set(progress?.cursors),
+    ids = new Set(messages.map(message => message.message_id));
   do {
     signal?.throwIfAborted();
     const query = new URLSearchParams({message_limit: "200"});
@@ -1074,10 +1100,7 @@ export async function fetchChatSessionHistory(session: ChatSessionSummary | stri
       {signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS)]) : AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS)});
     signal?.throwIfAborted();
     const expected = expectedSession;
-    const sameSource = snapshot.session?.session_id === sessionId && (!expected || (
-      (["agent_id", "goal_id", "channel_id", "managed_agent_id", "goal_instance_id", "project_ref"] as const)
-        .every(key => (snapshot.session[key] ?? null) === (expected[key] ?? null)) &&
-      (snapshot.session.session_mode ?? "managed_runtime") === (expected.session_mode ?? "managed_runtime")));
+    const sameSource = snapshot.session?.session_id === sessionId && (!expected || sameHistorySource(snapshot.session, expected));
     if (snapshot.ok !== true || snapshot.schema_version !== "loopx_chat_store_v1" || !sameSource || !Array.isArray(snapshot.messages)) {
       throw new Error("The original Session scope changed during history read.");
     }
@@ -1106,7 +1129,10 @@ export async function fetchChatSessionHistory(session: ChatSessionSummary | stri
     }
     first ??= snapshot;
     total = page.total; digest = page.snapshot_sha256; cursor = page.next_cursor;
-    if (cursor !== null) cursors.add(cursor);
+    if (cursor !== null) {
+      cursors.add(cursor);
+      checkpoint?.({first, messages: [...messages], cursors: new Set(cursors), cursor, total, digest});
+    }
   } while (cursor !== null);
   // Keep the first read's execution/revision hint. An append between pages is
   // intentionally outside this prefix and will trigger the normal next refresh.
@@ -1206,6 +1232,7 @@ export type ChatHistory = {
   sessions: ChatSessionSummary[];
   snapshots: ChatSessionSnapshot[];
   unavailableSessionIds: string[];
+  pendingReads?: Map<string, ChatHistoryReadProgress>;
 };
 
 export async function fetchChatHistory(options: {
@@ -1223,6 +1250,8 @@ export async function fetchChatHistory(options: {
   const listed = options.managed ? {sessions: [await resolveManagedChatSession(options.managed, AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS))]}
     : (!options.bound ? previous : undefined) ?? await fetchChatSessions({ ...options, signal: AbortSignal.timeout(CHAT_HISTORY_READ_TIMEOUT_MS) });
   const known = new Map(previous?.snapshots.map((snapshot) => [snapshot.session.session_id, snapshot]));
+  const pendingReads = new Map(previous?.pendingReads);
+  for (const id of pendingReads.keys()) if (!listed.sessions.some(session => session.session_id === id)) pendingReads.delete(id);
   // A failed historical read is not an empty transcript. Retrying only the
   // missing snapshots keeps this recovery read-only and bounds repeated work.
   const missing = listed.sessions.filter((session) => {
@@ -1234,7 +1263,20 @@ export async function fetchChatHistory(options: {
   });
   if (exact) for (const session of missing) known.delete(session.session_id);
   const results = await Promise.allSettled(missing.map(async (session) => {
-    const snapshot = await fetchChatSessionHistory(session);
+    const savedProgress = pendingReads.get(session.session_id);
+    if (savedProgress && !sameHistorySource(savedProgress.first.session, session)) pendingReads.delete(session.session_id);
+    let snapshot: ChatSessionSnapshot;
+    try {
+      snapshot = await readChatSessionHistory(session, undefined, undefined, pendingReads.get(session.session_id),
+        progress => pendingReads.set(session.session_id, progress));
+    } catch (error) {
+      // Reuse the hook's existing retry schedule only for a lost transport.
+      // Revoked sources, invalid pages and stale cursors must start a fresh read.
+      if (!(error instanceof ChatApiError && error.payload.error_code === "chat_api_unavailable"
+        && (error.payload.http_status === undefined || Number(error.payload.http_status) >= 500))) pendingReads.delete(session.session_id);
+      throw error;
+    }
+    pendingReads.delete(session.session_id);
     if (snapshot.session.session_id !== session.session_id || snapshot.session.agent_id !== session.agent_id) {
       throw new Error("The original Session identity changed during history read.");
     }
@@ -1258,6 +1300,7 @@ export async function fetchChatHistory(options: {
     sessions: listed.sessions,
     snapshots,
     unavailableSessionIds: listed.sessions.filter((session) => !known.has(session.session_id)).map((session) => session.session_id),
+    pendingReads,
   };
 }
 

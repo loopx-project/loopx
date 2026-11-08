@@ -58,7 +58,8 @@ def test_goal_availability_transport_preserves_full_read_and_recovery(tmp_path, 
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
             code = main(["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
-                "quota", "should-run", "--goal-id", goal, "--agent-id", "agent-a"])
+                "quota", "should-run", "--goal-id", goal, "--agent-id", "agent-a",
+                "--runtime-profile", "generic_cli", "--context-delivery", "off"])
         packet = json.loads(output.getvalue())
         assert code == 0 and packet["should_run"] is True, packet.get("reason")
         return packet["interaction_contract"]["agent_channel"]

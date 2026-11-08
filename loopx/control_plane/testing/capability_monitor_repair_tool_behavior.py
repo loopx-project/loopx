@@ -176,6 +176,7 @@ def _build_capability_repair_fixture(root: Path) -> _SelectedTodoToolFixture:
             "network",
         ],
         runtime_profile="codex_app_heartbeat",
+        registry_path=os.path.relpath(global_registry_path, project_root),
     )
     quota_guard_command = str(prompt["quota_guard_command"])
     if quota_guard_command not in str(prompt["task_body"]):

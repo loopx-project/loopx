@@ -535,6 +535,15 @@ context projects only that Todo's current target, a short next-choice cue and
 counterevidence references. Its existing question-scoped read command exposes
 the full decision, exact-profile feedback and prior execution attribution; the
 default projection does not repeat that full record.
+Before a current work decision exists, the same opt-in starting read can expose
+bounded measurement feedback from the Todo's canonical question links. This
+reuses Explore's exact-profile comparison owner, includes source references and
+omitted-group navigation, and does not infer a target, accepted outcome metric
+or proxy classification. A shared question link is evidence association, not
+immutable attribution of execution to that Todo. Recording the first decision
+remains optional; default-off and exact-field first reads retain their prior
+semantics. Production File/SQLite reader qualification and actual model benefit
+are separate obligations.
 Counterevidence requests reassessment at the next concrete choice; it is not a
 new hard gate, fidelity certification, permission to waive correctness or an
 instruction to replan every Turn. At a later meaningful capture, existing

@@ -18,9 +18,7 @@ from .chat import (
     require_matching_message_replay,
     resolve_attached_completion_replay,
 )
-from .capabilities.steward_executor.allocation import (
-    normalize_manager_executor_allocation,
-)
+from .capabilities.steward_executor.allocation import normalize_manager_executor_allocation
 from .capabilities.native_chat.model_settings import (
     MODEL_SELECTION_UNSET as _MODEL_SELECTION_UNSET, normalize_agent_model_id as normalize_agent_model_id,
     normalize_session_model_settings, session_model_settings_supported, normalize_session_model_changes,
@@ -36,6 +34,7 @@ from .control_plane.chat_turn_acceptance import (
     AcceptedManagedTurn,
     plan_managed_turn_acceptance,
 )
+from .control_plane.content_digest import BARE_SHA256_PATTERN
 from .file_lock import exclusive_file_lock, write_json_atomic
 
 
@@ -517,7 +516,7 @@ class ChatSessionStore(ChatIngressStore):
                                 or len(set(review_ids)) != len(review_ids) or review_ids[-1] != active["turn_id"]
                                 or not isinstance(parked["provider"], str) or not 1 <= len(parked["provider"]) <= 128
                                 or type(parked["prefix_count"]) is not int or parked["prefix_count"] < 0
-                                or any(not isinstance(parked[key], str) or not re.fullmatch(r"[0-9a-f]{64}", parked[key])
+                                or any(not isinstance(parked[key], str) or not BARE_SHA256_PATTERN.fullmatch(parked[key])
                                        for key in ("affinity_sha256", "prefix_sha256"))):
                             raise ValueError("invalid parked working history or review Turn")
                         if payload.get("answer_review") is True:

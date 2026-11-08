@@ -364,7 +364,12 @@ export const researchHistoryScenario = {
       assert.doesNotMatch(await native.locator('.research-native-scope').innerText(), /T00:00:00Z/);
       assert.equal(await native.locator('.research-native-basis').evaluate(e => e.open), false);
       assert.equal(await nativePage.locator('.research-progress-basis').evaluate(e => e.open), false);
-      assert.equal(await nativePage.getByRole('button',{name:'所选范围尚未分析',exact:true}).isVisible(), true, 'Measured progress remains readable before model analysis; the unknown analysis is contextual help');
+      const pendingScope = nativePage.locator('.research-progress-scope');
+      assert.equal(await pendingScope.innerText(), '尚无分析器判读', 'Prepared input counts cannot be mistaken for completed judgments');
+      const pendingHelp = nativePage.getByRole('button', {name: '所选范围尚未分析', exact: true});
+      await pendingHelp.focus();
+      assert.match(await nativePage.getByRole('tooltip').innerText(), /分析输入 · \d+ 个片段/);
+      await nativePage.keyboard.press('Escape');
       assert.equal(await nativePage.locator('.research-progress > header .context-help-trigger').count(), 1, 'Result state and interpretation share one heading help entry');
       await nativePage.screenshot({path: resolve(outputDir, 'research-native-default-desktop.png'), animations: 'disabled'});
       await native.getByRole('button', {name: /首次提交.*查看原始证据/}).click();
@@ -1675,6 +1680,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await progress.getByRole("combobox").focus();
       await progress.getByRole("combobox").selectOption("c".repeat(64));
       await progress.locator(`.research-progress-scope[data-pack-id="${"c".repeat(64)}"]`).waitFor();
+      assert.match(await progress.locator('.research-progress-scope').innerText(), /1 个片段 · .*未校准/, 'Stored judgments retain their visible coverage and calibration boundary');
       assert.equal(await progress.locator('.research-progress-basis > summary').getByRole('button',{name:/完整成本未知/}).isVisible(),true,'The cost boundary remains discoverable with the details closed');
       await progress.locator('.research-progress-basis > summary').click();
       assert.match(await progress.locator('.research-usage-heading').first().innerText(), /未采集|Not captured/);
@@ -1713,6 +1719,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       assert(await unfinishedHelp.evaluate(element => element === document.activeElement));
       await progress.locator('.research-progress-basis > summary').click();
       assert.equal(await progress.getByRole('button',{name:'所选范围尚未分析',exact:true}).isVisible(),true);
+      assert.equal(await progress.locator('.research-progress-scope').innerText(), '尚无分析器判读');
       assert.equal(await nativeResults.isVisible(), true, 'An unanalysed pack still exposes its recorded outcomes with cost details closed');
       assert.equal(await progress.locator('.research-effect-metrics').count(), 0, 'An unanalysed cost pack never borrows another pack’s judgments');
       assert.equal(await analysis.count(), 0, 'Choosing an unanalysed source never requests analysis');
@@ -1730,7 +1737,9 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await analysis.getByRole('button', {name: '重试读取', exact: true}).click();
       await analysis.getByRole('alert').waitFor({state: 'hidden'});
       assert(await analysis.getByRole('button', {name: '分析所选范围', exact: true}).isEnabled(), 'A successful owner read restores the existing explicit analysis action');
+      assert.match(await analysis.locator('.analysis-scope').innerText(), /\d+ 个输入片段/);
       await analysis.press('Escape');
+      await analysis.waitFor({state: 'hidden'});
       await basis.locator(':scope > summary').click();
       assert.equal(await nativeResults.locator('[data-native-point="retained"] strong').textContent(), '3', 'Native facts do not require an analyzer result');
       assert.match(await nativeResults.innerText(), /部分窗口 · 起点未知/);

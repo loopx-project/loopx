@@ -13,7 +13,7 @@ DIRECT_LOADER_ALLOWLIST = {
     "loopx/control_plane/coordination/new_goal_storage_transport.py",
     "loopx/chat_server.py",
     "loopx/presentation/goal_direction_api.py",
-    "loopx/chat_status_api.py",
+    "loopx/chat/status_api.py",
     "loopx/control_plane/goals/goal_amendment_runtime.py",
     "loopx/control_plane/goals/source_session_registration.py",
     "loopx/presentation/goal_amendment_api.py",
@@ -22,6 +22,7 @@ DIRECT_LOADER_ALLOWLIST = {
     "loopx/bootstrap.py",
     "loopx/capabilities/manager_context/__init__.py",
     "loopx/capabilities/manager_context/roundtrip.py",
+    "loopx/capabilities/issue_fix/correction_settlement.py",
     "loopx/capabilities/native_chat/project_context.py",
     "loopx/claude_goal_mode/scripts/connect.py",
     "loopx/cli_runtime.py",
@@ -53,6 +54,7 @@ METADATA_READER_FUNCTIONS = {
     "loopx/runtime.py": {"_archive_source_goal_refs"},
     "loopx/capabilities/native_chat/project_context.py": {"coordination_runtime_root"},
     "loopx/control_plane/goals/source_session_recreation.py": {"_canonical_runtime_root"},
+    "loopx/capabilities/issue_fix/correction_settlement.py": {"_require_origin_registry"},
 }
 
 
@@ -137,7 +139,7 @@ def test_direct_project_registry_loaders_have_source_session_denial() -> None:
         "loopx/presentation/request_control_api.py": {"_request_control_source"},
         "loopx/chat_server.py": {"serve_chat"},
         "loopx/presentation/goal_direction_api.py": {"_direction_route"},
-        "loopx/chat_status_api.py": {"_discovery_registry"},
+        "loopx/chat/status_api.py": {"_discovery_registry"},
         "loopx/control_plane/goals/direction_runtime.py": {"_source"},
         "loopx/control_plane/coordination/new_goal_storage_transport.py": {"initialize_goal_storage_target"},
         "loopx/presentation/goal_amendment_api.py": {"_amendment_inspect"},

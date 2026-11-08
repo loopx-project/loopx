@@ -86,6 +86,7 @@ for line in sys.stdin:
         answer = {name: "" for name, schema in properties.items() if schema["type"] == "string"}
         answer.update({"schema_version": "loopx_turn_result_v0", "turn_key": key, "result_kind": "wait", "completed_phases": ["host_execute", "typed_result"], "classification": "awaiting_operation_confirmation", "recommended_action": "Wait for actual human approval", "summary": "Owned native context retrieved; no approval or effect"})
         answer.update(work_evidence=None, validation_evidence=None)
+        answer.update(json.loads(os.environ.get("FAKE_OPERATION_RESULT_FIELDS", "{}")))
         emit({"method": "item/agentMessage/delta", "params": {"threadId": thread, "turnId": turn, "delta": json.dumps(answer)}})
         emit({"method": "turn/completed", "params": {"threadId": thread, "turn": {"id": turn, "status": "completed"}}})
 """
