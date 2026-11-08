@@ -118,12 +118,15 @@ def _native_store_components(home: Path) -> list[dict[str, str]]:
 
 
 @contextmanager
-def _idle_native_reader(env: dict[str, str], *, timeout: float, deadline: float):
+def _idle_native_reader(env: dict[str, str], *, timeout: float, deadline: float,
+                        sealed_store_paths: tuple[str, ...] | None = None):
     """Native history reads may update their index; keep those writes off source."""
     home = Path(env['CODEX_HOME'])
     with tempfile.TemporaryDirectory(prefix='loopx-idle-native-read-') as directory:
         observer = Path(directory)
         sources = [home / 'config.toml', *(Path(m['source_path']) for m in _native_store_components(home))]
+        if sealed_store_paths is not None and set(sources) != {Path(p) for p in sealed_store_paths}:
+            raise ValueError('Native idle observation differs from its sealed native-store participants')
         for source in sources:
             selected = [source, *source.rglob('*')] if source.is_dir() else [source]
             if any(p.is_symlink() or not (p.is_file() or p.is_dir()) for p in selected):
@@ -145,7 +148,7 @@ def _idle_native_reader(env: dict[str, str], *, timeout: float, deadline: float)
 
 
 def native_idle_turn(env: dict[str, str], session_id: str, *, process_started_at: float,
-                     timeout: float = 30) -> dict[str, Any]:
+                     timeout: float = 30, sealed_store_paths: tuple[str, ...] | None = None) -> dict[str, Any]:
     """Observe a stable completed history predating an uncertain Host launch.
 
     The caller separately proves the original namespace stopped, seals its
@@ -156,7 +159,8 @@ def native_idle_turn(env: dict[str, str], session_id: str, *, process_started_at
             for v in (process_started_at, timeout)) or timeout <= 0):
         raise ValueError("Native idle readback requires its original process boundary")
     deadline = time.monotonic() + timeout
-    with _idle_native_reader(env, timeout=timeout, deadline=deadline) as transport:
+    with _idle_native_reader(env, timeout=timeout, deadline=deadline,
+                             sealed_store_paths=sealed_store_paths) as transport:
         def request(method, params):
             remaining = deadline - time.monotonic()
             if remaining <= 0:

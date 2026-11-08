@@ -47,6 +47,13 @@ def file_inventory(root: Path) -> list[dict]:
     return result
 
 
+def native_source_paths(declaration: dict) -> dict[str, str]:
+    """Native base participants sealed by the stopped-source owner."""
+    home = declaration['native_home']
+    return {'native_sessions': home + '/sessions', 'native_state': home + '/state_5.sqlite',
+            'native_history': home + '/thread_history_1.sqlite', 'native_config': home + '/config.toml'}
+
+
 def source_paths(declaration: dict) -> dict[str, str]:
     required = {'goal_id', 'agent_id', 'workspace', 'runtime_root', 'native_home',
                 'registry', 'scheduler_state', 'wake_log_dir', 'phase_clock', 'wake_turn_id'}
@@ -56,13 +63,11 @@ def source_paths(declaration: dict) -> dict[str, str]:
         _guest_path(declaration[key])
     if not re.fullmatch(r'wake-[0-9]+-[a-f0-9]{12}', declaration['wake_turn_id']):
         raise ValueError('Stopped recovery requires the original worker wake identity')
-    home = declaration['native_home']
     # Explicit native participants exclude auth, caches and credential stores.
     return {**{k: declaration[k] for k in ('workspace', 'runtime_root', 'registry',
                 'scheduler_state', 'wake_log_dir', 'phase_clock')},
             'host_pending': declaration['scheduler_state'] + '.host-attempt',
-            'native_sessions': home + '/sessions', 'native_state': home + '/state_5.sqlite',
-            'native_history': home + '/thread_history_1.sqlite', 'native_config': home + '/config.toml'}
+            **native_source_paths(declaration)}
 
 
 def validate_idle_host_return(state: dict, receipt: dict, *, stdout: bytes, stderr: bytes,
@@ -173,8 +178,11 @@ def prepare_stopped_recovery(client, *, container_id: str, declaration: dict,
                            for key in ('goal_id', 'agent_id'))):
                 raise ValueError('Stopped source lacks its exact returned budget stop')
         if idle_host_handoff:
-            validate_idle_host_return(state, receipt, stdout=(wake.parent / 'stdout.jsonl').read_bytes(),
-                                      stderr=(wake.parent / 'stderr.txt').read_bytes(), lineage=declaration)
+            from benchmark.runtime.worker import host_output_paths
+
+            stdout, stderr = host_output_paths(wake.parent)
+            validate_idle_host_return(state, receipt, stdout=stdout.read_bytes(),
+                                      stderr=stderr.read_bytes(), lineage=declaration)
         elif failed:
             from loopx.control_plane.turn_driver.host_failure import build_host_failure_record, normalize_host_failure_record
 

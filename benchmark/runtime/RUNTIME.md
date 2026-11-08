@@ -446,6 +446,8 @@ producer requires the exact failed scheduler, pending witness, latest unique
 wake, original workspace, registry, runtime and native stores, including committed
 SQLite WALs. It preserves the unknown failure and does not infer a quota failure
 from diagnostic text. The proof grants no execution or evaluator authority.
+The empty-output witness uses the worker's `stdout.jsonl` and `stderr.log` files;
+the producer and receiver share that writer-owned layout.
 
 After the owner restores compatible native evaluator authority separately,
 restart only the original inert container and retain its original environment.
@@ -458,7 +460,10 @@ fresh native account allowance. The native history owner must return a stable
 complete history whose last completed cursor precedes the failed attempt, with
 no pending effects. Its observer uses a disposable copy of the native store and
 committed WALs because native read APIs can update their own history index; it
-copies no authentication file. The original source remains byte-stable. Empty
+copies no authentication file. Every copied native base participant must match
+the producer's sealed set; an extra archived-session/index store or database
+version is unsupported and rejected before native observation. The original
+source remains byte-stable. Empty
 output or a session-identity error alone is insufficient.
 The final source comparison runs under current Goal admission. Only its exact
 held cross-runtime lock and holder records may differ, verified through the
