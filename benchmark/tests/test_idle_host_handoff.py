@@ -8,13 +8,15 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import sys
 import time
 
 import pytest
 
-from benchmark.edgebench.stopped_recovery import prepare_stopped_recovery
+from benchmark.edgebench.stopped_recovery import native_source_paths, prepare_stopped_recovery
 from benchmark.runtime.scheduler import resume_state_file
+from benchmark.runtime.worker import host_output_paths
 from benchmark.tests.test_stopped_recovery import _source, _fake_container
 from loopx.control_plane.turn_driver.host_failure import build_host_failure_record
 from loopx.hosts import codex_checkpoint as native
@@ -51,9 +53,78 @@ def _idle_return(declaration):
     value.pop("return_code", None)
     receipt.write_text(json.dumps(value))
     os.utime(receipt, (110, 110))
-    for name in ("stdout.jsonl", "stderr.txt"):
-        (receipt.parent / name).write_bytes(b"")
+    for output in host_output_paths(receipt.parent):
+        output.write_bytes(b"")
     return state, receipt
+
+
+def test_stopped_export_uses_output_created_by_the_real_worker(tmp_path, monkeypatch):
+    from benchmark.runtime import worker
+    from benchmark.tests.test_worker_phase_budget import _phase_worker
+
+    env, _project, *_ = _phase_worker(tmp_path / "worker", monkeypatch)
+    Path(env["CODEX_BIN"]).write_text(
+        f"#!{sys.executable}\nimport signal,sys,time\n"
+        "signal.signal(signal.SIGINT,lambda *_:sys.exit(0))\n"
+        "signal.signal(signal.SIGTERM,lambda *_:sys.exit(0))\n"
+        "sys.stdin.read()\ntime.sleep(60)\n"
+    )
+    with pytest.raises(RuntimeError, match="session identity"):
+        worker.run_once(env)
+    wakes = list(Path(env["LOOPX_WAKE_LOG_DIR"]).glob("*/receipt.json"))
+    assert len(wakes) == 1
+    # Independent production-layout oracle: the worker, not a recovery fixture,
+    # must create these physical streams before its identity-confirmation error.
+    wake = wakes[0].parent
+    assert (wake / "stdout.jsonl").read_bytes() == b""
+    assert (wake / "stderr.log").read_bytes() == b""
+    assert not (wake / "stderr.txt").exists()
+    declaration = _source(tmp_path / "source")
+    _state, receipt = _idle_return(declaration)
+    for output in host_output_paths(receipt.parent):
+        output.unlink()
+    for output in (wake / "stdout.jsonl", wake / "stderr.log"):
+        shutil.copy2(output, receipt.parent / output.name)
+    box, client = _fake_container(monkeypatch)
+    proof = prepare_stopped_recovery(client, container_id=box.id, declaration=declaration,
+        output=tmp_path / "proof.json", idle_host_handoff=True)
+    assert proof["idle_host_handoff"] is True
+    assert not (receipt.parent / "stderr.txt").exists()
+
+
+@pytest.mark.parametrize("extra", [None, "archived_sessions", "session_index.jsonl",
+                                 "state_6.sqlite", "thread_history_2.sqlite"])
+def test_idle_native_reader_never_observes_unsealed_store_participants(tmp_path, monkeypatch, extra):
+    from benchmark.edgebench.stopped_recovery import native_source_paths
+
+    home = tmp_path / "native"
+    home.mkdir()
+    sealed = native_source_paths({"native_home": str(home)})
+    for path in map(Path, sealed.values()):
+        path.mkdir() if path.name == "sessions" else path.write_bytes(b"retained fixture")
+    if extra:
+        target = home / extra
+        target.mkdir() if extra == "archived_sessions" else target.write_bytes(b"unsealed")
+    calls = []
+
+    @contextmanager
+    def observe(env, **kwargs):
+        calls.append(env)
+        assert Path(env["CODEX_HOME"]) != home
+        yield "isolated reader"
+
+    monkeypatch.setattr(native, "native_checkpoint_reader", observe)
+    def read():
+        with native._idle_native_reader({"CODEX_HOME": str(home)}, timeout=1,
+                deadline=time.monotonic() + 1, sealed_store_paths=tuple(sealed.values())) as reader:
+            assert reader == "isolated reader"
+    if extra:
+        with pytest.raises(ValueError, match="sealed native-store participants"):
+            read()
+        assert not calls
+    else:
+        read()
+        assert len(calls) == 1
 
 
 @pytest.mark.parametrize(
@@ -83,7 +154,7 @@ def test_idle_source_export_is_explicit_and_keeps_original_failure(
         box.attrs["State"].update(Status="running", Running=True, Pid=1)
     elif fault in ("output", "stderr"):
         (
-            receipt.parent / ("stdout.jsonl" if fault == "output" else "stderr.txt")
+            receipt.parent / ("stdout.jsonl" if fault == "output" else "stderr.log")
         ).write_bytes(b"unknown output")
     elif fault in ("success", "wrong_goal", "not_budget"):
         value = json.loads(receipt.read_text())
@@ -475,7 +546,8 @@ def test_actual_native_idle_readback_never_dispatches_another_turn(tmp_path):
         source = source_stores()
         before = len(calls)
         observed = native.native_idle_turn(
-            env, session, process_started_at=time.time() + 2
+            env, session, process_started_at=time.time() + 2,
+            sealed_store_paths=tuple(native_source_paths({"native_home": str(home)}).values()),
         )
         assert observed["status"] == "completed" and observed["turn_count"] >= 1
         assert len(calls) == before

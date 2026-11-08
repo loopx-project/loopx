@@ -273,12 +273,13 @@ def read_idle_host(state: dict, *, state_file: Path, env: dict[str, str], wake_l
     owner must independently return its complete stable history before the
     original attempt. No failure classification or original receipt is changed.
     """
-    from benchmark.edgebench.stopped_recovery import validate_idle_host_return
+    from benchmark.edgebench.stopped_recovery import native_source_paths, validate_idle_host_return
     from loopx.control_plane.turn_driver.codex_agent_session import CodexAgentSession
     from loopx.hosts.codex_checkpoint import native_idle_turn
     from .codex import process_environment
     from .codex_readiness import require_native_receiver_allowance
     from scripts.external_scheduler_worker import _host_pending
+    from .worker import host_output_paths
 
     env = process_environment(Path(env['LOOPX_CODEX_HOME']), base=env)
     if _host_pending(state_file) is not True:
@@ -286,8 +287,9 @@ def read_idle_host(state: dict, *, state_file: Path, env: dict[str, str], wake_l
     path, raw, receipt, source = _stopped_source(state_file, state, env, wake_log_dir)
     if source.get('idle_host_handoff') is not True:
         raise ValueError('Idle handoff requires its explicitly sealed stopped source')
-    validate_idle_host_return(state, receipt, stdout=_physical_read(path.parent / 'stdout.jsonl'),
-                              stderr=_physical_read(path.parent / 'stderr.txt'),
+    stdout, stderr = host_output_paths(path.parent)
+    validate_idle_host_return(state, receipt, stdout=_physical_read(stdout),
+                              stderr=_physical_read(stderr),
                               lineage={'goal_id': env['LOOPX_GOAL_ID'], 'agent_id': env['LOOPX_AGENT_ID']})
     started = _number(source['process_started_at'])
     stopped = _number(source['process_stopped_at'])
@@ -302,7 +304,8 @@ def read_idle_host(state: dict, *, state_file: Path, env: dict[str, str], wake_l
     if not current.binding or current.session_id != session:
         raise ValueError('Idle handoff native session binding changed')
     allowance = require_native_receiver_allowance(env)
-    native = native_idle_turn(env, session, process_started_at=started)
+    native = native_idle_turn(env, session, process_started_at=started,
+        sealed_store_paths=tuple(native_source_paths(source['declaration']).values()))
     with current.admission.launch_lifetime(operation='benchmark_idle_host_handoff'):
         from loopx.file_lock import _effect_mutation_lock_path, lock_holder_paths
         from loopx.control_plane.goals.source_session_registry_state import guard_path
@@ -331,6 +334,7 @@ def read_idle_host(state: dict, *, state_file: Path, env: dict[str, str], wake_l
 def verify_idle_host_replay(state_file: Path, recovery: dict, *, env: dict[str, str]) -> None:
     """A repeated phase selection retains its original qualification and clock."""
     from benchmark.edgebench.stopped_recovery import validate_idle_host_return
+    from .worker import host_output_paths
 
     native, allowance = recovery.get('native'), recovery.get('allowance')
     if (not isinstance(native, dict) or not isinstance(allowance, dict)
@@ -342,8 +346,9 @@ def verify_idle_host_replay(state_file: Path, recovery: dict, *, env: dict[str, 
     source = json.loads(_physical_read(state_file))
     raw = _physical_read(Path(recovery['receipt_path']))
     receipt = json.loads(raw)
-    validate_idle_host_return(source, receipt, stdout=_physical_read(Path(recovery['receipt_path']).parent / 'stdout.jsonl'),
-                              stderr=_physical_read(Path(recovery['receipt_path']).parent / 'stderr.txt'),
+    stdout, stderr = host_output_paths(Path(recovery['receipt_path']).parent)
+    validate_idle_host_return(source, receipt, stdout=_physical_read(stdout),
+                              stderr=_physical_read(stderr),
                               lineage={'goal_id': env['LOOPX_GOAL_ID'], 'agent_id': env['LOOPX_AGENT_ID']})
     if (hashlib.sha256(raw).hexdigest() != recovery['receipt_sha256']
             or source['host_attempt']['host_failure'] != recovery['original_host_failure']
