@@ -78,12 +78,15 @@ def test_staged_packet_budget_and_lossless_authority(stride):
     assert "guidance" not in review
     assert json_bytes(writer) <= 16384
     if stride != "off":
+        assert review["decision_value_review"] == source["replan_action_packet"]["stride_control"]["decision_value_review"]
         control = writer["stride_control"]
         assert control["previous_decision_ref"] == source["replan_action_packet"]["stride_control"]["previous_decision_ref"]
         assert "decision_followthrough" not in control and "decision_value_review" not in control
         assert control["minimal_example"] == source["replan_action_packet"]["stride_control"]["minimal_example"]
         assert control["basis_options"] == ["supported_progress", "unexplained_gap", "uncertain_evidence", "useful_new_route", "decision_failure"]
         assert {"basis", "action", "axes", "next_probe"} <= set(control["required_fields"])
+    else:
+        assert "decision_value_review" not in review
     assert source == original
 
 
@@ -245,6 +248,13 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
             original = Path(argv[argv.index("--capture-file") + 1])
             assert original == captured_dir / "decision.json" and original.is_relative_to(wake)
             assert original.read_bytes() == raw and str(source_path) not in body
+            if replan:
+                selection = source["interaction_contract"]["cli_channel"]["selection_command"]
+                followup = shlex.split(selection["command_args_template"])
+                assert followup[followup.index("--decision-output-root") + 1] == str(captured_dir.parent.resolve())
+                assert followup[followup.index("--context-delivery") + 1] == "on"
+                assert followup[followup.index("--codex-context-dir") + 1] == str(native)
+                assert "--decision-output-dir" not in followup and "--prepared-capture-reference" not in followup
             assert not list(native.iterdir()), "Host preflight must not alter native continuity"
             session_id = "checkpoint-preflight-session"
             codex_context_hook(str(native), {"hook_event_name": "SessionStart", "source": "startup",
@@ -307,6 +317,15 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
         assert {key: fixture[key].read_bytes() for key in before} == before
         assert capture.read_bytes() == source_path.read_bytes()
         assert len(commands) == 1  # Reads did not re-enter checkpoint preflight.
+        if context_delivery:
+            selected = shlex.split(selection["route_prefix"]) + followup
+            selected[selected.index("{todo_id}")] = TODO
+            result = run(selected, cwd=fixture["project"], env=env, capture_output=True, text=True, timeout=60)
+            assert result.returncode == 0, result.stdout
+            [next_capture] = set(captured_dir.parent.glob("*/decision.json")) - {capture}
+            identity = json.loads(next_capture.read_bytes())["heartbeat_receipt"]["settlement_identity"]
+            assert (identity["todo_id"], identity["turn_instance_id"]) == (TODO, TURN)
+            assert capture.read_bytes() == source_path.read_bytes()
     finally:
         restart_effect_runtime(wait_for_exit=True)
 
@@ -544,7 +563,13 @@ def test_populated_history_and_cumulative_acceptance_have_separate_budgets(tmp_p
     no_planning.pop("planning_horizon")
     no_planning.pop("action_portfolio")
     _, history_review, _ = _views(no_planning)
-    assert json_bytes(history_review) <= 16 * 1024
+    # The previously omitted, opt-in advice earns a separate bounded allocation.
+    # Keep the full allowance for history and its existing decision evidence.
+    history_facts = {key: value for key, value in history_review.items() if key != "decision_value_review"}
+    assert json_bytes(history_facts) <= 16 * 1024
+    advice = history_review["decision_value_review"]
+    assert advice == base["replan_action_packet"]["stride_control"]["decision_value_review"]
+    assert 0 < json_bytes(history_review) - json_bytes(history_facts) <= 2600
     assert 0 < json_bytes(review) - json_bytes(history_review) <= 8 * 1024
     assert json_bytes(envelope["replan_action_packet"]) <= 2 * 1024
 
@@ -719,7 +744,7 @@ def test_native_reader_keeps_its_installation_across_acceptance_and_writeback(tm
     monkeypatch.setenv("LOOPX_RELEASE_ROOT", str(release_root))
     monkeypatch.setenv("PYTHONPATH", str(stale_root))
 
-    source = _quota_payload()
+    source = _quota_payload(stride_strategy="evidence_conditioned_v1")
     outcome = {"id": "original-outcome", "objective": "Deliver the original accepted artifact.",
         "requirements": [{"id": "original-stop", "description": "Stop before publication."}]}
     source["autonomous_replan_obligation"]["replan_context"]["core_goal"]["acceptance_contract"] = {
@@ -744,6 +769,7 @@ def test_native_reader_keeps_its_installation_across_acceptance_and_writeback(tm
         result = subprocess.run(shlex.split(command), cwd=tmp_path, capture_output=True, text=True, check=True)
         return json.loads(result.stdout)
     review = read(authority["replan_action_packet"]["review"])
+    assert review["decision_value_review"] == source["replan_action_packet"]["stride_control"]["decision_value_review"]
     index = review["acceptance_index"]
     acceptance = read(index["read_action_template"].replace("{outcome_ref}", index["outcomes"][0]["outcome_ref"]))
     assert acceptance["outcome"] == outcome
