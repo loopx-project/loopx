@@ -692,6 +692,12 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
   const prepared = object(cli?.execution_preparation);
   const identity = object(plan?.identity);
   const settlementSteps = steps?.map(object).filter(step => step?.kind === "durable_writeback" || step?.kind === "quota_spend");
+  const [writeback, spend] = settlementSteps ?? [];
+  const composedSettlement = plan?.schema_version === "quota_settlement_plan_v2" && writeback?.owner === "agent"
+    && spend?.owner === "runtime" && !Object.hasOwn(spend, "command_template");
+  const templates = plan?.schema_version === "quota_settlement_plan_v1"
+    ? [writeback?.command_template, spend?.command_template]
+    : composedSettlement ? [writeback?.command_template] : undefined;
   // A ready Turn already shows its ordered writeback and spend with their
   // conditions. Hide only the exact duplicate fallback in this first read;
   // recovery, legacy readers and the original capture keep both forms.
@@ -701,9 +707,9 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
     && typeof identity.todo_id === "string" && prepared.todo_id === identity.todo_id
     && object(context.selected_todo)?.todo_id === identity.todo_id
     && isDeepStrictEqual(identity, object(object(context.heartbeat_receipt)?.settlement_identity))
-    && settlementSteps?.length === 2 && settlementSteps[0]?.kind === "durable_writeback" && settlementSteps[1]?.kind === "quota_spend"
-    && settlementSteps.every(step => typeof step?.command_template === "string" && step.command_template.length > 0)
-    && isDeepStrictEqual(cli?.next_cli_actions, settlementSteps.map(step => step?.command_template));
+    && settlementSteps?.length === 2 && writeback?.kind === "durable_writeback" && spend?.kind === "quota_spend"
+    && templates?.every(command => typeof command === "string" && command.length > 0)
+    && isDeepStrictEqual(cli?.next_cli_actions, templates);
   if (!turnBindingRequired)
     for (const field of ["execution_preparation", "next_cli_actions", "spend_allowed_now", "spend_after_validation", "spend_policy",
       "quota_spend_source", "delivery_workspace_causality", "vision_continuation_audit"])

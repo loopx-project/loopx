@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .quota_presentation import (
+    _project_native_cli_settlement,
     _project_quota_cli_payload as _project_quota_cli_payload,
     _quota_renderer as _quota_renderer,
 )
@@ -23,6 +24,7 @@ from ..control_plane.turn_driver.decision_capture import (
 from ..usage_goal import observe_quota_result
 
 from ..control_plane.coordination.local_authority import CanonicalAuthorityRequired
+from ..control_plane.quota.effective_action import EffectiveAction
 from ..control_plane.quota.effect_program import SettlementIdentity
 from ..control_plane.quota.error_codes import (
     CloseoutQueryUnavailableError,
@@ -339,6 +341,19 @@ def _emit_quota_result(
     from ..command_invocation import current_loopx_cli_argv
 
     reader_argv = current_loopx_cli_argv()
+    activation = None
+    if args.quota_command == "should-run":
+        if payload.get("ok") is True:
+            activation = native_context_activation(args)
+            if (args.format == "json" and capture_directory is not None and activation["progressive_enabled"]
+                    and activation.get("scenario") == "codex_app_heartbeat"
+                    and (getattr(args, "codex_context_dir", None) or getattr(args, "codex_context_root", None))
+                    and not getattr(args, "turn_envelope", False) and not getattr(args, "defer_context_presentation", False)
+                    and payload.get("effective_action") == EffectiveAction.NORMAL_RUN.value
+                    and payload.get("normal_delivery_allowed") is True):
+                payload = _project_native_cli_settlement(payload)
+        attach_reward_memory_recall_after_should_run(payload, quota_command=args.quota_command,
+            heartbeat_turn_id=heartbeat_turn_id, registry_path=registry_path, goal_id=args.goal_id, agent_id=args.agent_id)
     # Compose optional capability guidance after recovery has chosen the plan,
     # before capture/compaction. The quota decision owner stays capability-neutral.
     cli = (payload.get("interaction_contract") or {}).get("cli_channel")
@@ -360,7 +375,7 @@ def _emit_quota_result(
         return _emit_bounded_settlement(payload, args, runtime_root=context.runtime_root,
             reader_argv=reader_argv, print_payload=print_payload)
     try:
-        activation = native_context_activation(args)
+        activation = activation or native_context_activation(args)
         context_delivery_enabled = activation["enabled"]
     except QuotaCommandValidationError:
         if payload.get("ok") is True:
@@ -968,14 +983,6 @@ def handle_quota_command(
                 spend_turn_instance_id=spend_turn_instance_id, rollout_details=rollout_details,
                 append_cli_rollout_event=append_cli_rollout_event,
             )
-    attach_reward_memory_recall_after_should_run(
-        payload,
-        quota_command=args.quota_command,
-        heartbeat_turn_id=heartbeat_turn_id,
-        registry_path=registry_path,
-        goal_id=args.goal_id,
-        agent_id=args.agent_id,
-    )
     return _emit_quota_result(
         payload,
         args,
