@@ -2742,3 +2742,41 @@ inside marked Todo region`. Thin Codex App output may expose only the error code
 read-only `loopx --format json quota status --goal-id <goal-id> --verbose` supplies
 the detailed symptom. Distinguish a shipped repair from installed-reader drift
 without weakening foreign-content rejection or rewriting active state.
+
+### 2026-11-08 — Combined loading proposal and nullable staged reads
+
+The declaration-codec proposal now integrates target main `efd49352c`, the
+feedback-loading component from #8339 and the equivalent anchored-clock repair
+already on main. Component approvals and checks remain evidence for their old
+heads; the combined proposal still needs its own review and validation.
+
+A real precision-preserving `quota replan-view --replan-stage explore` read
+fails when the staged view contains only strings, booleans and null. The
+existing edit encoder compacts the whole root into an empty property path,
+which its Python transport rejects. Restricting that compact replacement to
+nested records preserves the property-path contract and existing numeric/source
+lineage. The independent root-path oracle fails before the change and passes
+afterward; the real read now returns the original context/hash and an absent
+Explore basis. No decision owner, vocabulary, provider or authority is added.
+
+The integrated source and packaged wheel research-record checks retain the
+original negative paragraph, two original history rows, Goal isolation and
+exports; the packaged conversation scenario also passes. The earlier CI timeout
+is not reproduced locally, so its platform/timing cause remains unknown rather
+than being declared repaired. Four fresh source/wheel × File/SQLite 101-Todo
+correctness episodes preserve the original fixture/artifact, scopes, completion
+time, four receipts, one debit, refusal/restart/replay and two owned native exits.
+An initial driver used `python` while the source console selected `python3`,
+producing two distinct runtime fingerprints and failing the warmup/exit oracle.
+That failure is retained; the subsequent cases use each console's actual
+interpreter. They do not repeat or relabel any frozen cost sample.
+
+An isolated PostgreSQL 16 server passes 391 store and 11 service cases without
+skips. The installed wheel matches 1,921 tracked package entries byte for byte;
+17 tracked documentation/media/testing or source-only entries are omitted, and
+general distribution coverage beyond the exercised callers is not inferred.
+Whole-path cost benefit, installed adoption, PostgreSQL host/wheel and all
+I3/minor-release, M1/#8011, full R0/V10/R1, D2/D5/D6/D3,
+context/model/split-install and historical failure qualifications remain open.
+The next useful boundary remains report subscription/construction loading after
+the combined proposal's review; the original task stays open.

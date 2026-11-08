@@ -2132,3 +2132,33 @@ minor release。这些证据不关闭完整 R0/V10、M1/#8011、R1、context/mod
 精简 Codex App 输出可能只有错误码；只读
 `loopx --format json quota status --goal-id <goal-id> --verbose` 提供详细症状。
 据此区分已交付修复和安装 reader 漂移；保留外来内容拒绝，不重写活跃状态。
+
+### 2026-11-08 — 加载提案集成与可空 staged 读取
+
+声明 codec 提案现已整合目标 main `efd49352c`、#8339 的反馈加载组件，以及 main
+已有的等价固定时钟修复。组件的批准及检查仍只证明各自旧 head，组合提案需要自己的
+评审与验证。
+
+真实的保留数值精度的 `quota replan-view --replan-stage explore` 读取，在 staged
+视图仅含 string、boolean 和 null 时失败。既有 edit encoder 将整个 root 压缩为
+空 property path，Python transport 随后拒绝。将该紧凑替换限定到嵌套 record，
+保留 property-path 契约及既有 number／source lineage。独立 root-path oracle 在
+修改前失败、修改后通过；真实读取恢复原 context／hash 和缺省 Explore basis。
+不新增规则 owner、词汇、provider 或 authority。
+
+集成后的 source 与 packaged wheel 研究记录场景保留原负结果段落、两条原始历史、
+Goal 隔离及导出；packaged 对话场景也通过。此前 CI 超时在本地未复现，其平台／时序
+原因仍未知，不宣称已经修复。四条新的 source／wheel × File／SQLite 101-Todo
+正确性流程保留原 fixture／artifact、scope、completion time、四份 receipt、一次
+debit、refusal／restart／replay 和两个自有 native 退出。初始 driver 使用 `python`，
+source console 实际选择 `python3`，产生不同 runtime fingerprint，导致 warmup／
+exit oracle 失败。保留该失败；后续用例采用各 console 的实际解释器，不重跑或重标签
+任何冻结成本样本。
+
+隔离 PostgreSQL 16 的 store／service 分别通过 391／11 个用例，零 skip。
+已安装 wheel 的 1921 个 tracked package entry 字节一致；17 个 tracked 文档／媒体／
+测试或 source-only entry 未打包，不据此推断已执行 caller 之外的通用发行覆盖。
+Whole-path 成本收益、installed adoption、PostgreSQL host／wheel，以及全部
+I3／minor-release、M1/#8011、完整 R0/V10/R1、D2/D5/D6/D3、
+context／model／split-install 与历史失败资格继续开放。组合提案评审之后，下一段
+有用边界仍是报告订阅／构造加载；原 Task 保持开放。
