@@ -9,7 +9,6 @@ import os
 import re
 import subprocess
 import threading
-from collections import deque
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,6 +34,7 @@ from ..external_connector_runtime import (
 )
 from .event_collector_runtime import EVENT_DIAGNOSTIC_PREFIX, EVENT_READY_PREFIX
 from .event_inbox import (
+    LarkTopicInput,
     MESSAGE_ID_PATTERN,
     acknowledge_lark_event_inbox,
     ingest_lark_event_inbox,
@@ -48,7 +48,13 @@ from .goal_channel_contracts import (
 from .goal_channel_targets import goal_channel_target_for_name
 from .goal_channel_transport import lark_provider_mention_identities, record_event_timing
 from .goal_topic_connections import decide_lark_topic_event
-from .goal_topic_dispatch import ProfileEventDispatch
+from .goal_topic_dispatch import (
+    ProfileEventDispatch,
+    ProfileTopicIntake,
+    TopicIntakeRoute,
+    topic_inbox_key,
+    topic_intake_route,
+)
 from .inbox_reply import CommandRunner, reply_lark_event_inbox
 from .manager_reply_delivery import (
     load_delivery as _load_manager_delivery,
@@ -100,7 +106,7 @@ ProposalDeliverer = Callable[
 ReviewCallbackHandler = Callable[[Mapping[str, Any]], Mapping[str, Any]]
 MentionCapture = Callable[[Mapping[str, object]], dict[str, object]]
 EventLane = tuple[str, ...]
-CapturedEventLane = tuple[EventLane, dict[str, object] | None]
+CapturedEventLane = tuple[EventLane, dict[str, object] | None, TopicIntakeRoute | None]
 
 
 class LarkGoalTopicTurnFailed(RuntimeError):
@@ -406,7 +412,7 @@ def _profile_event_route(
 def _profile_event_lane(
     *, profile: str, snapshot: Mapping[str, object], event: Mapping[str, object],
     runtime_root: str | Path, capture_mention: MentionCapture | None = None,
-    include_capture: Literal[False] = False,
+    include_capture: Literal[False] = False, prepare_intake: bool = False,
 ) -> EventLane: ...
 
 
@@ -414,7 +420,7 @@ def _profile_event_lane(
 def _profile_event_lane(
     *, profile: str, snapshot: Mapping[str, object], event: Mapping[str, object],
     runtime_root: str | Path, capture_mention: MentionCapture | None = None,
-    include_capture: Literal[True],
+    include_capture: Literal[True], prepare_intake: bool = False,
 ) -> CapturedEventLane: ...
 
 
@@ -426,13 +432,15 @@ def _profile_event_lane(
     runtime_root: str | Path,
     capture_mention: MentionCapture | None = None,
     include_capture: bool = False,
+    prepare_intake: bool = False,
 ) -> EventLane | CapturedEventLane:
     """Capture a live target before joining the ordinary reply lane."""
 
     def result(
-        lane: EventLane, capture: dict[str, object] | None = None
+        lane: EventLane, capture: dict[str, object] | None = None,
+        intake: TopicIntakeRoute | None = None,
     ) -> EventLane | CapturedEventLane:
-        return (lane, capture) if include_capture else lane
+        return (lane, capture, intake) if include_capture else lane
 
     private_config = dict(snapshot.get("private_profiles") or {}).get(profile)
     if isinstance(private_config, Mapping) and _native_profile_event(snapshot, profile, event):
@@ -479,7 +487,8 @@ def _profile_event_lane(
             if capture and capture.get("target_turn_id"):
                 return result(("steer." + source, "steer.session." + str(route["session_id"])), capture)
             if route.get("session_id"):
-                return result((source, "session." + str(route["session_id"])), capture)
+                intake = topic_intake_route(profile, route, targets, routed_event) if prepare_intake else None
+                return result((source, "session." + str(route["session_id"])), capture, intake)
             return result((source,), capture)
     return result(("unmatched." + _opaque_digest(profile, event.get("chat_id")),))
 
@@ -707,14 +716,50 @@ def stream_lark_goal_topic_profile(
     exit_reason: str | None = None
     result_lock = threading.Lock()
 
-    def handle_event(line: str) -> None:
-        nonlocal event_count, replied_count, provider_ready
+    def note_provider_ready() -> None:
+        nonlocal provider_ready
 
-        envelope = json.loads(line)
-        event = envelope["event"]
+        with result_lock:
+            if provider_ready:
+                return
+            provider_ready = True
+            if health_sink is not None and not dispatch.failed:
+                health_sink({"status": "listening", "error_code": None})
+
+    def report_result(result: Mapping[str, Any]) -> None:
+        nonlocal event_count, replied_count
+
+        events = int(result.get("event_count") or 0)
+        if not events:
+            return
+        replies = int(result.get("replied_count") or 0)
+        statuses = list(result.get("event_statuses") or [])
+        reasons = list(result.get("event_reasons") or [])
+        with result_lock:
+            event_count += events
+            replied_count += replies
+            if health_sink is not None:
+                failed = dispatch.failed
+                health_sink({
+                    "status": "failed" if failed else "listening" if provider_ready else "starting",
+                    "error_code": "lark_event_listener_failed" if failed else None,
+                    "event_count": events,
+                    "replied_count": replies,
+                    "last_event_status": str(statuses[-1]) if statuses else None,
+                    "last_event_reason": str(reasons[-1]) if reasons and reasons[-1] else None,
+                })
+            print(json.dumps({
+                "schema_version": "loopx_lark_goal_topic_runtime_event_v0",
+                "event_count": events, "replied_count": replies,
+                "event_statuses": statuses, "event_reasons": reasons,
+            }, separators=(",", ":")), flush=True)
+
+    def dispatch_event(
+        event: Mapping[str, object], mention: Mapping[str, object] | None,
+        current_snapshot: Mapping[str, object],
+    ) -> None:
         message_id = str(event.get("message_id") or "")
         record_event_timing(profile, message_id, "dispatch_started")
-        current_snapshot = snapshot_provider()
         record_event_timing(profile, message_id, "dispatch_snapshot_ready")
         result = poll_lark_goal_topic_profile_once(
             profile=profile,
@@ -730,116 +775,59 @@ def stream_lark_goal_topic_profile(
             reply_runner=reply_runner,
             proposal_deliverer=proposal_deliverer,
             private_admitter=private_admitter,
-            mention_capture=envelope["mention_capture"],
+            mention_capture=mention,
         )
         record_event_timing(profile, message_id, "dispatch_returned")
-        with result_lock:
-            failed = dispatch.failed
-            if int(result.get("event_count") or 0) and not provider_ready:
-                # A provider event is stronger readiness evidence than a
-                # diagnostic marker and protects compatibility with providers
-                # that omit the marker while still emitting the typed stream.
-                provider_ready = True
-                if health_sink is not None and not failed:
-                    health_sink({"status": "listening", "error_code": None})
-            event_count += int(result.get("event_count") or 0)
-            replied_count += int(result.get("replied_count") or 0)
-            if health_sink is not None and int(result.get("event_count") or 0):
-                statuses = list(result.get("event_statuses") or [])
-                reasons = list(result.get("event_reasons") or [])
-                health_sink(
-                    {
-                        "status": "failed" if failed else "listening",
-                        "error_code": (
-                            "lark_event_listener_failed" if failed else None
-                        ),
-                        "event_count": int(result.get("event_count") or 0),
-                        "replied_count": int(result.get("replied_count") or 0),
-                        "last_event_status": str(statuses[-1]) if statuses else None,
-                        "last_event_reason": (
-                            str(reasons[-1]) if reasons and reasons[-1] else None
-                        ),
-                    }
-                )
-            if int(result.get("event_count") or 0):
-                print(
-                    json.dumps(
-                        {
-                            "schema_version": "loopx_lark_goal_topic_runtime_event_v0",
-                            "event_count": int(result.get("event_count") or 0),
-                            "replied_count": int(result.get("replied_count") or 0),
-                            "event_statuses": list(result.get("event_statuses") or []),
-                            "event_reasons": list(result.get("event_reasons") or []),
-                        },
-                        separators=(",", ":"),
-                    ),
-                    flush=True,
-                )
+        report_result(result)
 
     reserve_priority = capture_mention is not None and _profile_supports_mention_steering(
         snapshot, profile, capture_mention
     )
+    root = Path(runtime_root).expanduser().resolve()
+    provider_ref = _opaque_digest(profile_config.get("bot_app_id") or profile)
+    intake = ProfileTopicIntake(root, provider_ref)
+
+    def report_retained_input() -> None:
+        report_result({
+            "event_count": 1, "replied_count": 0,
+            "event_statuses": ["already_captured"], "event_reasons": [None],
+        })
+
+    def matches_input(inbox_key: str, packet: LarkTopicInput, snapshot: Mapping[str, object]) -> bool:
+        lane, _, route = _profile_event_lane(
+            profile=profile, snapshot=snapshot, event=packet["event"],
+            runtime_root=root, include_capture=True, prepare_intake=True,
+        )
+        return (
+            route is not None and route.inbox_key == inbox_key
+            and route.digest == packet["route_ref"] and lane == packet["lane"]
+        )
+
+    def prepare_input(inbox_key: str, packet: LarkTopicInput) -> Callable[[], None]:
+        fresh = snapshot_provider()
+        if matches_input(inbox_key, packet, fresh):
+            return lambda: dispatch_event(packet["event"], packet["mention_capture"], fresh)
+        return lambda: report_result({
+            "event_count": 1, "replied_count": 0, "event_statuses": ["ignored"],
+            "event_reasons": [LarkTopicEventDecisionReason.BINDING_UNAVAILABLE.value],
+        })
+
+    def handle_event(line: str) -> None:
+        envelope = json.loads(line)
+        if "intake" in envelope:
+            intake.dispatch_next(dispatch, envelope["intake"], tuple(envelope["lane"]), stop, prepare_input)
+        else:
+            dispatch_event(envelope["event"], envelope["mention_capture"], snapshot_provider())
+
     dispatch = ProfileEventDispatch(handle_event, stop, reserve_priority=reserve_priority)
-    ordinary_backlog: deque[tuple[tuple[str, ...], str]] = deque()
-    backlog_condition = threading.Condition()
-    backlog_closed = False
-    backlog_worker: threading.Thread | None = None
-
-    def drain_ordinary_backlog() -> None:
-        while True:
-            with backlog_condition:
-                while not ordinary_backlog and not backlog_closed:
-                    if stop.is_set() or dispatch.failed:
-                        return
-                    backlog_condition.wait(0.05)
-                if backlog_closed or stop.is_set() or dispatch.failed:
-                    ordinary_backlog.clear()
-                    backlog_condition.notify_all()
-                    return
-                lane, envelope = ordinary_backlog[0]
-            try:
-                submitted = dispatch.submit(lane, envelope, priority=False)
-            except Exception:
-                with backlog_condition:
-                    ordinary_backlog.clear()
-                    backlog_condition.notify_all()
-                return
-            with backlog_condition:
-                if ordinary_backlog:
-                    ordinary_backlog.popleft()
-                if not submitted:
-                    ordinary_backlog.clear()
-                backlog_condition.notify_all()
-                if not submitted:
-                    return
-
-    def submit_event(lane: tuple[str, ...], envelope: str, *, priority: bool) -> bool:
-        nonlocal backlog_worker
-        if priority or not reserve_priority:
-            return dispatch.submit(lane, envelope, priority=priority)
-        with backlog_condition:
-            if not ordinary_backlog and not dispatch.ordinary_full:
-                return dispatch.submit(lane, envelope, priority=False)
-            while len(ordinary_backlog) >= 64 and not backlog_closed:
-                if stop.is_set() or dispatch.failed:
-                    return False
-                backlog_condition.wait(0.05)
-            if backlog_closed or stop.is_set() or dispatch.failed:
-                return False
-            ordinary_backlog.append((lane, envelope))
-            if backlog_worker is None:
-                backlog_worker = threading.Thread(
-                    target=drain_ordinary_backlog,
-                    name=f"loopx-lark-ordinary-{profile}",
-                    daemon=True,
-                )
-                backlog_worker.start()
-            backlog_condition.notify_all()
-            return True
 
     watcher.start()
     stream_failed = True
     try:
+        intake.restore(
+            dispatch,
+            (lambda key, packet: matches_input(key, packet, snapshot)) if reserve_priority else None,
+        )
         stdout = process.stdout
         if stdout is None:
             return {
@@ -853,10 +841,7 @@ def stream_lark_goal_topic_profile(
                 break
             stripped = line.strip()
             if stripped.startswith(EVENT_READY_PREFIX):
-                with result_lock:
-                    provider_ready = True
-                    if health_sink is not None and not dispatch.failed:
-                        health_sink({"status": "listening", "error_code": None})
+                note_provider_ready()
                 continue
             if stripped.startswith("[event] exited "):
                 match = _EVENT_EXIT_REASON.search(stripped)
@@ -867,37 +852,46 @@ def stream_lark_goal_topic_profile(
             # Batch-shaped provider records are split before scheduling, so an
             # unrelated conversation in a batch can progress independently too.
             for event in _event_payloads(line):
+                # Recovered local input alone does not attest provider readiness.
+                note_provider_ready()
                 message_id = str(event.get("message_id") or "")
                 record_event_timing(profile, message_id, "received")
-                lane, mention_capture = _profile_event_lane(
+                if intake.retains(message_id):
+                    # A provider retry is the same source input even if the
+                    # App or Session is now routed to a different Goal Topic.
+                    report_retained_input()
+                    continue
+                lane, mention_capture, intake_route = _profile_event_lane(
                     profile=profile,
                     snapshot=snapshot_provider(),
                     event=event,
                     runtime_root=runtime_root,
                     capture_mention=capture_mention,
                     include_capture=True,
+                    prepare_intake=reserve_priority,
                 )
                 record_event_timing(profile, message_id, "lane_ready")
-                envelope = json.dumps({"event": event, "mention_capture": mention_capture}, ensure_ascii=False)
-                if not submit_event(lane, envelope, priority=bool((mention_capture or {}).get("target_turn_id"))):
-                    break
-        while True:
-            with backlog_condition:
-                if not ordinary_backlog or stop.is_set() or dispatch.failed:
-                    break
-                backlog_condition.wait(0.05)
+                priority = bool((mention_capture or {}).get("target_turn_id"))
+                if reserve_priority and intake_route is not None and not priority:
+                    if intake.capture(
+                        dispatch, intake_route, lane, event, mention_capture,
+                        lambda: _inbox_config(
+                            runtime_root=root, route=intake_route.route,
+                            target_payload=intake_route.targets,
+                        )[0],
+                    ):
+                        record_event_timing(profile, message_id, "inbox_captured")
+                    else:
+                        report_retained_input()
+                else:
+                    envelope = json.dumps({"event": event, "mention_capture": mention_capture}, ensure_ascii=False)
+                    if not dispatch.submit(lane, envelope, priority=priority):
+                        break
         stream_failed = False
     finally:
-        with backlog_condition:
-            backlog_closed = True
-            if stream_failed or stop.is_set() or dispatch.failed:
-                ordinary_backlog.clear()
-            backlog_condition.notify_all()
         try:
             dispatch.close(cancel_pending=stream_failed)
         finally:
-            if backlog_worker is not None:
-                backlog_worker.join(timeout=1)
             watcher_done.set()
             if process.poll() is None:
                 process.terminate()
@@ -1303,9 +1297,7 @@ def _inbox_config(
     chat_id = str(channel.get("chat_id") or "")
     profile = str(route.get("app_ref") or "")
     bot_display_name = str(identity.get("bot_display_name") or profile)
-    digest = hashlib.sha256(
-        f"{profile}\0{chat_id}\0{route.get('topic_root_message_id')}".encode("utf-8")
-    ).hexdigest()[:20]
+    digest = topic_inbox_key(profile, chat_id, str(route.get("topic_root_message_id") or ""))
     config_ref = f".loopx/config/lark-goal-topics/{digest}.json"
     config_path = runtime_root / config_ref
     payload = {

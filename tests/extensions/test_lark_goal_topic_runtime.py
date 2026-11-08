@@ -131,6 +131,7 @@ def _connection_runner(state: dict[str, Any]):
                         "available": True,
                         "verified": True,
                         "appName": "linkmacbot",
+                        **({"openId": state["bot_open_id"]} if "bot_open_id" in state else {}),
                     }
                 },
             }
@@ -3596,7 +3597,7 @@ def test_message_event_projection_preserves_flat_cli_and_raw_provider_provenance
         assert row["content"] == "plain rendered text"
 
 
-@pytest.mark.parametrize("ordinary_load", [63, 64])
+@pytest.mark.parametrize("ordinary_load", [63, 64, 128])
 @pytest.mark.parametrize("manager", [False, True])
 def test_native_mention_reaches_the_running_topic_before_its_ordinary_reply(
     tmp_path: Path, manager: bool, ordinary_load: int
@@ -3654,7 +3655,7 @@ def test_native_mention_reaches_the_running_topic_before_its_ordinary_reply(
     )
     session_id = session["session_id"]
     target_path, binding_path = tmp_path / "targets.json", tmp_path / "binding.json"
-    state: dict[str, Any] = {}
+    state: dict[str, Any] = {"bot_open_id": "ou_fixture_bot"}
     connected = connect_lark_goal_topic(
         registry=registry,
         goal_id="goal-alpha", agent_id="codex", session_id=session_id, target_path=target_path,
@@ -3671,30 +3672,32 @@ def test_native_mention_reaches_the_running_topic_before_its_ordinary_reply(
     snapshot.update(target_payload=target_payload, binding_payloads={"goal-alpha": binding_payload})
     ordinary = {"event_id": "evt_native_initial", "message_id": "om_native_initial",
                 "chat_id": "oc_public_fixture", "root_id": topic, "content": "wait for steer",
-                "sender_id": "ou_fixture_sender", "sender_type": "user", "message_type": "text", "mentions": []}
-    mention_text = "Add the error case.\nKeep both outcomes."
+                "sender_id": "ou_fixture_sender", "sender_type": "user", "message_type": "text", "mentions": [],
+                "create_time": "1794140000000"}
+    mention_text = "@Current bot Add the error case.\nKeep both outcomes."
     mention = {**ordinary, "event_id": "evt_native_mention", "message_id": "om_native_mention",
-               "content": json.dumps({"text": mention_text}),
-               "mentions": [{"name": "Current bot", "id": "cli_public_fixture"}]}
+               "content": mention_text,
+               "mentions": [{"key": "@_user_1", "name": "Current bot", "id": "ou_fixture_bot"}]}
     attachment = {**mention, "event_id": "evt_native_file", "message_id": "om_native_file",
                   "message_type": "file", "content": json.dumps({"file_key": "file_fixture"})}
     wrong_bot = {**mention, "event_id": "evt_other_bot", "message_id": "om_other_bot",
                  "content": "ordinary input for this connection",
-                 "mentions": [{"name": "Current bot", "id": "cli_other_bot"}]}
+                 "mentions": [{"key": "@_user_1", "name": "Current bot", "id": "ou_other_bot"}]}
     backlog = [
         {
             **wrong_bot,
-            "event_id": f"evt_other_bot_{index:02d}",
-            "message_id": f"om_other_bot_{index:02d}",
-            "content": f"ordinary backlog {index:02d}",
+            "event_id": f"evt_other_bot_{index:03d}",
+            "message_id": f"om_other_bot_{index:03d}",
+            "content": f"ordinary backlog {index:03d}\n" + "retained text " * 100 + "\nlast line",
         }
-        for index in range(ordinary_load - 2)
+        for index in reversed(range(ordinary_load - 2))
     ] + [wrong_bot]
     assert len({ordinary["message_id"], *(item["message_id"] for item in backlog)}) == ordinary_load
     idle = {**mention, "event_id": "evt_native_idle", "message_id": "om_native_idle",
-            "content": json.dumps({"text": "Start normal input."})}
+            "content": "@Current bot Start normal input."}
     steered_reply = threading.Event()
     attachment_reply = threading.Event()
+    last_ordinary_answer = threading.Event()
     runner = _reply_runner(state)
 
     def reply(args):
@@ -3716,7 +3719,7 @@ def test_native_mention_reaches_the_running_topic_before_its_ordinary_reply(
         mid = str(route.get("message_id") or "")
         if not route.get("native_mention"):
             observed_ordinary.append(mid)
-        if mid.startswith("om_other_bot_") and mid != "om_other_bot_00":
+        if mid.startswith("om_other_bot_") and mid != backlog[0]["message_id"]:
             return {
                 "response_text": f"Runtime response for {mid}.",
                 "effect_receipt": session_turn_effect(route),
@@ -3724,6 +3727,8 @@ def test_native_mention_reaches_the_running_topic_before_its_ordinary_reply(
         result = answer_lark_goal_topic(
             route=route, text=text, work_dir=tmp_path, objective="Review delivery", runtime_controller=controller,
         )
+        if mid == wrong_bot["message_id"]:
+            last_ordinary_answer.set()
         return result if isinstance(result, Mapping) else {
             "response_text": result, "effect_receipt": session_turn_effect(route),
         }
@@ -3744,9 +3749,17 @@ def test_native_mention_reaches_the_running_topic_before_its_ordinary_reply(
             time.sleep(0.02)
         else:
             raise AssertionError("the initial Topic input never reached the native executor")
+        def interrupt_fixture_if_blocked():
+            if not steered_reply.is_set():
+                controller.interrupt_turn(session_id=session_id, turn_id=initial["turn_id"])
+
+        watchdog = threading.Timer(8, interrupt_fixture_if_blocked)
+        watchdog.daemon = True
+        watchdog.start()
         try:
             for item in backlog:
                 yield json.dumps(item) + "\n"
+            assert store.load_turn(session_id, initial["turn_id"])["status"] == "running"
             yield json.dumps(attachment) + "\n"
             assert attachment_reply.wait(5), "the original file needs an explicit retained-message reply"
             yield json.dumps(mention) + "\n"
@@ -3758,17 +3771,25 @@ def test_native_mention_reaches_the_running_topic_before_its_ordinary_reply(
             assert store.steering_receipt(session_id, wrong_id) is None
             assert store.turn_for_client(session_id, wrong_id) is None
         finally:
+            watchdog.cancel()
             release.touch()
-        deadline = time.monotonic() + 15
+        assert last_ordinary_answer.wait(40), "the FIFO backlog did not reach its last ordinary input"
+        queued = store.turn_for_client(session_id, wrong_id)
+        assert queued and queued["status"] == "completed"
+        deadline = time.monotonic() + 3
+        while store.load_session(session_id).get("active_turn_id"):
+            assert time.monotonic() < deadline, "the completed Turn did not release the Session"
+            time.sleep(0.02)
+        yield json.dumps(idle) + "\n"
+        yield json.dumps(idle) + "\n"
+        deadline = time.monotonic() + 6
         while time.monotonic() < deadline:
-            queued = store.turn_for_client(session_id, wrong_id)
-            if queued and queued["status"] == "completed" and not store.load_session(session_id).get("active_turn_id"):
+            receipt = store.steering_receipt(session_id, idle_id)
+            if receipt and receipt["status"] == "delivered":
                 break
             time.sleep(0.02)
         else:
-            raise AssertionError("the ordinary input did not finish after the active Turn")
-        yield json.dumps(idle) + "\n"
-        yield json.dumps(idle) + "\n"
+            raise AssertionError("the idle mention did not enter the same Session queue")
         yield f"[event] exited — received {total_events} event(s) in 1s (reason: limit)\n"
 
     class FinishedConsumer:
@@ -3842,3 +3863,144 @@ def test_native_mention_reaches_the_running_topic_before_its_ordinary_reply(
     finally:
         release.touch()
         controller.close_session(session_id)
+
+
+@pytest.mark.parametrize("binding_change", ["unchanged", "session", "topic"])
+def test_topic_stream_recovers_only_unstarted_input_with_its_original_binding(
+    tmp_path: Path, binding_change: str,
+) -> None:
+    from loopx.extensions.lark.goal_topic_runtime import stream_lark_goal_topic_profile
+    from loopx.extensions.lark.manager_context import session_turn_effect
+
+    runtime_root = tmp_path / "runtime"
+    registry = {"goals": [{"id": "goal-alpha", "repo": str(tmp_path),
+                           "coordination": {"registered_agents": ["codex"]}}]}
+    targets_path = tmp_path / "targets.json"
+    binding_path = tmp_path / "binding.json"
+    state: dict[str, Any] = {}
+    assert connect_lark_goal_topic(
+        registry=registry, goal_id="goal-alpha", agent_id="codex",
+        session_id="session-original", target_path=targets_path, binding_path=binding_path,
+        app_ref="mew", chat_id="oc_public_fixture", chat_name="Product group",
+        capture_scope="configured_chat_all", ingress_mode="session_queue",
+        runner=_connection_runner(state), cli_bin="fake-lark",
+    )["ok"]
+    targets = read_goal_channel_targets(targets_path)
+    bindings = read_goal_channel_binding(binding_path)
+    topic = binding_for_goal(bindings, "goal-alpha")["topic"]["root_message_id"]
+    snapshot = {"target_payload": targets, "binding_payloads": {"goal-alpha": bindings}}
+    original = {
+        "event_id": "evt_started", "message_id": "om_started",
+        "chat_id": "oc_public_fixture", "root_id": topic, "content": "Original request.",
+        "create_time": "1794140000000", "sender_type": "user",
+        "sender_id": "ou_fixture_sender", "message_type": "text", "mentions": [],
+    }
+    later = [
+        {**original, "event_id": f"evt_{suffix}", "message_id": f"om_{suffix}",
+         "content": f"{suffix}\n" + "Complete source text. " * 100 + "\nLast line."}
+        for suffix in ("second", "first_by_id")
+    ]
+    entered = threading.Event()
+    release = threading.Event()
+    stop = threading.Event()
+    last_reply = threading.Event()
+    answered = []
+
+    def answer(route, text):
+        answered.append((route["session_id"], route["message_id"], text))
+        if route["message_id"] == original["message_id"]:
+            entered.set()
+            assert release.wait(5)
+        return {"response_text": "Verified reply.", "effect_receipt": session_turn_effect(route)}
+
+    def first_consumer():
+        yield "[event] ready event_key=im.message.receive_v1\n"
+        yield json.dumps(original) + "\n"
+        try:
+            assert entered.wait(5)
+            for row in later:
+                yield json.dumps(row) + "\n"
+        finally:
+            stop.set()
+            release.set()
+
+    runner = _reply_runner(state)
+    first_writes = []
+
+    def unverified_reply(args):
+        if "+messages-reply" in args and "--dry-run" not in args:
+            first_writes.append(args[args.index("--message-id") + 1])
+            return {"returncode": 0, "stdout": '{"data": {}}', "stderr": ""}
+        return runner(args)
+
+    class FinishedConsumer:
+        def __init__(self, stdout):
+            self.stdout = stdout
+
+        def poll(self):
+            return 0
+
+        def wait(self, timeout=None):
+            return 0
+
+    def consume(stdout, stop, reply):
+        return stream_lark_goal_topic_profile(
+            profile="mew", snapshot_provider=lambda: snapshot, runtime_root=runtime_root,
+            stop=stop, answer=answer, process_factory=lambda _: FinishedConsumer(stdout),
+            reply_runner=reply, capture_mention=lambda route: {
+                "connection_id": route["connection_id"], "session_id": route["session_id"],
+                "binding_matches": True, "target_turn_id": None,
+            },
+        )
+
+    stopped = consume(first_consumer(), stop, unverified_reply)
+    assert stopped["status"] == "stopped"
+    assert answered == [("session-original", original["message_id"], original["content"])]
+    assert first_writes == [original["message_id"]]
+
+    captures = {
+        path.stem: json.loads(path.read_text(encoding="utf-8"))
+        for path in runtime_root.rglob(".state/topic-intake/om_*.json")
+    }
+    assert captures[original["message_id"]]["started"] is True
+    for row in later:
+        assert captures[row["message_id"]]["started"] is False
+        assert captures[row["message_id"]]["event"] == row
+
+    rebind = binding_change != "unchanged"
+    connection, = bindings["bindings"]["goal-alpha"]["connections"].values()
+    if binding_change == "session":
+        connection["session_id"] = "session-replacement"
+    elif binding_change == "topic":
+        connection["topic"]["root_message_id"] = "om_topic_replacement"
+
+    def recovered_reply(args):
+        result = runner(args)
+        if "+messages-reply" in args and "--dry-run" not in args:
+            if args[args.index("--message-id") + 1] == later[-1]["message_id"]:
+                last_reply.set()
+        return result
+
+    def replacement_consumer():
+        yield "[event] ready event_key=im.message.receive_v1\n"
+        yield json.dumps({**original, "content": "Redelivered data must not replace the original."}) + "\n"
+        yield json.dumps(later[0]) + "\n"
+        if not rebind:
+            assert last_reply.wait(5), "the original Inbox should recover without provider redelivery"
+        yield "[event] exited (reason: timeout)\n"
+
+    resumed = consume(replacement_consumer(), threading.Event(), recovered_reply)
+    assert resumed["status"] == "stream_ended"
+    expected = [] if rebind else [
+        ("session-original", row["message_id"], row["content"]) for row in later
+    ]
+    assert answered[1:] == expected
+    replies = [args[args.index("--message-id") + 1] for args in state["calls"]
+               if "+messages-reply" in args and "--dry-run" not in args]
+    assert replies == ([] if rebind else [row["message_id"] for row in later])
+    retained = list(runtime_root.rglob(".state/topic-intake/om_*.json"))
+    assert {path.stem for path in retained} == (
+        set(captures) if rebind else {original["message_id"]}
+    )
+    original_file = next(path for path in retained if path.stem == original["message_id"])
+    assert json.loads(original_file.read_text(encoding="utf-8")) == captures[original["message_id"]]
