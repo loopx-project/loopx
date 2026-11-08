@@ -46,15 +46,16 @@ export const conversationActivityScenario = {
       const turn = await send("请检查当前任务状态，并说明下一步。");
       await page.getByRole("status", {name: "正在回复", exact: true}).waitFor();
       const pending = page.locator(".personal-message").filter({ has: page.getByRole("button", { name: "中断本轮", exact: true }) });
-      await page.clock.install();
+      // Freeze at a controlled future instant, the pattern goal-showcase and
+      // navigation-sorting already use: a sampled "now" can be in the past by
+      // the time the pause command arrives, and any headroom only narrows the
+      // race instead of removing it. A fixed origin makes the pause target
+      // deterministic regardless of command latency; only the equality of the
+      // frozen instant across views is asserted afterwards.
+      const clockStart = Date.UTC(2030, 0, 1);
+      await page.clock.install({time: clockStart});
       await page.clock.fastForward(25000);
-      // Compare the same instant across views; clock.install alone keeps
-      // advancing and can cross a second boundary while navigation completes.
-      // The pause target must sit in the future of the sampled instant: by
-      // the time the pause command arrives the running clock can already be
-      // past a sampled "now", and pausing into the past throws.
-      const sampledNow = await page.evaluate(() => Date.now());
-      await page.clock.pauseAt(sampledNow + 5_000);
+      await page.clock.pauseAt(clockStart + 60_000);
       await pending.locator(".personal-message-quiet").waitFor();
       const elapsedBefore = await pending.locator(".personal-message-elapsed").textContent();
       await page.getByRole("navigation", { name: "管家视图" }).getByRole("button", { name: "总览", exact: true }).click();
