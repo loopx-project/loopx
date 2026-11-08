@@ -152,6 +152,8 @@ test("only an admitted same-source Yardstick can precede the complete Goal bound
     graph: {
       work_yardstick_capture: {guidance: "compare the accepted outcome", template: "optional detail"},
       work_yardsticks: [{todo_id: "other", cue: "unrelated experiment"}, {todo_id: "current", cue: "current experiment"}],
+      work_measurements: [{todo_id: "other", measurement_feedback: ["foreign measurements"]},
+        {todo_id: "current", measurement_feedback: ["linked comparisons without a decision"]}],
     },
   }};
   const context = {
@@ -168,15 +170,18 @@ test("only an admitted same-source Yardstick can precede the complete Goal bound
   const choice = rows.findIndex(row => row.pointer.endsWith("/work_yardsticks/1"));
   assert.ok(choice > rows.findIndex(row => row.pointer === "/normal_delivery_allowed"));
   assert.ok(choice < rows.findIndex(row => row.pointer === "/goal_boundary"));
-  assert.ok(!selectedFacts(context, rows).some(fact => /unrelated experiment|optional detail/.test(fact)));
+  const measurements = rows.findIndex(row => row.pointer.endsWith("/work_measurements/1"));
+  assert.ok(measurements > rows.findIndex(row => row.pointer === "/normal_delivery_allowed"));
+  assert.ok(measurements < rows.findIndex(row => row.pointer === "/goal_boundary"));
+  assert.ok(!selectedFacts(context, rows).some(fact => /unrelated experiment|foreign measurements|optional detail/.test(fact)));
   for (const binding of [{goal_id: "another-goal"}, {agent_id: "another-agent"}, {todo_id: "other"}]) {
     const capture = structuredClone(context);
     Object.assign(capture.interaction_contract.agent_channel.work_context.sources[0].content, binding);
-    assert.ok(initial(capture).every(row => !row.pointer.includes("work_yardstick")));
+    assert.ok(initial(capture).every(row => !/work_yardstick|work_measurements/.test(row.pointer)));
   }
   for (const gate of [{normal_delivery_allowed: false}, {effective_action: "autonomous_replan_required"},
     {agent_id: "a", agent_identity: {agent_id: "another-agent"}}]) {
-    assert.ok(initial({...context, ...gate}).every(row => !row.pointer.includes("work_yardstick")));
+    assert.ok(initial({...context, ...gate}).every(row => !/work_yardstick|work_measurements/.test(row.pointer)));
   }
 });
 

@@ -142,6 +142,13 @@ The comparison is advisory and carries no retention or execution obligation.
 On an admitted work turn, the progressive starting read includes the enabled
 Yardstick's decision guidance and any compact cue for the selected Todo. Use
 the Explore context reader for the attachment template and scoped evidence.
+Before a first decision is recorded, the same opt-in entry shows up to three
+exact-profile measurement groups from questions canonically linked to that
+Todo, with omitted counts and the existing task reader. Distinct questions get
+a place before additional metrics from one question. These are declared
+comparisons, including shared findings; they do not establish which Todo ran a
+measurement or select an outcome/proxy profile. Default-off input and the
+benchmark's optional exact-field first read retain their existing behavior.
 
 Manually captured measured findings also appear in the existing result pages
 and, when linked to eligible work, its exact-source comparison cards. They need
