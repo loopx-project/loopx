@@ -635,6 +635,13 @@ class LarkPrivateConversations:
         projected = conversation_reply_context({**context, "source_conversation_id": event["chat_id"]})
         prefix = str(projected["context_text"])
         message = f"{prefix}\n\nCurrent user message:\n{text}" if prefix else text
+        # A compact private event can omit its thread ID. Retain the verified
+        # identity for redelivery even when the provider has no thread excerpt.
+        thread_id = context.get("thread_id")
+        if (event["chat_type"] == "p2p" and event.get("parent_id") and not event.get("thread_id")
+                and context.get("reply_context_verified") is True
+                and isinstance(thread_id, str) and 0 < len(thread_id) <= 200):
+            record["event"] = {**event, "thread_id": thread_id}
         record.update(reply_context_message=message, reply_context_source_text=text)
         _atomic_write_json(path, record)
         return message
@@ -683,8 +690,15 @@ class LarkPrivateConversations:
                     return {"status": "history_answer_held"}
                 # event_id can change on redelivery; canonical message content
                 # and audience cannot change underneath the stable message id.
-                if any(record["event"].get(key) != event.get(key) for key in
-                       ["message_id", "sender_id", "chat_id", "content", "message_type", "chat_type", "sender_type", "root_id", "parent_id", "thread_id"]):
+                # A compact private redelivery may omit a thread ID already
+                # verified and frozen with the original reply context.
+                saved_event = record["event"]
+                omitted_private_thread = (event["chat_type"] == "p2p" and not event.get("thread_id")
+                                          and "reply_context_message" in record)
+                if any(saved_event.get(key) != event.get(key) for key in (
+                        "message_id", "sender_id", "chat_id", "content", "message_type",
+                        "chat_type", "sender_type", "root_id", "parent_id")) or (
+                        not omitted_private_thread and saved_event.get("thread_id") != event.get("thread_id")):
                     return {"status": "source_conflict"}
             else:
                 record = {"schema_version": "lark_private_chat_delivery_v0", "request_ref": request,

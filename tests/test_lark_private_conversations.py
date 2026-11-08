@@ -4557,6 +4557,93 @@ def test_group_outbound_joins_current_source_and_identity_before_root_read(ordin
         runtime.close()
 
 
+@pytest.mark.parametrize("captured_thread", [False, True])
+def test_private_reply_keeps_the_exact_quote_when_thread_id_is_optional(ordinary, captured_thread):  # noqa: F811
+    store, runtime, provider, transport = connect(ordinary)
+    profile = "steward-app"
+    parent = provider.event(profile, "private-quote-parent", "Original quote\n\n**Second paragraph**")
+    reply = provider.event(profile, "private-quote-reply", "My question\n\n**Keep its formatting**")
+    parent_id, reply_id = parent["message_id"], reply["message_id"]
+    thread_id = "omt_private_quote"
+    reply.update(parent_id=parent_id, root_id=parent_id, thread_id=thread_id if captured_thread else None)
+    child = provider.messages[reply_id]
+    child.update(parent_id=parent_id, root_id=parent_id, thread_id=thread_id, thread_message_position=0)
+    provider.messages[parent_id].update(thread_id=thread_id, thread_message_position=-1, thread_replies=[child])
+    try:
+        assert transport.admit(profile, reply)["status"] == "durably_accepted"
+        request, = transport.core.pending()
+        sid, tid = request["session_id"], request["turn_id"]
+        transport = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+            runner=provider, cli_bin="lark-cli")
+        redelivery = {**reply, "event_id": "redelivered-private-quote", "thread_id": None}
+        assert transport.admit(profile, redelivery)["status"] == "durably_accepted"
+        assert transport.admit(profile, {**redelivery, "thread_id": "omt_other"})["status"] == "source_conflict"
+        runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)
+        original, = [row for row in store.messages(sid) if row["role"] == "user"]
+        status, snapshot = ordinary[3](f"/api/chat/sessions/{sid}?message_limit=5&turn_id={tid}")
+        assert status == 200
+        visible = next(row for row in snapshot["messages"] if row["message_id"] == original["message_id"])
+        context = visible["reply_context"]
+        assert context["source_text"] == reply["content"]
+        assert context["parent"] == {"message_id": parent_id, "content": parent["content"], "complete": True}
+        assert context["thread"]["thread_id"] == thread_id
+        assert context["thread"]["before_message_id"] == reply_id
+        assert visible["text"] == original["text"] == request["message"]
+        transport.reconcile()
+        assert provider.topic_writes == [(reply["chat_id"], parent_id, "Runtime response.")]
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("event_shape", ["compact", "full", "provider_without_thread"])
+def test_nested_private_reply_deduplicates_when_thread_history_is_unavailable(ordinary, event_shape):  # noqa: F811
+    store, runtime, provider, transport = connect(ordinary)
+    profile = "steward-app"
+    root = provider.event(profile, "nested-root", "Earlier topic")
+    parent = provider.event(profile, "nested-parent", "Exact quoted answer\n\n**Second paragraph**")
+    reply = provider.event(profile, "nested-reply", "My question\n\n**Keep its formatting**")
+    root_id, parent_id, reply_id = (row["message_id"] for row in (root, parent, reply))
+    thread_id = "omt_nested_child"
+    reply.update(parent_id=parent_id, root_id=root_id)
+    provider.messages[parent_id].update(parent_id=root_id, root_id=root_id, thread_id="omt_parent",
+        sender={"id": provider.profile_apps[profile], "sender_type": "app"})
+    child = provider.messages[reply_id]
+    child.update(parent_id=parent_id, root_id=root_id)
+    if event_shape != "provider_without_thread":
+        child.update(thread_id=thread_id, thread_message_position=-1)
+    if event_shape == "full":
+        reply["thread_id"] = thread_id
+    try:
+        assert transport.admit(profile, reply)["status"] == "durably_accepted"
+        request, = transport.core.pending()
+        sid, tid = request["session_id"], request["turn_id"]
+        transport = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+            runner=provider, cli_bin="lark-cli")
+        full = {**reply, "event_id": "nested-full-redelivery", "thread_id": thread_id}
+        expected = "source_conflict" if event_shape == "provider_without_thread" else "durably_accepted"
+        assert transport.admit(profile, full)["status"] == expected
+        compact = {**reply, "event_id": "nested-compact-redelivery"}
+        compact.pop("thread_id", None)
+        assert transport.admit(profile, compact)["status"] == "durably_accepted"
+        assert transport.admit(profile, {**full, "thread_id": "omt_parent"})["status"] == "source_conflict"
+        assert transport.admit(profile, {**full, "parent_id": root_id})["status"] == "source_conflict"
+        assert runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)["status"] == "completed"
+        original, = [row for row in store.messages(sid) if row["role"] == "user"]
+        status, snapshot = ordinary[3](f"/api/chat/sessions/{sid}?message_limit=5&turn_id={tid}")
+        assert status == 200
+        visible = next(row for row in snapshot["messages"] if row["message_id"] == original["message_id"])
+        context = visible["reply_context"]
+        assert context["source_text"] == reply["content"]
+        assert context["parent"] == {"message_id": parent_id, "content": parent["content"], "complete": True}
+        assert "thread" not in context
+        assert visible["text"] == original["text"] == request["message"]
+        transport.reconcile()
+        replies = [args for args in provider.calls if "+messages-reply" in args and "--dry-run" not in args]
+        assert sum(args[args.index("--message-id") + 1] == reply_id for args in replies) == 1
+    finally:
+        runtime.close()
+
+
 def test_group_admission_source_reads_overlap_but_keep_rendered_model_input(ordinary, monkeypatch):  # noqa: F811
     _, runtime, provider, transport = connect_group(ordinary)
     try:
