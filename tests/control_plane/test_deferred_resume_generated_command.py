@@ -208,6 +208,14 @@ def test_generated_deferred_resume_keeps_proof_fences_with_planning_note(
     assert reentry_args[reentry_args.index("--turn-instance-id") + 1] == "resume-command-turn"
     assert reentry_args[reentry_args.index("--todo-id") + 1] == TODO_ID
     assert not any("refresh-state" in action or "spend-slot" in action for action in actions)
+    rc, waiting = cli(*reentry_args)
+    assert rc == 0 and not waiting["normal_delivery_allowed"], waiting
+    assert waiting["heartbeat_receipt"]["event_id"] == guard["heartbeat_receipt"]["event_id"]
+    preparation = waiting["execution_preparation"]
+    assert preparation["state"] == "claim_required"
+    rc, acquired = cli(*preparation["claim"]["cli_args"])
+    assert rc == 0 and acquired["execution_managed"] is True, acquired
+
     rc, reentry = cli(*reentry_args)
     assert rc == 0 and reentry["normal_delivery_allowed"], reentry
     assert (
@@ -229,19 +237,6 @@ def test_generated_deferred_resume_keeps_proof_fences_with_planning_note(
     assert rc == 0 and cold["heartbeat_receipt"]["status"] == "replayed", cold
     assert cold["heartbeat_receipt"]["event_id"] == qualified["event_id"]
     assert load_rollout_events(log_path) == events
-    rc, acquired = cli(
-        "task-lease",
-        "acquire",
-        "--goal-id",
-        GOAL_ID,
-        "--todo-id",
-        TODO_ID,
-        "--owner",
-        AGENT_ID,
-        "--idempotency-key",
-        "fresh-after-resume",
-    )
-    assert rc == 0 and acquired["lease"]["status"] == "active", acquired
     artifact = project / "verified-result.txt"
     artifact.write_text(str(17 * 23))
     assert artifact.read_text() == "391"

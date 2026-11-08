@@ -74,25 +74,33 @@ def test_common_read_is_passive_and_default_off_stays_isolated(host):
 
 def test_http_recheck_starts_existing_owners_once_and_preserves_disabled_features(host):
     server, provider, _ = host
-    status, _ = request(server, "POST", {"operation": "recheck"})
+    status, result = request(server, "POST", {"operation": "recheck"})
     assert status == 200
-    first = server.manager_return_service.thread
+    returns = server.manager_return_service
+    first = returns.thread
+    first_execution = returns.execution_thread
+    manager_tasks = ("manager-returns", "manager-executions")
+    tasks = {item["id"]: item for item in result["tasks"]}
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
-        _, result = request(server)
-        tasks = {item["id"]: item for item in result["tasks"]}
-        if tasks["manager-returns"]["last_success_at"] is not None:
+        if all(tasks[key]["last_success_at"] is not None for key in manager_tasks):
             break
         time.sleep(.02)
-    assert tasks["manager-returns"]["state"] == "healthy"
-    assert tasks["manager-executions"]["state"] == "healthy"
+        status, result = request(server)
+        assert status == 200
+        tasks = {item["id"]: item for item in result["tasks"]}
+    for key in manager_tasks:
+        assert tasks[key]["last_success_at"] is not None, tasks[key]
+        # A worker can begin its next scan before the other completes its first.
+        assert tasks[key]["state"] in {"healthy", "checking"}, tasks[key]
     assert result["supervisor"]["state"] in {"healthy", "checking"}, "Recheck must restore the host as well"
     request(server, "POST", {"operation": "recheck"})
-    assert server.manager_return_service.thread is first
+    assert returns.thread is first
+    assert returns.execution_thread is first_execution
     assert not provider.root.exists() and not server.lark_goal_topic_runtime._delivery_thread
     server.background_services.close()
     request(server, "POST", {"operation": "recheck"})
-    assert not first.is_alive(), "Recheck after shutdown cannot resurrect work"
+    assert not first.is_alive() and not first_execution.is_alive(), "Recheck after shutdown cannot resurrect work"
 
 
 def test_recheck_uses_the_existing_loopback_guard_and_rejects_new_settings(host):

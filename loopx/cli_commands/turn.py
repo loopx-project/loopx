@@ -49,6 +49,7 @@ def handle_turn_command(
     print_payload: PrintPayload,
     native_host_runner: Callable[..., dict[str, Any]] | None = None,
     native_session_binding_resolver: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None,
+    native_execution_preparer: Callable[[Mapping[str, Any], Mapping[str, Any]], str | None] | None = None,
     native_completion_lease_resolver: Callable[[], Mapping[str, Any]] | None = None,
     native_task_validator: Callable[[Mapping[str, Any], Mapping[str, Any]], Mapping[str, Any]] | None = None,
 ) -> int | None:
@@ -81,6 +82,8 @@ def handle_turn_command(
             raise ValueError("a native completion lease requires its original host connection")
         if native_task_validator is not None and native_host_runner is None:
             raise ValueError("a native task validator requires its original host connection")
+        if native_execution_preparer is not None and native_host_runner is None:
+            raise ValueError("native task preparation requires its original host connection")
         if getattr(args, "todo_id", None) is not None and (
             getattr(args, "resume_turn_key", None)
             or any(getattr(args, key, None) for key in ("resume_goal_id", "resume_agent_id", "resume_todo_id"))
@@ -225,10 +228,6 @@ def handle_turn_command(
             from ..capabilities.semantic_preference.agent_preferences import extend_turn_start_dispatch as extend_preferences
             turn_start_hook_dispatch = extend_preferences(turn_start_hook_dispatch, runtime_root=runtime_root,
                 registry_path=registry_path, goal_id=args.goal_id, agent_id=args.agent_id)
-            from ..capabilities.explore.turn_context import extend_turn_start_dispatch as extend_explore
-            turn_start_hook_dispatch = extend_explore(turn_start_hook_dispatch,
-                registry_path=registry_path, runtime_root=runtime_root,
-                goal_id=args.goal_id, agent_id=args.agent_id, todo_id=getattr(args, "todo_id", None))
             if delegated_context is not None:
                 # Invocation material shares normal capture/delivery. It is not a
                 # capability observation, another decision or a new read command.
@@ -239,15 +238,27 @@ def handle_turn_command(
             # from the same live status, scheduler context and capability hooks, so
             # this Turn takes all of them -- and its later settle-against inputs --
             # from the shared decision owner instead of rebuilding them per command.
-            decision_owner = build_fresh_turn_decision_owner(
-                args,
-                registry_path=registry_path,
-                runtime_root=runtime_root,
-                runtime_root_arg=runtime_root_arg,
-                turn_start_hook_dispatch=turn_start_hook_dispatch,
-                goal_ref=goal_ref,
-                request_subject=delegated_context.get("request_subject") if delegated_context else None,
-            )
+            from ..capabilities.explore.turn_context import turn_context_projector
+
+            def read_decision_owner():
+                return build_fresh_turn_decision_owner(
+                    args,
+                    registry_path=registry_path,
+                    runtime_root=runtime_root,
+                    runtime_root_arg=runtime_root_arg,
+                    turn_start_hook_dispatch=turn_start_hook_dispatch,
+                    turn_context_projector=turn_context_projector(
+                        registry_path=registry_path,
+                        runtime_root=runtime_root,
+                        goal_id=args.goal_id,
+                        agent_id=args.agent_id,
+                        todo_id=getattr(args, "todo_id", None),
+                    ),
+                    goal_ref=goal_ref,
+                    request_subject=delegated_context.get("request_subject") if delegated_context else None,
+                )
+
+            decision_owner = read_decision_owner()
             operator_inbox_urgency_projector = decision_owner.operator_inbox_urgency_projector
             scheduler_context = decision_owner.scheduler_execution_context
             decision = decision_owner.resolve()
@@ -256,6 +267,21 @@ def handle_turn_command(
                 decision,
                 scheduler_execution_context=scheduler_context,
             )
+            if native_execution_preparer is not None and args.turn_command == "run-once" and args.execute:
+                prepared_todo = native_execution_preparer(decision, turn_envelope)
+                if prepared_todo is not None:
+                    # Host preparation changes canonical lease state. Plan and
+                    # settle against a fresh read of the same Turn and Todo.
+                    decision_owner = read_decision_owner()
+                    operator_inbox_urgency_projector = decision_owner.operator_inbox_urgency_projector
+                    scheduler_context = decision_owner.scheduler_execution_context
+                    decision = decision_owner.resolve()
+                    preparation = decision.get("execution_preparation") or {}
+                    if (preparation.get("state") != "ready" or preparation.get("todo_id") != prepared_todo
+                            or (decision.get("selected_todo") or {}).get("todo_id") != prepared_todo
+                            or decision.get("normal_delivery_allowed") is not True):
+                        raise ValueError("native task preparation did not make the same Todo ready")
+                    turn_envelope = build_turn_envelope(decision, scheduler_execution_context=scheduler_context)
             # Operation-equipped app-server sessions retain their Todo-bound
             # approval/handoff contract; this option controls exec conversation reuse.
             session_scope = (args.session_scope if args.host in {"codex-cli", "codex-app-server"}

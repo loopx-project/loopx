@@ -90,11 +90,7 @@ test("malformed facts are rejected", () => {
   );
 });
 
-test("the execution handoff vocabulary stays narrower than the historical one", () => {
-  // `legacy` still decodes stored state and receipts, but it is not an accepted
-  // execution-preparation input. Borrowing the shared `HANDOFF_MODES` list here
-  // instead of the execution subset would admit it silently, so both the
-  // membership and the rejection are pinned against the vocabulary owner.
+test("legacy facts stay readable and an old matching lease grants no new execution", () => {
   for (const mode of EXECUTION_HANDOFF_MODES) {
     assert.doesNotThrow(() => projectExecutionPreparation(facts({handoff_mode: mode})));
   }
@@ -102,8 +98,12 @@ test("the execution handoff vocabulary stays narrower than the historical one", 
   const execution: readonly string[] = EXECUTION_HANDOFF_MODES;
   assert.ok(historical.includes("legacy"), "legacy stays decodable for stored receipts");
   assert.ok(!execution.includes("legacy"), "legacy is not a new execution target");
-  assert.throws(
-    () => projectExecutionPreparation(facts({handoff_mode: "legacy"})),
-    EffectRuntimeRequestError,
-  );
+  const retired = projectExecutionPreparation(facts({handoff_mode: "legacy", leases: [
+    {status: "active", active: true, owner: "agent-a"},
+  ]}));
+  assert.equal(retired.handoff_mode, "legacy");
+  assert.equal(retired.state, "blocked_by_conflict");
+  assert.equal(retired.reason_code, "handoff_mode_retired");
+  assert.equal(retired.delivery_allowed, false);
+  assert.equal(Object.hasOwn(retired, "claim"), false);
 });

@@ -93,7 +93,9 @@ def test_http_keeps_original_return_and_request_readback(returned):
         assert controller.coordination_runtime_root == root
         snapshot = read(session["session_id"])
         result = next(m for m in snapshot["messages"] if m.get("origin") == "manager_followup")
-        assert result["text"].endswith("The checked result is ready.")
+        assert result["text"] == (
+            f"The checked result is ready.\n\n协作回复 · analyst · 委托 {receipt['request_id'][:8]}"
+        )
         assert result["return_delivery"]["status"] == "delivered"
         commitment = next(m for m in snapshot["messages"] if m.get("collaboration"))
         assert commitment["collaboration"]["request_id"] == receipt["request_id"]

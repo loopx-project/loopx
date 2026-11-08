@@ -13,6 +13,7 @@ from ...control_plane.capability_hooks import (
     dispatch_interaction_projection_hooks,
     TURN_START_HOOK_RESULT_SCHEMA_VERSION,
     TurnStartHookRegistration,
+    TurnStartContextProjector,
     dispatch_turn_start_hooks,
 )
 from ...control_plane.effect_runtime import effect_runtime_request_scope, effect_runtime_result
@@ -155,6 +156,30 @@ def explore_turn_context(
     ))
 
 
+def turn_context_projector(
+    *, registry_path: Path, runtime_root: Path, goal_id: str,
+    agent_id: str | None, todo_id: str | None = None,
+) -> TurnStartContextProjector | None:
+    """Bind an entrypoint's existing read request after governing selection.
+
+    Merely enabling a Goal or supplying unrelated hooks cannot request this
+    read. The decision owner supplies facts; this adapter changes no admission.
+    """
+    if not agent_id:
+        return None
+
+    def project(payload: Mapping[str, Any], dispatch: Mapping[str, Any] | None) -> dict[str, Any] | None:
+        channel = (payload.get("interaction_contract") or {}).get("agent_channel") or {}
+        selected = payload.get("selected_todo") or {}
+        focus = (selected.get("todo_id") if payload.get("normal_delivery_allowed") is True
+                 and channel.get("delivery_allowed") is True and selected.get("status") == "open" else None)
+        return extend_turn_start_dispatch(dict(dispatch or {}),
+            registry_path=registry_path, runtime_root=runtime_root,
+            goal_id=goal_id, agent_id=agent_id, todo_id=todo_id, selected_todo_id=focus)
+
+    return project
+
+
 def extend_turn_start_dispatch(
     dispatch: dict[str, Any] | None,
     *,
@@ -163,12 +188,20 @@ def extend_turn_start_dispatch(
     goal_id: str,
     agent_id: str | None,
     todo_id: str | None = None,
+    selected_todo_id: str | None = None,
 ) -> dict[str, Any] | None:
     if not agent_id:
         return dispatch
-    _, graph, gate = _policy(registry_path, goal_id, runtime_root)
+    goal, graph, gate = _policy(registry_path, goal_id, runtime_root)
     if not graph and not gate["enabled"]:
         return dispatch
+    if selected_todo_id is not None:
+        from ..todo_replan_cadence.machine_defaults import work_yardstick_enabled
+
+        # This optional policy's current-work card follows the resolved work
+        # identity. With the policy off, preserve the caller's original scope.
+        if work_yardstick_enabled(goal, runtime_root):
+            todo_id = selected_todo_id
 
     def produce() -> dict[str, Any]:
         return {

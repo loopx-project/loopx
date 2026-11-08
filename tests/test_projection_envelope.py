@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
+
 import loopx.control_plane.projection_envelope_facts as projection_envelope
 import loopx.control_plane.quota.should_run as quota_should_run_module
 import loopx.control_plane.quota.should_run_packet as should_run_packet
@@ -471,7 +473,7 @@ def test_real_cli_quota_should_run_emits_the_projection_envelope(
     )
 
     assert completed.returncode == 0, completed.stdout + completed.stderr
-    payload = json.loads(completed.stdout)
+    payload = read_cli_policy_payload(completed.stdout, returncode=completed.returncode)
     assert payload["projection_envelope"]["projection"] == "quota_should_run"
     assert payload["projection_envelope"]["coverage"]["included_count"] == 1
     assert payload["projection_envelope"]["upstream"][0]["projection"] == "status"
@@ -519,7 +521,7 @@ def test_real_cli_quota_should_run_discloses_unreadable_scheduler_state(
             timeout=60,
         )
         assert completed.returncode == 0, completed.stdout + completed.stderr
-        return json.loads(completed.stdout)
+        return read_cli_policy_payload(completed.stdout, returncode=completed.returncode)
 
     missing = _sources(run_cli()["projection_envelope"])["app_scheduler_state"]
     assert missing["read_status"] == "read"

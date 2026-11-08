@@ -127,3 +127,13 @@ export function normalizeTodoWorkRequirements(intent: JsonObject): JsonObject {
   }
   return result;
 }
+
+/** One additive effect, shared by the committing Todo owner and prospective
+ * review bases. Calculating the fields never grants authority or writes them. */
+export function appendTodoExploreReferences(todo: JsonObject, additions: unknown): JsonObject {
+  const refs = normalizeTodoWorkRequirements({explore_result_node_refs: requireStringArray(additions, "explore_result_node_refs")})
+    .explore_result_node_refs as string[];
+  const existing = normalizeTodoWorkRequirements({explore_result_node_refs: todo.explore_result_node_refs ?? []})
+    .explore_result_node_refs as string[];
+  return normalizeTodoWorkRequirements({explore_result_node_refs: [...existing, ...refs]});
+}

@@ -722,9 +722,21 @@ async function runConversation(browser, uncertain) {
     assert.ok(await panel.locator('article').count() <= 300);
     // Returning through newer tool pages must preserve the same disclosure and
     // keep every original row reachable, rather than remounting a closed group.
+    const settledTranscript = panel.locator('.attached-conversation-messages[aria-busy="false"]');
     for (let pageNumber = 0; pageNumber < 5 && !await longDialogue.count(); pageNumber++) {
-      const read = page.waitForResponse(response => new URL(response.url()).searchParams.has('after'));
-      await scrollHistory(page,panel,1); await read;
+      // A prior read may still be applying its retained window. Scroll after
+      // the transcript is ready to consume another page gesture.
+      await settledTranscript.waitFor();
+      const read = page.waitForResponse(response => {
+        const source = new URL(response.url());
+        return source.pathname === '/api/chat/codex-attached' && source.searchParams.has('after');
+      });
+      await scrollHistory(page,panel,1);
+      const response = await read;
+      assert.ok(response.ok(), 'The original source returns the requested newer page');
+      const tail = (await response.json()).messages.at(-1);
+      if (tail) await transcript.locator(`article[data-record-id="${tail.id}"]`).waitFor({state:'attached'});
+      await settledTranscript.waitFor();
       await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       assert.equal(await expandedGroup.evaluate(node => node.isConnected && node.open),true,'Newer pages preserve the expanded group');
     }
