@@ -66,6 +66,18 @@ test("initial work measurement feedback preserves linked scopes without choosing
   assert.equal(tie.best.candidate_ref, "candidate:a");
   assert.equal(tie.latest.measurement.candidate_ref, "candidate:b");
   assert.equal(tie.improvement, 0);
+  const declared: JsonObject = {...request, result_node: "local", projection: {...request.projection,
+    findings: [...request.projection.findings, {finding_id: "declared", node_id: "shared", recorded_order: 8,
+      evidence_refs: [], work_yardstick: {binding: {goal_id: "research", agent_id: "worker",
+        todo_id: todo.todo_id, turn_instance_id: "turn:declared"}, decision: {
+        schema_version: "work_yardstick_decision_v0", target: {summary: "Improve the accepted outcome",
+          scope: "Original work", acceptance_ref: "acceptance:original"}, authoritative: profile,
+        proxy: null, counterevidence_refs: [], prior_finding_id: null,
+        next_action: {method_id: "method:retained", reason: "Continue the recorded choice", cost_bound: "Existing budget"},
+      }}}]}};
+  const differentQuestion = projectExploreTurnContext(declared).graph as JsonObject;
+  assert.ok(!Object.hasOwn(differentQuestion, "work_measurements"));
+  assert.ok(differentQuestion.measurement_feedback.every(row => row.node_id === "local"));
 });
 
 test("recent questions use UTC instants, preserve microseconds and retain legacy timestamps", () => {
