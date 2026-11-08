@@ -275,6 +275,12 @@ it or starts model work. Before every write and receipt recovery, Core rechecks
 the Session, current binding and audience, and the provider verifies the original
 source. Posts identify the App speaker, stay in canonical append order within
 that outbox and retain complete long text through the existing rich-post parts.
+An exact App-origin terminal error also projects a public-safe failure notice
+with the original completion time. The notice is derived from the stored Turn
+and its matching error row, without exporting raw diagnostics. It uses the same
+outbox and message identity, so an already-mirrored input can receive its
+historical failure notice once after recovery. Earlier stop errors and completed
+Turns do not qualify as failures.
 Distinct canonical messages and parts get distinct provider idempotency keys,
 including when their text is identical; callers without that identity retain
 their existing receipt digest. Known attempts are read back before continuation;
