@@ -1397,6 +1397,20 @@ and synthetic grading. It does **not** qualify scientific research utility,
 matched strategy results, or the frontend restore journey. Actual task/profile
 admission and measured continuation outcomes remain required.
 
+### Preserve an interrupted Official control
+
+For `--worker official --feedback native --eval-interval 0`, the explicit
+`--preserve-failed-worker` option keeps the original Docker worker after a
+confirmed final solver failure. Native auto-resume, scoring, and final archive
+collection keep their ordinary behavior. The retained worker is stopped and
+verified by exact identity; a failed stop observation or receipt write never
+falls through to deletion. Without the option, ordinary cleanup still applies.
+
+The private terminal receipt records source retention only. It does not
+export an authentication file, create a joint checkpoint, or authorize
+a resume. Recover the original evaluator, session, and finite remaining
+budget separately before treating later work as part of this control.
+
 ### Continue an interrupted Host in its retained filesystem
 
 The explicit `benchmark.runtime.scheduler` budget-continuation entrypoint can
