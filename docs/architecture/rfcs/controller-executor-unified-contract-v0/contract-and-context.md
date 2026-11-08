@@ -638,6 +638,35 @@ creation. Source and packaged consumer checks are distinct from installed App
 adoption, live optional-provider/model behavior and original-quota complete-cost
 benefit. These repairs do not close C1 or authorize rollout or merge.
 
+The default JSON Turn inspection retains the current route, permissions, stops,
+selected work and executable Vision authoring. Supporting evidence and diagnostic
+body remain addressable in one immutable, digest-bound capture of that same
+complete source; a later live Goal change cannot redirect this read. An
+unavailable private capture falls back to the complete source. The projection is
+inspection-only and cannot be promoted into execution or source admission. This
+retains the existing 26,000-character crowded default ceiling. Explicit v1
+transaction detail carries the full source plus transaction and session metadata;
+the matched small fixture measures 26,886 characters against the retained v0
+15,000 failure. Only that declared v1 detail has a 30,000-character ceiling.
+The frozen differential caller uses each checkout's supported Host argv and
+recorded plan schema; ordinary quota remains unchanged in this extraction.
+The matched migration observes route, actor/work, execution duties, scope/stops,
+required reads, authoring and effects. The old Goal-file read and the new complete
+inline file must have the same full-file digest. The observation records every
+inspection-detail reader call and byte separately. Only this qualified v0-to-v1
+transition permits 2,000 additional default characters/bytes or 16,000 for full
+transaction detail; subsequent v1 growth and absolute ceilings remain guarded.
+This is migration qualification, not a net context-efficiency claim.
+
+Failed Session retry also delivers its callback input by the recorded request
+version after the existing complete-source check. Current requests supply the
+checked complete source; historical v0 supplies its original envelope, including
+when it carries a complete sidecar. Corrupt or mixed input is rejected before
+provider lookup. Real File/SQLite retry checks exercise callbacks that read their
+argument, original Session resume, actor/work mismatch refusal, unchanged saved
+sources and once-only Host/result effects. None establishes live model adoption
+or the parent C1's original-quota complete-cost benefit.
+
 ### C1 baseline boundary and reuse inventory
 
 The baseline is the **original caller-visible quota delivery**, not the raw
