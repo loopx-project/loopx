@@ -648,6 +648,48 @@ def test_initial_read_preserves_unfinished_requests_and_incomplete_observation(t
     assert detail["ok"] and "FULL-REQUEST-DETAIL-ON-DEMAND" in detail["content"]
 
 
+@pytest.mark.parametrize("route", ["matching", "different", "missing", "incomplete", "unknown", "small", "held"])
+def test_initial_read_leaves_large_agenda_rows_to_the_matching_required_read(tmp_path, decision, route):
+    command = "loopx manager-inbox read --goal-id fixture --agent-id author"
+    read = {"source": "turn_start_capability_hook", "kind": "operator_inbox",
+        "capability_id": "manager-context", "hook_id": "manager.context_inbox",
+        "ordering": "before_work", "command": command}
+    agenda = {"count_unit": "request", "incoming_count": 2, "outgoing_count": 1,
+        "items": [{"request_id": f"request-{index}", "next_action": "保留原反馈与验收材料。" * (4 if route == "small" else 48)}
+            for index in range(3)],
+        "omitted_count": 0, "scan_complete": route != "incomplete",
+        "unavailable_count": int(route == "incomplete"), "read_command": command,
+        "instruction": "Read the full current request before acting."}
+    if route == "unknown":
+        agenda["future_gate"] = "Check the retained restriction."
+    decision.update(should_run=True, normal_delivery_allowed=True, effective_action="normal_run")
+    channel = decision["interaction_contract"]["agent_channel"]
+    channel.update(delivery_allowed=route != "held", must_attempt=True)
+    channel["work_context"]["sources"].append({**read, "content": {
+        "ok": True, "read_complete": False, "unfinished_delegations": agenda,
+    }})
+    if route != "missing":
+        channel["required_reads"].append({**read, "command": command + " --agent-id other"} if route == "different" else read)
+
+    view = native_context_capture_view(decision, tmp_path)
+    _, values = read_selection(view["first_read_command"])
+    prefix = "/interaction_contract/agent_channel/work_context/sources/3/content"
+    assert values[prefix + "/read_complete"] is False
+    agenda_path = prefix + "/unfinished_delegations"
+    if route == "matching":
+        assert agenda_path not in values and agenda_path + "/items" not in values
+        for field in agenda.keys() - {"items"}:
+            assert values[f"{agenda_path}/{field}"] == agenda[field]
+        assert read in values["/interaction_contract/agent_channel/required_reads"]
+    else:
+        assert values[agenda_path] == agenda
+    detail = read_context_capture(Namespace(capture_file=view["recovery"]["path"],
+        capture_sha256=view["recovery"]["sha256"], format="json", select=[agenda_path],
+        offset=0, page_bytes=64000, max_page_output_bytes=64000))
+    assert detail["ok"] and detail["eof"]
+    assert json.loads(detail["content"])["selections"][0]["value"] == agenda
+
+
 def test_unknown_settlement_plan_is_not_compacted(tmp_path, decision):
     plan = {"schema_version": "future", "new_stop": "Stop before every new effect."}
     decision["interaction_contract"]["cli_channel"]["settlement_plan"] = plan

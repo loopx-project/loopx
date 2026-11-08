@@ -498,6 +498,25 @@ export function initialContextReadPointers(context: JsonObject, decisionFields: 
   return [...opening, ...remaining];
 }
 
+/** A pending Manager Inbox read already delivers these scoped request rows. */
+function managerAgendaHeaderFields(value: unknown, requiredReads: unknown[]): string[] | undefined {
+  const {content, ...read} = jsonObject(value) ?? {};
+  const source = jsonObject(content), agenda = jsonObject(source?.unfinished_delegations);
+  if (read.source !== "turn_start_capability_hook" || read.kind !== "operator_inbox"
+      || read.capability_id !== "manager-context" || read.hook_id !== "manager.context_inbox"
+      || read.ordering !== "before_work" || typeof read.command !== "string" || !read.command
+      || source?.ok !== true || source.read_complete !== false
+      || !agenda || agenda.read_command !== read.command || agenda.count_unit !== "request"
+      || agenda.scan_complete !== true || agenda.omitted_count !== 0 || agenda.unavailable_count !== 0
+      || !Array.isArray(agenda.items)
+      || !known(agenda, ["count_unit", "items", "incoming_count", "outgoing_count", "omitted_count",
+        "scan_complete", "unavailable_count", "observed_at", "read_command", "instruction"])
+      || !requiredReads.some(required => isDeepStrictEqual(required, read))) return undefined;
+  // Nine separate pointer wrappers cost more than a small inline agenda.
+  if (Buffer.byteLength(JSON.stringify(agenda.items), "utf8") < 2048) return undefined;
+  return Object.keys(agenda).filter(key => key !== "items");
+}
+
 function initialContextReadGroups(context: JsonObject, decisionFields: readonly string[]): {
   opening: string[]; remaining: string[];
 } {
@@ -568,6 +587,9 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
   const work = ["interaction_contract", "agent_channel", "work_context"];
   include(...work, "instruction");
   const channel = object(interaction.agent_channel);
+  const requiredInboxReads = context.effective_action === EffectiveAction.NORMAL_RUN && context.normal_delivery_allowed === true
+    && channel?.delivery_allowed === true && channel.must_attempt === true && Array.isArray(channel.required_reads)
+    ? channel.required_reads : [];
   const sources = object(channel?.work_context)?.sources;
   const sourceRows = Array.isArray(sources) ? sources.map((source, index) => ({source, index})) : [];
   const selectedTodo = object(context.selected_todo);
@@ -629,10 +651,11 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
     for (const field of ["ok", "status", "reason", "error", "recovery", "revision", "provider_revision", "source_authority",
       "decision_read_from_provider", "legacy_fallback_used", "graph_enabled", "harness_enabled", "boundary", "authority_read"])
       include(...source, "content", field);
-    // The capability already bounds this agenda. Keep pending returns and
-    // incomplete observations visible without expanding full request bodies.
     include(...source, "content", "read_complete");
-    include(...source, "content", "unfinished_delegations");
+    const agendaPath = [...source, "content", "unfinished_delegations"];
+    const agendaFields = managerAgendaHeaderFields(_source, requiredInboxReads);
+    if (agendaFields) for (const field of agendaFields) include(...agendaPath, field);
+    else include(...agendaPath);
     // The preference owner already supplies the complete current scoped view,
     // including corrections, retirement, provenance and advisory authority.
     // Its revision/instructions alone cannot fulfill that pre-work delivery.

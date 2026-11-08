@@ -213,12 +213,14 @@ corrections, retirement/expiry and empty replacements retain their provenance,
 revision and advisory authority. This captured pre-work view does not replace the
 preference owner's fresh exact-scope read before a later preference-dependent
 external action, and neither delivery nor a preference grants authority.
-The existing bounded `unfinished_delegations` projection and `read_complete`
-flag also remain visible. Adoption or a queued return does not establish
-completion. Pending peer results, counts, omitted items and unavailable
-observations retain their source semantics. Full request bodies stay on demand and must be
-read before assessing, executing or returning a request; the initial view does
-not consume a result or grant authority.
+The initial read includes the bounded `unfinished_delegations` projection and
+`read_complete` flag. For an admitted normal work Turn with a large, complete
+agenda and a matching required Manager Inbox read, the initial view keeps its counts,
+coverage, instructions and read command. The required read delivers the request
+rows. The original rows remain available from the same capture. Adoption and
+queued returns are intermediate states. Read the full current request before
+assessing, executing or returning it. Use the existing scoped request and
+consumption routes for those actions.
 It also exposes existing outcome material addresses and the current settlement
 plan's obligations, including unknown step fields. Only attachments explicitly
 marked `required=false` defer their guidance/templates; their routes stay visible
@@ -366,9 +368,11 @@ full/delta 字节比较计入这些 reader 命令元数据；既有进程内引�
 首读也给出现有验收材料地址和当前结算义务。仅明确 `required=false` 的附件延后完整
 说明与模板，使用前须读原附件；未知计划保留全文。首读分页不重复正文中的指针，
 选读摘要仍阻止将它记作完整输入。
-已有的有界 `unfinished_delegations` 投影和 `read_complete` 标记也直接呈现；采纳和
-回传入队不等于完成。待对端结果、计数、遗漏和不可用观测保留原来源语义。
-完整请求按需读取，评估、执行或回传前仍须读其全文；首读不消费结果，也不授予权限。
+首读包含有界 `unfinished_delegations` 投影和 `read_complete` 标记。已准入的普通
+工作 Turn 若有完整的大型委派摘要，且必读列表中有同一条管家收件箱命令，首读保留
+计数、覆盖状态、说明和读取命令，逐条记录由必做的收件箱读取交付。原记录仍可从
+同一捕获回读。采纳和回传入队是中间状态，评估、执行或回传前须读当前请求全文，
+并沿已有范围约束和消费入口办理。
 
 既有 acceptance owner 给出的完整 `outcome_context` 导航，与当前 capture 的 Goal、
 Agent、所选 Todo、成果版本及 provider revision 一致时，首读完整展开其建议成果在
