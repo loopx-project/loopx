@@ -952,8 +952,6 @@ class ChatRuntimeController:
                             payload={"error_code": "server_restarted", "message": failed["error"]},
                         )
         native_recovery = None
-        parked_working = None
-        working_continuation = None
         history_restore = NativeHistoryRestoration(self, session, accepted_turn_id, commit, check_route_configuration, manager_runtime is not None)
         try:
             same_working_route = (manager_runtime is not None and session.get("steward_context") is not None
@@ -969,20 +967,13 @@ class ChatRuntimeController:
             legacy_manager_context = history_restore.manager_migration(refresh=(manager_profile_changed
                 or model_allocation is not None or quota_fallback or answer_fallback))
             legacy_provider_context = history_restore.provider_migration(stored_messages)
-            if (same_working_route and checkpoint_available
+            if (manager_runtime is not None and same_working_route and checkpoint_available
                     and not legacy_provider_context and not legacy_project_context):
-                affinity = history_restore.working_affinity(
-                    work_dir=work_dir, codex_home=selected_codex_home, runtime=manager_runtime,
-                    account_epoch=native_account_epoch)
-                if answer_fallback:
-                    if cold_working:
-                        working_provider = history_restore.cold_working_provider(affinity=affinity)
-                    parked_working = history_restore.park_working_context(
-                        stored_messages, provider=working_provider, affinity=affinity)
-                    if parked_working is not None:
-                        history_restore.check()
-                elif session.get("answer_review") is True and not recovery.get("read_only_review"):
-                    working_continuation = history_restore.restore_working_context(stored_messages, affinity=affinity)
+                history_restore.prepare_working_context(stored_messages, work_dir=work_dir,
+                    codex_home=selected_codex_home, runtime=manager_runtime, account_epoch=native_account_epoch,
+                    working_provider=working_provider, cold_working=cold_working,
+                    answer_review=answer_fallback, read_only_review=bool(recovery.get("read_only_review")))
+            working_continuation = history_restore.working_continuation
             adapter = self._start_adapter(
                 agent_id=str(selected_agent),
                 work_dir=work_dir,
@@ -1087,8 +1078,8 @@ class ChatRuntimeController:
                     }
                     if answer_fallback or session.get("answer_review") is True:
                         changes["answer_review"] = answer_fallback
-                    if parked_working is not None or session.get("parked_native_working") is not None:
-                        changes.update(parked_native_working=parked_working,
+                    if history_restore.parked_working is not None or session.get("parked_native_working") is not None:
+                        changes.update(parked_native_working=history_restore.parked_working,
                             expected_upstream_thread_id=session["upstream_thread_id"])
                     if legacy_manager_context and adapter.upstream_thread_id != session.get("upstream_thread_id"):
                         # Preserve provenance for read-only checks of failed

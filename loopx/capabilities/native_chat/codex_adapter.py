@@ -22,6 +22,7 @@ from ...chat_agent import (
     _retry_error_details, _routing_discovery_timeout, _event_thread_id, _event_turn_id, _terminal_turn_error,
 )
 from ...chat_codex_goal import CodexGoalDriver
+from ...control_plane.content_digest import BARE_SHA256_PATTERN
 
 if TYPE_CHECKING:
     from ...chat_runtime import ChatRuntimeController
@@ -36,6 +37,59 @@ _READ_ONLY_ITEM_TYPES = frozenset({"reasoning", "webSearch", "imageView", "conte
 
 def _history_digest(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def validate_native_working_update(payload: Mapping[str, Any], changes: Mapping[str, Any], *,
+                                   expected_thread: str | None, active: Mapping[str, Any] | None) -> None:
+    """Check the adapter-specific checkpoint fields under the Session store lock."""
+    from ...chat_store import CHAT_SESSION_MODE_MANAGED
+
+    def provider_and_affinity_valid(value: Mapping[str, Any]) -> bool:
+        return (isinstance(value["provider"], str) and 1 <= len(value["provider"]) <= 128
+                and isinstance(value["affinity_sha256"], str)
+                and bool(BARE_SHA256_PATTERN.fullmatch(value["affinity_sha256"])))
+
+    if "native_working_checkpoint" in changes:
+        checkpoint = changes["native_working_checkpoint"]
+        if (not isinstance(checkpoint, dict) or set(checkpoint) != {"thread_id", "provider", "affinity_sha256"}
+                or payload.get("steward_context") is None or payload.get("answer_review")
+                or payload.get("agent_id") != "codex" or payload.get("upstream_mode") != "chat"
+                or payload.get("session_mode") != CHAT_SESSION_MODE_MANAGED
+                or changes.get("agent_id", "codex") != "codex" or changes.get("upstream_mode", "chat") != "chat"
+                or expected_thread is None or checkpoint["thread_id"] != expected_thread
+                or changes.get("upstream_thread_id", expected_thread) != expected_thread
+                or changes.get("answer_review") is True or not provider_and_affinity_valid(checkpoint)):
+            raise ValueError("working checkpoint requires the same bound native Codex thread")
+
+    if "parked_native_working" not in changes:
+        return
+    if (expected_thread is None or "answer_review" not in changes
+            or payload.get("steward_context") is None or payload.get("agent_id") != "codex"):
+        raise ValueError("working native history must be bound to a steward review transition")
+    parked = changes["parked_native_working"]
+    if parked is None:
+        return
+    if not isinstance(parked, dict) or set(parked) != {
+        "thread_id", "provider", "affinity_sha256", "prefix_count", "prefix_sha256", "review_turn_ids",
+    }:
+        raise ValueError("invalid parked working history")
+    review_ids = parked["review_turn_ids"]
+    if (changes["answer_review"] is not True or not active or active.get("status") != "queued"
+            or active.get("upstream_turn_id")
+            or changes.get("upstream_thread_id") in {None, expected_thread}
+            or not isinstance(review_ids, list) or not 1 <= len(review_ids) <= 32
+            or any(not isinstance(tid, str) for tid in review_ids)
+            or len(set(review_ids)) != len(review_ids) or review_ids[-1] != active["turn_id"]
+            or not provider_and_affinity_valid(parked)
+            or type(parked["prefix_count"]) is not int or parked["prefix_count"] < 0
+            or not isinstance(parked["prefix_sha256"], str) or not BARE_SHA256_PATTERN.fullmatch(parked["prefix_sha256"])):
+        raise ValueError("invalid parked working history or review Turn")
+    if payload.get("answer_review") is True:
+        prior = payload.get("parked_native_working")
+        if not isinstance(prior, dict) or {**parked, "review_turn_ids": review_ids[:-1]} != prior:
+            raise ValueError("a later review cannot replace the original working history")
+    elif parked["thread_id"] != expected_thread or review_ids != [active["turn_id"]]:
+        raise ValueError("parked history must name the original working thread")
 
 
 @dataclass(frozen=True)
@@ -57,6 +111,7 @@ class NativeHistoryRestoration:
     manager: bool
     invalidated: bool = False
     checked: bool = False
+    parked_working: dict[str, Any] | None = None
     working_continuation: NativeWorkingContinuation | None = None
 
     def capture(self, *, strict: bool = False) -> list[dict[str, Any]]:
@@ -194,6 +249,20 @@ class NativeHistoryRestoration:
             return None
         self.working_continuation = NativeWorkingContinuation(parked["thread_id"], parked["provider"], suffix)
         return self.working_continuation
+
+    def prepare_working_context(self, stored: list[dict[str, Any]], *, work_dir: Path, codex_home: Path,
+                                runtime: Mapping[str, Any], account_epoch: tuple[str, str] | None,
+                                working_provider: str | None, cold_working: bool,
+                                answer_review: bool, read_only_review: bool) -> None:
+        affinity = self.working_affinity(work_dir=work_dir, codex_home=codex_home,
+                                        runtime=runtime, account_epoch=account_epoch)
+        if answer_review:
+            provider = self.cold_working_provider(affinity=affinity) if cold_working else working_provider
+            self.parked_working = self.park_working_context(stored, provider=provider, affinity=affinity)
+            if self.parked_working is not None:
+                self.check()
+        elif self.session.get("answer_review") is True and not read_only_review:
+            self.restore_working_context(stored, affinity=affinity)
 
     def manager_migration(self, *, refresh: bool) -> bool:
         from ...chat_manager import MANAGER_CONTEXT_VERSION, is_manager_channel
