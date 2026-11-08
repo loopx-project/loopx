@@ -13,7 +13,7 @@ from collections import deque
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, Literal, overload
 
 from ...chat_manager import MANAGER_AGENT_OBJECTIVE, manager_channel
 from ...control_plane.collaboration import conversation_reply_context
@@ -85,6 +85,10 @@ from .team_plan_confirmation import (
     start_team_plan_review_callback_stream,
 )
 
+if TYPE_CHECKING:
+    from ...chat_runtime import ChatRuntimeController
+
+
 Answer = Callable[[Mapping[str, Any], str], str | Mapping[str, Any]]
 SnapshotProvider = Callable[[], Mapping[str, Any]]
 SimpleRunner = Callable[[list[str]], Mapping[str, Any]]
@@ -94,6 +98,9 @@ ProposalDeliverer = Callable[
     [Mapping[str, Any], list[str]], Mapping[str, Any]
 ]
 ReviewCallbackHandler = Callable[[Mapping[str, Any]], Mapping[str, Any]]
+MentionCapture = Callable[[Mapping[str, object]], dict[str, object]]
+EventLane = tuple[str, ...]
+CapturedEventLane = tuple[EventLane, dict[str, object] | None]
 
 
 class LarkGoalTopicTurnFailed(RuntimeError):
@@ -395,18 +402,36 @@ def _profile_event_route(
     ), "matched"
 
 
+@overload
+def _profile_event_lane(
+    *, profile: str, snapshot: Mapping[str, object], event: Mapping[str, object],
+    runtime_root: str | Path, capture_mention: MentionCapture | None = None,
+    include_capture: Literal[False] = False,
+) -> EventLane: ...
+
+
+@overload
+def _profile_event_lane(
+    *, profile: str, snapshot: Mapping[str, object], event: Mapping[str, object],
+    runtime_root: str | Path, capture_mention: MentionCapture | None = None,
+    include_capture: Literal[True],
+) -> CapturedEventLane: ...
+
+
 def _profile_event_lane(
     *,
     profile: str,
     snapshot: Mapping[str, Any],
-    event: Mapping[str, Any],
+    event: Mapping[str, object],
     runtime_root: str | Path,
-    capture_mention: Callable[[Mapping[str, object]], dict[str, object]] | None = None,
+    capture_mention: MentionCapture | None = None,
     include_capture: bool = False,
-) -> Any:
+) -> EventLane | CapturedEventLane:
     """Capture a live target before joining the ordinary reply lane."""
 
-    def result(lane: tuple[str, ...], capture: dict[str, object] | None = None) -> Any:
+    def result(
+        lane: EventLane, capture: dict[str, object] | None = None
+    ) -> EventLane | CapturedEventLane:
         return (lane, capture) if include_capture else lane
 
     private_config = dict(snapshot.get("private_profiles") or {}).get(profile)
@@ -573,7 +598,7 @@ def stream_lark_goal_topic_profile(
     health_sink: HealthSink | None = None,
     proposal_deliverer: ProposalDeliverer | None = None,
     private_admitter: Callable[[str, dict[str, object]], Mapping[str, object]] | None = None,
-    capture_mention: Callable[[Mapping[str, object]], dict[str, object]] | None = None,
+    capture_mention: MentionCapture | None = None,
     review_callback_handler: ReviewCallbackHandler | None = None,
 ) -> dict[str, Any]:
     """Keep one bounded long-lived CLI consumer attached between messages."""
@@ -929,9 +954,9 @@ def stream_lark_goal_topic_profile(
 
 
 def _profile_supports_mention_steering(
-    snapshot: Mapping[str, Any],
+    snapshot: Mapping[str, object],
     profile: str,
-    capture_mention: Callable[[Mapping[str, object]], dict[str, object]] | None = None,
+    capture_mention: MentionCapture | None = None,
 ) -> bool:
     """Reserve a priority worker only when a bound Session can steer on @mention."""
 
@@ -996,8 +1021,8 @@ def _profile_supports_mention_steering(
 
 
 def _bound_topic_session(
-    route: Mapping[str, object], runtime_controller: Any
-) -> Mapping[str, Any] | None:
+    route: Mapping[str, object], runtime_controller: ChatRuntimeController
+) -> Mapping[str, object] | None:
     session_id = str(route.get("session_id") or "")
     store = getattr(runtime_controller, "store", None)
     if not session_id or store is None:
@@ -1017,7 +1042,7 @@ def _bound_topic_session(
 
 
 def capture_topic_mention(
-    route: Mapping[str, object], runtime_controller: Any
+    route: Mapping[str, object], runtime_controller: ChatRuntimeController
 ) -> dict[str, object]:
     """Read the bound Session/Turn without opening or resuming an executor."""
     session = _bound_topic_session(route, runtime_controller)
