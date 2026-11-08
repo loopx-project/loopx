@@ -94,12 +94,14 @@ export function visionAuthoringContract(autonomousReplan = false): JsonObject {
       schema_version: GOAL_VISION_REPLAN_SCHEMA_VERSION, state: "vision_patch_proposed",
       vision_patch: {acceptance_summary: "Verified result; scoped work remains."},
       path_delta: {
+        schema_version: GOAL_PATH_DELTA_SCHEMA_VERSION,
         outcome: autonomousReplan ? "replan" : "continue", prior_assumption: "Viable route.",
         observed_reality: "Evidence supports the route.", retained: ["Route"],
         evidence_refs: ["evidence:verified-result"],
       },
     },
     authoring_hint: "Replace example claims/refs with evidence; obey the live contract and total limit. " +
+      "Use observed public-safe evidence IDs or aliases in evidence_refs. Keep raw paths with the artifact. " +
       "For todo_delta, use retain:todo_<id> for existing work; supported verbs are activate, create, reopen, resume and retain. " +
       "Replace todo_<id> with a verified Todo ID after normal authoring/readback. Entries record plans, not Todo mutations, claims or execution authority. " +
       "For ordinary CLI writeback, pass the packet with --agent-vision-json <file>. " +

@@ -63,6 +63,10 @@ test("ordinary completion is conditional on deliverable acceptance, not Turn acc
   assert.match(plan.steps[1].precondition, /--agent-vision-json/);
   assert.match(plan.steps[1].precondition, /path_delta.*evidence_refs/);
   assert.match(plan.steps[1].precondition, /acceptance_summary/);
+  assert.match(plan.steps[1].precondition, /typed progress flags only when this Turn's evidence supports/);
+  assert.match(plan.steps[1].precondition, /--progress-coverage-scope-id from verified scope coverage/);
+  assert.match(plan.steps[1].precondition, /terminal closeout follows spend/);
+  assert.doesNotMatch(plan.steps[1].command_template!, /--progress-coverage-scope-id/);
   assert.match(plan.steps[2].precondition, /declared completion validation/);
   assert.match(plan.steps[3].precondition, /matching writeback and quota spend receipts/);
   assert.equal(plan.steps[3].conditional, true);

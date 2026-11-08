@@ -31,13 +31,14 @@ export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan 
     "surface_only cannot settle this Turn. Do not relabel preparation-only work as progress; " +
     "continue authorized work within existing limits or report a genuine typed blocker. " +
     "Set --delivery-boundary " + DELIVERY_BOUNDARIES.join("|") + " for the applicable case above. " +
-    "Typed evidence: --progress-result-class " + PROGRESS_RESULT_CLASSES.join("|") +
-    ". For no_followup or exploration_exhausted, also pass --progress-coverage-scope-id; " +
-    "exploration_exhausted also needs --progress-coverage-complete. " +
-    "Todo completion alone does not establish scope coverage" +
-    ". For blocked outcome_gap, --progress-work-item-id must match this plan's Todo/obligation id " +
-    "and --progress-blocker-id names the blocker. Repeat --progress-evidence-id for evidence. " +
-    "IDs are 1-128 characters, start with an ASCII letter/digit, then letters/digits or ._:/- " +
+    "Add typed progress flags only when this Turn's evidence supports the observation. " +
+    "Use --progress-result-class " + PROGRESS_RESULT_CLASSES.join("|") +
+    ". For no_followup or exploration_exhausted, pass --progress-coverage-scope-id from verified scope coverage; " +
+    "exploration_exhausted also needs --progress-coverage-complete. For a final Todo, terminal closeout follows spend " +
+    "under its own plan step. A typed no_followup requires scope coverage beyond Todo completion. " +
+    "For blocked outcome_gap, --progress-work-item-id must match this plan's Todo/obligation id " +
+    "and --progress-blocker-id names the blocker. Repeat --progress-evidence-id for observed evidence identifiers. " +
+    "Use opaque public-safe IDs of 1-128 characters, starting with an ASCII letter/digit, then letters/digits or ._:/- " +
     "(e.g. evidence:validation-1); an ID does not upload a file. " +
     "Use --agent-vision-json <file> for the material vision packet; " +
     "--vision-unchanged-reason <reason> only reuses an already evidence-linked vision. " +
